@@ -41,3 +41,56 @@ used for routine 0x0251.
 2. Re-read `0841 / 0845 / 0850 / 0861` here (`python3 tools/uds_send.py radar_acc 22 08 41`, etc.) and match.
 3. Once matched, we have a verified live readout of the misalignment — useful to watch DURING a
    future `31 01 0251` alignment run (with the 120 cm mirror) to confirm it converges toward 0°.
+
+---
+
+# Routine 0x0251 — alignment routine mechanics (runtime-verified 2026-06-13)
+
+Tool: `tools/radar_acc_align_0251.py` (the only actuation in the repo). The earlier docs
+guessed at session/param; below is what the radar actually does on the wire.
+
+## How to drive it (VERIFIED)
+- **Start:** `31 01 0251` with **NO option byte**, in **extended session 0x03** → `71 01 0251`.
+  Appending an option byte (we tried `01`, copied from AlfaOBD's *different* routine `0x0250`)
+  → `7F 31 31` requestOutOfRange / `7F 31 13` length. **0x0251 takes zero option bytes.**
+- **Single-start lifecycle, NOT call-per-position:**
+  - 2nd `31 01` while running → `7F 31 24` requestSequenceError ("already running").
+  - `31 02 0251` (stopRoutine) → `71 02 0251`, returns to idle.
+  - **Re-sending `10 03` (session re-entry) also RESETS the routine.** This was a real bug in
+    the first runner: it re-entered the session before each "capture", and because the 0x03
+    session times out (S3 ≈ 5 s) while the operator works the prompts, every capture silently
+    *restarted* the routine — the status counter never advanced.
+- **Status via `31 03 0251`** → `71 03 0251 <rec>`:
+  - running = `01 01 00 02`, idle/stopped = `00 04 00 02`.
+- **Session/security red herrings:** sessions `0x40` and `0x60` are also grantable but are NOT
+  where this routine starts (we chased them after the timeout-induced `7F317F`). Security
+  level 5 seed is offered in 0x03 (`27 05` → `67 05 F0A75F5A`, constant) but **0x0251 needs no
+  `27` unlock** to start.
+
+## ★ Key NEGATIVE result: static-mirror method does not drive this radar
+Ran the routine correctly — start once, hold session alive with `3E`, present a flat mirror at
++2° / 0° / −2° on a **stationary** van. Result:
+- status record stayed `RUNNING` (`01 01 00 02`) the entire time, indifferent to mirror moves;
+- stored elevation `0845`/`0850` (≈ **−1.26°**) never changed;
+- DTC **C1418-78 stayed 0x8F (active)**.
+
+The routine **validates before committing**, so nothing bad was stored — the radar was left
+byte-for-byte unchanged. But presenting a static mirror to a parked vehicle accomplishes nothing.
+
+## Working conclusion
+The misalignment angle is **radar-target-derived** (Doppler-classified stationary returns), not
+read from a tilt sensor — so it needs **driving** to recompute, and a parked static mirror gives
+it nothing to measure. Crucially, **−1.26° has been stable across drive cycles** (identical to the
+fault-time freeze-frame at 13.9 V engine-running). If the radar could dynamically self-align this
+out, normal driving would already have done so. Therefore **−1.26° vertical is most likely a real
+*physical* misalignment beyond the self-align capture window** → the bracket/mount needs mechanical
+correction (owner reports no field-adjustable aim screws; aim is set at the bracket-to-body mount
+behind the fascia). A UDS routine alone will not zero it.
+
+## Open / untested
+- **Perturbation test** (`tools/perturb_monitor.py`, read-only): nudge the housing, watch whether
+  any DID twitches → is there a hidden live orientation signal, or is it purely driving-derived?
+- **Dynamic-drive hypothesis:** start `0251`, keep the session alive, drive straight >50 km/h and
+  watch `0845`/`0850` converge. Rated lower than "physical" given the cross-drive-cycle stability.
+- **Get the FCA/wiTECH Promaster (RU body) radar procedure** to disambiguate static-vs-dynamic and
+  the documented mechanical adjustment — before any more actuation.
