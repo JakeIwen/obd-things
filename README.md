@@ -3,6 +3,9 @@
 UDS/CAN diagnostics for a 2022 Ram Promaster over a PEAK PCAN-USB + SocketCAN. Started as ACC-radar
 (Bosch DASM / MRR1evo) alignment work; structured to extend to other modules (PCM, etc.).
 
+> **New here (human or agent)? Read [`docs/AGENT_HANDOFF.md`](docs/AGENT_HANDOFF.md) first** — it's
+> the current-state summary (verified facts, findings, gotchas, open work) so you don't re-derive anything.
+
 ## Layout
 ```
 bringup.sh                 generic: bring up can0 @ 500k (listen-only OFF), liveness check
