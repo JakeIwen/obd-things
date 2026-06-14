@@ -87,9 +87,15 @@ out, normal driving would already have done so. Therefore **−1.26° vertical i
 correction (owner reports no field-adjustable aim screws; aim is set at the bracket-to-body mount
 behind the fascia). A UDS routine alone will not zero it.
 
+## Perturbation test — DONE (2026-06-13): no live orientation signal
+Ran `tools/perturb_monitor.py` while bouncing the front suspension ~1–2 in by body weight
+(≈0.7° / ~700 millideg of body+radar pitch). Result: `0845`/`0850` (authoritative −1.26°) did
+**not** change at all; `0841` wiggled only ~7 millideg (continuing its slow session drift, ~100×
+too small to be tracking the bounce); everything else moving was counters/temp. **Conclusion: no
+exposed accelerometer/inclinometer — the misalignment is target-derived and needs DRIVING to update;
+a static physical nudge does not register.** Reinforces the physical-misalignment conclusion.
+
 ## Open / untested
-- **Perturbation test** (`tools/perturb_monitor.py`, read-only): nudge the housing, watch whether
-  any DID twitches → is there a hidden live orientation signal, or is it purely driving-derived?
 - **Dynamic-drive hypothesis:** start `0251`, keep the session alive, drive straight >50 km/h and
   watch `0845`/`0850` converge. Rated lower than "physical" given the cross-drive-cycle stability.
 - **Get the FCA/wiTECH Promaster (RU body) radar procedure** to disambiguate static-vs-dynamic and
