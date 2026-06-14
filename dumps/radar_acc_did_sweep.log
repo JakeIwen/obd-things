@@ -1,0 +1,82 @@
+# DID sweep 22 over 0x0000-0xFFFF (65536 DIDs)
+
+  ... at 0x0000  (found=0 locked=0 unresolved=0)
+  0103 OK  data=FF FF  |..|
+  0835 OK  data=4C  |L|
+  0840 OK  data=00  |.|
+  0841 OK  data=FA E8  |..|
+  0842 OK  data=00  |.|
+  0845 OK  data=FF EC C8 49 FF FF E5 5F  |...I..._|
+  0850 OK  data=FF ED 44 D4 FF FF 7E 86  |..D...~.|
+  0851 OK  data=01  |.|
+  0857 OK  data=AA  |.|
+  0858 OK  data=00  |.|
+  0861 OK  data=FE E3 00 80  |....|
+  0862 OK  data=00 00 00 00  |....|
+  0863 OK  data=01  |.|
+  0872 OK  data=00  |.|
+  ... at 0x1000  (found=14 locked=0 unresolved=0)
+  1002 OK  data=00  |.|
+  1006 OK  data=85  |.|
+  1008 OK  data=00 02 9A 48  |...H|
+  1009 OK  data=00 18  |..|
+  102A OK  data=00 00 00 00 00 00 00 00 00  |.........|
+  1921 OK  data=08 20 00 00 00 00 00 00 00  |. .......|
+  ... at 0x2000  (found=20 locked=0 unresolved=0)
+  2001 OK  data=0C 3F D2  |.?.|
+  2002 OK  data=00 00 00  |...|
+  2003 OK  data=01  |.|
+  2008 OK  data=00 02 9A 49  |...I|
+  2009 OK  data=00 1E  |..|
+  200A OK  data=04 E8  |..|
+  200B OK  data=00 02 99 6E  |...n|
+  200C OK  data=00 4A  |.J|
+  2010 OK  data=FF FF FF FF  |....|
+  2013 OK  data=02  |.|
+  292E OK  data=07  |.|
+  ... at 0x3000  (found=31 locked=0 unresolved=0)
+  ... at 0x4000  (found=31 locked=0 unresolved=0)
+  ... at 0x5000  (found=31 locked=0 unresolved=0)
+  ... at 0x6000  (found=31 locked=0 unresolved=0)
+  ... at 0x7000  (found=31 locked=0 unresolved=0)
+  ... at 0x8000  (found=31 locked=0 unresolved=0)
+  ... at 0x9000  (found=31 locked=0 unresolved=0)
+  ... at 0xA000  (found=31 locked=0 unresolved=0)
+  ... at 0xB000  (found=31 locked=0 unresolved=0)
+  ... at 0xC000  (found=31 locked=0 unresolved=0)
+  ... at 0xD000  (found=31 locked=0 unresolved=0)
+  ... at 0xE000  (found=31 locked=0 unresolved=0)
+  ... at 0xF000  (found=31 locked=0 unresolved=0)
+  F180 OK  data=01 01 08 02 07 14 20 20 20 20 20 20 00 01  |......      ..|
+  F181 OK  data=01 01 01 00 03 07 06 00 09 07 09 04 00 01  |..............|
+  F182 OK  data=01 01 01 00 03 07 06 00 09 07 09 04 00 01  |..............|
+  F183 OK  data=01 20 20 20 20 20 20 20 20 20 22 01 29  |.         ".)|
+  F184 OK  data=01 32 35 33 34 20 20 20 20 20 22 06 10  |.2534     "..|
+  F185 OK  data=01 32 35 33 34 20 20 20 20 20 22 06 10  |.2534     "..|
+  F186 OK  data=03  |.|
+  F187 OK  data=36 38 35 31 36 32 31 35 41 45 20  |68516215AE |
+  F188 OK  data=31 30 33 37 36 30 39 37 39 34 20  |1037609794 |
+  F18A OK  data=20 20 20 20 20 20 20 20 20 20  |          |
+  F18B OK  data=20 20 20 20 20 20 20 20 20 20  |          |
+  F18C OK  data=54 44 35 37 33 30 32 39 32 30 36 32 34 30 30  |TD5730292062400|
+  F190 OK  data=33 43 36 4C 52 56 44 47 34 4E 45 31 33 34 33 32 38  |3C6LRVDG4NE134328|
+  F191 OK  data=4D 52 52 31 65 76 6F 31 34 46 20  |MRR1evo14F |
+  F192 OK  data=4D 52 52 31 65 76 6F 31 34 46 20  |MRR1evo14F |
+  F193 OK  data=01  |.|
+  F194 OK  data=31 30 33 37 36 30 39 37 39 34 20  |1037609794 |
+  F195 OK  data=04 00  |..|
+  F196 OK  data=20 20 20 20 20 20  |      |
+  F1A0 OK  data=36 38 35 31 36 32 31 35 41 45 20 33 43 36 4C 52 56 44 47 34 4E 45 31 33 34 33 32 38 4D 52 52 31 65 76 6F 31 34 46 20 01 31 30 33 37 36 30 39 37 39 34 20 04 00 20 20 20 20 20 20 00 39 50 16 20  |68516215AE 3C6LRVDG4NE134328MRR1evo14F .1037609794 ..      .9P. |
+  F1A1 OK  data=00 00 00 25 98 10  |...%..|
+  F1A4 OK  data=20 20 20 20 20 20  |      |
+  F1A5 OK  data=00 39 50 16 20  |.9P. |
+  F1B0 OK  data=33 43 36 4C 52 56 44 47 34 4E 45 31 33 34 33 32 38  |3C6LRVDG4NE134328|
+  FD08 OK  data=31 30 33 37 36 30 39 37 39 34 3B 53 59 53 42 5F 50 4C 55 53 5F 46 49 41 54 5F 36 33 37 4D 59 32 32 5F 52 34 2E 30 5F 49 30 3B 00 30 3B 43 6F 6D 70 69 6C 65 64 20 62 79 20 47 44 53 31 4B 4F 52 20 6F 6E 20 4D 6F 6E 20 41 70 72 20 31 31 20 31 35 3A 35 34 3A 34 33 20 32 30 32 32 24 21 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  |1037609794;SYSB_PLUS_FIAT_637MY22_R4.0_I0;.0;Compiled by GDS1KOR on Mon Apr 11 15:54:43 2022$!..................................|
+
+============================================================
+  swept     : 65536 DIDs
+  readable  : 56
+  locked    : 0
+  unresolved: 0 
+  full log  : dids.txt
+============================================================
