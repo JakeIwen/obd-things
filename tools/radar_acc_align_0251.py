@@ -2,9 +2,13 @@
 """Guided runner for the ACC-radar (Bosch DASM / MRR1evo) alignment routine 0x0251.
 
     python3 tools/radar_acc_align_0251.py                 # PREFLIGHT ONLY (read-only, default)
-    python3 tools/radar_acc_align_0251.py --arm           # actually start the routine (gated)
+    python3 tools/radar_acc_align_0251.py --arm           # guided 3-position alignment (gated)
     python3 tools/radar_acc_align_0251.py --arm --option 01
     python3 tools/radar_acc_align_0251.py --abort         # send stopRoutine (31 02 0251)
+
+  --arm runs an interactive, guided loop: physical checklist -> typed confirm -> for each
+  mirror tilt POSITION (1/2/3) you set the mirror and it triggers a measurement and prints
+  the deviation; iterate, adjusting SCREW 1 (vertical), until vertical deviation -> ~0.
 
 ================================================================================
   THIS IS THE ONE TOOL IN THIS REPO THAT PERFORMS ACTUATION (UDS 31 01).
@@ -21,25 +25,27 @@
 ================================================================================
 
   ### LIVING SCRIPT -- UPDATE THIS FILE AS RUNTIME TEACHES US MORE ###
-  Much of the 0x0251 protocol below is INFERRED, not confirmed against a Bosch
-  ODX. The moment we run it for real (or finish the perturbation test, or get an
-  AlfaOBD cross-check), edit the relevant constant/branch here and delete the
-  "(GUESS)" / "(INFERRED)" tag so the next run is authoritative. Specifically:
+  PROCEDURE (from AllData "ACC Alignment Procedure", Bosch MRR; matches DIY reports):
+    * Static mirror reflection method. Flat mirror at 120 cm (+/-5 cm), squared to
+      the vehicle centerline, mirror CENTER at the radar's vertical-center height.
+    * Calibration = THREE measurements, changing the mirror tilt each time:
+      POSITION 1 = +2 deg forward, POSITION 2 = 0 deg, POSITION 3 = -2 deg back.
+    * Two radar screws (front grille access panel): SCREW 1 = vertical (our fault
+      C1418-78), SCREW 2 = horizontal. Tool gives turns/direction; iterate (~7
+      rounds typical). Running without the mirror -> "no valid positions found".
 
-    * OPTION/PARAM FORMAT (ROUTINE_OPTION): we mirror AlfaOBD's 0x0250 call and
-      send option byte 0x01 ("position 1"). 0x0251's real routineControlOption-
-      Record is unconfirmed. If start returns 7F31 31 (requestOutOfRange), the
-      option bytes are wrong -- record what works.
-    * ANGLE SCALE (MILLIDEG/MICRODEG): inferred from internal consistency + the
-      DTC, not a data dictionary. Pin it via the perturbation test, then fix the
-      divisors in read_angles().
-    * PROGRESS/RESULT ENCODING: we don't know what 31 03 0251 returns mid-run.
-      Capture the positive 71 03 payload and decode it here once seen.
-    * SECURITY ACCESS: prior reads needed no 27 unlock. If start returns 7F31 33
-      (securityAccessDenied), a seed/key is required -- FLAG IT, do not brute
-      force; record the requirement and stop.
-    * COMPLETION CRITERIA: "done" is currently inferred (angles -> ~0 and/or
-      C1418-78 clears). Replace with the real terminal response once observed.
+  STILL INFERRED -- confirm at runtime, then delete the tag:
+    * OPTION/PARAM (ROUTINE_OPTION): we send option 0x01. Whether 0x0251 wants ONE
+      start with internal sequencing or a per-position option byte is UNCONFIRMED.
+      If start returns 7F3131 (requestOutOfRange), the option is wrong -- record it.
+    * ANGLE SCALE: 0x0841 = signed millideg; 0x0845/0x0850 = signed microdeg int32
+      pairs (elev,azim). Cross-decode gave 0x0841 ~1000x 0x0845 (RATIO confirmed);
+      ABSOLUTE scale still not inclinometer-verified.
+    * RESULT ENCODING: decode the positive 71 01 / 71 03 payload here once seen
+      (may carry per-position deviation / screw-turn guidance).
+    * SECURITY: reads need no 27; 27 01 -> 7F2712 (no level-1 seed in extended
+      session). If start returns 7F3133, security IS required -- FLAG, don't brute.
+    * COMPLETION: inferred (vertical deviation -> ~0 and C1418-78 clears).
   ###################################################################
 """
 import os
@@ -59,6 +65,17 @@ CONFIRM_PHRASE = "ALIGN THE RADAR"  # must be typed verbatim to arm
 # Deviation-angle DIDs (INFERRED names/scale; see findings/radar_acc_did_findings.md).
 MILLIDEG = 1.0 / 1000.0
 MICRODEG = 1.0 / 1_000_000
+
+# The 3 mirror tilt positions the routine measures at (AllData ACC Alignment Procedure).
+POSITIONS = [
+    ("1", "Mirror FORWARD  -- tilt cam to +2.0 deg forward"),
+    ("2", "Mirror MIDDLE   -- tilt cam to  0.0 deg (centered)"),
+    ("3", "Mirror BACK     -- tilt cam to -2.0 deg rearward"),
+]
+SCREWS = (
+    "SCREW 1 = VERTICAL adjustment   <- our fault is vertical (C1418-78)",
+    "SCREW 2 = HORIZONTAL adjustment",
+)
 
 
 def rid_bytes(rid):
@@ -148,13 +165,16 @@ def preflight(s):
 
 
 def checklist():
-    print("== PHYSICAL CHECKLIST (do these before arming) ==")
+    print("== PHYSICAL CHECKLIST (AllData ACC Alignment Procedure -- do before arming) ==")
     for line in [
-        "Vehicle on LEVEL ground, normal tire pressures, normal/empty load.",
-        "Engine RUNNING (stable ~14 V); doors closed, vehicle stationary.",
-        "Flat mirror squared to the vehicle centerline, 120 cm (+/-5 cm) from the sensor.",
-        "Mirror in POSITION 1 (forward position), as AlfaOBD's instructions specify.",
         "Owner has consented to running the calibration routine.",
+        "Tire pressures correct; steering wheel centered; normal/unladen.",
+        "Floor incline <= 3 deg downhill / 1 deg uphill; >= 3 m (10 ft) clear ahead.",
+        "Engine RUNNING (stable ~14 V); doors closed, vehicle stationary.",
+        "Mirror squared to vehicle centerline at 120 cm (+/-5 cm) from the sensor.",
+        "Mirror CENTER set to the same height as the radar's vertical center.",
+        "Mirror stand levelled; tilt cam will be set to each POSITION below in turn.",
+        "Front grille access panel removed so SCREW 1 (vertical) is reachable.",
     ]:
         print(f"  [ ] {line}")
     print()
@@ -182,7 +202,7 @@ def interpret_start(resp, status):
         print("  -> No response. Check link/ignition; routine NOT started.")
         return False
     if resp[0] == 0x71:
-        print("  -> POSITIVE (71). Routine STARTED. Monitoring convergence; Ctrl-C to stop.")
+        print("  -> POSITIVE (71). Measurement accepted.")
         return True
     if resp[0] == 0x7F and len(resp) >= 3:
         nrc = resp[2]
@@ -202,26 +222,67 @@ def interpret_start(resp, status):
     return False
 
 
-def monitor(s, interval=1.0):
-    """Read 31 03 0251 + deviation angles in a loop; keepalive 3E 00; until Ctrl-C / convergence."""
-    print("\n== MONITORING (read-only loop) ==  Ctrl-C to stop.\n")
-    last_tp = time.time()
+def show_deviation(s, label="deviation"):
+    """Read + print the (stored) deviation angles, flagging vertical in/out of spec.
+    NB: these refresh only when a measurement runs -- they do NOT track a screw turn live."""
+    a = read_angles(s)
+    vert = a.get("vert 0x0841")
+    print(f"  -- {label} --")
+    print(fmt_angles(a))
+    if vert is not None:
+        verdict = "WITHIN" if abs(vert) < SPEC_DEG else "OUT OF"
+        print(f"     vertical {verdict} spec (|{vert:+.3f}| vs +/-{SPEC_DEG} deg)")
+    print()
+
+
+def measure_at_position(s):
+    """Trigger one measurement (31 01 0251 <opt>) and narrate. Whether each mirror position
+    needs its own option byte is UNCONFIRMED -- see living-script banner."""
+    print(f"  TX  : 31 01 {ROUTINE:04X} {uds.hx(ROUTINE_OPTION)}")
+    resp, status = uds.request(s, [0x31, 0x01, *rid_bytes(ROUTINE), *ROUTINE_OPTION], timeout=5.0)
+    return interpret_start(resp, status)
+
+
+def _ask(prompt):
     try:
-        while True:
-            if time.time() - last_tp > 2.0:
-                uds.request(s, [0x3E, 0x00], timeout=0.5)
-                last_tp = time.time()
-            resp, status = uds.request(s, [0x31, 0x03, *rid_bytes(ROUTINE)])
-            a = read_angles(s)
-            vert = a.get("vert 0x0841")
-            conv = "" if vert is None else ("  <- WITHIN SPEC" if abs(vert) < SPEC_DEG else "  (out of spec)")
-            ts = time.strftime("%H:%M:%S")
-            print(f"[{ts}] 31 03 {ROUTINE:04X}: {uds.hx(resp) if resp else '(none)'} ({status})")
-            print(fmt_angles(a) + conv + "\n")
-            # COMPLETION CRITERIA below is INFERRED -- replace once the real terminal response is known.
-            time.sleep(interval)
-    except KeyboardInterrupt:
-        print("\n  monitoring stopped by user.")
+        return input(prompt).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return "q"
+
+
+def guided_alignment(s):
+    """Walk the 3-mirror-position measurement + screw-adjust loop (AllData ACC procedure).
+    The deviation readout each round is feedback the OEM tool does NOT give."""
+    print("== GUIDED ALIGNMENT ==")
+    print("  Radar adjustment screws (front grille access panel):")
+    for ln in SCREWS:
+        print(f"    {ln}")
+    print("  Adjust in SMALL steps (as little as 1/4 turn). Expect several iterations (~7 normal).")
+    print("  The OEM tool shows no numbers -- it just says which screw/turns. We show the")
+    print("  deviation DIDs each round, so adjust SCREW 1 to drive vertical -> 0.\n")
+    show_deviation(s, "starting deviation")
+
+    iteration = 0
+    while True:
+        iteration += 1
+        print(f"----- ITERATION {iteration}: take the 3 mirror measurements -----")
+        for num, desc in POSITIONS:
+            while True:
+                cmd = _ask(f"  POSITION {num}: set {desc}.  [Enter]=measure  s=skip  q=quit: ")
+                if cmd == "q":
+                    print("\n  guided alignment ended by user.")
+                    return
+                if cmd == "s":
+                    break
+                ok = measure_at_position(s)
+                show_deviation(s, f"after position {num}")
+                if ok:
+                    break
+                print("     (not accepted -- re-set the mirror and retry, or s to skip.)")
+        show_deviation(s, f"end of iteration {iteration}")
+        cmd = _ask("  Adjust SCREW 1 (vertical) per the above, then [Enter] to re-measure, q to finish: ")
+        if cmd == "q":
+            return
 
 
 def abort(s):
@@ -281,11 +342,8 @@ def main():
         if not confirm_armed():
             return
 
-        print(f"\n  TX  : 31 01 {ROUTINE:04X} {uds.hx(ROUTINE_OPTION)}")
-        resp, status = uds.request(s, [0x31, 0x01, *rid_bytes(ROUTINE), *ROUTINE_OPTION], timeout=5.0)
-        if interpret_start(resp, status):
-            monitor(s)
-            post_check(s)
+        guided_alignment(s)
+        post_check(s)
     finally:
         s.close()
 
