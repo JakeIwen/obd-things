@@ -80,9 +80,9 @@ shows ~0 — so it hides the −1.2° fault entirely. Full evidence + a ready-to
    screws on this unit; aim is set at the bracket-to-body mount.
 2. **Get the FCA/wiTECH Promaster (RU body) radar alignment procedure** — disambiguates static-mirror
    vs dynamic-drive, and gives the documented mechanical adjustment. Do this before more actuation.
-3. **Perturbation test (read-only):** `python3 tools/perturb_monitor.py`, then gently load the bracket
-   up/down — flags any DID that twitches. Confirms whether there's a live orientation signal or it's
-   purely driving-derived (expected: only voltage/temp move).
+3. ~~Perturbation test~~ **DONE (2026-06-13):** bounced the suspension ~1–2 in (≈0.7° body pitch);
+   `0845`/`0850` unchanged, `0841` moved only ~7 millideg (drift, not tracking). **No live orientation
+   signal — angle is driving-derived.** Confirms physical movement does not register while parked.
 4. **Dynamic-drive hypothesis (lower priority):** start `0251`, keep the session alive, drive straight
    >50 km/h, watch `0845`/`0850` converge. Rated low given the cross-drive-cycle stability of −1.26°.
 5. **Send the AlfaOBD bug report** (`radar_acc_alfaobd_bugreport.md`) — strong as-is.
