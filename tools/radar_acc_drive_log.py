@@ -108,7 +108,10 @@ def main():
     m = get("radar_acc")
     hz = float(opt("--hz", "1"))
     period = 1.0 / hz
-    outdir = os.path.join(os.path.dirname(__file__), "..", "dumps")
+    quiet = "--quiet" in sys.argv          # suppress per-sample line (for unattended/cron)
+    stop_idle = float(opt("--stop-after-idle", "0"))   # exit after N s of no radar response (0=never)
+    outdir = opt("--out-dir") or os.path.join(os.path.dirname(__file__), "..", "dumps")
+    os.makedirs(outdir, exist_ok=True)
     outfile = os.path.abspath(os.path.join(
         outdir, f"radar_acc_drive_{time.strftime('%Y%m%d_%H%M%S')}.csv"))
 
@@ -125,6 +128,7 @@ def main():
 
     start = time.time()
     last_tp = start
+    last_data = start
     n = 0
     with open(outfile, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)
@@ -147,6 +151,17 @@ def main():
                     obd, obd_label = open_obd(m.channel)
                     continue
 
+                # "got data" = radar answered at all; used for idle-exit (vehicle slept).
+                got_data = row["volt"] is not None or any(
+                    row[k] is not None for k in ("vert_0841", "elev_0845", "elev_0850"))
+                if got_data:
+                    last_data = t0
+                elif stop_idle > 0 and (t0 - last_data) > stop_idle:
+                    if not quiet:
+                        print()
+                    print(f"  idle {stop_idle:g}s (vehicle asleep) -- stopping. {n} samples -> {outfile}")
+                    break
+
                 kmh = read_speed(obd)
                 mph = round(kmh * KMH_TO_MPH, 1) if kmh is not None else None
                 elapsed = round(t0 - start, 1)
@@ -156,13 +171,14 @@ def main():
                 f.flush()
                 n += 1
 
-                dtc = "----" if row["c1418"] is None else f"0x{row['c1418']:02X}"
-                spd = f"{mph:5.1f}mph" if mph is not None else "  n/a  "
-                def fmt(x): return "  n/a " if x is None else f"{x:+.4f}"
-                print(f"\r  t+{elapsed:6.0f}s  {spd}  {row['volt'] or 0:4.1f}V  "
-                      f"0841 {fmt(row['vert_0841'])}  "
-                      f"0845e {fmt(row['elev_0845'])}  0850e {fmt(row['elev_0850'])}  "
-                      f"DTC {dtc}   (n={n})", end="", flush=True)
+                if not quiet:
+                    dtc = "----" if row["c1418"] is None else f"0x{row['c1418']:02X}"
+                    spd = f"{mph:5.1f}mph" if mph is not None else "  n/a  "
+                    def fmt(x): return "  n/a " if x is None else f"{x:+.4f}"
+                    print(f"\r  t+{elapsed:6.0f}s  {spd}  {row['volt'] or 0:4.1f}V  "
+                          f"0841 {fmt(row['vert_0841'])}  "
+                          f"0845e {fmt(row['elev_0845'])}  0850e {fmt(row['elev_0850'])}  "
+                          f"DTC {dtc}   (n={n})", end="", flush=True)
 
                 dt = period - (time.time() - t0)
                 if dt > 0:
