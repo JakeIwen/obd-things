@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Guided runner for the ACC-radar (Bosch DASM / MRR1evo) alignment routine 0x0251.
 
-    python3 tools/radar_acc_align_0251.py                 # PREFLIGHT ONLY (read-only, default)
-    python3 tools/radar_acc_align_0251.py --arm           # guided 3-position alignment (gated)
-    python3 tools/radar_acc_align_0251.py --arm --option 01
-    python3 tools/radar_acc_align_0251.py --abort         # send stopRoutine (31 02 0251)
+    python3 projects/radar/radar_acc_align_0251.py        # PREFLIGHT ONLY (read-only, default)
+    python3 projects/radar/radar_acc_align_0251.py --arm  # guided 3-position alignment (gated)
+    python3 projects/radar/radar_acc_align_0251.py --arm --option 01
+    python3 projects/radar/radar_acc_align_0251.py --abort  # send stopRoutine (31 02 0251)
 
   --arm runs an interactive, guided loop: physical checklist -> typed confirm -> for each
   mirror tilt POSITION (1/2/3) you set the mirror and it triggers a measurement and prints
@@ -80,7 +80,10 @@ import os
 import sys
 import time
 
-REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+# locate repo root (dir containing lib/) regardless of how deep this script lives
+REPO = os.path.dirname(os.path.abspath(__file__))
+while REPO != os.path.dirname(REPO) and not os.path.isdir(os.path.join(REPO, "lib")):
+    REPO = os.path.dirname(REPO)
 sys.path.insert(0, REPO)
 from lib import uds
 from lib.modules import get

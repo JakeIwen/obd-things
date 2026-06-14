@@ -7,8 +7,8 @@ prints a live one-line readout. Purpose: watch what the radar measures its own a
 DRIVING (0x0841 is a target-derived online estimate that only updates with a moving scene); the
 speed column annotates the trace so we can spot turns / merging / passing / traffic.
 
-    python3 tools/radar_acc_drive_log.py                 # ~1 Hz until Ctrl-C
-    python3 tools/radar_acc_drive_log.py --hz 2
+    python3 projects/radar/radar_acc_drive_log.py        # ~1 Hz until Ctrl-C
+    python3 projects/radar/radar_acc_drive_log.py --hz 2
 
 Everything here is read-only (22 ReadDataByIdentifier, 19 ReadDTCInformation, 01 OBD-II current
 data). Nothing is started or written. The active C1418-78 fault has already disabled ACC/FCW, so
@@ -22,7 +22,11 @@ What the trace should show:
   * 0841 never moves either                    -> no measurement w/o the routine running
 """
 import os, sys, time, csv, datetime
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# locate repo root (dir containing lib/) regardless of how deep this script lives
+_root = os.path.dirname(os.path.abspath(__file__))
+while _root != os.path.dirname(_root) and not os.path.isdir(os.path.join(_root, "lib")):
+    _root = os.path.dirname(_root)
+sys.path.insert(0, _root)
 from lib import uds
 from lib.modules import get
 
@@ -113,7 +117,7 @@ def main():
     period = 1.0 / hz
     quiet = "--quiet" in sys.argv          # suppress per-sample line (for unattended/cron)
     stop_idle = float(opt("--stop-after-idle", "0"))   # exit after N s of no radar response (0=never)
-    outdir = opt("--out-dir") or os.path.join(os.path.dirname(__file__), "..", "dumps")
+    outdir = opt("--out-dir") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "dumps")
     os.makedirs(outdir, exist_ok=True)
     outfile = os.path.abspath(os.path.join(
         outdir, f"radar_acc_drive_{time.strftime('%Y%m%d_%H%M%S')}.csv"))

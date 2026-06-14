@@ -2,7 +2,7 @@
 
 Radar identifies as **MRR1evo14F** (Bosch Mid-Range Radar gen-1 evo). VIN `3C6LRVDG4NE134328`.
 Full read-only `22 <did>` sweep of 0x0000–0xFFFF: **56 readable DIDs, 0 locked, 0 unresolved (CLEAN)**.
-Raw log: `dumps/radar_acc_did_sweep.txt`. Tool: `python3 tools/did_sweep.py radar_acc`.
+Raw log: `projects/radar/dumps/radar_acc_did_sweep.txt`. Tool: `python3 tools/did_sweep.py radar_acc` (generic).
 
 ## ★ Alignment / deviation-angle candidates (stored, static across repeated reads)
 
@@ -46,7 +46,7 @@ used for routine 0x0251.
 
 # Routine 0x0251 — alignment routine mechanics (runtime-verified 2026-06-13)
 
-Tool: `tools/radar_acc_align_0251.py` (the only actuation in the repo). The earlier docs
+Tool: `projects/radar/radar_acc_align_0251.py` (the only actuation in the repo). The earlier docs
 guessed at session/param; below is what the radar actually does on the wire.
 
 ## How to drive it (VERIFIED)
@@ -88,7 +88,7 @@ correction (owner reports no field-adjustable aim screws; aim is set at the brac
 behind the fascia). A UDS routine alone will not zero it.
 
 ## Perturbation test — DONE (2026-06-13): no live orientation signal
-Ran `tools/perturb_monitor.py` while bouncing the front suspension ~1–2 in by body weight
+Ran `projects/radar/perturb_monitor.py` while bouncing the front suspension ~1–2 in by body weight
 (≈0.7° / ~700 millideg of body+radar pitch). Result: `0845`/`0850` (authoritative −1.26°) did
 **not** change at all; `0841` wiggled only ~7 millideg (continuing its slow session drift, ~100×
 too small to be tracking the bounce); everything else moving was counters/temp. **Conclusion: no

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Reproduce the ACC-radar (Bosch DASM) UDS baseline: session, key DIDs, serial, DTCs.
 
-    python3 tools/radar_acc_baseline.py
+    python3 projects/radar/radar_acc_baseline.py
 
 ACC/radar-specific (uses the radar's known DIDs and FCA DTC decoding). For a generic DID sweep use
 tools/did_sweep.py; for ad-hoc requests use tools/uds_send.py.
@@ -10,7 +10,11 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# locate repo root (dir containing lib/) regardless of how deep this script lives
+_root = os.path.dirname(os.path.abspath(__file__))
+while _root != os.path.dirname(_root) and not os.path.isdir(os.path.join(_root, "lib")):
+    _root = os.path.dirname(_root)
+sys.path.insert(0, _root)
 from lib import uds
 from lib.modules import MODULES
 

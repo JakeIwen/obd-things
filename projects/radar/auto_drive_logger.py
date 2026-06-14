@@ -9,15 +9,20 @@ drain the 12 V battery. When the bus is active and no logger is already running,
 logger exits on its own when the vehicle sleeps; the next cron tick relaunches on the next drive.
 
     # crontab -e  (run as the same user that can bring up can0):
-    * * * * * /usr/bin/python3 /home/pi/dev/obd-things/tools/auto_drive_logger.py >> /home/pi/dev/obd-things/tmp/auto_drive_logger.log 2>&1
+    * * * * * /usr/bin/python3 /home/pi/dev/obd-things/projects/radar/auto_drive_logger.py >> /home/pi/dev/obd-things/tmp/auto_drive_logger.log 2>&1
 
 Nothing here is interactive and nothing writes to the vehicle (logger is read-only 22/19/01).
 """
 import os, sys, time, glob, fcntl, subprocess
 
-REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+# locate repo root (dir containing lib/) regardless of how deep this script lives
+REPO = os.path.dirname(os.path.abspath(__file__))
+while REPO != os.path.dirname(REPO) and not os.path.isdir(os.path.join(REPO, "lib")):
+    REPO = os.path.dirname(REPO)
 sys.path.insert(0, REPO)
 from lib import uds  # noqa: E402
+
+HERE = os.path.dirname(os.path.abspath(__file__))   # this script's dir (projects/radar/)
 
 CHANNEL = "can0"
 OUT_DIR = os.path.join(REPO, "tmp", "dumps")
@@ -73,7 +78,7 @@ def launch_logger():
     logpath = os.path.join(TMP_DIR, "drive_logger.out")
     out = open(logpath, "a")
     p = subprocess.Popen(
-        [sys.executable, os.path.join(REPO, "tools", "radar_acc_drive_log.py"),
+        [sys.executable, os.path.join(HERE, "radar_acc_drive_log.py"),
          "--quiet", "--out-dir", OUT_DIR, "--stop-after-idle", str(STOP_AFTER_IDLE)],
         stdout=out, stderr=subprocess.STDOUT, start_new_session=True, cwd=REPO)
     with open(PIDFILE, "w") as f:
