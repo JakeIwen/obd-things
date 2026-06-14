@@ -27,6 +27,11 @@ PIDFILE = os.path.join(TMP_DIR, "drive_logger.pid")          # pid of the launch
 ACTIVITY_TIMEOUT = 3        # s to wait for one CAN frame before calling the bus idle
 STOP_AFTER_IDLE = 60        # logger self-exits after this many s of no radar response
 RETAIN_DAYS = 90            # delete captures older than this
+# One-shot raw-CAN burst (to identify the vehicle-speed broadcast frame). Only fires while the
+# marker file exists; delete the marker once speed is decoded. Bounded so it can't fill the disk.
+RAW_MARKER = os.path.join(REPO, "tmp", "CAPTURE_RAW")
+RAW_DIR = os.path.join(REPO, "tmp", "canraw")
+RAW_BURST_S = 240
 
 
 def log(msg):
@@ -74,6 +79,15 @@ def launch_logger():
     with open(PIDFILE, "w") as f:
         f.write(str(p.pid))
     log(f"launched logger pid={p.pid} -> {OUT_DIR}")
+
+    # one-shot raw-CAN burst for speed-frame identification (while marker present)
+    if os.path.exists(RAW_MARKER):
+        os.makedirs(RAW_DIR, exist_ok=True)
+        raw = os.path.join(RAW_DIR, f"drive_{time.strftime('%Y%m%d_%H%M%S')}.log")
+        rf = open(raw, "w")
+        subprocess.Popen(["timeout", str(RAW_BURST_S), "candump", "-ta", CHANNEL],
+                         stdout=rf, stderr=subprocess.STDOUT, start_new_session=True, cwd=REPO)
+        log(f"raw CAN burst ({RAW_BURST_S}s) -> {raw}")
 
 
 def sweep_old():

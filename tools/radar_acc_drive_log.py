@@ -59,10 +59,13 @@ def c1418(s):
 
 # --- vehicle speed via OBD-II Mode 01 PID 0D (separate ISO-TP socket) --------
 def open_obd(channel):
-    """Try standard 11-bit OBD-II then 29-bit ECM; return (socket, label) that answers 01 0D."""
+    """Find an OBD-II path that answers Mode 01 PID 0D; return (socket, label). Tries functional
+    broadcast first (how generic scan tools ask), then physical ECM, in both 11- and 29-bit."""
     candidates = [
-        ("11-bit 7E0/7E8", isotp.AddressingMode.Normal_11bits, 0x7E0, 0x7E8),
-        ("29-bit DA10",    isotp.AddressingMode.Normal_29bits, 0x18DA10F1, 0x18DAF110),
+        ("11-bit func 7DF", isotp.AddressingMode.Normal_11bits, 0x7DF, 0x7E8),
+        ("11-bit phys 7E0", isotp.AddressingMode.Normal_11bits, 0x7E0, 0x7E8),
+        ("29-bit func DB33", isotp.AddressingMode.Normal_29bits, 0x18DB33F1, 0x18DAF110),
+        ("29-bit phys DA10", isotp.AddressingMode.Normal_29bits, 0x18DA10F1, 0x18DAF110),
     ]
     for label, mode, tx, rx in candidates:
         try:
@@ -129,6 +132,7 @@ def main():
     start = time.time()
     last_tp = start
     last_data = start
+    last_obd_try = start
     n = 0
     with open(outfile, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)
@@ -156,11 +160,24 @@ def main():
                     row[k] is not None for k in ("vert_0841", "elev_0845", "elev_0850"))
                 if got_data:
                     last_data = t0
-                elif stop_idle > 0 and (t0 - last_data) > stop_idle:
-                    if not quiet:
-                        print()
-                    print(f"  idle {stop_idle:g}s (vehicle asleep) -- stopping. {n} samples -> {outfile}")
-                    break
+                else:
+                    # radar silent -> don't write an empty row; exit if idle long enough
+                    if stop_idle > 0 and (t0 - last_data) > stop_idle:
+                        if not quiet:
+                            print()
+                        print(f"  idle {stop_idle:g}s (vehicle asleep) -- stopping. {n} samples -> {outfile}")
+                        break
+                    dt = period - (time.time() - t0)
+                    if dt > 0:
+                        time.sleep(dt)
+                    continue
+
+                # late OBD attach: if speed never came up, retry the probe periodically
+                if obd is None and (t0 - last_obd_try) > 20:
+                    obd, obd_label = open_obd(m.channel)
+                    last_obd_try = t0
+                    if obd:
+                        print(f"  OBD-II speed now available: {obd_label}")
 
                 kmh = read_speed(obd)
                 mph = round(kmh * KMH_TO_MPH, 1) if kmh is not None else None
