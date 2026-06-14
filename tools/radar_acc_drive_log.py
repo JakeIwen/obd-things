@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""Read-only drive logger for the ACC radar misalignment angles.
+"""Read-only drive logger for the ACC radar misalignment angles (+ vehicle speed).
 
-Logs the deviation DIDs + DTC + voltage at ~1 Hz to a timestamped CSV in dumps/, and prints a
-live one-line readout. Purpose: watch what the radar measures its own aim to be WHILE DRIVING
-(0x0841 is a target-derived online estimate that only updates with a moving scene).
+Logs the deviation DIDs + DTC + voltage at ~1 Hz to a timestamped CSV in dumps/, plus vehicle
+speed via the standard OBD-II PID (Mode 01 / PID 0x0D) from the powertrain on the same bus, and
+prints a live one-line readout. Purpose: watch what the radar measures its own aim to be WHILE
+DRIVING (0x0841 is a target-derived online estimate that only updates with a moving scene); the
+speed column annotates the trace so we can spot turns / merging / passing / traffic.
 
     python3 tools/radar_acc_drive_log.py                 # ~1 Hz until Ctrl-C
     python3 tools/radar_acc_drive_log.py --hz 2
 
-Everything here is read-only (22 ReadDataByIdentifier + 19 ReadDTCInformation). Nothing is
-started or written. The active C1418-78 fault has already disabled ACC/FCW, so the radar is
-inert during the drive -- no phantom-braking risk. Bring a passenger to watch; don't drive solo
-while operating the Pi. Keep the PCAN on the powered hub (it auto-recovers from USB drops).
+Everything here is read-only (22 ReadDataByIdentifier, 19 ReadDTCInformation, 01 OBD-II current
+data). Nothing is started or written. The active C1418-78 fault has already disabled ACC/FCW, so
+the radar is inert during the drive -- no phantom-braking risk. Bring a passenger to watch; don't
+drive solo while operating the Pi. Keep the PCAN on the powered hub (it auto-recovers from drops).
 
 What the trace should show:
   * 0841 climbs from ~0 toward ~-1.26 deg     -> online estimate confirms the real misalignment
@@ -24,8 +26,14 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from lib import uds
 from lib.modules import get
 
+try:
+    import isotp
+except ImportError:
+    raise SystemExit("Missing dependency: pip3 install --break-system-packages can-isotp")
+
 MILLIDEG = 1.0 / 1000.0
 MICRODEG = 1.0 / 1_000_000
+KMH_TO_MPH = 0.621371
 
 
 def opt(flag, default=None):
@@ -47,6 +55,40 @@ def c1418(s):
         if b[i] == 0x54 and b[i + 1] == 0x18 and b[i + 2] == 0x78:
             return b[i + 3]
     return None  # not present = cleared
+
+
+# --- vehicle speed via OBD-II Mode 01 PID 0D (separate ISO-TP socket) --------
+def open_obd(channel):
+    """Try standard 11-bit OBD-II then 29-bit ECM; return (socket, label) that answers 01 0D."""
+    candidates = [
+        ("11-bit 7E0/7E8", isotp.AddressingMode.Normal_11bits, 0x7E0, 0x7E8),
+        ("29-bit DA10",    isotp.AddressingMode.Normal_29bits, 0x18DA10F1, 0x18DAF110),
+    ]
+    for label, mode, tx, rx in candidates:
+        try:
+            s = isotp.socket()
+            s.set_fc_opts(stmin=0, bs=0)
+            s.bind(channel, address=isotp.Address(mode, txid=tx, rxid=rx))
+            s.settimeout(0.8)
+        except OSError:
+            continue
+        if read_speed(s) is not None:
+            return s, label
+        s.close()
+    return None, None
+
+
+def read_speed(obd):
+    """OBD-II vehicle speed in km/h (Mode 01 PID 0D -> 41 0D <km/h>), or None."""
+    if obd is None:
+        return None
+    try:
+        r, _ = uds.request(obd, [0x01, 0x0D], timeout=0.5, retries=0)
+    except OSError:
+        return None
+    if r and len(r) >= 3 and r[0] == 0x41 and r[1] == 0x0D:
+        return r[2]
+    return None
 
 
 def sample(s):
@@ -72,11 +114,13 @@ def main():
 
     s = uds.open_socket(m.txid, m.rxid, m.channel, timeout=1.0)
     uds.request(s, [0x10, 0x03], timeout=1.0)
-    cols = ["iso_time", "elapsed_s", "volt", "vert_0841", "elev_0845", "azim_0845",
-            "elev_0850", "azim_0850", "c1418"]
+    obd, obd_label = open_obd(m.channel)
+    cols = ["iso_time", "elapsed_s", "speed_mph", "speed_kmh", "volt",
+            "vert_0841", "elev_0845", "azim_0845", "elev_0850", "azim_0850", "c1418"]
 
     print(f"# drive log -> {outfile}")
     print(f"# {m.name}  ~{hz:g} Hz  (read-only; Ctrl-C to stop)")
+    print(f"# OBD-II speed: {obd_label + ' OK' if obd else 'NOT AVAILABLE (logging angles only)'}")
     print(f"# watch 0841 climb toward ~-1.26 and whether 0845/0850 ever move / DTC clears\n")
 
     start = time.time()
@@ -100,18 +144,22 @@ def main():
                     print("\n  !! socket/link error -- recovering (USB brownout?) ...")
                     s = uds.recover_socket(m.txid, m.rxid, m.channel)
                     uds.request(s, [0x10, 0x03], timeout=1.0)
+                    obd, obd_label = open_obd(m.channel)
                     continue
 
+                kmh = read_speed(obd)
+                mph = round(kmh * KMH_TO_MPH, 1) if kmh is not None else None
                 elapsed = round(t0 - start, 1)
                 rec = {"iso_time": datetime.datetime.now().isoformat(timespec="seconds"),
-                       "elapsed_s": elapsed, **row}
+                       "elapsed_s": elapsed, "speed_mph": mph, "speed_kmh": kmh, **row}
                 w.writerow(rec)
                 f.flush()
                 n += 1
 
                 dtc = "----" if row["c1418"] is None else f"0x{row['c1418']:02X}"
+                spd = f"{mph:5.1f}mph" if mph is not None else "  n/a  "
                 def fmt(x): return "  n/a " if x is None else f"{x:+.4f}"
-                print(f"\r  t+{elapsed:6.0f}s  {row['volt'] or 0:4.1f}V  "
+                print(f"\r  t+{elapsed:6.0f}s  {spd}  {row['volt'] or 0:4.1f}V  "
                       f"0841 {fmt(row['vert_0841'])}  "
                       f"0845e {fmt(row['elev_0845'])}  0850e {fmt(row['elev_0850'])}  "
                       f"DTC {dtc}   (n={n})", end="", flush=True)
@@ -125,6 +173,8 @@ def main():
             try:
                 uds.request(s, [0x10, 0x01], timeout=0.5)
                 s.close()
+                if obd:
+                    obd.close()
             except OSError:
                 pass
 
