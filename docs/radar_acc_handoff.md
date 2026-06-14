@@ -1,5 +1,9 @@
 # Promaster ACC Radar Calibration — PCAN / SocketCAN Handoff
 
+> **NOTE (2026-06-13):** This is the *original* investigation handoff — good background and UDS
+> reference, but it predates everything we verified. For current verified state, repo layout,
+> findings, gotchas, and open work, read **`AGENT_HANDOFF.md`** first.
+
 > You are Claude running on a Raspberry Pi with a **PEAK PCAN-USB** interface wired to a
 > 2022 Ram Promaster's OBD-II port. Your job: stand up reliable raw CAN + ISO-TP UDS comms
 > to the radar module, verify prior findings, and (eventually, with consent + a mirror)
