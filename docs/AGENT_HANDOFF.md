@@ -96,6 +96,21 @@ RUNNING, angle unchanged, DTC stays 0x8F; it validates before committing so the 
 unchanged. Full detail in `../findings/radar_acc_did_findings.md`. Legal/liability terms: README
 "Safety & liability".
 
+## ⚠ TEARDOWN — temporary data-collection setup installed on the Pi (REMOVE WHEN DONE)
+These are **not in git** (they live on the Pi / in crontab) and must be torn down once we have
+enough data, so the rig isn't left logging the vehicle indefinitely.
+
+1. **Cron auto drive-logger** — installed in the user's crontab (`crontab -l`):
+   `* * * * * ... python3 tools/auto_drive_logger.py >> tmp/auto_drive_logger.log 2>&1`
+   Passively logs each drive to `tmp/dumps/*.csv` (read-only). **Remove once we've collected enough
+   driving traces to settle physical-vs-dynamic alignment:** edit it out via `crontab -e` (or
+   `crontab -r` to clear all). Output lives under `tmp/` (gitignored).
+2. **One-shot raw-CAN burst marker** — `tmp/CAPTURE_RAW`. While present, each logged drive also grabs
+   a bounded `candump` burst to `tmp/canraw/` to identify the vehicle-speed broadcast frame (OBD-II is
+   dead behind the SGW bypass). **Delete the marker (`rm tmp/CAPTURE_RAW`) as soon as the speed frame
+   is decoded**, then wire the speed ID into `radar_acc_drive_log.py` and the burst code can be removed.
+   Idle (0 mph) baseline for the diff: `tmp/canbaseline/idle_*.log`.
+
 ## Caveats / uncertainty
 - Angle **scale** (millideg vs microdeg) and exact DID→name labels are **inferred**, not from a Bosch
   ODX. Cross-check against AlfaOBD's displayed numbers (or the perturbation test) to certify.
