@@ -20,6 +20,33 @@ nothing** (routine stays RUNNING, stored angle unchanged, DTC stays active). Cur
 −1.26° is a **physical** misalignment beyond the self-align window → a **mechanical** fix, not a UDS
 routine. See Open work.
 
+## ▶ ACTIVE TASKS — drive-data is being auto-collected; here's what to do with it
+A cron logger (see TEARDOWN) records every drive **with no user action**. The captures live **on the
+Pi under `tmp/` (gitignored — not in a fresh clone; you must be on the Pi)**. Two analyses are pending:
+
+**Task A — identify the vehicle-speed broadcast frame** (OBD-II PIDs are dead behind the SGW bypass,
+so speed must be decoded from the bus broadcast; `radar_acc_drive_log.py` currently logs speed as n/a).
+- Data: idle 0 mph baseline `tmp/canbaseline/idle_*.log` vs a *moving* burst `tmp/canraw/drive_*.log`
+  (raw `candump -ta`, captured automatically while `tmp/CAPTURE_RAW` exists).
+- Method: the speed signal is the CAN ID + byte(s) that read ~0 at every stop and **ramp with motion**.
+  Diff a moving log against the idle baseline (bytes that are constant-0 at idle but vary while moving),
+  and within a moving log find the byte that returns to 0 at each stop. Confirm scale (km/h) against the
+  driver's recollection of speed.
+- Then: hard-code that ID/offset/scale into `projects/radar/radar_acc_drive_log.py` (replace the dead
+  `open_obd`/`read_speed` OBD path), and **`rm tmp/CAPTURE_RAW`** to stop the raw bursts.
+
+**Task B — monitor alignment angles across real drives** (settles physical-vs-dynamic, the core question).
+- Data: `tmp/dumps/radar_acc_drive_*.csv` (one per drive; columns incl. `vert_0841`, `elev_0845`,
+  `elev_0850`, `c1418`, plus speed once Task A is done). **Many early files are header-only/empty** (van
+  off or radar asleep — bus active but radar not answering); use files that have rows with data.
+- Read across the **moving** portion of a drive:
+  | observation | meaning |
+  |---|---|
+  | `0841` climbs from ~0 toward **−1.26°** | online estimate confirms the real misalignment vs targets |
+  | `0845`/`0850` stay ≈ −1.26°, `c1418` stays `0x8F` | radar sees it, won't self-correct → **physical** (leading) |
+  | `0845`/`0850` drift **toward 0** | dynamic self-align *is* working → keep driving |
+  | `0841` never moves either | no measurement w/o the routine running → try Open-work #4 |
+
 ## Vehicle & goal
 - 2022 Ram Promaster, VIN `3C6LRVDG4NE######`. SGW bypass installed (diagnostic writes reach modules).
 - Goal: clear C1418-78 by getting the radar **vertical** alignment back in spec so ACC works.
