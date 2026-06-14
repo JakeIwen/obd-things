@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Editor / OS junk
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Ad-hoc / debug dumps (keep the canonical full sweep radar_acc_did_sweep.txt + .log)
+dumps/*_did_sweep_*.txt
+*.tmp
