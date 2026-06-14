@@ -13,7 +13,7 @@ UDS link** to the radar over PCAN-USB + SocketCAN and have reverse-engineered it
 confirmed conclusions: (1) the radar-alignment routine is **`0x0251`**, not the `0x0250` AlfaOBD
 calls; (2) the real misalignment angle (~**−1.2° vertical**) is readable at DIDs we found, which
 AlfaOBD reports as "not supported." The repo is read-only **except for one gated actuation tool**
-(`tools/radar_acc_align_0251.py`, the only `31 01` in the repo). **0x0251 mechanics are now fully
+(`projects/radar/radar_acc_align_0251.py`, the only `31 01` in the repo). **0x0251 mechanics are now fully
 reverse-engineered** (session 0x03, no option byte, single-start lifecycle — see
 `../findings/radar_acc_did_findings.md`), but running it with a **static mirror on a parked van does
 nothing** (routine stays RUNNING, stored angle unchanged, DTC stays active). Current best conclusion:
@@ -46,16 +46,17 @@ routine. See Open work.
 
 ## Run it (commands)
 ```bash
-./bringup.sh                              # can0 up @500k (listen-only OFF); ignition must be ON
-python3 tools/radar_acc_baseline.py       # reproduce baseline + DTCs
-python3 live_data/radar_acc.py            # live top-style alignment gauge @5 Hz
-python3 tools/routine_scan.py radar_acc   # reconfirm 0x0251 (read-only, 31 03)
-python3 tools/did_sweep.py radar_acc      # full DID sweep -> dumps/ (~15 min; partial range -> own file)
-python3 tools/uds_send.py radar_acc 22 F1 A5   # ad-hoc read-only request
+./bringup.sh                                       # can0 up @500k (listen-only OFF); ignition must be ON
+python3 projects/radar/radar_acc_baseline.py       # reproduce baseline + DTCs
+python3 projects/radar/radar_acc_live.py           # live top-style alignment gauge @5 Hz
+python3 tools/routine_scan.py radar_acc            # reconfirm 0x0251 (generic, read-only, 31 03)
+python3 tools/did_sweep.py radar_acc               # full DID sweep -> dumps/ (~15 min; partial range -> own file)
+python3 tools/uds_send.py radar_acc 22 F1 A5       # ad-hoc read-only request (generic)
 ```
-Architecture: `lib/uds.py` (generic UDS) + `lib/modules.py` (addressing registry) → `live_data/`
-(base viewer + per-module sub-script) + `tools/` (generic scanners). Add a module = entry in
-`modules.py` + copy `live_data/radar_acc.py`.
+Architecture: generic platform at the repo root — `lib/uds.py` (UDS) + `lib/modules.py` (addressing
+registry) + `live_data/live_data.py` (base viewer) + `tools/` (generic scanners). Radar-specific work
+lives here under `projects/radar/`. Add a module = entry in `lib/modules.py` + copy
+`projects/radar/radar_acc_live.py`. Universal bus facts/gotchas: repo-root `README.md`.
 
 ## Key conclusion: AlfaOBD is mis-mapped for this MY2022 variant
 Same wrong-variant pattern in two places: it calls routine `0x0250` (unsupported here) instead of
@@ -88,7 +89,7 @@ shows ~0 — so it hides the −1.2° fault entirely. Full evidence + a ready-to
 5. **Send the AlfaOBD bug report** (`radar_acc_alfaobd_bugreport.md`) — strong as-is.
 
 ### 0x0251 — what's now VERIFIED (was "param/scale inferred")
-`tools/radar_acc_align_0251.py` (the only `31 01` in the repo; `--arm` + typed confirm to fire) now
+`projects/radar/radar_acc_align_0251.py` (the only `31 01` in the repo; `--arm` + typed confirm to fire) now
 drives the routine correctly: **session 0x03, `31 01 0251` with NO option byte, single-start** (2nd
 start → `7F3124`; `10 03` re-entry RESETS it; `31 02` stops it; status `01 01 00 02`=running /
 `00 04 00 02`=idle). **Negative result:** static mirror on a parked van does nothing — routine stays
@@ -101,7 +102,7 @@ These are **not in git** (they live on the Pi / in crontab) and must be torn dow
 enough data, so the rig isn't left logging the vehicle indefinitely.
 
 1. **Cron auto drive-logger** — installed in the user's crontab (`crontab -l`):
-   `* * * * * ... python3 tools/auto_drive_logger.py >> tmp/auto_drive_logger.log 2>&1`
+   `* * * * * ... python3 projects/radar/auto_drive_logger.py >> tmp/auto_drive_logger.log 2>&1`
    Passively logs each drive to `tmp/dumps/*.csv` (read-only). **Remove once we've collected enough
    driving traces to settle physical-vs-dynamic alignment:** edit it out via `crontab -e` (or
    `crontab -r` to clear all). Output lives under `tmp/` (gitignored).
@@ -119,7 +120,7 @@ enough data, so the rig isn't left logging the vehicle indefinitely.
 
 ## Safety
 Forward-collision radar. Everything in this repo is **read-only** (`22`/`19`/`31 03`) **except**
-`tools/radar_acc_align_0251.py`, the one gated actuation tool (`31 01`). A mis-aimed radar causes
+`projects/radar/radar_acc_align_0251.py`, the one gated actuation tool (`31 01`). A mis-aimed radar causes
 phantom braking / missed detection. Actuation is owner-consent-only and on your own vehicle — the
 legal/liability conditions in the README "Safety & liability" apply and are not optional.
 

@@ -1,7 +1,9 @@
 """Registry of diagnostic modules on the vehicle.
 
-To extend to a new module: add a Module entry here, then add a live_data/<module>.py that
-supplies its metric table, and reuse the generic tools/ scanners by passing the module key.
+To extend to a new module: add a Module entry here, then reuse the generic tools/ scanners by
+passing the module key. For a live view, copy projects/radar/radar_acc_live.py (it imports the
+base viewer from live_data/live_data.py) and swap the key + metric table. Per-target work and
+docs live under projects/<name>/.
 """
 from dataclasses import dataclass
 

@@ -3,14 +3,18 @@
 changes value. Use it to see whether gently nudging the radar housing shows up in any bit
 (i.e. is there a live orientation/accelerometer signal, or does it need driving?).
 
-    python3 tools/perturb_monitor.py          # ~2 Hz, runs until Ctrl-C
+    python3 projects/radar/perturb_monitor.py          # ~2 Hz, runs until Ctrl-C
 
 While it runs, gently load the radar bracket up/down (do NOT permanently deflect). Voltage
 (1006) and temp (0835) drift on their own and are tagged [expected]; anything else that moves
 is the interesting result. If nothing but those two ever changes, the angle is driving-derived.
 """
 import os, sys, time
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# locate repo root (dir containing lib/) regardless of how deep this script lives
+_root = os.path.dirname(os.path.abspath(__file__))
+while _root != os.path.dirname(_root) and not os.path.isdir(os.path.join(_root, "lib")):
+    _root = os.path.dirname(_root)
+sys.path.insert(0, _root)
 from lib import uds
 from lib.modules import get
 

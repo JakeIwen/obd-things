@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Live ACC-radar (Bosch MRR1evo / DASM) alignment + health view.
 
-    python3 live_data/radar_acc.py          # 5 Hz (default)
-    python3 live_data/radar_acc.py 0.5      # override refresh interval (seconds)
+    python3 projects/radar/radar_acc_live.py          # 5 Hz (default)
+    python3 projects/radar/radar_acc_live.py 0.5      # override refresh interval (seconds)
 
 ~20 UDS reads/s, <2% extra bus load - usable as a live aiming gauge while adjusting the mount.
 DID provenance, scaling caveats, and the AlfaOBD cross-check are in findings/ and docs/.
@@ -10,7 +10,11 @@ DID provenance, scaling caveats, and the AlfaOBD cross-check are in findings/ an
 import os
 import sys
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# locate repo root (dir containing lib/) regardless of how deep this script lives
+_root = os.path.dirname(os.path.abspath(__file__))
+while _root != os.path.dirname(_root) and not os.path.isdir(os.path.join(_root, "lib")):
+    _root = os.path.dirname(_root)
+sys.path.insert(0, _root)
 from lib.modules import MODULES
 from live_data.live_data import run, Metric, s16, s32, u8
 
