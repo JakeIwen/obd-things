@@ -12,8 +12,9 @@ misalignment fault (DTC C1418-78)** that disables ACC/FCW. We have a **fully wor
 UDS link** to the radar over PCAN-USB + SocketCAN and have reverse-engineered its live data. Two
 confirmed conclusions: (1) the radar-alignment routine is **`0x0251`**, not the `0x0250` AlfaOBD
 calls; (2) the real misalignment angle (~**−1.2° vertical**) is readable at DIDs we found, which
-AlfaOBD reports as "not supported." The repo is read-only by design (no actuation). The remaining
-work is one physical test + (eventually, with consent + a mirror) running the alignment routine.
+AlfaOBD reports as "not supported." The repo is read-only **except for one gated actuation tool**
+(`tools/radar_acc_align_0251.py`, the only `31 01` in the repo). The remaining work is one physical
+test + (eventually, with owner consent + a mirror) running the alignment routine via that tool.
 
 ## Vehicle & goal
 - 2022 Ram Promaster, VIN `3C6LRVDG4NE######`. SGW bypass installed (diagnostic writes reach modules).
@@ -73,9 +74,12 @@ shows ~0 — so it hides the −1.2° fault entirely. Full evidence + a ready-to
    bracket up/down and watch `0x0841`/`0x0845`. If the value tracks the tilt → it's a live measurement
    (bend-to-spec is viable) AND the slope settles millideg-vs-microdeg scale. Resolves the last unknowns.
 2. **Send the AlfaOBD bug report** (`radar_acc_alfaobd_bugreport.md`) — strong as-is.
-3. **ACTUATION (gated):** `31 01 0251 <param>` is the actual alignment routine. **Requires owner
-   consent + the 120 cm mirror staged + level ground/engine running.** NOT a probe — running it can
-   invalidate current alignment state. No tool here does `31 01` on purpose.
+3. **ACTUATION (gated):** `31 01 0251 <param>` is the actual alignment routine, now implemented in
+   `tools/radar_acc_align_0251.py` — the **only** `31 01` in the repo. It defaults to a read-only dry
+   run; firing requires `--arm` + a typed confirmation. **Requires owner consent + the 120 cm mirror
+   staged + level ground/engine running.** NOT a probe — running it can invalidate current alignment
+   state. Param format + angle scale in it are inferred ("living script" banner lists what to update
+   once observed). Legal/liability conditions for running it are in the README "Safety & liability".
 
 ## Caveats / uncertainty
 - Angle **scale** (millideg vs microdeg) and exact DID→name labels are **inferred**, not from a Bosch
@@ -84,8 +88,10 @@ shows ~0 — so it hides the −1.2° fault entirely. Full evidence + a ready-to
   calibrates the true beam center, which has a per-unit offset from the housing. See discussion in git history.
 
 ## Safety
-Forward-collision radar. Everything in this repo is **read-only** (`22`/`19`/`31 03`). Actuation
-(`31 01`) is deliberately absent. A mis-aimed radar causes phantom braking / missed detection.
+Forward-collision radar. Everything in this repo is **read-only** (`22`/`19`/`31 03`) **except**
+`tools/radar_acc_align_0251.py`, the one gated actuation tool (`31 01`). A mis-aimed radar causes
+phantom braking / missed detection. Actuation is owner-consent-only and on your own vehicle — the
+legal/liability conditions in the README "Safety & liability" apply and are not optional.
 
 ## Environment state
 Raspberry Pi, `/home/pi/dev/obd-things`. Installed: `can-utils` (apt); `python-can`, `can-isotp`,
