@@ -13,8 +13,12 @@ UDS link** to the radar over PCAN-USB + SocketCAN and have reverse-engineered it
 confirmed conclusions: (1) the radar-alignment routine is **`0x0251`**, not the `0x0250` AlfaOBD
 calls; (2) the real misalignment angle (~**−1.2° vertical**) is readable at DIDs we found, which
 AlfaOBD reports as "not supported." The repo is read-only **except for one gated actuation tool**
-(`tools/radar_acc_align_0251.py`, the only `31 01` in the repo). The remaining work is one physical
-test + (eventually, with owner consent + a mirror) running the alignment routine via that tool.
+(`tools/radar_acc_align_0251.py`, the only `31 01` in the repo). **0x0251 mechanics are now fully
+reverse-engineered** (session 0x03, no option byte, single-start lifecycle — see
+`../findings/radar_acc_did_findings.md`), but running it with a **static mirror on a parked van does
+nothing** (routine stays RUNNING, stored angle unchanged, DTC stays active). Current best conclusion:
+−1.26° is a **physical** misalignment beyond the self-align window → a **mechanical** fix, not a UDS
+routine. See Open work.
 
 ## Vehicle & goal
 - 2022 Ram Promaster, VIN `3C6LRVDG4NE134328`. SGW bypass installed (diagnostic writes reach modules).
@@ -70,16 +74,27 @@ shows ~0 — so it hides the −1.2° fault entirely. Full evidence + a ready-to
   still ACKs/answers direct UDS reads — so reads work, just no bus flood. Engine running = stable ~14 V.
 
 ## Open work (priority order)
-1. **Perturbation test (next, read-only):** with `live_data/radar_acc.py` open, gently load the radar
-   bracket up/down and watch `0x0841`/`0x0845`. If the value tracks the tilt → it's a live measurement
-   (bend-to-spec is viable) AND the slope settles millideg-vs-microdeg scale. Resolves the last unknowns.
-2. **Send the AlfaOBD bug report** (`radar_acc_alfaobd_bugreport.md`) — strong as-is.
-3. **ACTUATION (gated):** `31 01 0251 <param>` is the actual alignment routine, now implemented in
-   `tools/radar_acc_align_0251.py` — the **only** `31 01` in the repo. It defaults to a read-only dry
-   run; firing requires `--arm` + a typed confirmation. **Requires owner consent + the 120 cm mirror
-   staged + level ground/engine running.** NOT a probe — running it can invalidate current alignment
-   state. Param format + angle scale in it are inferred ("living script" banner lists what to update
-   once observed). Legal/liability conditions for running it are in the README "Safety & liability".
+1. **Inspect the radar mount physically** — the leading conclusion is that −1.26° vertical is a real
+   *physical* misalignment (stable across drive cycles, beyond the self-align window). Look behind the
+   fascia for a bent/knocked bracket or a mount sitting tilted ~1.26° down. No field-adjustable aim
+   screws on this unit; aim is set at the bracket-to-body mount.
+2. **Get the FCA/wiTECH Promaster (RU body) radar alignment procedure** — disambiguates static-mirror
+   vs dynamic-drive, and gives the documented mechanical adjustment. Do this before more actuation.
+3. **Perturbation test (read-only):** `python3 tools/perturb_monitor.py`, then gently load the bracket
+   up/down — flags any DID that twitches. Confirms whether there's a live orientation signal or it's
+   purely driving-derived (expected: only voltage/temp move).
+4. **Dynamic-drive hypothesis (lower priority):** start `0251`, keep the session alive, drive straight
+   >50 km/h, watch `0845`/`0850` converge. Rated low given the cross-drive-cycle stability of −1.26°.
+5. **Send the AlfaOBD bug report** (`radar_acc_alfaobd_bugreport.md`) — strong as-is.
+
+### 0x0251 — what's now VERIFIED (was "param/scale inferred")
+`tools/radar_acc_align_0251.py` (the only `31 01` in the repo; `--arm` + typed confirm to fire) now
+drives the routine correctly: **session 0x03, `31 01 0251` with NO option byte, single-start** (2nd
+start → `7F3124`; `10 03` re-entry RESETS it; `31 02` stops it; status `01 01 00 02`=running /
+`00 04 00 02`=idle). **Negative result:** static mirror on a parked van does nothing — routine stays
+RUNNING, angle unchanged, DTC stays 0x8F; it validates before committing so the radar is left
+unchanged. Full detail in `../findings/radar_acc_did_findings.md`. Legal/liability terms: README
+"Safety & liability".
 
 ## Caveats / uncertainty
 - Angle **scale** (millideg vs microdeg) and exact DID→name labels are **inferred**, not from a Bosch
