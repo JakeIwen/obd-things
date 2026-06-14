@@ -14,3 +14,6 @@ venv/
 # Ad-hoc / debug dumps (keep the canonical full sweep radar_acc_did_sweep.txt + .log)
 dumps/*_did_sweep_*.txt
 *.tmp
+
+# Unattended auto-drive-logger output + runtime state (tools/auto_drive_logger.py)
+tmp/
