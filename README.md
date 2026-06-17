@@ -13,7 +13,8 @@ each investigation living under `projects/<name>/`.
 ## Layout
 
 ```
-bringup.sh                 GENERIC: bring up can0 @ 500k (listen-only OFF) + liveness check
+bringup.sh                 GENERIC: bring up the PCAN, PASSIVE by default (--tx to arm; --bcan
+                             for the 125k body bus; --probe to find an unknown rate) + liveness
 lib/                       GENERIC, module-agnostic plumbing
   uds.py                     ISO-TP socket, UDS request, NRC table, byte decoders, USB-drop recovery
   modules.py                 module registry (addressing) — ADD A MODULE HERE to reach it
@@ -44,7 +45,12 @@ simpler `REPO = dirname(__file__)/..`.
 
 ## Universal facts about THIS van's bus (verified — trust these)
 
-- **Bus:** HS-CAN, **500 kbit/s**, OBD pins **6/14**. Only 500k yields traffic; all other rates silent.
+- **Two buses (multi-speed):**
+  - **C-CAN / HS-CAN, 500 kbit/s** — OBD pins **6/14**; powertrain + diagnostics. `bringup.sh` default.
+  - **B-CAN / body bus, 125 kbit/s** — comfort/body (locks, lights, windows, VIN broadcast). Reached on
+    the low-speed adapter pinout; `bringup.sh --bcan`. (Use `--probe` to rediscover an unknown rate.)
+  - One PCAN channel = one physical pair = **one bus at a time**; the OBD splitter parallels a single bus
+    (lets PCAN + a scan tool share it), it does **not** merge C-CAN and B-CAN.
 - **Diagnostic addressing:** UDS over ISO-TP, **29-bit normal-fixed**. Tester = `0xF1`; each ECU has a
   physical address (e.g. radar `0x2A` → TX `0x18DA2AF1`, RX `0x18DAF12A`). Add modules in `lib/modules.py`.
 - **SGW bypass is installed**, so diagnostic UDS (`22`/`19`/`31`/…) reaches the internal modules. **BUT
@@ -58,8 +64,10 @@ simpler `REPO = dirname(__file__)/..`.
 
 ## Gotchas (these already bit us)
 
-- **`listen-only` is sticky** across `ip link set up` — always bring the interface up with explicit
-  `listen-only off` (`bringup.sh` does). Symptom if wrong: RX fine, **all TX silently dropped**.
+- **`listen-only` is sticky** across `ip link set up` — always set it explicitly (`bringup.sh` does:
+  passive by default, `--tx` to arm). Symptom if armed-but-stuck-passive: RX fine, **all TX silently dropped**.
+- **Down before re-up:** changing bitrate/adapter on an already-up iface fails (`Device or resource busy`);
+  `bringup.sh` always `ip link set <if> down` first, so switching 500k↔125k is safe.
 - **`berr-reporting` unsupported** by this PCAN adapter (use `listen-only` instead).
 - **USB brownout:** the PCAN drops on a shared root hub (`Rx urb aborted -32`). Keep it on the **powered
   USB hub**. The scanners auto-recover (`lib.uds.recover_socket`); the live viewer shows NO DATA.
@@ -69,10 +77,25 @@ simpler `REPO = dirname(__file__)/..`.
 
 ---
 
+## Bus bring-up (`bringup.sh`)
+
+One script for both buses. **Passive (listen-only ON) by default** — only sniffs, never transmits/ACKs;
+pass `--tx` to arm (UDS tools require it). Always brings the iface down first, so switching speed/adapter
+is safe. Auto-picks the sole `can*` iface (or set `IFACE=canN`).
+
+```bash
+./bringup.sh                 # C-CAN 500k, passive sniff            (DEFAULT)
+./bringup.sh --tx            # C-CAN 500k, ARMED — can send UDS
+./bringup.sh --bcan          # B-CAN 125k, passive sniff
+./bringup.sh --bcan --tx     # B-CAN 125k, ARMED
+./bringup.sh --probe         # cycle common low-speed rates, report which is live
+./bringup.sh --bitrate N     # override bitrate (e.g. 250000)
+```
+
 ## Quick start
 
 ```bash
-./bringup.sh                                   # can0 up @500k, listen-only OFF; ignition ON (engine running ideal)
+./bringup.sh --tx                              # C-CAN 500k, ARMED (UDS needs TX); ignition ON (engine running ideal)
 python3 tools/uds_send.py radar_acc 22 F1 91   # ad-hoc read (radar family id) — sanity-check the link
 python3 tools/did_sweep.py radar_acc           # full DID sweep -> dumps/radar_acc_did_sweep.txt
 python3 tools/routine_scan.py radar_acc        # RoutineControl discovery (read-only)
