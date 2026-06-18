@@ -30,6 +30,8 @@ live at the repo root and take the module key `radar_acc`.
 ## Subdirs
 - `docs/` — `AGENT_HANDOFF.md` (read first), `radar_acc_handoff.md` (original investigation),
   `radar_acc_alfaobd_bugreport.md` (AlfaOBD mis-mapping evidence).
+  - `docs/oem/` — **OEM / authoritative sources** (FCA STAR TSB for C1418-78, etc.); trust over our
+    inferred findings. The TSB says C1418-78 is a seating/bumper-contact fault → fix mechanics, then calibrate.
 - `findings/` — `radar_acc_did_findings.md`: decoded DIDs, angle scaling, 0x0251 mechanics.
 - `dumps/` — kept captures (`radar_acc_did_sweep.txt`).
 
