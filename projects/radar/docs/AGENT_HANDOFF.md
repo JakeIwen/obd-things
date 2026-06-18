@@ -98,34 +98,41 @@ shows ~0 — so it hides the −1.2° fault entirely. Full evidence + a ready-to
   still ACKs/answers direct UDS reads — so reads work, just no bus flood. Engine running = stable ~14 V.
 
 ## Open work (priority order)
-0. **DIY Service Drive Alignment attempt — the decisive untried experiment.** OEM alignment is a
-   scan-tool-initiated **dynamic drive** (AllData, `docs/oem/`). Every prior `0x0251` run was PARKED, so
-   it just sat "RUNNING". **`projects/radar/radar_acc_sda_drive.py --arm`** does the missing test: starts
-   `0x0251` once, holds the session alive with TesterPresent (never re-sends `10 03` → would reset it),
-   and logs `0845`/`0850`/DTC/speed while you drive (straight/steady ~30-45 mph, ~15-20 min). If the radar
-   does the SDA itself → elevation converges / DTC clears = **DIY fix, no wiTECH**. If it stays pinned/
-   RUNNING → the commit likely needs a local `27` security unlock (cloud is unlikely — see below). **Either
-   outcome answers it, for free.** Do **after** #1 (mounting). The "Wi-Fi hotspot" is most likely just
-   wiTECH 2.0's browser/websocket session continuity (it's a web-portal app, drops if connection lost mid-
-   drive), NOT a radar-side server step — evidence: **AlfaOBD (a ~$50 cloud-free app) runs the FCA radar
-   alignment routine on supported models**, so the routine is local UDS, not cloud-gated.
-0b. **If `0251` stalls on security (`7F…33` on commit): sniff AlfaOBD, don't pay a dealer.** AlfaOBD has
-   the FCA seed/key. Run our PCAN **listen-only** (`./bringup.sh` passive) while AlfaOBD talks to the radar
-   (even its wrong-for-us `0250` attempt) and capture the `27` seed→key exchange — per-ECU-family, almost
-   certainly the same unlock `0251` needs — then replicate it before `31 01 0251`. Cloud-free.
-1. **Verify the module mounting first** (precondition for SDA; FCA STAR S2123000064 in `docs/oem/`):
-   re-seat it fully + level in the bracket; pull it and check for **witness/rub marks** where the aluminum
-   bumper bar contacts it — if the bar's too high, **slide the bumper DOWN** off the module. "Improper
-   mounting can cause the calibration to fail" (Ram chart). NOTE: the static-mirror flow in
-   `radar_acc_align_0251.py` is the WRONG method for this van (it's SDA/dynamic) — ignore those steps.
-2. **Promaster-specific geometry** — the TSB is FCA-generic (car-platform photos); confirm the RU-van's
+**Constraint:** van is the owner's home/office — **shop visits are off the table** ([[van-is-home-no-shop]]).
+Favor in-place DIY + things that piggyback on normal daily driving.
+
+**Owner data point (2026-06-18):** "ACC NOT AVAILABLE" self-cleared once within ~200 mi of driving before
+going permanent → the radar has **limited-range online auto-alignment**; small deviations self-heal while
+driving, but −1.26° is beyond the window. **So the leading no-tool path is #1 then "just drive":**
+
+1. **Physically re-seat / correct the mount** (FCA STAR S2123000064, `docs/oem/`): seat it fully + **level**
+   in the bracket; check for **witness/rub marks** where the aluminum bumper bar contacts it (bar too high →
+   slide bumper DOWN). Use a phone **inclinometer** to get the radar face physically nominal — this sidesteps
+   the unknown DID sign (aim for "level/square," not a signed angle). Goal: get the deviation back **within
+   the online auto-align window**.
+1b. **Then just drive + monitor (no tool).** With the mount corrected into range, the radar's own online
+   auto-align may re-converge over normal daily driving and clear C1418 — like it did the first time. The
+   **cron drive-logger already captures this passively**; watch `0845`/`0850` trend toward 0 / DTC clear over
+   miles. Best fit for "van is home." Don't rely on it, but it's the cheapest shot and costs only driving.
+2. **DIY Service Drive Alignment attempt — if 1b doesn't converge.** `projects/radar/radar_acc_sda_drive.py
+   --arm` starts `0x0251` once, holds the session with TesterPresent (never re-sends `10 03` → resets it),
+   and logs `0845`/`0850`/DTC/speed while you drive (straight/steady ~30-45 mph, ~15-20 min). Every prior
+   `0x0251` run was PARKED (just sat "RUNNING"); this is the untried test. Converges/clears → **DIY fix, no
+   wiTECH**. Stays RUNNING → likely needs a local `27` unlock (→ 2b). The "Wi-Fi hotspot" is most likely just
+   wiTECH 2.0 browser/websocket session continuity, NOT a radar-side server step (AlfaOBD runs the FCA radar
+   routine cloud-free → it's local UDS). The static-mirror flow in `radar_acc_align_0251.py` is the WRONG
+   method for this van — ignore it.
+2b. **If `0251` stalls on security (`7F..33`): sniff AlfaOBD, no dealer.** AlfaOBD has the FCA seed/key and
+   does it offline. Run the PCAN **listen-only** (`./bringup.sh`) while AlfaOBD talks to the radar (even its
+   wrong-for-us `0250` attempt), capture the `27` seed→key (per-ECU-family — almost certainly the same unlock
+   `0251` needs), then replicate before `31 01 0251`. (Also computable offline, e.g. DiagCode FCA SKGT.)
+3. **Promaster-specific geometry** — the TSB is FCA-generic (car-platform photos); confirm the RU-van's
    bracket/bumper against service info "08 - Electrical / 8E - ECMs / MODULE, ACC / Removal and Installation".
-3. ~~Perturbation test~~ **DONE (2026-06-13):** bounced the suspension ~1–2 in (≈0.7° body pitch);
-   `0845`/`0850` unchanged, `0841` moved only ~7 millideg (drift, not tracking). **No live orientation
-   signal — angle is driving-derived.** Confirms physical movement does not register while parked.
-4. **Dynamic-drive hypothesis (lower priority):** start `0251`, keep the session alive, drive straight
-   >50 km/h, watch `0845`/`0850` converge. Rated low given the cross-drive-cycle stability of −1.26°.
+4. ~~Perturbation test~~ **DONE (2026-06-13):** bounced suspension ~1–2 in; `0845`/`0850` unchanged, `0841`
+   moved ~7 millideg (drift). No live orientation signal — angle is driving-derived; a parked nudge doesn't register.
 5. **Send the AlfaOBD bug report** (`radar_acc_alfaobd_bugreport.md`) — strong as-is.
+6. **Tooling fallback (last resort, still IN-PLACE — no shop):** aftermarket Autel/Launch + AutoAuth (~$50/yr)
+   does FCA ADAS calibrations on-site via Starlink (~$600-1500 tool, reusable). See `docs/oem/research_2026-06-18_*`.
 
 ### 0x0251 — what's now VERIFIED (was "param/scale inferred")
 `projects/radar/radar_acc_align_0251.py` (the only `31 01` in the repo; `--arm` + typed confirm to fire) now

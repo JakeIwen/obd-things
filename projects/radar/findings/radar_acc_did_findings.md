@@ -121,10 +121,25 @@ counters (not speed); `0x0857` is a toggling flag.
 Drive with **sustained 60-89 km/h (37-55 mph) for ~10 min** (`tmp/dumps/hunt_20260617_222502.csv`):
 - **`elev_0845` dead flat at −1.254°** — mean −1.2540 FAST (≥60 km/h, n=606) vs −1.2558 STOPPED (n=176);
   no speed dependence, no convergence. `elev_0850` wandered −1.16→−1.37 (not toward 0).
-- **Do NOT read this as "physical."** OEM docs (`docs/oem/alldata_ram2022_C1418-78_and_acc_alignment.md`)
-  show alignment is a scan-tool-initiated **Service Drive Alignment (SDA)** — the radar does **not**
-  self-align during normal driving, so the flat angle just means **SDA was never run**, not a hard fault.
-  Earlier "physical strongly supported" was wrong on that point.
+- OEM docs (`docs/oem/alldata_ram2022_C1418-78_and_acc_alignment.md`) show the shop method is a
+  scan-tool **Service Drive Alignment (SDA)**. But SDA being the *service* method does NOT mean it's the
+  only way C1418 clears — it's the deterministic, time-effective shop path (owner's point, 2026-06-18).
+
+## ★ Owner history: ACC self-cleared once → there IS limited-range online auto-alignment (2026-06-18)
+Owner reports "ACC NOT AVAILABLE" appeared on the IPC a couple times **before** the fault went permanent;
+the **first occurrence cleared on its own within a couple hundred miles of normal driving, no action**
+(not confirmed to be C1418, but no obvious cause). Strong implication: the radar runs a **continuous
+online misalignment estimate + auto-correction with a LIMITED capture range**:
+- Early, **small** deviation → driving pulled it back in range → warning cleared (self-healed).
+- Now at **−1.26°** → **beyond the auto-align capture window** → can't self-correct → latched C1418-78.
+  This is exactly why the sustained-50 mph drive showed `0845` frozen (auto-align won't chase a deviation
+  outside its range), AND it reconciles the "is it physical?" question: **the deviation is real and the
+  radar normally self-heals small ones; −1.26° is just too big.**
+
+**Leading DIY hypothesis (no shop, no tool):** physically correct/re-seat the mount to bring the deviation
+back **within the online auto-align window**, then **normal driving may auto-clear it** like it did the
+first time — no SDA, no scan tool, no security unlock. Watch `0845`/`0850`/DTC via the cron logger over
+normal use. Don't *rely* on it yet, but it's the path that best fits "van is home/office — no shop visits."
 
 ## Open / untested
 - **Run SDA (the real fix):** scan tool → ACC ECU view → Misc Functions → "Service Drive Alignment
