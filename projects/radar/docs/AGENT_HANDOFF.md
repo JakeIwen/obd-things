@@ -64,7 +64,7 @@ On a **sustained 37-55 mph / ~10 min** run (`tmp/dumps/hunt_20260617_222502.csv`
 
 ## Run it (commands)
 ```bash
-./bringup.sh                                       # can0 up @500k (listen-only OFF); ignition must be ON
+./bringup.sh --tx                                  # can0 up @500k ARMED (UDS needs --tx now); ignition ON
 python3 projects/radar/radar_acc_baseline.py       # reproduce baseline + DTCs
 python3 projects/radar/radar_acc_live.py           # live top-style alignment gauge @5 Hz
 python3 tools/routine_scan.py radar_acc            # reconfirm 0x0251 (generic, read-only, 31 03)
@@ -93,12 +93,15 @@ shows ~0 — so it hides the −1.2° fault entirely. Full evidence + a ready-to
   still ACKs/answers direct UDS reads — so reads work, just no bus flood. Engine running = stable ~14 V.
 
 ## Open work (priority order)
-1. **Inspect the radar mount physically** — the leading conclusion is that −1.26° vertical is a real
-   *physical* misalignment (stable across drive cycles, beyond the self-align window). Look behind the
-   fascia for a bent/knocked bracket or a mount sitting tilted ~1.26° down. No field-adjustable aim
-   screws on this unit; aim is set at the bracket-to-body mount.
-2. **Get the FCA/wiTECH Promaster (RU body) radar alignment procedure** — disambiguates static-mirror
-   vs dynamic-drive, and gives the documented mechanical adjustment. Do this before more actuation.
+1. **Inspect the radar mount physically — per the FCA TSB this is THE fix path** (see
+   `docs/oem/` → FCA STAR S2123000064 for C1418-78). It's a **seating / interference** fault, not a
+   dialed-in angle: (a) **re-seat the module** fully + level in its bracket (alone may fix it); (b) pull
+   it and check for **witness/rub marks** where the aluminum bumper bar contacts it — if the bar sits
+   too high, **slide the bumper DOWN** off the module; (c) reinstall, confirm no contact, **then run the
+   calibration routine**. Explains why it won't self-align and why a parked nudge/static mirror did nothing.
+2. **Promaster-specific service info** — the TSB in `docs/oem/` is FCA-generic (car-platform photos);
+   confirm the RU-van's bracket/bumper geometry against service info "08 - Electrical / 8E - ECMs /
+   MODULE, Adaptive Cruise Control (ACC) / Removal and Installation" before disassembly.
 3. ~~Perturbation test~~ **DONE (2026-06-13):** bounced the suspension ~1–2 in (≈0.7° body pitch);
    `0845`/`0850` unchanged, `0841` moved only ~7 millideg (drift, not tracking). **No live orientation
    signal — angle is driving-derived.** Confirms physical movement does not register while parked.
