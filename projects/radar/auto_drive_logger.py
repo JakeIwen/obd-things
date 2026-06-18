@@ -8,12 +8,19 @@ drain the 12 V battery. When the bus is active and no logger is already running,
 `radar_acc_drive_log.py --quiet --stop-after-idle` writing to tmp/dumps/ (gitignored). The
 logger exits on its own when the vehicle sleeps; the next cron tick relaunches on the next drive.
 
+Bus-aware (bringup.sh is passive-by-default + supports the 125k B-CAN body bus):
+  * Only operates on the radar's C-CAN (500k). If can0 is at another bitrate (e.g. 125k B-CAN),
+    it SKIPS entirely -- never hijacks your body-bus work.
+  * The logger must transmit (UDS reads), so on an active C-CAN drive it AUTO-ARMS can0
+    (listen-only off) even if you left it passive; from a down iface it brings up C-CAN armed.
+    (Trade-off accepted: it will TX during an active bus even if you'd set passive for AlfaOBD.)
+
     # crontab -e  (run as the same user that can bring up can0):
     * * * * * /usr/bin/python3 /home/pi/dev/obd-things/projects/radar/auto_drive_logger.py >> /home/pi/dev/obd-things/tmp/auto_drive_logger.log 2>&1
 
 Nothing here is interactive and nothing writes to the vehicle (logger is read-only 22/19/01).
 """
-import os, sys, time, glob, fcntl, subprocess
+import os, sys, time, glob, fcntl, subprocess, re
 
 # locate repo root (dir containing lib/) regardless of how deep this script lives
 REPO = os.path.dirname(os.path.abspath(__file__))
@@ -29,6 +36,7 @@ OUT_DIR = os.path.join(REPO, "tmp", "dumps")
 TMP_DIR = os.path.join(REPO, "tmp")
 SUP_LOCK = os.path.join(TMP_DIR, "auto_drive_logger.lock")   # one supervisor at a time
 PIDFILE = os.path.join(TMP_DIR, "drive_logger.pid")          # pid of the launched logger
+RAW_PIDFILE = os.path.join(TMP_DIR, "raw_burst.pid")         # pid of the in-flight raw-CAN burst
 ACTIVITY_TIMEOUT = 3        # s to wait for one CAN frame before calling the bus idle
 STOP_AFTER_IDLE = 60        # logger self-exits after this many s of no radar response
 RETAIN_DAYS = 90            # delete captures older than this
@@ -43,17 +51,25 @@ def log(msg):
     print(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {msg}", flush=True)
 
 
-def iface_up():
-    r = subprocess.run(["ip", "-br", "link", "show", CHANNEL], capture_output=True, text=True)
-    return r.returncode == 0 and "UP" in r.stdout
+CCAN_BITRATE = 500000   # the radar lives on C-CAN 500k; B-CAN body bus is 125k (skip it)
 
 
-def ensure_iface():
-    """Bring can0 up (listen-only OFF) only if it is currently down -- never bounce a live link."""
-    if iface_up():
-        return True
-    log("can0 down -> bringing up @500k listen-only off")
-    return uds.bring_up_can(CHANNEL)
+def iface_details():
+    r = subprocess.run(["ip", "-details", "link", "show", CHANNEL], capture_output=True, text=True)
+    return r.stdout if r.returncode == 0 else ""
+
+
+def iface_up(details):
+    return "state UP" in details or "UP," in details   # ip -details header carries the UP flag
+
+
+def iface_bitrate(details):
+    m = re.search(r"bitrate (\d+)", details)
+    return int(m.group(1)) if m else None
+
+
+def iface_passive(details):
+    return "<LISTEN-ONLY>" in details   # armed (listen-only off) -> token absent
 
 
 def bus_active():
@@ -63,14 +79,18 @@ def bus_active():
     return r.returncode == 0
 
 
-def logger_alive():
+def _pid_alive(pidfile):
     try:
-        with open(PIDFILE) as f:
+        with open(pidfile) as f:
             pid = int(f.read().strip())
         os.kill(pid, 0)        # raises if not running
         return True
     except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
         return False
+
+
+def logger_alive():
+    return _pid_alive(PIDFILE)
 
 
 def launch_logger():
@@ -85,13 +105,15 @@ def launch_logger():
         f.write(str(p.pid))
     log(f"launched logger pid={p.pid} -> {OUT_DIR}")
 
-    # one-shot raw-CAN burst for speed-frame identification (while marker present)
-    if os.path.exists(RAW_MARKER):
+    # raw-CAN burst for speed-frame identification (while marker present), one at a time
+    if os.path.exists(RAW_MARKER) and not _pid_alive(RAW_PIDFILE):
         os.makedirs(RAW_DIR, exist_ok=True)
         raw = os.path.join(RAW_DIR, f"drive_{time.strftime('%Y%m%d_%H%M%S')}.log")
         rf = open(raw, "w")
-        subprocess.Popen(["timeout", str(RAW_BURST_S), "candump", "-ta", CHANNEL],
-                         stdout=rf, stderr=subprocess.STDOUT, start_new_session=True, cwd=REPO)
+        bp = subprocess.Popen(["timeout", str(RAW_BURST_S), "candump", "-ta", CHANNEL],
+                              stdout=rf, stderr=subprocess.STDOUT, start_new_session=True, cwd=REPO)
+        with open(RAW_PIDFILE, "w") as f:
+            f.write(str(bp.pid))
         log(f"raw CAN burst ({RAW_BURST_S}s) -> {raw}")
 
 
@@ -118,12 +140,32 @@ def main():
         if logger_alive():
             return  # a drive is already being recorded; do nothing
         sweep_old()
-        if not ensure_iface():
-            log("could not bring up can0; skipping")
+
+        d = iface_details()
+        if not iface_up(d):                       # down (e.g. after reboot) -> bring up armed C-CAN
+            log("can0 down -> bringing up C-CAN 500k armed")
+            if not uds.bring_up_can(CHANNEL):
+                log("could not bring up can0; skipping")
+                return
+            d = iface_details()
+
+        br = iface_bitrate(d)
+        if br is not None and br != CCAN_BITRATE:  # 125k B-CAN or other -> user's bus work; stay out
+            log(f"can0 @ {br} != C-CAN {CCAN_BITRATE} (B-CAN / other bus work) -- skipping")
             return
-        if bus_active():
-            launch_logger()
-        # else: bus silent (vehicle asleep) -- do nothing, never TX
+
+        if not bus_active():
+            return  # silent: parked / asleep -- never arm or TX
+
+        # active C-CAN drive: the logger must TX, so ensure ARMED (listen-only off). Per the
+        # chosen policy we auto-arm even if the user left it passive.
+        if iface_passive(d):
+            log("can0 passive -> arming (listen-only off) to log this drive")
+            if not uds.bring_up_can(CHANNEL):
+                log("could not arm can0; skipping")
+                return
+
+        launch_logger()
     finally:
         fcntl.flock(lock, fcntl.LOCK_UN)
         lock.close()
