@@ -104,9 +104,15 @@ shows ~0 — so it hides the −1.2° fault entirely. Full evidence + a ready-to
    `0x0251` once, holds the session alive with TesterPresent (never re-sends `10 03` → would reset it),
    and logs `0845`/`0850`/DTC/speed while you drive (straight/steady ~30-45 mph, ~15-20 min). If the radar
    does the SDA itself → elevation converges / DTC clears = **DIY fix, no wiTECH**. If it stays pinned/
-   RUNNING → the commit needs the wiTECH cloud/server side and pure-UDS is blocked. **Either outcome
-   answers it, for free.** Do **after** #1 (mounting). The "Wi-Fi hotspot" is likely just wiTECH's cloud
-   UI, not necessarily a radar-side requirement — this test tells us.
+   RUNNING → the commit likely needs a local `27` security unlock (cloud is unlikely — see below). **Either
+   outcome answers it, for free.** Do **after** #1 (mounting). The "Wi-Fi hotspot" is most likely just
+   wiTECH 2.0's browser/websocket session continuity (it's a web-portal app, drops if connection lost mid-
+   drive), NOT a radar-side server step — evidence: **AlfaOBD (a ~$50 cloud-free app) runs the FCA radar
+   alignment routine on supported models**, so the routine is local UDS, not cloud-gated.
+0b. **If `0251` stalls on security (`7F…33` on commit): sniff AlfaOBD, don't pay a dealer.** AlfaOBD has
+   the FCA seed/key. Run our PCAN **listen-only** (`./bringup.sh` passive) while AlfaOBD talks to the radar
+   (even its wrong-for-us `0250` attempt) and capture the `27` seed→key exchange — per-ECU-family, almost
+   certainly the same unlock `0251` needs — then replicate it before `31 01 0251`. Cloud-free.
 1. **Verify the module mounting first** (precondition for SDA; FCA STAR S2123000064 in `docs/oem/`):
    re-seat it fully + level in the bracket; pull it and check for **witness/rub marks** where the aluminum
    bumper bar contacts it — if the bar's too high, **slide the bumper DOWN** off the module. "Improper

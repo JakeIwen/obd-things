@@ -44,11 +44,20 @@ running, vehicle speed present). Steps:
   a server handshake we can't reproduce with raw `0x0251`. Replication attempt = start `0x0251`, keep the
   session alive, perform the guided drive (Open work #4) — but it may require the wiTECH/server side.
 
-### Why the internet? — UNDOCUMENTED (searched the whole scrape 2026-06-18)
-The AllData scrape has **zero** "secure gateway" / "AutoAuth" docs, and the **only** stated connectivity
-requirement is the bare "Wi-Fi Mobile Hot Spot router is required" in the alignment doc — **no rationale,
-no manual/UDS alternative**. So the *reason* is inference, not documented: almost certainly because
-wiTECH 2.0 is a **cloud client** (routine guidance streamed from Stellantis servers) and likely a
-server-side compute/validate and/or secure-access step to commit the calibration. Bottom line: **internet
-helps a real wiTECH/cloud scan tool (Starlink satisfies "drive with internet"); it does NOT help our raw
-`0x0251` Pi path** (we never reach Stellantis). The SGW *bypass* covers the gateway layer, not the cloud layer.
+### Why the internet? — REVISED 2026-06-18: most likely wiTECH session continuity, NOT a radar requirement
+AllData has **zero** "secure gateway"/"AutoAuth" docs; the only connectivity note is the bare "Wi-Fi
+Mobile Hot Spot router is required" (no rationale). Better-supported reading now:
+- **AlfaOBD (a ~$50 app, no cloud/websocket, plain UDS over an ELM/OBDLink adapter) runs the FCA radar
+  alignment routine on supported models** (people report success). So the routine is a **self-contained
+  local UDS sequence at the radar — NOT cloud-gated.** (AlfaOBD mis-maps our MY2022 variant: it calls
+  `0250` + hides the angles; the right routine for our radar is `0251`. That's an AlfaOBD DB gap, not a
+  cloud dependency.)
+- **wiTECH 2.0 is a browser/web-portal app** (VCI bridges the vehicle; UI runs in-browser vs Stellantis).
+  A persistent **websocket** would drop the moment connectivity is lost — and SDA happens while *driving*
+  away from shop wifi. So the hotspot is most plausibly **session continuity for the cloud tool**, not a
+  radar-side compute/auth step.
+- **Therefore the "needs a Stellantis server to commit" worry is probably wrong.** Our raw-`0x0251` Pi
+  path has real odds. The realistic remaining blocker is **local**: does `0251` need a `27` security
+  unlock to commit? (`27 05` returns a seed; we lack the key algorithm.) If so, **sniff AlfaOBD** (PCAN
+  listen-only) doing its routine on the radar to capture the `27` seed→key exchange (per-ECU-family;
+  almost certainly the same unlock `0251` needs), then replicate. Cloud-free, no wiTECH, no dealer.
