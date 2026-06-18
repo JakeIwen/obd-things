@@ -20,36 +20,23 @@ nothing** (routine stays RUNNING, stored angle unchanged, DTC stays active). Cur
 −1.26° is a **physical** misalignment beyond the self-align window → a **mechanical** fix, not a UDS
 routine. See Open work.
 
-## ▶ ACTIVE TASKS — drive-data is being auto-collected; here's what to do with it
-A cron logger (see TEARDOWN) records every drive **with no user action**. The captures live **on the
-Pi under `tmp/` (gitignored — not in a fresh clone; you must be on the Pi)**. Two analyses are pending:
+## ▶ ACTIVE TASKS — drive-data auto-collected; current results
+A cron logger records every drive **with no user action**, to `tmp/dumps/radar_acc_drive_*.csv` (on the
+Pi, gitignored — not in a fresh clone). Now logs **angles + DTC + voltage + speed**.
 
-**Task A — capture vehicle speed** (OBD-II PIDs are dead behind the SGW bypass; `radar_acc_drive_log.py`
-logs speed as n/a). AlfaOBD shows speed in the ACC live data, so the radar re-exposes received speed
-as a readable **`22` DID** (it consumes speed for ACC; ABS/PCM is the broadcaster). PREFERRED route:
-- A hands-off **DID hunt** is armed: while `tmp/HUNT_DIDS` exists, the cron launches
-  `projects/radar/did_hunt_log.py` (instead of the angle logger) which logs EVERY readable radar DID
-  to `tmp/dumps/hunt_*.csv`. Drive once (city is fine — speed varies 0→~40), then find the DID that
-  reads ~0 at every stop and ramps with motion.
-- Cross-check: the raw broadcast burst (`tmp/canraw/drive_*.log`, captured while `tmp/CAPTURE_RAW`
-  exists) contains a **distance/odometer accumulator at CAN ID `0x101` (bytes ~2-3, monotonic, flat at
-  stops)** — its per-second rate is a ground-truth speed proxy to validate the candidate DID. (A direct
-  clean *speed* field in the broadcast wasn't trivially isolated — counters/mux/aliasing — so the DID
-  route is preferred.)
-- Then: hard-code that DID/offset/scale into `radar_acc_drive_log.py` (replace the dead `open_obd`/
-  `read_speed`), and **`rm tmp/HUNT_DIDS` + `rm tmp/CAPTURE_RAW`** to return to normal angle logging.
+**Task A — capture vehicle speed: ✅ DONE (2026-06-17).** Speed = radar DID **`0x1002`, 1 byte, km/h**
+(found via the DID hunt; 0 at stops, plateau 68-88 = 42-55 mph matched the reported speed; this is what
+AlfaOBD shows). Wired into `radar_acc_drive_log.py`; the dead OBD path is retired and the
+`HUNT_DIDS`/`CAPTURE_RAW` markers + raw bursts are removed.
 
-**Task B — monitor alignment angles across real drives** (settles physical-vs-dynamic, the core question).
-- Data: `tmp/dumps/radar_acc_drive_*.csv` (one per drive; columns incl. `vert_0841`, `elev_0845`,
-  `elev_0850`, `c1418`, plus speed once Task A is done). **Many early files are header-only/empty** (van
-  off or radar asleep — bus active but radar not answering); use files that have rows with data.
-- Read across the **moving** portion of a drive:
-  | observation | meaning |
-  |---|---|
-  | `0841` climbs from ~0 toward **−1.26°** | online estimate confirms the real misalignment vs targets |
-  | `0845`/`0850` stay ≈ −1.26°, `c1418` stays `0x8F` | radar sees it, won't self-correct → **physical** (leading) |
-  | `0845`/`0850` drift **toward 0** | dynamic self-align *is* working → keep driving |
-  | `0841` never moves either | no measurement w/o the routine running → try Open-work #4 |
+**Task B — physical-vs-dynamic: strongly points PHYSICAL (2026-06-17), one UDS avenue left.**
+On a **sustained 37-55 mph / ~10 min** run (`tmp/dumps/hunt_20260617_222502.csv`):
+- `elev_0845` **dead flat at −1.254°** — mean −1.2540 fast (≥60 km/h) vs −1.2558 stopped; **no speed
+  dependence, no convergence toward 0**. `elev_0850` wandered −1.16→−1.37 (not toward 0). DTC stayed active.
+- `0841` is a **live ±10° instantaneous** estimate (vehicle pitch), not the stored value.
+- → the radar had ideal conditions for dynamic self-align and **did not correct**. **Most likely a
+  PHYSICAL mount misalignment** (Open work #1). The only untested UDS path: **run `0x0251` *while*
+  driving** (Open work #4) — normal driving (routine not running) does not align it.
 
 ## Vehicle & goal
 - 2022 Ram Promaster, VIN `3C6LRVDG4NE134328`. SGW bypass installed (diagnostic writes reach modules).
@@ -139,15 +126,12 @@ enough data, so the rig isn't left logging the vehicle indefinitely.
    it (listen-only off) to transmit the UDS reads; it **skips entirely when `can0` is at 125k B-CAN**
    so it never disrupts body-bus work. **Remove once we've collected enough driving traces to settle
    physical-vs-dynamic alignment:** edit it out via `crontab -e` (or `crontab -r`). Output under `tmp/`.
-2. **One-shot raw-CAN burst marker** — `tmp/CAPTURE_RAW`. While present, each logged drive also grabs
-   a bounded `candump` burst to `tmp/canraw/` to identify the vehicle-speed broadcast frame (OBD-II is
-   dead behind the SGW bypass). **Delete the marker (`rm tmp/CAPTURE_RAW`) as soon as the speed frame
-   is decoded**, then wire the speed ID into `radar_acc_drive_log.py` and the burst code can be removed.
-   Idle (0 mph) baseline for the diff: `tmp/canbaseline/idle_*.log`.
-3. **Speed-DID hunt marker** — `tmp/HUNT_DIDS`. While present, the cron logs ALL readable radar DIDs
-   via `did_hunt_log.py` (to `tmp/dumps/hunt_*.csv`) **instead of** the angle logger, to find the speed
-   DID (Task A). **`rm tmp/HUNT_DIDS`** once the speed DID is identified (then delete `did_hunt_log.py`)
-   to resume normal angle logging.
+2. ~~Raw-CAN burst marker `tmp/CAPTURE_RAW`~~ — **RETIRED (2026-06-17):** speed found via DID, not
+   broadcast; marker removed and `tmp/canraw/` bursts cleared (~1.5 GB reclaimed). The burst-launch
+   code remains dormant in `auto_drive_logger.py` (only fires if the marker is re-created).
+3. ~~Speed-DID hunt marker `tmp/HUNT_DIDS`~~ — **RETIRED (2026-06-17):** speed DID `0x1002` identified;
+   marker removed. `did_hunt_log.py` is kept (dormant, reusable for hunting other signals — runs only
+   if the marker is re-created).
 
 ## Caveats / uncertainty
 - Angle **scale** (millideg vs microdeg) and exact DID→name labels are **inferred**, not from a Bosch

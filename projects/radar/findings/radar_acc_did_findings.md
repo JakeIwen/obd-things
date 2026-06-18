@@ -107,7 +107,24 @@ Two auto-logged city drives (~10 min + ~6 min, `tmp/dumps/radar_acc_drive_202606
   authoritative value, `0841` = live/noisy, `0850` = intermediate.
 - Broadcast (raw burst) recon: a **distance/odometer accumulator sits at CAN ID `0x101` (bytes ~2-3,
   monotonic, flat at stops)**; useful as a speed-rate ground truth. No clean direct *speed* field was
-  trivially isolated in the broadcast → pursuing speed via a radar DID instead (see AGENT_HANDOFF Task A).
+  trivially isolated in the broadcast → pursued speed via a radar DID instead (below).
+
+## ★ Vehicle speed DID — VERIFIED (2026-06-17): `0x1002` = km/h (1 byte)
+Found via the DID hunt (`did_hunt_log.py`) on a drive with sustained 40-50 mph. `0x1002` byte0 is
+0 at every stop, ramps smoothly, and plateaus at 68-88 (= 42-55 mph) during the sustained stretch —
+textbook speed profile, matching the reported speed. This is what AlfaOBD shows in ACC live data (the
+radar consumes vehicle speed for ACC and re-exposes it). Now wired into `radar_acc_drive_log.py` as
+the speed source (one read on the radar socket; OBD-II path retired). `0x1009`/`0x2009` are monotonic
+counters (not speed); `0x0857` is a toggling flag.
+
+## ★ Sustained-speed drive — DOES NOT self-align (2026-06-17): physical strongly supported
+Drive with **sustained 60-89 km/h (37-55 mph) for ~10 min** (`tmp/dumps/hunt_20260617_222502.csv`):
+- **`elev_0845` dead flat at −1.254°** — mean −1.2540 while FAST (≥60 km/h, n=606) vs −1.2558 while
+  STOPPED (n=176). **No dependence on speed, no convergence toward 0.**
+- `elev_0850` wandered −1.16 → −1.37 (mean −1.29 fast) — if anything *more* negative, not toward 0.
+- The radar had the ideal conditions for dynamic self-alignment and **did not correct** → strongly
+  supports **physical misalignment** beyond the self-align window. ONE UDS avenue remains untested:
+  running `0x0251` *while* driving (Open work #4) — normal driving (routine not running) does not align.
 
 ## Open / untested
 - **Dynamic-drive hypothesis:** start `0251`, keep the session alive, drive straight >50 km/h and
