@@ -17,3 +17,7 @@ dumps/*_did_sweep_*.txt
 
 # Unattended auto-drive-logger output + runtime state (tools/auto_drive_logger.py)
 tmp/
+
+# Transient drive/hunt logger scratch if run with default out-dir (keep curated *_did_sweep.* only)
+projects/*/dumps/hunt_*.csv
+projects/*/dumps/radar_acc_drive_*.csv
