@@ -95,6 +95,20 @@ too small to be tracking the bounce); everything else moving was counters/temp. 
 exposed accelerometer/inclinometer — the misalignment is target-derived and needs DRIVING to update;
 a static physical nudge does not register.** Reinforces the physical-misalignment conclusion.
 
+## First real drive — city only (2026-06-17): angle behavior
+Two auto-logged city drives (~10 min + ~6 min, `tmp/dumps/radar_acc_drive_20260617_19*.csv`):
+- **`elev_0845` stayed ≈ −1.2585° (moved ~2 millideg total); `elev_0850` ≈ −1.2°; DTC `0x8F` throughout.**
+  The authoritative stored elevation did **not** converge toward 0 → consistent with a physical
+  misalignment, **but city-only driving can't rule out dynamic** (dynamic alignment needs sustained,
+  straight, higher speed — it wouldn't engage in stop-and-go anyway). **A highway run is still the
+  discriminator.**
+- **`0841` is a LIVE instantaneous estimate while driving** — swings ±10° around ~0 (240 distinct
+  values), tracking vehicle pitch/road, *not* converging to the stored −1.26°. So `0845` = frozen
+  authoritative value, `0841` = live/noisy, `0850` = intermediate.
+- Broadcast (raw burst) recon: a **distance/odometer accumulator sits at CAN ID `0x101` (bytes ~2-3,
+  monotonic, flat at stops)**; useful as a speed-rate ground truth. No clean direct *speed* field was
+  trivially isolated in the broadcast → pursuing speed via a radar DID instead (see AGENT_HANDOFF Task A).
+
 ## Open / untested
 - **Dynamic-drive hypothesis:** start `0251`, keep the session alive, drive straight >50 km/h and
   watch `0845`/`0850` converge. Rated lower than "physical" given the cross-drive-cycle stability.
