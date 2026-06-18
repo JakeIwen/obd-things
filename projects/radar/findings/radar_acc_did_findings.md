@@ -141,6 +141,17 @@ back **within the online auto-align window**, then **normal driving may auto-cle
 first time — no SDA, no scan tool, no security unlock. Watch `0845`/`0850`/DTC via the cron logger over
 normal use. Don't *rely* on it yet, but it's the path that best fits "van is home/office — no shop visits."
 
+## ★ 2-hour drive (2026-06-18, `radar_acc_drive_20260618_143202.csv`, 7013 rows): driving alone does NOT fix it
+117 min, mean 76 km/h, **60% of samples ≥80 km/h (50 mph)**, with stops — ideal auto-align conditions.
+- **`elev_0845` dead flat at ≈ −1.262°** across the whole drive (10-min-window means −1.266 → −1.262, ~4
+  millideg of noise, NOT convergence). `elev_0850` (noisier live estimate) wandered −1.20…−1.36, centered
+  ~−1.26, **no trend toward 0**. **C1418-78 never cleared** (0x8F throughout).
+- **Conclusion:** at −1.26°, **normal driving does NOT re-converge** — the deviation is beyond the online
+  auto-align capture window. The earlier self-clear was a *smaller* deviation. → **the physical mount
+  correction is REQUIRED, not optional; there is no "just keep driving" shortcut from here.** Once the
+  deviation is physically reduced into the window, re-run a comparable drive and watch `0845` move (clean
+  before/after baseline now exists). Speed via `0x1002` logged correctly (0-113 km/h) — logger fully working.
+
 ## Open / untested
 - **Run SDA (the real fix):** scan tool → ACC ECU view → Misc Functions → "Service Drive Alignment
   (SDA): radar calibration" (tire pressure OK, Wi-Fi hotspot). DIY replication: start `0x0251`, keep
