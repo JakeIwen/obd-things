@@ -6,6 +6,14 @@ First-party manufacturer service material and peer-reviewed references for the A
 
 ---
 
+## ★ AllData (Ram 2022, GAS) — C1418-78 chart + ACC alignment → [`alldata_ram2022_C1418-78_and_acc_alignment.md`](alldata_ram2022_C1418-78_and_acc_alignment.md)
+**Most authoritative — vehicle-specific to our actual van.** Key result: the Ram-2022 alignment is the
+**"Service Drive Alignment (SDA): radar calibration"** — a **dynamic drive** procedure run from the scan
+tool (ACC ECU view → Misc Functions), needing tire pressure + a **Wi-Fi hotspot**. **NOT a static
+mirror** (that premise came from a Giulia doc and is wrong for the Promaster). Read this first.
+
+---
+
 ## FCA STAR S2123000064 Rev.A — "Service FCW Message On Cluster And C1418-78 Vertical Misalignment DTC"
 - **File:** [`FCA_STAR_S2123000064_C1418-78_vertical_misalignment_2021-11.pdf`](FCA_STAR_S2123000064_C1418-78_vertical_misalignment_2021-11.pdf)
 - **Publisher:** FCA US LLC (Mopar STAR Online), release Nov 2021. **Directly addresses our exact DTC C1418-78.**
