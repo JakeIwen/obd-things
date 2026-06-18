@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """Guided runner for the ACC-radar (Bosch DASM / MRR1evo) alignment routine 0x0251.
 
+  *** METHOD CORRECTION (2026-06-18, OEM docs): the Ram-2022 alignment is a scan-tool "Service Drive
+  Alignment (SDA)" -- a DYNAMIC DRIVE calibration, NOT the static 3-position mirror this script's
+  checklist walks. See docs/oem/alldata_ram2022_C1418-78_and_acc_alignment.md. The static-mirror
+  steps below are from a Giulia doc and are WRONG for this van -- IGNORE them. 0x0251 here is likely
+  the SDA start (it stays "RUNNING" awaiting a guided drive). Correct use: verify mounting, --arm to
+  start 0x0251, then DRIVE (Open work #0). The mirror/position prompts are retained only as history. ***
+
+
     python3 projects/radar/radar_acc_align_0251.py        # PREFLIGHT ONLY (read-only, default)
     python3 projects/radar/radar_acc_align_0251.py --arm  # guided 3-position alignment (gated)
     python3 projects/radar/radar_acc_align_0251.py --arm --option 01

@@ -117,17 +117,19 @@ radar consumes vehicle speed for ACC and re-exposes it). Now wired into `radar_a
 the speed source (one read on the radar socket; OBD-II path retired). `0x1009`/`0x2009` are monotonic
 counters (not speed); `0x0857` is a toggling flag.
 
-## ★ Sustained-speed drive — DOES NOT self-align (2026-06-17): physical strongly supported
+## ★ Sustained-speed drive (2026-06-17) + OEM method (2026-06-18): alignment is SDA, not self-align
 Drive with **sustained 60-89 km/h (37-55 mph) for ~10 min** (`tmp/dumps/hunt_20260617_222502.csv`):
-- **`elev_0845` dead flat at −1.254°** — mean −1.2540 while FAST (≥60 km/h, n=606) vs −1.2558 while
-  STOPPED (n=176). **No dependence on speed, no convergence toward 0.**
-- `elev_0850` wandered −1.16 → −1.37 (mean −1.29 fast) — if anything *more* negative, not toward 0.
-- The radar had the ideal conditions for dynamic self-alignment and **did not correct** → strongly
-  supports **physical misalignment** beyond the self-align window. ONE UDS avenue remains untested:
-  running `0x0251` *while* driving (Open work #4) — normal driving (routine not running) does not align.
+- **`elev_0845` dead flat at −1.254°** — mean −1.2540 FAST (≥60 km/h, n=606) vs −1.2558 STOPPED (n=176);
+  no speed dependence, no convergence. `elev_0850` wandered −1.16→−1.37 (not toward 0).
+- **Do NOT read this as "physical."** OEM docs (`docs/oem/alldata_ram2022_C1418-78_and_acc_alignment.md`)
+  show alignment is a scan-tool-initiated **Service Drive Alignment (SDA)** — the radar does **not**
+  self-align during normal driving, so the flat angle just means **SDA was never run**, not a hard fault.
+  Earlier "physical strongly supported" was wrong on that point.
 
 ## Open / untested
-- **Dynamic-drive hypothesis:** start `0251`, keep the session alive, drive straight >50 km/h and
-  watch `0845`/`0850` converge. Rated lower than "physical" given the cross-drive-cycle stability.
+- **Run SDA (the real fix):** scan tool → ACC ECU view → Misc Functions → "Service Drive Alignment
+  (SDA): radar calibration" (tire pressure OK, Wi-Fi hotspot). DIY replication: start `0x0251`, keep
+  session alive, do the guided drive — but SDA's internet/server side may not be reproducible with raw
+  `0x0251`. Verify mounting first (`docs/oem/` TSB).
 - **Get the FCA/wiTECH Promaster (RU body) radar procedure** to disambiguate static-vs-dynamic and
   the documented mechanical adjustment — before any more actuation.

@@ -29,14 +29,19 @@ Pi, gitignored — not in a fresh clone). Now logs **angles + DTC + voltage + sp
 AlfaOBD shows). Wired into `radar_acc_drive_log.py`; the dead OBD path is retired and the
 `HUNT_DIDS`/`CAPTURE_RAW` markers + raw bursts are removed.
 
-**Task B — physical-vs-dynamic: strongly points PHYSICAL (2026-06-17), one UDS avenue left.**
-On a **sustained 37-55 mph / ~10 min** run (`tmp/dumps/hunt_20260617_222502.csv`):
-- `elev_0845` **dead flat at −1.254°** — mean −1.2540 fast (≥60 km/h) vs −1.2558 stopped; **no speed
-  dependence, no convergence toward 0**. `elev_0850` wandered −1.16→−1.37 (not toward 0). DTC stayed active.
-- `0841` is a **live ±10° instantaneous** estimate (vehicle pitch), not the stored value.
-- → the radar had ideal conditions for dynamic self-align and **did not correct**. **Most likely a
-  PHYSICAL mount misalignment** (Open work #1). The only untested UDS path: **run `0x0251` *while*
-  driving** (Open work #4) — normal driving (routine not running) does not align it.
+**Task B — RESOLVED by OEM docs (2026-06-18): alignment is a scan-tool "Service Drive Alignment".**
+The AllData Ram-2022 procedure (`docs/oem/alldata_ram2022_C1418-78_and_acc_alignment.md`) says alignment
+= **"Service Drive Alignment (SDA): radar calibration"** — a wiTECH-initiated **dynamic drive** (ACC ECU
+view → Misc Functions; needs tire pressure + a **Wi-Fi hotspot**). **Not a static mirror, not passive
+self-align.** This reframes the drive data:
+- `elev_0845` stayed flat at −1.254° at all speeds (`tmp/dumps/hunt_20260617_222502.csv`); `0841` is a
+  live ±10° instantaneous estimate. But the radar **does not** self-align during normal driving — SDA
+  must be explicitly run — **so this does NOT prove a physical fault** (earlier "strongly physical" was
+  wrong; it just means SDA was never run).
+- **Leading fix:** run **SDA** (ideally wiTECH; or replicate via `0x0251` + the guided drive — our
+  `0x0251` start that stays "RUNNING" is consistent with SDA armed-and-awaiting-the-drive), **after**
+  confirming proper mounting (TSB + chart note). DIY caveat: SDA needs internet (Wi-Fi hotspot) → may
+  have a server handshake raw `0x0251` can't reproduce.
 
 ## Vehicle & goal
 - 2022 Ram Promaster, VIN `3C6LRVDG4NE######`. SGW bypass installed (diagnostic writes reach modules).
@@ -93,15 +98,19 @@ shows ~0 — so it hides the −1.2° fault entirely. Full evidence + a ready-to
   still ACKs/answers direct UDS reads — so reads work, just no bus flood. Engine running = stable ~14 V.
 
 ## Open work (priority order)
-1. **Inspect the radar mount physically — per the FCA TSB this is THE fix path** (see
-   `docs/oem/` → FCA STAR S2123000064 for C1418-78). It's a **seating / interference** fault, not a
-   dialed-in angle: (a) **re-seat the module** fully + level in its bracket (alone may fix it); (b) pull
-   it and check for **witness/rub marks** where the aluminum bumper bar contacts it — if the bar sits
-   too high, **slide the bumper DOWN** off the module; (c) reinstall, confirm no contact, **then run the
-   calibration routine**. Explains why it won't self-align and why a parked nudge/static mirror did nothing.
-2. **Promaster-specific service info** — the TSB in `docs/oem/` is FCA-generic (car-platform photos);
-   confirm the RU-van's bracket/bumper geometry against service info "08 - Electrical / 8E - ECMs /
-   MODULE, Adaptive Cruise Control (ACC) / Removal and Installation" before disassembly.
+0. **Run the Service Drive Alignment (SDA) — this is the actual OEM fix** (AllData, `docs/oem/`).
+   It's a scan-tool-initiated **dynamic drive** calibration (ACC ECU view → Misc Functions → "Service
+   Drive Alignment (SDA): radar calibration"; tire pressure correct; **Wi-Fi hotspot** required). Easiest
+   with wiTECH/a capable scan tool. **DIY replication** (no guarantee — may need the wiTECH/server side):
+   start `0x0251` via `radar_acc_align_0251.py --arm`, keep the session alive, and do the guided drive;
+   watch `0845`/`0850` via the drive logger. Do **0** *after* #1.
+1. **Verify the module mounting first** (precondition for SDA; FCA STAR S2123000064 in `docs/oem/`):
+   re-seat it fully + level in the bracket; pull it and check for **witness/rub marks** where the aluminum
+   bumper bar contacts it — if the bar's too high, **slide the bumper DOWN** off the module. "Improper
+   mounting can cause the calibration to fail" (Ram chart). NOTE: the static-mirror flow in
+   `radar_acc_align_0251.py` is the WRONG method for this van (it's SDA/dynamic) — ignore those steps.
+2. **Promaster-specific geometry** — the TSB is FCA-generic (car-platform photos); confirm the RU-van's
+   bracket/bumper against service info "08 - Electrical / 8E - ECMs / MODULE, ACC / Removal and Installation".
 3. ~~Perturbation test~~ **DONE (2026-06-13):** bounced the suspension ~1–2 in (≈0.7° body pitch);
    `0845`/`0850` unchanged, `0841` moved only ~7 millideg (drift, not tracking). **No live orientation
    signal — angle is driving-derived.** Confirms physical movement does not register while parked.
