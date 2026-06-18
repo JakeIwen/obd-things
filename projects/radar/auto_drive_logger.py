@@ -45,6 +45,9 @@ RETAIN_DAYS = 90            # delete captures older than this
 RAW_MARKER = os.path.join(REPO, "tmp", "CAPTURE_RAW")
 RAW_DIR = os.path.join(REPO, "tmp", "canraw")
 RAW_BURST_S = 240
+# While this marker exists, log EVERY readable radar DID (did_hunt_log.py) instead of just the
+# angle logger -- to find the DID that tracks vehicle speed. Remove once the speed DID is found.
+HUNT_MARKER = os.path.join(REPO, "tmp", "HUNT_DIDS")
 
 
 def log(msg):
@@ -97,13 +100,15 @@ def launch_logger():
     os.makedirs(OUT_DIR, exist_ok=True)
     logpath = os.path.join(TMP_DIR, "drive_logger.out")
     out = open(logpath, "a")
+    # while the hunt marker exists, log ALL readable DIDs (find the speed DID) instead of angles
+    script = "did_hunt_log.py" if os.path.exists(HUNT_MARKER) else "radar_acc_drive_log.py"
     p = subprocess.Popen(
-        [sys.executable, os.path.join(HERE, "radar_acc_drive_log.py"),
+        [sys.executable, os.path.join(HERE, script),
          "--quiet", "--out-dir", OUT_DIR, "--stop-after-idle", str(STOP_AFTER_IDLE)],
         stdout=out, stderr=subprocess.STDOUT, start_new_session=True, cwd=REPO)
     with open(PIDFILE, "w") as f:
         f.write(str(p.pid))
-    log(f"launched logger pid={p.pid} -> {OUT_DIR}")
+    log(f"launched {script} pid={p.pid} -> {OUT_DIR}")
 
     # raw-CAN burst for speed-frame identification (while marker present), one at a time
     if os.path.exists(RAW_MARKER) and not _pid_alive(RAW_PIDFILE):

@@ -24,16 +24,20 @@ routine. See Open work.
 A cron logger (see TEARDOWN) records every drive **with no user action**. The captures live **on the
 Pi under `tmp/` (gitignored — not in a fresh clone; you must be on the Pi)**. Two analyses are pending:
 
-**Task A — identify the vehicle-speed broadcast frame** (OBD-II PIDs are dead behind the SGW bypass,
-so speed must be decoded from the bus broadcast; `radar_acc_drive_log.py` currently logs speed as n/a).
-- Data: idle 0 mph baseline `tmp/canbaseline/idle_*.log` vs a *moving* burst `tmp/canraw/drive_*.log`
-  (raw `candump -ta`, captured automatically while `tmp/CAPTURE_RAW` exists).
-- Method: the speed signal is the CAN ID + byte(s) that read ~0 at every stop and **ramp with motion**.
-  Diff a moving log against the idle baseline (bytes that are constant-0 at idle but vary while moving),
-  and within a moving log find the byte that returns to 0 at each stop. Confirm scale (km/h) against the
-  driver's recollection of speed.
-- Then: hard-code that ID/offset/scale into `projects/radar/radar_acc_drive_log.py` (replace the dead
-  `open_obd`/`read_speed` OBD path), and **`rm tmp/CAPTURE_RAW`** to stop the raw bursts.
+**Task A — capture vehicle speed** (OBD-II PIDs are dead behind the SGW bypass; `radar_acc_drive_log.py`
+logs speed as n/a). AlfaOBD shows speed in the ACC live data, so the radar re-exposes received speed
+as a readable **`22` DID** (it consumes speed for ACC; ABS/PCM is the broadcaster). PREFERRED route:
+- A hands-off **DID hunt** is armed: while `tmp/HUNT_DIDS` exists, the cron launches
+  `projects/radar/did_hunt_log.py` (instead of the angle logger) which logs EVERY readable radar DID
+  to `tmp/dumps/hunt_*.csv`. Drive once (city is fine — speed varies 0→~40), then find the DID that
+  reads ~0 at every stop and ramps with motion.
+- Cross-check: the raw broadcast burst (`tmp/canraw/drive_*.log`, captured while `tmp/CAPTURE_RAW`
+  exists) contains a **distance/odometer accumulator at CAN ID `0x101` (bytes ~2-3, monotonic, flat at
+  stops)** — its per-second rate is a ground-truth speed proxy to validate the candidate DID. (A direct
+  clean *speed* field in the broadcast wasn't trivially isolated — counters/mux/aliasing — so the DID
+  route is preferred.)
+- Then: hard-code that DID/offset/scale into `radar_acc_drive_log.py` (replace the dead `open_obd`/
+  `read_speed`), and **`rm tmp/HUNT_DIDS` + `rm tmp/CAPTURE_RAW`** to return to normal angle logging.
 
 **Task B — monitor alignment angles across real drives** (settles physical-vs-dynamic, the core question).
 - Data: `tmp/dumps/radar_acc_drive_*.csv` (one per drive; columns incl. `vert_0841`, `elev_0845`,
@@ -140,6 +144,10 @@ enough data, so the rig isn't left logging the vehicle indefinitely.
    dead behind the SGW bypass). **Delete the marker (`rm tmp/CAPTURE_RAW`) as soon as the speed frame
    is decoded**, then wire the speed ID into `radar_acc_drive_log.py` and the burst code can be removed.
    Idle (0 mph) baseline for the diff: `tmp/canbaseline/idle_*.log`.
+3. **Speed-DID hunt marker** — `tmp/HUNT_DIDS`. While present, the cron logs ALL readable radar DIDs
+   via `did_hunt_log.py` (to `tmp/dumps/hunt_*.csv`) **instead of** the angle logger, to find the speed
+   DID (Task A). **`rm tmp/HUNT_DIDS`** once the speed DID is identified (then delete `did_hunt_log.py`)
+   to resume normal angle logging.
 
 ## Caveats / uncertainty
 - Angle **scale** (millideg vs microdeg) and exact DID→name labels are **inferred**, not from a Bosch
