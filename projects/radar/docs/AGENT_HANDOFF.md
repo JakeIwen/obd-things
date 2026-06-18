@@ -98,12 +98,15 @@ shows ~0 — so it hides the −1.2° fault entirely. Full evidence + a ready-to
   still ACKs/answers direct UDS reads — so reads work, just no bus flood. Engine running = stable ~14 V.
 
 ## Open work (priority order)
-0. **Run the Service Drive Alignment (SDA) — this is the actual OEM fix** (AllData, `docs/oem/`).
-   It's a scan-tool-initiated **dynamic drive** calibration (ACC ECU view → Misc Functions → "Service
-   Drive Alignment (SDA): radar calibration"; tire pressure correct; **Wi-Fi hotspot** required). Easiest
-   with wiTECH/a capable scan tool. **DIY replication** (no guarantee — may need the wiTECH/server side):
-   start `0x0251` via `radar_acc_align_0251.py --arm`, keep the session alive, and do the guided drive;
-   watch `0845`/`0850` via the drive logger. Do **0** *after* #1.
+0. **DIY Service Drive Alignment attempt — the decisive untried experiment.** OEM alignment is a
+   scan-tool-initiated **dynamic drive** (AllData, `docs/oem/`). Every prior `0x0251` run was PARKED, so
+   it just sat "RUNNING". **`projects/radar/radar_acc_sda_drive.py --arm`** does the missing test: starts
+   `0x0251` once, holds the session alive with TesterPresent (never re-sends `10 03` → would reset it),
+   and logs `0845`/`0850`/DTC/speed while you drive (straight/steady ~30-45 mph, ~15-20 min). If the radar
+   does the SDA itself → elevation converges / DTC clears = **DIY fix, no wiTECH**. If it stays pinned/
+   RUNNING → the commit needs the wiTECH cloud/server side and pure-UDS is blocked. **Either outcome
+   answers it, for free.** Do **after** #1 (mounting). The "Wi-Fi hotspot" is likely just wiTECH's cloud
+   UI, not necessarily a radar-side requirement — this test tells us.
 1. **Verify the module mounting first** (precondition for SDA; FCA STAR S2123000064 in `docs/oem/`):
    re-seat it fully + level in the bracket; pull it and check for **witness/rub marks** where the aluminum
    bumper bar contacts it — if the bar's too high, **slide the bumper DOWN** off the module. "Improper
