@@ -43,3 +43,12 @@ running, vehicle speed present). Steps:
 - **DIY/UDS replication caveat:** SDA is wiTECH-guided and needs internet (Wi-Fi hotspot) — there may be
   a server handshake we can't reproduce with raw `0x0251`. Replication attempt = start `0x0251`, keep the
   session alive, perform the guided drive (Open work #4) — but it may require the wiTECH/server side.
+
+### Why the internet? — UNDOCUMENTED (searched the whole scrape 2026-06-18)
+The AllData scrape has **zero** "secure gateway" / "AutoAuth" docs, and the **only** stated connectivity
+requirement is the bare "Wi-Fi Mobile Hot Spot router is required" in the alignment doc — **no rationale,
+no manual/UDS alternative**. So the *reason* is inference, not documented: almost certainly because
+wiTECH 2.0 is a **cloud client** (routine guidance streamed from Stellantis servers) and likely a
+server-side compute/validate and/or secure-access step to commit the calibration. Bottom line: **internet
+helps a real wiTECH/cloud scan tool (Starlink satisfies "drive with internet"); it does NOT help our raw
+`0x0251` Pi path** (we never reach Stellantis). The SGW *bypass* covers the gateway layer, not the cloud layer.
