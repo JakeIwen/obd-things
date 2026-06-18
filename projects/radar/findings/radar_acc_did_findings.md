@@ -3,6 +3,8 @@
 Radar identifies as **MRR1evo14F** (Bosch Mid-Range Radar gen-1 evo). VIN `3C6LRVDG4NE134328`.
 Full read-only `22 <did>` sweep of 0x0000–0xFFFF: **56 readable DIDs, 0 locked, 0 unresolved (CLEAN)**.
 Raw log: `projects/radar/dumps/radar_acc_did_sweep.txt`. Tool: `python3 tools/did_sweep.py radar_acc` (generic).
+**Complete consolidated map of ALL 56 DIDs + sessions/security/routines/DTCs → [`did_map.md`](did_map.md)**
+(this file holds the narrative/analysis; `did_map.md` is the canonical lookup table).
 
 ## ★ Alignment / deviation-angle candidates (stored, static across repeated reads)
 
