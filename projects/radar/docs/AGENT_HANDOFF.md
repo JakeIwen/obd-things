@@ -130,9 +130,11 @@ enough data, so the rig isn't left logging the vehicle indefinitely.
 
 1. **Cron auto drive-logger** — installed in the user's crontab (`crontab -l`):
    `* * * * * ... python3 projects/radar/auto_drive_logger.py >> tmp/auto_drive_logger.log 2>&1`
-   Passively logs each drive to `tmp/dumps/*.csv` (read-only). **Remove once we've collected enough
-   driving traces to settle physical-vs-dynamic alignment:** edit it out via `crontab -e` (or
-   `crontab -r` to clear all). Output lives under `tmp/` (gitignored).
+   Passively logs each drive to `tmp/dumps/*.csv` (read-only). **Bus-aware** (bringup.sh is now
+   passive-by-default + multi-bus): it operates only on the radar's **C-CAN 500k** and **auto-arms**
+   it (listen-only off) to transmit the UDS reads; it **skips entirely when `can0` is at 125k B-CAN**
+   so it never disrupts body-bus work. **Remove once we've collected enough driving traces to settle
+   physical-vs-dynamic alignment:** edit it out via `crontab -e` (or `crontab -r`). Output under `tmp/`.
 2. **One-shot raw-CAN burst marker** — `tmp/CAPTURE_RAW`. While present, each logged drive also grabs
    a bounded `candump` burst to `tmp/canraw/` to identify the vehicle-speed broadcast frame (OBD-II is
    dead behind the SGW bypass). **Delete the marker (`rm tmp/CAPTURE_RAW`) as soon as the speed frame
