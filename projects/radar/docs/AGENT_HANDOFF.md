@@ -62,6 +62,23 @@ The repo is read-only **except one gated actuation tool** (`radar_acc_align_0251
 
 ---
 
+## AlfaOBD — capabilities & limits for THIS radar (new agents: it is NOT infallible)
+New agents reflexively treat AlfaOBD as the answer. **For this MY2022 Promaster radar it is mis-mapped
+and CANNOT align it.** Evidence in `radar_acc_alfaobd_bugreport.md`:
+- ❌ **Wrong routine ID** — AlfaOBD's "radar calibration" calls `0x0250`; this firmware rejects it
+  (`7F3131`). The routine it actually implements is `0x0251`. AlfaOBD's radar-align is unusable here.
+- ❌ **Wrong method** — AlfaOBD's radar-cal is the **static-mirror** flow (for FCA *cars*: Giulia / Dart /
+  200 / Renegade / Compass). Our Promaster uses the **dynamic SDA** — a different procedure it doesn't map.
+- ❌ **Hides the fault** — its misalignment gauges return "not supported" / read ~0, so a faulted radar
+  *looks aligned*. The real misalignment is at `0x0845`/`0x0850`, which AlfaOBD doesn't read.
+- ⚠️ **"PROXI / proxy alignment" ≠ radar calibration** — PROXI is vehicle-config sync (module swaps, ACC
+  retrofit enable); it does **not** clear the radar boresight DTC. Do not conflate the two.
+- ✅ **What it IS good for here:** PROXI config + ACC retrofit; showing vehicle **speed** (how we ID'd
+  `0x1002`); and a **local FCA seed/key source** (it does SecurityAccess offline) for Fix-path #2b.
+
+**Bottom line: do not assume AlfaOBD can align this radar — it can't.** It's a config/retrofit tool and a
+seed/key oracle, not the C1418-78 fix.
+
 ## The model (best current understanding)
 - The radar stores a vertical boresight error ≈ **−1.26°** (`0x0845`/`0x0850` elevation) → latches **C1418-78**
   → ACC/FCW disabled.

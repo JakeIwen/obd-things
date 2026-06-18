@@ -121,3 +121,18 @@ With a tester at `0x18DA2AF1` / `0x18DAF12A`, 500k HS-CAN:
   AlfaOBD's misalignment gauges; the exact voltage/temperature DID matches.
 - **Inferred (good leads, please confirm vs Bosch data):** that `0x0841/0x0845/0x0850` are the
   misalignment angles, and their exact unit/scale.
+
+---
+
+## Update (2026-06-18) — why AlfaOBD can't actually align THIS radar (new agents: don't assume it can)
+Further research (OEM AllData for the Ram 2022, `oem/`) explains the mis-mapping and why AlfaOBD is the
+wrong tool for clearing C1418-78 here:
+- **METHOD mismatch, not just a wrong RID.** AlfaOBD's radar calibration is the **static-mirror** procedure
+  (`0x0250`, mirror-position prompts) used on FCA **cars** (Giulia/Dart/200/Renegade/Compass). The
+  **Promaster uses a dynamic "Service Drive Alignment" (SDA)** via `0x0251` — a *drive* routine, no mirror —
+  which AlfaOBD does not map.
+- **"PROXI / proxy alignment" ≠ radar calibration.** PROXI (which AlfaOBD does well) is vehicle-config sync
+  (module swaps, ACC retrofit enable); it does **not** clear the radar boresight DTC. Common confusion.
+- **What AlfaOBD IS useful for here:** PROXI config + ACC retrofit; showing vehicle **speed** (how we ID'd
+  speed = DID `0x1002`); and a **local FCA seed/key oracle** (it does SecurityAccess offline) to supply the
+  `27` unlock if our DIY `0x0251` SDA needs it. See `AGENT_HANDOFF.md` → "AlfaOBD — capabilities & limits".
