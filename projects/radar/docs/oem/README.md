@@ -43,6 +43,13 @@ mirror** (that premise came from a Giulia doc and is wrong for the Promaster). R
   interference, then calibrate) almost certainly applies. Verify against the Promaster service info:
   "08 - Electrical / 8E - Electronic Control Modules / MODULE, Adaptive Cruise Control (ACC)".
 
+## Web research — tooling / SDA / security / costs → [`research_2026-06-18_tooling_and_alignment.md`](research_2026-06-18_tooling_and_alignment.md)
+Closes ecosystem-layer unknowns: wiTECH 2.0 is cloud/browser (hotspot = its session+security, not a
+radar step); **0250 = static-mirror (cars, AlfaOBD-supported) vs 0251 = dynamic SDA (our Promaster)**;
+AlfaOBD likely can't run our SDA but proves the radar routine is local UDS; **FCA `27` seed/key is locally
+solvable** (AlfaOBD/DiagCode, offline); aftermarket tools (Autel/Launch + AutoAuth ~$50/yr) do FCA ADAS
+calibrations for ~$600-1500, and a shop recalibration is ~$250-500 (not $2k).
+
 ## Supporting reference (not OEM, but peer-reviewed)
 - Burza et al., *Overview of Radar Alignment Methods and Analysis of Radar Misalignment's Impact* —
   `https://pmc.ncbi.nlm.nih.gov/articles/PMC11314900/`. Physics of vertical misalignment (sky vs ground)

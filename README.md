@@ -8,6 +8,16 @@ each investigation living under `projects/<name>/`.
 > **New here (human or agent)? Read this whole file first** (universal facts + gotchas below), then
 > the README of whatever you're working on, e.g. [`projects/radar/README.md`](projects/radar/README.md).
 
+## Working method — RESEARCH-FIRST (for agents)
+At every diagnostic fork, **before** going heads-down on bus-level reverse engineering:
+1. **Web-search the open question** — OEM procedures/TSBs, how the relevant tools behave, community DIY reports.
+2. **Ask what tools/resources/access the user has** — AlfaOBD, wiTECH, scan tools, service-doc subscriptions,
+   local scrapes (e.g. the AllData scrape at `~/dev/ram_2022_GAS`).
+3. **Mine resources already on disk / in-repo** — docs, scrapes, prior findings.
+
+Hard-won lesson on this project: the decisive clues lived in the **tool/OEM/community ecosystem**, not on
+the wire. Low-level CAN/UDS RE is the *fallback*, not the opener. (See memory `research-first-diagnostics`.)
+
 ---
 
 ## Layout
