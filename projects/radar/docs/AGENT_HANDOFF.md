@@ -123,6 +123,12 @@ seed/key oracle, not the C1418-78 fix.
 ## VERIFIED — trust these, do not re-test
 - **Bus:** HS-CAN / C-CAN, **500 kbit/s**, OBD pins 6/14. (Body B-CAN = 125k via `bringup.sh --bcan`.)
 - **Radar addressing:** UDS/ISO-TP, **29-bit normal-fixed**. TX `0x18DA2AF1`, RX `0x18DAF12A` (phys 0x2A, tester 0xF1).
+- **LINK PATH — everything goes through a physical SGW BYPASS.** A 2018+ FCA Security Gateway sits between
+  the OBD port and the internal buses; this van has an **ECRI-style SGW-bypass cable** that taps the
+  **internal** C-CAN directly. That bypass is **why our diagnostic UDS (`22`/`19`/`31`) reaches the radar
+  at all**, and **why legislated OBD-II PIDs do NOT route** (we're past the gateway's OBD path — ruled-out
+  #2). If the bypass is removed/disturbed, **nothing here works.** It is a *gateway* bypass only — it does
+  not touch the wiTECH cloud/AutoAuth layer or any in-module `27` security.
 - **Baseline reproduces exactly:** `10 03`→`50 03 00 32 01 F4`; `22 F191` family→`MRR1evo14F`; serial `22 F18C`→`TD5730292062400`; SW `F195`=`0400`, HW `F193`=`01`.
 - **DTCs (`19 02 FF`):** 8 total; **only C1418-78 active (0x8F)**, 7 dormant (0x40). FCA 3-byte encoding (C1418-78 = `54 18 78`).
 - **Routine scan CLEAN:** only `0x0251` exists; **runs in session `0x03`, NO option byte, single-start** (2nd
@@ -174,4 +180,5 @@ during a test. Legal/liability terms: repo-root README "Safety & liability".
 
 ## Environment
 Raspberry Pi, `/home/pi/dev/obd-things`. `can-utils` (apt); `python-can`, `can-isotp` (pip --break-system-packages).
-PCAN-USB on a powered hub; `can0` via in-kernel `peak_usb`. Van has **Starlink** (internet available in-vehicle).
+PCAN-USB on a powered hub → **SGW-bypass cable** → vehicle internal C-CAN; `can0` via in-kernel `peak_usb`.
+Van has **Starlink** (internet available in-vehicle). The whole link depends on the SGW bypass (see VERIFIED).

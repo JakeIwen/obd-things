@@ -3,7 +3,8 @@
 Canonical, persistent reference for **everything we know or suspect** about the radar's UDS surface.
 Source: full `22` sweep `../dumps/radar_acc_did_sweep.txt` (56 readable DIDs, 0 locked) + runtime work.
 Raw values shown are **idle/parked** snapshots. Addressing: 29-bit normal-fixed, TX `0x18DA2AF1` / RX
-`0x18DAF12A`. Confidence: **[V]** verified · **[I]** inferred (internally consistent, no ODX) ·
+`0x18DAF12A`. **All comms reach the radar via a physical SGW (Security Gateway) bypass** tapping the
+internal C-CAN — this is why UDS works here and why OBD-II PIDs don't route. Confidence: **[V]** verified · **[I]** inferred (internally consistent, no ODX) ·
 **[S]** suspected · **[?]** unknown.
 
 ## ★ Alignment / dynamic signals (the ones that matter for C1418-78)
