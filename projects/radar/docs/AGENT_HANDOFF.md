@@ -103,6 +103,11 @@ seed/key oracle, not the C1418-78 fix.
    "level/square," not a signed angle). Goal: deviation back **inside the auto-align window**. Nothing
    downstream works until this is done. *(AllData front-fascia + ACC-module removal steps can be pulled from
    `~/dev/ram_2022_GAS` on request.)*
+   **No live CAN feedback during the wrench work** — `0845`/`0850` are stored (update only via driving) and
+   `0841` is target-derived; the perturbation test proved a physical tilt doesn't register while parked. So
+   the loop is **inclinometer → drive → re-read `0845`/`0850`** (iterate). And note: if still outside the
+   auto-align window, the stored readings stay frozen and give NO feedback — rely on the inclinometer to
+   confirm you're physically nominal; a drive-read only starts moving once you're back in range.
 1b. **Then drive normally + monitor (no tool).** The cron logger captures it passively; watch `0845`/`0850`
    trend toward 0 / DTC clear over miles. Cheapest shot, best fit for "van is home." Don't *rely* on it.
 2. **DIY Service Drive Alignment — if 1b doesn't converge.** `radar_acc_sda_drive.py --arm`: starts `0x0251`
