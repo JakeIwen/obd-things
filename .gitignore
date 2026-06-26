@@ -13,6 +13,8 @@ venv/
 
 # Ad-hoc / debug dumps (keep the canonical full sweep radar_acc_did_sweep.txt + .log)
 dumps/*_did_sweep_*.txt
+# tools/sniff.sh raw candump captures (transient)
+dumps/sniff/
 *.tmp
 
 # Unattended auto-drive-logger output + runtime state (tools/auto_drive_logger.py)
