@@ -54,7 +54,10 @@ CHANNEL = "can0"
 BITRATE = 125000          # B-CAN body bus
 VOLT_ID = 0x46C           # BCM broadcast frame carrying system voltage
 SFF_MASK = 0x7FF          # standard 11-bit id mask
-DIVISOR = 400.0           # bytes[4:5] BE / 400 = volts (verified 2026-06-26; recalibrate vs multimeter)
+DIVISOR = 400.0           # voltage = (word & VOLT_MASK) / 400 (verified 2026-06-26; recal vs multimeter)
+VOLT_MASK = 0x1FFF        # 0x46C byte[4] HIGH bits are status flags (saw bit6=0x4000 set -> phantom +51 V);
+                          # the voltage is the LOW 13 bits of the bytes[4:5] BE word
+V_SANE = (6.0, 18.0)      # plausible 12 V-system rail; frames decoding outside this are dropped as corrupt
 WAKE_ID = 0x7FF           # benign unused id for the --wake burst (no module actuates on it)
 WAKE_N, WAKE_GAP = 75, 0.02   # ~1.5s of bus activity trips wake-on-activity; bus then stays up ~10s
 
@@ -175,7 +178,9 @@ def read_voltage(channel=CHANNEL, timeout=4.0, divisor=DIVISOR):
             can_id, dlc, data = struct.unpack("=IB3x8s", frame)
             data = data[:dlc]
             if len(data) >= 6:
-                volts.append(((data[4] << 8) | data[5]) / divisor)
+                v = (((data[4] << 8) | data[5]) & VOLT_MASK) / divisor   # mask off byte[4] status bits
+                if V_SANE[0] <= v <= V_SANE[1]:                          # drop corrupt/out-of-range frames
+                    volts.append(v)
     finally:
         s.close()
     if not volts:
