@@ -32,9 +32,15 @@ Two modes:
 Exit codes (match read_voltage.py / dongle_voltage.py so one notifier wrapper handles all sources):
     0  read OK and >= --warn        1  read failed (incl. bus asleep)        2  read OK but BELOW --warn
 
+SAFETY: both modes first run a passive bus-identity check (classify_bus) and ABORT without reading or
+transmitting if the adapter looks like it's on C-CAN (500k powertrain/diag) rather than B-CAN -- detected
+via C-CAN signature ids, rx-error spikes (500k sampled at 125k), or an active bus with no B-CAN signature.
+This guarantees the wake burst is never injected onto the powertrain bus.
+
 Default mode is read-only (listen-only); --wake transmits a benign burst. Needs sudo to bring up the iface.
 """
 import os
+import re
 import sys
 import csv
 import time
@@ -61,6 +67,13 @@ V_SANE = (6.0, 18.0)      # plausible 12 V-system rail; frames decoding outside 
 WAKE_ID = 0x7FF           # benign unused id for the --wake burst (no module actuates on it)
 WAKE_N, WAKE_GAP = 75, 0.02   # ~1.5s of bus activity trips wake-on-activity; bus then stays up ~10s
 
+# Bus-identity guard: refuse to read/TX if the adapter is on C-CAN (500k powertrain/diag) not B-CAN.
+# Signature ids observed in captures (see [[promaster-dasm-comms]] / bcan-bringup): high-rate C-CAN
+# powertrain frames vs the always-present B-CAN body frames (0x0A0 @40Hz, 0x46C, 0x3E0..).
+CCAN_IDS = {0x100, 0x101, 0x103, 0x104, 0x10F, 0x110, 0x116, 0x160, 0x0FE, 0x0FA, 0x0EE, 0x0EA}
+BCAN_IDS = {0x46C, 0x0A0, 0x0E0, 0x2EA, 0x3DC, 0x3DE, 0x3E0, 0x3E2, 0x3E4, 0x3E6, 0x354, 0x356}
+RX_ERR_ABORT = 200        # rx-error climb during the probe -> 500k bus sampled at 125k = wrong bus
+
 
 def _ip_up(channel, bitrate, listen_only, restart_ms=None):
     """down then up `channel` as CAN @bitrate. listen-only is set EXPLICITLY both ways because the
@@ -84,23 +97,52 @@ def _is_listen_only(channel):
     return "<LISTEN-ONLY>" in out
 
 
-def bus_active(channel=CHANNEL, probe=2.0):
-    """PASSIVE: return True iff ANY CAN frame arrives within `probe` s. Never transmits. Used to
-    decide whether a wake burst is even needed -- if the bus is already awake (fob/ignition/engine
-    running) we must NOT inject a wake onto a live bus, just read what's already on the wire."""
+def _rx_errors(channel):
+    out = subprocess.run(["ip", "-details", "link", "show", channel], capture_output=True, text=True).stdout
+    m = re.search(r"berr-counter\s+tx\s+\d+\s+rx\s+(\d+)", out)
+    return int(m.group(1)) if m else 0
+
+
+def classify_bus(channel=CHANNEL, probe=2.0):
+    """PASSIVE bus-identity check. Never transmits. Returns (verdict, detail):
+      'silent'  -- no traffic (asleep): safe to TX-wake.
+      'bcan'    -- B-CAN confirmed (body signature ids present): safe to read.
+      'foreign' -- C-CAN signature ids, OR rx-errors climbing (500k bus at 125k), OR an ACTIVE bus
+                   with NO B-CAN signature -> almost certainly the wrong bus. ABORT: do not read/TX.
+    On a live B-CAN, 0x0A0 (40 Hz) etc. always appear within the probe, so an active-but-unrecognized
+    bus is treated as foreign rather than risk reading/injecting on C-CAN."""
+    rx0 = _rx_errors(channel)
+    ids = set()
     try:
         s = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
         s.bind((channel,))
-        s.settimeout(probe)
-        try:
-            s.recv(16)
-            return True
-        except socket.timeout:
-            return False
-        finally:
-            s.close()
-    except OSError:
-        return False
+        deadline = time.time() + probe
+        while time.time() < deadline:
+            s.settimeout(max(0.05, deadline - time.time()))
+            try:
+                cid_raw = struct.unpack("=IB3x8s", s.recv(16))[0]
+            except socket.timeout:
+                break
+            except OSError:
+                break
+            cid = (cid_raw & 0x1FFFFFFF) if (cid_raw & 0x80000000) else (cid_raw & 0x7FF)
+            ids.add(cid)
+        s.close()
+    except OSError as e:
+        return "foreign", f"cannot open/bind {channel} ({e})"
+    rxd = _rx_errors(channel) - rx0
+
+    ccan_hit = sorted(ids & CCAN_IDS)
+    if ccan_hit:
+        return "foreign", f"C-CAN id(s) seen ({', '.join(hex(c) for c in ccan_hit)})"
+    if rxd > RX_ERR_ABORT:
+        return "foreign", f"{rxd} rx errors in {probe:.0f}s -> 500k C-CAN sampled at 125k?"
+    bcan_hit = [c for c in ids if c in BCAN_IDS or (c & 0x1FFF0000) == 0x1E340000]
+    if bcan_hit:
+        return "bcan", f"B-CAN confirmed ({len(ids)} ids incl. {', '.join(hex(c) for c in sorted(bcan_hit)[:3])})"
+    if ids:
+        return "foreign", f"active bus, no B-CAN signature ({len(ids)} unrecognized ids)"
+    return "silent", "no traffic"
 
 
 def bring_up_passive(channel=CHANNEL, bitrate=BITRATE):
@@ -196,12 +238,19 @@ def read_with_wake(channel=CHANNEL, timeout=4.0, divisor=DIVISOR, bringup=True):
     listen-only. Returns (volts, status). This is what the autonomous monitor calls."""
     if bringup and not bring_up_passive(channel):
         return None, "could not bring up can0 @125k passive (sudo rights? adapter plugged?)"
-    if bus_active(channel):                       # already awake -> read passively, NEVER TX
+    verdict, detail = classify_bus(channel)
+    if verdict == "foreign":                       # wrong bus -> never read or TX here
+        return None, f"ABORT: not B-CAN -- {detail} (adapter on C-CAN/wrong bus? refusing to read or TX)"
+    if verdict == "bcan":                          # already awake -> read passively, NEVER TX
         v, s = read_voltage(channel, timeout, divisor)
         return v, (s + " [passive: bus already awake]" if v is not None else s)
-    if not wake_bus(channel):                     # silent -> safe to actively wake it
+    # verdict == "silent": asleep -> safe to TX-wake, then RE-VERIFY before trusting/reading
+    if not wake_bus(channel):
         return None, "bus silent and could not arm/wake (sudo? adapter? listen-only stuck?)"
     try:
+        verdict2, detail2 = classify_bus(channel)
+        if verdict2 == "foreign":
+            return None, f"ABORT post-wake: not B-CAN -- {detail2} (woke a non-B-CAN bus; discarding)"
         v, s = read_voltage(channel, timeout, divisor)
     finally:
         restore_passive(channel)                  # always hand the iface back to passive
@@ -242,6 +291,11 @@ def main():
             if not args.quiet:
                 print(f"could not bring up {args.channel} @125k passive (sudo rights? adapter plugged?)",
                       file=sys.stderr)
+            sys.exit(1)
+        verdict, detail = classify_bus(args.channel)
+        if verdict == "foreign":                   # refuse to read off the wrong bus
+            if not args.quiet:
+                print(f"ABORT: not B-CAN -- {detail} (adapter on C-CAN/wrong bus?)", file=sys.stderr)
             sys.exit(1)
         volts, status = read_voltage(args.channel, args.timeout, args.divisor)
 
