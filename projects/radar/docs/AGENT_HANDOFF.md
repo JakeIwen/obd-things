@@ -119,6 +119,10 @@ seed/key oracle, not the C1418-78 fix.
    chime (`play_alert success.mp3`) once `elev_0845` moves **≥20%** from the start-of-drive baseline (so you
    know mid-drive the reading is responding and can stop). `rm tmp/CHIME` after. (Marker, not a manual
    `--chime` run, so only one logger touches the bus.)
+   **Watch it live:** `python3 projects/radar/radar_acc_live.py --follow` — tails the cron logger's CSV
+   (NO bus access, no contention) and shows `0845` with Δ / %-change / →0-vs-WORSE from the start-of-drive
+   baseline. NEVER run `radar_acc_live.py` in its direct (bus-reading) mode while the cron logger is active
+   — two testers on one ISO-TP socket cross-talk (observed: desynced reads, a false "DTC cleared").
 2. **DIY Service Drive Alignment — if 1b doesn't converge.** `radar_acc_sda_drive.py --arm`: starts `0x0251`
    once, holds the session with `3E` (never `10 03`), logs `0845`/`0850`/DTC/speed while you drive
    (straight/steady ~30-45 mph, ~15-20 min). Converges/clears → **DIY fix, no wiTECH**. Stays "RUNNING" →
