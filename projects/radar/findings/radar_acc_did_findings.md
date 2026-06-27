@@ -154,6 +154,22 @@ normal use. Don't *rely* on it yet, but it's the path that best fits "van is hom
   deviation is physically reduced into the window, re-run a comparable drive and watch `0845` move (clean
   before/after baseline now exists). Speed via `0x1002` logged correctly (0-113 km/h) — logger fully working.
 
+## ★★ BREAKTHROUGH (2026-06-26): nudge + drive → radar AUTO-ALIGNED (0845 converged through 0)
+After physically nudging the radar ~1.3°, a clean 29-min drive (`radar_acc_drive_20260626_232502.csv`,
+1736 rows, 0% garbage, max ~49 mph) showed `elev_0845` **converging monotonically toward 0** over the drive:
+5-min window means −0.446 → −0.341 → −0.231 → −0.135 → **+0.153 → +0.275** (started −0.62, ended +0.28).
+`elev_0850` tracked it (−0.36 → +0.25). So:
+- **The nudge was the RIGHT direction** — it reduced the physical deviation back **into the online
+  auto-align window**, and normal driving then corrected the stored value from the chronic −1.26° to ~0.
+  This CONFIRMS the limited-range-auto-align model and the "physically correct, then drive" fix path.
+- **Caveat 1 — DTC NOT cleared yet:** C1418-78 stayed `0x8F` all 1736 rows. Alignment is good now but the
+  fault latch hasn't dropped — likely needs another ignition cycle / drive to clear. **Next: drive again,
+  watch if C1418 clears now that 0845≈0** (if it clears + ACC returns → FIXED).
+- **Caveat 2 — slight positive overshoot** (ended +0.28°, within ±1° spec). Watch it SETTLE near 0 on the
+  next drive and not keep climbing positive (would mean nudged a hair too far).
+- Note: parked reads before this drive still showed ~−1.28° (stale); the stored value only re-measured
+  after the ignition cycle + drive — consistent with "0845 updates via driving, not parked."
+
 ## Open / untested
 - **Run SDA (the real fix):** scan tool → ACC ECU view → Misc Functions → "Service Drive Alignment
   (SDA): radar calibration" (tire pressure OK, Wi-Fi hotspot). DIY replication: start `0x0251`, keep
