@@ -20,7 +20,7 @@ detail + decoded DIDs in `findings/radar_acc_did_findings.md` and `docs/oem/`.
 | script | what | writes |
 |---|---|---|
 | `radar_acc_baseline.py` | reproduce UDS baseline: session, key DIDs, serial, DTCs (read-only) | — |
-| `radar_acc_live.py` | top-style live alignment/health gauge @5 Hz (read-only) | — |
+| `radar_acc_live.py` | live alignment/health gauge. Direct @5 Hz = a bus tester (don't run during cron logging). **`--follow`** tails the newest cron drive CSV (NO bus access) — use this to watch `0845` live mid-drive | — |
 | `radar_acc_drive_log.py` | log angles + DTC + **speed (DID 0x1002)** to CSV while driving (read-only) | `dumps/` |
 | `auto_drive_logger.py` | cron supervisor: passively auto-logs each drive (read-only) — **temporary, see TEARDOWN** | `../../tmp/` |
 | `radar_acc_sda_drive.py` | **⚠ ACTUATION** — DIY **Service Drive Alignment**: start `0x0251` + hold session + log while you drive. **This is the alignment tool to use.** | `dumps/` |
