@@ -48,6 +48,11 @@ RAW_BURST_S = 240
 # While this marker exists, log EVERY readable radar DID (did_hunt_log.py) instead of just the
 # angle logger -- to find the DID that tracks vehicle speed. Remove once the speed DID is found.
 HUNT_MARKER = os.path.join(REPO, "tmp", "HUNT_DIDS")
+# While this marker exists, the angle logger plays the Sonos success chime once elev_0845 moves
+# >=20% from the start-of-drive baseline (for mount-adjustment verification drives). `touch tmp/CHIME`
+# before such a drive, `rm tmp/CHIME` after. Using the marker (vs running --chime manually) keeps a
+# single logger -- avoids two testers on one socket.
+CHIME_MARKER = os.path.join(REPO, "tmp", "CHIME")
 
 
 def log(msg):
@@ -101,11 +106,14 @@ def launch_logger():
     logpath = os.path.join(TMP_DIR, "drive_logger.out")
     out = open(logpath, "a")
     # while the hunt marker exists, log ALL readable DIDs (find the speed DID) instead of angles
-    script = "did_hunt_log.py" if os.path.exists(HUNT_MARKER) else "radar_acc_drive_log.py"
-    p = subprocess.Popen(
-        [sys.executable, os.path.join(HERE, script),
-         "--quiet", "--out-dir", OUT_DIR, "--stop-after-idle", str(STOP_AFTER_IDLE)],
-        stdout=out, stderr=subprocess.STDOUT, start_new_session=True, cwd=REPO)
+    hunt = os.path.exists(HUNT_MARKER)
+    script = "did_hunt_log.py" if hunt else "radar_acc_drive_log.py"
+    args = [sys.executable, os.path.join(HERE, script),
+            "--quiet", "--out-dir", OUT_DIR, "--stop-after-idle", str(STOP_AFTER_IDLE)]
+    # while tmp/CHIME exists, the angle logger plays the Sonos success chime on a >=20% elev move
+    if not hunt and os.path.exists(CHIME_MARKER):
+        args.append("--chime")
+    p = subprocess.Popen(args, stdout=out, stderr=subprocess.STDOUT, start_new_session=True, cwd=REPO)
     with open(PIDFILE, "w") as f:
         f.write(str(p.pid))
     log(f"launched {script} pid={p.pid} -> {OUT_DIR}")

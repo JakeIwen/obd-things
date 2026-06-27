@@ -9,6 +9,9 @@ DRIVING; the speed column annotates the trace so we can spot stops / steady crui
 
     python3 projects/radar/radar_acc_drive_log.py        # ~1 Hz until Ctrl-C
     python3 projects/radar/radar_acc_drive_log.py --hz 2
+    python3 projects/radar/radar_acc_drive_log.py --chime # Sonos chime once elev_0845 moves >=20% from
+                                                          # the start-of-drive baseline (--chime-pct N,
+                                                          # --chime-sound success.mp3). For verify drives.
 
 Everything here is read-only (22 ReadDataByIdentifier, 19 ReadDTCInformation). Nothing is started
 or written. The active C1418-78 fault has already disabled ACC/FCW, so the radar is inert during
@@ -37,6 +40,17 @@ KMH_TO_MPH = 0.621371
 def opt(flag, default=None):
     a = sys.argv[1:]
     return a[a.index(flag) + 1] if flag in a else default
+
+
+def fire_chime(sound):
+    """Fire-and-forget the user's Sonos/van chime: play_alert (in ~/canbus_funcs.sh, sourced by
+    .bashrc). Needs an interactive bash so its aliases (sns/pk) resolve. Never blocks/raises."""
+    try:
+        import subprocess
+        subprocess.Popen(["bash", "-ic", f"play_alert {sound}"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except Exception:
+        pass
 
 
 def read_did(s, did):
@@ -85,6 +99,9 @@ def main():
     period = 1.0 / hz
     quiet = "--quiet" in sys.argv          # suppress per-sample line (for unattended/cron)
     stop_idle = float(opt("--stop-after-idle", "0"))   # exit after N s of no radar response (0=never)
+    chime = "--chime" in sys.argv          # play Sonos chime when elev_0845 moves >= --chime-pct from baseline
+    chime_sound = opt("--chime-sound", "success.mp3")
+    chime_pct = float(opt("--chime-pct", "20")) / 100.0   # default 20% change from start-of-drive baseline
     outdir = opt("--out-dir") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "dumps")
     os.makedirs(outdir, exist_ok=True)
     outfile = os.path.abspath(os.path.join(
@@ -97,12 +114,19 @@ def main():
 
     print(f"# drive log -> {outfile}")
     print(f"# {m.name}  ~{hz:g} Hz  (read-only; Ctrl-C to stop)")
-    print(f"# speed via radar DID 0x{SPEED_DID:04X} (km/h); 0845/0850 = elevation, DTC = C1418-78\n")
+    print(f"# speed via radar DID 0x{SPEED_DID:04X} (km/h); 0845/0850 = elevation, DTC = C1418-78")
+    if chime:
+        print(f"# CHIME armed: play_alert {chime_sound} once elev_0845 moves >= {chime_pct*100:g}% "
+              f"from the start-of-drive baseline")
+    print()
 
     start = time.time()
     last_tp = start
     last_data = start
     n = 0
+    chime_base = []        # first few elev_0845 readings -> baseline; chimed latches after firing once
+    chime_baseline = None
+    chimed = False
     with open(outfile, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)
         w.writeheader()
@@ -146,6 +170,20 @@ def main():
                 w.writerow(rec)
                 f.flush()
                 n += 1
+
+                # CHIME: fire once when elev_0845 moves >= chime_pct from the start-of-drive baseline.
+                if chime and not chimed and row["elev_0845"] is not None:
+                    e = row["elev_0845"]
+                    if chime_baseline is None:
+                        chime_base.append(e)
+                        if len(chime_base) >= 5:                  # settle baseline over first ~5 reads
+                            chime_baseline = sum(chime_base) / len(chime_base)
+                    elif abs(chime_baseline) >= 0.3 and abs(e - chime_baseline) >= chime_pct * abs(chime_baseline):
+                        chimed = True
+                        pct = abs(e - chime_baseline) / abs(chime_baseline) * 100
+                        print(f"\n  *** CHIME: elev_0845 {chime_baseline:+.4f} -> {e:+.4f} "
+                              f"({pct:.0f}% change) -- playing {chime_sound} ***")
+                        fire_chime(chime_sound)
 
                 if not quiet:
                     dtc = "----" if row["c1418"] is None else f"0x{row['c1418']:02X}"
