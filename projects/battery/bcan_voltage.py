@@ -97,6 +97,16 @@ def _is_listen_only(channel):
     return "<LISTEN-ONLY>" in out
 
 
+def iface_bitrate(channel=CHANNEL):
+    """Current CAN bitrate of `channel` if it's UP, else None. Used to detect a live C-CAN (500k)
+    session (e.g. auto_drive_logger) that we must not reconfigure."""
+    out = subprocess.run(["ip", "-details", "link", "show", channel], capture_output=True, text=True).stdout
+    if not re.search(r"state UP|UP,", out):
+        return None
+    m = re.search(r"bitrate (\d+)", out)
+    return int(m.group(1)) if m else None
+
+
 def _rx_errors(channel):
     out = subprocess.run(["ip", "-details", "link", "show", channel], capture_output=True, text=True).stdout
     m = re.search(r"berr-counter\s+tx\s+\d+\s+rx\s+(\d+)", out)

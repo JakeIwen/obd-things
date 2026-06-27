@@ -26,6 +26,10 @@ import subprocess
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import bcan_voltage as bv            # sibling reader: read_with_wake, append_csv, CSV_PATH, _ROOT
+try:                                 # radar reader (pulls in isotp); optional opportunistic C-CAN source
+    import read_voltage as rv
+except Exception:
+    rv = None
 
 NTFY_URL  = os.environ.get("NTFY_URL", "https://ntfy.sh/promaster_ncn")
 WARN_V    = 12.0                 # alert below this resting voltage (tune to taste)
@@ -85,6 +89,36 @@ def maybe_alert(volts, allow_send):
     _save_state(st)
 
 
+CCAN_BITRATE = 500000   # radar/auto_drive_logger bus; if can0 is here we only passive-sniff, never touch it
+
+
+def radar_logger_running():
+    """True if auto_drive_logger's child drive logger is actually alive -- if so it owns can0 on C-CAN
+    and we must NOT reconfigure/TX; only a passive radar sniff is safe. Verifies the pid's cmdline (not
+    just liveness) so a STALE pidfile whose number got reused doesn't falsely block B-CAN monitoring."""
+    try:
+        with open(os.path.join(bv._ROOT, "tmp", "drive_logger.pid")) as f:
+            pid = int(f.read().strip())
+        with open(f"/proc/{pid}/cmdline", "rb") as f:        # missing == dead pid -> exception -> False
+            cmd = f.read()
+        return b"radar_acc_drive_log" in cmd or b"did_hunt_log" in cmd
+    except Exception:
+        return False
+
+
+def acquire():
+    """Pick a NON-INTERFERING source. If the drive logger is running OR can0 is already on C-CAN 500k,
+    that bus belongs to auto_drive_logger -> only PASSIVELY sniff the radar's 0x1006 (no reconfigure,
+    no TX). Otherwise run the normal B-CAN monitor (which may TX-wake a silent body bus)."""
+    if radar_logger_running() or bv.iface_bitrate() == CCAN_BITRATE:
+        if rv is None:
+            return None, "C-CAN/drive-logger active -- iface untouched; radar reader unavailable (isotp?)"
+        v, s = rv.passive_read()
+        return v, (s if v is not None
+                   else "C-CAN/drive-logger active -- iface left untouched; no radar voltage caught")
+    return bv.read_with_wake()
+
+
 def main():
     allow_send = not ("--no-notify" in sys.argv or "--no-sms" in sys.argv)
     os.makedirs(os.path.dirname(LOCK), exist_ok=True)
@@ -95,7 +129,7 @@ def main():
         log("another voltage_mon instance is running; skipping this tick")
         return
 
-    volts, status = bv.read_with_wake()        # wakes the bus only if it's silent; never TX if awake
+    volts, status = acquire()                  # B-CAN wake-read, or passive radar sniff if C-CAN is busy
     bv.append_csv(bv.CSV_PATH, volts if volts is not None else "", status)
     if volts is None:
         log(f"voltage read FAILED: {status}")
