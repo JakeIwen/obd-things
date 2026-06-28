@@ -50,6 +50,10 @@ SETTLE_RANGE_DEG  = 0.05    # max peak-to-peak elev_0845 allowed within the wind
 SETTLE_SLOPE_DPM  = 0.02    # max |least-squares slope| within the window, deg/min (drive #1: mid-climb
                             #   was ~+0.036 dpm -> NOT settled; final 2 min ~+0.0035 dpm -> settled)
 SPEC_DEG          = 0.30    # |elev_0845| within this = aligned/in-spec (else "stalled out of spec")
+DTC_CLEAR_DEBOUNCE = 8      # SUCCESS needs this many consecutive VALID 'C1418 absent' reads before firing.
+                            #   A comms glitch garbles the 19 02 FF read -> looks like a clear; the
+                            #   valid-response gate + this debounce reject it (drive #2 false-fired at t+115s
+                            #   on a single garbled read -- see findings/adjustment_1_results_2.md).
 
 
 def opt(flag, default=None):
@@ -95,14 +99,19 @@ def read_did(s, did):
 
 
 def c1418(s):
+    """Read C1418-78 status. Returns (status, valid):
+      (byte, True)  -> DTC present, status byte
+      (None, True)  -> valid 0x59 response, DTC absent = genuinely cleared
+      (None, False) -> no/garbled response -> UNKNOWN (NOT a clear; a comms glitch reads like this,
+                       which is what false-fired the SUCCESS chime -- see adjustment_1_results_2.md)."""
     r, _ = uds.request(s, [0x19, 0x02, 0xFF], timeout=1.0)
     if not r or r[0] != 0x59:
-        return None
+        return None, False
     b = r[3:]
     for i in range(0, len(b) - 3, 4):
         if b[i] == 0x54 and b[i + 1] == 0x18 and b[i + 2] == 0x78:
-            return b[i + 3]
-    return None  # not present = cleared
+            return b[i + 3], True
+    return None, True
 
 
 # Vehicle speed: VERIFIED via DID hunt (2026-06-17) -- the radar re-exposes received vehicle speed
@@ -116,6 +125,7 @@ def sample(s):
     d41, d45, d50, d06 = read_did(s, 0x0841), read_did(s, 0x0845), read_did(s, 0x0850), read_did(s, 0x1006)
     dsp = read_did(s, SPEED_DID)
     kmh = dsp[0] if dsp else None
+    st, st_valid = c1418(s)
     return {
         "speed_kmh": kmh,
         "speed_mph": round(kmh * KMH_TO_MPH, 1) if kmh is not None else None,
@@ -125,7 +135,8 @@ def sample(s):
         "azim_0845": round(uds.s32(d45, 4) * MICRODEG, 4) if d45 and len(d45) >= 8 else None,
         "elev_0850": round(uds.s32(d50, 0) * MICRODEG, 4) if d50 and len(d50) >= 8 else None,
         "azim_0850": round(uds.s32(d50, 4) * MICRODEG, 4) if d50 and len(d50) >= 8 else None,
-        "c1418": c1418(s),
+        "c1418": st,
+        "_c1418_valid": st_valid,   # internal: not a CSV column (DictWriter extrasaction='ignore')
     }
 
 
@@ -166,10 +177,11 @@ def main():
     move_secs = 0.0          # cumulative CONTIGUOUS moving time (seconds)
     last_move_t = None       # timestamp of previous moving sample (None after a stop, breaks contiguity)
     dtc_seen_active = False   # latch: was C1418-78 ever active (testFailed) this drive?
+    clear_streak = 0          # consecutive VALID 'C1418 absent' reads (debounces the SUCCESS chime)
     success_chimed = False
     settled_chimed = False
     with open(outfile, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=cols)
+        w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")   # drop internal _c1418_valid
         w.writeheader()
         try:
             while True:
@@ -218,14 +230,21 @@ def main():
                     b = row["c1418"]
 
                     # tier 1 -- SUCCESS: C1418-78 was active and has now cleared (the real "fixed").
+                    # Requires a VALID DTC response showing it absent for DTC_CLEAR_DEBOUNCE consecutive
+                    # reads -- a single garbled read returns absent and must NOT fire (drive #2 lesson).
+                    valid = row.get("_c1418_valid", False)
                     if dtc_active(b):
                         dtc_seen_active = True
-                    elif dtc_seen_active and not success_chimed:
-                        success_chimed = True
-                        shown = f"0x{b:02X}" if b is not None else "gone"
-                        print(f"\n  *** SUCCESS: C1418-78 cleared (DTC {shown}) -- ACC should return "
-                              f"-- playing {success_sound} ***")
-                        fire_chime(success_sound)
+                        clear_streak = 0
+                    elif valid and b is None:
+                        clear_streak += 1
+                        if dtc_seen_active and not success_chimed and clear_streak >= DTC_CLEAR_DEBOUNCE:
+                            success_chimed = True
+                            print(f"\n  *** SUCCESS: C1418-78 cleared ({clear_streak} consecutive reads) "
+                                  f"-- ACC should return -- playing {success_sound} ***")
+                            fire_chime(success_sound)
+                    else:
+                        clear_streak = 0       # dormant (0x40) or garbled/unknown -> not a confirmed clear
 
                     # tier 2 -- SETTLED: elev_0845 has plateaued WHILE DRIVING -> more driving won't move it.
                     if e is not None and (row["speed_kmh"] or 0) >= SETTLE_MOVE_KMH:
