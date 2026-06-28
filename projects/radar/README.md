@@ -8,13 +8,21 @@ Reverse-engineering + alignment work for the forward-looking ACC/FCW radar. The 
 > and the ⚠ TEARDOWN section. Also read [`docs/oem/`](docs/oem/) (authoritative — trust over inference)
 > and the repo-root [`README.md`](../../README.md) (bus facts + RESEARCH-FIRST method).
 
-## Current conclusion (reconciled — see AGENT_HANDOFF for the full ruled-out list)
-The radar stores a vertical boresight error ≈ **−1.26°** → DTC C1418-78 → ACC/FCW off. The OEM fix is a
+## ✅ RESOLVED (2026-06-27) — see `findings/adjustment_1_results_3.md`
+C1418-78 is **cleared and ACC/FCW works again.** Path that fixed it: a **physical nudge** (~1.3°) brought
+the −1.26° boresight back inside the radar's auto-align window (drive #1: −1.26°→+0.28°), then the **DIY
+Service Drive Alignment** — `radar_acc_sda_drive.py --arm` started routine `0x0251`, held the session with
+`3E`, and we drove steady ~40 mph ~17 min. The routine's **progress counter** (status byte[2], 0–100%) hit
+100% and committed: DTC `0x8F`→`0x0E` (testFailed + warning cleared), held on the next drive. **Pure-UDS,
+local, no wiTECH / no shop.** Below is the original investigation (kept for context).
+
+## Original conclusion (kept for context — superseded by RESOLVED above)
+The radar stored a vertical boresight error ≈ **−1.26°** → DTC C1418-78 → ACC/FCW off. The OEM fix is a
 **dynamic "Service Drive Alignment" (SDA), NOT a static mirror** (that premise was a Giulia doc, ruled
 out). The radar self-aligns small deviations while driving but only within a **limited window**; −1.26°
-is beyond it (a 2-hr highway drive did not move it). So the **gate is physical**: re-seat/level the mount
-to get back inside the window, then normal driving or the SDA finishes it. **Van = home → no shop.** Full
-detail + decoded DIDs in `findings/radar_acc_did_findings.md` and `docs/oem/`.
+was beyond it (a 2-hr highway drive did not move it). So the **gate was physical**: re-seat/level the mount
+to get back inside the window, then the SDA finishes it. **Van = home → no shop.** Full detail + decoded
+DIDs in `findings/radar_acc_did_findings.md` and `docs/oem/`.
 
 ## Scripts (run from the repo root, e.g. `python3 projects/radar/<script>`)
 | script | what | writes |
