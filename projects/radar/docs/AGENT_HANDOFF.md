@@ -109,11 +109,11 @@ seed/key oracle, not the C1418-78 fix.
 ## Fix path (priority order — van = home, NO shop; all in-place DIY)
 1. **Physically re-seat / correct the mount — THE GATE.** (FCA STAR S2123000064, `docs/oem/`.) Seat the
    module fully + **level** in its bracket; pull it and check for **witness/rub marks** where the aluminum
-   bumper bar contacts it (bar too high → loosen, slide bumper **DOWN**, retighten bottom-first). Use a phone
-   **inclinometer** to get the radar face physically nominal — this sidesteps the unknown DID sign (aim for
-   "level/square," not a signed angle). Goal: deviation back **inside the auto-align window**. Nothing
-   downstream works until this is done. *(AllData front-fascia + ACC-module removal steps can be pulled from
-   `~/dev/ram_2022_GAS` on request.)*
+   bumper bar contacts it (bar too high → loosen, slide bumper **DOWN**, retighten bottom-first). Use a
+   **phone "level"/inclinometer app** (the built-in iPhone Measure→Level, or any free Android bubble-level
+   app) held against the radar face / bracket to read and set the tilt with a delta approximately the 
+   magnitude of your 0x845 reported deviation. Goal: deviation back **inside the auto-align window**. Nothing
+   downstream works until this is done.
    **No live CAN feedback during the wrench work** — the angle DIDs are driving-derived (the perturbation
    test proved a physical tilt doesn't register while parked). Loop: **inclinometer → drive → re-read
    `0845`/`0850`** (iterate). Distinguish **measure vs auto-correct**: the radar *measures* its current
