@@ -10,12 +10,14 @@ How it works / what to watch (verified -- see findings/adjustment_1_results_3.md
     drive a steady profile and COMMITS at 100% (~17 min at ~40 mph in the proven run).
   * At commit, C1418-78 flips 0x8F -> 0x0E (testFailed + warning bits clear) and ACC returns. The script
     detects this (testFailed dropping, debounced) AND progress==100, then plays the SUCCESS chime + stops.
-  * If it reaches the time limit without committing, it plays the TIMEOUT chime (keep driving / retry).
+  * There is NO fixed time limit (the routine itself has none). It runs until: COMMIT (success), progress
+    STALLS for 10 min with no gain, the routine goes IDLE/reset, or the link drops -- the non-success ends
+    play the TIMEOUT chime. Optional --minutes N adds a hard cap (default: none).
   No keyboard interaction needed while driving -- just listen for one of the two chimes (Sonos/van audio).
 
     python3 projects/radar/radar_acc_sda_drive.py                 # PREFLIGHT ONLY (read-only)
-    python3 projects/radar/radar_acc_sda_drive.py --arm           # start routine + hold session + log
-    python3 projects/radar/radar_acc_sda_drive.py --arm --minutes 20
+    python3 projects/radar/radar_acc_sda_drive.py --arm           # start + hold + log; ends on progress, not a clock
+    python3 projects/radar/radar_acc_sda_drive.py --arm --minutes 30   # optional hard cap
 
   *** ACTUATION (31 01) on a forward-collision radar. Owner-consent only; see README "Safety & liability".
       Start it PARKED (engine running), then drive: straight, steady, ~30-45 mph, clear road, minimal turns,
@@ -38,7 +40,12 @@ KMH_TO_MPH = 0.621371
 DTC_CLEAR_DEBOUNCE = 8          # consecutive VALID 'testFailed clear' reads before declaring it committed
                                 #   (rejects comms-glitch false clears -- see adjustment_1_results_2.md)
 SUCCESS_SOUND = "success.mp3"   # chime when the SDA commits (DTC testFailed clears / progress hits 100%)
-TIMEOUT_SOUND = "warn.mp3"      # chime when the run ends at the time limit WITHOUT committing
+TIMEOUT_SOUND = "warn.mp3"      # chime when the run ends WITHOUT committing (stall / routine reset / link lost)
+# The routine has NO inherent time limit -- it runs while we hold the session. So instead of a fixed wall
+# clock we end on PROGRESS behavior: it stalls, the routine goes idle, or the link drops.
+STALL_TIMEOUT = 600             # end if best progress %% hasn't advanced for this long (10 min of no gain)
+PROGRESS_ARM  = 5               # only arm idle/reset detection once progress has passed this %% (skip warmup)
+IDLE_DEBOUNCE = 10              # consecutive 'routine idle' reads (B1==04) => routine was reset/aborted
 
 
 def opt(flag, d=None):
@@ -78,6 +85,16 @@ def progress_pct(rs):
         return int(parts[2], 16)
     except ValueError:
         return None
+
+
+def routine_idle(rs):
+    """True if the routine reports NOT running. Status byte B1: 01=running, 03=completed, 04=idle/not-
+    started (idle baseline '00 04 00 02'). A garbled read won't cleanly show B1==04, so this is a valid
+    'routine reset/aborted' signal -- distinct from an unreadable status (which the stall timer catches)."""
+    if not rs:
+        return False
+    p = rs.split()
+    return len(p) >= 4 and p[1] == "04"
 
 
 def read_did(s, did):
@@ -120,7 +137,7 @@ def routine_status(s):
 def main():
     m = get("radar_acc")
     armed = "--arm" in sys.argv
-    minutes = float(opt("--minutes", "20"))
+    minutes = float(opt("--minutes", "0"))   # optional hard cap; 0 = none (end on progress behavior)
     s = uds.open_socket(m.txid, m.rxid, m.channel, timeout=1.5)
     uds.request(s, [0x10, SESSION], timeout=1.0)
 
@@ -160,26 +177,34 @@ def main():
                 0x31: "request-out-of-range"}.get(nrc, "")
         print(f"  START failed: {uds.hx(resp) if resp else '(none)'}"
               f"{('  -- ' + hint) if hint else ''} -- aborting."); s.close(); return
-    print(f"  STARTED ({uds.hx(resp)}).  >>> NOW DRIVE: straight/steady ~30-45 mph, clear road, "
-          f"~{minutes:g} min. Do not touch the keyboard. <<<\n")
+    cap_msg = f"hard cap {minutes:g} min" if minutes > 0 else "no time limit"
+    print(f"  STARTED ({uds.hx(resp)}).  >>> NOW DRIVE: straight/steady ~30-45 mph, clear road. Runs until "
+          f"it commits (SUCCESS chime), or progress stalls {STALL_TIMEOUT/60:g} min / routine resets "
+          f"(TIMEOUT chime); {cap_msg}. Do not touch the keyboard. <<<\n")
 
     outdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dumps")
     os.makedirs(outdir, exist_ok=True)
     outfile = os.path.join(outdir, f"sda_{time.strftime('%Y%m%d_%H%M%S')}.csv")
     cols = ["iso_time", "elapsed_s", "speed_mph", "speed_kmh", "elev_0845", "elev_0850",
             "vert_0841", "c1418", "routine"]
-    start = time.time(); deadline = start + minutes * 60; last_tp = 0; n = 0
+    start = time.time(); last_tp = 0; n = 0
+    cap_s = minutes * 60 if minutes > 0 else None   # optional hard cap; None = run until commit/stall/idle
     dtc_was_active = False     # latch: did we ever see C1418-78 actively failing (testFailed)?
     commit_streak = 0          # consecutive VALID 'testFailed clear' reads (debounces the commit detect)
-    prog = None; success = False
+    best_prog = -1; best_prog_t = start            # high-water progress + when it last advanced (stall timer)
+    idle_streak = 0            # consecutive 'routine idle' reads after real progress (reset/abort detect)
+    prog = None; success = False; end = None
     with open(outfile, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols); w.writeheader()
         try:
-            while time.time() < deadline:
+            while True:
                 t0 = time.time()
-                if t0 - last_tp > 2.0:                      # keep session alive -- NEVER 10 03
-                    uds.request(s, [0x3E, 0x00], timeout=0.4); last_tp = t0
-                a = angles(s); st, st_valid = c1418(s); rs = routine_status(s)
+                try:
+                    if t0 - last_tp > 2.0:                  # keep session alive -- NEVER 10 03
+                        uds.request(s, [0x3E, 0x00], timeout=0.4); last_tp = t0
+                    a = angles(s); st, st_valid = c1418(s); rs = routine_status(s)
+                except OSError:                             # USB brownout or vehicle asleep -> link gone
+                    end = "link lost (USB brownout / vehicle asleep)"; break
                 prog = progress_pct(rs)
                 w.writerow({"iso_time": datetime.datetime.now().isoformat(timespec="seconds"),
                             "elapsed_s": round(t0 - start, 1), **a, "c1418": st, "routine": rs})
@@ -194,26 +219,41 @@ def main():
                 else:
                     commit_streak = 0                       # garbled read -> don't count
 
+                # progress high-water (stall timer) + routine-idle/reset detection (only after real progress)
+                if prog is not None and prog > best_prog:
+                    best_prog = prog; best_prog_t = t0
+                if best_prog >= PROGRESS_ARM and routine_idle(rs):
+                    idle_streak += 1
+                else:
+                    idle_streak = 0
+
                 dtc = "----" if st is None else f"0x{st:02X}"
                 mph = a["speed_mph"]
                 pstr = f"SDA {prog:3d}%" if prog is not None else "SDA  ??%"
+                noadv = int(t0 - best_prog_t)               # seconds since progress last advanced
                 print(f"\r  t+{int(t0-start):4d}s {('%4.0f'%mph) if mph is not None else '  ? '}mph  "
-                      f"0845 {a['elev_0845']}  0850 {a['elev_0850']}  DTC {dtc}  {pstr}  rt[{rs}]   ",
+                      f"0845 {a['elev_0845']}  DTC {dtc}  {pstr}(max {max(best_prog,0)}%, +{noadv}s)  rt[{rs}]   ",
                       end="", flush=True)
 
+                # --- end conditions (no fixed time limit; the routine has none) ---
                 committed = dtc_was_active and commit_streak >= DTC_CLEAR_DEBOUNCE
-                if not success and (committed or (prog is not None and prog >= 100)):
+                if committed or (prog is not None and prog >= 100):
                     success = True
                     shown = "absent" if st is None else f"0x{st:02X}"
                     why = "testFailed cleared" if committed else "progress 100%"
                     print(f"\n\n  *** SDA COMMITTED ({why}; DTC {shown}; progress {prog}%) at "
                           f"t+{int(t0-start)}s -- ACC should return! -- playing {SUCCESS_SOUND} ***")
-                    fire_chime(SUCCESS_SOUND)
-                    break
+                    fire_chime(SUCCESS_SOUND); break
+                if idle_streak >= IDLE_DEBOUNCE:
+                    end = f"routine went IDLE at {best_prog}% (reset/aborted -- session drop? re-arm)"; break
+                if (t0 - best_prog_t) >= STALL_TIMEOUT:
+                    end = f"progress STALLED at {best_prog}% for {STALL_TIMEOUT/60:g} min (drive steadier / retry)"; break
+                if cap_s is not None and (t0 - start) >= cap_s:
+                    end = f"hit --minutes {minutes:g} cap at {best_prog}%"; break
                 time.sleep(1.0)
-            if not success:                                 # natural deadline reached without committing
-                print(f"\n\n  *** SDA did NOT commit in {minutes:g} min (progress {prog}%, DTC still "
-                      f"active) -- keep driving / retry -- playing {TIMEOUT_SOUND} ***")
+            if not success:
+                print(f"\n\n  *** SDA did NOT commit -- {end} -- (max progress {best_prog}%) "
+                      f"-- playing {TIMEOUT_SOUND} ***")
                 fire_chime(TIMEOUT_SOUND)
         except KeyboardInterrupt:
             print("\n  stopped by user.")
