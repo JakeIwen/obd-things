@@ -139,10 +139,12 @@ seed/key oracle, not the C1418-78 fix.
    (NO bus access, no contention) and shows `0845` with Δ / %-change / →0-vs-WORSE from the start-of-drive
    baseline. NEVER run `radar_acc_live.py` in its direct (bus-reading) mode while the cron logger is active
    — two testers on one ISO-TP socket cross-talk (observed: desynced reads, a false "DTC cleared").
-2. **DIY Service Drive Alignment — if 1b doesn't converge.** `radar_acc_sda_drive.py --arm`: starts `0x0251`
-   once, holds the session with `3E` (never `10 03`), logs `0845`/`0850`/DTC/speed while you drive
-   (straight/steady ~30-45 mph, ~15-20 min). Converges/clears → **DIY fix, no wiTECH**. Stays "RUNNING" →
-   likely needs a `27` unlock (→ #2b).
+2. **DIY Service Drive Alignment — THE FIX THAT WORKED (2026-06-27).** `radar_acc_sda_drive.py --arm`:
+   starts `0x0251` once, holds the session with `3E` (never `10 03`), shows live **SDA progress %**
+   (routine-status byte[2]) while you drive straight/steady ~30-45 mph. **No fixed time limit** — it runs
+   until it COMMITS (progress→100% / DTC `0x8F`→`0x0E`, plays SUCCESS chime) or progress stalls 10 min /
+   the routine resets (TIMEOUT chime). Took ~17 min of steady driving. **Pause the cron auto-logger first**
+   (its per-minute `10 03` resets the routine). If START returns `7F..33` (security) → #2b.
 2b. **If it stalls on security (`7F..33`): sniff AlfaOBD (no dealer).** PCAN **listen-only** (`./bringup.sh`)
    while AlfaOBD talks to the radar (even its wrong `0250` attempt); capture the `27` seed→key (per-ECU-family;
    almost certainly the same unlock `0251` needs), replicate before `31 01 0251`. Also offline-computable (DiagCode).
