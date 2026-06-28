@@ -33,6 +33,8 @@ MICRODEG = 1.0 / 1_000_000
 MILLIDEG = 1.0 / 1000.0
 KMH_TO_MPH = 0.621371
 SPEC_DEG = 1.0
+DTC_CLEAR_DEBOUNCE = 8          # consecutive VALID 'C1418 absent' reads before declaring it cleared
+                                #   (rejects comms-glitch false clears -- see adjustment_1_results_2.md)
 
 
 def opt(flag, d=None):
@@ -61,14 +63,18 @@ def angles(s):
 
 
 def c1418(s):
+    """Read C1418-78 status. Returns (status, valid):
+      (byte, True)  -> present;  (None, True) -> valid 0x59 response, DTC absent = genuinely cleared;
+      (None, False) -> no/garbled response -> UNKNOWN, NOT a clear. The valid gate + debounce stop a
+                       comms glitch from falsely declaring 'CLEARED' and ending the drive early."""
     r, _ = uds.request(s, [0x19, 0x02, 0xFF], timeout=1.0)
     if not r or r[0] != 0x59:
-        return None
+        return None, False
     b = r[3:]
     for i in range(0, len(b) - 3, 4):
         if b[i] == 0x54 and b[i + 1] == 0x18 and b[i + 2] == 0x78:
-            return b[i + 3]
-    return None
+            return b[i + 3], True
+    return None, True
 
 
 def routine_status(s):
@@ -84,7 +90,7 @@ def main():
     uds.request(s, [0x10, SESSION], timeout=1.0)
 
     # preflight
-    a = angles(s); st = c1418(s)
+    a = angles(s); st = c1418(s)[0]
     print(f"# {m.name}  SDA-drive attempt")
     print(f"  voltage   : need engine running (~14V)")
     print(f"  elevation : 0845={a['elev_0845']}  0850={a['elev_0850']}  (target -> ~0)")
@@ -114,6 +120,7 @@ def main():
     cols = ["iso_time", "elapsed_s", "speed_mph", "speed_kmh", "elev_0845", "elev_0850",
             "vert_0841", "c1418", "routine"]
     start = time.time(); deadline = start + minutes * 60; last_tp = 0; n = 0; base_elev = None
+    clear_streak = 0          # consecutive VALID 'C1418 absent' reads (debounces the cleared-detect)
     with open(outfile, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols); w.writeheader()
         try:
@@ -121,7 +128,7 @@ def main():
                 t0 = time.time()
                 if t0 - last_tp > 2.0:                      # keep session alive -- NEVER 10 03
                     uds.request(s, [0x3E, 0x00], timeout=0.4); last_tp = t0
-                a = angles(s); st = c1418(s); rs = routine_status(s)
+                a = angles(s); st, st_valid = c1418(s); rs = routine_status(s)
                 elevs = [a[k] for k in ("elev_0845", "elev_0850") if a[k] is not None]
                 emean = sum(elevs) / len(elevs) if elevs else None
                 if base_elev is None and emean is not None:
@@ -135,16 +142,21 @@ def main():
                 print(f"\r  t+{int(t0-start):4d}s {('%4.0f'%mph) if mph is not None else '  ? '}mph  "
                       f"0845 {a['elev_0845']}  0850 {a['elev_0850']}  DTC {dtc}  rt[{rs}]{conv}   ",
                       end="", flush=True)
-                if st is None:
-                    print(f"\n\n  *** C1418-78 CLEARED at t+{int(t0-start)}s -- SDA appears to have taken! ***")
-                    break
+                if st is None and st_valid:
+                    clear_streak += 1
+                    if clear_streak >= DTC_CLEAR_DEBOUNCE:
+                        print(f"\n\n  *** C1418-78 CLEARED at t+{int(t0-start)}s "
+                              f"({clear_streak} consecutive reads) -- SDA appears to have taken! ***")
+                        break
+                else:
+                    clear_streak = 0          # garbled read or DTC still present -> not a confirmed clear
                 if emean is not None and abs(emean) < SPEC_DEG * 0.5:
                     print(f"\n\n  *** elevation converged to {emean:+.3f} -- watching... ***")
                 time.sleep(1.0)
         except KeyboardInterrupt:
             print("\n  stopped by user.")
         finally:
-            stf = c1418(s)
+            stf = c1418(s)[0]
             print(f"\n  final: elevation {angles(s)} | C1418-78 "
                   f"{('0x%02X'%stf) if stf is not None else 'CLEARED'} | {n} samples -> {outfile}")
             uds.request(s, [0x10, 0x01], timeout=0.5); s.close()
