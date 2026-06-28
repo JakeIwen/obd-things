@@ -9,9 +9,10 @@ DRIVING; the speed column annotates the trace so we can spot stops / steady crui
 
     python3 projects/radar/radar_acc_drive_log.py        # ~1 Hz until Ctrl-C
     python3 projects/radar/radar_acc_drive_log.py --hz 2
-    python3 projects/radar/radar_acc_drive_log.py --chime # Sonos chime once elev_0845 moves >=20% from
-                                                          # the start-of-drive baseline (--chime-pct N,
-                                                          # --chime-sound success.mp3). For verify drives.
+    python3 projects/radar/radar_acc_drive_log.py --chime # two-tier Sonos chime (for verify drives):
+        #   SUCCESS (success.mp3) -- C1418-78 clears (testFailed bit drops) -> ACC should return; and
+        #   SETTLED (settled.mp3) -- elev_0845 has plateaued WHILE DRIVING (more driving won't move it).
+        # Override sounds with --chime-success-sound / --chime-settled-sound.
 
 Everything here is read-only (22 ReadDataByIdentifier, 19 ReadDTCInformation). Nothing is started
 or written. The active C1418-78 fault has already disabled ACC/FCW, so the radar is inert during
@@ -36,6 +37,20 @@ MILLIDEG = 1.0 / 1000.0
 MICRODEG = 1.0 / 1_000_000
 KMH_TO_MPH = 0.621371
 
+# --- two-tier chime tuning (rationale in findings/adjustment_1_results_1.md + docs/AGENT_HANDOFF.md) ---
+# SETTLED detector: the radar converges in STAIR-STEPS, so "flat for a few minutes" alone is not "done"
+# (drive #1 sat flat ~9 min at -0.36 deg -- but the owner was parked checking live data). So the plateau
+# is gated on actually DRIVING (speed) + enough cumulative moving time + a genuinely flat trailing window.
+SETTLE_MOVE_KMH   = 30.0    # only count samples while moving (0845 re-measures while driving); excludes
+                            #   parked stretches that masquerade as plateaus
+SETTLE_WINDOW_S   = 300.0   # trailing window that must be flat to call it settled (5 min)
+SETTLE_MIN_MOVE_S = 600.0   # require this much CUMULATIVE moving time first (skips the parked->drive
+                            #   re-measure transient and short intermediate rest-plateaus)
+SETTLE_RANGE_DEG  = 0.05    # max peak-to-peak elev_0845 allowed within the window
+SETTLE_SLOPE_DPM  = 0.02    # max |least-squares slope| within the window, deg/min (drive #1: mid-climb
+                            #   was ~+0.036 dpm -> NOT settled; final 2 min ~+0.0035 dpm -> settled)
+SPEC_DEG          = 0.30    # |elev_0845| within this = aligned/in-spec (else "stalled out of spec")
+
 
 def opt(flag, default=None):
     a = sys.argv[1:]
@@ -51,6 +66,27 @@ def fire_chime(sound):
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     except Exception:
         pass
+
+
+def dtc_active(b):
+    """C1418-78 currently FAILING = testFailed bit (0x01) set (status 0x8F). Dormant (0x40) or
+    cleared/absent (None) -> not active. This is the bit that re-asserts after a blind clear."""
+    return b is not None and (b & 0x01) != 0
+
+
+def slope_dpm(samples):
+    """Least-squares slope of elev vs time (deg/min) for [(t_s, elev_deg), ...]; 0 if degenerate."""
+    n = len(samples)
+    if n < 2:
+        return 0.0
+    tm = [t / 60.0 for t, _ in samples]            # seconds -> minutes
+    mt = sum(tm) / n
+    me = sum(e for _, e in samples) / n
+    var = sum((t - mt) ** 2 for t in tm)
+    if var <= 0:
+        return 0.0
+    cov = sum((tm[i] - mt) * (samples[i][1] - me) for i in range(n))
+    return cov / var
 
 
 def read_did(s, did):
@@ -99,9 +135,9 @@ def main():
     period = 1.0 / hz
     quiet = "--quiet" in sys.argv          # suppress per-sample line (for unattended/cron)
     stop_idle = float(opt("--stop-after-idle", "0"))   # exit after N s of no radar response (0=never)
-    chime = "--chime" in sys.argv          # play Sonos chime when elev_0845 moves >= --chime-pct from baseline
-    chime_sound = opt("--chime-sound", "success.mp3")
-    chime_pct = float(opt("--chime-pct", "20")) / 100.0   # default 20% change from start-of-drive baseline
+    chime = "--chime" in sys.argv          # arm two-tier chime (success on DTC-clear, settled on plateau)
+    success_sound = opt("--chime-success-sound") or opt("--chime-sound", "success.mp3")
+    settled_sound = opt("--chime-settled-sound", "settled.mp3")
     outdir = opt("--out-dir") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "dumps")
     os.makedirs(outdir, exist_ok=True)
     outfile = os.path.abspath(os.path.join(
@@ -116,17 +152,22 @@ def main():
     print(f"# {m.name}  ~{hz:g} Hz  (read-only; Ctrl-C to stop)")
     print(f"# speed via radar DID 0x{SPEED_DID:04X} (km/h); 0845/0850 = elevation, DTC = C1418-78")
     if chime:
-        print(f"# CHIME armed: play_alert {chime_sound} once elev_0845 moves >= {chime_pct*100:g}% "
-              f"from the start-of-drive baseline")
+        print(f"# CHIME armed (two-tier): {success_sound} when C1418-78 clears (testFailed drops); "
+              f"{settled_sound} when elev_0845 plateaus "
+              f"(>= {SETTLE_MIN_MOVE_S/60:g} min moving, last {SETTLE_WINDOW_S/60:g} min "
+              f"range<= {SETTLE_RANGE_DEG} deg & |slope|<= {SETTLE_SLOPE_DPM} deg/min)")
     print()
 
     start = time.time()
     last_tp = start
     last_data = start
     n = 0
-    chime_base = []        # first few elev_0845 readings -> baseline; chimed latches after firing once
-    chime_baseline = None
-    chimed = False
+    move_samples = []        # [(t, elev_0845)] while speed >= SETTLE_MOVE_KMH -> plateau detector
+    move_secs = 0.0          # cumulative CONTIGUOUS moving time (seconds)
+    last_move_t = None       # timestamp of previous moving sample (None after a stop, breaks contiguity)
+    dtc_seen_active = False   # latch: was C1418-78 ever active (testFailed) this drive?
+    success_chimed = False
+    settled_chimed = False
     with open(outfile, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)
         w.writeheader()
@@ -171,19 +212,46 @@ def main():
                 f.flush()
                 n += 1
 
-                # CHIME: fire once when elev_0845 moves >= chime_pct from the start-of-drive baseline.
-                if chime and not chimed and row["elev_0845"] is not None:
+                # TWO-TIER CHIME (armed with --chime; cron sets it from the tmp/CHIME marker).
+                if chime:
                     e = row["elev_0845"]
-                    if chime_baseline is None:
-                        chime_base.append(e)
-                        if len(chime_base) >= 5:                  # settle baseline over first ~5 reads
-                            chime_baseline = sum(chime_base) / len(chime_base)
-                    elif abs(chime_baseline) >= 0.3 and abs(e - chime_baseline) >= chime_pct * abs(chime_baseline):
-                        chimed = True
-                        pct = abs(e - chime_baseline) / abs(chime_baseline) * 100
-                        print(f"\n  *** CHIME: elev_0845 {chime_baseline:+.4f} -> {e:+.4f} "
-                              f"({pct:.0f}% change) -- playing {chime_sound} ***")
-                        fire_chime(chime_sound)
+                    b = row["c1418"]
+
+                    # tier 1 -- SUCCESS: C1418-78 was active and has now cleared (the real "fixed").
+                    if dtc_active(b):
+                        dtc_seen_active = True
+                    elif dtc_seen_active and not success_chimed:
+                        success_chimed = True
+                        shown = f"0x{b:02X}" if b is not None else "gone"
+                        print(f"\n  *** SUCCESS: C1418-78 cleared (DTC {shown}) -- ACC should return "
+                              f"-- playing {success_sound} ***")
+                        fire_chime(success_sound)
+
+                    # tier 2 -- SETTLED: elev_0845 has plateaued WHILE DRIVING -> more driving won't move it.
+                    if e is not None and (row["speed_kmh"] or 0) >= SETTLE_MOVE_KMH:
+                        if last_move_t is not None and (t0 - last_move_t) <= 3.0:
+                            move_secs += t0 - last_move_t        # only count contiguous moving time
+                        last_move_t = t0
+                        move_samples.append((t0, e))
+                        cut = t0 - SETTLE_WINDOW_S
+                        while move_samples and move_samples[0][0] < cut:
+                            move_samples.pop(0)                  # keep only the trailing window
+                        if (not settled_chimed and move_secs >= SETTLE_MIN_MOVE_S
+                                and len(move_samples) >= 20
+                                and (move_samples[-1][0] - move_samples[0][0]) >= 0.9 * SETTLE_WINDOW_S):
+                            es = [v for _, v in move_samples]
+                            rng = max(es) - min(es)
+                            slope = abs(slope_dpm(move_samples))
+                            if rng <= SETTLE_RANGE_DEG and slope <= SETTLE_SLOPE_DPM:
+                                settled_chimed = True
+                                tag = ("IN SPEC (aligned)" if abs(e) <= SPEC_DEG else
+                                       "OUT OF SPEC -- driving won't fix; re-adjust mount or run SDA")
+                                print(f"\n  *** SETTLED: elev_0845 flat at {e:+.4f} deg (last "
+                                      f"{SETTLE_WINDOW_S/60:g} min: range {rng:.3f}, slope {slope:.3f} deg/min) "
+                                      f"-- {tag} -- playing {settled_sound} ***")
+                                fire_chime(settled_sound)
+                    elif e is not None:
+                        last_move_t = None                       # a stop breaks moving-time contiguity
 
                 if not quiet:
                     dtc = "----" if row["c1418"] is None else f"0x{row['c1418']:02X}"

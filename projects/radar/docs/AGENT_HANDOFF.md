@@ -115,10 +115,15 @@ seed/key oracle, not the C1418-78 fix.
    reading is more stored-like than expected (lean on inclinometer + SDA).
 1b. **Then drive normally + monitor (no tool).** The cron logger captures it passively; watch `0845`/`0850`
    trend toward 0 / DTC clear over miles. Cheapest shot, best fit for "van is home." Don't *rely* on it.
-   **Audible cue:** `touch tmp/CHIME` before a verification drive → the cron logger plays the Sonos success
-   chime (`play_alert success.mp3`) once `elev_0845` moves **≥20%** from the start-of-drive baseline (so you
-   know mid-drive the reading is responding and can stop). `rm tmp/CHIME` after. (Marker, not a manual
-   `--chime` run, so only one logger touches the bus.)
+   **Audible cue (two-tier chime):** `touch tmp/CHIME` before a verification drive → the cron logger arms two
+   distinct Sonos chimes so you know mid-drive when to stop: **SUCCESS** (`success.mp3`) the moment **C1418-78
+   clears** (testFailed bit drops → ACC should return — the real win); and **SETTLED** (`settled.mp3`) when
+   `elev_0845` has **plateaued while genuinely driving** (≥10 min cumulative moving time, then a flat 5-min
+   trailing window: range ≤0.05° & |slope| ≤0.02°/min) → more driving won't move it (console says IN-SPEC vs
+   OUT-OF-SPEC/stalled). The old "≥20% delta from baseline" trigger was replaced — it fired on mere movement,
+   not completion, and was fooled by parked stretches (drive #1 sat flat ~9 min while parked). The SETTLED
+   gate is **speed-gated** (DID `0x1002`) precisely to ignore those. `rm tmp/CHIME` after. (Marker, not a
+   manual `--chime` run, so only one logger touches the bus.)
    **Watch it live:** `python3 projects/radar/radar_acc_live.py --follow` — tails the cron logger's CSV
    (NO bus access, no contention) and shows `0845` with Δ / %-change / →0-vs-WORSE from the start-of-drive
    baseline. NEVER run `radar_acc_live.py` in its direct (bus-reading) mode while the cron logger is active
@@ -189,8 +194,9 @@ radar-specific work here under `projects/radar/`.
    `tmp/dumps/radar_acc_drive_*.csv`. **Remove via `crontab -e` once the radar is fixed/abandoned.**
 2. `tmp/CAPTURE_RAW` and `tmp/HUNT_DIDS` markers — **retired**; `did_hunt_log.py` + raw-burst code remain dormant
    (only fire if a marker is re-created). Speed (`0x1002`) is wired into the normal logger.
-3. `tmp/CHIME` marker — while present, the cron logger plays the Sonos chime on a ≥20% `elev_0845` move
-   (mount-verification drives). **`rm tmp/CHIME`** when done so normal commutes don't chime.
+3. `tmp/CHIME` marker — while present, the cron logger arms the **two-tier chime** (SUCCESS = C1418-78
+   clears; SETTLED = `elev_0845` plateaus while driving — see Fix path #1b) for mount-verification drives.
+   **`rm tmp/CHIME`** when done so normal commutes don't chime.
 
 ## Safety
 Forward-collision radar. Everything is read-only (`22`/`19`/`31 03`) **except** `radar_acc_align_0251.py` and
