@@ -85,12 +85,18 @@ internal C-CAN — this is why UDS works here and why OBD-II PIDs don't route. C
 
 ## Routines (RoutineControl `31`)
 - **`0x0251` = the alignment routine.** Start `31 01 0251` (NO option) in session `0x03` → `71 01 0251`;
-  **single-start** (2nd start → `7F3124`; `31 02` stops; status `31 03 0251` → `71 03 0251 01 01 00 02`
-  running / `00 04 00 02` idle). It is the **dynamic Service Drive Alignment** (needs a drive — see
-  `../docs/oem/`), NOT a static-mirror routine.
+  **single-start** (2nd start → `7F3124`; `31 02` stops; status `31 03 0251` → `71 03 0251 B0 B1 B2 B3`).
+  It is the **dynamic Service Drive Alignment** (needs a drive — see `../docs/oem/`), NOT a static-mirror routine.
+  - **Status bytes `B0 B1 B2 B3`:** **B2 = progress `0x00`→`0x64` = 0–100%** (monotonic while driving);
+    B1 = state (`01` running, `03` completed); B0 = live flags (fluctuates); B3 mostly `00`. Idle = `00 04 00 02`.
+  - **At B2=100% it COMMITS** → C1418-78 flips `0x8F`→`0x0E` (testFailed+warningInd clear, ACC restored).
+    Proven 2026-06-27 (`adjustment_1_results_3.md`): 0→100% over a ~17 min steady ~40 mph drive.
 - `0x0250` → `7F3131` (the static-mirror routine used on FCA cars; **not implemented on this radar**).
 - Full `31 03` scan over 0x0200–0x03FF + 0xFF0x found only `0x0251`.
 
 ## DTCs (`19 02 FF`)
-- 8 stored; **only C1418-78 ACTIVE (status `0x8F`)**, other 7 dormant (`0x40`). FCA 3-byte encoding,
-  C1418-78 = `54 18 78`. (C1417-78 = horizontal-misalignment counterpart, per AllData.)
+- 8 stored; C1418-78 was the **only ACTIVE one (status `0x8F`)**, other 7 dormant (`0x40`). FCA 3-byte
+  encoding, C1418-78 = `54 18 78`. (C1417-78 = horizontal-misalignment counterpart, per AllData.)
+- **RESOLVED 2026-06-27:** after the SDA, C1418-78 → **`0x0E`** (testFailed+warningInd cleared → ACC back);
+  now a stored-history record that ages out (or one-time `14` clear). Status-byte bits: `0x01` testFailed,
+  `0x02` tfThisOpCycle, `0x04` pending, `0x08` confirmed, `0x80` warningIndicatorRequested.

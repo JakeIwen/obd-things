@@ -1,4 +1,4 @@
-# Agent Handoff — 2022 Ram Promaster ACC radar, DTC C1418-78 (current state 2026-06-18)
+# Agent Handoff — 2022 Ram Promaster ACC radar, DTC C1418-78 (RESOLVED 2026-06-27)
 
 **Read this first**, then the repo-root [`README.md`](../../../README.md) (universal bus facts/gotchas +
 the **RESEARCH-FIRST** working method) and the **authoritative OEM docs** in [`docs/oem/`](oem/) (trust
@@ -7,20 +7,31 @@ AlfaOBD write-up `radar_acc_alfaobd_bugreport.md`.
 
 ---
 
-## TL;DR (reconciled — this supersedes any older framing)
-2022 Ram Promaster forward **ACC radar** (Bosch MRR1evo14F, identifies as "DASM", bumper-mounted) has an
-**active vertical-misalignment fault, DTC C1418-78 (status 0x8F)**, which disables ACC/FCW. We have a
-**fully working UDS link** (PCAN-USB + SocketCAN) and have reverse-engineered the live data: the radar
-reports a **stored vertical boresight error of ≈ −1.26°** (DIDs `0x0845`/`0x0850`, elevation).
+## ✅ RESOLVED (2026-06-27) — DIY Service Drive Alignment fixed it
+C1418-78 is **cleared and ACC/FCW is functional again.** Full write-up: [`../findings/adjustment_1_results_3.md`].
+What worked, in order: (1) a **physical nudge** of the radar ~1.3° brought it back inside the auto-align
+window (drive #1 converged −1.26°→+0.28°); (2) the **DIY SDA** — `radar_acc_sda_drive.py --arm` started
+routine `0x0251`, held the session with `3E`, and we drove a steady ~40 mph for ~17 min. The radar's SDA
+**progress counter** (routine-status byte[2], 0x00→0x64 = 0–100%) climbed to 100% and **committed**: the
+DTC flipped `0x8F → 0x0E` (testFailed bit0→0, warningIndicator bit7→0) at that instant. ACC works; it held
+`0x0E` on the next drive. The residual `0x0E` is a stored-history record (ages out, or one-time `14` clear
+sticks now that testFailed=0). **Pure-UDS, local, no wiTECH / no shop / no `27` unlock needed.** Below is
+the original investigation (kept for context / if it ever regresses).
 
-**The fix is to re-align the radar — and the OEM method is a dynamic "Service Drive Alignment (SDA)",
+## TL;DR (original framing — kept for context; superseded by RESOLVED above)
+2022 Ram Promaster forward **ACC radar** (Bosch MRR1evo14F, identifies as "DASM", bumper-mounted) had an
+**active vertical-misalignment fault, DTC C1418-78 (status 0x8F)**, which disabled ACC/FCW. We have a
+**fully working UDS link** (PCAN-USB + SocketCAN) and reverse-engineered the live data: the radar reported
+a **stored vertical boresight error of ≈ −1.26°** (DIDs `0x0845`/`0x0850`, elevation).
+
+**The fix was to re-align the radar — the OEM method is a dynamic "Service Drive Alignment (SDA)",
 NOT a static mirror.** The radar also self-aligns small deviations during normal driving, but only within
-a **limited capture window**; −1.26° is **beyond** that window (proven: a 2-hour, 60%-highway drive did
-not move it). So the **gate is physical**: re-seat/level the mount to bring the deviation back inside the
-window, then let normal driving re-converge it **or** run the SDA. **Van is the owner's home/office →
-no shop visits**; everything below is in-place DIY.
+a **limited capture window**; −1.26° was **beyond** it (proven: a 2-hour drive did not move it). So the
+**gate was physical**: re-seat/level the mount to bring the deviation back inside the window, then run the
+SDA (which we did). **Van is the owner's home/office → no shop visits**; everything was in-place DIY.
 
-The repo is read-only **except one gated actuation tool** (`radar_acc_align_0251.py`, the only `31 01`).
+The repo is read-only **except two gated actuation tools** (`radar_acc_sda_drive.py` and the older
+`radar_acc_align_0251.py`, the only `31 01`).
 
 ---
 
@@ -156,6 +167,9 @@ seed/key oracle, not the C1418-78 fix.
 - **DTCs (`19 02 FF`):** 8 total; **only C1418-78 active (0x8F)**, 7 dormant (0x40). FCA 3-byte encoding (C1418-78 = `54 18 78`).
 - **Routine scan CLEAN:** only `0x0251` exists; **runs in session `0x03`, NO option byte, single-start** (2nd
   `31 01` while running → `7F3124`; `31 02` stops; `10 03` re-entry RESETS; status `01 01 00 02`=running / `00 04 00 02`=idle).
+- **SDA progress is readable live:** `31 03 0251` → `71 03 0251 B0 B1 B2 B3`. **B2 = progress `0x00`→`0x64`
+  (0–100%), monotonic**; B1 state (`01`=running, `03`=completed); B0 fluctuates (live flags); B3 mostly 00.
+  At B2=100% the routine commits and C1418-78 flips `0x8F`→`0x0E`. (Proven on the 2026-06-27 SDA run.)
 - **DID sweep CLEAN:** `22` over 0x0000–0xFFFF = 56 readable, 0 locked (`../dumps/radar_acc_did_sweep.txt`).
   **Full decoded map of all 56 DIDs + sessions/security/routines/DTCs → [`../findings/did_map.md`](../findings/did_map.md).**
 - **Key DIDs (scales inferred, internally consistent):**

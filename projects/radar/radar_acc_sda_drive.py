@@ -1,22 +1,25 @@
 #!/usr/bin/env python3
-"""DIY Service Drive Alignment (SDA) attempt for the ACC radar -- the one experiment we never ran.
+"""DIY Service Drive Alignment (SDA) for the ACC radar -- *** PROVEN: this fixed C1418-78 on 2026-06-27. ***
 
-OEM alignment = "Service Drive Alignment": a scan tool starts the radar calibration routine, then you
-DRIVE and the radar converges. Every prior 0x0251 attempt here was PARKED, so it just sat "RUNNING".
-This runner does the missing test: start 0x0251 ONCE, hold the diagnostic session alive with
-TesterPresent for the whole drive (never re-send 10 03 -- that RESETS the routine), and log the
-elevation / DTC / routine-status while YOU DRIVE. If the radar does the SDA itself, 0845/0850 should
-converge toward 0 and C1418-78 clear. If it stays pinned / RUNNING forever, the commit likely needs the
-wiTECH cloud/server side and the pure-UDS path is blocked -- either way this answers it, for free.
+OEM alignment = "Service Drive Alignment": start the radar calibration routine, then DRIVE and the radar
+converges to completion. This runner: start 0x0251 ONCE, hold the session with TesterPresent for the whole
+drive (never re-send 10 03 -- that RESETS the routine), log + show live progress while YOU DRIVE.
+
+How it works / what to watch (verified -- see findings/adjustment_1_results_3.md):
+  * Routine-status byte[2] is a 0-100% PROGRESS counter -- shown live as `SDA NN%`. It climbs while you
+    drive a steady profile and COMMITS at 100% (~17 min at ~40 mph in the proven run).
+  * At commit, C1418-78 flips 0x8F -> 0x0E (testFailed + warning bits clear) and ACC returns. The script
+    detects this (testFailed dropping, debounced) AND progress==100, then plays the SUCCESS chime + stops.
+  * If it reaches the time limit without committing, it plays the TIMEOUT chime (keep driving / retry).
+  No keyboard interaction needed while driving -- just listen for one of the two chimes (Sonos/van audio).
 
     python3 projects/radar/radar_acc_sda_drive.py                 # PREFLIGHT ONLY (read-only)
     python3 projects/radar/radar_acc_sda_drive.py --arm           # start routine + hold session + log
     python3 projects/radar/radar_acc_sda_drive.py --arm --minutes 20
 
   *** ACTUATION (31 01) on a forward-collision radar. Owner-consent only; see README "Safety & liability".
-      ACC/FCW is already disabled by the active DTC, so the radar is inert -- no phantom-braking risk during
-      the attempt. Start it PARKED (engine running), then drive: straight, steady, ~30-45 mph, clear road,
-      minimal turns, for the full duration. No keyboard interaction needed while driving (solo is fine). ***
+      Start it PARKED (engine running), then drive: straight, steady, ~30-45 mph, clear road, minimal turns,
+      for the full duration. PAUSE the cron auto-logger first (its per-minute 10 03 RESETS the routine). ***
 """
 import os, sys, time, csv, datetime
 _root = os.path.dirname(os.path.abspath(__file__))
@@ -32,9 +35,10 @@ CONFIRM = "RUN SDA"
 MICRODEG = 1.0 / 1_000_000
 MILLIDEG = 1.0 / 1000.0
 KMH_TO_MPH = 0.621371
-SPEC_DEG = 1.0
-DTC_CLEAR_DEBOUNCE = 8          # consecutive VALID 'C1418 absent' reads before declaring it cleared
+DTC_CLEAR_DEBOUNCE = 8          # consecutive VALID 'testFailed clear' reads before declaring it committed
                                 #   (rejects comms-glitch false clears -- see adjustment_1_results_2.md)
+SUCCESS_SOUND = "success.mp3"   # chime when the SDA commits (DTC testFailed clears / progress hits 100%)
+TIMEOUT_SOUND = "warn.mp3"      # chime when the run ends at the time limit WITHOUT committing
 
 
 def opt(flag, d=None):
@@ -43,6 +47,37 @@ def opt(flag, d=None):
 
 
 def rid(r): return [(r >> 8) & 0xFF, r & 0xFF]
+
+
+def fire_chime(sound):
+    """Fire-and-forget the user's Sonos/van chime (play_alert in ~/canbus_funcs.sh). Needs an
+    interactive bash so its aliases resolve. Never blocks/raises -- audible cue only, no keyboard needed."""
+    try:
+        import subprocess
+        subprocess.Popen(["bash", "-ic", f"play_alert {sound}"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except Exception:
+        pass
+
+
+def dtc_active(st):
+    """C1418-78 currently FAILING = testFailed bit (0x01) set (0x8F). testFailed clear (0x0E) or
+    absent (None) => not active. The 0x8F->0x0E commit is exactly testFailed dropping (ACC restored)."""
+    return st is not None and (st & 0x01) != 0
+
+
+def progress_pct(rs):
+    """SDA progress 0-100 from the routine-status hex string 'B0 B1 B2 B3' -- B2 = 0x00..0x64 (verified
+    2026-06-27: hits 0x64=100% at commit). None if unparseable. See findings/adjustment_1_results_3.md."""
+    if not rs:
+        return None
+    parts = rs.split()
+    if len(parts) < 3:
+        return None
+    try:
+        return int(parts[2], 16)
+    except ValueError:
+        return None
 
 
 def read_did(s, did):
@@ -107,10 +142,24 @@ def main():
     except (EOFError, KeyboardInterrupt):
         print("  aborted."); s.close(); return
 
+    # The confirm prompt above can block past the S3 timeout (~5s), dropping us back to the default
+    # session where RoutineControl is rejected (7F 31 7F = serviceNotSupportedInActiveSession). Re-enter
+    # extended RIGHT BEFORE start. Safe here -- no routine is running yet (the "10 03 resets a running
+    # routine" rule only bites mid-drive). From here on the session is held with 3E, never 10 03.
+    sresp, _ = uds.request(s, [0x10, SESSION], timeout=1.0)
+    if not (sresp and sresp[0] == 0x50):
+        print(f"  could not enter extended session 0x{SESSION:02X}: {uds.hx(sresp) if sresp else '(none)'}"
+              f" -- aborting."); s.close(); return
+
     uds.request(s, [0x31, 0x02, *rid(ROUTINE)], timeout=2.0)          # reset any prior state
     resp, _ = uds.request(s, [0x31, 0x01, *rid(ROUTINE)], timeout=5.0)  # START (no option)
     if not (resp and resp[0] == 0x71):
-        print(f"  START failed: {uds.hx(resp) if resp else '(none)'} -- aborting."); s.close(); return
+        nrc = resp[2] if (resp and resp[0] == 0x7F and len(resp) > 2) else None
+        hint = {0x7F: "service-not-in-session (S3 timed out again?)", 0x33: "security needed -> Fix path #2b",
+                0x22: "conditions-not-correct (engine running? in 0x03?)", 0x24: "sequence (already running?)",
+                0x31: "request-out-of-range"}.get(nrc, "")
+        print(f"  START failed: {uds.hx(resp) if resp else '(none)'}"
+              f"{('  -- ' + hint) if hint else ''} -- aborting."); s.close(); return
     print(f"  STARTED ({uds.hx(resp)}).  >>> NOW DRIVE: straight/steady ~30-45 mph, clear road, "
           f"~{minutes:g} min. Do not touch the keyboard. <<<\n")
 
@@ -119,8 +168,10 @@ def main():
     outfile = os.path.join(outdir, f"sda_{time.strftime('%Y%m%d_%H%M%S')}.csv")
     cols = ["iso_time", "elapsed_s", "speed_mph", "speed_kmh", "elev_0845", "elev_0850",
             "vert_0841", "c1418", "routine"]
-    start = time.time(); deadline = start + minutes * 60; last_tp = 0; n = 0; base_elev = None
-    clear_streak = 0          # consecutive VALID 'C1418 absent' reads (debounces the cleared-detect)
+    start = time.time(); deadline = start + minutes * 60; last_tp = 0; n = 0
+    dtc_was_active = False     # latch: did we ever see C1418-78 actively failing (testFailed)?
+    commit_streak = 0          # consecutive VALID 'testFailed clear' reads (debounces the commit detect)
+    prog = None; success = False
     with open(outfile, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols); w.writeheader()
         try:
@@ -129,30 +180,41 @@ def main():
                 if t0 - last_tp > 2.0:                      # keep session alive -- NEVER 10 03
                     uds.request(s, [0x3E, 0x00], timeout=0.4); last_tp = t0
                 a = angles(s); st, st_valid = c1418(s); rs = routine_status(s)
-                elevs = [a[k] for k in ("elev_0845", "elev_0850") if a[k] is not None]
-                emean = sum(elevs) / len(elevs) if elevs else None
-                if base_elev is None and emean is not None:
-                    base_elev = emean
+                prog = progress_pct(rs)
                 w.writerow({"iso_time": datetime.datetime.now().isoformat(timespec="seconds"),
                             "elapsed_s": round(t0 - start, 1), **a, "c1418": st, "routine": rs})
                 f.flush(); n += 1
+
+                # commit tracking: SDA is done when testFailed drops (0x8F->0x0E) -- NOT only when the DTC
+                # goes fully absent (the real commit leaves a 0x0E history record). Debounced + valid-gated.
+                if dtc_active(st):
+                    dtc_was_active = True; commit_streak = 0
+                elif st_valid:                              # valid read, testFailed bit clear
+                    commit_streak += 1
+                else:
+                    commit_streak = 0                       # garbled read -> don't count
+
                 dtc = "----" if st is None else f"0x{st:02X}"
                 mph = a["speed_mph"]
-                conv = "" if (emean is None or base_elev is None) else f" Δ{emean-base_elev:+.3f}"
+                pstr = f"SDA {prog:3d}%" if prog is not None else "SDA  ??%"
                 print(f"\r  t+{int(t0-start):4d}s {('%4.0f'%mph) if mph is not None else '  ? '}mph  "
-                      f"0845 {a['elev_0845']}  0850 {a['elev_0850']}  DTC {dtc}  rt[{rs}]{conv}   ",
+                      f"0845 {a['elev_0845']}  0850 {a['elev_0850']}  DTC {dtc}  {pstr}  rt[{rs}]   ",
                       end="", flush=True)
-                if st is None and st_valid:
-                    clear_streak += 1
-                    if clear_streak >= DTC_CLEAR_DEBOUNCE:
-                        print(f"\n\n  *** C1418-78 CLEARED at t+{int(t0-start)}s "
-                              f"({clear_streak} consecutive reads) -- SDA appears to have taken! ***")
-                        break
-                else:
-                    clear_streak = 0          # garbled read or DTC still present -> not a confirmed clear
-                if emean is not None and abs(emean) < SPEC_DEG * 0.5:
-                    print(f"\n\n  *** elevation converged to {emean:+.3f} -- watching... ***")
+
+                committed = dtc_was_active and commit_streak >= DTC_CLEAR_DEBOUNCE
+                if not success and (committed or (prog is not None and prog >= 100)):
+                    success = True
+                    shown = "absent" if st is None else f"0x{st:02X}"
+                    why = "testFailed cleared" if committed else "progress 100%"
+                    print(f"\n\n  *** SDA COMMITTED ({why}; DTC {shown}; progress {prog}%) at "
+                          f"t+{int(t0-start)}s -- ACC should return! -- playing {SUCCESS_SOUND} ***")
+                    fire_chime(SUCCESS_SOUND)
+                    break
                 time.sleep(1.0)
+            if not success:                                 # natural deadline reached without committing
+                print(f"\n\n  *** SDA did NOT commit in {minutes:g} min (progress {prog}%, DTC still "
+                      f"active) -- keep driving / retry -- playing {TIMEOUT_SOUND} ***")
+                fire_chime(TIMEOUT_SOUND)
         except KeyboardInterrupt:
             print("\n  stopped by user.")
         finally:
