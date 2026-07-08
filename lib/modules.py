@@ -24,6 +24,12 @@ MODULES = {
         txid=0x18DA2AF1,
         rxid=0x18DAF12A,
     ),
+    "rf_hub": Module(
+        key="rf_hub",
+        name="Radio Frequency Hub (RFH, Continental) - TPMS/RKE",
+        txid=0x18DAC7F1,
+        rxid=0x18DAF1C7,
+    ),
     # e.g. add more modules here as the project expands:
     # "pcm": Module("pcm", "Powertrain Control Module", 0x18DA10F1, 0x18DAF110),
 }

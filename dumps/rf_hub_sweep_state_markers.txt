@@ -1,0 +1,2 @@
+engine window END 17:53:38, sweep at: FEFF OK  data=33 43 
+engine window START 17:47:42, sweep at 40C1
