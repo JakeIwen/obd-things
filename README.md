@@ -25,9 +25,12 @@ the wire. Low-level CAN/UDS RE is the *fallback*, not the opener. (See memory `r
 ```
 bringup.sh                 GENERIC: bring up the PCAN, PASSIVE by default (--tx to arm; --bcan
                              for the 125k body bus; --probe to find an unknown rate) + liveness
+docs/                      cross-project vehicle reference
+  bus-map.md                 MASTER map: verified broadcast frames + decodes per bus, wake/sleep
+                             semantics, module summary — READ before new reverse-engineering
 lib/                       GENERIC, module-agnostic plumbing
   uds.py                     ISO-TP socket, UDS request, NRC table, byte decoders, USB-drop recovery
-  modules.py                 module registry (addressing) — ADD A MODULE HERE to reach it
+  modules.py                 module registry — SOURCE OF TRUTH for addressing; ADD A MODULE HERE
 live_data/                 GENERIC top-style live viewer
   live_data.py               BASE viewer: pass a module + a Metric table -> live display
 tools/                     GENERIC, module-agnostic CLI tools (take a module key)
