@@ -97,30 +97,25 @@ CCAN_BITRATE = 500000   # if can0 is already here (manual radar/C-CAN work, or a
 
 
 def acquire():
-    """Read voltage from whichever bus the PCAN is on. The iface BITRATE declares the bus (bringup.sh sets
-    it; the monitor also leaves it on the bus it last read), and we honor that for the TX-wake decision so
-    the wake burst NEVER fires on a bus declared C-CAN -- we must not inject onto the 500k powertrain bus.
-      - @500k (C-CAN): read the C-CAN broadcast if it's live; NEVER wake. A parked/asleep C-CAN is dark
-        (powertrain modules are ignition-switched, unpowered) so it has no readable voltage -- 'no reading'
-        is the correct, safe outcome. If a live B-CAN is seen instead (rx-error spike @500k), read it @125k.
-      - @125k or down (B-CAN, the deployed default): B-CAN wake-read (read live, or TX-wake a silent body
-        bus). If that sees a live C-CAN mis-sampled at 125k ('not B-CAN'), read C-CAN passively @500k.
-    So both LIVE buses are read regardless of which is connected, mismatches self-correct WITHOUT waking, and
-    the only unread case is a parked C-CAN (nothing to read) -- keep the adapter on B-CAN for parked monitoring.
-    When you move the adapter to C-CAN, bring it up @500k (bringup.sh) so the monitor won't try to wake it."""
-    if cv.iface_bitrate() == CCAN_BITRATE:
-        verdict, detail = cv.classify_bus()
-        if verdict == "ccan":
-            return cv.read_voltage()
-        if verdict == "foreign":                       # live bus but not C-CAN @500k -> B-CAN mis-sampled
-            bv.bring_up_passive()
-            if bv.classify_bus()[0] == "bcan":
-                return bv.read_voltage()
-        return None, f"can0 @500k: no live C-CAN voltage ({detail}); not waking (a parked C-CAN is dark)"
-    volts, status = bv.read_with_wake()                # declared B-CAN -> TX-wake is safe here
+    """Read voltage from whichever bus the PCAN is on (the iface BITRATE declares it). BOTH buses are now
+    Pi-wakeable when parked: B-CAN via a 0x7FF burst, C-CAN via an addressed rf_hub UDS poke (verified
+    2026-07-08; see docs/bus-map.md -- the rf_hub poke also briefly powers the BCM accessory rails/dashcam).
+      - @500k (C-CAN): cv.read_with_wake() -- read if live, else poke rf_hub to wake + read 0x41A.
+      - @125k or down (B-CAN): bv.read_with_wake() -- read if live, else TX-wake the body bus + read 0x46C.
+    Each read_with_wake ABORTS ('not C-CAN'/'not B-CAN') if the adapter is really on the OTHER bus, so we then
+    read that one passively -- a bitrate/bus mismatch self-corrects. Waking is self-validating: the rf_hub
+    poke only wakes if rf_hub answers (= we're on C-CAN); the B-CAN burst path aborts on a foreign classify."""
+    if cv.iface_bitrate() == CCAN_BITRATE:            # declared C-CAN -> read live, else rf_hub-poke wake
+        volts, status = cv.read_with_wake()
+        if "not C-CAN" not in status:
+            return volts, status
+        if not bv.bring_up_passive():                 # really B-CAN @500k -> read it passively @125k
+            return None, "detected B-CAN but could not bring up can0 @125k"
+        return bv.read_voltage() if bv.classify_bus()[0] == "bcan" else (None, "bus unrecognized")
+    volts, status = bv.read_with_wake()               # declared B-CAN -> read live, else 0x7FF-burst wake
     if "not B-CAN" not in status:
         return volts, status
-    if not cv.bring_up_passive():                      # B-CAN saw a live C-CAN @125k -> read it @500k
+    if not cv.bring_up_passive():                     # really C-CAN @125k -> read it passively @500k
         return None, "detected C-CAN but could not bring up can0 @500k passive"
     verdict, detail = cv.classify_bus()
     return cv.read_voltage() if verdict == "ccan" else (None, f"bus unrecognized ({detail})")
