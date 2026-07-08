@@ -29,9 +29,9 @@ DIDs in `findings/radar_acc_did_findings.md` and `docs/oem/`.
 |---|---|---|
 | `radar_acc_baseline.py` | reproduce UDS baseline: session, key DIDs, serial, DTCs (read-only) | — |
 | `radar_acc_live.py` | live alignment/health gauge. Direct @5 Hz = a bus tester (don't run during cron logging). **`--follow`** tails the newest cron drive CSV (NO bus access) — use this to watch `0845` live mid-drive | — |
-| `radar_acc_drive_log.py` | log angles + DTC + **speed (DID 0x1002)** to CSV while driving (read-only) | `dumps/` |
+| `radar_acc_drive_log.py` | log angles + DTC + **speed (DID 0x1002)** to CSV while driving (read-only) | `../../tmp/radar/` |
 | `auto_drive_logger.py` | cron supervisor: passively auto-logs each drive (read-only) — **temporary, see TEARDOWN** | `../../tmp/` |
-| `radar_acc_sda_drive.py` | **⚠ ACTUATION** — DIY **Service Drive Alignment**: start `0x0251` + hold session + log while you drive. **This is the alignment tool to use.** | `dumps/` |
+| `radar_acc_sda_drive.py` | **⚠ ACTUATION** — DIY **Service Drive Alignment**: start `0x0251` + hold session + log while you drive. **This is the alignment tool to use.** | `../../tmp/radar/` |
 | `radar_acc_align_0251.py` | **⚠ ACTUATION** — older gated `31 01` runner whose guided flow is the **static-mirror (WRONG method here)** — superseded by `sda_drive`; kept for its preflight/abort plumbing | — |
 | `perturb_monitor.py` | flag any DID that changes while nudging the housing (read-only) — **done: no live orientation signal** | — |
 | `did_hunt_log.py` | log ALL readable DIDs to a wide CSV (read-only) — **dormant**, reusable to hunt new signals via the `tmp/HUNT_DIDS` marker | `../../tmp/` |
@@ -45,8 +45,8 @@ live at the repo root and take the module key `radar_acc`.
   - `docs/oem/` — **OEM / authoritative sources** (FCA STAR TSB for C1418-78, etc.); trust over our
     inferred findings. The TSB says C1418-78 is a seating/bumper-contact fault → fix mechanics, then calibrate.
 - `findings/` — `did_map.md` (**canonical map of all 56 DIDs + sessions/security/routines/DTCs**),
-  `radar_acc_did_findings.md` (narrative/analysis: angle scaling, 0x0251 mechanics, drive results).
-- `dumps/` — kept captures (`radar_acc_did_sweep.txt`).
+  `radar_acc_did_findings.md` (narrative/analysis: angle scaling, 0x0251 mechanics, drive results),
+  plus promoted captures (`radar_acc_did_sweep.txt`/`.log`, `sda_20260627_225708.csv`).
 
 **Safety:** `radar_acc_align_0251.py` is the only actuation in the whole repo. Read the Safety &
 liability section of the root README before using it.

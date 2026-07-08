@@ -2,9 +2,9 @@
 
 **Headline: the DIY Service Drive Alignment worked. C1418-78 went from active (0x8F) to a stored-history
 record (0x0E), ACC/FCW is functional again, and the fix held on the next drive.** This is the resolution
-of the whole investigation. Source logs (gitignored `tmp/` + committed `dumps/`):
-`projects/radar/dumps/sda_20260627_225708.csv` (the SDA run) and
-`tmp/dumps/radar_acc_drive_20260627_232202.csv` (post-SDA confirmation drive).
+of the whole investigation. Source logs (gitignored `tmp/` + committed `findings/`):
+`projects/radar/findings/sda_20260627_225708.csv` (the SDA run) and
+`tmp/radar/radar_acc_drive_20260627_232202.csv` (post-SDA confirmation drive).
 
 ## What we ran
 `radar_acc_sda_drive.py --arm` — start `0x0251` once, hold the session with `3E`, drive ~20 min. Two

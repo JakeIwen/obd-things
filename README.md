@@ -32,16 +32,22 @@ live_data/                 GENERIC top-style live viewer
   live_data.py               BASE viewer: pass a module + a Metric table -> live display
 tools/                     GENERIC, module-agnostic CLI tools (take a module key)
   uds_send.py                ad-hoc read-only UDS request
-  did_sweep.py               ReadDataByIdentifier sweep 0000-FFFF       -> dumps/<key>_did_sweep.txt
+  did_sweep.py               ReadDataByIdentifier sweep 0000-FFFF       -> tmp/sweeps/<key>_did_sweep.txt
   routine_scan.py            RoutineControl discovery scan (31 03, read-only)
   signal_correlate.py        DID byte-slice <-> signal correlator (lstsq), capture + analyze
-dumps/                     GENERIC scratch output from the tools above
 projects/                  per-target investigations (radar today; add more here)
   radar/                     2022 Promaster ACC radar (Bosch DASM / MRR1evo14F) — see its README
     *.py                       radar-specific scripts (baseline, live, drive log, 0x0251 actuation, …)
-    docs/ findings/ dumps/     radar narrative docs, decoded data, kept captures
-tmp/                       gitignored runtime scratch (auto-logger output, raw captures)
+    docs/ findings/            radar narrative docs, decoded data + promoted (tracked) captures
+tmp/                       gitignored — ALL machine-written data lands here, never in git:
+  captures/                  raw candump logs (tools/dump.sh default)
+  sweeps/                    did_sweep.py / signal_correlate.py output
+  <project>/                 per-project logger output (tmp/radar/, tmp/battery/, tmp/tpms/)
 ```
+
+**Data convention:** tools only ever write under `tmp/` (gitignored). When a capture/sweep proves
+worth keeping, PROMOTE it: move it into `projects/<x>/findings/` and commit it next to the analysis
+that cites it. "Is it tracked?" is answered by location alone — nothing under `tmp/` ever is.
 
 **Generic vs project-specific:** anything in `lib/`, `tools/`, `live_data/`, and `bringup.sh` is
 module-agnostic and reusable — it knows nothing about any particular ECU (addressing is passed in via
@@ -107,7 +113,7 @@ is safe. Auto-picks the sole `can*` iface (or set `IFACE=canN`).
 ```bash
 ./bringup.sh --tx                              # C-CAN 500k, ARMED (UDS needs TX); ignition ON (engine running ideal)
 python3 tools/uds_send.py radar_acc 22 F1 91   # ad-hoc read (radar family id) — sanity-check the link
-python3 tools/did_sweep.py radar_acc           # full DID sweep -> dumps/radar_acc_did_sweep.txt
+python3 tools/did_sweep.py radar_acc           # full DID sweep -> tmp/sweeps/radar_acc_did_sweep.txt
 python3 tools/routine_scan.py radar_acc        # RoutineControl discovery (read-only)
 ```
 

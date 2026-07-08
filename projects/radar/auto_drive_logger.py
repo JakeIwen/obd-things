@@ -5,7 +5,7 @@ Designed to be fired by cron every minute. Idempotent and lock-guarded, so overl
 running invocations are no-ops. Trigger is PASSIVE -- it listens for CAN traffic (silent bus =
 asleep, busy = running) and never transmits when idle, so it cannot keep the vehicle awake or
 drain the 12 V battery. When the bus is active and no logger is already running, it launches
-`radar_acc_drive_log.py --quiet --stop-after-idle` writing to tmp/dumps/ (gitignored). The
+`radar_acc_drive_log.py --quiet --stop-after-idle` writing to tmp/radar/ (gitignored). The
 logger exits on its own when the vehicle sleeps; the next cron tick relaunches on the next drive.
 
 Bus-aware (bringup.sh is passive-by-default + supports the 125k B-CAN body bus):
@@ -32,7 +32,7 @@ from lib import uds  # noqa: E402
 HERE = os.path.dirname(os.path.abspath(__file__))   # this script's dir (projects/radar/)
 
 CHANNEL = "can0"
-OUT_DIR = os.path.join(REPO, "tmp", "dumps")
+OUT_DIR = os.path.join(REPO, "tmp", "radar")
 TMP_DIR = os.path.join(REPO, "tmp")
 SUP_LOCK = os.path.join(TMP_DIR, "auto_drive_logger.lock")   # one supervisor at a time
 PIDFILE = os.path.join(TMP_DIR, "drive_logger.pid")          # pid of the launched logger

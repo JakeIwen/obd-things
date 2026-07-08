@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Read 12 V system voltage PASSIVELY from the C-CAN (500k powertrain) bus.
 
-The powertrain bus DOES broadcast system voltage (found 2026-06-28 from tmp/raw_dumps/ccan analysis;
+The powertrain bus DOES broadcast system voltage (found 2026-06-28 from tmp/captures/ccan analysis;
 see memory battery-monitor-passive-plan). Two fields, both pure broadcast -- this NEVER transmits:
 
   * 0x2EF  bytes[0:1] little-endian uint16 / DIVISOR  -- FINE. Only present with IGNITION ON / running.
@@ -63,7 +63,7 @@ COARSE_DIVISOR = 14.2        # 0x41A: raw/14.2 = volts (coarse; likely small off
 V_SANE = (6.0, 18.0)         # plausible 12 V rail; frames decoding outside are dropped as corrupt
 
 # Bus-identity guard. C-CAN powertrain signature ids (high-rate; present ignition-on AND in parked wakes),
-# vs B-CAN body signature ids (abort -- wrong bus). Verified against tmp/raw_dumps/{ccan,bcan}.
+# vs B-CAN body signature ids (abort -- wrong bus). Verified against tmp/captures/{ccan,bcan}.
 CCAN_IDS = {0x100, 0x101, 0x103, 0x104, 0x10F, 0x110, 0x116, 0x0EA, 0x0EE, 0x0FA, 0x0FE,
             FINE_ID, COARSE_ID}
 BCAN_IDS = {0x46C, 0x0A0, 0x2EA, 0x3DC, 0x3DE, 0x3E0, 0x3E2, 0x3E4, 0x3E6, 0x354, 0x356}

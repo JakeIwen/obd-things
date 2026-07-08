@@ -4,7 +4,7 @@
     python3 projects/radar/radar_acc_live.py          # 5 Hz, reads the bus directly (a TESTER)
     python3 projects/radar/radar_acc_live.py 0.5      # override refresh interval (seconds)
     python3 projects/radar/radar_acc_live.py --follow # NO bus access -- tails the newest cron
-                                                      #   drive CSV (tmp/dumps/radar_acc_drive_*.csv)
+                                                      #   drive CSV (tmp/radar/radar_acc_drive_*.csv)
     python3 projects/radar/radar_acc_live.py --follow <path.csv>
 
 Direct mode is ~20 UDS reads/s -- do NOT run it while the cron auto-logger is active (two testers on
@@ -64,12 +64,12 @@ def follow_csv(path=None):
     delta/direction from the start-of-drive baseline, the decoded DTC status byte (F/C/W flags), and a
     speed-gated SETTLED indicator + trailing-window slope -- the same plateau gate the logger chimes on."""
     GRN, RED, CYA, YEL, DIM, RST = "\033[32m", "\033[31m", "\033[36m", "\033[33m", "\033[2m", "\033[0m"
-    dumps_dir = os.path.join(_root, "tmp", "dumps")
+    dumps_dir = os.path.join(_root, "tmp", "radar")
     newest = lambda: (sorted(glob.glob(os.path.join(dumps_dir, "radar_acc_drive_*.csv")),
                              key=os.path.getmtime) or [None])[-1]
     cur = os.path.abspath(path) if path else newest()
     if not cur or not os.path.exists(cur):
-        print("No radar_acc_drive_*.csv in tmp/dumps yet — start driving (the cron logger creates it), "
+        print("No radar_acc_drive_*.csv in tmp/radar yet — start driving (the cron logger creates it), "
               "then re-run with --follow."); return
     print(f"following {cur}\n(no bus access; Ctrl-C to stop)\n")
 

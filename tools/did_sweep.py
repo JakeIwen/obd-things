@@ -6,7 +6,8 @@
     python3 tools/did_sweep.py radar_acc 0800 08FF
 
 Records every DID that returns positive (62) or securityAccessDenied (7F2233 = exists but locked);
-skips requestOutOfRange (7F2231 = not implemented). USB-drop resilient. Writes dumps/<key>_did_sweep.txt.
+skips requestOutOfRange (7F2231 = not implemented). USB-drop resilient. Writes tmp/sweeps/<key>_did_sweep.txt
+(gitignored scratch -- promote a sweep worth keeping into projects/<x>/findings/).
 Pure reads, safe.
 """
 import os
@@ -80,5 +81,6 @@ if __name__ == "__main__":
     # can't clobber the full sweep.
     full = (start == 0x0000 and end == 0xFFFF)
     name = f"{key}_did_sweep.txt" if full else f"{key}_did_sweep_{start:04X}-{end:04X}.txt"
-    out = os.path.join(REPO, "dumps", name)
+    out = os.path.join(REPO, "tmp", "sweeps", name)
+    os.makedirs(os.path.dirname(out), exist_ok=True)
     dump_dids(module, start, end, out)

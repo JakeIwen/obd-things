@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Read-only drive logger for the ACC radar misalignment angles (+ vehicle speed).
 
-Logs the deviation DIDs + DTC + voltage + vehicle speed at ~1 Hz to a timestamped CSV in dumps/,
+Logs the deviation DIDs + DTC + voltage + vehicle speed at ~1 Hz to a timestamped CSV in tmp/radar/,
 and prints a live one-line readout. Speed is read from the radar's own DID 0x1002 (km/h) -- OBD-II
 PIDs are unreachable behind the SGW bypass, and the radar re-exposes the speed it consumes for ACC
 (this is the value AlfaOBD shows in ACC live data). Purpose: track the radar's measured aim WHILE
@@ -149,7 +149,7 @@ def main():
     chime = "--chime" in sys.argv          # arm two-tier chime (success on DTC-clear, settled on plateau)
     success_sound = opt("--chime-success-sound") or opt("--chime-sound", "success.mp3")
     settled_sound = opt("--chime-settled-sound", "settled.mp3")
-    outdir = opt("--out-dir") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "dumps")
+    outdir = opt("--out-dir") or os.path.join(_root, "tmp", "radar")
     os.makedirs(outdir, exist_ok=True)
     outfile = os.path.abspath(os.path.join(
         outdir, f"radar_acc_drive_{time.strftime('%Y%m%d_%H%M%S')}.csv"))

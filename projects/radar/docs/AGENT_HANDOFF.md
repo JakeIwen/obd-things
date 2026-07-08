@@ -2,7 +2,7 @@
 
 **Read this first**, then the repo-root [`README.md`](../../../README.md) (universal bus facts/gotchas +
 the **RESEARCH-FIRST** working method) and the **authoritative OEM docs** in [`docs/oem/`](oem/) (trust
-those over our inference). Background: `radar_acc_handoff.md`; raw data in `../findings/` + `../dumps/`;
+those over our inference). Background: `radar_acc_handoff.md`; raw data in `../findings/`;
 AlfaOBD write-up `radar_acc_alfaobd_bugreport.md`.
 
 ---
@@ -46,7 +46,7 @@ The repo is read-only **except two gated actuation tools** (`radar_acc_sda_drive
 3. **Decoding speed from the CAN broadcast.** Abandoned — `0x1002` solved it. (A distance/odometer
    accumulator lives at CAN ID `0x101` if ever needed, but you won't need it.)
 4. **"Just keep driving" to auto-fix at the current −1.26°.** Ruled out by a **2-hour, 60%-highway drive**
-   (`tmp/dumps/radar_acc_drive_20260618_143202.csv`): `0845` stayed flat at −1.26°, DTC never cleared.
+   (`tmp/radar/radar_acc_drive_20260618_143202.csv`): `0845` stayed flat at −1.26°, DTC never cleared.
    Online auto-align won't chase a deviation this far out. Driving alone fixes it **only after** the mount
    is physically corrected back into the window (see Fix path #1).
 5. **Wrong sessions for the routine (`0x40`, `0x60`).** Red herrings from the `0x03` session timing out.
@@ -172,7 +172,7 @@ seed/key oracle, not the C1418-78 fix.
 - **SDA progress is readable live:** `31 03 0251` → `71 03 0251 B0 B1 B2 B3`. **B2 = progress `0x00`→`0x64`
   (0–100%), monotonic**; B1 state (`01`=running, `03`=completed); B0 fluctuates (live flags); B3 mostly 00.
   At B2=100% the routine commits and C1418-78 flips `0x8F`→`0x0E`. (Proven on the 2026-06-27 SDA run.)
-- **DID sweep CLEAN:** `22` over 0x0000–0xFFFF = 56 readable, 0 locked (`../dumps/radar_acc_did_sweep.txt`).
+- **DID sweep CLEAN:** `22` over 0x0000–0xFFFF = 56 readable, 0 locked (`../findings/radar_acc_did_sweep.txt`).
   **Full decoded map of all 56 DIDs + sessions/security/routines/DTCs → [`../findings/did_map.md`](../findings/did_map.md).**
 - **Key DIDs (scales inferred, internally consistent):**
   | DID | meaning | notes |
@@ -191,7 +191,7 @@ seed/key oracle, not the C1418-78 fix.
 ./bringup.sh --tx                              # can0 @500k ARMED (UDS needs --tx; passive is the default now); ignition ON
 python3 projects/radar/radar_acc_baseline.py   # reproduce baseline + DTCs (read-only)
 python3 projects/radar/radar_acc_live.py       # live alignment/health gauge @5 Hz (read-only)
-python3 projects/radar/radar_acc_drive_log.py  # log angles+speed+DTC to dumps/ while driving (read-only)
+python3 projects/radar/radar_acc_drive_log.py  # log angles+speed+DTC to tmp/radar/ while driving (read-only)
 python3 projects/radar/radar_acc_sda_drive.py --arm   # ** ACTUATION ** DIY SDA: start 0x0251 + hold session + log; then DRIVE
 python3 tools/uds_send.py radar_acc 22 F1 91   # ad-hoc read (generic)
 ```
@@ -207,7 +207,7 @@ radar-specific work here under `projects/radar/`.
 ## ⚠ TEARDOWN — temporary rig on the Pi (NOT in git; remove when done)
 1. **Cron auto drive-logger** (`crontab -l` → `projects/radar/auto_drive_logger.py` every minute). Bus-aware:
    operates only on C-CAN 500k, **auto-arms** to log, **skips when can0 is at 125k B-CAN**. Logs each drive to
-   `tmp/dumps/radar_acc_drive_*.csv`. **Remove via `crontab -e` once the radar is fixed/abandoned.**
+   `tmp/radar/radar_acc_drive_*.csv`. **Remove via `crontab -e` once the radar is fixed/abandoned.**
 2. `tmp/CAPTURE_RAW` and `tmp/HUNT_DIDS` markers — **retired**; `did_hunt_log.py` + raw-burst code remain dormant
    (only fire if a marker is re-created). Speed (`0x1002`) is wired into the normal logger.
 3. `tmp/CHIME` marker — while present, the cron logger arms the **two-tier chime** (SUCCESS = C1418-78

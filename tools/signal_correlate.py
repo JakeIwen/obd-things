@@ -17,7 +17,7 @@ Workflow:
     #    (default DIDs = the angle candidates + sanity rows; Ctrl-C to stop early)
 
     # 2. analyze: regress every captured slice against a reference slice
-    python3 tools/signal_correlate.py analyze dumps/radar_acc_correlate_*.json \\
+    python3 tools/signal_correlate.py analyze tmp/sweeps/radar_acc_correlate_*.json \\
             --ground 0845:0:4:>i4
 
 Everything here is read-only (only 22 ReadDataByIdentifier on the wire).
@@ -196,7 +196,8 @@ def main():
         dids = ([int(x, 16) for x in opt("--dids").split(",")] if opt("--dids") else DEFAULT_DIDS)
         seconds = float(opt("--seconds", "0"))
         out = opt("-o") or os.path.join(
-            REPO, "dumps", f"{module.key}_correlate_{time.strftime('%Y%m%d_%H%M%S')}.json")
+            REPO, "tmp", "sweeps", f"{module.key}_correlate_{time.strftime('%Y%m%d_%H%M%S')}.json")
+        os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
         capture(module, dids, seconds, out)
     else:
         path = args[0] if args and not args[0].startswith("-") else None

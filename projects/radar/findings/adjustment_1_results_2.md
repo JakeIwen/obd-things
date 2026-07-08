@@ -3,7 +3,7 @@
 Second post-adjustment drive (the stability-confirmation drive). **Headline: alignment is locked in —
 `elev_0845` held rock-steady at +0.278° across a fresh ignition cycle, confirming the adjustment-#1
 result is stable. But DTC C1418-78 still did NOT clear, and a comms glitch exposed a false-fire bug in
-the SUCCESS chime.** Source log (gitignored `tmp/`): `tmp/dumps/radar_acc_drive_20260627_221602.csv`.
+the SUCCESS chime.** Source log (gitignored `tmp/`): `tmp/radar/radar_acc_drive_20260627_221602.csv`.
 
 ## The drive
 - 1132 rows, **18.9 min** (22:16:03 → 22:35:00), `tmp/CHIME` present → two-tier chime armed.

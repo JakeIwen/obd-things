@@ -4,6 +4,12 @@ Handoff doc. State as of **2026-07-07**. Any agent/human should be able to resum
 Link path & general UDS tooling: see repo `docs/`, `lib/modules.py`, and the radar project docs
 (same PCAN → SGW-bypass → C-CAN tap). Everything below was verified on the vehicle.
 
+**Data locations (repo convention, 2026-07-08 — see root `CLAUDE.md` / `README.md`):** all
+tool output for this project goes to **`tmp/tpms/`** (gitignored: drive-log CSV, AlfaOBD
+sniffs); raw bus-state reference captures live in `tmp/captures/`; committed evidence
+(DID sweep + state markers) is promoted into **`findings/` (this dir)**. The old
+`dumps/` and `tmp/raw_dumps/` locations no longer exist.
+
 ## The complaint
 
 Intermittent **C1504** ("Tire Pressure Sensor 4 — Rear Right") for the vehicle's whole life.
@@ -57,8 +63,8 @@ Current codes in the RF Hub: **B1040-64** and **C1512-88** (details below). No C
    records — update trigger NOT yet characterized (did not reset on parked pressure events;
    one reset seen at ignition-on). `40A6-40A9` localization/event records `02 01 <pos> <id> ...`.
    `40C0` = 2022-date-stamped factory event log. `2024` = the one LOCKED DID (security access).
-   Full sweep: `dumps/rf_hub_did_sweep.txt` (118 readable / 1 locked / 0 unresolved),
-   ignition-state bands in `dumps/rf_hub_sweep_state_markers.txt`.
+   Full sweep: `findings/rf_hub_did_sweep.txt` (118 readable / 1 locked / 0 unresolved),
+   ignition-state bands in `findings/rf_hub_sweep_state_markers.txt`.
 
 ## Infrastructure now running
 
@@ -72,9 +78,13 @@ Current codes in the RF Hub: **B1040-64** and **C1512-88** (details below). No C
   awake** (verified: with a frame-count gate the bus never slept; polling stopped → asleep in
   60 s). A dropout in the CSV names its slot → physical wheel via the table above; a DTC
   status flip (e.g. `C1504-xx=2F`) timestamps fault onset.
+  The live unit is `/etc/systemd/system/tpms-logger.service`; a tracked copy sits in this dir
+  (`tpms-logger.service`). (Re)install after changing the unit (NOT needed for logger edits —
+  those just need a restart):
+  `sudo cp projects/tpms/tpms-logger.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart tpms-logger`
 - **`isotp_decode_rfh.py` (this dir)** — offline ISO-TP transcript decoder for candump logs
   (hardcoded to the RFH ID pair); used to decode the AlfaOBD session sniffs in
-  `tmp/raw_dumps/rfh_alfaobd_sniff_ccan_resilient.log`.
+  `tmp/tpms/rfh_alfaobd_sniff_ccan_resilient.log`.
 - **voltage_mon cron is COMMENTED OUT** (dated tag in `crontab -l`): it was crashing
   (`iface_bitrate()` TypeError, mid-refactor), its B-CAN path is physically moot while the
   PCAN sits on the C-CAN tap, and its iface flips would blind this logger. Re-enable by

@@ -2,7 +2,7 @@
 
 Radar identifies as **MRR1evo14F** (Bosch Mid-Range Radar gen-1 evo). VIN `3C6LRVDG4NE######`.
 Full read-only `22 <did>` sweep of 0x0000–0xFFFF: **56 readable DIDs, 0 locked, 0 unresolved (CLEAN)**.
-Raw log: `projects/radar/dumps/radar_acc_did_sweep.txt`. Tool: `python3 tools/did_sweep.py radar_acc` (generic).
+Raw log: `projects/radar/findings/radar_acc_did_sweep.txt`. Tool: `python3 tools/did_sweep.py radar_acc` (generic).
 **Complete consolidated map of ALL 56 DIDs + sessions/security/routines/DTCs → [`did_map.md`](did_map.md)**
 (this file holds the narrative/analysis; `did_map.md` is the canonical lookup table).
 
@@ -98,7 +98,7 @@ exposed accelerometer/inclinometer — the misalignment is target-derived and ne
 a static physical nudge does not register.** Reinforces the physical-misalignment conclusion.
 
 ## First real drive — city only (2026-06-17): angle behavior
-Two auto-logged city drives (~10 min + ~6 min, `tmp/dumps/radar_acc_drive_20260617_19*.csv`):
+Two auto-logged city drives (~10 min + ~6 min, `tmp/radar/radar_acc_drive_20260617_19*.csv`):
 - **`elev_0845` stayed ≈ −1.2585° (moved ~2 millideg total); `elev_0850` ≈ −1.2°; DTC `0x8F` throughout.**
   The authoritative stored elevation did **not** converge toward 0 → consistent with a physical
   misalignment, **but city-only driving can't rule out dynamic** (dynamic alignment needs sustained,
@@ -120,7 +120,7 @@ the speed source (one read on the radar socket; OBD-II path retired). `0x1009`/`
 counters (not speed); `0x0857` is a toggling flag.
 
 ## ★ Sustained-speed drive (2026-06-17) + OEM method (2026-06-18): alignment is SDA, not self-align
-Drive with **sustained 60-89 km/h (37-55 mph) for ~10 min** (`tmp/dumps/hunt_20260617_222502.csv`):
+Drive with **sustained 60-89 km/h (37-55 mph) for ~10 min** (`tmp/radar/hunt_20260617_222502.csv`):
 - **`elev_0845` dead flat at −1.254°** — mean −1.2540 FAST (≥60 km/h, n=606) vs −1.2558 STOPPED (n=176);
   no speed dependence, no convergence. `elev_0850` wandered −1.16→−1.37 (not toward 0).
 - OEM docs (`docs/oem/alldata_ram2022_C1418-78_and_acc_alignment.md`) show the shop method is a

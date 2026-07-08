@@ -39,7 +39,7 @@ def main():
     period = 1.0 / hz
     quiet = "--quiet" in sys.argv
     stop_idle = float(opt("--stop-after-idle", "0"))
-    outdir = opt("--out-dir") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "dumps")
+    outdir = opt("--out-dir") or os.path.join(_root, "tmp", "radar")
     os.makedirs(outdir, exist_ok=True)
     outfile = os.path.abspath(os.path.join(outdir, f"hunt_{time.strftime('%Y%m%d_%H%M%S')}.csv"))
 

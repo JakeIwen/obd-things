@@ -182,7 +182,7 @@ def main():
           f"it commits (SUCCESS chime), or progress stalls {STALL_TIMEOUT/60:g} min / routine resets "
           f"(TIMEOUT chime); {cap_msg}. Do not touch the keyboard. <<<\n")
 
-    outdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dumps")
+    outdir = os.path.join(_root, "tmp", "radar")
     os.makedirs(outdir, exist_ok=True)
     outfile = os.path.join(outdir, f"sda_{time.strftime('%Y%m%d_%H%M%S')}.csv")
     cols = ["iso_time", "elapsed_s", "speed_mph", "speed_kmh", "elev_0845", "elev_0850",

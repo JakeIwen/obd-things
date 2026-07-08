@@ -1,0 +1,15 @@
+[Unit]
+Description=TPMS drive logger (RF Hub UDS poll while van is on; idle-RX while parked)
+After=multi-user.target
+
+[Service]
+User=pi
+Environment=PYTHONUNBUFFERED=1
+Type=simple
+WorkingDirectory=/home/pi/dev/obd-things
+ExecStart=/usr/bin/python3 projects/tpms/tpms_logger.py --auto
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

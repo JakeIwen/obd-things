@@ -13,7 +13,7 @@
 # (Passive/listen-only makes the physical switch electrically safe; bringup's liveness check
 #  also catches a still-asleep B-CAN -- wake it with a FOB unlock.)
 #
-#   ./tools/dump.sh                   sniff the sole can iface -> dumps/dump-<ts>.log
+#   ./tools/dump.sh                   sniff the sole can iface -> tmp/captures/dump-<ts>.log
 #   ./tools/dump.sh --filepath PATH   write to PATH instead of the default
 #   ./tools/dump.sh --stdout          stream to the console only, no log file
 #   ./tools/dump.sh --timeout SECS    auto-stop after SECS seconds (default: until Ctrl-C)
@@ -25,7 +25,7 @@
 #
 # --filepath PATH may be absolute or relative; a relative PATH is resolved against your
 # current working directory (NOT the repo root), and missing parent dirs are created.
-# Only the default output is anchored under the repo's dumps/.
+# Only the default output is anchored under the repo's tmp/captures/ (gitignored).
 #
 # --timeout SECS (positive integer) wraps candump in `timeout`, so it runs for SECS then
 # stops cleanly (log flushed/complete); omit it to run until Ctrl-C. A timed-out run exits
@@ -38,7 +38,7 @@ set -eo pipefail   # pipefail: a --timeout hit propagates candump's 124 through 
 # repo root = parent of this script's dir (tools/)
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-OUT=""        # --filepath overrides; empty -> timestamped default under dumps/
+OUT=""        # --filepath overrides; empty -> timestamped default under tmp/captures/
 STDOUT_ONLY=0 # --stdout streams to the console only, no log file
 TIMEOUT=""    # --timeout SECS auto-stops after N seconds; empty -> run until Ctrl-C
 while [ $# -gt 0 ]; do
@@ -91,8 +91,8 @@ if [ "$STDOUT_ONLY" -eq 1 ]; then
   echo "sniffing $IFACE ($STOP) -> stdout only (no log file)" >&2
   "${CAP[@]}"
 else
-  # Default output -> dumps/dump-<ts>.log; --filepath takes it anywhere (dir is created).
-  [ -n "$OUT" ] || OUT="$REPO/dumps/dump-$(date +%Y%m%d_%H%M%S).log"
+  # Default output -> tmp/captures/dump-<ts>.log; --filepath takes it anywhere (dir is created).
+  [ -n "$OUT" ] || OUT="$REPO/tmp/captures/dump-$(date +%Y%m%d_%H%M%S).log"
   mkdir -p "$(dirname "$OUT")"
   echo "sniffing $IFACE ($STOP) -> $OUT"
   "${CAP[@]}" | tee "$OUT"

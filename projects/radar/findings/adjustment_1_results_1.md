@@ -2,8 +2,8 @@
 
 First post-adjustment drive after physically nudging the ACC radar **~1.3°**. **Headline: it worked —
 the radar auto-aligned during the drive**, converging the chronic −1.26° elevation through zero.
-Source log: `../dumps/` → not committed (gitignored `tmp/`); analyzed from
-`tmp/dumps/radar_acc_drive_20260626_232502.csv`.
+Source log: not committed (gitignored `tmp/`); analyzed from
+`tmp/radar/radar_acc_drive_20260626_232502.csv`.
 
 ## Setup / baselines
 | state | `elev_0845` |

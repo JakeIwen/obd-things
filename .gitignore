@@ -11,16 +11,8 @@ venv/
 *.swp
 .DS_Store
 
-# Ad-hoc / debug dumps (keep the canonical full sweep radar_acc_did_sweep.txt + .log)
-dumps/*_did_sweep_*.txt
-# tools/dump.sh raw candump captures (transient)
-dumps/dump-*.log
-dumps/sniff/
 *.tmp
 
-# Unattended auto-drive-logger output + runtime state (tools/auto_drive_logger.py)
+# ALL machine-written data lands under tmp/ (captures, sweeps, per-project logs, runtime state).
+# Nothing a tool writes is ever tracked; promote anything worth keeping into projects/<x>/findings/.
 tmp/
-
-# Transient drive/hunt logger scratch if run with default out-dir (keep curated *_did_sweep.* only)
-projects/*/dumps/hunt_*.csv
-projects/*/dumps/radar_acc_drive_*.csv
