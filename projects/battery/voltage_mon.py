@@ -10,6 +10,10 @@ Alerts go to ntfy (free push, no account): edge-triggered when it first drops be
 throttled re-alert while it stays low, and one 'recovered' note on the way back up. Every message
 is datestamped. Set NTFY_URL to override the topic.
 
+CONNECTIVITY GATE: before touching the bus it checks the ntfy host is reachable -- if not, it SKIPS
+without waking CAN (no point spending battery to wake the bus if the alert can't be delivered anyway).
+--no-notify bypasses the gate so the read path can be tested offline.
+
     python3 projects/battery/voltage_mon.py             # one run (pushes ntfy if low)
     python3 projects/battery/voltage_mon.py --no-notify  # one run, never pushes (test the read path)
 
@@ -20,16 +24,15 @@ import os
 import sys
 import json
 import fcntl
+import socket
 import datetime
 import subprocess
+import urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import bcan_voltage as bv            # sibling reader: read_with_wake, append_csv, CSV_PATH, _ROOT
-try:                                 # radar reader (pulls in isotp); optional opportunistic C-CAN source
-    import read_voltage as rv
-except Exception:
-    rv = None
+import ccan_voltage as cv            # C-CAN voltage BROADCAST reader (0x2EF/0x41A); stdlib-only, no isotp
 
 NTFY_URL  = os.environ.get("NTFY_URL", "https://ntfy.sh/promaster_ncn")
 WARN_V    = 12.0                 # alert below this resting voltage (tune to taste)
@@ -89,34 +92,53 @@ def maybe_alert(volts, allow_send):
     _save_state(st)
 
 
-CCAN_BITRATE = 500000   # radar/auto_drive_logger bus; if can0 is here we only passive-sniff, never touch it
-
-
-def radar_logger_running():
-    """True if auto_drive_logger's child drive logger is actually alive -- if so it owns can0 on C-CAN
-    and we must NOT reconfigure/TX; only a passive radar sniff is safe. Verifies the pid's cmdline (not
-    just liveness) so a STALE pidfile whose number got reused doesn't falsely block B-CAN monitoring."""
-    try:
-        with open(os.path.join(bv._ROOT, "tmp", "drive_logger.pid")) as f:
-            pid = int(f.read().strip())
-        with open(f"/proc/{pid}/cmdline", "rb") as f:        # missing == dead pid -> exception -> False
-            cmd = f.read()
-        return b"radar_acc_drive_log" in cmd or b"did_hunt_log" in cmd
-    except Exception:
-        return False
+CCAN_BITRATE = 500000   # if can0 is already here (manual radar/C-CAN work, or a drive logger) read the
+                        # C-CAN voltage broadcast passively rather than reconfigure/hijack the bus.
 
 
 def acquire():
-    """Pick a NON-INTERFERING source. If the drive logger is running OR can0 is already on C-CAN 500k,
-    that bus belongs to auto_drive_logger -> only PASSIVELY sniff the radar's 0x1006 (no reconfigure,
-    no TX). Otherwise run the normal B-CAN monitor (which may TX-wake a silent body bus)."""
-    if radar_logger_running() or bv.iface_bitrate() == CCAN_BITRATE:
-        if rv is None:
-            return None, "C-CAN/drive-logger active -- iface untouched; radar reader unavailable (isotp?)"
-        v, s = rv.passive_read()
-        return v, (s if v is not None
-                   else "C-CAN/drive-logger active -- iface left untouched; no radar voltage caught")
-    return bv.read_with_wake()
+    """Read voltage from whichever bus the PCAN is on. The iface BITRATE declares the bus (bringup.sh sets
+    it; the monitor also leaves it on the bus it last read), and we honor that for the TX-wake decision so
+    the wake burst NEVER fires on a bus declared C-CAN -- we must not inject onto the 500k powertrain bus.
+      - @500k (C-CAN): read the C-CAN broadcast if it's live; NEVER wake. A parked/asleep C-CAN is dark
+        (powertrain modules are ignition-switched, unpowered) so it has no readable voltage -- 'no reading'
+        is the correct, safe outcome. If a live B-CAN is seen instead (rx-error spike @500k), read it @125k.
+      - @125k or down (B-CAN, the deployed default): B-CAN wake-read (read live, or TX-wake a silent body
+        bus). If that sees a live C-CAN mis-sampled at 125k ('not B-CAN'), read C-CAN passively @500k.
+    So both LIVE buses are read regardless of which is connected, mismatches self-correct WITHOUT waking, and
+    the only unread case is a parked C-CAN (nothing to read) -- keep the adapter on B-CAN for parked monitoring.
+    When you move the adapter to C-CAN, bring it up @500k (bringup.sh) so the monitor won't try to wake it."""
+    if cv.iface_bitrate() == CCAN_BITRATE:
+        verdict, detail = cv.classify_bus()
+        if verdict == "ccan":
+            return cv.read_voltage()
+        if verdict == "foreign":                       # live bus but not C-CAN @500k -> B-CAN mis-sampled
+            bv.bring_up_passive()
+            if bv.classify_bus()[0] == "bcan":
+                return bv.read_voltage()
+        return None, f"can0 @500k: no live C-CAN voltage ({detail}); not waking (a parked C-CAN is dark)"
+    volts, status = bv.read_with_wake()                # declared B-CAN -> TX-wake is safe here
+    if "not B-CAN" not in status:
+        return volts, status
+    if not cv.bring_up_passive():                      # B-CAN saw a live C-CAN @125k -> read it @500k
+        return None, "detected C-CAN but could not bring up can0 @500k passive"
+    verdict, detail = cv.classify_bus()
+    return cv.read_voltage() if verdict == "ccan" else (None, f"bus unrecognized ({detail})")
+
+
+def have_connectivity(url=NTFY_URL, timeout=6):
+    """True if the ntfy host is reachable (DNS + TCP connect). No point waking the CAN bus (which draws
+    battery) if we can't deliver the alert anyway. Probes the actual NTFY_URL host, so a custom/self-hosted
+    topic is tracked too."""
+    try:
+        u = urllib.parse.urlparse(url)
+        host, port = u.hostname, (u.port or (443 if u.scheme == "https" else 80))
+        if not host:
+            return False
+        socket.create_connection((host, port), timeout=timeout).close()
+        return True
+    except (OSError, ValueError):        # ValueError: urlparse().port raises on a non-numeric port
+        return False
 
 
 def main():
@@ -129,7 +151,12 @@ def main():
         log("another voltage_mon instance is running; skipping this tick")
         return
 
-    volts, status = acquire()                  # B-CAN wake-read, or passive radar sniff if C-CAN is busy
+    # Gate on connectivity BEFORE acquire(): no point waking the bus (draws battery) if we can't alert.
+    if allow_send and not have_connectivity():
+        log("no internet (ntfy host unreachable) -- skipping; not waking the bus")
+        return
+
+    volts, status = acquire()                  # B-CAN wake-read, or C-CAN broadcast if can0 is already there
     bv.append_csv(bv.CSV_PATH, volts if volts is not None else "", status)
     if volts is None:
         log(f"voltage read FAILED: {status}")

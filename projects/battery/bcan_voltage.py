@@ -40,20 +40,20 @@ This guarantees the wake burst is never injected onto the powertrain bus.
 Default mode is read-only (listen-only); --wake transmits a benign burst. Needs sudo to bring up the iface.
 """
 import os
-import re
 import sys
-import csv
 import time
 import errno
 import socket
 import struct
 import argparse
 import datetime
-import subprocess
 
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 while _ROOT != os.path.dirname(_ROOT) and not os.path.isdir(os.path.join(_ROOT, "lib")):
     _ROOT = os.path.dirname(_ROOT)
+sys.path.insert(0, _ROOT)
+from lib import canbus                                # noqa: E402  shared CAN-iface plumbing
+from lib.canbus import iface_bitrate, append_csv      # noqa: E402,F401  re-exported for callers
 CSV_PATH = os.path.join(_ROOT, "tmp", "battery", "bcan_voltage.csv")
 
 CHANNEL = "can0"
@@ -75,44 +75,6 @@ BCAN_IDS = {0x46C, 0x0A0, 0x0E0, 0x2EA, 0x3DC, 0x3DE, 0x3E0, 0x3E2, 0x3E4, 0x3E6
 RX_ERR_ABORT = 200        # rx-error climb during the probe -> 500k bus sampled at 125k = wrong bus
 
 
-def _ip_up(channel, bitrate, listen_only, restart_ms=None):
-    """down then up `channel` as CAN @bitrate. listen-only is set EXPLICITLY both ways because the
-    flag is STICKY on PCAN/SocketCAN -- omitting it leaves the previous mode, which silently breaks
-    TX (frames go nowhere). restart_ms>0 lets the controller auto-recover from a bus-off (an unACKed
-    wake frame on a still-sleeping bus drives toward bus-off)."""
-    if subprocess.run(["ip", "link", "show", channel], capture_output=True).returncode != 0:
-        return False
-    subprocess.run(["sudo", "ip", "link", "set", channel, "down"], capture_output=True)
-    cmd = ["sudo", "ip", "link", "set", channel, "up", "type", "can", "bitrate", str(bitrate),
-           "listen-only", "on" if listen_only else "off"]
-    if restart_ms is not None:
-        cmd += ["restart-ms", str(restart_ms)]
-    r = subprocess.run(cmd, capture_output=True)
-    time.sleep(0.3)
-    return r.returncode == 0
-
-
-def _is_listen_only(channel):
-    out = subprocess.run(["ip", "-details", "link", "show", channel], capture_output=True, text=True).stdout
-    return "<LISTEN-ONLY>" in out
-
-
-def iface_bitrate(channel=CHANNEL):
-    """Current CAN bitrate of `channel` if it's UP, else None. Used to detect a live C-CAN (500k)
-    session (e.g. auto_drive_logger) that we must not reconfigure."""
-    out = subprocess.run(["ip", "-details", "link", "show", channel], capture_output=True, text=True).stdout
-    if not re.search(r"state UP|UP,", out):
-        return None
-    m = re.search(r"bitrate (\d+)", out)
-    return int(m.group(1)) if m else None
-
-
-def _rx_errors(channel):
-    out = subprocess.run(["ip", "-details", "link", "show", channel], capture_output=True, text=True).stdout
-    m = re.search(r"berr-counter\s+tx\s+\d+\s+rx\s+(\d+)", out)
-    return int(m.group(1)) if m else 0
-
-
 def classify_bus(channel=CHANNEL, probe=2.0):
     """PASSIVE bus-identity check. Never transmits. Returns (verdict, detail):
       'silent'  -- no traffic (asleep): safe to TX-wake.
@@ -121,26 +83,10 @@ def classify_bus(channel=CHANNEL, probe=2.0):
                    with NO B-CAN signature -> almost certainly the wrong bus. ABORT: do not read/TX.
     On a live B-CAN, 0x0A0 (40 Hz) etc. always appear within the probe, so an active-but-unrecognized
     bus is treated as foreign rather than risk reading/injecting on C-CAN."""
-    rx0 = _rx_errors(channel)
-    ids = set()
     try:
-        s = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
-        s.bind((channel,))
-        deadline = time.time() + probe
-        while time.time() < deadline:
-            s.settimeout(max(0.05, deadline - time.time()))
-            try:
-                cid_raw = struct.unpack("=IB3x8s", s.recv(16))[0]
-            except socket.timeout:
-                break
-            except OSError:
-                break
-            cid = (cid_raw & 0x1FFFFFFF) if (cid_raw & 0x80000000) else (cid_raw & 0x7FF)
-            ids.add(cid)
-        s.close()
+        ids, rxd = canbus.probe_ids(channel, probe)
     except OSError as e:
         return "foreign", f"cannot open/bind {channel} ({e})"
-    rxd = _rx_errors(channel) - rx0
 
     ccan_hit = sorted(ids & CCAN_IDS)
     if ccan_hit:
@@ -157,18 +103,12 @@ def classify_bus(channel=CHANNEL, probe=2.0):
 
 def bring_up_passive(channel=CHANNEL, bitrate=BITRATE):
     """Ensure `channel` is UP at `bitrate`, listen-only ON (passive, never TX/ACK)."""
-    try:
-        return _ip_up(channel, bitrate, listen_only=True)
-    except Exception:
-        return False
+    return canbus.bring_up_passive(channel, bitrate)
 
 
 def restore_passive(channel=CHANNEL, bitrate=BITRATE):
     """Put the iface back to the safe passive default (listen-only ON) after an active --wake."""
-    try:
-        _ip_up(channel, bitrate, listen_only=True)
-    except Exception:
-        pass
+    canbus.bring_up_passive(channel, bitrate)
 
 
 def wake_bus(channel=CHANNEL, bitrate=BITRATE):
@@ -178,11 +118,11 @@ def wake_bus(channel=CHANNEL, bitrate=BITRATE):
     ARMED for the immediate read; the caller must restore_passive() afterward. Returns True on
     success. 0x7FF/DLC0 is an unused id no module acts on; we only need bus activity for the wake."""
     try:
-        if not _ip_up(channel, bitrate, listen_only=False, restart_ms=100):
+        if not canbus.ip_up(channel, bitrate, listen_only=False, restart_ms=100):
             return False
     except Exception:
         return False
-    if _is_listen_only(channel):           # sticky-flag guard: must be cleared or we can't TX
+    if canbus.is_listen_only(channel):     # sticky-flag guard: must be cleared or we can't TX
         return False
     try:
         s = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
@@ -265,16 +205,6 @@ def read_with_wake(channel=CHANNEL, timeout=4.0, divisor=DIVISOR, bringup=True):
     finally:
         restore_passive(channel)                  # always hand the iface back to passive
     return v, (s + " [tx-waked]" if v is not None else s)
-
-
-def append_csv(path, volts, status):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    new = not os.path.exists(path)
-    with open(path, "a", newline="") as f:
-        w = csv.writer(f)
-        if new:
-            w.writerow(["iso_time", "volts", "status"])
-        w.writerow([datetime.datetime.now().isoformat(timespec="seconds"), volts, status])
 
 
 def main():

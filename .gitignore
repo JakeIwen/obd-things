@@ -13,7 +13,8 @@ venv/
 
 # Ad-hoc / debug dumps (keep the canonical full sweep radar_acc_did_sweep.txt + .log)
 dumps/*_did_sweep_*.txt
-# tools/sniff.sh raw candump captures (transient)
+# tools/dump.sh raw candump captures (transient)
+dumps/dump-*.log
 dumps/sniff/
 *.tmp
 

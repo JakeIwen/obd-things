@@ -26,7 +26,6 @@ open AP (NetworkManager profile 'vlink-obd'); pass --connect to have it ensure t
 import os
 import re
 import sys
-import csv
 import time
 import socket
 import argparse
@@ -38,6 +37,8 @@ NM_PROFILE = "vlink-obd"                   # NetworkManager connection for the V
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 while _ROOT != os.path.dirname(_ROOT) and not os.path.isdir(os.path.join(_ROOT, "lib")):
     _ROOT = os.path.dirname(_ROOT)
+sys.path.insert(0, _ROOT)
+from lib.canbus import append_csv          # noqa: E402,F401  shared CSV appender
 CSV_PATH = os.path.join(_ROOT, "tmp", "battery", "dongle_voltage.csv")
 _VOLT_RE = re.compile(r"([0-9]{1,2}\.[0-9]+)\s*V", re.I)
 
@@ -118,16 +119,6 @@ def calibrate(actual_v, host=HOST, port=PORT):
         ok = _elm(s, f"ATCV {xxxx:04d}")
         after = _elm(s, "ATRV")
     return ok, after
-
-
-def append_csv(path, volts, status):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    new = not os.path.exists(path)
-    with open(path, "a", newline="") as f:
-        w = csv.writer(f)
-        if new:
-            w.writerow(["iso_time", "volts", "status"])
-        w.writerow([datetime.datetime.now().isoformat(timespec="seconds"), volts, status])
 
 
 def main():

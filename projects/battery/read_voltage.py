@@ -27,10 +27,6 @@ Read-only on the vehicle (UDS service 22 only). Requires TX, so it auto-arms can
 """
 import os
 import sys
-import csv
-import time
-import socket
-import struct
 import argparse
 import datetime
 
@@ -41,47 +37,12 @@ while _ROOT != os.path.dirname(_ROOT) and not os.path.isdir(os.path.join(_ROOT, 
 sys.path.insert(0, _ROOT)
 from lib import uds                      # noqa: E402
 from lib.modules import get              # noqa: E402
+from lib.canbus import append_csv        # noqa: E402,F401  shared CSV appender
 
 VOLT_DID = 0x1006        # control-module voltage on the radar
 SCALE = 0.1              # u8 x 0.1 -> volts
 BITRATE = 500000         # radar lives on C-CAN 500k
 CSV_PATH = os.path.join(_ROOT, "tmp", "battery", "voltage.csv")
-RADAR_RXID = get("radar_acc").rxid       # 0x18DAF12A: radar UDS responses (ECU->tester) ride this id
-
-
-def passive_read(channel="can0", timeout=3.0):
-    """PASSIVE, READ-ONLY catch of the radar's voltage -- no TX, no iface reconfigure, so it is safe
-    to run alongside auto_drive_logger on C-CAN. The radar only reports 0x1006 when polled, so this
-    yields a value ONLY while something else (e.g. the drive logger, which reads 0x1006 at ~1 Hz) is
-    actively reading it: that read comes back as the ISO-TP single frame '04 62 10 06 XX' on
-    RADAR_RXID. Returns (volts, status); (None, ...) if nothing is polling it. Never reconfigures the
-    bus, so it must be on C-CAN 500k already (caller's job to check)."""
-    try:
-        s = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
-        s.setsockopt(socket.SOL_CAN_RAW, socket.CAN_RAW_FILTER,
-                     struct.pack("=II", RADAR_RXID | socket.CAN_EFF_FLAG,
-                                 socket.CAN_EFF_MASK | socket.CAN_EFF_FLAG))   # only the radar's id
-        s.bind((channel,))
-    except OSError as e:
-        return None, f"cannot sniff {channel} ({e})"
-    try:
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            s.settimeout(max(0.05, deadline - time.time()))
-            try:
-                _, dlc, data = struct.unpack("=IB3x8s", s.recv(16))
-            except (socket.timeout, OSError):
-                break
-            data = data[:dlc]
-            # ISO-TP single frame, positive response to ReadDataByIdentifier 0x1006: 04 62 10 06 XX
-            if len(data) >= 5 and data[0] == 0x04 and data[1] == 0x62 \
-                    and data[2] == (VOLT_DID >> 8) and data[3] == (VOLT_DID & 0xFF):
-                v = round(data[4] * SCALE, 1)
-                if 6.0 <= v <= 18.0:
-                    return v, "radar 0x1006 [passive C-CAN]"
-        return None, "no radar 0x1006 on bus (radar not being polled / asleep)"
-    finally:
-        s.close()
 
 
 def read_voltage(module, do_bringup=True):
@@ -107,16 +68,6 @@ def read_voltage(module, do_bringup=True):
     if resp and resp[0] == 0x62 and len(resp) >= 4:          # 62 10 06 <byte>
         return round(resp[3] * SCALE, 1), "ok"
     return None, status if resp is None else f"unexpected reply {uds.hx(resp)}"
-
-
-def append_csv(path, volts, status):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    new = not os.path.exists(path)
-    with open(path, "a", newline="") as f:
-        w = csv.writer(f)
-        if new:
-            w.writerow(["iso_time", "volts", "status"])
-        w.writerow([datetime.datetime.now().isoformat(timespec="seconds"), volts, status])
 
 
 def main():
