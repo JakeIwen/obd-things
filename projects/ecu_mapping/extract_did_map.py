@@ -96,11 +96,16 @@ def main(argv):
     with open(out, "w") as g:
         g.write(f"# AlfaOBD {'OUR-VAN' if ours else 'reference-van'} module/DID map "
                 f"(extrapolation)\n")
-        g.write(f"# VEHICLE VIN: {redact_vin(vin)}"
+        g.write(f"# F190-identified VIN: {redact_vin(vin)}"
                 f"{'   (our van — ground truth)' if ours else '   (NOT our van)'}\n")
         g.write(f"# source: decoded AlfaOBD debug log under tmp/ecu_mapping/. "
                 f"requests={nreq:,}\n")
-        g.write(f"# NOTE single-frame 22 reads reassemble clean; multi-frame commands "
+        g.write(f"# NOTE: 'module(s)' names are AlfaOBD SELECTED-PROFILE labels (what the operator\n")
+        g.write(f"#   picked in AlfaOBD), NOT confirmed hardware — many are near-empty probes "
+                f"(check reads=).\n")
+        g.write(f"#   The VIN above is only the F190-identified vehicle; a multi-session log can mix\n")
+        g.write(f"#   profiles AND vehicles, so a profile name may not match that VIN.\n")
+        g.write(f"# NOTE: single-frame 22 reads reassemble clean; multi-frame commands "
                 f"(2E/2F/31/27) are fragmented -> reassemble_commands.py.\n")
         g.write(f"# line: <svc/DID>  reads=N  resp=<hex> |ascii|\n\n")
         for addr in sorted(by_addr, key=lambda a: -sum(r["n"] for _, r in by_addr[a])):

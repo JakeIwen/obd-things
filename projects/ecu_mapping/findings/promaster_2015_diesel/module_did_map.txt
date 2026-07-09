@@ -1,7 +1,11 @@
 # AlfaOBD reference-van module/DID map (extrapolation)
-# VEHICLE VIN: 3C6TRVDD2FE######   (NOT our van)
+# F190-identified VIN: 3C6TRVDD2FE######   (NOT our van)
 # source: decoded AlfaOBD debug log under tmp/ecu_mapping/. requests=1,928,182
-# NOTE single-frame 22 reads reassemble clean; multi-frame commands (2E/2F/31/27) are fragmented -> reassemble_commands.py.
+# NOTE: 'module(s)' names are AlfaOBD SELECTED-PROFILE labels (what the operator
+#   picked in AlfaOBD), NOT confirmed hardware — many are near-empty probes (check reads=).
+#   The VIN above is only the F190-identified vehicle; a multi-session log can mix
+#   profiles AND vehicles, so a profile name may not match that VIN.
+# NOTE: single-frame 22 reads reassemble clean; multi-frame commands (2E/2F/31/27) are fragmented -> reassemble_commands.py.
 # line: <svc/DID>  reads=N  resp=<hex> |ascii|
 
 ==============================================================================

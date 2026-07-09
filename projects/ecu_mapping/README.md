@@ -12,8 +12,16 @@ AlfaOBD debug files accumulate across every vehicle a tablet has touched. We hav
 
 | source (in `~/claude/shared-files/`) | vehicle | use |
 |---|---|---|
-| `old.AlfaOBD_Debug.bin` (~396 MB, 2022–2024) | owner's **prior 2015** Promaster `3C6TRVDD2FE######` | reference only — NOT our van |
+| `old.AlfaOBD_Debug.bin` (~396 MB, 2022–2024) | multi-profile **aggregate**; only F190-identified vehicle is the prior **2015** diesel `3C6TRVDD2FE######` | reference only — NOT our van |
 | `AlfaOBD logs and data July 8 2026/` | **our van** `3C6LRVDG4NE######` (fresh, 2026-07-07) | ground truth |
+
+**"Recording data for X" is the AlfaOBD *profile the operator selected*, not confirmed
+hardware.** Many entries are near-empty probes — check `reads=` in the map. The 396 MB `old.`
+bin is a multi-year, multi-profile **aggregate**: its only F190-identified vehicle is the 2015
+diesel, but it also carries unrelated profiles (e.g. 2024 "Chrysler Pentastar 2021" sessions —
+`3E01` keepalive only, no F190 — which are NOT the diesel, and are a *gas* Pentastar profile,
+possibly an early poke at our van or another vehicle). So the promaster_2015_diesel map header reads
+"F190-identified VIN", not "the vehicle", and a profile name may not match that VIN.
 
 Within the fresh folder, `AlfaOBD_Debug.bin` (2.9 MB) is **100 % our van**, and
 `RFH_FGA_Info.log` / `ADAPTIVE_CRUISE_Info.log` / `TIGERSHARK_CUSW_Info.log` are our van.
@@ -61,9 +69,9 @@ model descriptor. Raw logs under `tmp/` (gitignored) keep the full VIN.
 - **`tmp/ecu_mapping/`** (gitignored): `raw/` = copied `.bin`/`.log`; decoded `*.decoded.txt`.
   Raw CAN/log data is never git-tracked.
 - **`findings/`** (tracked): *extrapolations* only — the derived maps.
-  - `ourvan_module_did_map.txt` — our van, per-module DID/service inventory (ground truth)
-  - `refvan_module_did_map.txt` — 2015 reference van (same family; candidate cross-ref)
-  - `ourvan_command_log.txt` — reassembled + interpreted command sequences (our van)
+  - `promaster_2022/module_did_map.txt` — our van, per-module DID/service inventory (ground truth)
+  - `promaster_2015_diesel/module_did_map.txt` — 2015 reference van (same family; candidate cross-ref)
+  - `promaster_2022/command_log.txt` — reassembled + interpreted command sequences (our van)
 
 ## Findings so far (fresh our-van bin, 2026-07-07)
 
@@ -90,7 +98,7 @@ trans `DA18F1`/0x18, engine `DA10F1`/0x10 + `7E0`, shifter `DA1FF1`/0x1F.
 
 1. **Unlock:** identify which BCM `2F` IO-control DID drives the door lock/unlock (correlate the
    command log's timestamps with the actuations run in AlfaOBD, or its labels), then verify on
-   our van via the tap before replaying — `2F 51xx ctrl=03 opt=xx`. See `ourvan_command_log.txt`.
+   our van via the tap before replaying — `2F 51xx ctrl=03 opt=xx`. See `promaster_2022/command_log.txt`.
 2. Correlate `*_Info.log` labels ↔ debug-bin DIDs → labeled maps (start RFH/TPMS + radar).
 3. Improve `reassemble_commands.py` response capture for the long `2E` writes (currently the
    request reassembles fully but the post-write response is only partly captured).
