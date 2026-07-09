@@ -1,0 +1,277 @@
+# AlfaOBD OUR-VAN module/DID map (extrapolation)
+# VEHICLE VIN: 3C6LRVDG4NE######   (our van — ground truth)
+# source: decoded AlfaOBD debug log under tmp/ecu_mapping/. requests=2,186
+# NOTE single-frame 22 reads reassemble clean; multi-frame commands (2E/2F/31/27) are fragmented -> reassemble_commands.py.
+# line: <svc/DID>  reads=N  resp=<hex> |ascii|
+
+==============================================================================
+## ATSH DA2AF1   (phys 0x2A)   reads=1,621   distinct=17
+   module(s): Adaptive Cruise Control Unit Bosch (x2024)
+------------------------------------------------------------------------------
+  22083F         reads=171     resp=7F2231                                           |."1|  (+3 more)
+  22083E         reads=162     resp=7F2231                                           |."1|  (+3 more)
+  220840         reads=158     resp=62084000                                         |b.@.|  (+3 more)
+  220846         reads=157     resp=7F2231                                           |."1|  (+3 more)
+  221006         reads=149     resp=6210067E                                         |b..~|  (+3 more)
+  221002         reads=148     resp=62100200                                         |b...|  (+3 more)
+  220830         reads=146     resp=7F2231                                           |."1|  (+3 more)
+  22083C         reads=145     resp=620850FFED44D4FFFF7E86                           |b.P..D...~.|  (+3 more)
+  220835         reads=144     resp=620850FFED44D4FFFF7E86                           |b.P..D...~.|  (+3 more)
+  220860         reads=138     resp=7F2231                                           |."1|  (+3 more)
+  1003           reads=42      resp=5003003201F4                                     |P..2..|  (+3 more)
+  22F1A5         reads=24      resp=62F1A50039501620                                 |b...9P. |  (+3 more)
+  1A87           reads=18      resp=7F1A11                                           |...|  (+2 more)
+  22F100         reads=10      resp=620850FFED44D4FFFF7E86                           |b.P..D...~.|  (+1 more)
+  22F110         reads=6       resp=7F2231                                           |."1|  (+1 more)
+  1092           reads=2       resp=620850FFED44D4FFFF7E86                           |b.P..D...~.|  (+1 more)
+  31.01.0250     reads=1       resp=7F3131                                           |.11|
+
+==============================================================================
+## ATSH DAC7F1   (phys 0xC7)   reads=317   distinct=101
+   module(s): Radio Frequency HUB (RFH) Continental (x1368)
+------------------------------------------------------------------------------
+  1904           reads=19      resp=59049040640800051008000356A010090004200A03F66082 |Y..@d.......V..... ...`.|  (+3 more)
+  1906           reads=9       resp=59069040640801608025406408                       |Y..@d..`.%@d.|  (+3 more)
+  22F185         reads=8       resp=62F1850120202020202020202022060620202020         |b...         "..    |  (+1 more)
+  22F1A4         reads=5       resp=62F1A4202020202020A4202020                       |b..      .   |  (+2 more)
+  22F18C         reads=5       resp=62F18C5430345A323135343244303534313032           |b..T04Z21542D054102|  (+2 more)
+  1003           reads=4       resp=5003003201F4                                     |P..2..|
+  22F1A5         reads=4       resp=62F1A50041502620F1A5004150                       |b...AP& ...AP|
+  1902           reads=4       resp=5902CF90406408551288084064                       |Y...@d.U...@d|  (+1 more)
+  22F1A0         reads=4       resp=62F1A0363835313632383541432023232323232323232323 |b..68516285AC ##########|  (+1 more)
+  22F190         reads=4       resp=62F1902323232323232323232323232323232323         |b..#################|
+  22F1B0         reads=4       resp=62F1B02323232323232323232323232323232323         |b..#################|  (+1 more)
+  22F192         reads=4       resp=62F1923633373030343333454120303433334541         |b..63700433EA 0433EA|  (+1 more)
+  22F193         reads=4       resp=62F19301                                         |b...|
+  22F194         reads=4       resp=62F1943130343338323431414120383234314141         |b..10438241AA 8241AA|
+  22F195         reads=4       resp=7F227862F1950400                                 |."xb....|  (+1 more)
+  22F132         reads=4       resp=7F2231                                           |."1|
+  22F180         reads=4       resp=62F18001013130343338323338414100D2323338         |b....10438238AA..238|
+  22F181         reads=4       resp=62F18101013130343338323339414400D2323339         |b....10438239AD..239|  (+1 more)
+  22F182         reads=4       resp=62F18201013130343338323430414600D2323430         |b....10438240AF..240|  (+1 more)
+  22F183         reads=4       resp=62F1830120202020202020202022060620202020         |b...         "..    |
+  22F184         reads=4       resp=62F1840120202020202020202022060620202020         |b...         "..    |  (+1 more)
+  22F186         reads=4       resp=62F18603                                         |b...|
+  22F187         reads=4       resp=62F1873638353136323835414320363238354143         |b..68516285AC 6285AC|  (+1 more)
+  22F188         reads=4       resp=62F1883130343338323431414120383234314141         |b..10438241AA 8241AA|  (+1 more)
+  22F18A         reads=4       resp=62F18A20202020202020202020                       |b..          |
+  22F18B         reads=4       resp=62F18B20202020202020202020                       |b..          |
+  22F100         reads=4       resp=7F2231                                           |."1|
+  22F110         reads=4       resp=7F2231                                           |."1|
+  222001         reads=3       resp=6220010C4B08                                     |b ..K.|
+  222002         reads=3       resp=622002000000                                     |b ....|
+  222003         reads=3       resp=62200300                                         |b ..|
+  221008         reads=3       resp=6210080003F508                                   |b......|  (+2 more)
+  221009         reads=3       resp=6210090016                                       |b....|  (+2 more)
+  222008         reads=3       resp=6220080003F4FD                                   |b .....|  (+1 more)
+  222009         reads=3       resp=6220090004                                       |b ...|  (+2 more)
+  22200A         reads=3       resp=62200A050D                                       |b ...|  (+1 more)
+  22200B         reads=3       resp=62200B00035571                                   |b ...Uq|
+  22200C         reads=3       resp=62200C0053                                       |b ..S|
+  222010         reads=3       resp=622010FFFFFFFF                                   |b .....|
+  222013         reads=3       resp=62201302                                         |b ..|
+  220103         reads=3       resp=620103FFFF                                       |b....|
+  221002         reads=3       resp=62100200                                         |b...|
+  221004         reads=3       resp=6210046F                                         |b..o|  (+2 more)
+  220A42         reads=3       resp=620A4203FC                                       |b.B..|
+  220A44         reads=3       resp=620A440076                                       |b.D.v|  (+1 more)
+  222029         reads=3       resp=6220290000                                       |b )..|
+  222924         reads=3       resp=62292401                                         |b)$.|
+  222946         reads=3       resp=62294603                                         |b)F.|
+  22300D         reads=3       resp=62300D06010202020202060102                       |b0...........|
+  22010B         reads=3       resp=62010BBF                                         |b...|  (+1 more)
+  220100         reads=3       resp=62010000                                         |b...|
+  220101         reads=3       resp=6201016E                                         |b..n|  (+2 more)
+  2240A3         reads=3       resp=6240A3030203000000000000920F000000000092         |b@..................|
+  2240A5         reads=3       resp=6240A5000000000000000000000000000000000000000000 |b@......................|  (+1 more)
+  220104         reads=3       resp=62010400                                         |b...|
+  220102         reads=3       resp=62010200BF020203010200BF02                       |b............|  (+1 more)
+  222941         reads=3       resp=622941810CA86400C7FDA764000000000000000000000000 ||  (+1 more)
+  2240A4         reads=3       resp=6240A4020203C7FDA764840203                       |b@.......d...|
+  220112         reads=3       resp=6201120000                                       |b....|
+  22010C         reads=3       resp=62010C02                                         |b...|  (+1 more)
+  220105         reads=3       resp=620105000000040200000C4B08                       |b..........K.|  (+1 more)
+  220106         reads=2       resp=62010610                                         |b...|
+  220107         reads=2       resp=620107000100                                     |b.....|
+  220108         reads=2       resp=62010800000000                                   |b......|
+  220109         reads=2       resp=62010900000000000002000000                       |b............|  (+1 more)
+  22010A         reads=2       resp=62010A00040000                                   |b......|
+  220122         reads=2       resp=62012200000000000022000000                       |b."......"...|
+  22010F         reads=2       resp=7F2231                                           |."1|
+  220111         reads=2       resp=62011101                                         |b...|
+  220130         reads=2       resp=620130014D0101010101010901                       |b.0.M........|
+  223019         reads=2       resp=623019187F1B74043019187F1B                       |b0....t.0....|
+  22301E         reads=2       resp=62301E040C3FD23F301E040C3F                       |b0...?.?0...?|  (+1 more)
+  22301F         reads=2       resp=62301F040C3FD23D301F040C3F                       |b0...?.=0...?|  (+1 more)
+  223020         reads=2       resp=623020040C3FD23C3020040C3F                       |b0 ..?.<0 ..?|  (+1 more)
+  223021         reads=2       resp=623021040C3FD23B3021040C3F                       |b0!..?.;0!..?|  (+1 more)
+  2240C0         reads=2       resp=6240C01F06FF07E6100F0106FF07E6102C1F06FF07E6102C |b@..............,......,|
+  2240C1         reads=2       resp=6240C1000000000000000000000000000000000000000000 |b@......................|  (+1 more)
+  2231C4         reads=2       resp=6231C40004                                       |b1...|
+  2231C6         reads=2       resp=6231C6089F                                       |b1...|
+  2231C7         reads=2       resp=6231C7158D                                       |b1...|
+  2231D0         reads=2       resp=6231D00EB0                                       |b1...|
+  2231D1         reads=2       resp=6231D10F03                                       |b1...|
+  2231D2         reads=2       resp=6231D21496                                       |b1...|
+  2231D3         reads=2       resp=6231D313F1                                       |b1...|
+  2231D4         reads=2       resp=7F2222                                           |.""|
+  2231D5         reads=2       resp=6231D5010100                                     |b1....|
+  2231D6         reads=2       resp=6231D60B                                         |b1..|
+  2231DC         reads=2       resp=7F2222                                           |.""|
+  2231DD         reads=2       resp=7F2222                                           |.""|
+  2231DE         reads=2       resp=7F2222                                           |.""|
+  2231DF         reads=2       resp=7F2222                                           |.""|
+  2240A6         reads=2       resp=6240A60201027004E049112800005E0F0C3F500C48920F0C |b@....p..I.(..^..?P.H...|
+  2240A7         reads=2       resp=6240A70201027004E04910BA0000531A0B7A200B83761A0B |b@....p..I....S..z ..v..|
+  2240A8         reads=2       resp=6240A11825BA910F100005B110C3F500C4892110C3F500C  ||  (+1 more)
+  2240A9         reads=2       resp=6240A9020103700497DF06DD0000BA370BC3400BC34A370B |b@....p........7..@..J7.|
+  2240AD         reads=2       resp=6240ADFFFFFFFF0746113DFFFFFFFFFFFFFFFFFFFFFFFFFF |b@......F.=.............|
+  2240B1         reads=2       resp=6240B10ECC0000430183DCCC00                       |b@.....C.....|
+  2240B2         reads=2       resp=6240B20F1E0000440683DC1E00                       |b@.....D.....|
+  2240B3         reads=2       resp=6240B3140D000046018                              ||  (+1 more)
+  2240B4         reads=2       resp=6240B414B100004801E2DCB100                       |b@.....H.....|
+  2240B5         reads=2       resp=7F2222                                           |.""|
+
+==============================================================================
+## ATSH DA40F1   (phys 0x40)   reads=198   distinct=104
+   module(s): Body computer Marelli (x10666), Adaptive Cruise Control Unit Bosch (x18)
+------------------------------------------------------------------------------
+  1003           reads=37      resp=5003003201F4                                     |P..2..|
+  1902           reads=14      resp=59024FC01100089636154D9632154D962E154D962A154D90 |Y.O.....6.M.2.M...M.*.M.|  (+3 more)
+  31.01.0200     reads=12      resp=7F3122                                           |.1"|
+  2F5120         reads=6       resp=7F2F22                                           |./"|  (+2 more)
+  2F5115         reads=6       resp=6F511503                                         |oQ..|  (+2 more)
+  22F1A5         reads=5       resp=62F1A50000607719                                 |b....`w.|
+  2F5041         reads=5       resp=6F504103                                         |oPA.|  (+1 more)
+  2F5118         reads=4       resp=6F511803                                         |oQ..|  (+1 more)
+  222023         reads=4       resp=000000000000000000000000000000000000000000000000 |........................|  (+2 more)
+  2F5040         reads=4       resp=6F504003                                         |oP@.|  (+1 more)
+  2F5050         reads=3       resp=6F505003                                         |oPP.|  (+1 more)
+  14FF           reads=3       resp=54                                               |T|
+  220133         reads=2       resp=6201330001                                       |b.3..|
+  220136         reads=2       resp=62013600                                         |b.6.|
+  24000000       reads=2       resp=037F2E78036E2023                                 |...x.n #|
+  2F5122         reads=1       resp=7F2F22                                           |./"|
+  2F5311         reads=1       resp=7F2F22                                           |./"|
+  2F5140         reads=1       resp=7F2F31                                           |./1|
+  222013         reads=1       resp=62201302                                         |b ..|
+  220103         reads=1       resp=620103FFF                                        ||
+  222001         reads=1       resp=6220010C3FD2                                     |b ..?.|
+  222002         reads=1       resp=622002000000                                     |b ....|
+  222003         reads=1       resp=62200302                                         |b ..|
+  221008         reads=1       resp=62100800037E12                                   |b....~.|
+  222008         reads=1       resp=62200800037E0C                                   |b ...~.|
+  221009         reads=1       resp=6210090000                                       |b....|
+  222009         reads=1       resp=6220090000                                       |b ...|
+  22200A         reads=1       resp=62200A04F3                                       |b ...|
+  22200B         reads=1       resp=62200B00036102                                   |b ...a.|
+  22200C         reads=1       resp=62200C0000                                       |b ...|
+  222010         reads=1       resp=622010FFFFFFFF                                   |b .....|
+  221921         reads=1       resp=621921020000000002000000                         |b.!.........|
+  22013B         reads=1       resp=62013B4C                                         |b.;L|
+  22013C         reads=1       resp=62013C82                                         |b.<.|
+  221000         reads=1       resp=6210000000                                       |b....|
+  221002         reads=1       resp=62100200                                         |b...|
+  221004         reads=1       resp=62100478                                         |b..x|
+  221204         reads=1       resp=6212042F24                                       |b../$|
+  221005         reads=1       resp=7F2231                                           |."1|
+  223200         reads=1       resp=7F2231                                           |."1|
+  222949         reads=1       resp=62294900                                         |b)I.|
+  220140         reads=1       resp=7F2231                                           |."1|
+  222050         reads=1       resp=622050202203253200                               |b P ".%2.|
+  220130         reads=1       resp=62013088                                         |b.0.|
+  220131         reads=1       resp=62013100                                         |b.1.|
+  220132         reads=1       resp=6201320020                                       |b.2. |
+  220135         reads=1       resp=620135000000                                     |b.5...|
+  220137         reads=1       resp=6201370000                                       |b.7..|
+  220138         reads=1       resp=62013800                                         |b.8.|
+  220151         reads=1       resp=62015100                                         |b.Q.|
+  220144         reads=1       resp=6201440000                                       |b.D..|
+  220150         reads=1       resp=620150000000                                     |b.P...|
+  220152         reads=1       resp=6201520000                                       |b.R..|
+  220153         reads=1       resp=62015300                                         |b.S.|
+  220154         reads=1       resp=6201540000                                       |b.T..|
+  220155         reads=1       resp=7F2222                                           |.""|
+  220156         reads=1       resp=7F2231                                           |."1|
+  220157         reads=1       resp=7F2222                                           |.""|
+  222920         reads=1       resp=62292000                                         |b) .|
+  222921         reads=1       resp=62292100                                         |b)!.|
+  222922         reads=1       resp=62292200                                         |b)".|
+  222923         reads=1       resp=62292300                                         |b)#.|
+  222947         reads=1       resp=7F2222                                           |.""|
+  222940         reads=1       resp=7F2222                                           |.""|
+  222946         reads=1       resp=62294683                                         |b)F.|
+  222941         reads=1       resp=7F2231                                           |."1|
+  22292B         reads=1       resp=7F2231                                           |."1|
+  222944         reads=1       resp=622944FF                                         |b)D.|
+  222961         reads=1       resp=7F2231                                           |."1|
+  222962         reads=1       resp=622962FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF |b)b.....................|
+  222A50         reads=1       resp=622A50000000000000000000000000000000000000000000 |b*P.....................|
+  223000         reads=1       resp=62300000                                         |b0..|
+  223001         reads=1       resp=62300100                                         |b0..|
+  223500         reads=1       resp=623500210213042023210113042023210013042023       |b5.!... #!... #!... #|
+  223505         reads=1       resp=7F2231                                           |."1|
+  223DDD         reads=1       resp=623DDD0F                                         |b=..|
+  223DDE         reads=1       resp=623DDE00                                         |b=..|
+  223FFD         reads=1       resp=623FFD0A                                         |b?..|
+  223FFE         reads=1       resp=623FFEC8                                         |b?..|
+  223FFF         reads=1       resp=623FFF0080                                       |b?...|
+  2240A1         reads=1       resp=6240A14F0C40441800040202000000800000000904000018 |b@.O.@D.................|
+  2240A2         reads=1       resp=6240A24F0C40441800040202000000800000004F0C404418 |b@.O.@D............O.@D.|
+  2240A3         reads=1       resp=6240A301000000000000000000D1000F18               |b@...............|
+  2240A4         reads=1       resp=7F223                                            ||
+  2240A6         reads=1       resp=6240A600000000000000000000000000000000           |b@.................|
+  2240AA         reads=1       resp=6240AA4F0C40441800040202000000800000004F0C404418 |b@.O.@D............O.@D.|
+  22A023         reads=1       resp=7F2222                                           |.""|
+  22A024         reads=1       resp=7F2222                                           |.""|
+  22A025         reads=1       resp=7F2222                                           |.""|
+  22A026         reads=1       resp=7F2222                                           |.""|
+  22A027         reads=1       resp=7F2222                                           |.""|
+  22A028         reads=1       resp=7F2222                                           |.""|
+  22A029         reads=1       resp=7F2222                                           |.""|
+  22A02A         reads=1       resp=7F2222                                           |.""|
+  22A02B         reads=1       resp=7F2222                                           |.""|
+  22A02C         reads=1       resp=7F2222                                           |.""|
+  22A02D         reads=1       resp=7F2222                                           |.""|
+  22A02E         reads=1       resp=7F2222                                           |.""|
+  22A02F         reads=1       resp=7F2222                                           |.""|
+  22A054         reads=1       resp=7F2222                                           |.""|
+  22292C         reads=1       resp=62292C30303030303030                             |b),0000000|
+  22102A         reads=1       resp=62102A000000000000000000                         |b.*.........|
+  22292D         reads=1       resp=62292D00                                         |b)-.|
+  22292E         reads=1       resp=62292E0D                                         |b)..|
+
+==============================================================================
+## ATSH DA18F1   (phys 0x18)   reads=23   distinct=4
+   module(s): ZF 948TE 9 speed  Automatic Transmission (x174)
+------------------------------------------------------------------------------
+  1003           reads=13      resp=5003003201F4                                     |P..2..|
+  1902           reads=6       resp=7F19785902CF1500008F                             |..xY......|  (+1 more)
+  22F1A5         reads=3       resp=62F1A55285040D3DAAAAAAAAAA                       |b..R...=.....|
+  14FF           reads=1       resp=7F1422                                           |.."|
+
+==============================================================================
+## ATSH 7E0   (phys 0x7E0)   reads=12   distinct=2
+   module(s): (no recording header)
+------------------------------------------------------------------------------
+  1092           reads=8       resp=                                                 ||
+  1003           reads=4       resp=                                                 ||
+
+==============================================================================
+## ATSH DA10F1   (phys 0x10)   reads=10   distinct=4
+   module(s): Chrysler Pentastar/Hemi engine Model Year 2021 (x92)
+------------------------------------------------------------------------------
+  1092           reads=3       resp=5092                                             |P.|
+  1A87           reads=3       resp=5A8702407F340D2047150800363835333231353741493332 |Z..@.4. G...68532157AI32|
+  1800FF00       reads=3       resp=5803C402F0C41870150070F0C4                       |X......p..p..|  (+2 more)
+  14FF           reads=1       resp=54FF00                                           |T..|
+
+==============================================================================
+## ATSH DA1FF1   (phys 0x1F)   reads=5   distinct=4
+   module(s): Electronic Shifter Module SILATECH (x27)
+------------------------------------------------------------------------------
+  1902           reads=2       resp=59024F1C732408                                   |Y.O.s$.|  (+1 more)
+  1003           reads=1       resp=5003003201F4                                     |P..2..|
+  22F1A5         reads=1       resp=62F1A50016507A190000000000                       |b....Pz......|
+  14FF           reads=1       resp=7F147854                                         |..xT|
+

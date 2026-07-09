@@ -36,7 +36,16 @@ registry can't hold; keep the addresses in sync with `lib/modules.py`.
 |---|---|---|---|---|
 | `radar_acc` | Bosch ACC radar (DASM / MRR1evo) | C-CAN | `18DA2AF1` → `18DAF12A` | ACKs our frames even with ignition cut mid-sweep. Speed only via DID `0x1002` (no OBD PIDs behind SGW). |
 | `rf_hub` | RF Hub (Continental) — TPMS/RKE | C-CAN | `18DAC7F1` → `18DAF1C7` | **Answers with ignition OFF** (battery-powered RKE receiver). |
-| *(not yet added)* | Body Control Module (BCM) | — | C-CAN `18DA40F1` → `18DAF140` for ignition-by-diag routine; **also 11-bit UDS on B-CAN** (diag IDs `7C0 7B8 760 762 764 768 75C` seen) | actuation is **power-mode gated** (LOCK/ignition routines return `7F..22 conditionsNotCorrect` key-off). See [bcan wake notes](#b-can-broadcast-frames). Adding needs an 11-bit Module variant. |
+| *(not yet added)* | Body Control Module (BCM) | — | C-CAN `18DA40F1` → `18DAF140` for ignition-by-diag routine; **also 11-bit UDS on B-CAN** (diag IDs `7C0 7B8 760 762 764 768 75C` seen) | actuation is **power-mode gated** (LOCK/ignition routines return `7F..22 conditionsNotCorrect` key-off). See [bcan wake notes](#b-can-broadcast-frames). Adding needs an 11-bit Module variant. **AlfaOBD our-van log** (`projects/ecu_mapping`) confirms 0x40 answers UDS and ran **`2F` IO-control actuations that succeeded** (`2F 5115/5118/5120/5040/5041/5050`, `ctrl=03`→`6F..03`) + `2E 2023` PROXI writes — leads for remote-unlock; verify on our tap before replaying. |
+
+> **AlfaOBD-observed modules (provenance: `projects/ecu_mapping` our-van debug log, VIN
+> `…######` — strong evidence, but NOT yet independently driven from our tap, so not in
+> `lib/modules.py`).** Physical UDS addresses `18DAxxF1`/`18DAF1xx` seen answering on our van:
+> **0x10** engine PCM (profile "Tigershark/Pentastar MY21"), **0x18** transmission
+> (reports "ZF 948TE 9-speed"), **0x1F** electronic shifter, **0x40** BCM (above),
+> **0x2A** radar, **0xC7** RF Hub. Per-module DID inventories + reassembled command sequences:
+> `projects/ecu_mapping/findings/`. Promote any row into this table + `lib/modules.py` only
+> after our own tap confirms it.
 
 ---
 
