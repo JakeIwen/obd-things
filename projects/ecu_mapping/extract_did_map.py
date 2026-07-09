@@ -94,10 +94,10 @@ def main(argv):
         by_addr[addr].append((k, rec))
     ours = vin == OUR_VIN
     with open(out, "w") as g:
-        g.write(f"# AlfaOBD {'OUR-VAN' if ours else 'reference-van'} module/DID map "
+        g.write(f"# AlfaOBD {'2022 ProMaster' if ours else 'reference'} module/DID map "
                 f"(extrapolation)\n")
         g.write(f"# F190-identified VIN: {redact_vin(vin)}"
-                f"{'   (our van — ground truth)' if ours else '   (NOT our van)'}\n")
+                f"{'   (2022 ProMaster — ground truth)' if ours else '   (NOT the 2022 ProMaster)'}\n")
         g.write(f"# source: decoded AlfaOBD debug log under tmp/ecu_mapping/. "
                 f"requests={nreq:,}\n")
         g.write(f"# NOTE: 'module(s)' names are AlfaOBD SELECTED-PROFILE labels (what the operator\n")

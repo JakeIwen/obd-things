@@ -1,5 +1,5 @@
-# AlfaOBD reference-van module/DID map (extrapolation)
-# F190-identified VIN: 3C6TRVDD2FE######   (NOT our van)
+# AlfaOBD reference module/DID map (extrapolation)
+# F190-identified VIN: 3C6TRVDD2FE######   (NOT the 2022 ProMaster)
 # source: decoded AlfaOBD debug log under tmp/ecu_mapping/. requests=1,928,182
 # NOTE: 'module(s)' names are AlfaOBD SELECTED-PROFILE labels (what the operator
 #   picked in AlfaOBD), NOT confirmed hardware — many are near-empty probes (check reads=).

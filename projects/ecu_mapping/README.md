@@ -12,21 +12,21 @@ AlfaOBD debug files accumulate across every vehicle a tablet has touched. We hav
 
 | source (in `~/claude/shared-files/`) | vehicle | use |
 |---|---|---|
-| `old.AlfaOBD_Debug.bin` (~396 MB, 2022–2024) | multi-profile **aggregate**; only F190-identified vehicle is the prior **2015** diesel `3C6TRVDD2FE######` | reference only — NOT our van |
-| `AlfaOBD logs and data July 8 2026/` | **our van** `3C6LRVDG4NE######` (fresh, 2026-07-07) | ground truth |
+| `old.AlfaOBD_Debug.bin` (~396 MB, 2022–2024) | multi-profile **aggregate**; only F190-identified vehicle is the prior **2015** diesel `3C6TRVDD2FE######` | reference only — NOT 2022 ProMaster |
+| `AlfaOBD logs and data July 8 2026/` | **2022 ProMaster** `3C6LRVDG4NE######` (fresh, 2026-07-07) | ground truth |
 
 **"Recording data for X" is the AlfaOBD *profile the operator selected*, not confirmed
 hardware.** Many entries are near-empty probes — check `reads=` in the map. The 396 MB `old.`
 bin is a multi-year, multi-profile **aggregate**: its only F190-identified vehicle is the 2015
 diesel, but it also carries unrelated profiles (e.g. 2024 "Chrysler Pentastar 2021" sessions —
 `3E01` keepalive only, no F190 — which are NOT the diesel, and are a *gas* Pentastar profile,
-possibly an early poke at our van or another vehicle). So the promaster_2015_diesel map header reads
+possibly an early poke at 2022 ProMaster or another vehicle). So the promaster_2015_diesel map header reads
 "F190-identified VIN", not "the vehicle", and a profile name may not match that VIN.
 
-Within the fresh folder, `AlfaOBD_Debug.bin` (2.9 MB) is **100 % our van**, and
-`RFH_FGA_Info.log` / `ADAPTIVE_CRUISE_Info.log` / `TIGERSHARK_CUSW_Info.log` are our van.
+Within the fresh folder, `AlfaOBD_Debug.bin` (2.9 MB) is **100 % 2022 ProMaster**, and
+`RFH_FGA_Info.log` / `ADAPTIVE_CRUISE_Info.log` / `TIGERSHARK_CUSW_Info.log` are 2022 ProMaster.
 **Gotcha:** `BCDELPHI_Info.log` (Body Computer text log) is **stale — still the 2015 van**;
-re-capture BCM text on our van if you need it (the fresh `.bin` did catch our-van BCM).
+re-capture BCM text on 2022 ProMaster if you need it (the fresh `.bin` did catch 2022 ProMaster BCM).
 Always run `vin_scan.py` on any new log first. See memory `[[alfaobd-debug-bin-other-van]]`.
 
 ## The AlfaOBD debug format
@@ -69,11 +69,11 @@ model descriptor. Raw logs under `tmp/` (gitignored) keep the full VIN.
 - **`tmp/ecu_mapping/`** (gitignored): `raw/` = copied `.bin`/`.log`; decoded `*.decoded.txt`.
   Raw CAN/log data is never git-tracked.
 - **`findings/`** (tracked): *extrapolations* only — the derived maps.
-  - `promaster_2022/module_did_map.txt` — our van, per-module DID/service inventory (ground truth)
+  - `promaster_2022/module_did_map.txt` — 2022 ProMaster, per-module DID/service inventory (ground truth)
   - `promaster_2015_diesel/module_did_map.txt` — 2015 reference van (same family; candidate cross-ref)
-  - `promaster_2022/command_log.txt` — reassembled + interpreted command sequences (our van)
+  - `promaster_2022/command_log.txt` — reassembled + interpreted command sequences (2022 ProMaster)
 
-## Findings so far (fresh our-van bin, 2026-07-07)
+## Findings so far (fresh 2022 ProMaster bin, 2026-07-07)
 
 Modules seen (ATSH → phys addr): radar `DA2AF1`/0x2A, **BCM `DA40F1`/0x40**, RFH `DAC7F1`/0xC7,
 trans `DA18F1`/0x18, engine `DA10F1`/0x10 + `7E0`, shifter `DA1FF1`/0x1F.
@@ -90,7 +90,7 @@ trans `DA18F1`/0x18, engine `DA10F1`/0x10 + `7E0`, shifter `DA1FF1`/0x1F.
   Consecutive Frames of the `2E 2023` write (nibble-2 PCI). **No `27` in this session.** With the
   SGW bypassed (`[[sgw-bypass-always]]`) the successful `2F` actuations are the remote-unlock
   lead; next is identifying *which* `2F` DID drives the door lock (correlate with what was
-  actuated in AlfaOBD) and verifying on our van via the tap before replaying.
+  actuated in AlfaOBD) and verifying on 2022 ProMaster via the tap before replaying.
 - **RFH (0xC7)** full ID block + TPMS; pair with labeled `RFH_FGA_Info.log` (current faults
   `U0001/B1040/C1502-FR/C1501-FL`) for the TPMS project. See `../tpms/`.
 
@@ -98,9 +98,9 @@ trans `DA18F1`/0x18, engine `DA10F1`/0x10 + `7E0`, shifter `DA1FF1`/0x1F.
 
 1. **Unlock:** identify which BCM `2F` IO-control DID drives the door lock/unlock (correlate the
    command log's timestamps with the actuations run in AlfaOBD, or its labels), then verify on
-   our van via the tap before replaying — `2F 51xx ctrl=03 opt=xx`. See `promaster_2022/command_log.txt`.
+   2022 ProMaster via the tap before replaying — `2F 51xx ctrl=03 opt=xx`. See `promaster_2022/command_log.txt`.
 2. Correlate `*_Info.log` labels ↔ debug-bin DIDs → labeled maps (start RFH/TPMS + radar).
 3. Improve `reassemble_commands.py` response capture for the long `2E` writes (currently the
    request reassembles fully but the post-write response is only partly captured).
-4. Once a DID/address/routine is *verified on our van*, promote it into the canonical maps
+4. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps
    (`../../docs/bus-map.md`, `../../lib/modules.py`, project DID maps) per the maintenance rule.

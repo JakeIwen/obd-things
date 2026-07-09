@@ -39,7 +39,7 @@ mirror** (that premise came from a Giulia doc and is wrong for the Promaster). R
 - The literal sign (up vs down) of our `0x0845`/`0x0850` elevation is **not** given here; the TSB makes
   it moot — the corrective action is "seat it level + relieve bumper contact," not a signed tilt.
 - **Caveat:** this TSB is FCA-generic (photos look like a car platform, e.g. Giulia — not the Promaster
-  RU van). Our van's exact bumper-bar/bracket geometry may differ, but the principle (seating +
+  RU van). 2022 ProMaster's exact bumper-bar/bracket geometry may differ, but the principle (seating +
   interference, then calibrate) almost certainly applies. Verify against the Promaster service info:
   "08 - Electrical / 8E - Electronic Control Modules / MODULE, Adaptive Cruise Control (ACC)".
 
