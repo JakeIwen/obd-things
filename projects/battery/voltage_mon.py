@@ -8,7 +8,7 @@ No wlan0 / ignitionmon involvement (that was the retired ELM327-dongle path).
 
 Alerts go to ntfy (free push, no account): edge-triggered when it first drops below WARN_V, a
 throttled re-alert while it stays low, and one 'recovered' note on the way back up. Every message
-is datestamped. Set NTFY_URL to override the topic.
+is datestamped. NTFY_VOLTAGE_URL sets the topic (defined in ~/secrets/.bash_variables, kept out of git).
 
 CONNECTIVITY GATE: before touching the bus it checks the ntfy host is reachable -- if not, it SKIPS
 without waking CAN (no point spending battery to wake the bus if the alert can't be delivered anyway).
@@ -34,7 +34,7 @@ sys.path.insert(0, HERE)
 import bcan_voltage as bv            # sibling reader: read_with_wake, append_csv, CSV_PATH, _ROOT
 import ccan_voltage as cv            # C-CAN voltage BROADCAST reader (0x2EF/0x41A); stdlib-only, no isotp
 
-NTFY_URL  = os.environ.get("NTFY_URL", "https://ntfy.sh/promaster_ncn")
+NTFY_VOLTAGE_URL = os.environ.get("NTFY_VOLTAGE_URL", "")  # topic in ~/secrets/.bash_variables (sourced by .bashrc + cron BASH_ENV); never hardcode
 WARN_V    = 12.0                 # alert below this resting voltage (tune to taste)
 HYST_V    = 0.3                  # must rise this far above WARN to count as "recovered"
 REALERT_H = 12                   # while still low, re-push at most every this many hours
@@ -68,7 +68,7 @@ def notify(msg, allow_send):
         return
     try:
         subprocess.run(["curl", "-fsS", "-m", "20", "-H", "Title: Van battery",
-                        "-d", stamped, NTFY_URL], capture_output=True, timeout=25)
+                        "-d", stamped, NTFY_VOLTAGE_URL], capture_output=True, timeout=25)
     except subprocess.SubprocessError as e:
         log(f"ntfy send failed: {e}")
 
@@ -121,9 +121,9 @@ def acquire():
     return cv.read_voltage() if verdict == "ccan" else (None, f"bus unrecognized ({detail})")
 
 
-def have_connectivity(url=NTFY_URL, timeout=6):
+def have_connectivity(url=NTFY_VOLTAGE_URL, timeout=6):
     """True if the ntfy host is reachable (DNS + TCP connect). No point waking the CAN bus (which draws
-    battery) if we can't deliver the alert anyway. Probes the actual NTFY_URL host, so a custom/self-hosted
+    battery) if we can't deliver the alert anyway. Probes the actual NTFY_VOLTAGE_URL host, so a custom/self-hosted
     topic is tracked too."""
     try:
         u = urllib.parse.urlparse(url)
@@ -144,6 +144,11 @@ def main():
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         log("another voltage_mon instance is running; skipping this tick")
+        return
+
+    # Config gate: without a topic there's nothing to deliver to (fail loud, not as "no internet").
+    if allow_send and not NTFY_VOLTAGE_URL:
+        log("NTFY_VOLTAGE_URL unset (define it in ~/secrets/.bash_variables) -- skipping notify path")
         return
 
     # Gate on connectivity BEFORE acquire(): no point waking the bus (draws battery) if we can't alert.
