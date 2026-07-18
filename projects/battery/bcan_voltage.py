@@ -57,87 +57,30 @@ from lib.canbus import iface_bitrate, append_csv      # noqa: E402,F401  re-expo
 CSV_PATH = os.path.join(_ROOT, "tmp", "battery", "bcan_voltage.csv")
 
 CHANNEL = "can0"
-BITRATE = 125000          # B-CAN body bus
+BITRATE = canbus.BITRATE_BCAN  # B-CAN body bus (125k)
 VOLT_ID = 0x46C           # BCM broadcast frame carrying system voltage
 SFF_MASK = 0x7FF          # standard 11-bit id mask
 DIVISOR = 400.0           # voltage = (word & VOLT_MASK) / 400 (verified 2026-06-26; recal vs multimeter)
 VOLT_MASK = 0x1FFF        # 0x46C byte[4] HIGH bits are status flags (saw bit6=0x4000 set -> phantom +51 V);
                           # the voltage is the LOW 13 bits of the bytes[4:5] BE word
 V_SANE = (6.0, 18.0)      # plausible 12 V-system rail; frames decoding outside this are dropped as corrupt
-WAKE_ID = 0x7FF           # benign unused id for the --wake burst (no module actuates on it)
-WAKE_N, WAKE_GAP = 75, 0.02   # ~1.5s of bus activity trips wake-on-activity; bus then stays up ~10s
-
-# Bus-identity guard: refuse to read/TX if the adapter is on C-CAN (500k powertrain/diag) not B-CAN.
-# Signature ids observed in captures (see [[promaster-dasm-comms]] / bcan-bringup): high-rate C-CAN
-# powertrain frames vs the always-present B-CAN body frames (0x0A0 @40Hz, 0x46C, 0x3E0..).
-CCAN_IDS = {0x100, 0x101, 0x103, 0x104, 0x10F, 0x110, 0x116, 0x160, 0x0FE, 0x0FA, 0x0EE, 0x0EA}
-BCAN_IDS = {0x46C, 0x0A0, 0x0E0, 0x2EA, 0x3DC, 0x3DE, 0x3E0, 0x3E2, 0x3E4, 0x3E6, 0x354, 0x356}
-RX_ERR_ABORT = 200        # rx-error climb during the probe -> 500k bus sampled at 125k = wrong bus
+# Bus identity + wake now live in lib/canbus (identify_bus / tx_wake_burst); classify_bus below just maps them.
 
 
 def classify_bus(channel=CHANNEL, probe=2.0):
-    """PASSIVE bus-identity check. Never transmits. Returns (verdict, detail):
-      'silent'  -- no traffic (asleep): safe to TX-wake.
-      'bcan'    -- B-CAN confirmed (body signature ids present): safe to read.
-      'foreign' -- C-CAN signature ids, OR rx-errors climbing (500k bus at 125k), OR an ACTIVE bus
-                   with NO B-CAN signature -> almost certainly the wrong bus. ABORT: do not read/TX.
-    On a live B-CAN, 0x0A0 (40 Hz) etc. always appear within the probe, so an active-but-unrecognized
-    bus is treated as foreign rather than risk reading/injecting on C-CAN."""
-    try:
-        ids, rxd = canbus.probe_ids(channel, probe)
-    except OSError as e:
-        return "foreign", f"cannot open/bind {channel} ({e})"
-
-    ccan_hit = sorted(ids & CCAN_IDS)
-    if ccan_hit:
-        return "foreign", f"C-CAN id(s) seen ({', '.join(hex(c) for c in ccan_hit)})"
-    if rxd > RX_ERR_ABORT:
-        return "foreign", f"{rxd} rx errors in {probe:.0f}s -> 500k C-CAN sampled at 125k?"
-    bcan_hit = [c for c in ids if c in BCAN_IDS or (c & 0x1FFF0000) == 0x1E340000]
-    if bcan_hit:
-        return "bcan", f"B-CAN confirmed ({len(ids)} ids incl. {', '.join(hex(c) for c in sorted(bcan_hit)[:3])})"
-    if ids:
-        return "foreign", f"active bus, no B-CAN signature ({len(ids)} unrecognized ids)"
-    return "silent", "no traffic"
+    """Map the generic lib.canbus.identify_bus() to this reader's verdict: 'bcan' (safe to read), 'silent'
+    (asleep -> safe to TX-wake), or 'foreign' (C-CAN / wrong-rate / unknown -> ABORT: do not read or TX)."""
+    bus = canbus.identify_bus(channel, probe)
+    if bus == "b-can":
+        return "bcan", "B-CAN confirmed"
+    if bus == "silent":
+        return "silent", "no traffic"
+    return "foreign", f"not B-CAN (identify_bus={bus})"
 
 
 def bring_up_passive(channel=CHANNEL, bitrate=BITRATE):
     """Ensure `channel` is UP at `bitrate`, listen-only ON (passive, never TX/ACK)."""
     return canbus.bring_up_passive(channel, bitrate)
-
-
-def restore_passive(channel=CHANNEL, bitrate=BITRATE):
-    """Put the iface back to the safe passive default (listen-only ON) after an active --wake."""
-    canbus.bring_up_passive(channel, bitrate)
-
-
-def wake_bus(channel=CHANNEL, bitrate=BITRATE):
-    """ACTIVE: arm the iface and TX a brief benign burst to wake a sleeping body bus.
-    Verified 2026-06-26: ~1.5s of 0x7FF/0-length frames wakes B-CAN, which then carries normal
-    traffic (incl. 0x46C) for ~10s before re-sleeping -- ample to read voltage. Leaves the iface
-    ARMED for the immediate read; the caller must restore_passive() afterward. Returns True on
-    success. 0x7FF/DLC0 is an unused id no module acts on; we only need bus activity for the wake."""
-    try:
-        if not canbus.ip_up(channel, bitrate, listen_only=False, restart_ms=100):
-            return False
-    except Exception:
-        return False
-    if canbus.is_listen_only(channel):     # sticky-flag guard: must be cleared or we can't TX
-        return False
-    try:
-        s = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
-        s.bind((channel,))
-        frame = struct.pack("=IB3x8s", WAKE_ID, 0, b"")   # id=0x7FF, dlc=0
-        for _ in range(WAKE_N):
-            try:
-                s.send(frame)
-            except OSError:
-                pass        # unACKed on a still-sleeping bus -> restart-ms recovers; keep poking
-            time.sleep(WAKE_GAP)
-        s.close()
-        return True
-    except OSError:
-        return False
 
 
 def read_voltage(channel=CHANNEL, timeout=4.0, divisor=DIVISOR):
@@ -195,7 +138,7 @@ def read_with_wake(channel=CHANNEL, timeout=4.0, divisor=DIVISOR, bringup=True):
         v, s = read_voltage(channel, timeout, divisor)
         return v, (s + " [passive: bus already awake]" if v is not None else s)
     # verdict == "silent": asleep -> safe to TX-wake, then RE-VERIFY before trusting/reading
-    if not wake_bus(channel):
+    if not canbus.tx_wake_burst(channel, BITRATE):
         return None, "bus silent and could not arm/wake (sudo? adapter? listen-only stuck?)"
     try:
         verdict2, detail2 = classify_bus(channel)
@@ -203,7 +146,7 @@ def read_with_wake(channel=CHANNEL, timeout=4.0, divisor=DIVISOR, bringup=True):
             return None, f"ABORT post-wake: not B-CAN -- {detail2} (woke a non-B-CAN bus; discarding)"
         v, s = read_voltage(channel, timeout, divisor)
     finally:
-        restore_passive(channel)                  # always hand the iface back to passive
+        canbus.restore_passive(channel, BITRATE)  # always hand the iface back to passive
     return v, (s + " [tx-waked]" if v is not None else s)
 
 

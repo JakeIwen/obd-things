@@ -1,0 +1,15 @@
+[Unit]
+Description=TPMS passive drive sniffer (RX-only C-CAN capture to find the pressure broadcast)
+After=multi-user.target
+
+[Service]
+User=pi
+Environment=PYTHONUNBUFFERED=1
+Type=simple
+WorkingDirectory=/home/pi/dev/obd-things
+ExecStart=/usr/bin/python3 projects/tpms/drive_sniff.py --auto
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

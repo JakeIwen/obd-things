@@ -4,7 +4,7 @@ Handoff doc. State as of **2026-07-07**. Any agent/human should be able to resum
 Link path & general UDS tooling: see repo `docs/`, `lib/modules.py`, and the radar project docs
 (same PCAN → SGW-bypass → C-CAN tap). Everything below was verified on the vehicle.
 
-**Data locations (repo convention, 2026-07-08 — see root `CLAUDE.md` / `README.md`):** all
+**Data locations (repo convention, 2026-07-08 — see root `AGENTS.md` / `README.md`):** all
 tool output for this project goes to **`tmp/tpms/`** (gitignored: drive-log CSV, AlfaOBD
 sniffs); raw bus-state reference captures live in `tmp/captures/`; committed evidence
 (DID sweep + state markers) is promoted into **`findings/` (this dir)**. The old
@@ -36,6 +36,19 @@ Current codes in the RF Hub: **B1040-64** and **C1512-88** (details below). No C
 
    Pressure scale **0.1 kPa** (confirmed: deflations tracked exactly). Placard-ish targets:
    fronts 55 / rears 75 psi. `31C6`/`31C7` (2207/5517) likely front/rear thresholds.
+
+   The ID-DID↔pressure-DID slot pairing (31CB↔31D0 … 31CE↔31D3) is no longer just a DID-adjacency
+   assumption: the `40A6-40A9` records carry a position byte — pos01=`11825BA9`, pos02=`7004E049`,
+   pos03=`700497DF`, pos04=`7004C287` — matching both the ID and pressure DID orders, and this same
+   ordering appears in an **independent AlfaOBD capture** (`projects/ecu_mapping/findings/
+   promaster_2022/module_did_map.txt`). `7004C287` is absent from `40A6-40A9` in **both** captures.
+
+   ⚠️ **CORRECTION (2026-07-14):** the moment C1512-88 self-erased, `40A6-40A9` began returning
+   NRC 0x22 (conditionsNotCorrect) — they are **fault-linked records, NOT a permanent position
+   table**. So "`7004C287` has no `40Ax` record" does **not** establish that it is unlocalized, and
+   the prime-suspect status that rested on it is **downgraded to unproven**. What survives: the
+   `40Ax` position bytes did align with the ID/pressure slot order while readable, so the ID↔slot
+   pairing stands; and the deflate-derived wheel map (below) never depended on `40Ax` at all.
 
 3. **Reinterpretation of the history**: the hub's rear positions are crossed (classic failed
    rear-axle localization). "C1504 = RR" pointed at the wrong corner, so both sensor
@@ -94,10 +107,51 @@ Current codes in the RF Hub: **B1040-64** and **C1512-88** (details below). No C
   Gotcha: `pkill -f`/`pgrep -f` with a pattern that appears in your own command line kills
   your own shell — use `pkill -x candump` or exact PIDs.
 
+## Campaign status (2026-07-14) — 18 sessions, ~11 h of driving logged
+
+- **ZERO dropouts.** All four sensors, incl. `7004C287`, reported every 10 s in every session.
+- **C1512-88 SELF-ERASED at 2026-07-13 20:37** (caught live by the logger; confirmed by UDS —
+  `19 02 0D` now returns B1040-64 only). It aged out on clean cycles, as predicted.
+  Simultaneously `40A6-40A9` went to NRC 0x22 → see the CORRECTION above.
+- **B1040-64 persists**, error counter down to **10** (from 37 at first sight) → on track to
+  self-erase in ~10 more clean cycles unless it recurs.
+- **Pressure decode VALIDATED against the vehicle**: owner cycled the IPC to the TPMS screen on
+  the 2026-07-13 drive and saw rears peak at **90 psi**; the logger's max for that session is
+  **90.0 psi (RL)**. The 0.1 kPa scale is now confirmed against the cluster's own display.
+- Cluster shows four real numbers (not dashes) → the RFH **is** currently broadcasting valid
+  per-wheel pressures, so a zero-TX passive logging channel exists (see Open questions).
+- **Caveat on all of the above:** the fault has not recurred *while we have been polling the hub
+  every 10 s and after we deflated/re-inflated all four tires*. Neither confound is ruled out.
+
+## Passive pressure-broadcast hunt — NEGATIVE (2026-07-14)
+
+Goal was to find a C-CAN frame carrying per-wheel pressure so the logger could go zero-TX
+(removing any observer effect). Captured two real warm-up drives (49 + 54 min, thermal rise
+F 55→68 / R 75→90 psi) via the RX-only `drive_sniff.py`, correlated every broadcast slice
+against the logger's ground-truth curves (`find_pressure_frame.py`). **No pressure broadcast
+found**, by four independent methods:
+- plain correlation — confounded (everything rises together on warm-up; ~0.9 vs all wheels);
+- 4-fields-in-one-frame structural fit (shared affine map to the 4 pressures) — nothing;
+- multiplexed rotating-wheel frame — only counter bytes, no 2-low/2-high pressure structure;
+- **common-mode-removed residual correlation + cross-drive consistency** (the decisive test) —
+  the only survivor, `0x5A0`, is a per-drive trip/minute counter (b1 rises 0→53 identically both
+  drives); its apparent RR match was a sparse-zero interpolation artifact.
+
+**Likely reason:** the RFH→IPC pressure data is gateway-routed to the interior/IHS CAN (where the
+cluster lives) and does not traverse the internal diagnostic C-CAN our SGW-bypass taps. The
+`31D0-31D3` DID poll works only because UDS diagnostic addressing IS routed to us. **Consequence:
+passive-only TPMS logging is not achievable on this tap; the logger must keep polling.** Captures
+kept under `tmp/tpms/captures/`; `drive_sniff.py` / `tpms-drivesniff.service` can be stopped
+(`sudo systemctl disable --now tpms-drivesniff`) unless re-run for a different signal.
+
+To resolve the observer-effect question without a passive bus channel: either (a) slow the poll
+(e.g. 60 s — a dropout persists a full 20-min driving period before C1504 sets, so 60 s still
+catches it) to cut bus intervention ~6×, or (b) go truly off-bus with an RTL-SDR on 433 MHz.
+
 ## Next steps
 
 1. Let the logger accumulate drives. On a dropout: which physical wheel, key-on time,
-   DTC flips. Watch **RL / `7004C287`** first.
+   DTC flips. (Prime-suspect status for `7004C287` is now UNPROVEN — treat all four equally.)
 2. User to dig up sensor invoices → confirm `11825BA9` (2nd replacement) and get the 1st
    replacement's ID (if it matches nothing on the van, it was binned during replacement #2).
 3. If dropouts occur: RTL-SDR (~$30) + `rtl_433` on the Pi decodes 433 MHz FCA TPMS bursts →
