@@ -30,8 +30,10 @@ a **limited capture window**; −1.26° was **beyond** it (proven: a 2-hour driv
 **gate was physical**: re-seat/level the mount to bring the deviation back inside the window, then run the
 SDA (which we did). **Van is the owner's home/office → no shop visits**; everything was in-place DIY.
 
-The repo is read-only **except two gated actuation tools** (`radar_acc_sda_drive.py` and the older
-`radar_acc_align_0251.py`, the only `31 01`).
+Most diagnostic tools are non-mutating but still transmit and may change session state. The two
+dedicated radar actuators are `radar_acc_sda_drive.py` and the older
+`radar_acc_align_0251.py`; generic gated `tools/uds_send.py` can also send an explicitly authorized
+mutation or actuation payload.
 
 ---
 
@@ -43,8 +45,10 @@ The repo is read-only **except two gated actuation tools** (`radar_acc_sda_drive
 2. **OBD-II PIDs (Mode 01) for vehicle data.** Functional `0x7DF` + physical `0x7E0`, 11- and 29-bit, **all
    NO RESPONSE** behind the SGW bypass (we're on the internal bus, not the gateway's OBD path). Vehicle
    **speed = radar DID `0x1002`** (km/h, 1 byte) — already wired into the logger. Don't re-probe OBD.
-3. **Decoding speed from the CAN broadcast.** Abandoned — `0x1002` solved it. (A distance/odometer
-   accumulator lives at CAN ID `0x101` if ever needed, but you won't need it.)
+3. **Assuming CAN ID `0x101` is an odometer accumulator.** Disproved by the 2026-07-19 passive drive:
+   its packed 12-bit field is reversible instantaneous speed and tracks `0x0EE` almost perfectly.
+   Its exact `/16`-versus-`/32` km/h scale still needs one known-speed reference. Radar DID `0x1002`
+   remains the verified km/h source for this project.
 4. **"Just keep driving" to auto-fix at the current −1.26°.** Ruled out by a **2-hour, 60%-highway drive**
    (`tmp/radar/radar_acc_drive_20260618_143202.csv`): `0845` stayed flat at −1.26°, DTC never cleared.
    Online auto-align won't chase a deviation this far out. Driving alone fixes it **only after** the mount
@@ -124,7 +128,8 @@ seed/key oracle, not the C1418-78 fix.
    "it tracks" as strong inference. **De-risk: make a small (¼–½°) reversible test adjustment first, drive,
    and read** — toward 0 = right way (and confirms it responds); more negative = wrong way; no movement =
    reading is more stored-like than expected (lean on inclinometer + SDA).
-1b. **Then drive normally + monitor (no tool).** The cron logger captures it passively; watch `0845`/`0850`
+1b. **Then drive normally + monitor.** The cron trigger is passive, but once launched the logger auto-arms
+   C-CAN and sends active, non-mutating UDS reads; watch `0845`/`0850`
    trend toward 0 / DTC clear over miles. Cheapest shot, best fit for "van is home." Don't *rely* on it.
    **Audible cue (two-tier chime):** `touch tmp/CHIME` before a verification drive → the cron logger arms two
    distinct Sonos chimes so you know mid-drive when to stop: **SUCCESS** (`success.mp3`) the moment **C1418-78
@@ -188,12 +193,13 @@ seed/key oracle, not the C1418-78 fix.
 
 ## Run it (commands)
 ```bash
-./bringup.sh --tx                              # can0 @500k ARMED (UDS needs --tx; passive is the default now); ignition ON
-python3 projects/radar/radar_acc_baseline.py   # reproduce baseline + DTCs (read-only)
-python3 projects/radar/radar_acc_live.py       # live alignment/health gauge @5 Hz (read-only)
-python3 projects/radar/radar_acc_drive_log.py  # log angles+speed+DTC to tmp/radar/ while driving (read-only)
-python3 projects/radar/radar_acc_sda_drive.py --arm   # ** ACTUATION ** DIY SDA: start 0x0251 + hold session + log; then DRIVE
-python3 tools/uds_send.py radar_acc 22 F1 91   # ad-hoc read (generic)
+./bringup.sh --tx                              # can0 @500k ARMED; ignition ON
+python3 projects/radar/radar_acc_baseline.py   # active non-mutating baseline + DTC reads
+python3 projects/radar/radar_acc_live.py       # dry-run plan only; prints every live gate
+python3 projects/radar/radar_acc_live.py --follow [CSV]  # bus-free view of an existing CSV
+python3 projects/radar/radar_acc_drive_log.py  # active non-mutating UDS drive logger
+python3 projects/radar/radar_acc_sda_drive.py --arm      # ** ACTUATION ** start 0x0251
+python3 tools/uds_send.py radar_acc 22 F1 91   # dry-run plan; prints exact live gates
 ```
 Architecture: generic platform at repo root (`lib/`, `tools/`, `live_data/live_data.py`, `bringup.sh`);
 radar-specific work here under `projects/radar/`.
@@ -215,10 +221,11 @@ radar-specific work here under `projects/radar/`.
    **`rm tmp/CHIME`** when done so normal commutes don't chime.
 
 ## Safety
-Forward-collision radar. Everything is read-only (`22`/`19`/`31 03`) **except** `radar_acc_align_0251.py` and
-`radar_acc_sda_drive.py` (`31 01`). A mis-aimed radar causes phantom braking / missed detection. Actuation is
-owner-consent-only, on your own vehicle; ACC/FCW is already disabled by the active DTC so the radar is inert
-during a test. Legal/liability terms: repo-root README "Safety & liability".
+Forward-collision radar. `22`/`19`/`31 03` are non-mutating diagnostic requests, not passive capture.
+`radar_acc_align_0251.py` and `radar_acc_sda_drive.py` send `31 01`; generic gated `tools/uds_send.py`
+can send other authorized payloads. A mis-aimed radar can cause phantom braking or missed detection.
+Actuation is owner-consent-only, on your own vehicle. The former active DTC is resolved and ACC/FCW is
+functional, so never assume the radar is inert. Legal/liability terms: repo-root README "Safety & liability".
 
 ## Environment
 Raspberry Pi, `/home/pi/dev/obd-things`. `can-utils` (apt); `python-can`, `can-isotp` (pip --break-system-packages).

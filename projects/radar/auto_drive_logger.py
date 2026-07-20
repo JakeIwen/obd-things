@@ -18,7 +18,8 @@ Bus-aware (bringup.sh is passive-by-default + supports the 125k B-CAN body bus):
     # crontab -e  (run as the same user that can bring up can0):
     * * * * * /usr/bin/python3 /home/pi/dev/obd-things/projects/radar/auto_drive_logger.py >> /home/pi/dev/obd-things/tmp/auto_drive_logger.log 2>&1
 
-Nothing here is interactive and nothing writes to the vehicle (logger is read-only 22/19/01).
+Nothing here is interactive. The logger sends active UDS reads (`22`/`19`/`01`) but does not issue a
+diagnostic write, IO-control, DTC-clear, or routine-start request.
 """
 import os, sys, time, glob, fcntl, subprocess, re
 

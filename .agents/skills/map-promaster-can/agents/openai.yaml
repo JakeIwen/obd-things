@@ -1,0 +1,4 @@
+interface:
+  display_name: "Map ProMaster CAN"
+  short_description: "Map ProMaster CAN and UDS safely"
+  default_prompt: "Use $map-promaster-can to plan and execute a passive-first CAN/UDS mapping task."

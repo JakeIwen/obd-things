@@ -2,7 +2,8 @@
 
 Radar identifies as **MRR1evo14F** (Bosch Mid-Range Radar gen-1 evo). VIN `3C6LRVDG4NE######`.
 Full read-only `22 <did>` sweep of 0x0000–0xFFFF: **56 readable DIDs, 0 locked, 0 unresolved (CLEAN)**.
-Raw log: `projects/radar/findings/radar_acc_did_sweep.txt`. Tool: `python3 tools/did_sweep.py radar_acc` (generic).
+Raw log: `projects/radar/findings/radar_acc_did_sweep.txt`. Historical sweep used the generic
+`did_sweep.py`; today a bare `python3 tools/did_sweep.py radar_acc` is a no-CAN plan only.
 **Complete consolidated map of ALL 56 DIDs + sessions/security/routines/DTCs → [`did_map.md`](did_map.md)**
 (this file holds the narrative/analysis; `did_map.md` is the canonical lookup table).
 
@@ -40,7 +41,8 @@ used for routine 0x0251.
 
 ## Next step to confirm angles
 1. In AlfaOBD, open the radar live-data / alignment screen; note vertical & horizontal deviation values.
-2. Re-read `0841 / 0845 / 0850 / 0861` here (`python3 tools/uds_send.py radar_acc 22 08 41`, etc.) and match.
+2. Plan each re-read here (`python3 tools/uds_send.py radar_acc 22 08 41`, etc.), then use the live
+   read gates printed by the plan while parked; each request restores passive mode, so re-arm between reads.
 3. Once matched, we have a verified live readout of the misalignment — useful to watch DURING a
    future `31 01 0251` alignment run (with the 120 cm mirror) to confirm it converges toward 0°.
 
@@ -48,7 +50,8 @@ used for routine 0x0251.
 
 # Routine 0x0251 — alignment routine mechanics (runtime-verified 2026-06-13)
 
-Tool: `projects/radar/radar_acc_align_0251.py` (the only actuation in the repo). The earlier docs
+Tool: `projects/radar/radar_acc_align_0251.py` (one of two dedicated radar actuators; generic gated
+`uds_send.py` can also carry an explicitly authorized mutation). The earlier docs
 guessed at session/param; below is what the radar actually does on the wire.
 
 ## How to drive it (VERIFIED)
@@ -107,9 +110,12 @@ Two auto-logged city drives (~10 min + ~6 min, `tmp/radar/radar_acc_drive_202606
 - **`0841` is a LIVE instantaneous estimate while driving** — swings ±10° around ~0 (240 distinct
   values), tracking vehicle pitch/road, *not* converging to the stored −1.26°. So `0845` = frozen
   authoritative value, `0841` = live/noisy, `0850` = intermediate.
-- Broadcast (raw burst) recon: a **distance/odometer accumulator sits at CAN ID `0x101` (bytes ~2-3,
-  monotonic, flat at stops)**; useful as a speed-rate ground truth. No clean direct *speed* field was
-  trivially isolated in the broadcast → pursued speed via a radar DID instead (below).
+- Historical broadcast recon initially mislabeled part of CAN ID `0x101` as a distance/odometer
+  accumulator. A much longer passive drive capture on 2026-07-19 disproved that label: the packed
+  12-bit field spanning bytes 0–2 is reversible **instantaneous speed**, independently mirrored by
+  `0x0EE`; the neighboring bytes 2–3 field behaves like braking/deceleration. Absolute scaling still
+  needs one known-speed reference. See the canonical decode in `docs/bus-map.md` and
+  `projects/ecu_mapping/findings/promaster_2022/2026-07-19_ccan_drive_signal_analysis.md`.
 
 ## ★ Vehicle speed DID — VERIFIED (2026-06-17): `0x1002` = km/h (1 byte)
 Found via the DID hunt (`did_hunt_log.py`) on a drive with sustained 40-50 mph. `0x1002` byte0 is

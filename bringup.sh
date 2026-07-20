@@ -7,20 +7,23 @@
 #
 #   ./bringup.sh                 HS-CAN 500k, passive sniff            (DEFAULT)
 #   ./bringup.sh --tx            HS-CAN 500k, ARMED (can send UDS)
-#   ./bringup.sh --bcan          body bus 125k, passive sniff
-#   ./bringup.sh --bcan --tx     body bus 125k, ARMED
+#   ./bringup.sh --bcan          legacy observed body capture @125k, passive sniff
+#   ./bringup.sh --bcan --tx     legacy observed body capture @125k, ARMED
 #   ./bringup.sh --probe         cycle common low-speed rates (passive), report which is live
 #   ./bringup.sh --bitrate N     override bitrate (e.g. 250000)
 #   IFACE=can1 ./bringup.sh ...  override interface (default: auto-pick the sole can iface)
 #
-# Verified buses on this van: HS-CAN 500k (OBD 6/14, diagnostics) and body B-CAN 125k.
+# Verified on this van: HS-CAN 500k on pins 6/14. A separate legacy body capture was observed
+# at 125k, but its exact DLC auxiliary pair and CAN-CH-vs-IHS branch name remain unresolved.
 set -e
 
 BITRATE=500000        # HS-CAN default; --bcan flips to 125k; --bitrate overrides either
 LISTEN_ONLY=on        # passive by default; --tx arms (listen-only off)
 PROBE=0
-# Common low-speed body/comfort CAN rates, most-likely first for Fiat Ducato (--probe).
-PROBE_RATES=(125000 50000 100000 250000 83333 33333)
+# Common HS/body/comfort CAN rates for an unknown physical pair. Include 500k because CAN CH
+# may be another high-speed branch; 125k is locally observed body CAN and 50k is a concrete
+# related-Ducato/Jumper cabin-bus lead. The probe always uses listen-only mode.
+PROBE_RATES=(500000 125000 50000 100000 250000 83333 33333)
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -50,6 +53,21 @@ if [ -z "$IFACE" ]; then
   else
     echo "ERROR: multiple can interfaces (${CANS[*]}). Pick one: IFACE=canN ./bringup.sh ..."; exit 1
   fi
+fi
+
+# Interface down/up and bitrate changes participate in the same cooperative channel lock as the
+# Python diagnostic tools. This prevents a passive survey or manual re-arm from disrupting an
+# in-flight ISO-TP request whose process already owns the channel. The descriptor releases on exit.
+if [[ ! "$IFACE" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+  echo "ERROR: unsafe CAN interface name: $IFACE" >&2
+  exit 2
+fi
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+mkdir -p "$SCRIPT_DIR/tmp/locks"
+exec 9>>"$SCRIPT_DIR/tmp/locks/active-diagnostics-$IFACE.lock"
+if ! flock -n 9; then
+  echo "ERROR: another participating tool owns $IFACE; refusing to reconfigure it." >&2
+  exit 1
 fi
 
 sudo modprobe can-isotp 2>/dev/null || true   # needed for UDS/ISO-TP; harmless when just sniffing

@@ -3,7 +3,7 @@
 to a wide CSV while driving, so we can find the DID that tracks vehicle speed -- AlfaOBD shows
 speed in the ACC live data, so the radar re-exposes the received speed as a 22 DID. Once the
 speed DID is identified (it reads ~0 at every stop and ramps with motion; cross-check against the
-broadcast odometer ID 0x101 in the matching tmp/canraw burst), wire just that DID into
+broadcast speed field at ID 0x101 in the matching tmp/canraw burst), wire just that DID into
 radar_acc_drive_log.py and delete this script + the tmp/HUNT_DIDS marker.
 
 Same CLI as radar_acc_drive_log.py (--quiet --out-dir --stop-after-idle) so the cron supervisor
@@ -47,7 +47,10 @@ def main():
     uds.request(s, [0x10, 0x03], timeout=1.0)
     cols = ["iso_time", "elapsed_s"] + [f"{d:04X}" for d in DIDS]
     if not quiet:
-        print(f"# DID-hunt log -> {outfile}  ({len(DIDS)} DIDs ~{hz:g} Hz, read-only)")
+        print(
+            f"# DID-hunt log -> {outfile}  "
+            f"({len(DIDS)} DIDs ~{hz:g} Hz, active non-mutating UDS)"
+        )
 
     start = time.time(); last_tp = start; last_data = start; n = 0
     with open(outfile, "w", newline="") as f:

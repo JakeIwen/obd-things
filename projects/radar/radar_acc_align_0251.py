@@ -21,8 +21,9 @@
   radar-dependent and UNVERIFIED for this unit -- see "MECHANICAL vs ELECTRONIC" below.
 
 ================================================================================
-  THIS IS THE ONE TOOL IN THIS REPO THAT PERFORMS ACTUATION (UDS 31 01).
-  Every other tool is read-only by design. Running 0x0251 calibrates a
+  THIS IS A DEDICATED ACTUATION TOOL (UDS 31 01). radar_acc_sda_drive.py is
+  the current drive-alignment actuator, and gated uds_send.py can carry arbitrary
+  explicitly authorized payloads. Running 0x0251 calibrates a
   forward-collision radar; a mis-aimed radar causes phantom braking / missed
   detection. Requires: owner consent, a flat mirror at 120 cm (+/-5 cm) squared
   to vehicle centerline, level ground, engine running (~14 V), normal tire

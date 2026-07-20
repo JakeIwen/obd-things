@@ -29,7 +29,9 @@ committed in place.
 
 - `tmp/captures/` — raw candump logs and condition-named bus reference captures (`ccan/`, `bcan/`,
   and their `events/` subdirectories)
-- `tmp/sweeps/` — output from `tools/did_sweep.py` and `tools/signal_correlate.py`
+- `tmp/inventories/` — per-module identity, DTC, checkpointed DID, and routine reports
+- `tmp/sweeps/` — completed DID compatibility text and `tools/signal_correlate.py` output
+- `tmp/locks/` — advisory per-channel lock files for participating active diagnostic tools
 - `tmp/<project>/` — project logger/tool output such as `tmp/radar/`, `tmp/battery/`, and `tmp/tpms/`
 
 Committing data is deliberate promotion: move selected evidence into

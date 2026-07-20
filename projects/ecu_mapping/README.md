@@ -78,6 +78,18 @@ model descriptor. Raw logs under `tmp/` (gitignored) keep the full VIN.
 Modules seen (ATSH → phys addr): radar `DA2AF1`/0x2A, **BCM `DA40F1`/0x40**, RFH `DAC7F1`/0xC7,
 trans `DA18F1`/0x18, engine `DA10F1`/0x10 + `7E0`, shifter `DA1FF1`/0x1F.
 
+Direct live discovery on 2026-07-19 independently verified C-CAN endpoints `0x18`, `0x1F`,
+`0x2A`, `0x40`, `0x60`, `0xC6`, and `0xC7`; PCM `0x10` remains unresolved in the default
+session. See [`2026-07-19_live_ecu_discovery.md`](findings/promaster_2022/2026-07-19_live_ecu_discovery.md).
+The companion [`ODX/PDX source research`](findings/promaster_2022/2026-07-19_odx_pdx_source_research.md)
+records the free local toolchain, searched sources, and remaining acquisition paths.
+The [`related-platform passive bus leads`](findings/promaster_2022/2026-07-19_related_platform_bus_leads.md)
+record a 50-kbit/s/29-bit 2020 Citroën Jumper cabin-bus hypothesis and candidate IDs to check only
+after the PCAN is physically repinned; none are yet verified on this van.
+The [`2026-07-19 passive drive analysis`](findings/promaster_2022/2026-07-19_ccan_drive_signal_analysis.md)
+corrects CAN ID `0x101` from the old odometer hypothesis to a packed instantaneous-speed field,
+corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one known-speed reference.
+
 - **Radar (0x2A)** confirms the radar project's story: `31 01 0250` → `7F3131` (wrong RID),
   alignment-gauge DIDs (`083E/083F/0846/0830/0860`) → `7F2231` "not supported". DID `0850`
   returns real bytes (`FF ED 44 D4 FF FF 7E 86`) — decode target. See `../radar/`.

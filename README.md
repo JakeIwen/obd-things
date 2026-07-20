@@ -31,24 +31,33 @@ docs/                      cross-project vehicle reference
 lib/                       GENERIC, module-agnostic plumbing
   uds.py                     ISO-TP socket, UDS request, NRC table, byte decoders, USB-drop recovery
   modules.py                 module registry — SOURCE OF TRUTH for addressing; ADD A MODULE HERE
-live_data/                 GENERIC top-style live viewer
-  live_data.py               BASE viewer: pass a module + a Metric table -> live display
+  diagnostic_safety.py       per-SocketCAN-channel lock for guarded active diagnostic tools
+live_data/                 GENERIC top-style live-view library (not a standalone CLI)
+  live_data.py               BASE: a thin module wrapper passes Module + Metric rows to run()
 tools/                     GENERIC, module-agnostic CLI tools (take a module key)
-  uds_send.py                ad-hoc read-only UDS request
-  did_sweep.py               ReadDataByIdentifier sweep 0000-FFFF       -> tmp/sweeps/<key>_did_sweep.txt
-  routine_scan.py            RoutineControl discovery scan (31 03, read-only)
+  uds_send.py                ad-hoc raw UDS request (payload determines safety class)
+  ecu_discover.py            bounded active ECU presence scan -> tmp/discovery/
+  identity_inventory.py      bounded per-ECU identity reads -> tmp/inventories/<key>/
+  dtc_inventory.py           non-clearing per-ECU DTC inventory -> tmp/inventories/<key>/
+  can_capture_summary.py     streaming offline candump summary (`--snapshot` bounds growing logs)
+  did_sweep.py               dry-run-first, checkpointed ReadDataByIdentifier inventory (22)
+  routine_scan.py            dry-run-first, checkpointed result-only RoutineControl inventory (31 03)
   signal_correlate.py        DID byte-slice <-> signal correlator (lstsq), capture + analyze
-projects/                  per-target investigations (radar today; add more here)
+projects/                  per-target investigations and durable findings
   radar/                     2022 Promaster ACC radar (Bosch DASM / MRR1evo14F) — see its README
     *.py                       radar-specific scripts (baseline, live, drive log, 0x0251 actuation, …)
     docs/ findings/            radar narrative docs, decoded data + promoted (tracked) captures
 tmp/                       gitignored — ALL machine-written data lands here, never in git:
   captures/                  raw candump logs (tools/dump.sh default)
-  sweeps/                    did_sweep.py / signal_correlate.py output
+  discovery/                 bounded ECU-address discovery reports
+  inventories/               per-module identity, DTC, DID, and routine reports
+  sweeps/                    completed DID compatibility text + signal_correlate.py output
+  locks/                     advisory per-channel active-diagnostic lock files
   <project>/                 per-project logger output (tmp/radar/, tmp/battery/, tmp/tpms/)
 ```
 
-**Data convention:** tools only ever write under `tmp/` (gitignored). When a capture/sweep proves
+**Data convention:** tool defaults write under `tmp/` (gitignored); keep any explicit output override
+there too. When a capture/sweep proves
 worth keeping, PROMOTE it: move it into `projects/<x>/findings/` and commit it next to the analysis
 that cites it. "Is it tracked?" is answered by location alone — nothing under `tmp/` ever is.
 
@@ -64,14 +73,18 @@ simpler `REPO = dirname(__file__)/..`.
 
 ## Universal facts about THIS van's bus (verified — trust these)
 
-- **Two buses (multi-speed):**
+- **Live-verified buses plus OEM DLC branches:**
   - **C-CAN / HS-CAN, 500 kbit/s** — OBD pins **6/14**; powertrain + diagnostics. `bringup.sh` default.
-  - **B-CAN / body bus, 125 kbit/s** — comfort/body (locks, lights, windows, VIN broadcast). Reached on
-    the low-speed adapter pinout; `bringup.sh --bcan`. (Use `--probe` to rediscover an unknown rate.)
+  - **125 kbit/s body capture** — comfort/body effects (locks, lights, windows, VIN broadcast), currently
+    called `b-can` in code/data. Its exact OEM branch still needs confirmation; `bringup.sh --bcan`.
+  - OEM wiring identifies **CAN CH on pins 12/13** and **CAN IHS on pins 3/11**. Their bitrates and
+    relationship to the existing `b-can` capture are not yet live-verified; survey them passively.
   - One PCAN channel = one physical pair = **one bus at a time**; the OBD splitter parallels a single bus
     (lets PCAN + a scan tool share it), it does **not** merge C-CAN and B-CAN.
-- **Diagnostic addressing:** UDS over ISO-TP, **29-bit normal-fixed**. Tester = `0xF1`; each ECU has a
-  physical address (e.g. radar `0x2A` → TX `0x18DA2AF1`, RX `0x18DAF12A`). Add modules in `lib/modules.py`.
+- **Diagnostic addressing:** verified C-CAN modules use UDS over ISO-TP with **29-bit** IDs. Tester =
+  `0xF1`; each ECU has a physical address (e.g. radar `0x2A` → TX `0x18DA2AF1`, RX `0x18DAF12A`).
+  The shared transport also supports explicit 11-bit module entries; each registry entry records its
+  addressing mode and bitrate. Add only independently verified TX/RX pairs in `lib/modules.py`.
 - **SGW bypass is installed**, so diagnostic UDS (`22`/`19`/`31`/…) reaches the internal modules. **BUT
   legislated OBD-II is NOT reachable this way** — Mode 01 PIDs via functional `0x7DF` / physical `0x7E0`
   (11- and 29-bit) all return NO RESPONSE, because the bypass taps the *internal* bus, not the gateway's
@@ -89,7 +102,8 @@ simpler `REPO = dirname(__file__)/..`.
   `bringup.sh` always `ip link set <if> down` first, so switching 500k↔125k is safe.
 - **`berr-reporting` unsupported** by this PCAN adapter (use `listen-only` instead).
 - **USB brownout:** the PCAN drops on a shared root hub (`Rx urb aborted -32`). Keep it on the **powered
-  USB hub**. The scanners auto-recover (`lib.uds.recover_socket`); the live viewer shows NO DATA.
+  USB hub**. Long-running tools that explicitly call `lib.uds.recover_socket` can auto-recover;
+  bounded discovery/identity/DTC tools fail, preserve a partial report, and restore passive mode.
 - **Passive bus-activity check** (`timeout 3 candump -n 1 can0`) is the safe way to tell whether the
   vehicle is running without transmitting — exit 0 = traffic present, 124 = silent. Never poll UDS just to
   detect "awake," or you risk keeping modules awake / draining the 12 V battery.
@@ -113,33 +127,126 @@ is safe. Auto-picks the sole `can*` iface (or set `IFACE=canN`).
 
 ## Quick start
 
+Both inventory commands below are safe planning runs: dry-run is the default, so they do not
+inspect the live interface, open a CAN socket, or write a report.
+
 ```bash
-./bringup.sh --tx                              # C-CAN 500k, ARMED (UDS needs TX); ignition ON (engine running ideal)
-python3 tools/uds_send.py radar_acc 22 F1 91   # ad-hoc read (radar family id) — sanity-check the link
-python3 tools/did_sweep.py radar_acc           # full DID sweep -> tmp/sweeps/radar_acc_did_sweep.txt
-python3 tools/routine_scan.py radar_acc        # RoutineControl discovery (read-only)
+python3 tools/did_sweep.py radar_acc 0800 08FF # plan 256 physical DID reads; NO CAN traffic
+python3 tools/routine_scan.py radar_acc 0200 020F # plan 31 03 reads (+ FF00-FF03); NO CAN traffic
 ```
 
-All generic tools take a **module key** from `lib/modules.py` (`radar_acc` today).
+Generic diagnostic tools take a **module key** from `lib/modules.py`; inspect that registry for
+the current verified set and each module's bus/addressing metadata.
+
+### Diagnostic CLI matrix
+
+Every command below is a no-I/O plan unless its live gates are supplied. Live commands also run
+interface/service preflight, take the per-channel transmitter lock, and return the adapter to verified
+listen-only mode. Consequently, explicitly re-run `./bringup.sh --tx` before each subsequent live tool.
+
+| Tool | Default plan | Additional live requirements / scope |
+|---|---|---|
+| `ecu_discover.py` | seven verified C-CAN endpoints | `--execute --confirm-parked --pair --conditions`; all 255 usable 29-bit targets add `--all-29bit-targets --confirm-expanded-scan`; custom pairs add `--confirm-custom-physical` |
+| `identity_inventory.py` | bounded standardized/OEM identity set, excluding VIN | common live gates above; `--did` replaces defaults; VIN is opt-in and masked in reports |
+| `dtc_inventory.py` | non-clearing `19 01`, `19 02`, and `19 03` | common live gates; the larger supported-DTC `19 0A` catalog is opt-in |
+| `did_sweep.py` | bounded `22` range | common live gates; expanded ranges and explicit sessions have separate confirmations described below |
+| `routine_scan.py` | result-only `31 03` | common live gates; cannot start/stop a routine; expanded ranges and explicit sessions have separate confirmations |
+| `signal_correlate.py capture` | bounded capture plan | common live gates plus `--confirm-session-change --confirm-no-active-routine`; fixed extended session |
+| `uds_send.py` | classify and print one exact physical request | reads use common live gates; session or mutation payloads add the exact confirmations printed by the plan |
+| module wrapper around `live_data.run()` | bounded direct-view plan | common live gates plus engine-off/session/no-active-routine confirmations; parked use only |
+
+`live_data/live_data.py` is a library, not a standalone command. Create a thin project wrapper that
+defines only its module key and `Metric` table and calls `run()`; do not copy radar-specific `--follow`
+imports into an unrelated module.
+
+### Parked live inventories
+
+Never execute an inventory while the vehicle is moving. Finish/stop any drive capture first, park
+the vehicle, record the ignition/engine state, and stop the background TPMS poller. A bounded live
+DID inventory then looks like this:
+
+```bash
+sudo systemctl stop tpms-logger
+./bringup.sh --tx
+python3 tools/did_sweep.py radar_acc 0800 08FF \
+  --execute --confirm-parked --pair 6/14 \
+  --conditions "parked, ignition ON, engine OFF"
+sudo systemctl start tpms-logger
+```
+
+The tool refuses live execution unless the module's interface is up, armed (not listen-only), at
+the registry bitrate, not BUS-OFF, and noninteractive `sudo` is available for cleanup. It also
+refuses to compete with `tpms-logger` or `promaster-drive-capture`. Once preflight passes and the
+tool acquires its channel lock, its cleanup path restores the adapter to listen-only mode, including
+on interruption/error. Re-run `./bringup.sh --tx` before each additional active tool, then restart
+`tpms-logger` when the manual campaign is finished.
+
+`did_sweep.py` writes each result immediately to
+`tmp/inventories/<module>/dids_<timestamp>.results.jsonl` and writes an atomic run summary beside it.
+Only a clean, complete run whose passive restore succeeded also creates the historical text view in
+`tmp/sweeps/`. A live range above 512 DIDs additionally requires `--confirm-expanded-scan`; selecting
+all 65,536 DIDs requires both `--full-range` and `--confirm-expanded-scan` and takes at least about
+9.1 hours at the default 2 requests/s.
+
+`routine_scan.py` has the same dry-run and parked-live gates. Its default plan covers `0200-03FF`
+plus `FF00-FF03`; choose tighter hexadecimal bounds while mapping a new ECU. It can only send
+requestRoutineResults (`31 03`) and cannot construct routine start/stop (`31 01`/`31 02`). Each
+completed result is fsync-checkpointed to
+`tmp/inventories/<module>/routines_<timestamp>.results.jsonl`; the companion atomic JSON report makes
+partial/error and passive-restoration state explicit. Live plans above 512 unique RIDs require
+`--confirm-expanded-scan`. The 512-ID default range plus four extra RIDs totals 516 requests, so a live
+default-plan run requires that confirmation; the tighter example below does not.
+
+```bash
+# Alternative bounded routine campaign:
+sudo systemctl stop tpms-logger
+./bringup.sh --tx
+python3 tools/routine_scan.py radar_acc 0200 020F \
+  --execute --confirm-parked --pair 6/14 \
+  --conditions "parked, ignition ON, engine OFF"
+sudo systemctl start tpms-logger
+```
+
+Both tools inherit the ECU's current session by default and send neither DiagnosticSessionControl
+nor TesterPresent. An explicit session is a separately gated state change: DID scans require
+`--session HEX --confirm-session-change`; routine scans additionally require
+`--confirm-no-active-routine`, because changing/re-entering a session can discard routine state.
+Session bytes are restricted to `01-7F` so the response-suppression bit cannot defeat positive-echo
+validation. Explicit-session scans require at least `--rate 0.5`; slower request spacing can exceed the
+two-second bounded TesterPresent cadence used to hold the selected session.
+Participating active diagnostic tools also take a nonblocking per-channel advisory lock under
+`tmp/locks/`, so two of them cannot transmit through the same SocketCAN channel concurrently. The
+participants are the guarded inventory/discovery tools, `uds_send.py`, `signal_correlate.py capture`,
+direct-bus `live_data` viewers, and `tpms_logger.py` while it is polling. Offline analysis, passive
+capture, and the TPMS logger's ignition-watch idle state do not take the lock. The lock is cooperative:
+stop any older/project-specific transmitter that has not adopted it before starting manual bus work.
 
 ## Adding another module / project
 
-1. Add a `Module(...)` entry to `lib/modules.py` (key, name, txid, rxid).
+1. Add a `Module(...)` entry to `lib/modules.py` (key, name, txid, rxid, plus explicit bitrate and
+   `addressing_mode="normal_11bits"` when the module is not on the default 500k/29-bit transport).
 2. The generic tools work immediately: `did_sweep.py <key>`, `routine_scan.py <key>`, `uds_send.py <key> …`.
-3. For a live view, copy `projects/radar/radar_acc_live.py`, swap the module key + `METRICS` table (it
-   imports the base viewer from `live_data/live_data.py`).
+3. For a live view, make a thin wrapper that defines the module key + `METRICS` table and calls
+   `live_data.live_data.run()`; keep radar-specific follow/CSV logic out of generic wrappers.
 4. Put target-specific scripts/docs/findings under `projects/<name>/`.
 
 ---
 
 ## Safety & liability
 
-**Read this before running anything that writes to the vehicle.**
+**Read this before running anything that transmits to the vehicle.**
 
-- **Almost everything here is read-only** (`22`, `19`, `31 03`) and safe to run.
-- **One tool performs actuation:** `projects/radar/radar_acc_align_0251.py` issues `31 01` (startRoutine)
-  to calibrate the ACC radar. It is gated (read-only dry run by default; `--arm` + a typed confirmation
-  required to fire) but it is still actuation on a **safety-critical forward-collision / ADAS sensor.** A
+- Most tools send **non-mutating diagnostic reads** (`22`, `19`, `31 03`), but they are active
+  transmissions: they can wake modules, change diagnostic-session state, and briefly power accessory
+  rails. They are not passive captures. Stop `tpms-logger`, confirm the physical bus/rate, and restore
+  listen-only mode after a manual campaign.
+- `tools/uds_send.py` accepts an arbitrary payload and therefore is only as safe as the supplied service.
+  It is dry-run by default and gates mutation/unknown services, but those gates do not make an arbitrary
+  request intrinsically safe.
+- **Dedicated radar actuation tools:** `projects/radar/radar_acc_sda_drive.py` and the older
+  `radar_acc_align_0251.py` issue `31 01` (startRoutine) to calibrate the ACC radar. The generic gated
+  `uds_send.py` can also transmit an explicitly authorized mutation/actuation payload. Radar calibration
+  is actuation on a **safety-critical forward-collision / ADAS sensor.** A
   mis-aimed or mis-calibrated radar can cause phantom braking or fail to detect an obstacle, at speed.
 
 **Conditions of use for the actuation tool (and any `31 01` you derive from it):**

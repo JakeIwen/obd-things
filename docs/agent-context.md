@@ -30,6 +30,13 @@ service, cron, network, and vehicle state before acting.
 - PCAN `listen-only` is sticky: a later ordinary interface bring-up does not clear it. Any intentional
   TX setup must explicitly use `listen-only off` and then restore the documented passive state. The
   adapter/driver does not support `berr-reporting on`; use received-frame and RX-error counters.
+- Safety-hardened inventory CLIs default to an offline dry run. Their live mode preflights service,
+  interface, bitrate, listen-only, BUS-OFF, and cleanup capability; records physical pair and vehicle
+  conditions; and restores passive mode afterward. Participating active tools serialize by SocketCAN
+  channel with the advisory lock in `tmp/locks/`. The guarded set includes inventory/discovery tools,
+  raw `uds_send.py`, signal-correlation capture, direct live-data viewers, and TPMS UDS polling; passive
+  and offline modes do not lock. This cooperative lock supplements, rather than replaces, service/
+  drive-capture preflight and manual campaign coordination with older project-specific transmitters.
 - Parked C-CAN diagnostic TX can wake the BCM, briefly power switched accessories, and boot the dashcam.
   The user approved low-frequency parked TX without a separate prompt, but it is still an observer and
   battery effect. Avoid gratuitous traffic. See `docs/bus-map.md` for verified wake behavior.

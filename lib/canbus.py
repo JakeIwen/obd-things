@@ -22,7 +22,13 @@ import struct
 import datetime
 import subprocess
 
+from lib import diagnostic_safety
+
 DEFAULT_CHANNEL = "can0"
+
+
+class PassiveRestoreError(RuntimeError):
+    """An interface-changing helper could not prove that it returned CAN to listen-only mode."""
 
 
 def ip_up(channel, bitrate, listen_only, restart_ms=None):
@@ -57,16 +63,63 @@ def iface_bitrate(channel=DEFAULT_CHANNEL):
     return int(m.group(1)) if m else None
 
 
+def controller_state(channel=DEFAULT_CHANNEL):
+    """Return SocketCAN controller state (for example ERROR-ACTIVE or BUS-OFF), if available."""
+    out = subprocess.run(
+        ["ip", "-details", "link", "show", channel], capture_output=True, text=True
+    ).stdout
+    match = re.search(r"can state ([A-Z-]+)", out)
+    return match.group(1) if match else None
+
+
 def rx_errors(channel=DEFAULT_CHANNEL):
     out = subprocess.run(["ip", "-details", "link", "show", channel], capture_output=True, text=True).stdout
     m = re.search(r"berr-counter\s+tx\s+\d+\s+rx\s+(\d+)", out)
     return int(m.group(1)) if m else 0
 
 
+def _passive_readback_matches(channel, bitrate):
+    """Return whether one fresh ``ip -details`` readback proves the requested passive state.
+
+    A successful configuration command is not sufficient: PCAN's listen-only setting is sticky,
+    and an interface can also be left down, at the wrong rate, or BUS-OFF.  Require an
+    administratively-UP link flag, the exact requested bitrate, an explicit LISTEN-ONLY CAN flag,
+    and a reported controller state other than BUS-OFF.  Missing or unparseable fields fail closed.
+    """
+    result = subprocess.run(
+        ["ip", "-details", "link", "show", channel], capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        return False
+    out = result.stdout
+
+    link_flags = re.search(r"^\s*\d+:\s+[^\n]*<([^>\n]*)>", out, re.MULTILINE)
+    if link_flags is None or "UP" not in link_flags.group(1).split(","):
+        return False
+
+    rate = re.search(r"\bbitrate\s+(\d+)\b", out)
+    if rate is None or int(rate.group(1)) != bitrate:
+        return False
+
+    option_groups = re.findall(r"<([^>\n]*)>", out)
+    if not any("LISTEN-ONLY" in group.split(",") for group in option_groups):
+        return False
+
+    state = re.search(r"\bcan(?:\s+<[^>\n]*>)?\s+state\s+([A-Z-]+)\b", out)
+    return state is not None and state.group(1) != "BUS-OFF"
+
+
 def bring_up_passive(channel, bitrate):
-    """Ensure `channel` is UP @bitrate, listen-only ON (passive, never TX/ACK). Returns True on success."""
+    """Configure and verify ``channel`` as passive at ``bitrate``.
+
+    Returns True only when the configuration command succeeds and a fresh readback confirms the
+    interface is UP at the exact bitrate, has listen-only ON, and is not BUS-OFF.  Any command,
+    readback, or parsing failure returns False.
+    """
     try:
-        return ip_up(channel, bitrate, listen_only=True)
+        if not ip_up(channel, bitrate, listen_only=True):
+            return False
+        return _passive_readback_matches(channel, bitrate)
     except Exception:
         return False
 
@@ -134,19 +187,71 @@ def identify_bus(channel=DEFAULT_CHANNEL, probe=2.0):
 def detect_bus(channel=DEFAULT_CHANNEL):
     """Auto-detect the connected bus: bring the iface up PASSIVE and probe at 500k (C-CAN) then 125k (B-CAN).
     Returns (bus, bitrate) with bus in 'c-can'/'b-can'/'silent'. 'silent' = both rates quiet (bus asleep);
-    leaves the iface @500k -- rouse it with wake()."""
-    for rate in (BITRATE_CCAN, BITRATE_BCAN):
-        if not bring_up_passive(channel, rate):
-            continue
-        bus = identify_bus(channel)
-        if bus in ("c-can", "b-can"):
-            return bus, rate
-    return "silent", BITRATE_CCAN
+    leaves the iface verified passive @500k -- rouse it with wake(). All bitrate changes and
+    probes are serialized under the active-diagnostics channel lock."""
+    with diagnostic_safety.interrupt_on_termination() as termination:
+        lock_handle = None
+        restore_default = False
+        try:
+            lock_handle = diagnostic_safety.acquire_channel_lock(channel)
+            # From this point onward an interrupted/failed probe may have changed the interface.
+            restore_default = True
+            for rate in (BITRATE_CCAN, BITRATE_BCAN):
+                if not bring_up_passive(channel, rate):
+                    continue
+                bus = identify_bus(channel)
+                if bus in ("c-can", "b-can"):
+                    restore_default = False
+                    return bus, rate
+
+            # The second probe leaves a quiet interface at 125k. Honor the documented silent-bus
+            # contract with a verified 500k passive restore before reporting the result.
+            _require_passive_restore(channel, BITRATE_CCAN)
+            restore_default = False
+            return "silent", BITRATE_CCAN
+        finally:
+            termination.begin_cleanup()
+            try:
+                if lock_handle is not None and restore_default:
+                    _require_passive_restore(channel, BITRATE_CCAN)
+            finally:
+                diagnostic_safety.release_channel_lock(lock_handle)
 
 
 def restore_passive(channel=DEFAULT_CHANNEL, bitrate=BITRATE_CCAN):
-    """Put the iface back to the safe passive default (listen-only ON) after an active wake."""
-    bring_up_passive(channel, bitrate)
+    """Restore the passive default and return True only after verified passive-state readback.
+
+    This has the same fail-closed contract as :func:`bring_up_passive`; callers can persist/report a
+    failed cleanup instead of treating successful command submission as proof of safe restoration.
+    """
+    return bring_up_passive(channel, bitrate)
+
+
+def _require_passive_restore(channel, bitrate):
+    """Restore passive mode or surface the cleanup failure to the interface-changing caller."""
+    if not restore_passive(channel, bitrate):
+        raise PassiveRestoreError(
+            f"could not verify {channel} passive at {bitrate} bit/s after CAN interface use"
+        )
+
+
+def _require_coordinated_passive_restore(channel, bitrate):
+    """Take the channel lock and complete a termination-safe verified passive restore."""
+    with diagnostic_safety.interrupt_on_termination() as termination:
+        lock_handle = None
+        restored = False
+        try:
+            lock_handle = diagnostic_safety.acquire_channel_lock(channel)
+            termination.begin_cleanup()
+            _require_passive_restore(channel, bitrate)
+            restored = True
+        finally:
+            termination.begin_cleanup()
+            try:
+                if lock_handle is not None and not restored:
+                    _require_passive_restore(channel, bitrate)
+            finally:
+                diagnostic_safety.release_channel_lock(lock_handle)
 
 
 # --- waking a sleeping bus (ACTIVE -- callers gate these behind a bus check) ---
@@ -158,53 +263,115 @@ RFH_WAKE_DID = 0xF190       # benign identification read; any response = module 
 
 def tx_wake_burst(channel=DEFAULT_CHANNEL, bitrate=BITRATE_BCAN):
     """ACTIVE: arm the iface and TX a brief benign 0x7FF burst to wake a sleeping bus via wake-on-activity.
-    Verified on B-CAN (~1.5s burst -> ~10s awake). Leaves the iface ARMED for an immediate read; the caller
-    must restore_passive(). Returns True if it armed and sent. (Does NOT wake C-CAN -- selective wake there;
-    use poke_wake for C-CAN.)"""
-    try:
-        if not ip_up(channel, bitrate, listen_only=False, restart_ms=100):
-            return False
-    except Exception:
-        return False
-    if is_listen_only(channel):            # sticky-flag guard: must be cleared or we can't TX
-        return False
-    try:
-        s = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
-        s.bind((channel,))
-        frame = struct.pack("=IB3x8s", WAKE_ID, 0, b"")   # id=0x7FF, dlc=0
-        for _ in range(WAKE_N):
+    Verified on the legacy observed 125-kbit/s body capture. The helper owns the per-channel
+    diagnostic lock and restores verified listen-only mode before returning. It returns True only
+    if at least one frame was accepted by the local CAN socket. (Does NOT wake C-CAN -- selective
+    wake there; use poke_wake for C-CAN.) A cleanup failure raises PassiveRestoreError."""
+    with diagnostic_safety.interrupt_on_termination() as termination:
+        lock_handle = None
+        sock = None
+        sent = 0
+        mutation_started = False
+        try:
+            lock_handle = diagnostic_safety.acquire_channel_lock(channel)
+            # ``ip_up`` runs multiple commands; assume the interface may need cleanup as soon as
+            # the call starts, even if it raises or returns False partway through.
+            mutation_started = True
             try:
-                s.send(frame)
+                armed = ip_up(channel, bitrate, listen_only=False, restart_ms=100)
+            except Exception:
+                armed = False
+            if not armed or is_listen_only(channel):
+                return False
+            try:
+                sock = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
+                sock.bind((channel,))
+                frame = struct.pack("=IB3x8s", WAKE_ID, 0, b"")  # id=0x7FF, dlc=0
+                for _ in range(WAKE_N):
+                    try:
+                        sock.send(frame)
+                        sent += 1
+                    except OSError:
+                        # An unACKed sleeping bus can temporarily reject a send while restart-ms
+                        # recovers the controller. Continue the bounded burst, but never report
+                        # success if every send failed.
+                        pass
+                    time.sleep(WAKE_GAP)
             except OSError:
-                pass        # unACKed on a still-sleeping bus -> restart-ms recovers; keep poking
-            time.sleep(WAKE_GAP)
-        s.close()
-        return True
-    except OSError:
-        return False
+                return False
+            return sent > 0
+        finally:
+            termination.begin_cleanup()
+            try:
+                if sock is not None:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+            finally:
+                try:
+                    if lock_handle is not None and mutation_started:
+                        _require_passive_restore(channel, bitrate)
+                finally:
+                    diagnostic_safety.release_channel_lock(lock_handle)
 
 
 def poke_wake(channel=DEFAULT_CHANNEL, bitrate=BITRATE_CCAN, module_key=RFH_MODULE, did=RFH_WAKE_DID):
     """ACTIVE: wake a bus by sending ONE addressed UDS read to an always-awake module (default rf_hub on
     C-CAN). The diag exchange trips the gateway's network-management wake -> full broadcast for ~15s.
-    SELF-VALIDATING: returns True iff the module answered (= we're on that module's bus, and it's waking).
-    Leaves the iface ARMED; caller must restore_passive(). SIDE EFFECT on this van: also wakes the BCM ->
-    accessory rails briefly power up (dashcam). Lazy-imports isotp so this module stays stdlib-only unless a
-    poke is actually requested."""
+    SELF-VALIDATING: returns True iff the module answered with the requested DID echo or a valid
+    negative response for service 22 (= an ECU at the physical address completed the exchange).
+    The helper owns the per-channel diagnostic lock and restores verified listen-only mode before
+    returning. SIDE EFFECT on this van: also wakes the BCM -> accessory rails briefly power up
+    (dashcam). A cleanup failure raises PassiveRestoreError. Lazy-imports isotp so this module stays
+    stdlib-only unless a poke is actually requested."""
     from lib import uds                    # lazy: only poke_wake needs isotp
     from lib.modules import get
     m = get(module_key)
-    if not ip_up(channel, bitrate, listen_only=False, restart_ms=100):
-        return False
-    if is_listen_only(channel):
-        return False
-    try:
-        s = uds.open_socket(m.txid, m.rxid, channel, timeout=1.0)
-        resp, _ = uds.request(s, [0x22, did >> 8, did & 0xFF], timeout=1.5, retries=1)
-        s.close()
-    except OSError:
-        return False
-    return resp is not None                # any response (even a 7F negative) = exchange happened = wake
+    payload = bytes((0x22, did >> 8, did & 0xFF))
+    with diagnostic_safety.interrupt_on_termination() as termination:
+        lock_handle = None
+        sock = None
+        mutation_started = False
+        try:
+            lock_handle = diagnostic_safety.acquire_channel_lock(channel)
+            mutation_started = True
+            try:
+                armed = ip_up(channel, bitrate, listen_only=False, restart_ms=100)
+            except Exception:
+                armed = False
+            if not armed or is_listen_only(channel):
+                return False
+            try:
+                sock = uds.open_module_socket(m, channel=channel, timeout=1.0)
+                uds.drain(sock)
+                resp, _ = uds.request(sock, payload, timeout=1.5, retries=0)
+            except OSError:
+                return False
+            if resp is None:
+                return False
+            response = bytes(resp)
+            return (
+                len(response) >= 3
+                and (
+                    response[:3] == bytes((0x62, did >> 8, did & 0xFF))
+                    or response[:2] == bytes.fromhex("7F 22")
+                )
+            )
+        finally:
+            termination.begin_cleanup()
+            try:
+                if sock is not None:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+            finally:
+                try:
+                    if lock_handle is not None and mutation_started:
+                        _require_passive_restore(channel, bitrate)
+                finally:
+                    diagnostic_safety.release_channel_lock(lock_handle)
 
 
 def wake(channel=DEFAULT_CHANNEL):
@@ -221,12 +388,10 @@ def wake(channel=DEFAULT_CHANNEL):
     # silent: rouse-and-identify. C-CAN poke first (self-validating), then B-CAN burst.
     if poke_wake(channel, BITRATE_CCAN):
         awake = identify_bus(channel) == "c-can"
-        restore_passive(channel, BITRATE_CCAN)
         return "c-can", awake
     if tx_wake_burst(channel, BITRATE_BCAN):
         awake = identify_bus(channel) == "b-can"
-        restore_passive(channel, BITRATE_BCAN)
         if awake:
             return "b-can", True
-    restore_passive(channel, BITRATE_CCAN)
+    _require_coordinated_passive_restore(channel, BITRATE_CCAN)
     return None, False

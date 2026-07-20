@@ -1,0 +1,30 @@
+web_search = "live"
+
+[mcp_servers.ddgs]
+command = "/home/pi/dev/obd-things/tmp/venvs/obd-research/bin/ddgs"
+args = ["mcp"]
+enabled = true
+startup_timeout_sec = 30
+tool_timeout_sec = 120
+default_tools_approval_mode = "auto"
+
+[mcp_servers.playwright]
+command = "npx"
+args = [
+  "-y",
+  "@playwright/mcp@0.0.78",
+  "--headless",
+  "--isolated",
+  "--executable-path",
+  "/usr/bin/chromium",
+  "--output-dir",
+  "/home/pi/dev/obd-things/tmp/playwright",
+]
+enabled = true
+startup_timeout_sec = 30
+tool_timeout_sec = 120
+default_tools_approval_mode = "writes"
+
+[mcp_servers.playwright.env]
+PLAYWRIGHT_BROWSERS_PATH = "/home/pi/dev/obd-things/tmp/playwright/browsers"
+XDG_CACHE_HOME = "/home/pi/dev/obd-things/tmp/cache"

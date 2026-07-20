@@ -1,8 +1,8 @@
 # Promaster bus map — master reference
 
-2022 Ram Promaster (VIN 3C6LRVDG4NE######). Everything below was **verified on the vehicle**;
-each row cites how. This is the single place to learn what's already mapped on each bus before
-starting new reverse-engineering.
+2022 Ram Promaster (VIN 3C6LRVDG4NE######). Verified facts, explicit candidates, and remaining
+unknowns are labeled with their confidence/provenance below. This is the single place to learn
+what is already mapped on each bus before starting new reverse-engineering.
 
 > **Maintenance rule:** when you verify a new broadcast frame, decode, or wake behavior, add it
 > here **in the same change** — with its provenance (which capture/finding proved it) and a
@@ -21,9 +21,35 @@ Provenance shorthand: capture logs live under `tmp/captures/` (bus-state referen
 | bus | rate | where | access | notes |
 |---|---|---|---|---|
 | **C-CAN / HS-CAN** | 500 kbit/s | OBD pins **6/14** | PCAN via **SGW bypass** (ECRI tap on internal C-CAN) | powertrain + diagnostics. `bringup.sh` default. The bypass is why our UDS reaches gated modules at all; legislated OBD-II Mode 01 PIDs do NOT route through it. |
-| **B-CAN (body)** | 125 kbit/s | separate physical bus (low-speed adapter wiring), **not** pins 6/14 | second PCAN; `bringup.sh --bcan` | comfort/body (locks, lights, interior). AlfaOBD's UDS rides C-CAN, not this bus — body bus shows *effects* only. |
+| **CAN CH / second high-speed CAN** | **unverified live**; **500 kbit/s is the leading candidate** | DLC pins **12/13** (OEM: CAN CH +/−) | PCAN requires repinning; passive survey pending | OEM topology includes BCM, SGW, ORC, park assist, EPS, ABS, and forward camera. AlfaOBD's current hardware guide explicitly calls pins 12/13 the second high-speed CAN bus on 2022+ ProMaster. That establishes the bus class, not the exact bitrate or addressing on this van. |
+| **CAN IHS / middle-speed CAN** | **unverified live**; **50 kbit/s is the leading candidate** | DLC pins **3/11** (OEM: CAN IHS +/−) | PCAN requires repinning; passive survey pending | OEM topology includes BCM, SGW, radio/telematics, cluster, HVAC, center stack, blind-spot sensors, trailer module, and CVPM. AlfaOBD's PowerNet/CUSW hardware guide places the middle-speed bus on pins 3/11 and includes 2022+ ProMaster (excluding pre-2022 ProMaster). An exact-vehicle OEM overview declares its lower-speed CAN-B at 50 kbit/s, and a 2020 Jumper cabin-bus implementation independently uses 50 kbit/s; live measurement must still tie the IHS/B/BH naming and rate to this pair. |
+| **B-CAN (observed body capture; legacy project label)** | 125 kbit/s | separate low-speed adapter wiring, **not** pins 6/14; exact CAN CH-vs-IHS correspondence not yet proven | `bringup.sh --bcan` | comfort/body effects (locks, lights, interior) were live-observed at 125 kbit/s. This conflicts with the exact-vehicle OEM overview's `CAN-B (50K)` label, so the old capture's physical branch/name is unresolved rather than evidence against the OEM rate. AlfaOBD's UDS rides C-CAN, not this capture. |
 
-Both come up **passive (listen-only)** by default; `bringup.sh --tx` arms transmission (UDS needs it).
+The currently configured C-CAN/B-CAN modes come up **passive (listen-only)** by default;
+`bringup.sh --tx` arms transmission (UDS needs it).
+
+The DLC pin names above come from local OEM diagram `2022_VF_EN_18-000-000`, revision 2064:
+`/home/pi/dev/ram_2022_GAS/diagrams/systems/data_link_connector.html`. That source establishes
+physical topology, not bitrate. Its companion CAN C/CH/IHS topology diagrams identify attached
+modules, but CH and IHS still require passive rate/signature surveys on this van.
+
+[AlfaOBD's current hardware guide](https://alfaobd.com/) independently identifies pins 12/13 as
+the second high-speed CAN bus for 2022+ ProMaster and describes the supported PowerNet/CUSW layout
+as high-speed CAN on 6/14 plus middle-speed CAN on 3/11. Its
+[vehicle table](https://www.alfaobd.com/supported_cars.html) specifically assigns the grey
+second-high-speed adapter to `RAM PRO MASTER (VF) 2022+`, rather than the yellow adapter used by
+pre-2022 VF. This is strong diagnostic-tool-vendor provenance for bus class and adapter routing,
+but it is not a live bitrate measurement or an OEM address map. Survey 12/13 at 500 kbit/s first
+and 3/11 at 50 kbit/s first, always listen-only.
+
+The exact-vehicle OEM `COMMUNICATION / CAN BUS DESCRIPTION` at
+`/home/pi/dev/ram_2022_GAS/data_pages/article/63088/guid/na-cr22vf-GUID-4C3C4E91-36D8-4B2A-A666-DF07A5921AF8_html.html`
+explicitly calls CAN-C **500K** and CAN-B **50K**. Its layout uses additional branch labels
+(`C-1` through `C-8` and `BH`) while the DLC diagram says CAN C/CH/IHS, so it does not by itself
+prove which DLC auxiliary pair carries the 50-kbit/s branch. Treat 50 kbit/s as the first IHS
+survey candidate and preserve the independently observed 125-kbit/s legacy capture until repinning
+ties each trace to pins 3/11 or 12/13. Public related-platform candidates and exact IDs to search are
+recorded in [`2026-07-19_related_platform_bus_leads.md`](../projects/ecu_mapping/findings/promaster_2022/2026-07-19_related_platform_bus_leads.md).
 
 ---
 
@@ -36,16 +62,19 @@ registry can't hold; keep the addresses in sync with `lib/modules.py`.
 |---|---|---|---|---|
 | `radar_acc` | Bosch ACC radar (DASM / MRR1evo) | C-CAN | `18DA2AF1` → `18DAF12A` | ACKs our frames even with ignition cut mid-sweep. Speed only via DID `0x1002` (no OBD PIDs behind SGW). |
 | `rf_hub` | RF Hub (Continental) — TPMS/RKE | C-CAN | `18DAC7F1` → `18DAF1C7` | **Answers with ignition OFF** (battery-powered RKE receiver). |
-| *(not yet added)* | Body Control Module (BCM) | — | C-CAN `18DA40F1` → `18DAF140` for ignition-by-diag routine; **also 11-bit UDS on B-CAN** (diag IDs `7C0 7B8 760 762 764 768 75C` seen) | actuation is **power-mode gated** (LOCK/ignition routines return `7F..22 conditionsNotCorrect` key-off). See [bcan wake notes](#b-can-broadcast-frames). Adding needs an 11-bit Module variant. **AlfaOBD 2022 ProMaster log** (`projects/ecu_mapping`) confirms 0x40 answers UDS and ran **`2F` IO-control actuations that succeeded** (`2F 5115/5118/5120/5040/5041/5050`, `ctrl=03`→`6F..03`) + `2E 2023` PROXI writes — leads for remote-unlock; verify on our tap before replaying. |
+| `tcm` | ZF 948TE transmission controller | C-CAN | `18DA18F1` → `18DAF118` | Live identity on 2026-07-19: `F187=46342086`, `F194/F132=68532161AF`, `F192=ES11-1065 D`. |
+| `shifter` | SILATECH electronic shifter | C-CAN | `18DA1FF1` → `18DAF11F` | Live identity on 2026-07-19: `F187=P7FK46LXHAD`, `F188/F194=AGSM637FCA`. |
+| `bcm_ccan` | Body Control Module, C-CAN endpoint | C-CAN | `18DA40F1` → `18DAF140` | Live identity on 2026-07-19: `F187=68524831AF`, `F192=BC637M.0001`; actuation remains power-mode gated. |
+| `cluster` | Marelli Instrument Panel Cluster (IPC) | C-CAN | `18DA60F1` → `18DAF160` | Live identity on 2026-07-19: `F187=68517084AD`, `F192=50019990002`. FCA's [NHTSA Part 573 filing](https://downloads.regulations.gov/NHTSA-2023-0046-0001/attachment_1.pdf) identifies `68517084AD` as the Marelli IPC. |
+| `telematics` | Global Telematics Box Module (TBM2) | C-CAN | `18DAC6F1` → `18DAF1C6` | Live identity on 2026-07-19: `F132=68510377AC`, `F192=TBM200A11P`. The TBM string, exact-part [Mopar catalog supersession](https://www.moparpartsgiant.com/parts/mopar-module-telematics~68647858aa.html), and exact-vehicle local OEM TBM2 procedure make the role high-confidence. |
+| *(not registered)* | BCM 11-bit body-bus endpoint | legacy observed B-CAN label | exact TX/RX pairing unverified; IDs `7C0 7B8 760 762 764 768 75C` were seen | Do not infer a `+8` pair. The verified C-CAN endpoint is `bcm_ccan`; add a separate 11-bit module only after a physical-pair survey and explicit pairing evidence. |
 
-> **AlfaOBD-observed modules (provenance: `projects/ecu_mapping` 2022 ProMaster debug log, VIN
-> `…######` — strong evidence, but NOT yet independently driven from our tap, so not in
-> `lib/modules.py`).** Physical UDS addresses `18DAxxF1`/`18DAF1xx` seen answering on 2022 ProMaster:
-> **0x10** engine PCM (profile "Tigershark/Pentastar MY21"), **0x18** transmission
-> (reports "ZF 948TE 9-speed"), **0x1F** electronic shifter, **0x40** BCM (above),
-> **0x2A** radar, **0xC7** RF Hub. Per-module DID inventories + reassembled command sequences:
-> `projects/ecu_mapping/findings/`. Promote any row into this table + `lib/modules.py` only
-> after our own tap confirms it.
+> **AlfaOBD-only endpoint still unresolved on our tap:** `0x10` engine PCM (profile
+> "Tigershark/Pentastar MY21"). The 2026-07-19 default-session `22 F187` and `1A 87` probes
+> timed out; that is not proof of absence because the AlfaOBD trace suggests session `10 92`
+> precedes legacy identity. The other AlfaOBD-observed physical endpoints (`0x18`, `0x1F`,
+> `0x2A`, `0x40`, and `0xC7`) are now independently live-verified and registered. See
+> [`2026-07-19_live_ecu_discovery.md`](../projects/ecu_mapping/findings/promaster_2022/2026-07-19_live_ecu_discovery.md).
 
 ---
 
@@ -56,7 +85,10 @@ registry can't hold; keep the addresses in sync with `lib/modules.py`.
 | `0x2EF` | bytes[0:1] LE u16 | `/ ~400` | **system voltage (fine)** — same ÷~400 family as B-CAN 0x46C; engine/ignition ratio 1.17 (alternator) | **ignition ON / running only** | field confirmed; **divisor not pinned** (needs one ground-truth cal via `ccan_voltage.py --calibrate`) |
 | `0x2EF` | presence | — | **ignition-on gate** — its presence = key-on; tpms-logger uses it as the drive/park gate | ignition ON | verified (frame-count gates failed; presence gate works) |
 | `0x41A` | byte0 | `/ ~14.2` | **system voltage (coarse)** — C-CAN analogue of 0x46C, readable in a parked *wake* (~12.5 V resting) | any awake C-CAN incl. parked wake | field confirmed; divisor coarse/approx |
-| `0x101` | — | — | odometer/speed broadcast (cross-ref for the radar's 0x1002 speed DID) | driving | referenced in radar hunt work |
+| `0x101` | `((b0 & 1) << 11) \| (b1 << 3) \| (b2 >> 5)` | **scale unresolved:** leading candidates `/16` or `/32` km/h | **instantaneous vehicle speed**, not an odometer accumulator. It ramps reversibly, is flat at zero when stopped, crosses 2047→2048 continuously, and tracks `0x0EE` at ≈8:1. A known-speed reference is still required before choosing the scale. | ignition ON; moving value while driving | **field/meaning high confidence; scale unverified**, 2026-07-19 drive captures; [analysis](../projects/ecu_mapping/findings/promaster_2022/2026-07-19_ccan_drive_signal_analysis.md) |
+| `0x101` | `((b2 & 3) << 6) \| (b3 >> 2)` | raw | braking/deceleration-like field; correlated with braking magnitude and near zero at steady speed. Not yet ground-truthed. | driving | candidate, same 2026-07-19 analysis |
+| `0x101` | byte6 low nibble; byte7 | counter `0..15`; CRC-8/SAE-J1850 over bytes0–6 | rolling frame counter and checksum. CRC matched every one of 224,137 continuation frames. | ignition ON | verified in the 2026-07-19 continuation capture |
+| `0x0EE` | bytes[0:2] BE u16 | ≈`8 × 0x101_speed_raw`; paired scale candidates `/128` or `/256` km/h | independent higher-resolution vehicle-speed field corroborating `0x101`; Pearson `r=0.9999919` while moving. Absolute scale remains tied to the same ground-truth question. | ignition ON / driving | field relationship high confidence; scale unverified, [analysis](../projects/ecu_mapping/findings/promaster_2022/2026-07-19_ccan_drive_signal_analysis.md) |
 | signature set | — | — | C-CAN identity guard: `0x100 101 103 104 10F 110 116 0EA 0EE 0FA 0FE` (+ `2EF 41A`) | high-rate, ignition-on & in parked wakes | used by `classify_bus()` |
 
 ---
@@ -95,5 +127,9 @@ unrelated. Each module keeps its own canonical map next to its analysis:
 - **radar_acc** → [`projects/radar/findings/did_map.md`](../projects/radar/findings/did_map.md) — canonical 56-DID map (sessions, security, routines, DTCs, angle scaling). Full sweep: `projects/radar/findings/radar_acc_did_sweep.txt`.
 - **rf_hub** → [`projects/tpms/README.md`](../projects/tpms/README.md) — TPMS/RKE DID map inline (pressure `31D0-31D3`, sensor-ID `31CB-31CE`, snapshot/extended-data DIDs, the verified wheel↔slot table). Full sweep: `projects/tpms/findings/rf_hub_did_sweep.txt`.
 
-To sweep a new/unmapped module: `python3 tools/did_sweep.py <key>` → `tmp/sweeps/`, then promote
-the analysis into that project's `findings/` and add a pointer row here.
+To plan a new module inventory without touching CAN, run
+`python3 tools/did_sweep.py <key> START END` (dry-run is the default). A parked live run requires
+the explicit `--execute --confirm-parked --pair ... --conditions ...` gates described in the root
+README. Checkpointed JSONL plus an atomic summary land under `tmp/inventories/<key>/`; a clean,
+complete run also produces a compatibility text view under `tmp/sweeps/`. Promote selected evidence
+and its per-ECU analysis into that project's `findings/`, then add a pointer row here.

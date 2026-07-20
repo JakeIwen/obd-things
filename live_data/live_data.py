@@ -1,8 +1,12 @@
 """Base live-data viewer: a `top`-style display driven by a module's address + a metric table.
 
 Per-module scripts (e.g. radar_acc.py) define a list of Metric(...) and call run(). This file is
-generic - it knows nothing about any particular ECU. Reads only (ReadDataByIdentifier), safe.
+generic - it knows nothing about any particular ECU. Direct mode is active diagnostic traffic,
+dry-run by default, and bounded by explicit time/rate/request limits. It enters an extended
+session and sends TesterPresent plus ReadDataByIdentifier requests only after parked safety gates.
 """
+import argparse
+import math
 import os
 import sys
 import time
@@ -11,8 +15,9 @@ import shutil
 from collections import namedtuple
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from lib import uds
+from lib import canbus, diagnostic_safety, uds
 from lib.uds import s16, s32, u8        # re-export so metric tables can `from ... import s16,...`
+from tools.ecu_discover import preflight
 
 # A displayed row: which DID to read, friendly name, fn(data)->number, scale, unit string.
 # unit beginning with "deg" gets the spec-window colour cue; others (V, C, ...) are neutral.
@@ -26,6 +31,11 @@ BOLD, DIM, RST = "\033[1m", "\033[2m", "\033[0m"
 RED, YEL, GRN, CYA = "\033[31m", "\033[33m", "\033[32m", "\033[36m"
 
 W_DID, W_NAME, W_VAL, W_UNIT = 4, 26, 8, 5
+MAX_RUN_SECONDS = 600.0
+MAX_REQUEST_RATE = 10.0
+MIN_REQUEST_RATE = 0.5
+MAX_REQUESTS = 5000
+TESTER_PRESENT_INTERVAL_S = 2.0
 
 
 def reading_cell(val, unit, spec_deg):
@@ -39,35 +49,57 @@ def reading_cell(val, unit, spec_deg):
     return color + s + RST
 
 
+class LinkError(RuntimeError):
+    """The bounded direct diagnostic link cannot continue without unsafe recovery."""
+
+
 class Link:
-    """Owns the socket + diagnostic session for one module; reconnects on USB/bus errors."""
-    def __init__(self, module):
+    """Own one bounded socket/session without reconfiguring or re-arming the CAN interface."""
+    def __init__(self, module, request_rate=5.0, max_requests=1000, timeout=0.75):
         self.m = module
         self.sock = None
         self.connected = False
         self.last_tp = 0.0
+        self.last_send = None
+        self.request_rate = request_rate
+        self.max_requests = max_requests
+        self.timeout = timeout
+        self.request_attempts = 0
+
+    def _request(self, payload, timeout=None):
+        if self.sock is None:
+            raise LinkError("diagnostic socket is not open")
+        if self.request_attempts >= self.max_requests:
+            raise LinkError("bounded live-view request budget exhausted")
+        now = time.monotonic()
+        interval = 1.0 / self.request_rate
+        if self.last_send is not None:
+            time.sleep(max(0.0, interval - (now - self.last_send)))
+        uds.drain(self.sock)
+        self.last_send = time.monotonic()
+        self.request_attempts += 1
+        return uds.request(
+            self.sock,
+            bytes(payload),
+            timeout=timeout or self.timeout,
+            retries=0,
+            response_pending_timeout=max(5.0, self.timeout * 5.0),
+            max_pending_responses=32,
+        )
 
     def ensure(self):
         if self.sock is not None:
             return True
         try:
-            self.sock = uds.open_socket(self.m.txid, self.m.rxid, self.m.channel, timeout=0.5)
-        except OSError:
-            if not uds.bring_up_can(self.m.channel):
-                return False
-            try:
-                self.sock = uds.open_socket(self.m.txid, self.m.rxid, self.m.channel, 0.5)
-            except OSError:
-                self.sock = None
-                return False
-        try:
-            uds.request(self.sock, [0x10, 0x03], timeout=1.0)   # extended session
-        except OSError:
-            # interface down / bus gone - try to bring it up, retry next cycle (shows NO DATA)
-            uds.bring_up_can(self.m.channel)
+            self.sock = uds.open_module_socket(self.m, timeout=self.timeout)
+            response, _ = self._request(bytes.fromhex("10 03"), timeout=max(1.0, self.timeout))
+            if response is None or bytes(response)[:2] != bytes.fromhex("50 03"):
+                detail = uds.hx(response) if response else "timeout"
+                raise LinkError(f"extended session lacked exact 50 03 echo ({detail})")
+        except Exception:
             self.drop()
-            return False
-        self.last_tp = time.time()
+            raise
+        self.last_tp = time.monotonic()
         return True
 
     def drop(self):
@@ -82,32 +114,28 @@ class Link:
     def read_did(self, did):
         """Return data bytes (after 62 + 2-byte echo) or None. Validates the echoed DID so a late
         reply never lands on the wrong row."""
-        if not self.ensure():
-            return None
+        self.ensure()
         hi, lo = (did >> 8) & 0xFF, did & 0xFF
         try:
-            uds.drain(self.sock)
-            if time.time() - self.last_tp > 2.0:
-                uds.request(self.sock, [0x3E, 0x00], timeout=0.3)   # TesterPresent
-                self.last_tp = time.time()
-            self.sock.send(bytes([0x22, hi, lo]))
-            deadline = time.time() + 0.6
-            while time.time() < deadline:
-                try:
-                    r = self.sock.recv()
-                except Exception:
-                    break
-                if not r:
-                    break
-                if r[0] == 0x7F and len(r) >= 3 and r[2] == 0x78:
-                    deadline = time.time() + 0.6
-                    continue
-                if r[0] == 0x62 and len(r) >= 3 and r[1] == hi and r[2] == lo:
-                    self.connected = True
-                    return bytes(r[3:])
-        except OSError:
+            if time.monotonic() - self.last_tp >= TESTER_PRESENT_INTERVAL_S:
+                response, _ = self._request(bytes.fromhex("3E 00"), timeout=min(0.5, self.timeout))
+                if response is None or bytes(response)[:2] != bytes.fromhex("7E 00"):
+                    detail = uds.hx(response) if response else "timeout"
+                    raise LinkError(f"TesterPresent lacked exact 7E 00 echo ({detail})")
+                self.last_tp = time.monotonic()
+            response, _ = self._request(bytes((0x22, hi, lo)))
+            if response is None:
+                raise LinkError(f"DID {did:04X} timed out; aborting instead of replaying/re-arming")
+            response = bytes(response)
+            if len(response) >= 3 and response[:3] == bytes((0x62, hi, lo)):
+                self.connected = True
+                return response[3:]
+            if len(response) >= 3 and response[:2] == bytes.fromhex("7F 22"):
+                return None
+            raise LinkError(f"DID {did:04X} response lacked exact 62 {did:04X} echo")
+        except Exception:
             self.drop()
-        return None
+            raise
 
 
 def render(link, metrics, title, spec_deg, interval, tick):
@@ -125,7 +153,10 @@ def render(link, metrics, title, spec_deg, interval, tick):
 
     lines = []
     lines.append(f"{BOLD}{CYA}{title}{RST}  {link.m.name}  TX {link.m.txid:08X} / RX {link.m.rxid:08X}")
-    lines.append(f"{ts}  refresh {1.0/interval:.1f} Hz  cycle {tick}  status {status}")
+    lines.append(
+        f"{ts}  target cycle {1.0/interval:.1f} Hz  request cap {link.request_rate:g}/s  "
+        f"cycle {tick}  status {status}"
+    )
     lines.append("")
     lines.append(f"{BOLD}{'DID':<{W_DID}}  {'Name':<{W_NAME}} {'Reading':>{W_VAL}} "
                  f"{'Units':<{W_UNIT}} {'Raw bytes'}{RST}")
@@ -153,29 +184,136 @@ def render(link, metrics, title, spec_deg, interval, tick):
     sys.stdout.flush()
 
 
-def run(module, metrics, title=None, spec_deg=1.0, refresh_hz=5.0):
-    """Drive the live view. Optional CLI arg overrides the refresh interval (seconds)."""
-    interval = 1.0 / refresh_hz
-    if len(sys.argv) > 1:
-        try:
-            interval = float(sys.argv[1])
-        except ValueError:
-            sys.exit(f"usage: {sys.argv[0]} [refresh_seconds]")
+def _run_parser():
+    p = argparse.ArgumentParser(
+        description="Bounded direct UDS live-data view (dry-run by default)."
+    )
+    p.add_argument(
+        "refresh_seconds",
+        nargs="?",
+        type=float,
+        help="legacy display refresh interval override",
+    )
+    p.add_argument("--seconds", type=float, default=60.0, help="bounded live duration")
+    p.add_argument("--rate", type=float, default=5.0, help="maximum total UDS requests/s")
+    p.add_argument("--max-requests", type=int, default=1000)
+    p.add_argument("--timeout", type=float, default=0.75)
+    p.add_argument("--session", default="03", choices=("03",), help="fixed reviewed session")
+    p.add_argument("--execute", action="store_true")
+    p.add_argument("--confirm-parked", action="store_true")
+    p.add_argument("--confirm-engine-off", action="store_true")
+    p.add_argument("--confirm-session-change", action="store_true")
+    p.add_argument("--confirm-no-active-routine", action="store_true")
+    p.add_argument("--pair")
+    p.add_argument("--conditions")
+    return p
+
+
+def run(module, metrics, title=None, spec_deg=1.0, refresh_hz=5.0, argv=None):
+    """Plan or drive a bounded live view; direct CAN access is never implicit."""
+    args = _run_parser().parse_args(sys.argv[1:] if argv is None else argv)
+    interval = args.refresh_seconds if args.refresh_seconds is not None else 1.0 / refresh_hz
+    if not math.isfinite(interval) or interval <= 0:
+        raise SystemExit("refresh_seconds must be a positive finite number")
+    if not math.isfinite(args.seconds) or not 0 < args.seconds <= MAX_RUN_SECONDS:
+        raise SystemExit(f"--seconds must be >0 and <= {MAX_RUN_SECONDS:g}")
+    if not math.isfinite(args.rate) or not MIN_REQUEST_RATE <= args.rate <= MAX_REQUEST_RATE:
+        raise SystemExit(
+            f"--rate must be between {MIN_REQUEST_RATE:g} and {MAX_REQUEST_RATE:g} requests/s"
+        )
+    if not isinstance(args.max_requests, int) or not 2 <= args.max_requests <= MAX_REQUESTS:
+        raise SystemExit(f"--max-requests must be between 2 and {MAX_REQUESTS}")
+    if not math.isfinite(args.timeout) or not 0 < args.timeout <= 5.0:
+        raise SystemExit("--timeout must be finite, >0, and <=5 seconds")
+
     title = title or module.name
-    link = Link(module)
-    tick = 0
-    sys.stdout.write(ALT_ON + CUR_OFF)
+    unique_dids = tuple(dict.fromkeys(metric.did for metric in metrics))
+    print(f"ACTIVE LIVE-DATA PLAN: {module.key} ({module.name})")
+    print(
+        f"session=10 03; DIDs={' '.join(f'{did:04X}' for did in unique_dids) or '(none)'}; "
+        f"duration<={args.seconds:g}s; rate<={args.rate:g}/s; requests<={args.max_requests}"
+    )
+    if not args.execute:
+        print("DRY RUN: no preflight, lock, CAN socket, interface change, or transmission occurred.")
+        return 0
+    if (
+        not args.confirm_parked
+        or not args.confirm_engine_off
+        or not args.confirm_session_change
+        or not args.confirm_no_active_routine
+        or not args.pair
+        or not args.conditions
+    ):
+        raise SystemExit(
+            "--execute requires --confirm-parked, --confirm-engine-off, "
+            "--confirm-session-change, --confirm-no-active-routine, --pair, and --conditions"
+        )
+
+    errors = preflight(module.channel, module.bitrate)
+    if errors:
+        raise SystemExit("live-data preflight failed: " + "; ".join(errors))
     try:
-        while True:
-            tick += 1
-            t0 = time.time()
-            render(link, metrics, title, spec_deg, interval, tick)
-            dt = time.time() - t0
-            if dt < interval:
-                time.sleep(interval - dt)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        link.drop()
-        sys.stdout.write(CUR_ON + ALT_OFF)
-        sys.stdout.flush()
+        lock = diagnostic_safety.acquire_channel_lock(module.channel)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise SystemExit(f"refusing to start live diagnostics: {exc}") from None
+
+    link = None
+    fatal_error = None
+    interrupted = False
+    restored_passive = False
+    terminal_active = False
+    with diagnostic_safety.interrupt_on_termination() as termination:
+        try:
+            link = Link(
+                module,
+                request_rate=args.rate,
+                max_requests=args.max_requests,
+                timeout=args.timeout,
+            )
+            tick = 0
+            deadline = time.monotonic() + args.seconds
+            sys.stdout.write(ALT_ON + CUR_OFF)
+            terminal_active = True
+            while time.monotonic() < deadline and link.request_attempts < args.max_requests:
+                tick += 1
+                started = time.monotonic()
+                render(link, metrics, title, spec_deg, interval, tick)
+                elapsed = time.monotonic() - started
+                if elapsed < interval:
+                    remaining = max(0.0, deadline - time.monotonic())
+                    sleep_for = min(interval - elapsed, remaining)
+                    if sleep_for > 0:
+                        time.sleep(sleep_for)
+        except KeyboardInterrupt:
+            interrupted = True
+        except Exception as exc:
+            fatal_error = f"{type(exc).__name__}: {exc}"
+        finally:
+            termination.begin_cleanup()
+            try:
+                if link is not None:
+                    link.drop()
+            except Exception as exc:
+                if fatal_error is None:
+                    fatal_error = f"link close failed: {type(exc).__name__}: {exc}"
+            finally:
+                try:
+                    restored_passive = bool(canbus.restore_passive(module.channel, module.bitrate))
+                except Exception as exc:
+                    if fatal_error is None:
+                        fatal_error = f"passive restore failed: {type(exc).__name__}: {exc}"
+                finally:
+                    diagnostic_safety.release_channel_lock(lock)
+            if terminal_active:
+                sys.stdout.write(CUR_ON + ALT_OFF)
+                sys.stdout.flush()
+
+    if termination.received_signal is not None:
+        interrupted = True
+
+    print(f"adapter restored passive: {'yes' if restored_passive else 'NO - CHECK IT NOW'}")
+    if fatal_error:
+        raise SystemExit(f"live diagnostics aborted: {fatal_error}")
+    if not restored_passive:
+        raise SystemExit("live diagnostics ended but passive restoration could not be verified")
+    return 130 if interrupted else 0

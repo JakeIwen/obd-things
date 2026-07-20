@@ -15,13 +15,15 @@
 #
 #   ./tools/dump.sh                   sniff the sole can iface -> tmp/captures/dump-<ts>.log
 #   ./tools/dump.sh --filepath PATH   write to PATH instead of the default
+#   ./tools/dump.sh --file-only       write the log without echoing every frame (systemd/tmux friendly)
 #   ./tools/dump.sh --stdout          stream to the console only, no log file
 #   ./tools/dump.sh --timeout SECS    auto-stop after SECS seconds (default: until Ctrl-C)
 #   IFACE=can1 ./tools/dump.sh        pick a specific iface when several are present
 #
 # By default the live dump is shown on the console AND teed to a log. --stdout drops the
 # log and streams only to the console (its banner goes to stderr, so stdout stays a clean
-# candump stream you can pipe). --stdout and --filepath are mutually exclusive.
+# candump stream you can pipe). --stdout and --filepath are mutually exclusive. --file-only avoids
+# duplicating a long capture into a terminal scrollback or the systemd journal.
 #
 # --filepath PATH may be absolute or relative; a relative PATH is resolved against your
 # current working directory (NOT the repo root), and missing parent dirs are created.
@@ -40,10 +42,12 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 OUT=""        # --filepath overrides; empty -> timestamped default under tmp/captures/
 STDOUT_ONLY=0 # --stdout streams to the console only, no log file
+FILE_ONLY=0   # --file-only writes the capture without teeing every frame to stdout
 TIMEOUT=""    # --timeout SECS auto-stops after N seconds; empty -> run until Ctrl-C
 while [ $# -gt 0 ]; do
   case "$1" in
     --filepath) OUT="$2"; shift 2;;
+    --file-only) FILE_ONLY=1; shift;;
     --stdout)   STDOUT_ONLY=1; shift;;
     --timeout)  TIMEOUT="$2"; shift 2;;
     -h|--help)  grep '^#' "$0" | sed 's/^# \?//'; exit 0;;
@@ -53,6 +57,9 @@ done
 
 if [ "$STDOUT_ONLY" -eq 1 ] && [ -n "$OUT" ]; then
   echo "ERROR: --stdout (no log file) and --filepath are mutually exclusive." >&2; exit 2
+fi
+if [ "$STDOUT_ONLY" -eq 1 ] && [ "$FILE_ONLY" -eq 1 ]; then
+  echo "ERROR: --stdout and --file-only are mutually exclusive." >&2; exit 2
 fi
 if [ -n "$TIMEOUT" ] && ! [[ "$TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
   echo "ERROR: --timeout wants a positive integer (seconds), got: $TIMEOUT" >&2; exit 2
@@ -94,6 +101,11 @@ else
   # Default output -> tmp/captures/dump-<ts>.log; --filepath takes it anywhere (dir is created).
   [ -n "$OUT" ] || OUT="$REPO/tmp/captures/dump-$(date +%Y%m%d_%H%M%S).log"
   mkdir -p "$(dirname "$OUT")"
-  echo "sniffing $IFACE ($STOP) -> $OUT"
-  "${CAP[@]}" | tee "$OUT"
+  if [ "$FILE_ONLY" -eq 1 ]; then
+    echo "sniffing $IFACE ($STOP) -> $OUT (file only)"
+    "${CAP[@]}" > "$OUT"
+  else
+    echo "sniffing $IFACE ($STOP) -> $OUT"
+    "${CAP[@]}" | tee "$OUT"
+  fi
 fi

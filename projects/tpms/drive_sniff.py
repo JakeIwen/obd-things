@@ -10,8 +10,8 @@ WHY A DRIVE (and not the parked capture we already have): parked pressures are s
 only TWO levels (fronts ~55, rears ~75 psi), which cannot identify an offset-encoded field — any
 affine map fits two levels. Driving warms each tire along its OWN curve (F 55->68, R 75->90 psi),
 giving four independent signals to correlate against. Pair this capture with the ground truth in
-tmp/tpms/tpms_drive_log.csv (same wall clock) and feed both to tools/can_field_finder.py /
-tools/signal_correlate.py.
+tmp/tpms/tpms_drive_log.csv (same wall clock). A dedicated timestamp-aligned broadcast/CSV correlator
+is still needed; `tools/signal_correlate.py` analyzes its own active-DID JSON, not candump plus TPMS CSV.
 
 **PURE RX. This script NEVER transmits** — it only opens a raw CAN socket and reads, so it adds
 no bus traffic and no observer effect of its own. It also never reconfigures the interface

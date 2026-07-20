@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """Live ACC-radar (Bosch MRR1evo / DASM) alignment + health view.
 
-    python3 projects/radar/radar_acc_live.py          # 5 Hz, reads the bus directly (a TESTER)
-    python3 projects/radar/radar_acc_live.py 0.5      # override refresh interval (seconds)
+    python3 projects/radar/radar_acc_live.py          # print bounded direct-view plan; NO CAN access
+    python3 projects/radar/radar_acc_live.py --execute --confirm-parked --confirm-engine-off \
+        --confirm-session-change --confirm-no-active-routine --pair 6/14 \
+        --conditions "parked, ignition ON, engine OFF"  # ACTIVE parked direct view
     python3 projects/radar/radar_acc_live.py --follow # NO bus access -- tails the newest cron
                                                       #   drive CSV (tmp/radar/radar_acc_drive_*.csv)
     python3 projects/radar/radar_acc_live.py --follow <path.csv>
 
-Direct mode is ~20 UDS reads/s -- do NOT run it while the cron auto-logger is active (two testers on
-one ISO-TP socket cross-talk). Use **--follow** during a logged drive: it only reads the CSV the cron
-logger writes, so there is zero bus contention. DID provenance/scaling: findings/ + docs/.
+Direct mode is bounded active UDS, dry-run by default, and limited to five total requests/s by default.
+Do not run it while another logger is active. Use **--follow [csv]** during a logged drive: it only reads
+an existing CSV, so there is zero bus contention, but it does not start a logger or prove the file is
+fresh. DID provenance/scaling: findings/ + docs/.
 """
 import os
 import sys
