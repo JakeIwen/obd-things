@@ -63,6 +63,13 @@ service, cron, network, and vehicle state before acting.
 - AlfaOBD debug bins use ASCII hex representing bytes XORed with `0xFF`. The maintained pipeline is
   `tools/alfaobd_decode.py` → `projects/ecu_mapping/vin_scan.py` → `extract_did_map.py` →
   `reassemble_commands.py`; read `projects/ecu_mapping/README.md` first.
+- The owner-authorized Android-tablet pull includes AlfaOBD 2.4.4.0's installed APK under the
+  gitignored `tmp/ecu_mapping/android_tablet/` tree. Its 51 split database assets reconstruct into a
+  valid SQLite catalog. `tools/alfaobd_apk_db.py` and `tools/alfaobd_catalog.py` reproduce the
+  read-only extraction/export; the canonical interpretation and hashes are in
+  `projects/ecu_mapping/findings/promaster_2022/2026-07-21_alfaobd_apk_catalog.md`. Raw numeric string
+  placeholders are authoritative because direct indexing into the English resource is not yet a
+  valid label decode. Do not redistribute the APK/database.
 - Earlier interpretation of BCM `27xx`/`2Axx` as SecurityAccess was wrong: they were ISO-TP consecutive
   frames within a long `2E 2023` PROXI write. The current-van capture contains successful `2F` IO-control
   operations but no verified `27` exchange. Verify all candidates live before replaying.

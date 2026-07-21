@@ -44,18 +44,36 @@ clock-ordered header/close pairs before streaming exchanges; long-open or unclos
 the prior best-known date instead of being blindly backdated from a later close marker.
 
 To capture a fresh one on the tablet: enable **Debug Data recording** (raw) and ideally
-**Gauges data recording** (labeled CSV, `Gauges_Data.log`) in Preferences, drive the
-modules/live-data, then pull from
+**Gauges data recording** (labeled CSV, commonly `Gauges_Data.csv` or `Gauges_Data.log`) in
+Preferences, drive the modules/live-data, then pull from
 `/sdcard/Android/data/com.android.AlfaOBD/files/logs/`.
 
 ## Pipeline
 
 ```
 tools/alfaobd_decode.py  <in.bin> [out.txt]      # generic: .bin -> decoded text (reusable)
+tools/alfaobd_gauges.py  <Gauges_Data.csv>       # offline section/profile/metric inventory -> tmp/
+tools/alfaobd_apk_db.py  <base.apk>              # reconstruct catalog DB + label resource -> tmp/
+tools/alfaobd_catalog.py <db> <labels> --device-id N  # read-only model/device export -> tmp/
 projects/ecu_mapping/vin_scan.py        <decoded.txt> [vin]   # which van? (run FIRST)
 projects/ecu_mapping/extract_did_map.py <decoded.txt> <out>   # per-module DID/service map
 projects/ecu_mapping/alfalog.py                  # shared log parser + ELM reassembly
 ```
+
+`alfaobd_gauges.py` understands that a single Gauges Data file is a concatenation of many
+independently headed CSV recordings. It distinguishes explicit selected-profile markers from
+blank markers whose sections inherit the most recent named profile, counts corrupt/partial rows,
+and keeps identically named metrics separated by selected-profile namespace. By default it writes
+`inventory.json`, `sections.csv`, and `metrics.csv` under
+`tmp/inventories/alfaobd_gauges/`; use `--out-dir` to choose another machine-output directory.
+Gauge labels and rendered values do **not** carry DID numbers, so a label-to-DID claim still
+requires a time-aligned Debug Data trace or a controlled one-variable capture.
+
+The APK tools operate only on an owner-supplied local package and default all generated artifacts
+under `tmp/`. The catalog exporter opens SQLite in read-only mode, preserves source hashes and raw
+fields, and marks its mechanical English-resource substitutions as unverified: the APK's numeric
+placeholders have another unresolved runtime indirection, so raw placeholder IDs win. Do not commit
+or redistribute the APK, reconstructed database, or extracted application resource.
 
 `reassemble_commands.py <decoded.txt> <out.txt> [atsh]` — rebuilds multi-frame COMMANDS.
 AlfaOBD sends long requests as MANUAL ISO-TP frames: First Frame `1L LL <6 data>` + a trailing
@@ -133,13 +151,14 @@ corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one
   SGW bypassed (`[[sgw-bypass-always]]`) the successful `2F` actuations are the remote-unlock
   lead; next is identifying *which* `2F` DID drives the door lock (correlate with what was
   actuated in AlfaOBD) and verifying on 2022 ProMaster via the tap before replaying.
-  Offline action-label recovery is currently exhausted: the current-van debug stream records the
-  raw commands but not the UI action names, `BT_Debug.log` contains connection transport rather than
-  those diagnostic payloads, and the mixed `BCDELPHI_Info.log` has no action annotation at the
-  June-12 command times. No AlfaOBD APK/database is present locally, and exact public-web/GitHub
-  searches on 2026-07-21 found no useful matches. A fresh, one-action-at-a-time AlfaOBD session with
-  the PCAN listening in parallel is the next evidence-producing step for labels; do not guess them
-  from command timing alone.
+  The installed AlfaOBD 2.4.4.0 APK has now been copied with the owner's authorization and its split
+  SQLite catalog reconstructed offline. The model-code-88 catalog matches the app's `RAM PRO MASTER
+  (VF) 2022+` selection, includes the correct BCM profile, and exposes a 67-entry action menu with
+  front/rear door-lock relay labels. It still does not directly associate those menu labels with the
+  six captured `2F` DIDs, so a fresh, one-action-at-a-time AlfaOBD session with PCAN listening in
+  parallel remains the next evidence-producing step for unlock labels; do not guess them from menu
+  order or command timing. See
+  [`2026-07-21_alfaobd_apk_catalog.md`](findings/promaster_2022/2026-07-21_alfaobd_apk_catalog.md).
 - **RFH (0xC7)** full ID block + TPMS; pair with labeled `RFH_FGA_Info.log` (current faults
   `U0001/B1040/C1502-FR/C1501-FL`) for the TPMS project. See `../tpms/`.
 - **PCM (0x10)** is independently live-verified at `18DA10F1 -> 18DAF110`: fixed-DLC-8 padded
@@ -154,9 +173,13 @@ corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one
    `4000-40FF` namespace is bounded. Do not repeat either scan without a new experimental question.
    An optional padded PCM engine-off repeat could isolate framing from power state, but is not needed
    for endpoint verification.
-2. **Unlock:** identify which BCM `2F` IO-control DID drives the door lock/unlock (correlate the
-   command log's timestamps with the actuations run in AlfaOBD, or its labels), then verify on
-   2022 ProMaster via the tap before replaying — `2F 51xx ctrl=03 opt=xx`. See `promaster_2022/command_log.txt`.
-3. Correlate `*_Info.log` labels ↔ debug-bin DIDs → labeled maps (start RFH/TPMS + radar).
+2. **Unlock:** the APK catalog confirms that the current BCM profile offers separate front/rear
+   door-lock relay actions, but not which captured `2F` DID implements each. Correlate one deliberate
+   AlfaOBD action at a time with Debug Data plus listen-only PCAN, then verify the result before any
+   replay. Do not use the adjacent PROXI/configuration menu entries.
+3. Export/decode the catalog's 75 current-BCM request definitions against the existing trace (all
+   75 were already requested: 55 positive, 20 negative); do not repeat that live traffic without a
+   new experimental question. Then correlate fresh `*_Info.log`/Gauges labels with debug-bin DIDs
+   per module.
 4. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps
    (`../../docs/bus-map.md`, `../../lib/modules.py`, project DID maps) per the maintenance rule.

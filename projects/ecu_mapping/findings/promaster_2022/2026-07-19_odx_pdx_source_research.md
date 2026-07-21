@@ -36,9 +36,13 @@ The same 2026-07-21 pass searched the six successful BCM IO-control request/resp
 public web and authenticated GitHub code indexes, and searched the local OEM corpus for those values
 and IO-control terminology. It found no usable label/schema match. A public FCA CAN-monitor repository
 contained only older Alfa Romeo broadcast captures and parser code, not diagnostic descriptions.
-Local AlfaOBD artifacts contain the commands but no corresponding UI action labels, and no APK or
-application database is present. This makes a fresh labeled AlfaOBD capture—not another blind public
-search—the next source for those action names.
+At the time of that search, the local AlfaOBD logs contained the commands but no corresponding UI
+action labels and no APK/application database had yet been copied. On 2026-07-21 the owner-authorized
+tablet extraction recovered AlfaOBD 2.4.4.0's internal catalog. It confirms front/rear door-lock relay
+actions in the exact BCM profile's menu, but its menu tables do not directly bind those labels to the
+six captured IO-control DIDs. A fresh labeled AlfaOBD capture—not another blind public search—therefore
+remains the next source for the exact action-to-payload mapping. See
+[`2026-07-21_alfaobd_apk_catalog.md`](2026-07-21_alfaobd_apk_catalog.md).
 
 The local `/home/pi/dev/ram_2022_GAS` corpus (about 1.7 GB / 5,925 HTML documents) contains
 service procedures and wiring/topology material, but the search found no `.odx`, `.pdx`, `.cdf`,
@@ -61,10 +65,11 @@ access observation, not a claim that the Mac lacks the files.
 - NHTSA-hosted FCA filings and TSBs provide exact part/module relationships. The
   [Part 573 IPC filing](https://downloads.regulations.gov/NHTSA-2023-0046-0001/attachment_1.pdf)
   identifies `68517084AD` as a Marelli Instrument Panel Cluster.
-- The current-van AlfaOBD debug trace remains the best authorized labeled oracle already on
-  hand. Its physical addresses, requested DIDs, session transitions, and command/result pairs
-  can be correlated with fresh `Gauges_Data.log` exports without extracting AlfaOBD's internal
-  proprietary database.
+- The current-van AlfaOBD debug trace remains the best vehicle-grounded oracle already on hand.
+  The newly extracted AlfaOBD catalog adds vendor-derived raw field layouts/scaling and module
+  search candidates, but its numeric language placeholders need another indirection resolved and
+  it is not proof of installed hardware or current-van values. Correlate it with fresh
+  `Gauges_Data.log` and Debug Data exports.
 - The exact-vehicle local OEM HTML corpus establishes topology, component names, DTC procedures,
   and operating conditions. It usually does not expose raw DID names/scales.
 - Multiecuscan's public
