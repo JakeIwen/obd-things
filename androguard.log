@@ -1,0 +1,44 @@
+2026-07-21 17:06:53.418 | DEBUG    | androguard.cli.cli:apkid:421 - APKID
+2026-07-21 17:06:53.419 | DEBUG    | androguard.core.apk:get_apkid:3047 - GET_APKID
+2026-07-21 17:06:53.605 | DEBUG    | androguard.core.axml:__init__:449 - AXMLParser
+2026-07-21 17:06:53.606 | DEBUG    | androguard.core.axml:__init__:482 - FIRST HEADER <ARSCHeader idx='0x00000000' type='3' header_size='8' size='14804'>
+2026-07-21 17:06:53.606 | DEBUG    | androguard.core.axml:__init__:540 - STRING_POOL <ARSCHeader idx='0x00000008' type='1' header_size='28' size='7280'>
+2026-07-21 17:06:53.607 | DEBUG    | androguard.core.axml:is_valid:575 - True
+2026-07-21 17:06:53.607 | DEBUG    | androguard.core.axml:_do_next:593 - M_EVENT -1
+2026-07-21 17:06:53.608 | DEBUG    | androguard.core.axml:_do_next:608 - NEXT HEADER <ARSCHeader idx='0x00001c78' type='384' header_size='8' size='128'>
+2026-07-21 17:06:53.609 | DEBUG    | androguard.core.axml:_do_next:617 - AXML contains a RESOURCE MAP
+2026-07-21 17:06:53.610 | DEBUG    | androguard.core.axml:_do_next:608 - NEXT HEADER <ARSCHeader idx='0x00001cf8' type='256' header_size='16' size='24'>
+2026-07-21 17:06:53.610 | DEBUG    | androguard.core.axml:_do_next:685 - Start of Namespace mapping: prefix 36: 'android' --> uri 107: 'http://schemas.android.com/apk/res/android'
+2026-07-21 17:06:53.611 | DEBUG    | androguard.core.axml:_do_next:608 - NEXT HEADER <ARSCHeader idx='0x00001d10' type='258' header_size='16' size='216'>
+2026-07-21 17:06:53.612 | DEBUG    | androguard.core.axml:getAttributeName:997 - 0
+2026-07-21 17:06:53.612 | DEBUG    | androguard.core.axml:getAttributeValueType:1027 - 0
+2026-07-21 17:06:53.612 | DEBUG    | androguard.core.axml:getAttributeValueData:1038 - 0
+2026-07-21 17:06:53.613 | DEBUG    | androguard.core.axml:getAttributeName:997 - 1
+2026-07-21 17:06:53.613 | DEBUG    | androguard.core.axml:getAttributeValueType:1027 - 1
+2026-07-21 17:06:53.614 | DEBUG    | androguard.core.axml:getAttributeValueData:1038 - 1
+2026-07-21 17:06:53.614 | DEBUG    | androguard.core.axml:getAttributeValue:1052 - 1
+2026-07-21 17:06:53.614 | DEBUG    | androguard.core.axml:getAttributeName:997 - 2
+2026-07-21 17:06:53.614 | DEBUG    | androguard.core.axml:getAttributeValueType:1027 - 2
+2026-07-21 17:06:53.614 | DEBUG    | androguard.core.axml:getAttributeValueData:1038 - 2
+2026-07-21 17:06:53.614 | DEBUG    | androguard.core.axml:getAttributeName:997 - 3
+2026-07-21 17:06:53.615 | DEBUG    | androguard.core.axml:getAttributeValueType:1027 - 3
+2026-07-21 17:06:53.615 | DEBUG    | androguard.core.axml:getAttributeValueData:1038 - 3
+2026-07-21 17:06:53.615 | DEBUG    | androguard.core.axml:getAttributeValue:1052 - 3
+2026-07-21 17:06:53.615 | DEBUG    | androguard.core.axml:getAttributeName:997 - 4
+2026-07-21 17:06:53.615 | DEBUG    | androguard.core.axml:getAttributeValueType:1027 - 4
+2026-07-21 17:06:53.615 | DEBUG    | androguard.core.axml:getAttributeValueData:1038 - 4
+2026-07-21 17:06:53.616 | DEBUG    | androguard.core.axml:getAttributeValue:1052 - 4
+2026-07-21 17:06:53.616 | DEBUG    | androguard.core.axml:getAttributeName:997 - 5
+2026-07-21 17:06:53.616 | DEBUG    | androguard.core.axml:getAttributeValueType:1027 - 5
+2026-07-21 17:06:53.616 | DEBUG    | androguard.core.axml:getAttributeValueData:1038 - 5
+2026-07-21 17:06:53.616 | DEBUG    | androguard.core.axml:getAttributeValue:1052 - 5
+2026-07-21 17:06:53.617 | DEBUG    | androguard.core.axml:getAttributeName:997 - 6
+2026-07-21 17:06:53.617 | DEBUG    | androguard.core.axml:getAttributeValueType:1027 - 6
+2026-07-21 17:06:53.617 | DEBUG    | androguard.core.axml:getAttributeValueData:1038 - 6
+2026-07-21 17:06:53.617 | DEBUG    | androguard.core.axml:getAttributeValue:1052 - 6
+2026-07-21 17:06:53.617 | DEBUG    | androguard.core.axml:getAttributeName:997 - 7
+2026-07-21 17:06:53.618 | DEBUG    | androguard.core.axml:getAttributeValueType:1027 - 7
+2026-07-21 17:06:53.618 | DEBUG    | androguard.core.axml:getAttributeValueData:1038 - 7
+2026-07-21 17:06:53.618 | DEBUG    | androguard.core.axml:getAttributeName:997 - 8
+2026-07-21 17:06:53.618 | DEBUG    | androguard.core.axml:getAttributeValueType:1027 - 8
+2026-07-21 17:06:53.618 | DEBUG    | androguard.core.axml:getAttributeValueData:1038 - 8
