@@ -138,7 +138,7 @@ unrelated. Each module keeps its own canonical map next to its analysis:
 
 - **radar_acc** → [`projects/radar/findings/did_map.md`](../projects/radar/findings/did_map.md) — canonical 56-DID map (sessions, security, routines, DTCs, angle scaling). Full sweep: `projects/radar/findings/radar_acc_did_sweep.txt`.
 - **rf_hub** → [`projects/tpms/README.md`](../projects/tpms/README.md) — TPMS/RKE DID map inline (pressure `31D0-31D3`, sensor-ID `31CB-31CE`, snapshot/extended-data DIDs, the verified wheel↔slot table). Full sweep: `projects/tpms/findings/rf_hub_did_sweep.txt`.
-- **tcm / shifter / bcm_ccan / cluster / telematics** → [`2026-07-21 candidate DID inventory`](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_candidate_did_inventory.md) — complete inherited-session `F100-F1FF` results per ECU plus BCM candidate/page inventories. A controlled comparison proved BCM `40A3` and `40A6` are exposed by session `03`. Keep these namespaces separate; labels/scaling outside established identity strings remain unresolved.
+- **tcm / shifter / bcm_ccan / cluster / telematics** → [`2026-07-21 candidate DID inventory`](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_candidate_did_inventory.md) — complete inherited-session `F100-F1FF` results per ECU plus BCM candidate/page inventories. The complete BCM session-03 `4000-40FF` page found only default-visible `40A1`, `40A2`, `40AA` and session-gated `40A3`, `40A6`; no other session-only positive appeared. Keep these namespaces separate; labels/scaling outside established identity strings remain unresolved.
 
 To plan a new module inventory without touching CAN, run
 `python3 tools/did_sweep.py <key> START END` (dry-run is the default). A parked live run requires

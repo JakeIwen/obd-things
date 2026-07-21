@@ -307,8 +307,9 @@ raw capture filtered to the PCM request/response IDs:
   --conditions "ignition ON, engine OFF, PCAN on pigtail C-CAN DB9"
 ```
 
-The PCM half is now complete. If the BCM page has not yet run, use `--bcm-extended-page` rather
-than repeating the combined mode.
+Both halves completed successfully on 2026-07-21. The BCM session-03 page exposed only the already
+known session-gated `40A3` and `40A6` beyond the three default-visible positives. These modes remain
+available for reproducibility, but should not be repeated without a new experimental reason.
 
 Participating active diagnostic tools also take a nonblocking per-channel advisory lock under
 `tmp/locks/`, so two of them cannot transmit through the same SocketCAN channel concurrently. The

@@ -154,6 +154,31 @@ Raw reports:
 `tmp/inventories/bcm_ccan/dids_20260721_031634_459940-0600.*` and
 `tmp/inventories/bcm_ccan/dids_20260721_031637_471601-0600.*`.
 
+## Complete BCM session-03 page
+
+At 13:13 the owner completed the justified `4000-40FF` page parked, ignition ON, engine OFF.
+The BCM accepted `10 03` with exact `50 03 00 32 01 F4`; all 61 periodic `3E 00` requests received
+exact `7E 00`; and all 256 DID reads received a response. The report is complete, has no fatal or
+partial state, and records a successful passive restore.
+
+The page contained exactly five positives:
+
+| DID | session-03 result | comparison with default page |
+|---|---|---|
+| `40A1` | positive, 64 bytes | positive and byte-identical in default state |
+| `40A2` | positive, 80 bytes | positive and byte-identical in default state |
+| `40A3` | positive, 14 bytes: `01 00 00 00 00 00 00 00 00 00 D1 01 0B 18` | session-gated; `7F 22 31` by default |
+| `40A6` | positive, 16 zero bytes | session-gated; `7F 22 31` by default |
+| `40AA` | positive, 80 bytes | positive and byte-identical in default state |
+
+Every other DID in the page—including `40A4` and `40A5`—returned `7F 22 31`. The broad pass
+therefore bounds the observed effect of session `03` in this page to the already isolated `40A3`
+and `40A6`; it discovered no additional session-only DID. Repeating adjacent BCM scans is not
+justified without a new label, state-dependent lead, or compatible diagnostic database.
+
+Raw report:
+`tmp/inventories/bcm_ccan/dids_20260721_131311_438149-0600.{results.jsonl,summary.json}`.
+
 ## Source and PCM follow-up
 
 A same-day exact-string search of the local 1.7 GB OEM corpus and publicly indexed sources found no
@@ -167,8 +192,8 @@ unavailable outside public indexes. The broader source audit remains in
 The default-session identity and evidence-selected BCM pages are now sufficiently inventoried.
 Broad adjacent scanning had sharply diminishing returns: the four full pages added only `2023`
 beyond the AlfaOBD-derived positive list. The controlled comparison then proved that session `03`
-exposes at least `40A3` and `40A6`. A single extended-session `4000-40FF` pass is now justified to
-bound that session-specific namespace; another broad default-session page is not.
+exposes `40A3` and `40A6`; the subsequent complete session-03 `4000-40FF` pass found no other
+session-only positive. Another broad BCM page is not justified without new evidence.
 
 The then-unresolved PCM `0x10` path remained separate. The parked ignition-ON/engine-OFF probe at 03:16
 sent an unpadded `10 92` ISO-TP request to `18DA10F1` but received no response, so the tool correctly

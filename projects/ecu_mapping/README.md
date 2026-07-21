@@ -100,7 +100,9 @@ records complete `F100-F1FF` pages for TCM, shifter, BCM, cluster, and telematic
 recheck of 61 current-van AlfaOBD BCM candidates. It established 135 positive identity-page
 responses and reverified 59 BCM candidates. A controlled follow-up proved BCM `40A3`/`40A6` are
 session-gated: both returned `7F 22 31` in the inherited state and positive data after validated
-`10 03 -> 50 03 00 32 01 F4` under otherwise unchanged conditions.
+`10 03 -> 50 03 00 32 01 F4` under otherwise unchanged conditions. The completed session-03
+`4000-40FF` page then found only five positives: default-visible `40A1`, `40A2`, and `40AA`, plus
+session-gated `40A3` and `40A6`. No other hidden DID appeared in that page.
 The subsequent four-page BCM pass completed 1,024/1,024 reads and found one additional positive,
 `2023`, whose complete 250-byte readback matches the later captured AlfaOBD PROXI/configuration write
 payload at every unredacted byte. It also preserved four condition-gated DIDs
@@ -148,17 +150,13 @@ corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one
 
 ## Next steps
 
-1. **PCM endpoint completed:** the padded engine-idling retry received exact positive responses to
-   `10 92` and `1A 87`, including expected identity `68532157AI`. An optional padded engine-off
-   repeat could isolate framing from power state, but is not required for endpoint verification.
-2. Run one bounded BCM `4000-40FF` page in session `03`. The controlled comparison has now proven
-   that extended session exposes `40A3` and `40A6`, justifying one session-specific page to bound
-   nearby hidden DIDs. It still requires explicit DiagnosticSessionControl authorization. Use
-   `tools/ccan_inventory_campaign.sh --bcm-extended-page`; the combined `--session-followup` would
-   unnecessarily repeat the now-complete PCM probe.
-3. **Unlock:** identify which BCM `2F` IO-control DID drives the door lock/unlock (correlate the
+1. **PCM and BCM session follow-up completed:** the PCM endpoint is verified and the BCM session-03
+   `4000-40FF` namespace is bounded. Do not repeat either scan without a new experimental question.
+   An optional padded PCM engine-off repeat could isolate framing from power state, but is not needed
+   for endpoint verification.
+2. **Unlock:** identify which BCM `2F` IO-control DID drives the door lock/unlock (correlate the
    command log's timestamps with the actuations run in AlfaOBD, or its labels), then verify on
    2022 ProMaster via the tap before replaying — `2F 51xx ctrl=03 opt=xx`. See `promaster_2022/command_log.txt`.
-4. Correlate `*_Info.log` labels ↔ debug-bin DIDs → labeled maps (start RFH/TPMS + radar).
-5. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps
+3. Correlate `*_Info.log` labels ↔ debug-bin DIDs → labeled maps (start RFH/TPMS + radar).
+4. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps
    (`../../docs/bus-map.md`, `../../lib/modules.py`, project DID maps) per the maintenance rule.
