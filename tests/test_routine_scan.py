@@ -597,6 +597,7 @@ class RoutineCliSafetyTests(unittest.TestCase):
         report = {}
         installed = {}
         old_handlers = {
+            routine_scan.signal.SIGINT: mock.sentinel.old_int,
             routine_scan.signal.SIGTERM: mock.sentinel.old_term,
             routine_scan.signal.SIGHUP: mock.sentinel.old_hup,
         }
@@ -648,6 +649,7 @@ class RoutineCliSafetyTests(unittest.TestCase):
         sock = mock.Mock()
         report = {}
         current = {
+            routine_scan.signal.SIGINT: mock.sentinel.old_int,
             routine_scan.signal.SIGTERM: mock.sentinel.old_term,
             routine_scan.signal.SIGHUP: mock.sentinel.old_hup,
         }

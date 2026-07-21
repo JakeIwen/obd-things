@@ -42,6 +42,7 @@ tools/                     GENERIC, module-agnostic CLI tools (take a module key
   can_capture_summary.py     streaming offline candump summary (`--snapshot` bounds growing logs)
   did_sweep.py               dry-run-first, checkpointed ReadDataByIdentifier inventory (22)
   routine_scan.py            dry-run-first, checkpointed result-only RoutineControl inventory (31 03)
+  ccan_inventory_campaign.sh one-command parked baseline, DID-page, or session-compare campaigns
   signal_correlate.py        DID byte-slice <-> signal correlator (lstsq), capture + analyze
 projects/                  per-target investigations and durable findings
   radar/                     2022 Promaster ACC radar (Bosch DASM / MRR1evo14F) — see its README
@@ -75,10 +76,10 @@ simpler `REPO = dirname(__file__)/..`.
 
 - **Live-verified buses plus OEM DLC branches:**
   - **C-CAN / HS-CAN, 500 kbit/s** — OBD pins **6/14**; powertrain + diagnostics. `bringup.sh` default.
-  - **125 kbit/s body capture** — comfort/body effects (locks, lights, windows, VIN broadcast), currently
-    called `b-can` in code/data. Its exact OEM branch still needs confirmation; `bringup.sh --bcan`.
-  - OEM wiring identifies **CAN CH on pins 12/13** and **CAN IHS on pins 3/11**. Their bitrates and
-    relationship to the existing `b-can` capture are not yet live-verified; survey them passively.
+  - **B-CAN / CAN-IHS, 125 kbit/s** — OBD pins **3/11**, reached through the B-CAN leg of the
+    labeled dual-DB9 pigtail; comfort/body traffic. Live-verified 2026-07-20; `bringup.sh --bcan`.
+  - OEM wiring identifies **CAN CH on pins 12/13**. That branch remains unverified live and is not
+    required for the current C-CAN/B-CAN campaign.
   - One PCAN channel = one physical pair = **one bus at a time**; the OBD splitter parallels a single bus
     (lets PCAN + a scan tool share it), it does **not** merge C-CAN and B-CAN.
 - **Diagnostic addressing:** verified C-CAN modules use UDS over ISO-TP with **29-bit** IDs. Tester =
@@ -133,6 +134,13 @@ inspect the live interface, open a CAN socket, or write a report.
 ```bash
 python3 tools/did_sweep.py radar_acc 0800 08FF # plan 256 physical DID reads; NO CAN traffic
 python3 tools/routine_scan.py radar_acc 0200 020F # plan 31 03 reads (+ FF00-FF03); NO CAN traffic
+./tools/ccan_inventory_campaign.sh --candidate-dids # plan per-ECU F1xx + AlfaOBD candidates; NO CAN traffic
+./tools/ccan_inventory_campaign.sh --bcm-pages # plan four evidence-selected BCM pages; NO CAN traffic
+./tools/ccan_inventory_campaign.sh --bcm-session-compare # plan four-DID default/session-03 comparison
+./tools/ccan_inventory_campaign.sh --pcm-probe # plan exact PCM 10 92 -> 1A 87 presence sequence
+./tools/ccan_inventory_campaign.sh --session-probes # plan both bounded session checks together
+./tools/ccan_inventory_campaign.sh --bcm-extended-page # plan session-03 BCM 4000-40FF
+./tools/ccan_inventory_campaign.sh --session-followup # plan padded PCM retry + BCM extended page
 ```
 
 Generic diagnostic tools take a **module key** from `lib/modules.py`; inspect that registry for
@@ -146,7 +154,7 @@ listen-only mode. Consequently, explicitly re-run `./bringup.sh --tx` before eac
 
 | Tool | Default plan | Additional live requirements / scope |
 |---|---|---|
-| `ecu_discover.py` | seven verified C-CAN endpoints | `--execute --confirm-parked --pair --conditions`; all 255 usable 29-bit targets add `--all-29bit-targets --confirm-expanded-scan`; custom pairs add `--confirm-custom-physical` |
+| `ecu_discover.py` | seven verified C-CAN endpoints | `--execute --confirm-parked --pair --conditions`; all 255 usable 29-bit targets add `--all-29bit-targets --confirm-expanded-scan`; custom pairs add `--confirm-custom-physical`; a researched legacy session preamble is restricted to one custom target and adds `--confirm-session-change` |
 | `identity_inventory.py` | bounded standardized/OEM identity set, excluding VIN | common live gates above; `--did` replaces defaults; VIN is opt-in and masked in reports |
 | `dtc_inventory.py` | non-clearing `19 01`, `19 02`, and `19 03` | common live gates; the larger supported-DTC `19 0A` catalog is opt-in |
 | `did_sweep.py` | bounded `22` range | common live gates; expanded ranges and explicit sessions have separate confirmations described below |
@@ -181,6 +189,41 @@ tool acquires its channel lock, its cleanup path restores the adapter to listen-
 on interruption/error. Re-run `./bringup.sh --tx` before each additional active tool, then restart
 `tpms-logger` when the manual campaign is finished.
 
+For the current ProMaster mapping campaign, the wrapper automates that re-arm/restore cycle. Its
+`--candidate-dids` mode scans `F100-F1FF` on TCM, shifter, BCM, cluster, and telematics, then reads
+61 additional BCM-only DIDs that were positive in the current-van AlfaOBD trace. It sends 1,341
+physical `22` reads in the inherited session, performs no session change, and is dry-run by default:
+
+```bash
+./tools/ccan_inventory_campaign.sh --candidate-dids
+
+# Later, while parked with ignition ON, engine OFF, and PCAN physically on C-CAN:
+./tools/ccan_inventory_campaign.sh --candidate-dids --execute --confirm-parked \
+  --conditions "ignition ON, engine OFF, PCAN on pigtail C-CAN DB9"
+```
+
+After that candidate campaign, `--bcm-pages` covers the four 256-DID neighborhoods selected by
+the confirmed positives (`0100`, `2000`, `2900`, and `4000`). It uses the same inherited-session,
+physical-read-only boundary and live gates:
+
+```bash
+./tools/ccan_inventory_campaign.sh --bcm-pages
+./tools/ccan_inventory_campaign.sh --bcm-pages --execute --confirm-parked \
+  --conditions "ignition ON, engine OFF, PCAN on pigtail C-CAN DB9"
+```
+
+Once those pages are complete, the separately gated `--bcm-session-compare` mode reads only
+`40A3-40A6` before and after physical `10 03`. The current-van AlfaOBD trace returned `40A3` and
+`40A6` positively while it held session `03`, whereas the default-session campaign returned
+`7F 22 31`. Live use therefore requires explicit session-change confirmation:
+
+```bash
+./tools/ccan_inventory_campaign.sh --bcm-session-compare
+./tools/ccan_inventory_campaign.sh --bcm-session-compare --execute \
+  --confirm-parked --confirm-session-change \
+  --conditions "ignition ON, engine OFF, PCAN on pigtail C-CAN DB9"
+```
+
 `did_sweep.py` writes each result immediately to
 `tmp/inventories/<module>/dids_<timestamp>.results.jsonl` and writes an atomic run summary beside it.
 Only a clean, complete run whose passive restore succeeded also creates the historical text view in
@@ -214,6 +257,52 @@ nor TesterPresent. An explicit session is a separately gated state change: DID s
 Session bytes are restricted to `01-7F` so the response-suppression bit cannot defeat positive-echo
 validation. Explicit-session scans require at least `--rate 0.5`; slower request spacing can exceed the
 two-second bounded TesterPresent cadence used to hold the selected session.
+
+The unresolved PCM is a legacy exception backed by an exact current-van AlfaOBD trace. Its dry-run
+plan sends nothing and records the candidate pair, `10 92` preamble, and `1A 87` identity request:
+
+```bash
+python3 tools/ecu_discover.py \
+  --target pcm_candidate=18DA10F1:18DAF110 \
+  --probe legacy-1a87 --session 92 --tx-padding 00
+```
+
+Live execution is restricted to that one explicit physical pair and requires both
+`--confirm-custom-physical` and `--confirm-session-change`. The tool requires exact `50 92` before
+it will send `1A 87`; it never uses functional broadcast. The explicit zero padding reproduces
+AlfaOBD's ELM `PP 2C=01` fixed-eight-byte CAN framing. The first independent attempt omitted this
+padding and timed out before the identity request.
+
+The campaign wrapper supplies the service/interface lifecycle and those fixed target arguments so
+the owner can run the same probe with one command after separately authorizing the session change:
+
+```bash
+./tools/ccan_inventory_campaign.sh --pcm-probe
+./tools/ccan_inventory_campaign.sh --pcm-probe --execute \
+  --confirm-parked --confirm-session-change \
+  --conditions "ignition ON, engine OFF, PCAN on pigtail C-CAN DB9"
+```
+
+The initial combined mode runs the PCM probe first, then the four-DID BCM comparison:
+
+```bash
+./tools/ccan_inventory_campaign.sh --session-probes
+./tools/ccan_inventory_campaign.sh --session-probes --execute \
+  --confirm-parked --confirm-session-change \
+  --conditions "ignition ON, engine OFF, PCAN on pigtail C-CAN DB9"
+```
+
+After that comparison proved `40A3` and `40A6` session-gated, the follow-up mode was narrowed to
+the fixed-DLC PCM retry and one BCM `4000-40FF` page in session `03`. It also saves a raw capture
+filtered to the PCM request/response IDs:
+
+```bash
+./tools/ccan_inventory_campaign.sh --session-followup
+./tools/ccan_inventory_campaign.sh --session-followup --execute \
+  --confirm-parked --confirm-session-change \
+  --conditions "ignition ON, engine OFF, PCAN on pigtail C-CAN DB9"
+```
+
 Participating active diagnostic tools also take a nonblocking per-channel advisory lock under
 `tmp/locks/`, so two of them cannot transmit through the same SocketCAN channel concurrently. The
 participants are the guarded inventory/discovery tools, `uds_send.py`, `signal_correlate.py capture`,

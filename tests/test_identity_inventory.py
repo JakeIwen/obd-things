@@ -157,6 +157,7 @@ class IdentityCliSafetyTests(unittest.TestCase):
         report = {}
         installed = {}
         old_handlers = {
+            identity_inventory.signal.SIGINT: mock.sentinel.old_int,
             identity_inventory.signal.SIGTERM: mock.sentinel.old_term,
             identity_inventory.signal.SIGHUP: mock.sentinel.old_hup,
         }
@@ -214,6 +215,7 @@ class IdentityCliSafetyTests(unittest.TestCase):
         sock = mock.Mock()
         report = {}
         current = {
+            identity_inventory.signal.SIGINT: mock.sentinel.old_int,
             identity_inventory.signal.SIGTERM: mock.sentinel.old_term,
             identity_inventory.signal.SIGHUP: mock.sentinel.old_hup,
         }

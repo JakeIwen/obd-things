@@ -214,6 +214,7 @@ class LiveDataCliSafetyTests(unittest.TestCase):
         link = mock.Mock(request_attempts=0)
         sig = live_data.diagnostic_safety.signal
         current = {
+            sig.SIGINT: mock.sentinel.old_int,
             sig.SIGTERM: mock.sentinel.old_term,
             sig.SIGHUP: mock.sentinel.old_hup,
         }

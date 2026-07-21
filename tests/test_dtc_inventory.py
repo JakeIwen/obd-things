@@ -79,6 +79,7 @@ class DtcCliSafetyTests(unittest.TestCase):
         report = {}
         installed = {}
         old_handlers = {
+            dtc_inventory.signal.SIGINT: mock.sentinel.old_int,
             dtc_inventory.signal.SIGTERM: mock.sentinel.old_term,
             dtc_inventory.signal.SIGHUP: mock.sentinel.old_hup,
         }
@@ -130,6 +131,7 @@ class DtcCliSafetyTests(unittest.TestCase):
         sock = mock.Mock()
         report = {}
         current = {
+            dtc_inventory.signal.SIGINT: mock.sentinel.old_int,
             dtc_inventory.signal.SIGTERM: mock.sentinel.old_term,
             dtc_inventory.signal.SIGHUP: mock.sentinel.old_hup,
         }

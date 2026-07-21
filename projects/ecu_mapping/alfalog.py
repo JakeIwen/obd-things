@@ -46,6 +46,44 @@ def iter_lines(path):
     yield from _logical_lines(path)
 
 
+def recording_date_hints(path):
+    """Map recording-header line numbers to dates written by their closing marker.
+
+    AlfaOBD may not write a full date until ``Recording closed ...``. Pre-index
+    header/close pairs so streaming parsers can use that date from the start without
+    buffering a potentially very large recording in memory. Unclosed recordings have
+    no hint and retain the parser's prior best-known date.
+    """
+    hints = {}
+    active_start = None
+    first_timestamp = None
+    for line_number, line in enumerate(_logical_lines(path), 1):
+        if _REC.search(line):
+            active_start = line_number
+            first_timestamp = None
+            continue
+        transport = _LINE.match(line)
+        if active_start is not None and first_timestamp is None and transport:
+            first_timestamp = transport.group(1)
+        if "Recording closed" not in line:
+            continue
+        match = _DATE.search(line)
+        close_time = re.search(r'\d{4}/\d{2}/\d{2} (\d{2}:\d{2}:\d{2}\.\d{3})', line)
+        # AlfaOBD can leave recording enabled across days. In that case a later close
+        # marker's clock may precede this block's first transport timestamp, so assigning
+        # its date to the whole block would be demonstrably wrong. Retain the prior date.
+        clocks_are_ordered = (
+            first_timestamp is None
+            or close_time is None
+            or close_time.group(1) >= first_timestamp
+        )
+        if active_start is not None and match and clocks_are_ordered:
+            hints[active_start] = match.group(1)
+        active_start = None
+        first_timestamp = None
+    return hints
+
+
 def _finish(seg, plain):
     return ("".join(seg[k] for k in sorted(seg)) if seg else plain).upper()
 
@@ -55,12 +93,14 @@ def iter_exchanges(path):
        {ts, date, addr, module, req, resp}  (req/resp are uppercase hex; resp may be '')."""
     addr, module, date = "?", None, "????/??/??"
     pend = None  # {'ts','req','seg','plain'}
-    for ln in _logical_lines(path):
+    date_hints = recording_date_hints(path)
+    for line_number, ln in enumerate(_logical_lines(path), 1):
         m = _LINE.match(ln)
         if not m:
             r = _REC.search(ln)
             if r:
                 module = r.group(1).strip()
+                date = date_hints.get(line_number, date)
             elif "Recording closed" in ln:
                 module = None
             d = _DATE.search(ln)

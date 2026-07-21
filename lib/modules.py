@@ -109,10 +109,14 @@ MODULES = {
     ),
     # e.g. add more modules here as the project expands:
     # PCM 0x10 is AlfaOBD-observed but did not answer our 22 F187 or 1A87 default-session probes
-    # on 2026-07-19; do not register it until independently verified from this tap.
-    # BCM's C-CAN endpoint is registered above. A separate 11-bit body-bus endpoint was observed,
-    # but its physical pair, bitrate, and exact TX/RX pairing remain unresolved. Register it only
-    # after a repinned passive survey and explicit pairing evidence; see docs/bus-map.md.
+    # on 2026-07-19. AlfaOBD got 10 92 -> 50 92, then 1A87 -> identity containing 68532157AI;
+    # FCA maps that part to the exact 2022 VF 3.6L PCM lineage. An unpadded independent 10 92 probe
+    # timed out with ignition ON/engine OFF on 2026-07-21. AlfaOBD uses fixed-DLC-8 ELM protocol
+    # options, so explicit zero padding is the next discriminator. Do not register this endpoint
+    # until a positive response is independently reproduced.
+    # BCM's C-CAN endpoint is registered above. No direct B-CAN diagnostic endpoint is verified:
+    # formerly suggested high 11-bit IDs on B-CAN / CAN-IHS are periodic application broadcasts,
+    # not ISO-TP pair evidence. Register one only after a captured request/response exchange.
 }
 
 

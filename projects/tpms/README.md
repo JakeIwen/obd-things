@@ -173,6 +173,8 @@ campaign status and
 - The last sample, Jul 19 00:06:53, had all four pressures valid and C1503 stored/non-active
   (`08`), but the repeated receive droughts make another recurrence likely until the cause is
   corrected.
+- A parked ignition-on inventory on Jul 21 again found exactly `C1503-31=08` and `B1040-64=08`:
+  both remain confirmed history, with testFailed clear at that instant. No DTC was cleared.
 
 ## Passive pressure-broadcast hunt — NEGATIVE (2026-07-14)
 

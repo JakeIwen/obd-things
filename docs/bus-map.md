@@ -21,9 +21,8 @@ Provenance shorthand: capture logs live under `tmp/captures/` (bus-state referen
 | bus | rate | where | access | notes |
 |---|---|---|---|---|
 | **C-CAN / HS-CAN** | 500 kbit/s | OBD pins **6/14** | PCAN via **SGW bypass** (ECRI tap on internal C-CAN) | powertrain + diagnostics. `bringup.sh` default. The bypass is why our UDS reaches gated modules at all; legislated OBD-II Mode 01 PIDs do NOT route through it. |
+| **B-CAN / CAN IHS** | **125 kbit/s, live-verified** | DLC pins **3/11** (OEM: CAN IHS +/−) | PCAN through the **B-CAN DB9** of the owner's labeled dual-pair OBD pigtail; `bringup.sh --bcan` | Comfort/body effects (locks, lights, interior) and the established B-CAN signature set were captured with listen-only explicitly on and zero RX errors on 2026-07-20. Owner confirmed the pigtail directly selects the documented 2022 ProMaster B-CAN pair; the DIY yellow adapter has never been used on this van. [Evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-20_bcan_pair_verification.md). |
 | **CAN CH / second high-speed CAN** | **unverified live**; **500 kbit/s is the leading candidate** | DLC pins **12/13** (OEM: CAN CH +/−) | PCAN requires repinning; passive survey pending | OEM topology includes BCM, SGW, ORC, park assist, EPS, ABS, and forward camera. AlfaOBD's current hardware guide explicitly calls pins 12/13 the second high-speed CAN bus on 2022+ ProMaster. That establishes the bus class, not the exact bitrate or addressing on this van. |
-| **CAN IHS / middle-speed CAN** | **unverified live**; **50 kbit/s is the leading candidate** | DLC pins **3/11** (OEM: CAN IHS +/−) | PCAN requires repinning; passive survey pending | OEM topology includes BCM, SGW, radio/telematics, cluster, HVAC, center stack, blind-spot sensors, trailer module, and CVPM. AlfaOBD's PowerNet/CUSW hardware guide places the middle-speed bus on pins 3/11 and includes 2022+ ProMaster (excluding pre-2022 ProMaster). An exact-vehicle OEM overview declares its lower-speed CAN-B at 50 kbit/s, and a 2020 Jumper cabin-bus implementation independently uses 50 kbit/s; live measurement must still tie the IHS/B/BH naming and rate to this pair. |
-| **B-CAN (observed body capture; legacy project label)** | 125 kbit/s | separate low-speed adapter wiring, **not** pins 6/14; exact CAN CH-vs-IHS correspondence not yet proven | `bringup.sh --bcan` | comfort/body effects (locks, lights, interior) were live-observed at 125 kbit/s. This conflicts with the exact-vehicle OEM overview's `CAN-B (50K)` label, so the old capture's physical branch/name is unresolved rather than evidence against the OEM rate. AlfaOBD's UDS rides C-CAN, not this capture. |
 
 The currently configured C-CAN/B-CAN modes come up **passive (listen-only)** by default;
 `bringup.sh --tx` arms transmission (UDS needs it).
@@ -31,7 +30,8 @@ The currently configured C-CAN/B-CAN modes come up **passive (listen-only)** by 
 The DLC pin names above come from local OEM diagram `2022_VF_EN_18-000-000`, revision 2064:
 `/home/pi/dev/ram_2022_GAS/diagrams/systems/data_link_connector.html`. That source establishes
 physical topology, not bitrate. Its companion CAN C/CH/IHS topology diagrams identify attached
-modules, but CH and IHS still require passive rate/signature surveys on this van.
+modules. The labeled pigtail plus the 2026-07-20 passive captures now tie CAN IHS/B-CAN to pins
+3/11 at 125 kbit/s; CAN CH still requires a live survey if it becomes relevant.
 
 [AlfaOBD's current hardware guide](https://alfaobd.com/) independently identifies pins 12/13 as
 the second high-speed CAN bus for 2022+ ProMaster and describes the supported PowerNet/CUSW layout
@@ -39,17 +39,17 @@ as high-speed CAN on 6/14 plus middle-speed CAN on 3/11. Its
 [vehicle table](https://www.alfaobd.com/supported_cars.html) specifically assigns the grey
 second-high-speed adapter to `RAM PRO MASTER (VF) 2022+`, rather than the yellow adapter used by
 pre-2022 VF. This is strong diagnostic-tool-vendor provenance for bus class and adapter routing,
-but it is not a live bitrate measurement or an OEM address map. Survey 12/13 at 500 kbit/s first
-and 3/11 at 50 kbit/s first, always listen-only.
+but it is not a live bitrate measurement or an OEM address map. The 3/11 live rate is now established
+independently at 125 kbit/s. Survey 12/13 at 500 kbit/s first if CAN CH work is later prioritized.
 
 The exact-vehicle OEM `COMMUNICATION / CAN BUS DESCRIPTION` at
 `/home/pi/dev/ram_2022_GAS/data_pages/article/63088/guid/na-cr22vf-GUID-4C3C4E91-36D8-4B2A-A666-DF07A5921AF8_html.html`
 explicitly calls CAN-C **500K** and CAN-B **50K**. Its layout uses additional branch labels
-(`C-1` through `C-8` and `BH`) while the DLC diagram says CAN C/CH/IHS, so it does not by itself
-prove which DLC auxiliary pair carries the 50-kbit/s branch. Treat 50 kbit/s as the first IHS
-survey candidate and preserve the independently observed 125-kbit/s legacy capture until repinning
-ties each trace to pins 3/11 or 12/13. Public related-platform candidates and exact IDs to search are
-recorded in [`2026-07-19_related_platform_bus_leads.md`](../projects/ecu_mapping/findings/promaster_2022/2026-07-19_related_platform_bus_leads.md).
+(`C-1` through `C-8` and `BH`) while the DLC diagram says CAN C/CH/IHS. The document's 50K statement
+therefore describes a differently named internal branch or conflicts with the exposed DLC branch; it
+does **not** override the live 125-kbit/s measurement on pins 3/11. The related-platform 50-kbit/s lead
+is retained as historical research context, not as the current survey plan, in
+[`2026-07-19_related_platform_bus_leads.md`](../projects/ecu_mapping/findings/promaster_2022/2026-07-19_related_platform_bus_leads.md).
 
 ---
 
@@ -67,12 +67,26 @@ registry can't hold; keep the addresses in sync with `lib/modules.py`.
 | `bcm_ccan` | Body Control Module, C-CAN endpoint | C-CAN | `18DA40F1` → `18DAF140` | Live identity on 2026-07-19: `F187=68524831AF`, `F192=BC637M.0001`; actuation remains power-mode gated. |
 | `cluster` | Marelli Instrument Panel Cluster (IPC) | C-CAN | `18DA60F1` → `18DAF160` | Live identity on 2026-07-19: `F187=68517084AD`, `F192=50019990002`. FCA's [NHTSA Part 573 filing](https://downloads.regulations.gov/NHTSA-2023-0046-0001/attachment_1.pdf) identifies `68517084AD` as the Marelli IPC. |
 | `telematics` | Global Telematics Box Module (TBM2) | C-CAN | `18DAC6F1` → `18DAF1C6` | Live identity on 2026-07-19: `F132=68510377AC`, `F192=TBM200A11P`. The TBM string, exact-part [Mopar catalog supersession](https://www.moparpartsgiant.com/parts/mopar-module-telematics~68647858aa.html), and exact-vehicle local OEM TBM2 procedure make the role high-confidence. |
-| *(not registered)* | BCM 11-bit body-bus endpoint | legacy observed B-CAN label | exact TX/RX pairing unverified; IDs `7C0 7B8 760 762 764 768 75C` were seen | Do not infer a `+8` pair. The verified C-CAN endpoint is `bcm_ccan`; add a separate 11-bit module only after a physical-pair survey and explicit pairing evidence. |
+
+No B-CAN diagnostic endpoint is registered. The previously listed `0x75C`, `0x760`, `0x762`,
+`0x764`, `0x768`, and `0x7C0` candidates are fixed-payload 1–2 Hz broadcasts, not an ISO-TP
+family; the one observed `0x7B8` frame contained ASCII `3231`, not a diagnostic response. A
+111-second B-CAN capture made during an AlfaOBD RF Hub session likewise contains no ISO-TP
+exchange, while the adapter trace addresses the RF Hub and BCM over their verified 29-bit C-CAN
+endpoints. Direct diagnostics on B-CAN are therefore **not established**. Do not infer `+8`
+pairs or add an 11-bit module without an actual request/response capture. See the
+[`B-CAN pair verification`](../projects/ecu_mapping/findings/promaster_2022/2026-07-20_bcan_pair_verification.md).
 
 > **AlfaOBD-only endpoint still unresolved on our tap:** `0x10` engine PCM (profile
 > "Tigershark/Pentastar MY21"). The 2026-07-19 default-session `22 F187` and `1A 87` probes
-> timed out; that is not proof of absence because the AlfaOBD trace suggests session `10 92`
-> precedes legacy identity. The other AlfaOBD-observed physical endpoints (`0x18`, `0x1F`,
+> timed out; that is not proof of absence. The current-van AlfaOBD trace repeatedly shows
+> `18DA10F1 -> 18DAF110`, `10 92 -> 50 92`, then `1A 87` with identity string
+> `68532157AI32157`; FCA's official J2534 report maps `68532157AI` to a 2022 VF 3.6L PCM
+> calibration. An unpadded exact-sequence probe with ignition ON/engine OFF timed out at `10 92`
+> on 2026-07-21 and correctly skipped `1A 87`. AlfaOBD configures its ELM adapter for fixed DLC 8,
+> while our first SocketCAN probe used minimum-DLC frames; an explicitly zero-padded retry is the
+> next discriminator. The endpoint remains unregistered until independently verified. The other
+> AlfaOBD-observed physical endpoints (`0x18`, `0x1F`,
 > `0x2A`, `0x40`, and `0xC7`) are now independently live-verified and registered. See
 > [`2026-07-19_live_ecu_discovery.md`](../projects/ecu_mapping/findings/promaster_2022/2026-07-19_live_ecu_discovery.md).
 
@@ -126,6 +140,7 @@ unrelated. Each module keeps its own canonical map next to its analysis:
 
 - **radar_acc** → [`projects/radar/findings/did_map.md`](../projects/radar/findings/did_map.md) — canonical 56-DID map (sessions, security, routines, DTCs, angle scaling). Full sweep: `projects/radar/findings/radar_acc_did_sweep.txt`.
 - **rf_hub** → [`projects/tpms/README.md`](../projects/tpms/README.md) — TPMS/RKE DID map inline (pressure `31D0-31D3`, sensor-ID `31CB-31CE`, snapshot/extended-data DIDs, the verified wheel↔slot table). Full sweep: `projects/tpms/findings/rf_hub_did_sweep.txt`.
+- **tcm / shifter / bcm_ccan / cluster / telematics** → [`2026-07-21 candidate DID inventory`](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_candidate_did_inventory.md) — complete inherited-session `F100-F1FF` results per ECU plus BCM candidate/page inventories. A controlled comparison proved BCM `40A3` and `40A6` are exposed by session `03`. Keep these namespaces separate; labels/scaling outside established identity strings remain unresolved.
 
 To plan a new module inventory without touching CAN, run
 `python3 tools/did_sweep.py <key> START END` (dry-run is the default). A parked live run requires

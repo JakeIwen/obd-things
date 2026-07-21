@@ -179,6 +179,7 @@ class UdsSendCliSafetyTests(unittest.TestCase):
         sock = mock.Mock()
         sig = uds_send.diagnostic_safety.signal
         current = {
+            sig.SIGINT: mock.sentinel.old_int,
             sig.SIGTERM: mock.sentinel.old_term,
             sig.SIGHUP: mock.sentinel.old_hup,
         }

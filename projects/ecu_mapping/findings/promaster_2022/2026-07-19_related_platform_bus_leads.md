@@ -1,12 +1,20 @@
 # Related-platform passive bus leads — 2026-07-19
 
+> **Status update, 2026-07-20:** the 50-kbit/s hypothesis is superseded for this van's DLC
+> pins 3/11. The owner identified the connected leg of the dual-DB9 OBD pigtail as B-CAN, and
+> three listen-only captures received the established body-bus signature at **125 kbit/s** with
+> zero RX errors. See
+> [`2026-07-20_bcan_pair_verification.md`](2026-07-20_bcan_pair_verification.md). The material
+> below remains useful as related-platform vocabulary and for other branches, not as a 3/11
+> bitrate or identifier prediction.
+
 ## Why this is only a candidate list
 
 The 2022 US ProMaster is related to the Fiat Ducato/Citroën Jumper platform, but model year,
 market, ECU generation, bus branch, identifiers, and scaling can all differ. Nothing below is a
-verified ProMaster decode. These leads are useful only for prioritizing **passive** searches after
-the PCAN is physically moved to DLC pairs 3/11 and 12/13. A matching identifier is still not enough
-to promote a signal: require payload behavior plus a controlled ground-truth event on this van.
+verified ProMaster decode. These leads remain useful only for prioritizing **passive** searches on
+unresolved branches or comparing dialects. A matching identifier is still not enough to promote a
+signal: require payload behavior plus a controlled ground-truth event on this van.
 
 ## Public 2020 Citroën Jumper implementation
 
@@ -14,11 +22,10 @@ The GPL-3.0 project [`danielfett/miqro_can`](https://github.com/danielfett/miqro
 commit `aba4bd856c9cf98db9b0da583f5e6a44f7aa6bc3`, says it was tested on a 2020 Citroën Jumper's
 "entertainment CAN bus." Its current code configures SocketCAN at **50 kbit/s** and listens for
 29-bit identifiers. The exact-vehicle local OEM `COMMUNICATION / CAN BUS DESCRIPTION` independently
-declares CAN-C at 500K and its lower-speed CAN-B at **50K**. That makes 50 kbit/s the leading rate
-for the ProMaster CAN-IHS survey, but still not a live-established rate for DLC pins 3/11: the OEM
-documents mix CAN IHS, CAN-B/BH, and branch labels without explicitly tying that rate sentence to
-the auxiliary DLC pair. The topology puts radio, telematics, cluster, HVAC, and other cabin modules
-on CAN IHS, which is why pins 3/11 are the first passive place to test it.
+declares CAN-C at 500K and a lower-speed CAN-B branch at **50K**. That originally made 50 kbit/s a
+reasonable survey candidate, but live evidence now establishes the exposed DLC pins 3/11 at
+**125 kbit/s**. The OEM documents mix CAN IHS, CAN-B/BH, and branch labels; the 50K statement must
+refer to a differently named internal branch or be a documentation mismatch for this configuration.
 
 High-value identifier/decode candidates from that implementation are:
 
@@ -37,8 +44,8 @@ High-value identifier/decode candidates from that implementation are:
 | `04214001` | reverse | byte 7 low-state candidate |
 
 These formulas are third-party reverse-engineering claims, not OEM definitions. Their greatest
-near-term value is as a signature set: if several of the exact IDs appear together at 50 kbit/s on
-one physical pair, that is much stronger evidence of a related cabin-bus dialect than any one ID.
+remaining value is as a signature set for a different branch or related vehicle. These IDs are not
+expected constants for this van's now-verified 125-kbit/s B-CAN.
 
 ## Comparison with the current C-CAN capture
 
@@ -76,16 +83,13 @@ particular, do not turn the ScanDoc values shown from another vehicle into expec
 this van. Multiecuscan's `INFO/DTC/PRM/ACT/ADJ` support flags likewise expose capabilities, not
 wire-level CAN identifiers, request bytes, numeric DIDs, layouts, or scaling.
 
-## Parked physical-pair survey order
+## Parked physical-pair survey status
 
-1. Repin the PCAN to DLC 3/11 with the vehicle parked; probe passively at observed/error-safe rates,
-   starting with 50 kbit/s. [AlfaOBD's current hardware guide](https://alfaobd.com/) describes this
-   as the middle-speed pair for its supported PowerNet/CUSW layout, while its 2022+ ProMaster notes
-   separately call pins 12/13 the second high-speed CAN bus. Do not use the related project's
-   automatic recovery code because it reconfigures the interface and is not a passive survey workflow.
-2. If several candidate IDs appear, capture ignition-off through ignition-on and controlled events
-   (one door, parking brake, reverse selection only while stationary, known outside temperature).
-3. Survey DLC 12/13 independently, starting at 500 kbit/s because AlfaOBD identifies it as the
+1. **Completed 2026-07-20:** DLC 3/11 via the pigtail's B-CAN DB9, 125 kbit/s, listen-only,
+   established body-bus signature, zero RX errors.
+2. **Completed 2026-07-20:** ignition-off fob wake, ignition OFF→ON, and steady ignition-on captures.
+   Continue controlled body-event experiments only when they serve a specific decode question.
+3. If CAN CH becomes relevant, survey DLC 12/13 independently, starting at 500 kbit/s because AlfaOBD identifies it as the
    second high-speed pair for 2022+ ProMaster. The exact rate remains a live-measurement question;
    do not assume CAN-CH and CAN-IHS share a rate or identifier set.
 4. Promote only this-van evidence into `docs/bus-map.md`, with the capture path and experiment.

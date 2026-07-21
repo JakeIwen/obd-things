@@ -56,8 +56,10 @@ service, cron, network, and vehicle state before acting.
 - `~/claude/shared-files/old.AlfaOBD_Debug.bin` is a large aggregate from the owner's previous 2015
   diesel ProMaster, not the current van. Treat its modules/DIDs only as same-family candidates to verify.
 - `~/claude/shared-files/AlfaOBD logs and data July 8 2026/AlfaOBD_Debug.bin` and the RFH, adaptive-cruise,
-  and engine info logs are from the current 2022 van. The `BCDELPHI_Info.log` inside that set is stale
-  2015-van data. Verify source VIN while decoding and keep unique VIN digits out of tracked output.
+  and engine info logs are from the current 2022 van. `BCDELPHI_Info.log` is cumulative and mixed:
+  early snapshots include the 2015 van, while its 2026-06-22 tail time-aligns with current-van BCM
+  commands. Use only timestamp-correlated records, never the file wholesale. Verify source VIN while
+  decoding and keep unique VIN digits out of tracked output.
 - AlfaOBD debug bins use ASCII hex representing bytes XORed with `0xFF`. The maintained pipeline is
   `tools/alfaobd_decode.py` → `projects/ecu_mapping/vin_scan.py` → `extract_did_map.py` →
   `reassemble_commands.py`; read `projects/ecu_mapping/README.md` first.

@@ -25,9 +25,12 @@ possibly an early poke at 2022 ProMaster or another vehicle). So the promaster_2
 
 Within the fresh folder, `AlfaOBD_Debug.bin` (2.9 MB) is **100 % 2022 ProMaster**, and
 `RFH_FGA_Info.log` / `ADAPTIVE_CRUISE_Info.log` / `TIGERSHARK_CUSW_Info.log` are 2022 ProMaster.
-**Gotcha:** `BCDELPHI_Info.log` (Body Computer text log) is **stale — still the 2015 van**;
-re-capture BCM text on 2022 ProMaster if you need it (the fresh `.bin` did catch 2022 ProMaster BCM).
-Always run `vin_scan.py` on any new log first. See memory `[[alfaobd-debug-bin-other-van]]`.
+**Gotcha:** `BCDELPHI_Info.log` is a cumulative, mixed-vehicle Body Computer text log. Its early
+status/DTC snapshots include the old 2015 van and cannot be applied wholesale to this vehicle, but
+its 2026-06-22 tail aligns within seconds with the current-van debug trace's BCM configuration write
+and DTC clear. Use only timestamp-correlated entries, and capture a fresh single-module log when a
+label matters. Always run `vin_scan.py` on any new debug bin first. See memory
+`[[alfaobd-debug-bin-other-van]]`.
 
 ## The AlfaOBD debug format
 
@@ -36,6 +39,9 @@ are the **ones-complement (XOR 0xFF)** of the log text. Decoded, it's a timestam
 adapter trace: `HH:MM:SS.mmm S:/R: <hex>`, where each payload is hex-encoded ASCII (a UDS
 message like `22F190`, or an `AT`/`ST` command). Multi-frame responses come back as a length
 line + indexed `0:`/`1:`/`2:` segments. `ATSH <hdr>` lines set the target module address.
+Because AlfaOBD may write the full date only at `Recording closed`, the parsers pre-index
+clock-ordered header/close pairs before streaming exchanges; long-open or unclosed recordings keep
+the prior best-known date instead of being blindly backdated from a later close marker.
 
 To capture a fresh one on the tablet: enable **Debug Data recording** (raw) and ideally
 **Gauges data recording** (labeled CSV, `Gauges_Data.log`) in Preferences, drive the
@@ -83,9 +89,28 @@ Direct live discovery on 2026-07-19 independently verified C-CAN endpoints `0x18
 session. See [`2026-07-19_live_ecu_discovery.md`](findings/promaster_2022/2026-07-19_live_ecu_discovery.md).
 The companion [`ODX/PDX source research`](findings/promaster_2022/2026-07-19_odx_pdx_source_research.md)
 records the free local toolchain, searched sources, and remaining acquisition paths.
+The [`2026-07-21 read-only module inventory`](findings/promaster_2022/2026-07-21_readonly_module_inventory.md)
+completes inherited-session `18DAxxF1` address coverage and records bounded DTC/result-only routine
+responses for all seven verified C-CAN modules. It found no additional address responder; DTC state
+and routine-response leads are kept per module there.
+The follow-on [`candidate DID inventory`](findings/promaster_2022/2026-07-21_candidate_did_inventory.md)
+records complete `F100-F1FF` pages for TCM, shifter, BCM, cluster, and telematics plus a direct
+recheck of 61 current-van AlfaOBD BCM candidates. It established 135 positive identity-page
+responses and reverified 59 BCM candidates. A controlled follow-up proved BCM `40A3`/`40A6` are
+session-gated: both returned `7F 22 31` in the inherited state and positive data after validated
+`10 03 -> 50 03 00 32 01 F4` under otherwise unchanged conditions.
+The subsequent four-page BCM pass completed 1,024/1,024 reads and found one additional positive,
+`2023`, whose complete 250-byte readback matches the later captured AlfaOBD PROXI/configuration write
+payload at every unredacted byte. It also preserved four condition-gated DIDs
+and the first controlled key-cycle evidence for dynamic BCM values.
 The [`related-platform passive bus leads`](findings/promaster_2022/2026-07-19_related_platform_bus_leads.md)
-record a 50-kbit/s/29-bit 2020 Citroën Jumper cabin-bus hypothesis and candidate IDs to check only
-after the PCAN is physically repinned; none are yet verified on this van.
+record a 50-kbit/s/29-bit 2020 Citroën Jumper cabin-bus hypothesis. It is now explicitly superseded
+for this van's DLC 3/11 branch: the labeled B-CAN pigtail and passive captures live-verified that pair
+at 125 kbit/s on 2026-07-20. See the
+[`B-CAN pair verification`](findings/promaster_2022/2026-07-20_bcan_pair_verification.md).
+That analysis also rejects the old high 11-bit candidates as fixed-rate application broadcasts;
+no direct B-CAN diagnostic endpoint is currently established, so active inventories stay on the
+verified C-CAN endpoints while B-CAN remains a passive signal/event source.
 The [`2026-07-19 passive drive analysis`](findings/promaster_2022/2026-07-19_ccan_drive_signal_analysis.md)
 corrects CAN ID `0x101` from the old odometer hypothesis to a packed instantaneous-speed field,
 corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one known-speed reference.
@@ -96,23 +121,38 @@ corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one
 - **BCM (0x40)** — real commands (from the reassembled log): `2F` IO-control actuations that
   **succeeded** (`2F5115/5118/5120/5040/5041/5050` → `6F..03`/`6F..00` return-control), each run
   as `ctrl=03` (shortTermAdjustment) `opt=01`/`02` then `ctrl=00` (release); routine `31 01 0200`
-  → `7F..22` conditionsNotCorrect (power-mode gated); two large **PROXI config writes**
-  (`2E 2023`, ~200-byte ASCII blocks); `10 03` session, `14` ClearDTC. **Correction:** the
+  → `7F..22` conditionsNotCorrect (power-mode gated); two large, positively acknowledged
+  **PROXI config writes** (`2E 2023`, 250-byte payloads, each `7F 2E 78` then `6E 20 23`);
+  `10 03` session, `14` ClearDTC. **Correction:** the
   `27`/`2A`/`2B` "commands" an earlier pass reported were **not** SecurityAccess — they were
   Consecutive Frames of the `2E 2023` write (nibble-2 PCI). **No `27` in this session.** With the
   SGW bypassed (`[[sgw-bypass-always]]`) the successful `2F` actuations are the remote-unlock
   lead; next is identifying *which* `2F` DID drives the door lock (correlate with what was
   actuated in AlfaOBD) and verifying on 2022 ProMaster via the tap before replaying.
+  Offline action-label recovery is currently exhausted: the current-van debug stream records the
+  raw commands but not the UI action names, `BT_Debug.log` contains connection transport rather than
+  those diagnostic payloads, and the mixed `BCDELPHI_Info.log` has no action annotation at the
+  June-12 command times. No AlfaOBD APK/database is present locally, and exact public-web/GitHub
+  searches on 2026-07-21 found no useful matches. A fresh, one-action-at-a-time AlfaOBD session with
+  the PCAN listening in parallel is the next evidence-producing step for labels; do not guess them
+  from command timing alone.
 - **RFH (0xC7)** full ID block + TPMS; pair with labeled `RFH_FGA_Info.log` (current faults
   `U0001/B1040/C1502-FR/C1501-FL`) for the TPMS project. See `../tpms/`.
 
 ## Next steps
 
-1. **Unlock:** identify which BCM `2F` IO-control DID drives the door lock/unlock (correlate the
+1. Repeat the AlfaOBD-only PCM `18DA10F1 -> 18DAF110` exact probe parked with ignition ON and engine
+   OFF, this time with fixed-DLC-8 zero padding and a filtered raw capture. The first unpadded attempt
+   timed out at `10 92`, while AlfaOBD's successful ELM setup explicitly selects fixed eight-byte
+   CAN frames. If the padded retry still fails, repeat with the engine idling. The expected identity
+   contains `68532157AI`, which FCA's official J2534 report maps to the exact 2022 VF 3.6L lineage.
+2. Run one bounded BCM `4000-40FF` page in session `03`. The controlled comparison has now proven
+   that extended session exposes `40A3` and `40A6`, justifying one session-specific page to bound
+   nearby hidden DIDs. It still requires explicit DiagnosticSessionControl authorization.
+   `tools/ccan_inventory_campaign.sh --session-followup` performs steps 1 and 2 together.
+3. **Unlock:** identify which BCM `2F` IO-control DID drives the door lock/unlock (correlate the
    command log's timestamps with the actuations run in AlfaOBD, or its labels), then verify on
    2022 ProMaster via the tap before replaying — `2F 51xx ctrl=03 opt=xx`. See `promaster_2022/command_log.txt`.
-2. Correlate `*_Info.log` labels ↔ debug-bin DIDs → labeled maps (start RFH/TPMS + radar).
-3. Improve `reassemble_commands.py` response capture for the long `2E` writes (currently the
-   request reassembles fully but the post-write response is only partly captured).
-4. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps
+4. Correlate `*_Info.log` labels ↔ debug-bin DIDs → labeled maps (start RFH/TPMS + radar).
+5. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps
    (`../../docs/bus-map.md`, `../../lib/modules.py`, project DID maps) per the maintenance rule.

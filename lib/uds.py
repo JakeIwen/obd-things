@@ -87,16 +87,24 @@ def _resolve_addressing_mode(addressing_mode):
 
 
 def open_socket(txid, rxid, channel=DEFAULT_CHANNEL, timeout=2.0,
-                addressing_mode=DEFAULT_ADDRESSING_MODE):
+                addressing_mode=DEFAULT_ADDRESSING_MODE, tx_padding=None):
     """Open an ISO-TP socket for explicit CAN IDs and addressing mode.
 
     ``addressing_mode`` is a repository-level string so module definitions do not depend on
     python-can-isotp. The default preserves the original 29-bit behavior.
     """
     isotp_mode = _resolve_addressing_mode(addressing_mode)
+    if tx_padding is not None and (
+        not isinstance(tx_padding, int)
+        or isinstance(tx_padding, bool)
+        or not 0 <= tx_padding <= 0xFF
+    ):
+        raise ValueError("tx_padding must be a byte between 0x00 and 0xFF, or None")
     s = isotp.socket()
     try:
         s.set_fc_opts(stmin=0, bs=0)          # stream FC: stmin 0, bs 0
+        if tx_padding is not None:
+            s.set_opts(txpad=tx_padding)
         s.bind(channel, address=isotp.Address(
             isotp_mode, txid=txid, rxid=rxid))
         s.settimeout(timeout)
@@ -109,7 +117,7 @@ def open_socket(txid, rxid, channel=DEFAULT_CHANNEL, timeout=2.0,
         raise
 
 
-def open_module_socket(module, timeout=2.0, channel=None):
+def open_module_socket(module, timeout=2.0, channel=None, tx_padding=None):
     """Open a socket using all transport metadata from a module registry entry."""
     return open_socket(
         module.txid,
@@ -117,6 +125,7 @@ def open_module_socket(module, timeout=2.0, channel=None):
         channel=channel or module.channel,
         timeout=timeout,
         addressing_mode=module.addressing_mode,
+        tx_padding=tx_padding,
     )
 
 

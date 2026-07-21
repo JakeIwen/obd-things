@@ -22,12 +22,30 @@ GitHub code searches for that identity and the additional live part numbers also
 Those reports corroborate hardware-family reuse only and are not a source for this van's DIDs or
 scaling.
 
+A 2026-07-21 follow-up after the five-module `F100-F1FF` live inventory searched the new exact
+supplier/configuration strings `13GJ6D0YN7CB`, `04446561007`, `TF0711552047510`, `AGSM637FCA`, and
+`P7FK46LXHAD`, as well as the earlier `TBM200A11P`. Neither public indexes nor the local OEM corpus
+produced an ODX/PDX or diagnostic-description hit. The official Mopar catalog does identify
+[`68524831AF` as a Body Controller](https://store.mopar.com/oem-parts/mopar-body-controller-module-68524831af),
+which corroborates the live BCM identity but adds no DID labels or encodings. Preserve this as a
+dated negative search; the exact live values and raw-report provenance are in
+[`2026-07-21_candidate_did_inventory.md`](2026-07-21_candidate_did_inventory.md).
+
+The same 2026-07-21 pass searched the six successful BCM IO-control request/response identifiers
+(`2F/6F 5040`, `5041`, `5050`, `5115`, `5118`, and `5120`) in contiguous and spaced forms across
+public web and authenticated GitHub code indexes, and searched the local OEM corpus for those values
+and IO-control terminology. It found no usable label/schema match. A public FCA CAN-monitor repository
+contained only older Alfa Romeo broadcast captures and parser code, not diagnostic descriptions.
+Local AlfaOBD artifacts contain the commands but no corresponding UI action labels, and no APK or
+application database is present. This makes a fresh labeled AlfaOBD capture—not another blind public
+search—the next source for those action names.
+
 The local `/home/pi/dev/ram_2022_GAS` corpus (about 1.7 GB / 5,925 HTML documents) contains
 service procedures and wiring/topology material, but the search found no `.odx`, `.pdx`, `.cdf`,
-`.cdd`, `.a2l`, or `.dbc` diagnostic database. The exact service-document tree on `m4mac` was
-not accessible from `vanpi` during this check: host `192.168.6.116` responded on the LAN, but
-SSH (22), SMB (445), and AFP (548) were closed. That is a temporal access observation, not a
-claim that the Mac lacks the files.
+`.cdd`, `.a2l`, or `.dbc` diagnostic database. The exact service-document tree on `m4mac` was not
+accessible from `vanpi` during the original check. A 2026-07-21 recheck again found `m4mac`
+responding on the LAN while SSH (22), SMB (445), and AFP (548) were closed. That is a temporal
+access observation, not a claim that the Mac lacks the files.
 
 ## Sources that did produce useful identity metadata
 

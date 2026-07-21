@@ -29,9 +29,13 @@ and 234 timeouts. The tool was then fixed to exclude `0xF1`.
 
 The subsequent legacy `1A 87` run covered all 255 usable target addresses. The same seven
 modern responders returned `7F 1A 11` (`serviceNotSupported`); the other 248 targets timed out.
-That result does not prove an ECU is absent. In particular, the PCM at `0x10` remains unresolved:
-the current-van AlfaOBD trace suggests it may require diagnostic session `10 92` before legacy
-identity service `1A 87`.
+That result does not prove an ECU is absent. In particular, the PCM at `0x10` remains unresolved
+on the PCAN, but the current-van AlfaOBD trace provides an exact, repeated sequence on physical
+`18DA10F1 -> 18DAF110`: `10 92 -> 50 92`, immediately followed by `1A 87 -> 5A 87 ...`.
+The 27-byte identity response contains ASCII `68532157AI32157`. FCA's official J2534 report maps
+`68532157AI` to the **2022 VF 3.6L PCM, 948TE, box on, 50-state** calibration lineage. This makes
+the role and expected identity high-confidence before the independent live probe, but the endpoint
+must not enter `lib/modules.py` until that probe succeeds from the PCAN tap.
 
 | phys | physical TX → RX | verified or inferred role | `F187` | corroborating identity |
 |---|---|---|---|---|
@@ -53,15 +57,22 @@ identity service `1A 87`.
 
 ## Next bounded steps
 
-1. While parked, complete modern `22 F187` coverage for `0xF2` through `0xFF` (the unattempted
-   tail of the interrupted modern run).
+1. **Completed 2026-07-21:** modern `22 F187` coverage for `0xF2` through `0xFF`; all 14 targets
+   timed out, adding no responder. See
+   [`2026-07-21_readonly_module_inventory.md`](2026-07-21_readonly_module_inventory.md).
 2. Confirm the TBM2 `0xC6` assignment with an official FCA part-number source if one becomes
    available; the live `TBM200A11P` identity, Mopar part supersession, and exact-vehicle OEM TBM2
    documentation already make it high-confidence.
-3. Review and, while parked, test the AlfaOBD-observed PCM `10 92` → `1A 87` sequence. Treat
-   the session change as active diagnostic state even though it is not an actuator.
-4. Run per-module non-clearing DTC inventories and result-only (`31 03`) routine inventories
-   only while parked; keep the potentially large `19 0A` supported-DTC catalog opt-in.
+3. **Attempted 2026-07-21, parked ignition ON/engine OFF:** the initial physical PCM probe sent an
+   unpadded `10 92` to `18DA10F1` but timed out; it therefore correctly skipped `1A 87`. The report
+   completed and restored passive mode. AlfaOBD's successful setup uses ELM `PP 2C=01, PP 2D=01`,
+   which the official ELM327 definition identifies as 29-bit ISO-15765, fixed DLC 8, 500 kbit/s.
+   The prepared retry now explicitly zero-pads transmitted ISO-TP frames and records a filtered raw
+   capture. Try that under the same ignition-ON/engine-OFF condition before testing with the engine
+   idling. Do not register the endpoint until an independent positive response is obtained.
+4. **Initial bounded pass completed 2026-07-21:** per-module non-clearing DTC inventories and
+   result-only (`31 03`) samples. Continue to keep the potentially large `19 0A` supported-DTC
+   catalog opt-in and do not treat requestSequenceError as proof a routine exists.
 
 ## Identity-source cross-checks
 
@@ -72,4 +83,6 @@ identity service `1A 87`.
   `TBM2` and places it on CAN-C:
   `/home/pi/dev/ram_2022_GAS/vehicle/all_diagnostic_trouble_codes_(_dtc_)/testing_and_inspection/b_code_charts/b22a9/b22a9-96/global_telematics_box_module_-_ecu_internal_performance_-_component_internal_failure.html`.
 - FCA's official [wiTECH J2534 report](https://kb.fcawitech.com/assets/J2534_FedWorldReport.pdf)
-  places `68532161AF` in the 2022 VF 3.6L 948TE TCM software lineage, corroborating address `0x18`.
+  places `68532161AF` in the 2022 VF 3.6L 948TE TCM software lineage, corroborating address `0x18`,
+  and maps the AlfaOBD PCM response string `68532157AI` specifically to a 2022 VF 3.6L PCM
+  948TE box-on 50-state calibration.

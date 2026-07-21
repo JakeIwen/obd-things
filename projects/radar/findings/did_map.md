@@ -100,3 +100,6 @@ internal C-CAN — this is why UDS works here and why OBD-II PIDs don't route. C
 - **RESOLVED 2026-06-27:** after the SDA, C1418-78 → **`0x0E`** (testFailed+warningInd cleared → ACC back);
   now a stored-history record that ages out (or one-time `14` clear). Status-byte bits: `0x01` testFailed,
   `0x02` tfThisOpCycle, `0x04` pending, `0x08` confirmed, `0x80` warningIndicatorRequested.
+- **2026-07-21 parked recheck:** `C1418-78=08` remains confirmed history with testFailed clear;
+  `C1408-86=08` (ESC fail-status signal invalid) is also confirmed history. Seven other records
+  were `40`. Neither record was currently failing, and nothing was cleared.

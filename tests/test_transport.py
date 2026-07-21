@@ -90,6 +90,31 @@ class UdsTransportTests(unittest.TestCase):
         )
         sock.bind.assert_called_once_with("can9", address=address.return_value)
 
+    def test_open_module_socket_can_request_fixed_dlc_padding(self):
+        module = Module("pcm", "PCM fixture", 0x18DA10F1, 0x18DAF110)
+        sock = mock.Mock()
+        with (
+            mock.patch.object(uds.isotp, "socket", return_value=sock),
+            mock.patch.object(uds.isotp, "Address"),
+        ):
+            uds.open_module_socket(module, timeout=0.75, tx_padding=0x00)
+
+        sock.set_opts.assert_called_once_with(txpad=0x00)
+        self.assertLess(
+            sock.method_calls.index(mock.call.set_opts(txpad=0x00)),
+            next(i for i, call in enumerate(sock.method_calls) if call[0] == "bind"),
+        )
+
+    def test_open_socket_rejects_invalid_padding_before_socket_creation(self):
+        for padding in (-1, 0x100, True, "00"):
+            with self.subTest(padding=padding):
+                with (
+                    mock.patch.object(uds.isotp, "socket") as socket_factory,
+                    self.assertRaisesRegex(ValueError, "tx_padding must be a byte"),
+                ):
+                    uds.open_socket(0x18DA10F1, 0x18DAF110, tx_padding=padding)
+                socket_factory.assert_not_called()
+
     def test_recover_module_socket_uses_registry_bitrate_and_mode(self):
         module = Module(
             "test_bcm",

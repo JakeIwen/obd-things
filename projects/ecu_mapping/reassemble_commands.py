@@ -21,7 +21,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from alfalog import iter_lines, ascii_of, phys_addr
+from alfalog import iter_lines, ascii_of, phys_addr, recording_date_hints
 
 _LINE = re.compile(r'^(\d{2}:\d{2}:\d{2}\.\d{3}) ([SR]): ([0-9A-Fa-f]*)$')
 _SEG  = re.compile(r'^([0-9A-Fa-f]):([0-9A-Fa-f]+)$')
@@ -33,6 +33,40 @@ NRC = {"11": "serviceNotSupported", "12": "subFunctionNotSupported",
        "33": "securityAccessDenied", "35": "invalidKey", "36": "exceedNumberOfAttempts",
        "78": "responsePending", "7E": "subFuncNotSupportedInActiveSession",
        "7F": "serviceNotSupportedInActiveSession"}
+
+
+def normalize_plain_response(raw):
+    """Strip ELM single-frame PCI bytes and retain the final UDS response.
+
+    AlfaOBD can log a response-pending frame and its eventual positive response as
+    adjacent unnumbered ISO-TP single frames, followed by a separate bare prompt.
+    Preserve unframed or malformed input so older decoded-log formats still work.
+    """
+    raw = raw.upper()
+    pos = 0
+    payloads = []
+    while pos < len(raw):
+        if len(raw) - pos < 2:
+            return raw
+        try:
+            pci = int(raw[pos:pos + 2], 16)
+        except ValueError:
+            return raw
+        if pci >> 4 != 0:
+            return raw
+        length = pci & 0x0F
+        end = pos + 2 + length * 2
+        if length == 0 or end > len(raw):
+            return raw
+        payloads.append(raw[pos + 2:end])
+        pos = end
+
+    if not payloads:
+        return raw
+    for payload in reversed(payloads):
+        if not (payload.startswith("7F") and len(payload) >= 6 and payload[4:6] == "78"):
+            return payload
+    return payloads[-1]
 
 
 def interpret(req, resp):
@@ -74,9 +108,12 @@ def iter_commands(path):
     ff_ts = None; decl = 0; req_hex = ""
     pend = None                   # single-frame request awaiting response
     rseg = {}; rplain = ""
+    adapter_reply = False         # ignore AT/ST acknowledgements inside an MF exchange
 
     def resp():
-        return ("".join(rseg[k] for k in sorted(rseg)) if rseg else rplain).upper()
+        if rseg:
+            return "".join(rseg[k] for k in sorted(rseg)).upper()
+        return normalize_plain_response(rplain)
 
     def accumulate(pay):
         nonlocal rplain
@@ -90,11 +127,14 @@ def iter_commands(path):
             elif re.fullmatch(r"[0-9A-Fa-f]{2,}", part):
                 rplain += part
 
-    for ln in iter_lines(path):
+    date_hints = recording_date_hints(path)
+    for line_number, ln in enumerate(iter_lines(path), 1):
         m = _LINE.match(ln)
         if not m:
             r = _REC.search(ln)
-            if r: module = r.group(1).strip()
+            if r:
+                module = r.group(1).strip()
+                date = date_hints.get(line_number, date)
             elif "Recording closed" in ln: module = None
             d = re.search(r'(\d{4}/\d{2}/\d{2})', ln)
             if d: date = d.group(1)
@@ -107,7 +147,9 @@ def iter_commands(path):
                 yield dict(ts=pend[0], date=date, addr=addr, module=module,
                            req=pend[1], resp=resp()); pend = None; rseg.clear(); rplain = ""
             if u.startswith("ATSH"): addr = u[4:]; continue
-            if u.startswith(("AT", "ST")): continue
+            if u.startswith(("AT", "ST")):
+                adapter_reply = True
+                continue
             if len(u) == 17 and u[0] == "1":          # First Frame
                 if mode == "mf" and req_hex:          # previous mf never got a response
                     yield dict(ts=ff_ts, date=date, addr=addr, module=module,
@@ -115,7 +157,7 @@ def iter_commands(path):
                 b = u[:16]; decl = int(b[:4], 16) & 0x0FFF
                 req_hex = b[4:]; ff_ts = ts; mode = "mf"; rseg.clear(); rplain = ""
                 continue
-            if mode == "mf" and len(u) == 17 and u[0] == "2":   # Consecutive Frame
+            if mode == "mf" and len(u) in (16, 17) and u[0] == "2":  # Consecutive Frame
                 req_hex += u[:16][2:]; continue
             # single-frame request
             if mode == "mf":
@@ -123,10 +165,19 @@ def iter_commands(path):
                            req=req_hex[:decl*2] if decl else req_hex, resp=""); mode = "idle"
             pend = (ts, u); rseg.clear(); rplain = ""
         else:                                          # R frame
+            if adapter_reply:
+                if ">" in pay:
+                    adapter_reply = False
+                continue
             if mode == "mf":
-                if u.startswith("30") or not u or u == ">":     # flow control / prompt
-                    if ">" in pay and not u.replace(">", ""):    # bare prompt only
-                        pass
+                if u.startswith("30") or not u:                  # flow control / blank
+                    continue
+                if u == ">":                                    # response ended on next line
+                    if rseg or rplain:
+                        full = req_hex[:decl*2] if decl else req_hex
+                        yield dict(ts=ff_ts, date=date, addr=addr, module=module,
+                                   req=full, resp=resp())
+                        mode = "idle"; rseg.clear(); rplain = ""
                     continue
                 accumulate(pay)
                 if ">" in pay:
@@ -141,6 +192,9 @@ def iter_commands(path):
                                req=pend[1], resp=resp()); pend = None; rseg.clear(); rplain = ""
     if pend is not None:
         yield dict(ts=pend[0], date=date, addr=addr, module=module, req=pend[1], resp=resp())
+    elif mode == "mf" and req_hex:
+        yield dict(ts=ff_ts, date=date, addr=addr, module=module,
+                   req=req_hex[:decl*2] if decl else req_hex, resp=resp())
 
 
 def main(argv):
@@ -153,6 +207,7 @@ def main(argv):
         g.write("# AlfaOBD reassembled COMMAND log (extrapolation) — multi-frame requests "
                 "rebuilt\n")
         g.write(f"# source: decoded log under tmp/ecu_mapping/  filter={filt or 'all modules'}\n")
+        g.write("# dates: later Recording-closed dates are applied only to clock-ordered blocks\n")
         g.write("# only command services (2E/2F/31/27/10/14); 22 reads + 3E omitted\n\n")
         last = None
         for ex in iter_commands(src):

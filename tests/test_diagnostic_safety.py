@@ -64,6 +64,7 @@ class DiagnosticLockTests(unittest.TestCase):
         installed = {}
         restored = []
         old_handlers = {
+            diagnostic_safety.signal.SIGINT: object(),
             diagnostic_safety.signal.SIGTERM: object(),
             diagnostic_safety.signal.SIGHUP: object(),
         }
@@ -90,6 +91,7 @@ class DiagnosticLockTests(unittest.TestCase):
         self.assertEqual(
             restored,
             [
+                (diagnostic_safety.signal.SIGINT, old_handlers[diagnostic_safety.signal.SIGINT]),
                 (diagnostic_safety.signal.SIGTERM, old_handlers[diagnostic_safety.signal.SIGTERM]),
                 (diagnostic_safety.signal.SIGHUP, old_handlers[diagnostic_safety.signal.SIGHUP]),
             ],
@@ -97,6 +99,7 @@ class DiagnosticLockTests(unittest.TestCase):
 
     def test_cleanup_phase_ignores_first_and_repeated_termination_signals(self):
         old_handlers = {
+            diagnostic_safety.signal.SIGINT: mock.sentinel.old_int,
             diagnostic_safety.signal.SIGTERM: mock.sentinel.old_term,
             diagnostic_safety.signal.SIGHUP: mock.sentinel.old_hup,
         }

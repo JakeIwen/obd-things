@@ -21,12 +21,10 @@ The tool refuses to run while tpms-logger is active, the interface is listen-onl
 the bitrate differs. It never uses functional broadcast. It restores listen-only mode even
 after an interrupted/failed scan and writes a JSON report under tmp/discovery/.
 
-For an explicitly researched 11-bit pair, replace the profile with one or more targets:
-
-    python3 tools/ecu_discover.py --target bcm_guess=760:768 \
-        --addressing-mode normal_11bits --bitrate 125000 --bus b-can
-
-Custom targets are dry-run by default too. Exact 11-bit pairings are intentionally not guessed.
+For an independently researched 11-bit pair, replace the profile with one or more
+``--target LABEL=TX:RX`` arguments and select ``--addressing-mode normal_11bits``.
+Custom targets are dry-run by default too. No ProMaster B-CAN diagnostic pair is currently
+verified, so this documentation intentionally does not provide a copyable guessed pair.
 
 An expanded 29-bit normal-fixed address-byte sweep is available only with an explicit flag and
 confirmation. It still sends physical 0x18DAxxF1 requests, never functional broadcast:
@@ -36,8 +34,25 @@ confirmation. It still sends physical 0x18DAxxF1 requests, never functional broa
         --execute --confirm-parked --pair 6/14 \
         --conditions "ignition ON, engine OFF, PCAN on SGW-bypass C-CAN"
 
+A bounded portion of that address-byte space can be selected without repeating a completed scan:
+
+    python3 tools/ecu_discover.py --address-byte-range F2 FF
+
+Live use of a range is also an unverified-address scan and requires ``--confirm-expanded-scan``.
+
 FCA modules using legacy ECU identification can be surveyed separately with
 ``--probe legacy-1a87``. This sends ReadECUIdentification, not a write or session change.
+
+One researched legacy target can optionally receive an explicit DiagnosticSessionControl
+preamble before its identity read. This is deliberately restricted to a single custom physical
+pair and requires a separate live confirmation::
+
+    python3 tools/ecu_discover.py --target pcm_candidate=18DA10F1:18DAF110 \
+        --probe legacy-1a87 --session 92 --tx-padding 00
+
+The exact current-van AlfaOBD trace used ``10 92 -> 50 92`` immediately before
+``1A 87 -> 5A 87 ...`` at that pair. Session selection changes diagnostic state even though the
+following identity request is non-mutating; dry-run remains the default.
 """
 import argparse
 import datetime
@@ -68,6 +83,30 @@ PROBE_PAYLOADS = {
 }
 
 
+def parse_session_byte(value):
+    try:
+        session = int(value, 16)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"invalid hexadecimal diagnostic session: {value!r}"
+        ) from None
+    if not 1 <= session <= 0xFF:
+        raise argparse.ArgumentTypeError("diagnostic session must be between 01 and FF")
+    return session
+
+
+def parse_padding_byte(value):
+    try:
+        padding = int(value, 16)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"invalid hexadecimal padding byte: {value!r}"
+        ) from None
+    if not 0 <= padding <= 0xFF:
+        raise argparse.ArgumentTypeError("padding byte must be between 00 and FF")
+    return padding
+
+
 @dataclass(frozen=True)
 class Candidate:
     label: str
@@ -78,6 +117,7 @@ class Candidate:
     bus: str = "c-can"
     bitrate: int = 500000
     addressing_mode: str = NORMAL_29BITS
+    tx_padding: int | None = None
 
     def module(self, channel):
         return Module(
@@ -143,6 +183,18 @@ def parse_can_id(value):
     return can_id
 
 
+def parse_address_byte(value):
+    try:
+        address = int(value, 16)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"invalid hexadecimal address byte: {value!r}"
+        ) from None
+    if not 0 <= address <= 0xFF:
+        raise argparse.ArgumentTypeError("address byte must be between 00 and FF")
+    return address
+
+
 def custom_candidate(spec, args, index):
     """Parse LABEL=TX:RX (or TX:RX) into a provenance-labeled candidate."""
     if "=" in spec:
@@ -164,6 +216,7 @@ def custom_candidate(spec, args, index):
         bus=args.bus,
         bitrate=args.bitrate,
         addressing_mode=args.addressing_mode,
+        tx_padding=getattr(args, "tx_padding", None),
     )
     if candidate.addressing_mode == NORMAL_11BITS and (
         candidate.txid == 0x7DF or candidate.rxid == 0x7DF
@@ -195,17 +248,36 @@ def build_targets(args):
                 )
             seen_pairs.add(pair)
         return targets
-    if args.all_29bit_targets:
-        return [
+    if args.all_29bit_targets or args.address_byte_range:
+        if args.address_byte_range:
+            start, end = args.address_byte_range
+            if start > end:
+                raise argparse.ArgumentTypeError(
+                    "address-byte range START must be less than or equal to END"
+                )
+            addresses = range(start, end + 1)
+            source = (
+                f"explicit bounded 29-bit normal-fixed address-byte enumeration "
+                f"0x{start:02X}-0x{end:02X}"
+            )
+        else:
+            addresses = range(0x100)
+            source = "explicit exhaustive 29-bit normal-fixed address-byte enumeration"
+        targets = [
             normal_29bit_candidate(
                 f"address_{address:02X}",
                 f"Unverified physical address 0x{address:02X}",
                 address,
-                "explicit exhaustive 29-bit normal-fixed address-byte enumeration",
+                source,
             )
-            for address in range(0x100)
+            for address in addresses
             if address != 0xF1  # tester source address; would make TX and RX CAN IDs identical
         ]
+        if not targets:
+            raise argparse.ArgumentTypeError(
+                "address-byte selection contains only reserved tester address 0xF1"
+            )
+        return targets
     return list(PROMASTER_CCAN_CANDIDATES)
 
 
@@ -261,13 +333,66 @@ def classify_response(request_payload, response, status):
     return "unexpected"
 
 
-def scan_target(candidate, channel, timeout, request_payload=None):
+def classify_session_response(session, response):
+    if not response:
+        return "timeout"
+    if len(response) >= 3 and response[:2] == bytes.fromhex("7F 10"):
+        return "negative"
+    if len(response) >= 2 and response[:2] == bytes((0x50, session)):
+        return "positive_echo"
+    return "unexpected"
+
+
+def scan_target(candidate, channel, timeout, request_payload=None, session=None):
     request_payload = request_payload or PROBE_PAYLOADS["uds-f187"]
     started = time.monotonic()
     sock = None
     request_attempted = False
+    response_received = False
+    session_request = bytes((0x10, session)) if session is not None else None
+    session_request_attempted = False
+    session_response = None
+    session_response_received = False
+    session_category = None
+    session_status = None
+
+    def session_result_fields():
+        return {
+            "session_request_hex": uds.hx(session_request) if session_request else None,
+            "session_response_hex": uds.hx(session_response) if session_response else None,
+            "session_category": session_category,
+            "session_status": session_status,
+            "session_negative_response": uds.negative_response_details(session_response),
+            "session_request_attempted": session_request_attempted,
+            "session_response_received": session_response_received,
+        }
+
     try:
-        sock = uds.open_module_socket(candidate.module(channel), timeout=timeout)
+        sock = uds.open_module_socket(
+            candidate.module(channel), timeout=timeout, tx_padding=candidate.tx_padding
+        )
+        if session_request is not None:
+            uds.drain(sock)
+            session_request_attempted = True
+            session_response, session_status = uds.request(
+                sock, session_request, timeout=timeout, retries=0
+            )
+            session_response_received = bool(session_response)
+            session_category = classify_session_response(session, session_response)
+            if session_category != "positive_echo":
+                return {
+                    **asdict(candidate),
+                    **session_result_fields(),
+                    "request_hex": uds.hx(request_payload),
+                    "response_hex": None,
+                    "category": f"session_{session_category}",
+                    "present": bool(session_response),
+                    "request_attempted": False,
+                    "response_received": False,
+                    "status": "identity probe skipped because session echo was not validated",
+                    "negative_response": uds.negative_response_details(session_response),
+                    "elapsed_s": round(time.monotonic() - started, 3),
+                }
         # A newly bound socket can still receive a late response from an earlier use of the
         # same physical pair. Empty it before associating any response with this request.
         uds.drain(sock)
@@ -275,15 +400,17 @@ def scan_target(candidate, channel, timeout, request_payload=None):
         # Increment before calling so a receive-side transport exception cannot erase the attempt.
         request_attempted = True
         response, status = uds.request(sock, request_payload, timeout=timeout, retries=0)
+        response_received = bool(response)
         category = classify_response(request_payload, response, status)
         return {
             **asdict(candidate),
+            **session_result_fields(),
             "request_hex": uds.hx(request_payload),
             "response_hex": uds.hx(response) if response else None,
             "category": category,
             "present": bool(response),
             "request_attempted": request_attempted,
-            "response_received": bool(response),
+            "response_received": response_received,
             "status": status,
             "negative_response": uds.negative_response_details(response),
             "elapsed_s": round(time.monotonic() - started, 3),
@@ -291,6 +418,7 @@ def scan_target(candidate, channel, timeout, request_payload=None):
     except OSError as exc:
         return {
             **asdict(candidate),
+            **session_result_fields(),
             "request_hex": uds.hx(request_payload),
             "response_hex": None,
             "category": "transport_error",
@@ -310,12 +438,18 @@ def scan_target(candidate, channel, timeout, request_payload=None):
 
 
 def scan_targets(targets, channel, timeout, request_rate, results, quiet_timeouts=False,
-                 request_payload=None):
+                 request_payload=None, session=None):
     interval = 1.0 / request_rate
     for index, candidate in enumerate(targets):
-        result = scan_target(candidate, channel, timeout, request_payload=request_payload)
+        result = scan_target(
+            candidate,
+            channel,
+            timeout,
+            request_payload=request_payload,
+            session=session,
+        )
         results.append(result)
-        response = result["response_hex"] or "(none)"
+        response = result["response_hex"] or result.get("session_response_hex") or "(none)"
         if not quiet_timeouts or result["category"] != "timeout":
             print(
                 f"{candidate.label:<22} TX={candidate.txid:X} RX={candidate.rxid:X} "
@@ -362,6 +496,20 @@ def parser():
         default="uds-f187",
         help="non-mutating presence request (default: uds-f187)",
     )
+    p.add_argument(
+        "--session",
+        type=parse_session_byte,
+        metavar="HEX",
+        help=(
+            "explicit DiagnosticSessionControl byte before the identity read; restricted to "
+            "one custom target with --probe legacy-1a87"
+        ),
+    )
+    p.add_argument(
+        "--confirm-session-change",
+        action="store_true",
+        help="required live with --session",
+    )
     target_group = p.add_mutually_exclusive_group()
     target_group.add_argument("--target", action="append", help="explicit LABEL=TX:RX; replaces default profile")
     target_group.add_argument(
@@ -372,10 +520,20 @@ def parser():
             "0xF1 is reserved for the tester"
         ),
     )
+    target_group.add_argument(
+        "--address-byte-range",
+        nargs=2,
+        type=parse_address_byte,
+        metavar=("START", "END"),
+        help=(
+            "enumerate an inclusive bounded range of 29-bit normal-fixed target address bytes; "
+            "0xF1 is reserved for the tester"
+        ),
+    )
     p.add_argument(
         "--confirm-expanded-scan",
         action="store_true",
-        help="required with --execute --all-29bit-targets",
+        help="required with live all-target or bounded address-byte scans",
     )
     p.add_argument(
         "--confirm-custom-physical",
@@ -383,6 +541,12 @@ def parser():
         help="required for live custom targets; asserts every supplied TX/RX pair is physical",
     )
     p.add_argument("--addressing-mode", choices=(NORMAL_29BITS, NORMAL_11BITS), default=NORMAL_29BITS)
+    p.add_argument(
+        "--tx-padding",
+        type=parse_padding_byte,
+        metavar="HEX",
+        help="pad transmitted ISO-TP CAN frames to DLC 8 with this byte; custom targets only",
+    )
     p.add_argument("--bitrate", type=int, default=500000)
     p.add_argument("--bus", default="c-can", help="bus label recorded for custom targets")
     p.add_argument("--pair", help="physical DLC/tap pair, required with --execute (for example 6/14)")
@@ -408,17 +572,25 @@ def main(argv=None):
             file=sys.stderr,
         )
         return 2
-    if args.confirm_expanded_scan and not args.all_29bit_targets:
-        print("ERROR: --confirm-expanded-scan requires --all-29bit-targets", file=sys.stderr)
+    expanded_selection = bool(args.all_29bit_targets or args.address_byte_range)
+    if args.confirm_expanded_scan and not expanded_selection:
+        print(
+            "ERROR: --confirm-expanded-scan requires --all-29bit-targets or "
+            "--address-byte-range",
+            file=sys.stderr,
+        )
         return 2
     if args.confirm_custom_physical and not args.target:
         print("ERROR: --confirm-custom-physical requires at least one --target", file=sys.stderr)
         return 2
     if not args.target and (
-        args.addressing_mode != NORMAL_29BITS or args.bitrate != 500000 or args.bus != "c-can"
+        args.addressing_mode != NORMAL_29BITS
+        or args.bitrate != 500000
+        or args.bus != "c-can"
+        or args.tx_padding is not None
     ):
         print(
-            "ERROR: --addressing-mode, --bitrate, and --bus only apply with --target",
+            "ERROR: --addressing-mode, --bitrate, --bus, and --tx-padding only apply with --target",
             file=sys.stderr,
         )
         return 2
@@ -428,22 +600,38 @@ def main(argv=None):
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
+    if args.confirm_session_change and args.session is None:
+        print("ERROR: --confirm-session-change requires --session", file=sys.stderr)
+        return 2
+    if args.session is not None and (
+        args.probe != "legacy-1a87" or not args.target or len(targets) != 1
+    ):
+        print(
+            "ERROR: --session is restricted to one custom physical target with "
+            "--probe legacy-1a87",
+            file=sys.stderr,
+        )
+        return 2
+
     request_payload = PROBE_PAYLOADS[args.probe]
     print(
         f"ACTIVE DIAGNOSTIC ECU DISCOVERY "
         f"(physical {uds.hx(request_payload)}; never functional broadcast)"
     )
     print(f"channel={args.channel} targets={len(targets)} max_rate={args.rate:g}/s")
+    if args.session is not None:
+        print(f"session preamble: physical 10 {args.session:02X}; exact 50 {args.session:02X} echo required")
     for candidate in targets:
         print(
             f"  {candidate.label:<22} {candidate.addressing_mode:<13} "
             f"{candidate.bitrate:>6} bit/s TX={candidate.txid:X} RX={candidate.rxid:X}"
+            + (f" txpad={candidate.tx_padding:02X}" if candidate.tx_padding is not None else "")
         )
 
     if not args.execute:
         print("\nDRY RUN: no CAN sockets opened and nothing transmitted. Add --execute only after passive survey.")
         return 0
-    if args.all_29bit_targets and not args.confirm_expanded_scan:
+    if expanded_selection and not args.confirm_expanded_scan:
         print(
             "ERROR: expanded mode requires --confirm-expanded-scan with --execute",
             file=sys.stderr,
@@ -452,6 +640,12 @@ def main(argv=None):
     if args.target and not args.confirm_custom_physical:
         print(
             "ERROR: live custom targets require --confirm-custom-physical",
+            file=sys.stderr,
+        )
+        return 2
+    if args.session is not None and not args.confirm_session_change:
+        print(
+            "ERROR: live session selection requires --confirm-session-change",
             file=sys.stderr,
         )
         return 2
@@ -515,8 +709,9 @@ def main(argv=None):
             args.timeout,
             args.rate,
             results,
-            quiet_timeouts=args.all_29bit_targets,
+            quiet_timeouts=expanded_selection,
             request_payload=request_payload,
+            session=args.session,
         )
     except KeyboardInterrupt:
         interrupted = True
@@ -550,11 +745,22 @@ def main(argv=None):
                     "request": uds.hx(request_payload),
                     "functional_broadcast": False,
                     "custom_pairs_asserted_physical": bool(args.target),
-                    "diagnostic_session_control_sent": False,
-                    "ecu_session": "inherited/unknown",
+                    "diagnostic_session_control_sent": any(
+                        bool(result.get("session_request_attempted")) for result in results
+                    ),
+                    "requested_session": (
+                        f"{args.session:02X}" if args.session is not None else None
+                    ),
+                    "ecu_session": (
+                        f"explicit_{args.session:02X}"
+                        if args.session is not None
+                        else "inherited/unknown"
+                    ),
                     "target_selection": (
                         "all_29bit_physical_addresses"
                         if args.all_29bit_targets
+                        else "bounded_29bit_physical_address_range"
+                        if args.address_byte_range
                         else "custom_explicit_pairs"
                         if args.target
                         else "promaster_ccan_verified_endpoints"
@@ -577,10 +783,14 @@ def main(argv=None):
                     "fatal_errors": fatal_errors,
                     "restored_passive": restored_passive,
                     "request_attempts": sum(
-                        bool(result.get("request_attempted")) for result in results
+                        bool(result.get("request_attempted"))
+                        + bool(result.get("session_request_attempted"))
+                        for result in results
                     ),
                     "responses_received": sum(
-                        bool(result.get("response_received")) for result in results
+                        bool(result.get("response_received"))
+                        + bool(result.get("session_response_received"))
+                        for result in results
                     ),
                     "count_semantics": (
                         "request_attempts counts uds.request calls initiated before the call; "

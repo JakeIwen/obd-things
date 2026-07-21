@@ -180,6 +180,10 @@ class ActiveDiagnosticLockTests(unittest.TestCase):
                     "6/14",
                     "--conditions",
                     "parked test",
+                    "--seconds",
+                    "0.1",
+                    "--max-requests",
+                    "2",
                 ],
             )
 
@@ -190,6 +194,9 @@ class ActiveDiagnosticLockTests(unittest.TestCase):
         events = []
         sock = mock.Mock()
         sock.close.side_effect = lambda: events.append("close")
+        # Keep an accidentally unmocked drain bounded. A bare Mock.recv() returns another
+        # truthy Mock forever, which can turn uds.drain() into an unbounded call-recording loop.
+        sock.recv.side_effect = BlockingIOError
         with tempfile.TemporaryDirectory() as directory:
             with (
                 mock.patch.object(tpms_logger, "CSV_PATH", os.path.join(directory, "drive.csv")),
@@ -209,7 +216,9 @@ class ActiveDiagnosticLockTests(unittest.TestCase):
                     "open_socket",
                     side_effect=lambda *_args, **_kwargs: events.append("open") or sock,
                 ),
-                mock.patch.object(tpms_logger, "read_did", side_effect=KeyboardInterrupt),
+                mock.patch.object(
+                    tpms_logger, "read_did_evidence", side_effect=KeyboardInterrupt
+                ),
                 mock.patch("builtins.print"),
             ):
                 with self.assertRaises(KeyboardInterrupt):
@@ -223,6 +232,11 @@ class ActiveDiagnosticLockTests(unittest.TestCase):
             mock.patch.object(tpms_logger, "iface_is_armed", return_value=True),
             mock.patch.object(tpms_logger, "_reconfigure_iface") as reconfigure,
             mock.patch.object(tpms_logger, "ignition_on", side_effect=KeyboardInterrupt),
+            mock.patch.object(
+                tpms_logger.time,
+                "sleep",
+                side_effect=AssertionError("idle-loop fixture failed to exit at ignition probe"),
+            ),
             mock.patch.object(
                 tpms_logger.diagnostic_safety, "acquire_channel_lock"
             ) as acquire,

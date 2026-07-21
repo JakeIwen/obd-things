@@ -49,6 +49,24 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(candidate.addressing_mode, NORMAL_11BITS)
         self.assertEqual(candidate.bitrate, 125000)
 
+    def test_custom_target_can_select_fixed_dlc_padding(self):
+        args = ecu_discover.parser().parse_args(
+            ["--target", "pcm=18DA10F1:18DAF110", "--tx-padding", "00"]
+        )
+
+        candidate = ecu_discover.build_targets(args)[0]
+
+        self.assertEqual(candidate.tx_padding, 0x00)
+        self.assertEqual(candidate.module("can0").txid, 0x18DA10F1)
+
+    def test_padding_is_rejected_without_custom_target(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            rc = ecu_discover.main(["--tx-padding", "00"])
+
+        self.assertEqual(rc, 2)
+        self.assertIn("only apply with --target", stderr.getvalue())
+
     def test_custom_11_bit_pair_rejects_extended_id(self):
         args = argparse.Namespace(
             bus="b-can",
@@ -83,6 +101,34 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(candidates[-1].rxid, 0x18DAF1FF)
         self.assertNotIn(0x18DAF1F1, [candidate.txid for candidate in candidates])
 
+    def test_bounded_address_byte_range_does_not_repeat_other_targets(self):
+        args = ecu_discover.parser().parse_args(["--address-byte-range", "F2", "FF"])
+
+        candidates = ecu_discover.build_targets(args)
+
+        self.assertEqual(len(candidates), 14)
+        self.assertEqual(candidates[0].txid, 0x18DAF2F1)
+        self.assertEqual(candidates[-1].txid, 0x18DAFFF1)
+
+    def test_bounded_address_byte_range_excludes_tester_address(self):
+        args = ecu_discover.parser().parse_args(["--address-byte-range", "F0", "F2"])
+
+        candidates = ecu_discover.build_targets(args)
+
+        self.assertEqual([candidate.txid for candidate in candidates], [0x18DAF0F1, 0x18DAF2F1])
+
+    def test_reversed_address_byte_range_is_rejected(self):
+        args = ecu_discover.parser().parse_args(["--address-byte-range", "FF", "F2"])
+
+        with self.assertRaisesRegex(argparse.ArgumentTypeError, "START"):
+            ecu_discover.build_targets(args)
+
+    def test_tester_only_address_byte_range_is_rejected(self):
+        args = ecu_discover.parser().parse_args(["--address-byte-range", "F1", "F1"])
+
+        with self.assertRaisesRegex(argparse.ArgumentTypeError, "reserved tester"):
+            ecu_discover.build_targets(args)
+
     def test_duplicate_custom_physical_pair_is_rejected(self):
         args = ecu_discover.parser().parse_args(
             ["--target", "first=760:768", "--target", "second=760:768",
@@ -114,6 +160,75 @@ class ResponseTests(unittest.TestCase):
             ),
             "positive",
         )
+
+    def test_classifies_exact_legacy_session_echo(self):
+        self.assertEqual(
+            ecu_discover.classify_session_response(0x92, bytes.fromhex("50 92")),
+            "positive_echo",
+        )
+        self.assertEqual(
+            ecu_discover.classify_session_response(0x92, bytes.fromhex("50 12")),
+            "unexpected",
+        )
+
+    def test_session_preamble_must_validate_before_identity_probe(self):
+        candidate = ecu_discover.normal_29bit_candidate("pcm", "PCM candidate", 0x10, "fixture")
+        sock = mock.Mock()
+        with (
+            mock.patch.object(ecu_discover.uds, "open_module_socket", return_value=sock),
+            mock.patch.object(ecu_discover.uds, "drain") as drain,
+            mock.patch.object(
+                ecu_discover.uds,
+                "request",
+                side_effect=[
+                    (bytes.fromhex("50 92"), "POSITIVE"),
+                    (bytes.fromhex("5A 87 01 02"), "POSITIVE"),
+                ],
+            ) as request,
+        ):
+            result = ecu_discover.scan_target(
+                candidate,
+                "can0",
+                0.5,
+                request_payload=bytes.fromhex("1A 87"),
+                session=0x92,
+            )
+
+        self.assertEqual(result["session_category"], "positive_echo")
+        self.assertEqual(result["category"], "positive")
+        self.assertTrue(result["session_request_attempted"])
+        self.assertTrue(result["request_attempted"])
+        self.assertEqual(drain.call_count, 2)
+        self.assertEqual(
+            [call.args[1] for call in request.call_args_list],
+            [bytes.fromhex("10 92"), bytes.fromhex("1A 87")],
+        )
+        sock.close.assert_called_once_with()
+
+    def test_bad_session_echo_skips_identity_probe(self):
+        candidate = ecu_discover.normal_29bit_candidate("pcm", "PCM candidate", 0x10, "fixture")
+        sock = mock.Mock()
+        with (
+            mock.patch.object(ecu_discover.uds, "open_module_socket", return_value=sock),
+            mock.patch.object(ecu_discover.uds, "drain"),
+            mock.patch.object(
+                ecu_discover.uds,
+                "request",
+                return_value=(bytes.fromhex("50 12"), "POSITIVE"),
+            ) as request,
+        ):
+            result = ecu_discover.scan_target(
+                candidate,
+                "can0",
+                0.5,
+                request_payload=bytes.fromhex("1A 87"),
+                session=0x92,
+            )
+
+        self.assertEqual(result["category"], "session_unexpected")
+        self.assertFalse(result["request_attempted"])
+        request.assert_called_once()
+        sock.close.assert_called_once_with()
 
     def test_transport_receive_error_is_an_attempt_without_response_and_closes_socket(self):
         candidate = ecu_discover.PROMASTER_CCAN_CANDIDATES[0]
@@ -185,6 +300,113 @@ class CliSafetyTests(unittest.TestCase):
         preflight.assert_not_called()
         scan_targets.assert_not_called()
 
+    def test_pcm_legacy_session_plan_is_dry_run(self):
+        with (
+            mock.patch.object(ecu_discover, "preflight") as preflight,
+            mock.patch.object(ecu_discover, "scan_targets") as scan_targets,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            result = ecu_discover.main(
+                [
+                    "--target", "pcm_candidate=18DA10F1:18DAF110",
+                    "--probe", "legacy-1a87",
+                    "--session", "92",
+                ]
+            )
+
+        self.assertEqual(result, 0)
+        preflight.assert_not_called()
+        scan_targets.assert_not_called()
+
+    def test_session_plan_is_restricted_and_live_confirmation_is_required(self):
+        invalid_plans = (
+            ["--session", "92"],
+            [
+                "--target", "pcm_candidate=18DA10F1:18DAF110",
+                "--session", "92",
+            ],
+            [
+                "--target", "one=18DA10F1:18DAF110",
+                "--target", "two=18DA11F1:18DAF111",
+                "--probe", "legacy-1a87",
+                "--session", "92",
+            ],
+            ["--confirm-session-change"],
+        )
+        for argv in invalid_plans:
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(ecu_discover.main(argv), 2)
+
+        with (
+            mock.patch.object(ecu_discover, "preflight") as preflight,
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            result = ecu_discover.main(
+                [
+                    "--target", "pcm_candidate=18DA10F1:18DAF110",
+                    "--probe", "legacy-1a87",
+                    "--session", "92",
+                    "--execute", "--confirm-parked", "--confirm-custom-physical",
+                    "--pair", "6/14", "--conditions", "fixture",
+                ]
+            )
+
+        self.assertEqual(result, 2)
+        preflight.assert_not_called()
+
+    def test_session_probe_report_counts_preamble_and_identity_separately(self):
+        report = {}
+
+        def fake_scan(targets, _channel, _timeout, _rate, results, **kwargs):
+            self.assertEqual(len(targets), 1)
+            self.assertEqual(kwargs["session"], 0x92)
+            results.append(
+                {
+                    "present": True,
+                    "category": "positive",
+                    "request_attempted": True,
+                    "response_received": True,
+                    "session_request_attempted": True,
+                    "session_response_received": True,
+                }
+            )
+
+        with (
+            mock.patch.object(ecu_discover, "preflight", return_value=[]),
+            mock.patch.object(
+                ecu_discover.diagnostic_safety,
+                "acquire_channel_lock",
+                return_value=mock.sentinel.lock,
+            ),
+            mock.patch.object(ecu_discover.diagnostic_safety, "release_channel_lock"),
+            mock.patch.object(ecu_discover, "scan_targets", side_effect=fake_scan),
+            mock.patch.object(ecu_discover.canbus, "restore_passive", return_value=True),
+            mock.patch.object(ecu_discover, "report_path", return_value="/tmp/pcm-probe.json"),
+            mock.patch.object(
+                ecu_discover, "write_report", side_effect=lambda _path, payload: report.update(payload)
+            ),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            result = ecu_discover.main(
+                [
+                    "--target", "pcm_candidate=18DA10F1:18DAF110",
+                    "--probe", "legacy-1a87", "--session", "92",
+                    "--execute", "--confirm-parked", "--confirm-custom-physical",
+                    "--confirm-session-change", "--pair", "6/14",
+                    "--conditions", "fixture",
+                ]
+            )
+
+        self.assertEqual(result, 0)
+        self.assertTrue(report["diagnostic_session_control_sent"])
+        self.assertEqual(report["requested_session"], "92")
+        self.assertEqual(report["ecu_session"], "explicit_92")
+        self.assertEqual(report["request_attempts"], 2)
+        self.assertEqual(report["responses_received"], 2)
+
     def test_execute_requires_conditions_before_preflight(self):
         with (
             mock.patch.object(ecu_discover, "preflight") as preflight,
@@ -210,6 +432,25 @@ class CliSafetyTests(unittest.TestCase):
                     "6/14",
                     "--conditions",
                     "test fixture only",
+                ]
+            )
+
+        self.assertEqual(result, 2)
+        preflight.assert_not_called()
+
+    def test_bounded_range_execute_requires_explicit_confirmation(self):
+        with (
+            mock.patch.object(ecu_discover, "preflight") as preflight,
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            result = ecu_discover.main(
+                [
+                    "--address-byte-range", "F2", "FF",
+                    "--execute",
+                    "--confirm-parked",
+                    "--pair", "6/14",
+                    "--conditions", "test fixture only",
                 ]
             )
 
