@@ -20,8 +20,9 @@ fatal error or partial report and verified a passive restore. Final interface st
 All 14 remaining target bytes `F2-FF` timed out on `22 F187`. Combined with the earlier `00-F0`
 pass (excluding tester address `F1`), the physical `18DAxxF1` address-byte space has now been
 covered in the inherited/default session. This did not add a responder beyond the seven already
-registered modules. A timeout does not prove an ECU is absent or unreachable in every session;
-the AlfaOBD-observed PCM at address `0x10` remains the known example of that limitation.
+known default-session responders. A timeout does not prove an ECU is absent or unreachable in every
+session: the PCM at address `0x10` became the concrete example when a later padded `10 92 -> 1A 87`
+probe succeeded and independently verified it.
 
 Raw report:
 `tmp/discovery/ecu_discovery_20260721_004834_342418-0600.json`.

@@ -85,14 +85,16 @@ Modules seen (ATSH → phys addr): radar `DA2AF1`/0x2A, **BCM `DA40F1`/0x40**, R
 trans `DA18F1`/0x18, engine `DA10F1`/0x10 + `7E0`, shifter `DA1FF1`/0x1F.
 
 Direct live discovery on 2026-07-19 independently verified C-CAN endpoints `0x18`, `0x1F`,
-`0x2A`, `0x40`, `0x60`, `0xC6`, and `0xC7`; PCM `0x10` remains unresolved in the default
-session. See [`2026-07-19_live_ecu_discovery.md`](findings/promaster_2022/2026-07-19_live_ecu_discovery.md).
+`0x2A`, `0x40`, `0x60`, `0xC6`, and `0xC7`. A fixed-DLC-8 legacy-session probe on 2026-07-21
+then independently verified PCM `0x10` while parked with the engine idling; ordinary default-session
+reads remain unsupported/unresolved. See
+[`2026-07-19_live_ecu_discovery.md`](findings/promaster_2022/2026-07-19_live_ecu_discovery.md).
 The companion [`ODX/PDX source research`](findings/promaster_2022/2026-07-19_odx_pdx_source_research.md)
 records the free local toolchain, searched sources, and remaining acquisition paths.
 The [`2026-07-21 read-only module inventory`](findings/promaster_2022/2026-07-21_readonly_module_inventory.md)
 completes inherited-session `18DAxxF1` address coverage and records bounded DTC/result-only routine
-responses for all seven verified C-CAN modules. It found no additional address responder; DTC state
-and routine-response leads are kept per module there.
+responses for all seven default-session C-CAN modules in that campaign. It found no additional
+address responder; DTC state and routine-response leads are kept per module there.
 The follow-on [`candidate DID inventory`](findings/promaster_2022/2026-07-21_candidate_did_inventory.md)
 records complete `F100-F1FF` pages for TCM, shifter, BCM, cluster, and telematics plus a direct
 recheck of 61 current-van AlfaOBD BCM candidates. It established 135 positive identity-page
@@ -138,18 +140,22 @@ corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one
   from command timing alone.
 - **RFH (0xC7)** full ID block + TPMS; pair with labeled `RFH_FGA_Info.log` (current faults
   `U0001/B1040/C1502-FR/C1501-FL`) for the TPMS project. See `../tpms/`.
+- **PCM (0x10)** is independently live-verified at `18DA10F1 -> 18DAF110`: fixed-DLC-8 padded
+  `10 92 -> 50 92`, then `1A 87 -> 5A 87 ... 68532157AI`. The successful run was parked with the
+  engine idling. Because both padding and engine power state differed from the failed unpadded
+  ignition-on run, the exact cause of the earlier timeout remains unisolated; use the specialized
+  legacy probe until default-session/DID behavior is mapped.
 
 ## Next steps
 
-1. Repeat the AlfaOBD-only PCM `18DA10F1 -> 18DAF110` exact probe parked with ignition ON and engine
-   OFF, this time with fixed-DLC-8 zero padding and a filtered raw capture. The first unpadded attempt
-   timed out at `10 92`, while AlfaOBD's successful ELM setup explicitly selects fixed eight-byte
-   CAN frames. If the padded retry still fails, repeat with the engine idling. The expected identity
-   contains `68532157AI`, which FCA's official J2534 report maps to the exact 2022 VF 3.6L lineage.
+1. **PCM endpoint completed:** the padded engine-idling retry received exact positive responses to
+   `10 92` and `1A 87`, including expected identity `68532157AI`. An optional padded engine-off
+   repeat could isolate framing from power state, but is not required for endpoint verification.
 2. Run one bounded BCM `4000-40FF` page in session `03`. The controlled comparison has now proven
    that extended session exposes `40A3` and `40A6`, justifying one session-specific page to bound
-   nearby hidden DIDs. It still requires explicit DiagnosticSessionControl authorization.
-   `tools/ccan_inventory_campaign.sh --session-followup` performs steps 1 and 2 together.
+   nearby hidden DIDs. It still requires explicit DiagnosticSessionControl authorization. Use
+   `tools/ccan_inventory_campaign.sh --bcm-extended-page`; the combined `--session-followup` would
+   unnecessarily repeat the now-complete PCM probe.
 3. **Unlock:** identify which BCM `2F` IO-control DID drives the door lock/unlock (correlate the
    command log's timestamps with the actuations run in AlfaOBD, or its labels), then verify on
    2022 ProMaster via the tap before replaying — `2F 51xx ctrl=03 opt=xx`. See `promaster_2022/command_log.txt`.

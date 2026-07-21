@@ -14,6 +14,14 @@ class ModuleTests(unittest.TestCase):
         self.assertEqual(radar.addressing_mode, NORMAL_29BITS)
         self.assertEqual(radar.bitrate, 500000)
 
+    def test_verified_pcm_uses_normal_fixed_address_pair(self):
+        pcm = get("pcm")
+
+        self.assertEqual(pcm.txid, 0x18DA10F1)
+        self.assertEqual(pcm.rxid, 0x18DAF110)
+        self.assertEqual(pcm.addressing_mode, NORMAL_29BITS)
+        self.assertEqual(pcm.bitrate, 500000)
+
     def test_11_bit_module_accepts_standard_ids_and_bitrate(self):
         module = Module(
             "test_bcm",

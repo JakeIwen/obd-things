@@ -154,7 +154,7 @@ listen-only mode. Consequently, explicitly re-run `./bringup.sh --tx` before eac
 
 | Tool | Default plan | Additional live requirements / scope |
 |---|---|---|
-| `ecu_discover.py` | seven verified C-CAN endpoints | `--execute --confirm-parked --pair --conditions`; all 255 usable 29-bit targets add `--all-29bit-targets --confirm-expanded-scan`; custom pairs add `--confirm-custom-physical`; a researched legacy session preamble is restricted to one custom target and adds `--confirm-session-change` |
+| `ecu_discover.py` | seven modern/default-session C-CAN endpoints | `--execute --confirm-parked --pair --conditions`; all 255 usable 29-bit targets add `--all-29bit-targets --confirm-expanded-scan`; custom pairs add `--confirm-custom-physical`; the verified PCM legacy-session probe remains restricted to one custom target and adds `--confirm-session-change` |
 | `identity_inventory.py` | bounded standardized/OEM identity set, excluding VIN | common live gates above; `--did` replaces defaults; VIN is opt-in and masked in reports |
 | `dtc_inventory.py` | non-clearing `19 01`, `19 02`, and `19 03` | common live gates; the larger supported-DTC `19 0A` catalog is opt-in |
 | `did_sweep.py` | bounded `22` range | common live gates; expanded ranges and explicit sessions have separate confirmations described below |
@@ -258,12 +258,13 @@ Session bytes are restricted to `01-7F` so the response-suppression bit cannot d
 validation. Explicit-session scans require at least `--rate 0.5`; slower request spacing can exceed the
 two-second bounded TesterPresent cadence used to hold the selected session.
 
-The unresolved PCM is a legacy exception backed by an exact current-van AlfaOBD trace. Its dry-run
-plan sends nothing and records the candidate pair, `10 92` preamble, and `1A 87` identity request:
+The PCM is a verified legacy-session exception backed by both a current-van AlfaOBD trace and an
+independent PCAN exchange. Its dry-run plan sends nothing and records the physical pair, `10 92`
+preamble, fixed-DLC-8 zero padding, and `1A 87` identity request:
 
 ```bash
 python3 tools/ecu_discover.py \
-  --target pcm_candidate=18DA10F1:18DAF110 \
+  --target pcm=18DA10F1:18DAF110 \
   --probe legacy-1a87 --session 92 --tx-padding 00
 ```
 
@@ -271,7 +272,10 @@ Live execution is restricted to that one explicit physical pair and requires bot
 `--confirm-custom-physical` and `--confirm-session-change`. The tool requires exact `50 92` before
 it will send `1A 87`; it never uses functional broadcast. The explicit zero padding reproduces
 AlfaOBD's ELM `PP 2C=01` fixed-eight-byte CAN framing. The first independent attempt omitted this
-padding and timed out before the identity request.
+padding and timed out before the identity request. A parked engine-idling retry on 2026-07-21
+received `50 92` and a positive multi-frame `5A 87` containing `68532157AI`, verifying the
+registered `pcm` endpoint. Because both padding and engine state changed, that run did not isolate
+which condition caused the earlier timeout.
 
 The campaign wrapper supplies the service/interface lifecycle and those fixed target arguments so
 the owner can run the same probe with one command after separately authorizing the session change:
@@ -292,9 +296,9 @@ The initial combined mode runs the PCM probe first, then the four-DID BCM compar
   --conditions "ignition ON, engine OFF, PCAN on pigtail C-CAN DB9"
 ```
 
-After that comparison proved `40A3` and `40A6` session-gated, the follow-up mode was narrowed to
-the fixed-DLC PCM retry and one BCM `4000-40FF` page in session `03`. It also saves a raw capture
-filtered to the PCM request/response IDs:
+After that comparison proved `40A3` and `40A6` session-gated, the combined follow-up mode was
+narrowed to the fixed-DLC PCM retry and one BCM `4000-40FF` page in session `03`. It also saves a
+raw capture filtered to the PCM request/response IDs:
 
 ```bash
 ./tools/ccan_inventory_campaign.sh --session-followup
@@ -302,6 +306,9 @@ filtered to the PCM request/response IDs:
   --confirm-parked --confirm-session-change \
   --conditions "ignition ON, engine OFF, PCAN on pigtail C-CAN DB9"
 ```
+
+The PCM half is now complete. If the BCM page has not yet run, use `--bcm-extended-page` rather
+than repeating the combined mode.
 
 Participating active diagnostic tools also take a nonblocking per-channel advisory lock under
 `tmp/locks/`, so two of them cannot transmit through the same SocketCAN channel concurrently. The

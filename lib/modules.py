@@ -50,6 +50,19 @@ MODULES = {
         bus="c-can",
         note="ACKs frames even with ignition cut mid-sweep; speed only via DID 0x1002 (no OBD PIDs behind SGW).",
     ),
+    "pcm": Module(
+        key="pcm",
+        name="Powertrain Control Module (PCM, 3.6L Pentastar)",
+        txid=0x18DA10F1,
+        rxid=0x18DAF110,
+        bus="c-can",
+        note=(
+            "Live-verified 2026-07-21 while parked/engine-idling with fixed-DLC-8 zero padding: "
+            "10 92 -> 50 92, then 1A 87 -> identity containing 68532157AI. Default-session "
+            "22 F187 and unpadded probes timed out; use the bounded legacy PCM probe until its "
+            "session/DID behavior is mapped."
+        ),
+    ),
     "rf_hub": Module(
         key="rf_hub",
         name="Radio Frequency Hub (RFH, Continental) - TPMS/RKE",
@@ -108,12 +121,6 @@ MODULES = {
         ),
     ),
     # e.g. add more modules here as the project expands:
-    # PCM 0x10 is AlfaOBD-observed but did not answer our 22 F187 or 1A87 default-session probes
-    # on 2026-07-19. AlfaOBD got 10 92 -> 50 92, then 1A87 -> identity containing 68532157AI;
-    # FCA maps that part to the exact 2022 VF 3.6L PCM lineage. An unpadded independent 10 92 probe
-    # timed out with ignition ON/engine OFF on 2026-07-21. AlfaOBD uses fixed-DLC-8 ELM protocol
-    # options, so explicit zero padding is the next discriminator. Do not register this endpoint
-    # until a positive response is independently reproduced.
     # BCM's C-CAN endpoint is registered above. No direct B-CAN diagnostic endpoint is verified:
     # formerly suggested high 11-bit IDs on B-CAN / CAN-IHS are periodic application broadcasts,
     # not ISO-TP pair evidence. Register one only after a captured request/response exchange.

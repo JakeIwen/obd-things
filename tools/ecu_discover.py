@@ -47,7 +47,7 @@ One researched legacy target can optionally receive an explicit DiagnosticSessio
 preamble before its identity read. This is deliberately restricted to a single custom physical
 pair and requires a separate live confirmation::
 
-    python3 tools/ecu_discover.py --target pcm_candidate=18DA10F1:18DAF110 \
+    python3 tools/ecu_discover.py --target pcm=18DA10F1:18DAF110 \
         --probe legacy-1a87 --session 92 --tx-padding 00
 
 The exact current-van AlfaOBD trace used ``10 92 -> 50 92`` immediately before

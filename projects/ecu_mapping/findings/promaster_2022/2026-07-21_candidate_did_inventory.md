@@ -154,7 +154,7 @@ Raw reports:
 `tmp/inventories/bcm_ccan/dids_20260721_031634_459940-0600.*` and
 `tmp/inventories/bcm_ccan/dids_20260721_031637_471601-0600.*`.
 
-## Source follow-up and next discriminator
+## Source and PCM follow-up
 
 A same-day exact-string search of the local 1.7 GB OEM corpus and publicly indexed sources found no
 ODX/PDX, diagnostic database, or DID labels for `13GJ6D0YN7CB`, `04446561007`, `TBM200A11P`,
@@ -170,13 +170,15 @@ beyond the AlfaOBD-derived positive list. The controlled comparison then proved 
 exposes at least `40A3` and `40A6`. A single extended-session `4000-40FF` pass is now justified to
 bound that session-specific namespace; another broad default-session page is not.
 
-The unresolved PCM `0x10` path remains separate. The parked ignition-ON/engine-OFF probe at 03:16
+The then-unresolved PCM `0x10` path remained separate. The parked ignition-ON/engine-OFF probe at 03:16
 sent an unpadded `10 92` ISO-TP request to `18DA10F1` but received no response, so the tool correctly
 skipped `1A 87`. Offline comparison then found one wire-format difference: immediately before every
 successful AlfaOBD exchange, the app programs ELM `PP 2C=01` and `PP 2D=01`. The
 [official ELM327 definition](https://elmelectronics.com/wp-content/uploads/2020/05/ELM327DSL.pdf)
 decodes those values as 29-bit, fixed eight-byte CAN frames, ISO-15765 formatting, and
-500 kbit/s. Our SocketCAN ISO-TP default uses the minimum DLC for a single frame. The next bounded
-discriminator is therefore the same parked ignition-ON/engine-OFF probe with explicit zero padding,
-plus a filtered raw capture proving the transmitted DLC. Only if that still fails should the engine
-idle power-state test or alternate transport assumptions move ahead.
+500 kbit/s. Our SocketCAN ISO-TP default uses the minimum DLC for a single frame. A later fixed-DLC-8
+retry while parked with the engine idling received `50 92` and a positive `5A 87` response containing
+`68532157AI`, independently verifying the endpoint. The successful run changed both framing and engine
+power state, so it does not isolate which difference resolved the timeout. Exact evidence and report
+provenance are recorded in
+[`2026-07-19_live_ecu_discovery.md`](2026-07-19_live_ecu_discovery.md).

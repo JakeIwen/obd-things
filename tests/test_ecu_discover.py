@@ -20,6 +20,9 @@ class CandidateTests(unittest.TestCase):
         )
         self.assertEqual(tuple(candidate.label for candidate in candidates), expected_keys)
         self.assertEqual(len(candidates), 7)
+        self.assertIn("pcm", MODULES)
+        # PCM is verified but needs its legacy 10 92 -> 1A 87 recipe, so it deliberately
+        # remains outside this ordinary default-session 22 F187 profile.
         self.assertNotIn(0x18DA10F1, [candidate.txid for candidate in candidates])
         self.assertIn(0x18DA60F1, [candidate.txid for candidate in candidates])
         self.assertIn(0x18DAC6F1, [candidate.txid for candidate in candidates])

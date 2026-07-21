@@ -123,7 +123,7 @@ dry_run_bcm_session_compare() {
 dry_run_pcm_probe() {
   echo "DRY RUN: no sudo, interface change, CAN socket, or transmission will occur."
   python3 tools/ecu_discover.py \
-    --target pcm_candidate=18DA10F1:18DAF110 \
+    --target pcm=18DA10F1:18DAF110 \
     --probe legacy-1a87 --session 92 --tx-padding 00
 }
 
@@ -294,7 +294,7 @@ run_padded_pcm_probe() {
     return 1
   fi
   python3 tools/ecu_discover.py \
-    --target pcm_candidate=18DA10F1:18DAF110 \
+    --target pcm=18DA10F1:18DAF110 \
     --probe legacy-1a87 --session 92 --tx-padding 00 \
     --confirm-custom-physical --confirm-session-change "${common[@]}"
   stop_pcm_capture

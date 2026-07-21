@@ -61,6 +61,7 @@ registry can't hold; keep the addresses in sync with `lib/modules.py`.
 | key | module | bus | TX → RX | quirks |
 |---|---|---|---|---|
 | `radar_acc` | Bosch ACC radar (DASM / MRR1evo) | C-CAN | `18DA2AF1` → `18DAF12A` | ACKs our frames even with ignition cut mid-sweep. Speed only via DID `0x1002` (no OBD PIDs behind SGW). |
+| `pcm` | Powertrain Control Module (3.6L Pentastar) | C-CAN | `18DA10F1` → `18DAF110` | Live-verified 2026-07-21 while parked/engine-idling: fixed-DLC-8 padded `10 92 → 50 92`, then `1A 87 → 5A 87` containing `68532157AI`. Default-session and unpadded probes had timed out. |
 | `rf_hub` | RF Hub (Continental) — TPMS/RKE | C-CAN | `18DAC7F1` → `18DAF1C7` | **Answers with ignition OFF** (battery-powered RKE receiver). |
 | `tcm` | ZF 948TE transmission controller | C-CAN | `18DA18F1` → `18DAF118` | Live identity on 2026-07-19: `F187=46342086`, `F194/F132=68532161AF`, `F192=ES11-1065 D`. |
 | `shifter` | SILATECH electronic shifter | C-CAN | `18DA1FF1` → `18DAF11F` | Live identity on 2026-07-19: `F187=P7FK46LXHAD`, `F188/F194=AGSM637FCA`. |
@@ -77,17 +78,14 @@ endpoints. Direct diagnostics on B-CAN are therefore **not established**. Do not
 pairs or add an 11-bit module without an actual request/response capture. See the
 [`B-CAN pair verification`](../projects/ecu_mapping/findings/promaster_2022/2026-07-20_bcan_pair_verification.md).
 
-> **AlfaOBD-only endpoint still unresolved on our tap:** `0x10` engine PCM (profile
-> "Tigershark/Pentastar MY21"). The 2026-07-19 default-session `22 F187` and `1A 87` probes
-> timed out; that is not proof of absence. The current-van AlfaOBD trace repeatedly shows
-> `18DA10F1 -> 18DAF110`, `10 92 -> 50 92`, then `1A 87` with identity string
-> `68532157AI32157`; FCA's official J2534 report maps `68532157AI` to a 2022 VF 3.6L PCM
-> calibration. An unpadded exact-sequence probe with ignition ON/engine OFF timed out at `10 92`
-> on 2026-07-21 and correctly skipped `1A 87`. AlfaOBD configures its ELM adapter for fixed DLC 8,
-> while our first SocketCAN probe used minimum-DLC frames; an explicitly zero-padded retry is the
-> next discriminator. The endpoint remains unregistered until independently verified. The other
-> AlfaOBD-observed physical endpoints (`0x18`, `0x1F`,
-> `0x2A`, `0x40`, and `0xC7`) are now independently live-verified and registered. See
+> **PCM legacy-session requirement:** `0x10` was independently verified from the PCAN tap on
+> 2026-07-21. While parked with the engine idling, fixed-DLC-8 zero-padded
+> `18DA10F1 -> 18DAF110` traffic produced exact `10 92 -> 50 92`, followed by a positive
+> multi-frame `1A 87 -> 5A 87` identity containing `68532157AI`; FCA's official J2534 report maps
+> that part to a 2022 VF 3.6L PCM calibration. Earlier default-session and unpadded probes timed
+> out. Because padding and engine power state changed between the failed and successful attempts,
+> this run verifies the endpoint and recipe but does not isolate which condition was decisive.
+> Keep using the bounded legacy probe rather than assuming ordinary default-session `22` support. See
 > [`2026-07-19_live_ecu_discovery.md`](../projects/ecu_mapping/findings/promaster_2022/2026-07-19_live_ecu_discovery.md).
 
 ---

@@ -29,16 +29,17 @@ and 234 timeouts. The tool was then fixed to exclude `0xF1`.
 
 The subsequent legacy `1A 87` run covered all 255 usable target addresses. The same seven
 modern responders returned `7F 1A 11` (`serviceNotSupported`); the other 248 targets timed out.
-That result does not prove an ECU is absent. In particular, the PCM at `0x10` remains unresolved
-on the PCAN, but the current-van AlfaOBD trace provides an exact, repeated sequence on physical
+That result did not prove an ECU absent. In particular, the PCM at `0x10` required the exact
+legacy session/framing recipe shown by the current-van AlfaOBD trace on physical
 `18DA10F1 -> 18DAF110`: `10 92 -> 50 92`, immediately followed by `1A 87 -> 5A 87 ...`.
 The 27-byte identity response contains ASCII `68532157AI32157`. FCA's official J2534 report maps
 `68532157AI` to the **2022 VF 3.6L PCM, 948TE, box on, 50-state** calibration lineage. This makes
-the role and expected identity high-confidence before the independent live probe, but the endpoint
-must not enter `lib/modules.py` until that probe succeeds from the PCAN tap.
+the role and expected identity high-confidence. The independent verification below establishes the
+endpoint from the PCAN tap.
 
 | phys | physical TX → RX | verified or inferred role | `F187` | corroborating identity |
 |---|---|---|---|---|
+| `0x10` | `18DA10F1` → `18DAF110` | 3.6L Pentastar PCM | not supported in the tested default state | fixed-DLC-8 `10 92`, then `1A 87`: `68532157AI` |
 | `0x18` | `18DA18F1` → `18DAF118` | ZF 948TE TCM | `46342086` | `F194/F132=68532161AF`; `F192=ES11-1065 D` |
 | `0x1F` | `18DA1FF1` → `18DAF11F` | electronic shifter | `P7FK46LXHAD` | `F188/F194=AGSM637FCA`; `F191=52209130`; `F192=073250002B0` |
 | `0x2A` | `18DA2AF1` → `18DAF12A` | ACC radar | `68516215AE` | already mapped in the radar project |
@@ -54,6 +55,28 @@ must not enter `lib/modules.py` until that probe succeeds from the PCAN tap.
 - partial modern expanded pass: `tmp/discovery/ecu_discovery_20260719_154841-0600.json`
 - complete legacy expanded pass: `tmp/discovery/ecu_discovery_20260719_155100-0600.json`
 - identity reports: `tmp/inventories/{tcm,shifter,bcm_ccan,ecu_60,ecu_c6}/identity_20260719_*.json`
+- successful padded PCM report: `tmp/discovery/ecu_discovery_20260721_130053_398245-0600.json`
+- successful filtered PCM capture: `tmp/captures/ccan/events/pcm_probe_20260721_130052_-0600.candump`;
+  promoted excerpt: [`2026-07-21_pcm_fixed_dlc_engine_idling.candump`](2026-07-21_pcm_fixed_dlc_engine_idling.candump)
+
+## PCM independent verification — 2026-07-21
+
+The bounded retry ran parked with the engine idling, transmission in Park, parking brake set, and
+the PCAN on C-CAN. It used 29-bit normal-fixed ISO-TP and zero-padded every CAN frame to DLC 8.
+The PCM answered both requests immediately:
+
+- `10 92 -> 50 92` (exact session echo)
+- `1A 87 -> 5A 87 02 40 7F 34 0D 20 47 15 08 00 36 38 35 33 32 31 35 37 41 49`
+
+The second response contains ASCII `68532157AI`, matching the expected 2022 VF 3.6L PCM identity.
+The two calls completed in about 15 ms, so the campaign's short runtime was expected rather than a
+sign of early termination. The JSON report records 2/2 responses, `partial=false`, no fatal error,
+and `restored_passive=true`; the wrapper then restarted `tpms-logger` as designed.
+
+This independently verifies the address pair, session preamble, fixed-DLC-compatible framing, and
+identity. It does **not** distinguish whether padding or the engine-running power state resolved the
+earlier timeout because both changed between the failed and successful attempts. An engine-off padded
+repeat would isolate that variable, but it is no longer required to register or use this endpoint.
 
 ## Next bounded steps
 
@@ -63,13 +86,10 @@ must not enter `lib/modules.py` until that probe succeeds from the PCAN tap.
 2. Confirm the TBM2 `0xC6` assignment with an official FCA part-number source if one becomes
    available; the live `TBM200A11P` identity, Mopar part supersession, and exact-vehicle OEM TBM2
    documentation already make it high-confidence.
-3. **Attempted 2026-07-21, parked ignition ON/engine OFF:** the initial physical PCM probe sent an
-   unpadded `10 92` to `18DA10F1` but timed out; it therefore correctly skipped `1A 87`. The report
-   completed and restored passive mode. AlfaOBD's successful setup uses ELM `PP 2C=01, PP 2D=01`,
-   which the official ELM327 definition identifies as 29-bit ISO-15765, fixed DLC 8, 500 kbit/s.
-   The prepared retry now explicitly zero-pads transmitted ISO-TP frames and records a filtered raw
-   capture. Try that under the same ignition-ON/engine-OFF condition before testing with the engine
-   idling. Do not register the endpoint until an independent positive response is obtained.
+3. **Completed 2026-07-21, parked/engine-idling:** the fixed-DLC-8 padded PCM probe received exact
+   positive responses to both `10 92` and `1A 87`, independently verifying the `0x10` endpoint and
+   expected identity. It is now registered as `pcm`; keep using the specialized legacy probe until
+   its default-session and DID behavior are mapped.
 4. **Initial bounded pass completed 2026-07-21:** per-module non-clearing DTC inventories and
    result-only (`31 03`) samples. Continue to keep the potentially large `19 0A` supported-DTC
    catalog opt-in and do not treat requestSequenceError as proof a routine exists.
