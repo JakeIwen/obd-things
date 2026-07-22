@@ -8,6 +8,10 @@ DID oracle: a mismatched profile can poll unsupported DIDs or apply the wrong la
 Treat its raw request/response trace as evidence and verify rendered interpretations against the
 installed subtype or controlled ground truth.
 
+The cross-project [`AlfaOBD evidence history`](../../docs/alfaobd-evidence-history.md) is the
+canonical chronology of confirmed mis-mappings, incompatible profiles, recording/catalog traps,
+project parser corrections, and the trust rules derived from them.
+
 ## ⚠️ Provenance — two vans in the data (read before trusting anything)
 
 AlfaOBD debug files accumulate across every vehicle a tablet has touched. We have two dumps:

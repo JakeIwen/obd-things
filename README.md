@@ -28,6 +28,9 @@ bringup.sh                 GENERIC: bring up the PCAN, PASSIVE by default (--tx 
 docs/                      cross-project vehicle reference
   bus-map.md                 MASTER map: verified broadcast frames + decodes per bus, wake/sleep
                              semantics, module summary — READ before new reverse-engineering
+  alfaobd-evidence-history.md
+                             canonical chronology of observed AlfaOBD mis-mappings, artifact traps,
+                             confidence boundaries, and validation rules
 lib/                       GENERIC, module-agnostic plumbing
   uds.py                     ISO-TP socket, UDS request, NRC table, byte decoders, USB-drop recovery
   modules.py                 module registry — SOURCE OF TRUTH for addressing; ADD A MODULE HERE

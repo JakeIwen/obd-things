@@ -1,5 +1,8 @@
 # AlfaOBD bug report — MY2022 Ram Promaster, Bosch ACC radar (DASM / MRR1evo)
 
+For the chronological cross-project record and later AlfaOBD findings, see the canonical
+[`AlfaOBD evidence history`](../../../docs/alfaobd-evidence-history.md).
+
 ## Summary
 On the 2022 Ram Promaster's Bosch Adaptive Cruise Control radar, two AlfaOBD definitions
 appear to be mapped for a different model-year/variant:
@@ -57,9 +60,11 @@ A hardened **read-only** scan of `31 03 <rid>` across `0x0200–0x03FF` plus `0x
 (516 routine IDs, every one answered — no dropped frames) found **exactly one** recognized
 routine: **`0x0251`** (`7F3124`). Every other ID returned `7F3131`.
 
-**Conclusion / fix:** for this MY2022 Promaster Bosch DASM, the radar-calibration routine ID is
-**`0x0251`**, not `0x0250`. Please correct the routine ID for this ECU/variant. (The on-screen
-mirror geometry instructions appear correct; only the routine ID is wrong.)
+**Initial conclusion (superseded by the 2026-06-18 update below):** for this MY2022 Promaster Bosch
+DASM, the implemented radar-calibration routine ID is **`0x0251`**, not `0x0250`. At this stage the
+on-screen mirror instructions still appeared applicable. OEM research later proved this is a whole
+procedure mismatch, not a safe one-byte substitution: `0x0251` is a dynamic drive routine, takes no
+option byte, and does not use the mirror flow.
 
 ---
 

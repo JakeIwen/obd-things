@@ -54,6 +54,8 @@ service change.
 
 ## AlfaOBD data provenance
 
+- Read the canonical [`AlfaOBD evidence history`](alfaobd-evidence-history.md) before treating a
+  selected profile, rendered value, catalog label, timeout, or output file as ground truth.
 - `~/claude/shared-files/old.AlfaOBD_Debug.bin` is a large aggregate from the owner's previous 2015
   diesel ProMaster, not the current van. Treat its modules/DIDs only as same-family candidates to verify.
 - `~/claude/shared-files/AlfaOBD logs and data July 8 2026/AlfaOBD_Debug.bin` and the RFH, adaptive-cruise,
