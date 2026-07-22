@@ -53,6 +53,7 @@ Preferences, drive the modules/live-data, then pull from
 ```
 tools/alfaobd_decode.py  <in.bin> [out.txt]      # generic: .bin -> decoded text (reusable)
 tools/alfaobd_gauges.py  <Gauges_Data.csv>       # offline section/profile/metric inventory -> tmp/
+tools/alfaobd_gauge_join.py <Gauges_Data.csv> <decoded.txt> --section N  # offline DID candidates
 tools/alfaobd_apk_db.py  <base.apk>              # reconstruct catalog DB + label resource -> tmp/
 tools/alfaobd_catalog.py <db> <labels> --device-id N  # read-only model/device export -> tmp/
 tools/alfaobd_bcm_decode.py                   # apply current-BCM field layouts to existing evidence
@@ -69,6 +70,33 @@ and keeps identically named metrics separated by selected-profile namespace. By 
 `tmp/inventories/alfaobd_gauges/`; use `--out-dir` to choose another machine-output directory.
 Gauge labels and rendered values do **not** carry DID numbers, so a label-to-DID claim still
 requires a time-aligned Debug Data trace or a controlled one-variable capture.
+
+`alfaobd_gauge_join.py` performs that time alignment for one bounded Gauge section at a time. It
+preserves every original sample row and column index, uses the response-completion timestamp from
+the decoded trace, splits repeated-DID polling loops, and explicitly scores preceding/current/
+following-cycle lag hypotheses. Only exact single-DID `22 XXXX -> 62 XXXX ...` echoes enter the
+byte-slice/endian/signed affine search; constants, `NA`, and fewer than three varying values remain
+unidentifiable. Reports and evidence JSONL default under `tmp/inventories/alfaobd_gauge_join/` and
+always say `candidate_only`. Pass exactly one decoded debug source per run—historic conflict files
+are overlapping cumulative snapshots, not independent samples—and label old-van work explicitly:
+
+```bash
+python3 tools/alfaobd_gauge_join.py Gauges_Data.csv decoded.txt \
+  --section 2 --address DA10F1 --source-scope historical-other-vehicle
+```
+
+As an offline regression check, section 2 of the recovered historical diesel snapshot reproduces
+`386F` byte 0 as `displayed = 50 * raw` across 2,370 samples and `18DE` bytes 0–1 as
+`displayed = 0.02 * raw - 40`. Both remain old-vehicle reference mappings, not current-van facts.
+
+The joiner caps retained matching debug exchanges at 100,000 and candidate hypotheses per metric
+at 20,000 by default so an unexpectedly large cumulative source fails before consuming the Pi's
+memory. Narrow by section/profile/address or `--did` first; raise either limit only for a deliberate
+larger run. It also refuses to guess when prompt-completion timestamps do not identify one polling
+boundary; inspect the trace and supply `--boundary-did` explicitly in that case.
+
+Even an exact historical fit is reference-only until the same ECU/DID/scaling is established on
+the current van; correlation by itself is not controlled ground truth.
 
 The APK tools operate only on an owner-supplied local package and default all generated artifacts
 under `tmp/`. The catalog exporter opens SQLite in read-only mode, preserves source hashes and raw

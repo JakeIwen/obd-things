@@ -88,11 +88,34 @@ def _finish(seg, plain):
     return ("".join(seg[k] for k in sorted(seg)) if seg else plain).upper()
 
 
-def iter_exchanges(path):
-    """Yield dicts for each completed UDS request:
-       {ts, date, addr, module, req, resp}  (req/resp are uppercase hex; resp may be '')."""
+def _completed_exchange(pend, completion_reason):
+    """Render one pending exchange, including timing/provenance for exact joins."""
+    return {
+        "ts": pend["request_ts"],  # backwards-compatible request timestamp
+        "request_ts": pend["request_ts"],
+        "response_end_ts": pend["response_end_ts"],
+        "request_line": pend["request_line"],
+        "response_end_line": pend["response_end_line"],
+        "completion_reason": completion_reason,
+        "prompt_seen": completion_reason == "prompt",
+        "date": pend["date"],
+        "addr": pend["addr"],
+        "module": pend["module"],
+        "req": pend["req"],
+        "resp": _finish(pend["seg"], pend["plain"]),
+    }
+
+
+def iter_exchanges_detailed(path):
+    """Yield completed UDS exchanges with request and response-end provenance.
+
+    ``ts`` remains the request-send timestamp for compatibility.  ``completion_reason``
+    distinguishes an actual adapter ``prompt`` from a pending exchange flushed by the
+    ``next_request`` or ``eof``. Gauge/debug joins should anchor only prompt-completed
+    ``response_end_ts`` values.
+    """
     addr, module, date = "?", None, "????/??/??"
-    pend = None  # {'ts','req','seg','plain'}
+    pend = None
     date_hints = recording_date_hints(path)
     for line_number, ln in enumerate(_logical_lines(path), 1):
         m = _LINE.match(ln)
@@ -111,17 +134,28 @@ def iter_exchanges(path):
         pay = ascii_of(payhex).strip().upper().replace(" ", "")
         if sr == "S":
             if pend:
-                yield {"ts": pend["ts"], "date": date, "addr": addr,
-                       "module": module, "req": pend["req"],
-                       "resp": _finish(pend["seg"], pend["plain"])}
+                yield _completed_exchange(pend, "next_request")
                 pend = None
             if pay.startswith("ATSH"):
                 addr = pay[4:]
                 continue
             if pay.startswith(("AT", "ST")) or not re.fullmatch(r"[0-9A-F]+", pay) or len(pay) < 2:
                 continue
-            pend = {"ts": ts, "req": pay, "seg": {}, "plain": ""}
+            pend = {
+                "request_ts": ts,
+                "response_end_ts": None,
+                "request_line": line_number,
+                "response_end_line": None,
+                "date": date,
+                "addr": addr,
+                "module": module,
+                "req": pay,
+                "seg": {},
+                "plain": "",
+            }
         elif sr == "R" and pend is not None:
+            pend["response_end_ts"] = ts
+            pend["response_end_line"] = line_number
             for part in pay.split("\r") if "\r" in pay else [pay]:
                 part = part.strip()
                 if not part or part == ">":
@@ -131,15 +165,18 @@ def iter_exchanges(path):
                     pend["seg"][int(sm.group(1), 16)] = sm.group(2)
                 elif re.fullmatch(r"[0-9A-F]{2,}", part):
                     pend["plain"] += part
-            if ">" in payhex or ">" in pay:
-                yield {"ts": pend["ts"], "date": date, "addr": addr,
-                       "module": module, "req": pend["req"],
-                       "resp": _finish(pend["seg"], pend["plain"])}
+            if ">" in pay:
+                yield _completed_exchange(pend, "prompt")
                 pend = None
     if pend:
-        yield {"ts": pend["ts"], "date": date, "addr": addr,
-               "module": module, "req": pend["req"],
-               "resp": _finish(pend["seg"], pend["plain"])}
+        yield _completed_exchange(pend, "eof")
+
+
+def iter_exchanges(path):
+    """Yield legacy exchange dictionaries with request timestamp ``ts``."""
+    keys = ("ts", "date", "addr", "module", "req", "resp")
+    for exchange in iter_exchanges_detailed(path):
+        yield {key: exchange[key] for key in keys}
 
 
 def phys_addr(atsh):
