@@ -319,28 +319,93 @@ class CliSafetyTests(unittest.TestCase):
                 self.assertTrue(any("expected ERROR-ACTIVE" in error for error in errors))
 
     def test_dry_run_does_not_preflight_or_open_can(self):
+        stdout = io.StringIO()
         with (
             mock.patch.object(ecu_discover, "preflight") as preflight,
             mock.patch.object(ecu_discover, "scan_targets") as scan_targets,
-            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stdout(stdout),
         ):
             result = ecu_discover.main([])
 
         self.assertEqual(result, 0)
+        self.assertIn("22 F1 87", stdout.getvalue())
         preflight.assert_not_called()
         scan_targets.assert_not_called()
 
     def test_bcan_catalog_profile_dry_run_does_not_open_can(self):
+        stdout = io.StringIO()
         with (
             mock.patch.object(ecu_discover, "preflight") as preflight,
             mock.patch.object(ecu_discover, "scan_targets") as scan_targets,
-            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stdout(stdout),
         ):
             result = ecu_discover.main(["--profile", "promaster88-bcan"])
 
         self.assertEqual(result, 0)
+        self.assertIn("22 F1 A5", stdout.getvalue())
         preflight.assert_not_called()
         scan_targets.assert_not_called()
+
+    def test_bcan_catalog_profile_allows_explicit_f187_override(self):
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            result = ecu_discover.main(
+                ["--profile", "promaster88-bcan", "--probe", "uds-f187"]
+            )
+
+        self.assertEqual(result, 0)
+        self.assertIn("22 F1 87", stdout.getvalue())
+
+    def test_live_bcan_profile_dispatches_and_reports_resolved_f1a5(self):
+        report = {}
+
+        def fake_scan(targets, _channel, _timeout, _rate, results, **kwargs):
+            self.assertEqual(len(targets), 8)
+            self.assertEqual(kwargs["request_payload"], bytes.fromhex("22 F1 A5"))
+            self.assertIsNone(kwargs["session"])
+            results.extend(
+                {
+                    "present": False,
+                    "category": "timeout",
+                    "request_attempted": True,
+                    "response_received": False,
+                }
+                for _target in targets
+            )
+
+        with (
+            mock.patch.object(ecu_discover, "preflight", return_value=[]) as preflight,
+            mock.patch.object(
+                ecu_discover.diagnostic_safety,
+                "acquire_channel_lock",
+                return_value=mock.sentinel.lock,
+            ),
+            mock.patch.object(ecu_discover.diagnostic_safety, "release_channel_lock"),
+            mock.patch.object(ecu_discover, "scan_targets", side_effect=fake_scan),
+            mock.patch.object(ecu_discover.canbus, "restore_passive", return_value=True),
+            mock.patch.object(ecu_discover, "report_path", return_value="/tmp/bcan-probe.json"),
+            mock.patch.object(
+                ecu_discover,
+                "write_report",
+                side_effect=lambda _path, payload: report.update(payload),
+            ),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            result = ecu_discover.main(
+                [
+                    "--profile", "promaster88-bcan",
+                    "--execute", "--confirm-catalog-candidates", "--confirm-parked",
+                    "--pair", "3/11", "--conditions", "parked fixture",
+                ]
+            )
+
+        self.assertEqual(result, 0)
+        preflight.assert_called_once_with("can0", 125000)
+        self.assertEqual(report["probe"], "uds-f1a5")
+        self.assertEqual(report["request"], "22 F1 A5")
+        self.assertEqual(report["target_selection"], "alfaobd_promaster88_bcan_candidates")
+        self.assertEqual(report["profile_expected_pair"], "3/11")
 
     def test_live_catalog_profile_requires_separate_confirmation(self):
         stderr = io.StringIO()

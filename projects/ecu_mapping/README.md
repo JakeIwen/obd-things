@@ -219,6 +219,8 @@ corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one
 4. **Next new-address campaign:** move the PEAK to the B-CAN DB9 and dry-run
    `python3 tools/ecu_discover.py --profile promaster88-bcan`. The eight physical 29-bit pairs come
    from AlfaOBD adapter-6 rows, and the tablet UI independently identifies adapter 6 as MS-CAN
-   BLUE. They remain candidates until a response is captured; do not add them to `lib/modules.py`.
+   BLUE. The profile defaults to an inferred, catalog-linked `22 F1A5` subtype-signature read;
+   `F187` remains an explicit fallback. They remain candidates until a response is captured; do
+   not add them to `lib/modules.py`.
 5. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps
    (`../../docs/bus-map.md`, `../../lib/modules.py`, project DID maps) per the maintenance rule.

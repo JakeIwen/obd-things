@@ -171,9 +171,12 @@ imports into an unrelated module.
 The named `promaster88-bcan` discovery profile is the only maintained direct-diagnostic candidate
 set for pins 3/11. Its eight 29-bit pairs come from AlfaOBD model-88 adapter-6 rows, while the
 installed tablet selector independently labels adapter 6 `MS-CAN BLUE`; this is routing evidence,
-not proof that the optional modules are installed. The profile sends one physical `22 F187` per
-target and no broadcast, session change, write, routine, or actuation. Dry-run first, then use the
-separate catalog-candidate gate only after moving the PEAK to the B-CAN DB9:
+not proof that the optional modules are installed. The profile sends one physical `22 F1A5` per
+target because every candidate Device ID has catalog isocode values and exact F1A5 values select
+the same table for all seven verified default-session C-CAN endpoints. That makes the B-CAN F1A5
+link an evidence-backed inference, not a live result. The profile sends no broadcast, session
+change, write, routine, or actuation; `--probe uds-f187` remains an explicit fallback. Dry-run
+first, then use the separate catalog-candidate gate only after moving the PEAK to the B-CAN DB9:
 
 ```bash
 python3 tools/ecu_discover.py --profile promaster88-bcan

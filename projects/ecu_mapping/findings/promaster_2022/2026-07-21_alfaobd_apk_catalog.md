@@ -101,9 +101,36 @@ That resolves the model-code-88 candidates into useful physical-bus groups:
 This explains why adapter-6/7 candidates timed out during exhaustive pins-6/14 address scans: the
 scan covered their address bytes but not their catalog-selected physical branches. It does not prove
 the optional modules are installed. `tools/ecu_discover.py --profile promaster88-bcan` now provides
-an eight-target, dry-run-by-default B-CAN `22 F187` plan. Live mode requires the separate
+an eight-target, dry-run-by-default B-CAN `22 F1A5` plan. Live mode requires the separate
 `--confirm-catalog-candidates` gate plus the normal parked/pair/conditions checks and passive restore.
 No candidate enters `lib/modules.py` before an exact response is captured.
+
+### Why the candidate profile starts with F1A5
+
+All eight adapter-6 model rows use catalog initialization type `5`, and each row's Device ID has one
+or more entries in the database's `isocodes` table. The table does not itself label those values as
+F1A5. However, on all seven default-session C-CAN endpoints already verified on this van, AlfaOBD
+reads `F1A5` and the exact returned value selects the matching `isocodes` subtype. Applying that
+independently verified relationship makes the B-CAN values below inferred F1A5 subtype-signature
+candidates, not live B-CAN evidence:
+
+| target | model-88 profile | Device ID / unit ID | catalog isocode / inferred F1A5 signature candidate(s) |
+|---:|---|---:|---|
+| `0x4A` | `TRAILER_TOW` | 7193 / 408 | `E607040DD3`, `E607830D52` |
+| `0x62` | `LBSS_FGA` | 8670 / 433 | `0033071819`, `0033409317`, `003350B214`, `0033701819`, `0033706220`, `0033706B20` |
+| `0x65` | `RBSS_FGA` | 8671 / 434 | `0034409417`, `003450B114`, `0034701919`, `0034706320`, `0034706C20` |
+| `0x6A` | `DCSD` | 55885 / 452 | `0083701223`, `0083701C19`, `0083709E20`, `008370B720`, `008370C020` |
+| `0x85` | `ICS_FGA` | 55930 / 272 | `0032701720`, `0032707D19` |
+| `0x87` | `UCONNECT` | 6052 / 410 | `0024401614`, `0024402814`, `0024406014`, `0024506D17`, `0024702F18`, `0024704E17`, `0024705515`, `B5831A0B32`, `B583980BB0` |
+| `0x98` | `COND_MARELLI_EP_6079` | 6082 / 131 | `3483290BXX` (catalog wildcard pattern) |
+| `0xD9` | `EMCM2` | 54749 / 451 | `0066405820`, `0066505919`, `0066700319`, `0066708320` |
+
+The cumulative historical tablet trace also contains positive F1A5 responses at `0x87` and `0x98`,
+but that mixed old-vehicle source is reference only and does not establish either module on this van.
+Those historical endpoint sections contain no F187 request, so they provide no comparative F187
+evidence. The catalog/current-van relationship and positive historical F1A5 observations make F1A5
+the better first presence/subtype read, not proof that it must answer in the current ignition/session
+state. `--probe uds-f187` remains available as an explicit second-pass fallback.
 
 ## Current subtype identification from live F1A5 values
 

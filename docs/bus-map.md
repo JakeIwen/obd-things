@@ -82,9 +82,13 @@ The AlfaOBD model-88 catalog plus its installed selector now supplies a separate
 29-bit B-CAN candidate set: `18DA{4A,62,65,6A,85,87,98,D9}F1` with corresponding
 `18DAF1xx` responses. These are trailer, blind-spot, display/infotainment, and climate profile
 choices; any may be optional or absent. Dry-run the exact set with
-`python3 tools/ecu_discover.py --profile promaster88-bcan`. A live run is active diagnostic traffic
-and requires the profile-specific confirmation and normal safety gates. Register only exact
-responders. [Catalog/UI evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_alfaobd_apk_catalog.md#adapter-routing-recovered-from-the-live-application-selector).
+`python3 tools/ecu_discover.py --profile promaster88-bcan`. The profile defaults to one physical
+`22 F1A5` subtype-signature read per target because all eight Device IDs have catalog isocodes and
+exact current-van F1A5 values select that table for all seven verified default-session C-CAN
+endpoints. The B-CAN linkage remains inferred and candidate-only; `--probe uds-f187` is an explicit
+fallback. A live run is active diagnostic traffic and requires the profile-specific confirmation
+and normal safety gates. Register only exact responders.
+[Catalog/UI evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_alfaobd_apk_catalog.md#adapter-routing-recovered-from-the-live-application-selector).
 
 > **PCM legacy-session requirement:** `0x10` was independently verified from the PCAN tap on
 > 2026-07-21. While parked with the engine idling, fixed-DLC-8 zero-padded

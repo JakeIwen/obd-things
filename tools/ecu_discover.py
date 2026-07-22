@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Bounded ACTIVE diagnostic ECU discovery using one non-mutating identity read per target.
 
-This is not passive or OBD broadcast discovery. It transmits a physical UDS
-ReadDataByIdentifier request (22 F187, spare-part number), may wake the vehicle network and
-accessory rails, and must only be used after a passive bus survey confirms the physical pair
-and bitrate.
+This is not passive or OBD broadcast discovery. The ordinary C-CAN profile transmits physical
+``22 F187`` (spare-part number); the catalog-routed B-CAN profile defaults to physical ``22 F1A5``
+(FCA-observed subtype signature) because exact F1A5 values select AlfaOBD subtypes for all seven
+verified default-session C-CAN endpoints. Either request may wake the vehicle network and accessory
+rails, and must only be used after a passive bus survey confirms the physical pair and bitrate.
 
 Dry-run the current-van C-CAN verified-endpoint profile (default; sends nothing):
 
@@ -91,11 +92,13 @@ from lib.modules import MODULES, Module, NORMAL_11BITS, NORMAL_29BITS
 
 
 DISCOVERY_DID = 0xF187  # standardized vehicle-manufacturer spare-part number; deliberately not VIN
+SUBTYPE_DID = 0xF1A5  # FCA-observed identity value; selects AlfaOBD's current subtype catalog
 MIN_REQUEST_RATE = 0.1
 MAX_REQUEST_RATE = 5.0
 MAX_REQUEST_TIMEOUT_S = 5.0
 PROBE_PAYLOADS = {
     "uds-f187": bytes((0x22, DISCOVERY_DID >> 8, DISCOVERY_DID & 0xFF)),
+    "uds-f1a5": bytes((0x22, SUBTYPE_DID >> 8, SUBTYPE_DID & 0xFF)),
     "legacy-1a87": bytes.fromhex("1A 87"),
 }
 
@@ -201,6 +204,7 @@ PROMASTER88_BCAN_SOURCE = (
     "candidate only, presence unverified"
 )
 PROFILE_EXPECTED_PAIRS = {"promaster88-bcan": "3/11"}
+PROFILE_DEFAULT_PROBES = {"promaster88-bcan": "uds-f1a5"}
 PROMASTER88_BCAN_CANDIDATE_SPECS = (
     ("trailer_tow_candidate", "Trailer tow module candidate", 0x4A),
     ("left_blind_spot_candidate", "Left blind-spot sensor candidate", 0x62),
@@ -550,8 +554,10 @@ def parser():
     p.add_argument(
         "--probe",
         choices=tuple(PROBE_PAYLOADS),
-        default="uds-f187",
-        help="non-mutating presence request (default: uds-f187)",
+        help=(
+            "non-mutating presence request (default: uds-f187; promaster88-bcan "
+            "defaults to uds-f1a5)"
+        ),
     )
     p.add_argument(
         "--session",
@@ -673,11 +679,12 @@ def main(argv=None):
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
+    probe_name = args.probe or PROFILE_DEFAULT_PROBES.get(args.profile, "uds-f187")
     if args.confirm_session_change and args.session is None:
         print("ERROR: --confirm-session-change requires --session", file=sys.stderr)
         return 2
     if args.session is not None and (
-        args.probe != "legacy-1a87" or not args.target or len(targets) != 1
+        probe_name != "legacy-1a87" or not args.target or len(targets) != 1
     ):
         print(
             "ERROR: --session is restricted to one custom physical target with "
@@ -686,7 +693,7 @@ def main(argv=None):
         )
         return 2
 
-    request_payload = PROBE_PAYLOADS[args.probe]
+    request_payload = PROBE_PAYLOADS[probe_name]
     print(
         f"ACTIVE DIAGNOSTIC ECU DISCOVERY "
         f"(physical {uds.hx(request_payload)}; never functional broadcast)"
@@ -829,7 +836,7 @@ def main(argv=None):
                     "profile_expected_pair": PROFILE_EXPECTED_PAIRS.get(args.profile),
                     "conditions": args.conditions,
                     "parked_asserted": args.confirm_parked,
-                    "probe": args.probe,
+                    "probe": probe_name,
                     "request": uds.hx(request_payload),
                     "functional_broadcast": False,
                     "custom_pairs_asserted_physical": bool(args.target),
