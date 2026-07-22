@@ -52,6 +52,33 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(candidate.addressing_mode, NORMAL_11BITS)
         self.assertEqual(candidate.bitrate, 125000)
 
+    def test_promaster88_bcan_profile_is_bounded_and_stays_out_of_registry(self):
+        args = ecu_discover.parser().parse_args(
+            ["--profile", "promaster88-bcan"]
+        )
+        candidates = ecu_discover.build_targets(args)
+
+        self.assertEqual(len(candidates), 8)
+        self.assertEqual(
+            [candidate.txid for candidate in candidates],
+            [
+                0x18DA4AF1,
+                0x18DA62F1,
+                0x18DA65F1,
+                0x18DA6AF1,
+                0x18DA85F1,
+                0x18DA87F1,
+                0x18DA98F1,
+                0x18DAD9F1,
+            ],
+        )
+        for candidate in candidates:
+            self.assertEqual(candidate.bus, "b-can")
+            self.assertEqual(candidate.bitrate, 125000)
+            self.assertEqual(candidate.addressing_mode, "normal_29bits")
+            self.assertIn("adapter=6", candidate.source)
+            self.assertNotIn(candidate.label, MODULES)
+
     def test_custom_target_can_select_fixed_dlc_padding(self):
         args = ecu_discover.parser().parse_args(
             ["--target", "pcm=18DA10F1:18DAF110", "--tx-padding", "00"]
@@ -302,6 +329,93 @@ class CliSafetyTests(unittest.TestCase):
         self.assertEqual(result, 0)
         preflight.assert_not_called()
         scan_targets.assert_not_called()
+
+    def test_bcan_catalog_profile_dry_run_does_not_open_can(self):
+        with (
+            mock.patch.object(ecu_discover, "preflight") as preflight,
+            mock.patch.object(ecu_discover, "scan_targets") as scan_targets,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            result = ecu_discover.main(["--profile", "promaster88-bcan"])
+
+        self.assertEqual(result, 0)
+        preflight.assert_not_called()
+        scan_targets.assert_not_called()
+
+    def test_live_catalog_profile_requires_separate_confirmation(self):
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(ecu_discover, "preflight") as preflight,
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(stderr),
+        ):
+            result = ecu_discover.main(
+                [
+                    "--profile", "promaster88-bcan",
+                    "--execute",
+                    "--confirm-parked",
+                    "--pair", "3/11",
+                    "--conditions", "parked fixture",
+                ]
+            )
+
+        self.assertEqual(result, 2)
+        self.assertIn("--confirm-catalog-candidates", stderr.getvalue())
+        preflight.assert_not_called()
+
+    def test_live_bcan_profile_rejects_wrong_physical_pair_before_preflight(self):
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(ecu_discover, "preflight") as preflight,
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(stderr),
+        ):
+            result = ecu_discover.main(
+                [
+                    "--profile", "promaster88-bcan",
+                    "--execute",
+                    "--confirm-catalog-candidates",
+                    "--confirm-parked",
+                    "--pair", "6/14",
+                    "--conditions", "parked fixture",
+                ]
+            )
+
+        self.assertEqual(result, 2)
+        self.assertIn("requires physical pair 3/11", stderr.getvalue())
+        preflight.assert_not_called()
+
+    def test_live_bcan_profile_uses_125k_preflight_on_exact_pair(self):
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(
+                ecu_discover, "preflight", return_value=["fixture stop"]
+            ) as preflight,
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(stderr),
+        ):
+            result = ecu_discover.main(
+                [
+                    "--profile", "promaster88-bcan",
+                    "--execute",
+                    "--confirm-catalog-candidates",
+                    "--confirm-parked",
+                    "--pair", " 3 / 11 ",
+                    "--conditions", "parked fixture",
+                ]
+            )
+
+        self.assertEqual(result, 2)
+        preflight.assert_called_once_with("can0", 125000)
+        self.assertIn("fixture stop", stderr.getvalue())
+
+    def test_catalog_confirmation_is_rejected_without_profile(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            result = ecu_discover.main(["--confirm-catalog-candidates"])
+
+        self.assertEqual(result, 2)
+        self.assertIn("requires --profile", stderr.getvalue())
 
     def test_pcm_legacy_session_plan_is_dry_run(self):
         with (

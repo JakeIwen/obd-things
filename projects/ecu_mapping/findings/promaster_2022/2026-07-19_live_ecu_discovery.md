@@ -37,6 +37,12 @@ The 27-byte identity response contains ASCII `68532157AI32157`. FCA's official J
 the role and expected identity high-confidence. The independent verification below establishes the
 endpoint from the PCAN tap.
 
+That exhaustive result applies only to the pins-6/14 C-CAN branch under the recorded inherited
+session and framing. Later offline AlfaOBD work proved that model-88 adapter `6` is MS-CAN BLUE
+(pins 3/11) and adapter `7` is C-CAN2 GREY (pins 12/13). Reusing the same numeric target byte on
+another physical branch is a separate experiment; the C-CAN timeouts do not rule out those modules.
+See the [APK catalog/selector finding](2026-07-21_alfaobd_apk_catalog.md#adapter-routing-recovered-from-the-live-application-selector).
+
 | phys | physical TX → RX | verified or inferred role | `F187` | corroborating identity |
 |---|---|---|---|---|
 | `0x10` | `18DA10F1` → `18DAF110` | 3.6L Pentastar PCM | not supported in the tested default state | fixed-DLC-8 `10 92`, then `1A 87`: `68532157AI` |
@@ -93,6 +99,9 @@ repeat would isolate that variable, but it is no longer required to register or 
 4. **Initial bounded pass completed 2026-07-21:** per-module non-clearing DTC inventories and
    result-only (`31 03`) samples. Continue to keep the potentially large `19 0A` supported-DTC
    catalog opt-in and do not treat requestSequenceError as proof a routine exists.
+5. The next new-address experiment is the eight-target, vendor-routed B-CAN profile rather than
+   another full C-CAN address sweep: `python3 tools/ecu_discover.py --profile promaster88-bcan`
+   dry-runs the exact plan. These remain candidates until an exact response is captured.
 
 ## Identity-source cross-checks
 

@@ -70,6 +70,41 @@ justify declaring the remaining profiles present. The next ignition-on discovery
 this bounded list with the correct per-profile initialization/session behavior instead of another
 full address-space scan.
 
+## Adapter routing recovered from the live application selector
+
+The database's numeric `ECUList.adapter` values were initially only opaque catalog fields. The
+installed application now resolves two of them directly without connecting its OBD interface or
+opening a vehicle session:
+
+| selected model-88 profile | catalog adapter | exact selector text | routing consequence |
+|---|---:|---|---|
+| Climate Control Marelli EP (`0x98`) | `6` | `Use MS-CAN BLUE adapter` | pins 3/11, the van's live-verified 125-kbit/s B-CAN branch |
+| Electric Steering DELPHI EP (`0x30`) | `7` | `Use C CAN 2 GREY adapter` | pins 12/13, the second high-speed/CAN-CH branch |
+
+The gitignored UI evidence is retained as XML and screenshots under
+`tmp/ecu_mapping/android_tablet/alfaobd_adapter{6_blue,7_grey}_ui.*`. The XML SHA-256 values are
+`ad871a6210fd7efb9eb1f9a8173b1a26da19a25b8d34ad2f94f563decb54b8af` (blue) and
+`05d5aa1a7d2a9207910bc3d1e844eb52c0c83d46c6cd2488b069bc98929fcb32` (grey).
+This matches [AlfaOBD's current public hardware guide](https://www.alfaobd.com/) (accessed
+2026-07-21): blue remaps pins 3/11 to an interface's CAN pins, while grey remaps pins 12/13. Its
+[supported-vehicle table](https://www.alfaobd.com/supported_cars.html) separately specifies the
+grey-adapter setup for `RAM PRO MASTER (VF) 2022+`.
+
+That resolves the model-code-88 candidates into useful physical-bus groups:
+
+| adapter | branch | model-88 29-bit targets | present status |
+|---:|---|---|---|
+| `0` | ordinary C-CAN/profile connection | `10,18,1F,2A,40,60,C6,C7,CB` | first eight verified; SGW `CB` unresolved behind the bypass |
+| `6` | B-CAN / MS-CAN BLUE | `4A,62,65,6A,85,87,98,D9` | not yet actively surveyed on B-CAN |
+| `7` | C-CAN2 / GREY / CAN-CH | `26,28,30,31,A0,C0` | outside the current C-CAN/B-CAN scope |
+
+This explains why adapter-6/7 candidates timed out during exhaustive pins-6/14 address scans: the
+scan covered their address bytes but not their catalog-selected physical branches. It does not prove
+the optional modules are installed. `tools/ecu_discover.py --profile promaster88-bcan` now provides
+an eight-target, dry-run-by-default B-CAN `22 F187` plan. Live mode requires the separate
+`--confirm-catalog-candidates` gate plus the normal parked/pair/conditions checks and passive restore.
+No candidate enters `lib/modules.py` before an exact response is captured.
+
 ## Current subtype identification from live F1A5 values
 
 Unlike a model-menu row, this join starts with each ECU's `F1A5` value read from the current van.
@@ -123,6 +158,24 @@ proof the definitions are wrong. Re-test one only when its catalog label supplie
 experimental reason. The existing trace is sufficient for offline work across the `01xx`, `10xx`,
 `12xx`, `19xx`, `20xx`, `29xx`, `30xx`, `35xx`, `3xxx`, `40xx`, and `A0xx` groups.
 
+### Offline structural decode outcome
+
+`tools/alfaobd_bcm_decode.py` now applies those definitions to the existing current-van trace and
+checkpointed BCM inventories without opening CAN or ADB. It validates each inventory against its
+paired summary (`bcm_ccan`, `18DA40F1 -> 18DAF140`, 29-bit normal-fixed) before accepting any row,
+and attaches requested session, confirmed session state, conditions, results path, and summary path
+to every inventory observation. This prevents an overlapping DID from another ECU or diagnostic
+state from silently becoming BCM evidence. For example, `40A3` remains visibly split between
+inherited-state `7F 22 31` and positive data from confirmed session `03` campaigns.
+
+The current report contains 75 requests and 540 unique field definitions: 362 enum, 124 numeric,
+and 54 raw. Across 67 distinct complete positive response variants it decoded 493 field instances
+with zero out-of-bounds fields. The report deliberately surfaces rather than repairs vendor-data
+anomalies: `1004` has malformed slope text `0.10.0`, while `1008`, `2008`, and `200B` use ambiguous
+32-bit bounds `0..-1`. Human names, unit IDs, and physical scaling remain unverified even when the
+catalog arithmetic is mechanically valid. A controlled ground-truth comparison is still required
+before promoting any of these fields into a per-ECU DID map.
+
 ## Diagnostic-menu labels and the unlock limitation
 
 `Diag_devices` identifies `BCDELPHI55851`; joining its diagnostic menu yields 67 labels. They
@@ -152,11 +205,13 @@ provenance boundaries prevent old labels or scaling from leaking into the 2022 m
 1. The read-only `tools/alfaobd_catalog.py` export now preserves the model-code-88 ECU rows, exact
    subtype isocodes, BCM definitions, raw placeholders, and source hashes in JSON. Reverse the
    application's extra string-table indirection before treating any placeholder expansion as a label.
-2. Decode the 55 existing positive BCM responses using only the structural/numeric catalog fields
-   that survive validation. Spot-check field boundaries/scaling against controlled vehicle state
-   before promoting labels into a canonical map; do not repeat the already complete 75-request set
-   without a new question.
-3. With ignition on and PCAN listen-only, run one front-door lock/unlock output action at a time in
+2. The structural decode is complete. Spot-check names/units/scaling against controlled vehicle
+   state before promoting fields; do not repeat the already complete 75-request set without a new
+   question.
+3. Survey the eight adapter-6 candidates on the verified B-CAN branch with the guarded named profile.
+   A negative response proves an endpoint exists; a timeout proves only that this request/session/
+   state did not answer. Keep all candidates out of the registry until an exact response is captured.
+4. With ignition on and PCAN listen-only, run one front-door lock/unlock output action at a time in
    AlfaOBD while recording Debug Data. Do not enter Tools/PROXI or car-configuration menus.
-4. For other modules, record fresh simultaneous Gauges Data and Debug Data in small labeled batches.
+5. For other modules, record fresh simultaneous Gauges Data and Debug Data in small labeled batches.
    That supplies the timestamp bridge between human labels/scaled values and raw DID responses.

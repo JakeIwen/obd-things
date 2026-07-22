@@ -21,8 +21,8 @@ Provenance shorthand: capture logs live under `tmp/captures/` (bus-state referen
 | bus | rate | where | access | notes |
 |---|---|---|---|---|
 | **C-CAN / HS-CAN** | 500 kbit/s | OBD pins **6/14** | PCAN via **SGW bypass** (ECRI tap on internal C-CAN) | powertrain + diagnostics. `bringup.sh` default. The bypass is why our UDS reaches gated modules at all; legislated OBD-II Mode 01 PIDs do NOT route through it. |
-| **B-CAN / CAN IHS** | **125 kbit/s, live-verified** | DLC pins **3/11** (OEM: CAN IHS +/−) | PCAN through the **B-CAN DB9** of the owner's labeled dual-pair OBD pigtail; `bringup.sh --bcan` | Comfort/body effects (locks, lights, interior) and the established B-CAN signature set were captured with listen-only explicitly on and zero RX errors on 2026-07-20. Owner confirmed the pigtail directly selects the documented 2022 ProMaster B-CAN pair; the DIY yellow adapter has never been used on this van. [Evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-20_bcan_pair_verification.md). |
-| **CAN CH / second high-speed CAN** | **unverified live**; **500 kbit/s is the leading candidate** | DLC pins **12/13** (OEM: CAN CH +/−) | PCAN requires repinning; passive survey pending | OEM topology includes BCM, SGW, ORC, park assist, EPS, ABS, and forward camera. AlfaOBD's current hardware guide explicitly calls pins 12/13 the second high-speed CAN bus on 2022+ ProMaster. That establishes the bus class, not the exact bitrate or addressing on this van. |
+| **B-CAN / CAN IHS** | **125 kbit/s, live-verified** | DLC pins **3/11** (OEM: CAN IHS +/−) | PCAN through the **B-CAN DB9** of the owner's labeled dual-pair OBD pigtail; `bringup.sh --bcan` | Comfort/body effects (locks, lights, interior) and the established B-CAN signature set were captured with listen-only explicitly on and zero RX errors on 2026-07-20. Owner confirmed the pigtail directly selects the documented 2022 ProMaster B-CAN pair; the DIY yellow adapter has never been used on this van. The installed AlfaOBD selector independently renders catalog adapter `6` as `MS-CAN BLUE`, yielding eight guarded 29-bit diagnostic candidates—not verified endpoints. [Evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_alfaobd_apk_catalog.md#adapter-routing-recovered-from-the-live-application-selector). |
+| **CAN CH / second high-speed CAN** | **unverified live**; **500 kbit/s is the leading candidate** | DLC pins **12/13** (OEM: CAN CH +/−) | PCAN requires repinning; passive survey pending | OEM topology includes BCM, SGW, ORC, park assist, EPS, ABS, and forward camera. AlfaOBD's current hardware guide explicitly calls pins 12/13 the second high-speed CAN bus on 2022+ ProMaster, and the installed selector renders catalog adapter `7` as `C CAN 2 GREY`. That establishes the bus class/routing, not the exact bitrate, installed modules, or live addressing on this van. |
 
 The currently configured C-CAN/B-CAN modes come up **passive (listen-only)** by default;
 `bringup.sh --tx` arms transmission (UDS needs it).
@@ -77,6 +77,14 @@ exchange, while the adapter trace addresses the RF Hub and BCM over their verifi
 endpoints. Direct diagnostics on B-CAN are therefore **not established**. Do not infer `+8`
 pairs or add an 11-bit module without an actual request/response capture. See the
 [`B-CAN pair verification`](../projects/ecu_mapping/findings/promaster_2022/2026-07-20_bcan_pair_verification.md).
+
+The AlfaOBD model-88 catalog plus its installed selector now supplies a separate, evidence-bounded
+29-bit B-CAN candidate set: `18DA{4A,62,65,6A,85,87,98,D9}F1` with corresponding
+`18DAF1xx` responses. These are trailer, blind-spot, display/infotainment, and climate profile
+choices; any may be optional or absent. Dry-run the exact set with
+`python3 tools/ecu_discover.py --profile promaster88-bcan`. A live run is active diagnostic traffic
+and requires the profile-specific confirmation and normal safety gates. Register only exact
+responders. [Catalog/UI evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_alfaobd_apk_catalog.md#adapter-routing-recovered-from-the-live-application-selector).
 
 > **PCM legacy-session requirement:** `0x10` was independently verified from the PCAN tap on
 > 2026-07-21. While parked with the engine idling, fixed-DLC-8 zero-padded

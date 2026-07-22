@@ -92,7 +92,7 @@ def device_membership_sql(table: str) -> str:
     # Table identifiers come only from CATALOG_TABLES, never user input.
     return (
         f'SELECT rowid AS _rowid, * FROM "{table}" '
-        "WHERE instr(',' || replace(device_id, ' ', ''), ',' || ? || ',') > 0 "
+        "WHERE instr(',' || replace(device_id, ' ', '') || ',', ',' || ? || ',') > 0 "
         "ORDER BY rowid"
     )
 

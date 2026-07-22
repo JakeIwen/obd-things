@@ -55,6 +55,7 @@ tools/alfaobd_decode.py  <in.bin> [out.txt]      # generic: .bin -> decoded text
 tools/alfaobd_gauges.py  <Gauges_Data.csv>       # offline section/profile/metric inventory -> tmp/
 tools/alfaobd_apk_db.py  <base.apk>              # reconstruct catalog DB + label resource -> tmp/
 tools/alfaobd_catalog.py <db> <labels> --device-id N  # read-only model/device export -> tmp/
+tools/alfaobd_bcm_decode.py                   # apply current-BCM field layouts to existing evidence
 projects/ecu_mapping/vin_scan.py        <decoded.txt> [vin]   # which van? (run FIRST)
 projects/ecu_mapping/extract_did_map.py <decoded.txt> <out>   # per-module DID/service map
 projects/ecu_mapping/alfalog.py                  # shared log parser + ELM reassembly
@@ -74,6 +75,13 @@ under `tmp/`. The catalog exporter opens SQLite in read-only mode, preserves sou
 fields, and marks its mechanical English-resource substitutions as unverified: the APK's numeric
 placeholders have another unresolved runtime indirection, so raw placeholder IDs win. Do not commit
 or redistribute the APK, reconstructed database, or extracted application resource.
+
+`alfaobd_bcm_decode.py` opens the reconstructed database read-only and mechanically applies the
+current BCM subtype's bit layouts to already captured responses. It verifies every inventory's
+paired summary against the BCM module key and exact TX/RX endpoint, carries diagnostic-session and
+vehicle-condition provenance into each observation, and keeps all names/units as unresolved raw
+catalog references. Its default JSON report lives under `tmp/ecu_mapping/android_tablet/`; it does
+not open CAN or ADB.
 
 `reassemble_commands.py <decoded.txt> <out.txt> [atsh]` — rebuilds multi-frame COMMANDS.
 AlfaOBD sends long requests as MANUAL ISO-TP frames: First Frame `1L LL <6 data>` + a trailing
@@ -110,9 +118,9 @@ reads remain unsupported/unresolved. See
 The companion [`ODX/PDX source research`](findings/promaster_2022/2026-07-19_odx_pdx_source_research.md)
 records the free local toolchain, searched sources, and remaining acquisition paths.
 The [`2026-07-21 read-only module inventory`](findings/promaster_2022/2026-07-21_readonly_module_inventory.md)
-completes inherited-session `18DAxxF1` address coverage and records bounded DTC/result-only routine
+completes inherited-session `18DAxxF1` address coverage on the pins-6/14 C-CAN branch and records bounded DTC/result-only routine
 responses for all seven default-session C-CAN modules in that campaign. It found no additional
-address responder; DTC state and routine-response leads are kept per module there.
+address responder on that branch; DTC state and routine-response leads are kept per module there.
 The follow-on [`candidate DID inventory`](findings/promaster_2022/2026-07-21_candidate_did_inventory.md)
 records complete `F100-F1FF` pages for TCM, shifter, BCM, cluster, and telematics plus a direct
 recheck of 61 current-van AlfaOBD BCM candidates. It established 135 positive identity-page
@@ -177,9 +185,12 @@ corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one
    door-lock relay actions, but not which captured `2F` DID implements each. Correlate one deliberate
    AlfaOBD action at a time with Debug Data plus listen-only PCAN, then verify the result before any
    replay. Do not use the adjacent PROXI/configuration menu entries.
-3. Export/decode the catalog's 75 current-BCM request definitions against the existing trace (all
-   75 were already requested: 55 positive, 20 negative); do not repeat that live traffic without a
-   new experimental question. Then correlate fresh `*_Info.log`/Gauges labels with debug-bin DIDs
-   per module.
-4. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps
+3. **BCM structural decode completed:** all 75 definitions are represented in the offline report;
+   55 DIDs have positive trace evidence and 20 are negative. Continue with controlled scaling/name
+   validation, not another live sweep of the same requests.
+4. **Next new-address campaign:** move the PEAK to the B-CAN DB9 and dry-run
+   `python3 tools/ecu_discover.py --profile promaster88-bcan`. The eight physical 29-bit pairs come
+   from AlfaOBD adapter-6 rows, and the tablet UI independently identifies adapter 6 as MS-CAN
+   BLUE. They remain candidates until a response is captured; do not add them to `lib/modules.py`.
+5. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps
    (`../../docs/bus-map.md`, `../../lib/modules.py`, project DID maps) per the maintenance rule.

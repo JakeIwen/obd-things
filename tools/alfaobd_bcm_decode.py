@@ -68,6 +68,21 @@ NRC_NAMES = {
     0x78: "requestCorrectlyReceivedResponsePending",
 }
 
+CATEGORY_HINT_FAMILIES = {
+    "positive": "positive",
+    "timeout": "timeout",
+    "transport_error": "transport_error",
+    "response_pending": "pending",
+    "service_not_supported": "negative",
+    "subfunction_not_supported": "negative",
+    "incorrect_length_or_format": "negative",
+    "conditions_not_correct": "negative",
+    "out_of_range_current_session": "negative",
+    "security_denied": "negative",
+    "session_restricted": "negative",
+    "negative_other": "negative",
+}
+
 
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -101,7 +116,13 @@ def _hex_prefix(value: str) -> str:
     return re.sub(r"\s+", "", value or "").upper()
 
 
-def classify_response(request: str, response: str, *, prefix_only: bool = False) -> dict[str, Any]:
+def classify_response(
+    request: str,
+    response: str,
+    *,
+    prefix_only: bool = False,
+    category_hint: str = "",
+) -> dict[str, Any]:
     """Classify a response while requiring the exact positive DID echo.
 
     Malformed/truncated evidence can retain a positive or negative *family* for
@@ -111,6 +132,13 @@ def classify_response(request: str, response: str, *, prefix_only: bool = False)
     request = normalize_request(request)
     expected_positive = "62" + request[2:]
     raw_compact = _hex_prefix(response)
+    hinted_family = CATEGORY_HINT_FAMILIES.get(category_hint)
+    if not raw_compact and hinted_family in ("timeout", "transport_error"):
+        return {
+            "category": category_hint,
+            "status_family": hinted_family,
+            "response_hex": "",
+        }
     try:
         clean = compact_hex(response)
     except ValueError as error:
@@ -145,6 +173,14 @@ def classify_response(request: str, response: str, *, prefix_only: bool = False)
         }
     if clean.startswith("7F22") and len(clean) >= 6:
         nrc = int(clean[4:6], 16)
+        if nrc == 0x78:
+            return {
+                "category": "pending_prefix" if prefix_only else "pending",
+                "status_family": "pending",
+                "response_hex": clean,
+                "nrc": f"{nrc:02X}",
+                "nrc_name": NRC_NAMES[nrc],
+            }
         return {
             "category": "negative_prefix" if prefix_only else "negative",
             "status_family": "negative",
@@ -279,7 +315,7 @@ def load_catalog(database: Path, device_id: int = 55851) -> tuple[dict[str, Any]
             dict(row)
             for row in connection.execute(
                 "SELECT rowid AS _rowid, * FROM FGA_BCM_DATA "
-                "WHERE instr(',' || replace(device_id, ' ', ''), ',' || ? || ',') > 0 "
+                "WHERE instr(',' || replace(device_id, ' ', '') || ',', ',' || ? || ',') > 0 "
                 "ORDER BY request, CAST(bit_pos AS INTEGER), CAST(bit_len AS INTEGER), rowid",
                 (str(device_id),),
             )
@@ -340,6 +376,26 @@ class Evidence:
     timestamp: str = ""
     category_hint: str = ""
     occurrences: int = 1
+    request_occurrences_total: int | None = None
+    summary_path: str = ""
+    module_key: str = ""
+    module_txid: str = ""
+    module_rxid: str = ""
+    module_bus: str = ""
+    module_bitrate: int | None = None
+    module_channel: str = ""
+    addressing_mode: str = ""
+    physical_pair: str = ""
+    requested_session: str = ""
+    session_state: str = ""
+    diagnostic_session_policy: str = ""
+    conditions: str = ""
+    campaign_status: str = ""
+    campaign_partial: bool | None = None
+    campaign_fatal_error: str = ""
+    restored_passive: bool | None = None
+    started_at: str = ""
+    completed_at: str = ""
 
 
 def load_decoded_evidence(path: Path, addr: str = "DA40F1") -> list[Evidence]:
@@ -365,13 +421,165 @@ def load_decoded_evidence(path: Path, addr: str = "DA40F1") -> list[Evidence]:
     return result
 
 
-def load_inventory_evidence(paths: Iterable[Path]) -> list[Evidence]:
+def _canonical_can_id(value: Any) -> str:
+    if isinstance(value, bool):
+        raise ValueError("boolean is not a CAN ID")
+    if isinstance(value, int):
+        number = value
+    else:
+        text = re.sub(r"[\s_]", "", str(value or "")).upper()
+        if text.startswith("0X"):
+            text = text[2:]
+        if not text or not HEX_RE.fullmatch(text):
+            raise ValueError(f"invalid CAN ID {value!r}")
+        number = int(text, 16)
+    if not 0 <= number <= 0x1FFFFFFF:
+        raise ValueError(f"CAN ID outside 29-bit range: {value!r}")
+    return f"{number:X}"
+
+
+def _normal_fixed_endpoint(addr: str) -> tuple[str, str]:
+    header = _canonical_can_id(addr)
+    if len(header) == 6 and header.startswith("DA"):
+        header = "18" + header
+    if len(header) != 8 or not header.startswith("18DA"):
+        raise ValueError(
+            f"inventory provenance verification requires an 18DA normal-fixed header, got {addr!r}"
+        )
+    txid = int(header, 16)
+    target = (txid >> 8) & 0xFF
+    source = txid & 0xFF
+    rxid = 0x18DA0000 | (source << 8) | target
+    return f"{txid:08X}", f"{rxid:08X}"
+
+
+def _inventory_summary_path(path: Path) -> Path:
+    suffix = ".results.jsonl"
+    if not path.name.endswith(suffix):
+        raise ValueError(f"inventory filename must end in {suffix}: {path}")
+    return path.with_name(path.name[: -len(suffix)] + ".summary.json")
+
+
+def _load_inventory_context(
+    path: Path,
+    *,
+    expected_txid: str,
+    expected_rxid: str,
+    expected_module_key: str,
+    expected_bus: str,
+    expected_bitrate: int,
+) -> tuple[dict[str, Any], Path]:
+    summary_path = _inventory_summary_path(path)
+    if not summary_path.is_file():
+        raise ValueError(f"inventory has no paired summary: {summary_path}")
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"invalid inventory summary JSON: {summary_path}") from error
+    module = summary.get("module")
+    if not isinstance(module, dict):
+        raise ValueError(f"inventory summary has no module object: {summary_path}")
+    module_key = str(module.get("key") or "")
+    if module_key != expected_module_key:
+        raise ValueError(
+            f"inventory module mismatch in {summary_path}: "
+            f"{module_key!r} != {expected_module_key!r}"
+        )
+    actual_txid = _canonical_can_id(module.get("txid"))
+    actual_rxid = _canonical_can_id(module.get("rxid"))
+    if actual_txid != _canonical_can_id(expected_txid) or actual_rxid != _canonical_can_id(
+        expected_rxid
+    ):
+        raise ValueError(
+            f"inventory endpoint mismatch in {summary_path}: "
+            f"{actual_txid}:{actual_rxid} != {expected_txid}:{expected_rxid}"
+        )
+    addressing_mode = str(module.get("addressing_mode") or "")
+    if addressing_mode != "normal_29bits":
+        raise ValueError(
+            f"inventory addressing mismatch in {summary_path}: {addressing_mode!r}"
+        )
+    module_bus = str(module.get("bus") or "")
+    if module_bus != expected_bus:
+        raise ValueError(
+            f"inventory bus mismatch in {summary_path}: "
+            f"{module_bus!r} != {expected_bus!r}"
+        )
+    try:
+        module_bitrate = int(module.get("bitrate"))
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"invalid inventory bitrate in {summary_path}") from error
+    if module_bitrate != expected_bitrate:
+        raise ValueError(
+            f"inventory bitrate mismatch in {summary_path}: "
+            f"{module_bitrate} != {expected_bitrate}"
+        )
+    declared_results = summary.get("results_jsonl")
+    if declared_results and Path(str(declared_results)).name != path.name:
+        raise ValueError(
+            f"inventory summary names a different results file: {declared_results!r}"
+        )
+    requested_session = summary.get("requested_session")
+    context = {
+        "summary_path": str(summary_path),
+        "module_key": module_key,
+        "module_txid": actual_txid,
+        "module_rxid": actual_rxid,
+        "module_bus": module_bus,
+        "module_bitrate": module_bitrate,
+        "module_channel": str(module.get("channel") or summary.get("channel") or ""),
+        "addressing_mode": addressing_mode,
+        "physical_pair": str(summary.get("physical_pair") or ""),
+        "conditions": str(summary.get("conditions") or ""),
+        "requested_session": "" if requested_session is None else str(requested_session),
+        "session_state": str(summary.get("session_state") or ""),
+        "diagnostic_session_policy": str(
+            summary.get("diagnostic_session_policy") or ""
+        ),
+        "started_at": str(summary.get("started_at") or ""),
+        "completed_at": str(summary.get("completed_at") or ""),
+        "campaign_status": str(summary.get("status") or ""),
+        "campaign_partial": summary.get("partial"),
+        "campaign_fatal_error": str(summary.get("fatal_error") or ""),
+        "restored_passive": summary.get("restored_passive"),
+        "results_written": summary.get("results_written"),
+    }
+    return context, summary_path
+
+
+def load_inventory_evidence(
+    paths: Iterable[Path],
+    *,
+    expected_txid: str,
+    expected_rxid: str,
+    expected_module_key: str = "bcm_ccan",
+    expected_bus: str = "c-can",
+    expected_bitrate: int = 500000,
+) -> tuple[list[Evidence], list[Path], dict[str, Any]]:
     result = []
+    summary_paths = []
+    skipped_invalid_requests = []
+    category_hint_mismatches = []
+    campaign_contexts = []
     for path in paths:
+        context, summary_path = _load_inventory_context(
+            path,
+            expected_txid=expected_txid,
+            expected_rxid=expected_rxid,
+            expected_module_key=expected_module_key,
+            expected_bus=expected_bus,
+            expected_bitrate=expected_bitrate,
+        )
+        summary_paths.append(summary_path)
+        campaign_contexts.append(
+            {key: value for key, value in context.items() if key != "results_written"}
+        )
+        rows_read = 0
         with path.open("r", encoding="utf-8") as source:
             for line_number, line in enumerate(source, 1):
                 if not line.strip():
                     continue
+                rows_read += 1
                 try:
                     row = json.loads(line)
                 except json.JSONDecodeError as error:
@@ -381,18 +589,79 @@ def load_inventory_evidence(paths: Iterable[Path]) -> list[Evidence]:
                 )
                 try:
                     request = normalize_request(request_value)
-                except ValueError:
+                except ValueError as error:
+                    skipped_invalid_requests.append(
+                        {"path": str(path), "line": line_number, "error": str(error)}
+                    )
                     continue
+                response = str(row.get("response_hex") or "")
+                hint = str(row.get("category") or "")
+                classified = classify_response(
+                    request, response, category_hint=hint
+                )
+                expected_family = CATEGORY_HINT_FAMILIES.get(hint)
+                if expected_family and expected_family != classified["status_family"]:
+                    category_hint_mismatches.append(
+                        {
+                            "path": str(path),
+                            "line": line_number,
+                            "request": request,
+                            "category_hint": hint,
+                            "classified_family": classified["status_family"],
+                        }
+                    )
                 result.append(
                     Evidence(
                         request=request,
-                        response=str(row.get("response_hex") or ""),
+                        response=response,
                         source_kind="inventory",
                         source_path=str(path),
-                        category_hint=str(row.get("category") or ""),
+                        category_hint=hint,
+                        summary_path=context["summary_path"],
+                        module_key=context["module_key"],
+                        module_txid=context["module_txid"],
+                        module_rxid=context["module_rxid"],
+                        module_bus=context["module_bus"],
+                        module_bitrate=context["module_bitrate"],
+                        module_channel=context["module_channel"],
+                        addressing_mode=context["addressing_mode"],
+                        physical_pair=context["physical_pair"],
+                        requested_session=context["requested_session"],
+                        session_state=context["session_state"],
+                        diagnostic_session_policy=context[
+                            "diagnostic_session_policy"
+                        ],
+                        conditions=context["conditions"],
+                        campaign_status=context["campaign_status"],
+                        campaign_partial=context["campaign_partial"],
+                        campaign_fatal_error=context["campaign_fatal_error"],
+                        restored_passive=context["restored_passive"],
+                        started_at=context["started_at"],
+                        completed_at=context["completed_at"],
                     )
                 )
-    return result
+        declared_count = context["results_written"]
+        if declared_count is not None and int(declared_count) != rows_read:
+            raise ValueError(
+                f"inventory row-count mismatch for {path}: "
+                f"summary={declared_count}, actual={rows_read}"
+            )
+    return result, summary_paths, {
+        "files_loaded": len(summary_paths),
+        "evidence_rows_loaded": len(result),
+        "skipped_invalid_request_count": len(skipped_invalid_requests),
+        "skipped_invalid_requests": skipped_invalid_requests,
+        "category_hint_mismatch_count": len(category_hint_mismatches),
+        "category_hint_mismatches": category_hint_mismatches,
+        "campaign_contexts": campaign_contexts,
+        "noncomplete_or_failed_campaign_count": sum(
+            context["campaign_status"] not in ("", "complete")
+            or bool(context["campaign_partial"])
+            or bool(context["campaign_fatal_error"])
+            or context["restored_passive"] is False
+            for context in campaign_contexts
+        ),
+    }
 
 
 def load_module_map_evidence(path: Path, addr: str = "DA40F1") -> list[Evidence]:
@@ -421,7 +690,8 @@ def load_module_map_evidence(path: Path, addr: str = "DA40F1") -> list[Evidence]
                     source_kind="module_map",
                     source_path=str(path),
                     complete=False,
-                    occurrences=int(occurrences),
+                    occurrences=1,
+                    request_occurrences_total=int(occurrences),
                 )
             )
     return result
@@ -532,13 +802,24 @@ def decode_positive(definition: dict[str, Any], response_hex: str) -> dict[str, 
 
 def _source_summary(evidence: Sequence[Evidence], catalog_requests: set[str]) -> dict[str, Any]:
     by_kind: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
-    occurrence_counts: dict[str, int] = defaultdict(int)
+    sample_counts: dict[str, int] = defaultdict(int)
+    request_occurrence_counts: dict[str, int] = defaultdict(int)
     for item in evidence:
         if item.request not in catalog_requests:
             continue
-        classified = classify_response(item.request, item.response, prefix_only=not item.complete)
+        classified = classify_response(
+            item.request,
+            item.response,
+            prefix_only=not item.complete,
+            category_hint=item.category_hint,
+        )
         by_kind[item.source_kind][item.request].add(classified["status_family"])
-        occurrence_counts[item.source_kind] += item.occurrences
+        sample_counts[item.source_kind] += item.occurrences
+        request_occurrence_counts[item.source_kind] += (
+            item.request_occurrences_total
+            if item.request_occurrences_total is not None
+            else item.occurrences
+        )
     result = {}
     for kind, requests in sorted(by_kind.items()):
         families = defaultdict(int)
@@ -552,9 +833,19 @@ def _source_summary(evidence: Sequence[Evidence], catalog_requests: set[str]) ->
             "catalog_requests_observed": len(requests),
             "positive_requests": families["positive"],
             "negative_requests": families["negative"],
+            "pending_requests": families["pending"],
+            "timeout_requests": families["timeout"],
+            "transport_error_requests": families["transport_error"],
             "invalid_requests": families["invalid"],
             "mixed_status_requests": mixed,
-            "evidence_occurrences": occurrence_counts[kind],
+            "evidence_sample_count": sample_counts[kind],
+            "request_occurrences_total": request_occurrence_counts[kind],
+            "occurrence_note": (
+                "module_map request totals aggregate all variants; each displayed prefix "
+                "is counted only as one evidence sample"
+                if kind == "module_map"
+                else "samples are complete source records"
+            ),
         }
     return result
 
@@ -564,7 +855,12 @@ def _observations_for_request(request: str, evidence: Sequence[Evidence]) -> lis
     for item in evidence:
         if item.request != request:
             continue
-        classified = classify_response(request, item.response, prefix_only=not item.complete)
+        classified = classify_response(
+            request,
+            item.response,
+            prefix_only=not item.complete,
+            category_hint=item.category_hint,
+        )
         key = (
             classified.get("response_hex", ""),
             classified["category"],
@@ -578,12 +874,19 @@ def _observations_for_request(request: str, evidence: Sequence[Evidence]) -> lis
                 "source_kind": item.source_kind,
                 "source_paths": [],
                 "complete": item.complete,
-                "occurrences": 0,
+                "sample_occurrences": 0,
+                "request_occurrences_total": 0,
                 "category_hints": [],
                 "timestamps": [],
+                "provenance": [],
             },
         )
-        record["occurrences"] += item.occurrences
+        record["sample_occurrences"] += item.occurrences
+        record["request_occurrences_total"] += (
+            item.request_occurrences_total
+            if item.request_occurrences_total is not None
+            else item.occurrences
+        )
         if item.source_path not in record["source_paths"]:
             record["source_paths"].append(item.source_path)
         if item.category_hint and item.category_hint not in record["category_hints"]:
@@ -591,6 +894,31 @@ def _observations_for_request(request: str, evidence: Sequence[Evidence]) -> lis
         stamp = " ".join(part for part in (item.date, item.timestamp) if part)
         if stamp and stamp not in record["timestamps"]:
             record["timestamps"].append(stamp)
+        if item.summary_path:
+            provenance = {
+                "results_path": item.source_path,
+                "summary_path": item.summary_path,
+                "module_key": item.module_key,
+                "module_txid": item.module_txid,
+                "module_rxid": item.module_rxid,
+                "module_bus": item.module_bus,
+                "module_bitrate": item.module_bitrate,
+                "module_channel": item.module_channel,
+                "addressing_mode": item.addressing_mode,
+                "physical_pair": item.physical_pair,
+                "requested_session": item.requested_session or None,
+                "session_state": item.session_state,
+                "diagnostic_session_policy": item.diagnostic_session_policy,
+                "conditions": item.conditions,
+                "campaign_status": item.campaign_status,
+                "campaign_partial": item.campaign_partial,
+                "campaign_fatal_error": item.campaign_fatal_error or None,
+                "restored_passive": item.restored_passive,
+                "started_at": item.started_at,
+                "completed_at": item.completed_at,
+            }
+            if provenance not in record["provenance"]:
+                record["provenance"].append(provenance)
     return sorted(
         grouped.values(),
         key=lambda row: (row["source_kind"], row.get("response_hex", ""), row["category"]),
@@ -608,13 +936,28 @@ def build_report(
 ) -> dict[str, Any]:
     definitions, catalog_meta = load_catalog(database, device_id)
     evidence: list[Evidence] = []
+    inventory_audit: dict[str, Any] = {
+        "files_loaded": 0,
+        "evidence_rows_loaded": 0,
+        "skipped_invalid_request_count": 0,
+        "skipped_invalid_requests": [],
+        "category_hint_mismatch_count": 0,
+        "category_hint_mismatches": [],
+        "campaign_contexts": [],
+        "noncomplete_or_failed_campaign_count": 0,
+    }
     source_files: list[tuple[str, Path]] = [("database", database)]
     if decoded is not None:
         evidence.extend(load_decoded_evidence(decoded, addr))
         source_files.append(("decoded_trace", decoded))
     if inventories:
-        evidence.extend(load_inventory_evidence(inventories))
-        source_files.extend(("inventory", path) for path in inventories)
+        expected_txid, expected_rxid = _normal_fixed_endpoint(addr)
+        inventory_evidence, inventory_summaries, inventory_audit = load_inventory_evidence(
+            inventories, expected_txid=expected_txid, expected_rxid=expected_rxid
+        )
+        evidence.extend(inventory_evidence)
+        source_files.extend(("inventory_results", path) for path in inventories)
+        source_files.extend(("inventory_summary", path) for path in inventory_summaries)
     if module_map is not None:
         evidence.extend(load_module_map_evidence(module_map, addr))
         source_files.append(("module_map", module_map))
@@ -625,6 +968,7 @@ def build_report(
     total_decoded_fields = 0
     total_out_of_bounds_fields = 0
     invalid_numeric_fields: set[tuple[str, int, int, str]] = set()
+    ambiguous_bounds_fields: set[tuple[str, int, int, str]] = set()
     for request, definition in definitions.items():
         observations = _observations_for_request(request, evidence)
         positive_responses: dict[str, set[str]] = defaultdict(set)
@@ -645,6 +989,15 @@ def build_report(
                 numeric = field.get("numeric")
                 if numeric and numeric["scaling_status"] != "applied_catalog_arithmetic":
                     invalid_numeric_fields.add(
+                        (
+                            request,
+                            field["bit_pos"],
+                            field["bit_len"],
+                            field["response_name_raw"],
+                        )
+                    )
+                if numeric and numeric["bounds_status"] == "ambiguous_catalog_bounds":
+                    ambiguous_bounds_fields.add(
                         (
                             request,
                             field["bit_pos"],
@@ -702,6 +1055,7 @@ def build_report(
             "field_encoding_counts": dict(sorted(encoding_counts.items())),
         },
         "evidence_summary": _source_summary(evidence, catalog_requests),
+        "inventory_input_audit": inventory_audit,
         "decode_summary": {
             "complete_positive_response_variants": total_decoded_variants,
             "decoded_field_instances": total_decoded_fields,
@@ -715,6 +1069,16 @@ def build_report(
                     "response_name_raw": item[3],
                 }
                 for item in sorted(invalid_numeric_fields)
+            ],
+            "ambiguous_numeric_bounds_field_count": len(ambiguous_bounds_fields),
+            "ambiguous_numeric_bounds_fields": [
+                {
+                    "request": item[0],
+                    "bit_pos": item[1],
+                    "bit_len": item[2],
+                    "response_name_raw": item[3],
+                }
+                for item in sorted(ambiguous_bounds_fields)
             ],
         },
         "requests": requests_report,
@@ -788,6 +1152,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"{kind}: observed={summary['catalog_requests_observed']} "
             f"positive={summary['positive_requests']} "
             f"negative={summary['negative_requests']} "
+            f"pending={summary['pending_requests']} "
+            f"timeout={summary['timeout_requests']} "
+            f"transport={summary['transport_error_requests']} "
             f"invalid={summary['invalid_requests']} "
             f"mixed={summary['mixed_status_requests']}"
         )

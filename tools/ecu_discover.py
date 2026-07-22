@@ -24,7 +24,8 @@ after an interrupted/failed scan and writes a JSON report under tmp/discovery/.
 For an independently researched 11-bit pair, replace the profile with one or more
 ``--target LABEL=TX:RX`` arguments and select ``--addressing-mode normal_11bits``.
 Custom targets are dry-run by default too. No ProMaster B-CAN diagnostic pair is currently
-verified, so this documentation intentionally does not provide a copyable guessed pair.
+verified, so do not invent an 11-bit ``+8`` pair; the vendor-routed named profile below is the
+only maintained B-CAN candidate set.
 
 An expanded 29-bit normal-fixed address-byte sweep is available only with an explicit flag and
 confirmation. It still sends physical 0x18DAxxF1 requests, never functional broadcast:
@@ -39,6 +40,21 @@ A bounded portion of that address-byte space can be selected without repeating a
     python3 tools/ecu_discover.py --address-byte-range F2 FF
 
 Live use of a range is also an unverified-address scan and requires ``--confirm-expanded-scan``.
+
+The owner-supplied AlfaOBD 2.4.4.0 model-88 catalog and its on-tablet unit selector identify
+eight adapter-6 targets as MS-CAN/BLUE-adapter modules.  This is a vendor-derived candidate
+profile for the van's independently verified 125-kbit/s B-CAN pair, not proof that any listed
+module is installed.  Dry-run it before moving the PEAK connection to the B-CAN DB9::
+
+    python3 tools/ecu_discover.py --profile promaster88-bcan
+
+Live use additionally requires ``--confirm-catalog-candidates`` and the ordinary parked,
+physical-pair, interface, service, and passive-restoration gates::
+
+    ./bringup.sh --bcan --tx
+    python3 tools/ecu_discover.py --profile promaster88-bcan \
+        --execute --confirm-catalog-candidates --confirm-parked --pair 3/11 \
+        --conditions "ignition ON, engine OFF, PCAN on pigtail B-CAN DB9"
 
 FCA modules using legacy ECU identification can be surveyed separately with
 ``--probe legacy-1a87``. This sends ReadECUIdentification, not a write or session change.
@@ -59,6 +75,7 @@ import datetime
 import json
 import math
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -133,13 +150,17 @@ class Candidate:
         )
 
 
-def normal_29bit_candidate(label, name, target_address, source):
+def normal_29bit_candidate(
+    label, name, target_address, source, *, bus="c-can", bitrate=500000
+):
     return Candidate(
         label=label,
         name=name,
         txid=0x18DA0000 | (target_address << 8) | 0xF1,
         rxid=0x18DAF100 | target_address,
         source=source,
+        bus=bus,
+        bitrate=bitrate,
     )
 
 
@@ -173,6 +194,36 @@ PROMASTER_CCAN_CANDIDATES = (
 )
 
 
+PROMASTER88_BCAN_SOURCE = (
+    "owner-supplied AlfaOBD 2.4.4.0 model-code-88 ECUList adapter=6; "
+    "the app's on-tablet selector identifies adapter 6 as MS-CAN BLUE; "
+    "DLC 3/11 at 125 kbit/s independently live-verified on this van 2026-07-20; "
+    "candidate only, presence unverified"
+)
+PROFILE_EXPECTED_PAIRS = {"promaster88-bcan": "3/11"}
+PROMASTER88_BCAN_CANDIDATE_SPECS = (
+    ("trailer_tow_candidate", "Trailer tow module candidate", 0x4A),
+    ("left_blind_spot_candidate", "Left blind-spot sensor candidate", 0x62),
+    ("right_blind_spot_candidate", "Right blind-spot sensor candidate", 0x65),
+    ("display_candidate", "Display screen module candidate", 0x6A),
+    ("ics_candidate", "Integrated center stack candidate", 0x85),
+    ("uconnect_candidate", "Uconnect module candidate", 0x87),
+    ("climate_candidate", "Climate-control module candidate", 0x98),
+    ("emcm2_candidate", "Entertainment multimedia control module candidate", 0xD9),
+)
+PROMASTER88_BCAN_CANDIDATES = tuple(
+    normal_29bit_candidate(
+        label,
+        name,
+        address,
+        PROMASTER88_BCAN_SOURCE,
+        bus="b-can",
+        bitrate=125000,
+    )
+    for label, name, address in PROMASTER88_BCAN_CANDIDATE_SPECS
+)
+
+
 def parse_can_id(value):
     try:
         can_id = int(value, 16)
@@ -181,6 +232,10 @@ def parse_can_id(value):
     if can_id < 0:
         raise argparse.ArgumentTypeError("CAN IDs cannot be negative")
     return can_id
+
+
+def normalize_physical_pair(value):
+    return re.sub(r"\s+", "", str(value or ""))
 
 
 def parse_address_byte(value):
@@ -248,6 +303,8 @@ def build_targets(args):
                 )
             seen_pairs.add(pair)
         return targets
+    if args.profile == "promaster88-bcan":
+        return list(PROMASTER88_BCAN_CANDIDATES)
     if args.all_29bit_targets or args.address_byte_range:
         if args.address_byte_range:
             start, end = args.address_byte_range
@@ -513,6 +570,11 @@ def parser():
     target_group = p.add_mutually_exclusive_group()
     target_group.add_argument("--target", action="append", help="explicit LABEL=TX:RX; replaces default profile")
     target_group.add_argument(
+        "--profile",
+        choices=("promaster88-bcan",),
+        help="bounded researched candidate profile; dry-run by default",
+    )
+    target_group.add_argument(
         "--all-29bit-targets",
         action="store_true",
         help=(
@@ -539,6 +601,11 @@ def parser():
         "--confirm-custom-physical",
         action="store_true",
         help="required for live custom targets; asserts every supplied TX/RX pair is physical",
+    )
+    p.add_argument(
+        "--confirm-catalog-candidates",
+        action="store_true",
+        help="required for live use of a vendor-catalog candidate profile",
     )
     p.add_argument("--addressing-mode", choices=(NORMAL_29BITS, NORMAL_11BITS), default=NORMAL_29BITS)
     p.add_argument(
@@ -582,6 +649,12 @@ def main(argv=None):
         return 2
     if args.confirm_custom_physical and not args.target:
         print("ERROR: --confirm-custom-physical requires at least one --target", file=sys.stderr)
+        return 2
+    if args.confirm_catalog_candidates and args.profile is None:
+        print(
+            "ERROR: --confirm-catalog-candidates requires --profile",
+            file=sys.stderr,
+        )
         return 2
     if not args.target and (
         args.addressing_mode != NORMAL_29BITS
@@ -643,6 +716,12 @@ def main(argv=None):
             file=sys.stderr,
         )
         return 2
+    if args.profile and not args.confirm_catalog_candidates:
+        print(
+            "ERROR: live catalog profile requires --confirm-catalog-candidates",
+            file=sys.stderr,
+        )
+        return 2
     if args.session is not None and not args.confirm_session_change:
         print(
             "ERROR: live session selection requires --confirm-session-change",
@@ -652,6 +731,14 @@ def main(argv=None):
     if not args.confirm_parked or not args.pair or not args.conditions:
         print(
             "ERROR: --execute requires --confirm-parked, --pair, and --conditions",
+            file=sys.stderr,
+        )
+        return 2
+    expected_pair = PROFILE_EXPECTED_PAIRS.get(args.profile)
+    if expected_pair and normalize_physical_pair(args.pair) != expected_pair:
+        print(
+            f"ERROR: profile {args.profile} requires physical pair {expected_pair}; "
+            f"got {args.pair!r}",
             file=sys.stderr,
         )
         return 2
@@ -739,12 +826,16 @@ def main(argv=None):
                     ),
                     "channel": args.channel,
                     "physical_pair": args.pair,
+                    "profile_expected_pair": PROFILE_EXPECTED_PAIRS.get(args.profile),
                     "conditions": args.conditions,
                     "parked_asserted": args.confirm_parked,
                     "probe": args.probe,
                     "request": uds.hx(request_payload),
                     "functional_broadcast": False,
                     "custom_pairs_asserted_physical": bool(args.target),
+                    "catalog_candidates_confirmed": bool(
+                        args.profile and args.confirm_catalog_candidates
+                    ),
                     "diagnostic_session_control_sent": any(
                         bool(result.get("session_request_attempted")) for result in results
                     ),
@@ -763,6 +854,8 @@ def main(argv=None):
                         if args.address_byte_range
                         else "custom_explicit_pairs"
                         if args.target
+                        else "alfaobd_promaster88_bcan_candidates"
+                        if args.profile == "promaster88-bcan"
                         else "promaster_ccan_verified_endpoints"
                     ),
                     "max_request_rate_hz": args.rate,

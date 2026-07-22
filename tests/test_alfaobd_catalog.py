@@ -48,7 +48,7 @@ class AlfaObdCatalogTests(unittest.TestCase):
                 CREATE TABLE FGA_BCM_DATA(
                     request TEXT, response_name TEXT, device_id TEXT
                 );
-                INSERT INTO FGA_BCM_DATA VALUES('220001', '(1)', '55851,56056,');
+                INSERT INTO FGA_BCM_DATA VALUES('220001', '(1)', '55851');
                 INSERT INTO FGA_BCM_DATA VALUES('220002', '(1)', '155851,');
                 CREATE TABLE isocodes(iso_code TEXT, device_id INTEGER, device_type TEXT);
                 INSERT INTO isocodes VALUES('00000000', 55851, 'encrypted');
