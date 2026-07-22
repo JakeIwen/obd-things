@@ -52,7 +52,7 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(candidate.addressing_mode, NORMAL_11BITS)
         self.assertEqual(candidate.bitrate, 125000)
 
-    def test_promaster88_bcan_profile_is_bounded_and_stays_out_of_registry(self):
+    def test_promaster88_bcan_profile_tracks_verified_and_unresolved_targets(self):
         args = ecu_discover.parser().parse_args(
             ["--profile", "promaster88-bcan"]
         )
@@ -77,7 +77,25 @@ class CandidateTests(unittest.TestCase):
             self.assertEqual(candidate.bitrate, 125000)
             self.assertEqual(candidate.addressing_mode, "normal_29bits")
             self.assertIn("adapter=6", candidate.source)
-            self.assertNotIn(candidate.label, MODULES)
+
+        by_address = {(candidate.txid >> 8) & 0xFF: candidate for candidate in candidates}
+        for address, key in ecu_discover.PROMASTER88_BCAN_REGISTRY_KEYS.items():
+            candidate = by_address[address]
+            module = MODULES[key]
+            self.assertEqual(candidate.txid, module.txid)
+            self.assertEqual(candidate.rxid, module.rxid)
+            self.assertEqual(module.bus, "b-can")
+            self.assertEqual(module.bitrate, 125000)
+            self.assertEqual(module.addressing_mode, "normal_29bits")
+            self.assertIn("exact positive", candidate.source)
+            self.assertIn(f"registry key={key}", candidate.source)
+
+        registered_txids = {module.txid for module in MODULES.values()}
+        for address in (0x4A, 0x62, 0x65, 0x6A):
+            candidate = by_address[address]
+            self.assertNotIn(candidate.txid, registered_txids)
+            self.assertIn("both timed out", candidate.source)
+            self.assertIn("absence not proven", candidate.source)
 
     def test_custom_target_can_select_fixed_dlc_padding(self):
         args = ecu_discover.parser().parse_args(
@@ -343,6 +361,8 @@ class CliSafetyTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertIn("22 F1 A5", stdout.getvalue())
+        self.assertIn("status=verified:ics_bcan", stdout.getvalue())
+        self.assertIn("status=unresolved", stdout.getvalue())
         preflight.assert_not_called()
         scan_targets.assert_not_called()
 

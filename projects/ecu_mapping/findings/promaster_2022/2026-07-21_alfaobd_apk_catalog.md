@@ -51,24 +51,24 @@ database join did not expose one for that profile variant.
 | `0x30` | `ESTEER_DELPHI_CAN` | unverified EPS candidate |
 | `0x31` | `HALF_DUCATO` | unverified candidate |
 | `0x40` | `BCDELPHI` | verified live |
-| `0x4A` | `TRAILER_TOW` | unverified candidate |
+| `0x4A` | `TRAILER_TOW` | F1A5 and F187 timed out on B-CAN 2026-07-21; unresolved/possibly absent |
 | `0x60` | `MARELLI_DASH_EP` | verified live |
-| `0x62`, `0x65` | `LBSS_FGA`, `RBSS_FGA` | unverified blind-spot candidates |
-| `0x6A` | `DCSD` | unverified display candidate |
-| `0x85`, `0x87` | `ICS_FGA`, `UCONNECT` | unverified infotainment candidates |
-| `0x98` | `COND_MARELLI_EP` | unverified HVAC candidate |
+| `0x62`, `0x65` | `LBSS_FGA`, `RBSS_FGA` | F1A5 and F187 timed out on B-CAN 2026-07-21; unresolved/possibly absent |
+| `0x6A` | `DCSD` | F1A5 and F187 timed out on B-CAN 2026-07-21; unresolved/possibly absent |
+| `0x85` | `ICS_FGA` | verified live B-CAN ICS endpoint; `F1A5=0032701720`, `F187=7DN08LXFAB` |
+| `0x87` | `UCONNECT` | verified live B-CAN Uconnect endpoint; `F1A5=0024701A19`, `F187=60986318` |
+| `0x98` | `COND_MARELLI_EP` | verified live B-CAN HVAC endpoint; `F1A5=000A702520`, `F187=68516124AE` |
 | `0xA0` | `PARK_BOSCH_EP` | unverified candidate |
 | `0xC0` | `BOSCH_EP` airbag | unverified candidate |
 | `0xC6` | `TBM2` | verified live |
 | `0xC7` | `RFH_CUSW` | verified live RF Hub address |
 | `0xCB` | `SGW_FGA` | unverified candidate; the physical SGW bypass changes reachability assumptions |
-| `0xD9` | `EMCM2` | unverified candidate |
+| `0xD9` | `EMCM2` | verified live B-CAN EMCM2 endpoint; `F1A5=0066708320`, `F187=7DN14LXHAF` |
 
-The exact overlap with all eight live-verified addresses (`0x10`, `0x18`, `0x1F`, `0x2A`,
-`0x40`, `0x60`, `0xC6`, and `0xC7`) makes the catalog valuable for prioritization. It does not
-justify declaring the remaining profiles present. The next ignition-on discovery pass should use
-this bounded list with the correct per-profile initialization/session behavior instead of another
-full address-space scan.
+The exact overlap with all eight previously live-verified C-CAN addresses (`0x10`, `0x18`, `0x1F`,
+`0x2A`, `0x40`, `0x60`, `0xC6`, and `0xC7`) made the catalog valuable for prioritization. The
+subsequent bounded B-CAN pass verified four more catalog-routed addresses (`0x85`, `0x87`, `0x98`,
+and `0xD9`) without justifying the remaining optional profiles as present.
 
 ## Adapter routing recovered from the live application selector
 
@@ -95,42 +95,40 @@ That resolves the model-code-88 candidates into useful physical-bus groups:
 | adapter | branch | model-88 29-bit targets | present status |
 |---:|---|---|---|
 | `0` | ordinary C-CAN/profile connection | `10,18,1F,2A,40,60,C6,C7,CB` | first eight verified; SGW `CB` unresolved behind the bypass |
-| `6` | B-CAN / MS-CAN BLUE | `4A,62,65,6A,85,87,98,D9` | not yet actively surveyed on B-CAN |
+| `6` | B-CAN / MS-CAN BLUE | `4A,62,65,6A,85,87,98,D9` | `85,87,98,D9` verified; `4A,62,65,6A` timed out twice and remain unresolved |
 | `7` | C-CAN2 / GREY / CAN-CH | `26,28,30,31,A0,C0` | outside the current C-CAN/B-CAN scope |
 
 This explains why adapter-6/7 candidates timed out during exhaustive pins-6/14 address scans: the
-scan covered their address bytes but not their catalog-selected physical branches. It does not prove
-the optional modules are installed. `tools/ecu_discover.py --profile promaster88-bcan` now provides
-an eight-target, dry-run-by-default B-CAN `22 F1A5` plan. Live mode requires the separate
-`--confirm-catalog-candidates` gate plus the normal parked/pair/conditions checks and passive restore.
-No candidate enters `lib/modules.py` before an exact response is captured.
+scan covered their address bytes but not their catalog-selected physical branches. The bounded
+`tools/ecu_discover.py --profile promaster88-bcan` plan subsequently captured exact responses from
+four adapter-6 endpoints on pins 3/11; only those four entered `lib/modules.py`. The other four
+timeouts remain unresolved because they may be optional or state-dependent. Live mode retains the
+separate `--confirm-catalog-candidates` gate plus the normal parked/pair/conditions checks and
+passive restore.
 
 ### Why the candidate profile starts with F1A5
 
 All eight adapter-6 model rows use catalog initialization type `5`, and each row's Device ID has one
 or more entries in the database's `isocodes` table. The table does not itself label those values as
-F1A5. However, on all seven default-session C-CAN endpoints already verified on this van, AlfaOBD
-reads `F1A5` and the exact returned value selects the matching `isocodes` subtype. Applying that
-independently verified relationship makes the B-CAN values below inferred F1A5 subtype-signature
-candidates, not live B-CAN evidence:
+F1A5. Before the live pass, the fact that AlfaOBD read `F1A5` and selected exact `isocodes` subtypes
+on all seven default-session C-CAN endpoints made the values below evidence-backed B-CAN candidates.
+The last column now records the subsequent independent 2026-07-21 B-CAN result:
 
-| target | model-88 profile | Device ID / unit ID | catalog isocode / inferred F1A5 signature candidate(s) |
-|---:|---|---:|---|
-| `0x4A` | `TRAILER_TOW` | 7193 / 408 | `E607040DD3`, `E607830D52` |
-| `0x62` | `LBSS_FGA` | 8670 / 433 | `0033071819`, `0033409317`, `003350B214`, `0033701819`, `0033706220`, `0033706B20` |
-| `0x65` | `RBSS_FGA` | 8671 / 434 | `0034409417`, `003450B114`, `0034701919`, `0034706320`, `0034706C20` |
-| `0x6A` | `DCSD` | 55885 / 452 | `0083701223`, `0083701C19`, `0083709E20`, `008370B720`, `008370C020` |
-| `0x85` | `ICS_FGA` | 55930 / 272 | `0032701720`, `0032707D19` |
-| `0x87` | `UCONNECT` | 6052 / 410 | `0024401614`, `0024402814`, `0024406014`, `0024506D17`, `0024702F18`, `0024704E17`, `0024705515`, `B5831A0B32`, `B583980BB0` |
-| `0x98` | `COND_MARELLI_EP_6079` | 6082 / 131 | `3483290BXX` (catalog wildcard pattern) |
-| `0xD9` | `EMCM2` | 54749 / 451 | `0066405820`, `0066505919`, `0066700319`, `0066708320` |
+| target | model-88 profile | Device ID / unit ID | catalog isocode / inferred F1A5 candidate(s) | live result |
+|---:|---|---:|---|---|
+| `0x4A` | `TRAILER_TOW` | 7193 / 408 | `E607040DD3`, `E607830D52` | F1A5 and F187 timeout; unresolved |
+| `0x62` | `LBSS_FGA` | 8670 / 433 | `0033071819`, `0033409317`, `003350B214`, `0033701819`, `0033706220`, `0033706B20` | F1A5 and F187 timeout; unresolved |
+| `0x65` | `RBSS_FGA` | 8671 / 434 | `0034409417`, `003450B114`, `0034701919`, `0034706320`, `0034706C20` | F1A5 and F187 timeout; unresolved |
+| `0x6A` | `DCSD` | 55885 / 452 | `0083701223`, `0083701C19`, `0083709E20`, `008370B720`, `008370C020` | F1A5 and F187 timeout; unresolved |
+| `0x85` | `ICS_FGA` | 55930 / 272 | `0032701720`, `0032707D19` | exact `0032701720`; verified |
+| `0x87` | `UCONNECT` | 6052 / 410 | `0024401614`, `0024402814`, `0024406014`, `0024506D17`, `0024702F18`, `0024704E17`, `0024705515`, `B5831A0B32`, `B583980BB0` | `0024701A19`; not Device 6052, but exact APK UCONNECT Device 8931 match at `0x87` |
+| `0x98` | `COND_MARELLI_EP_6079` | 6082 / 131 | `3483290BXX` (catalog wildcard pattern) | `000A702520`; no exact match, same `000A70` family as other climate variants |
+| `0xD9` | `EMCM2` | 54749 / 451 | `0066405820`, `0066505919`, `0066700319`, `0066708320` | exact `0066708320`; verified |
 
 The cumulative historical tablet trace also contains positive F1A5 responses at `0x87` and `0x98`,
-but that mixed old-vehicle source is reference only and does not establish either module on this van.
-Those historical endpoint sections contain no F187 request, so they provide no comparative F187
-evidence. The catalog/current-van relationship and positive historical F1A5 observations make F1A5
-the better first presence/subtype read, not proof that it must answer in the current ignition/session
-state. `--probe uds-f187` remains available as an explicit second-pass fallback.
+but that mixed old-vehicle source remains reference only. Current-van endpoint proof instead comes
+from the independent physical F1A5 and F187 responses recorded in
+[`2026-07-21_bcan_live_ecu_discovery.md`](2026-07-21_bcan_live_ecu_discovery.md).
 
 ## Current subtype identification from live F1A5 values
 
@@ -147,13 +145,34 @@ resulting addresses agree with independent live discovery:
 | shifter | `00 16 50 7A 19` | 55982 | alias fallback `ESM`, 0x1F |
 | cluster | `00 03 50 74 20` | 8801 | installed subtype at 0x60; supersedes generic model-menu Device ID 6812 for data lookup |
 | telematics | `00 23 50 69 20` | 55732 | `TBM2`, 0xC6 |
+| ICS | `00 32 70 17 20` | 55930 | exact `ICS_FGA`, 0x85; B-CAN verified |
+| Uconnect | `00 24 70 1A 19` | 8931 | exact global `UCONNECT`, 0x87; supersedes model-88 Device 6052 for subtype lookup |
+| Climate | `00 0A 70 25 20` | no exact match | model-88 `COND_MARELLI_EP` routing and family prefix still support 0x98; B-CAN verified independently |
+| EMCM2 | `00 66 70 83 20` | 54749 | exact `EMCM2`, 0xD9; B-CAN verified |
 
-Only exact subtype 55851 has direct membership in this APK's request/routine tables:
+Among the seven original C-CAN rows above, only exact subtype 55851 has direct membership in this
+APK's request/routine tables:
 `FGA_BCM_DATA`. The other six exact subtypes have identity/isocode rows but no direct request or
 routine definitions in the inspected tables; their data is stored elsewhere, encoded, or implemented
 in application code. Model-menu PCM Device ID 6829 exposes only generic 11-bit `7E0`/`7E8` metadata
 and has neither an isocode nor a request-table row. It does not describe the current trace's verified
 legacy internal PCM endpoint at 0x10.
+
+## Climate RID 0201: profile start payload found, label still unresolved
+
+The live B-CAN result-only inventory sent `31 03 02 01` to the verified climate endpoint and
+received `71 03 02 01 00 02`. Offline inspection then found a `31 01 02 01` routine-start payload
+in the DEX default handler for the model-88-selected `COND_MARELLI_EP_6079` Device 6082 profile.
+The SQLite routine table itself contains no Device 6082 row, no `31030201` row, and no `31010201`
+row; control-flow inspection also found no `31 03 02 01` decoder reachable from that DEX handler.
+
+This does not establish an exact routine name. The live ECU's `F1A5=000A702520` does not match
+Device 6082's `3483290BXX` wildcard, so the start payload describes AlfaOBD's selected model-menu
+profile, not proven exact-variant compatibility. The nearby diagnostic-menu entries “Sensor fan
+inside vehicle” and “Flap actuators learning test” have no explicit join to RID `0201`; menu order
+is not a safe mapping. Treat `31 01 02 01` as an actuation lead only. It was not sent to the vehicle,
+and it requires a separate payload review, safe-state plan, and owner authorization before any
+future test. The returned result bytes `00 02` remain unresolved.
 
 ## BCM read-data catalog
 
@@ -235,9 +254,9 @@ provenance boundaries prevent old labels or scaling from leaking into the 2022 m
 2. The structural decode is complete. Spot-check names/units/scaling against controlled vehicle
    state before promoting fields; do not repeat the already complete 75-request set without a new
    question.
-3. Survey the eight adapter-6 candidates on the verified B-CAN branch with the guarded named profile.
-   A negative response proves an endpoint exists; a timeout proves only that this request/session/
-   state did not answer. Keep all candidates out of the registry until an exact response is captured.
+3. The guarded adapter-6 B-CAN survey is complete: four endpoints are verified and four timed out to
+   both F1A5 and F187. Do not repeat it without a new state/session question. Use the verified module
+   identities to select small labeled AlfaOBD Gauges + Debug Data batches for DID correlation.
 4. With ignition on and PCAN listen-only, run one front-door lock/unlock output action at a time in
    AlfaOBD while recording Debug Data. Do not enter Tools/PROXI or car-configuration menus.
 5. For other modules, record fresh simultaneous Gauges Data and Debug Data in small labeled batches.

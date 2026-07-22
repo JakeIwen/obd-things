@@ -21,7 +21,7 @@ Provenance shorthand: capture logs live under `tmp/captures/` (bus-state referen
 | bus | rate | where | access | notes |
 |---|---|---|---|---|
 | **C-CAN / HS-CAN** | 500 kbit/s | OBD pins **6/14** | PCAN via **SGW bypass** (ECRI tap on internal C-CAN) | powertrain + diagnostics. `bringup.sh` default. The bypass is why our UDS reaches gated modules at all; legislated OBD-II Mode 01 PIDs do NOT route through it. |
-| **B-CAN / CAN IHS** | **125 kbit/s, live-verified** | DLC pins **3/11** (OEM: CAN IHS +/−) | PCAN through the **B-CAN DB9** of the owner's labeled dual-pair OBD pigtail; `bringup.sh --bcan` | Comfort/body effects (locks, lights, interior) and the established B-CAN signature set were captured with listen-only explicitly on and zero RX errors on 2026-07-20. Owner confirmed the pigtail directly selects the documented 2022 ProMaster B-CAN pair; the DIY yellow adapter has never been used on this van. The installed AlfaOBD selector independently renders catalog adapter `6` as `MS-CAN BLUE`, yielding eight guarded 29-bit diagnostic candidates—not verified endpoints. [Evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_alfaobd_apk_catalog.md#adapter-routing-recovered-from-the-live-application-selector). |
+| **B-CAN / CAN IHS** | **125 kbit/s, live-verified** | DLC pins **3/11** (OEM: CAN IHS +/−) | PCAN through the **B-CAN DB9** of the owner's labeled dual-pair OBD pigtail; `bringup.sh --bcan` | Comfort/body effects (locks, lights, interior) and the established B-CAN signature set were captured with listen-only explicitly on and zero RX errors on 2026-07-20. Owner confirmed the pigtail directly selects the documented 2022 ProMaster B-CAN pair; the DIY yellow adapter has never been used on this van. The installed AlfaOBD selector independently renders catalog adapter `6` as `MS-CAN BLUE`; a 2026-07-21 live pass verified four of its eight 29-bit diagnostic targets and left four unresolved. [Evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_bcan_live_ecu_discovery.md). |
 | **CAN CH / second high-speed CAN** | **unverified live**; **500 kbit/s is the leading candidate** | DLC pins **12/13** (OEM: CAN CH +/−) | PCAN requires repinning; passive survey pending | OEM topology includes BCM, SGW, ORC, park assist, EPS, ABS, and forward camera. AlfaOBD's current hardware guide explicitly calls pins 12/13 the second high-speed CAN bus on 2022+ ProMaster, and the installed selector renders catalog adapter `7` as `C CAN 2 GREY`. That establishes the bus class/routing, not the exact bitrate, installed modules, or live addressing on this van. |
 
 The currently configured C-CAN/B-CAN modes come up **passive (listen-only)** by default;
@@ -68,27 +68,27 @@ registry can't hold; keep the addresses in sync with `lib/modules.py`.
 | `bcm_ccan` | Body Control Module, C-CAN endpoint | C-CAN | `18DA40F1` → `18DAF140` | Live identity on 2026-07-19: `F187=68524831AF`, `F192=BC637M.0001`; actuation remains power-mode gated. |
 | `cluster` | Marelli Instrument Panel Cluster (IPC) | C-CAN | `18DA60F1` → `18DAF160` | Live identity on 2026-07-19: `F187=68517084AD`, `F192=50019990002`. FCA's [NHTSA Part 573 filing](https://downloads.regulations.gov/NHTSA-2023-0046-0001/attachment_1.pdf) identifies `68517084AD` as the Marelli IPC. |
 | `telematics` | Global Telematics Box Module (TBM2) | C-CAN | `18DAC6F1` → `18DAF1C6` | Live identity on 2026-07-19: `F132=68510377AC`, `F192=TBM200A11P`. The TBM string, exact-part [Mopar catalog supersession](https://www.moparpartsgiant.com/parts/mopar-module-telematics~68647858aa.html), and exact-vehicle local OEM TBM2 procedure make the role high-confidence. |
+| `ics_bcan` | Integrated Center Stack customer-interface panel | B-CAN | `18DA85F1` → `18DAF185` | Live identity on 2026-07-21: `F1A5=0032701720`, `F187=7DN08LXFAB`; exact APK subtype match plus exact-vehicle OEM CAN-IHS role. |
+| `uconnect_bcan` | Uconnect radio/display module | B-CAN | `18DA87F1` → `18DAF187` | Live identity on 2026-07-21: `F1A5=0024701A19`, `F187=60986318`; exact global APK UCONNECT subtype/address match plus Radio/DSM DTC families. |
+| `climate_bcan` | Electronic Climate Control / HVAC module | B-CAN | `18DA98F1` → `18DAF198` | Live identity on 2026-07-21: `F1A5=000A702520`, `F187=68516124AE`; AlfaOBD routing plus exact-vehicle HVAC DTC evidence. |
+| `emcm2_bcan` | EMCM2 center-stack menu/volume controls | B-CAN | `18DAD9F1` → `18DAF1D9` | Live identity on 2026-07-21: `F1A5=0066708320`, `F187=7DN14LXHAF`; exact APK subtype match plus exact-vehicle OEM CAN-IHS role. |
 
-No B-CAN diagnostic endpoint is registered. The previously listed `0x75C`, `0x760`, `0x762`,
-`0x764`, `0x768`, and `0x7C0` candidates are fixed-payload 1–2 Hz broadcasts, not an ISO-TP
-family; the one observed `0x7B8` frame contained ASCII `3231`, not a diagnostic response. A
-111-second B-CAN capture made during an AlfaOBD RF Hub session likewise contains no ISO-TP
-exchange, while the adapter trace addresses the RF Hub and BCM over their verified 29-bit C-CAN
-endpoints. Direct diagnostics on B-CAN are therefore **not established**. Do not infer `+8`
-pairs or add an 11-bit module without an actual request/response capture. See the
-[`B-CAN pair verification`](../projects/ecu_mapping/findings/promaster_2022/2026-07-20_bcan_pair_verification.md).
+Four B-CAN diagnostic endpoints are now registered from exact physical request/response captures.
+This does **not** validate the previously listed `0x75C`, `0x760`, `0x762`, `0x764`, `0x768`, and
+`0x7C0` guesses: those are fixed-payload 1–2 Hz application broadcasts, not an ISO-TP family, and
+the one observed `0x7B8` frame contained ASCII `3231`. The earlier 111-second AlfaOBD RF Hub
+capture had no B-CAN diagnostic exchange because that session addressed RFH and BCM through their
+29-bit C-CAN endpoints. Do not infer an 11-bit `+8` pair without an actual exchange. See the
+[`B-CAN pair verification`](../projects/ecu_mapping/findings/promaster_2022/2026-07-20_bcan_pair_verification.md)
+and the subsequent [`live B-CAN discovery`](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_bcan_live_ecu_discovery.md).
 
-The AlfaOBD model-88 catalog plus its installed selector now supplies a separate, evidence-bounded
-29-bit B-CAN candidate set: `18DA{4A,62,65,6A,85,87,98,D9}F1` with corresponding
-`18DAF1xx` responses. These are trailer, blind-spot, display/infotainment, and climate profile
-choices; any may be optional or absent. Dry-run the exact set with
-`python3 tools/ecu_discover.py --profile promaster88-bcan`. The profile defaults to one physical
-`22 F1A5` subtype-signature read per target because all eight Device IDs have catalog isocodes and
-exact current-van F1A5 values select that table for all seven verified default-session C-CAN
-endpoints. The B-CAN linkage remains inferred and candidate-only; `--probe uds-f187` is an explicit
-fallback. A live run is active diagnostic traffic and requires the profile-specific confirmation
-and normal safety gates. Register only exact responders.
-[Catalog/UI evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_alfaobd_apk_catalog.md#adapter-routing-recovered-from-the-live-application-selector).
+The maintained AlfaOBD-derived B-CAN profile remains
+`18DA{4A,62,65,6A,85,87,98,D9}F1`, with corresponding `18DAF1xx` responses. Addresses `85`,
+`87`, `98`, and `D9` answered both F1A5 and F187 on 2026-07-21. Addresses `4A`, `62`, `65`, and
+`6A` timed out to both reads and remain unresolved/possibly optional, not proven absent. Dry-run
+the bounded set with `python3 tools/ecu_discover.py --profile promaster88-bcan`; a live rerun is
+active diagnostic traffic and still requires the profile-specific confirmation and normal safety
+gates. [Catalog/UI evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_alfaobd_apk_catalog.md#adapter-routing-recovered-from-the-live-application-selector).
 
 > **PCM legacy-session requirement:** `0x10` was independently verified from the PCAN tap on
 > 2026-07-21. While parked with the engine idling, fixed-DLC-8 zero-padded
@@ -151,6 +151,7 @@ unrelated. Each module keeps its own canonical map next to its analysis:
 - **radar_acc** → [`projects/radar/findings/did_map.md`](../projects/radar/findings/did_map.md) — canonical 56-DID map (sessions, security, routines, DTCs, angle scaling). Full sweep: `projects/radar/findings/radar_acc_did_sweep.txt`.
 - **rf_hub** → [`projects/tpms/README.md`](../projects/tpms/README.md) — TPMS/RKE DID map inline (pressure `31D0-31D3`, sensor-ID `31CB-31CE`, snapshot/extended-data DIDs, the verified wheel↔slot table). Full sweep: `projects/tpms/findings/rf_hub_did_sweep.txt`.
 - **tcm / shifter / bcm_ccan / cluster / telematics** → [`2026-07-21 candidate DID inventory`](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_candidate_did_inventory.md) — complete inherited-session `F100-F1FF` results per ECU plus BCM candidate/page inventories. The complete BCM session-03 `4000-40FF` page found only default-visible `40A1`, `40A2`, `40AA` and session-gated `40A3`, `40A6`; no other session-only positive appeared. Keep these namespaces separate; labels/scaling outside established identity strings remain unresolved.
+- **ics_bcan / uconnect_bcan / climate_bcan / emcm2_bcan** → [`2026-07-21 B-CAN live ECU discovery`](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_bcan_live_ecu_discovery.md) — exact 29-bit addressing and identity, DTC semantics, bounded result-only routine responses, and complete inherited-session `F100-F1FF` inventories for each B-CAN ECU. Ordinary live-data DID labels/scaling remain unresolved.
 
 To plan a new module inventory without touching CAN, run
 `python3 tools/did_sweep.py <key> START END` (dry-run is the default). A parked live run requires

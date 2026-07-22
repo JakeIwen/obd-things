@@ -167,8 +167,11 @@ for this van's DLC 3/11 branch: the labeled B-CAN pigtail and passive captures l
 at 125 kbit/s on 2026-07-20. See the
 [`B-CAN pair verification`](findings/promaster_2022/2026-07-20_bcan_pair_verification.md).
 That analysis also rejects the old high 11-bit candidates as fixed-rate application broadcasts;
-no direct B-CAN diagnostic endpoint is currently established, so active inventories stay on the
-verified C-CAN endpoints while B-CAN remains a passive signal/event source.
+the follow-on [`B-CAN live ECU discovery`](findings/promaster_2022/2026-07-21_bcan_live_ecu_discovery.md)
+then verified four independent 29-bit endpoints on pins 3/11: ICS `0x85`, Uconnect `0x87`,
+Climate `0x98`, and EMCM2 `0xD9`. It records identity, non-clearing DTC, result-only routine, and
+complete inherited-session `F100-F1FF` inventories for each. Trailer `0x4A`, blind-spot `0x62/65`,
+and display `0x6A` timed out to both F1A5 and F187 and remain unresolved/possibly optional.
 The [`2026-07-19 passive drive analysis`](findings/promaster_2022/2026-07-19_ccan_drive_signal_analysis.md)
 corrects CAN ID `0x101` from the old odometer hypothesis to a packed instantaneous-speed field,
 corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one known-speed reference.
@@ -216,11 +219,9 @@ corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one
 3. **BCM structural decode completed:** all 75 definitions are represented in the offline report;
    55 DIDs have positive trace evidence and 20 are negative. Continue with controlled scaling/name
    validation, not another live sweep of the same requests.
-4. **Next new-address campaign:** move the PEAK to the B-CAN DB9 and dry-run
-   `python3 tools/ecu_discover.py --profile promaster88-bcan`. The eight physical 29-bit pairs come
-   from AlfaOBD adapter-6 rows, and the tablet UI independently identifies adapter 6 as MS-CAN
-   BLUE. The profile defaults to an inferred, catalog-linked `22 F1A5` subtype-signature read;
-   `F187` remains an explicit fallback. They remain candidates until a response is captured; do
-   not add them to `lib/modules.py`.
+4. **B-CAN discovery and first inventories completed:** do not repeat the same eight-target/F1xx
+   campaign without a new state/session question. Next, use small fresh AlfaOBD Gauges + Debug Data
+   batches alongside a listen-only PCAN capture to join labels/rendered values to exact per-module
+   DIDs. Climate result-only RID `0201` is an offline identification lead only; do not start/stop it.
 5. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps
    (`../../docs/bus-map.md`, `../../lib/modules.py`, project DID maps) per the maintenance rule.

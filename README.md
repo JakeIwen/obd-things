@@ -82,10 +82,11 @@ simpler `REPO = dirname(__file__)/..`.
     required for the current C-CAN/B-CAN campaign.
   - One PCAN channel = one physical pair = **one bus at a time**; the OBD splitter parallels a single bus
     (lets PCAN + a scan tool share it), it does **not** merge C-CAN and B-CAN.
-- **Diagnostic addressing:** verified C-CAN modules use UDS over ISO-TP with **29-bit** IDs. Tester =
-  `0xF1`; each ECU has a physical address (e.g. radar `0x2A` → TX `0x18DA2AF1`, RX `0x18DAF12A`).
-  The shared transport also supports explicit 11-bit module entries; each registry entry records its
-  addressing mode and bitrate. Add only independently verified TX/RX pairs in `lib/modules.py`.
+- **Diagnostic addressing:** verified C-CAN modules and the four verified B-CAN modules use UDS over
+  ISO-TP with **29-bit** IDs. Tester = `0xF1`; each ECU has a physical address (e.g. radar `0x2A` →
+  TX `0x18DA2AF1`, RX `0x18DAF12A`). The shared transport also supports explicit 11-bit module
+  entries, but no ProMaster B-CAN 11-bit diagnostic pair is currently verified. Each registry entry
+  records its addressing mode and bitrate; add only independently verified TX/RX pairs.
 - **SGW bypass is installed**, so diagnostic UDS (`22`/`19`/`31`/…) reaches the internal modules. **BUT
   legislated OBD-II is NOT reachable this way** — Mode 01 PIDs via functional `0x7DF` / physical `0x7E0`
   (11- and 29-bit) all return NO RESPONSE, because the bypass taps the *internal* bus, not the gateway's
@@ -134,7 +135,7 @@ inspect the live interface, open a CAN socket, or write a report.
 ```bash
 python3 tools/did_sweep.py radar_acc 0800 08FF # plan 256 physical DID reads; NO CAN traffic
 python3 tools/routine_scan.py radar_acc 0200 020F # plan 31 03 reads (+ FF00-FF03); NO CAN traffic
-python3 tools/ecu_discover.py --profile promaster88-bcan # plan 8 catalog-routed B-CAN reads; NO traffic
+python3 tools/ecu_discover.py --profile promaster88-bcan # plan 4 verified + 4 unresolved B-CAN reads; NO traffic
 ./tools/ccan_inventory_campaign.sh --candidate-dids # plan per-ECU F1xx + AlfaOBD candidates; NO CAN traffic
 ./tools/ccan_inventory_campaign.sh --bcm-pages # plan four evidence-selected BCM pages; NO CAN traffic
 ./tools/ccan_inventory_campaign.sh --bcm-session-compare # plan four-DID default/session-03 comparison
@@ -155,7 +156,7 @@ listen-only mode. Consequently, explicitly re-run `./bringup.sh --tx` before eac
 
 | Tool | Default plan | Additional live requirements / scope |
 |---|---|---|
-| `ecu_discover.py` | seven modern/default-session C-CAN endpoints | `--execute --confirm-parked --pair --conditions`; the eight vendor-routed B-CAN candidates use `--profile promaster88-bcan` and add `--confirm-catalog-candidates`; all 255 usable 29-bit targets add `--all-29bit-targets --confirm-expanded-scan`; custom pairs add `--confirm-custom-physical`; the verified PCM legacy-session probe remains restricted to one custom target and adds `--confirm-session-change` |
+| `ecu_discover.py` | seven modern/default-session C-CAN endpoints | `--execute --confirm-parked --pair --conditions`; the bounded four-verified/four-unresolved B-CAN set uses `--profile promaster88-bcan` and adds `--confirm-catalog-candidates`; all 255 usable 29-bit targets add `--all-29bit-targets --confirm-expanded-scan`; custom pairs add `--confirm-custom-physical`; the verified PCM legacy-session probe remains restricted to one custom target and adds `--confirm-session-change` |
 | `identity_inventory.py` | bounded standardized/OEM identity set, excluding VIN | common live gates above; `--did` replaces defaults; VIN is opt-in and masked in reports |
 | `dtc_inventory.py` | non-clearing `19 01`, `19 02`, and `19 03` | common live gates; the larger supported-DTC `19 0A` catalog is opt-in |
 | `did_sweep.py` | bounded `22` range | common live gates; expanded ranges and explicit sessions have separate confirmations described below |
@@ -168,15 +169,16 @@ listen-only mode. Consequently, explicitly re-run `./bringup.sh --tx` before eac
 defines only its module key and `Metric` table and calls `run()`; do not copy radar-specific `--follow`
 imports into an unrelated module.
 
-The named `promaster88-bcan` discovery profile is the only maintained direct-diagnostic candidate
+The named `promaster88-bcan` discovery profile is the only maintained direct-diagnostic target
 set for pins 3/11. Its eight 29-bit pairs come from AlfaOBD model-88 adapter-6 rows, while the
-installed tablet selector independently labels adapter 6 `MS-CAN BLUE`; this is routing evidence,
-not proof that the optional modules are installed. The profile sends one physical `22 F1A5` per
-target because every candidate Device ID has catalog isocode values and exact F1A5 values select
-the same table for all seven verified default-session C-CAN endpoints. That makes the B-CAN F1A5
-link an evidence-backed inference, not a live result. The profile sends no broadcast, session
-change, write, routine, or actuation; `--probe uds-f187` remains an explicit fallback. Dry-run
-first, then use the separate catalog-candidate gate only after moving the PEAK to the B-CAN DB9:
+installed tablet selector independently labels adapter 6 `MS-CAN BLUE`. A parked ignition-on live
+pass on 2026-07-21 established exact physical 29-bit UDS endpoints at `85`, `87`, `98`, and `D9`;
+addresses `4A`, `62`, `65`, and `6A` timed out to both F1A5 and F187 and remain unresolved/optional,
+not proven absent. The four responders are registered as `ics_bcan`, `uconnect_bcan`,
+`climate_bcan`, and `emcm2_bcan`. The profile still sends only one physical identity read per
+target—no broadcast, session change, write, routine, or actuation—and `--probe uds-f187` remains
+an explicit fallback. Dry-run first, then use the separate catalog-candidate gate only after
+moving the PEAK to the B-CAN DB9:
 
 ```bash
 python3 tools/ecu_discover.py --profile promaster88-bcan
@@ -188,8 +190,8 @@ python3 tools/ecu_discover.py --profile promaster88-bcan \
 ```
 
 A response (positive or negative) verifies an endpoint; a timeout proves only that the particular
-request/session/state received no reply. Keep every candidate out of `lib/modules.py` until an exact
-response ID is captured.
+request/session/state received no reply. The live results and inventories are recorded in
+[`2026-07-21 B-CAN live ECU discovery`](projects/ecu_mapping/findings/promaster_2022/2026-07-21_bcan_live_ecu_discovery.md).
 
 ### Parked live inventories
 

@@ -120,10 +120,66 @@ MODULES = {
             "Exact role is high-confidence from the TBM identifier, OEM TBM2 docs, and Mopar part catalog."
         ),
     ),
+    "ics_bcan": Module(
+        key="ics_bcan",
+        name="Integrated Center Stack (ICS) customer-interface panel",
+        txid=0x18DA85F1,
+        rxid=0x18DAF185,
+        bus="b-can",
+        bitrate=125000,
+        note=(
+            "Live-verified on DLC 3/11 B-CAN 2026-07-21, ignition-on/engine-off; "
+            "F1A5=0032701720 and F187=7DN08LXFAB. The F1A5 value exactly matches the "
+            "AlfaOBD ICS_FGA subtype, and exact-vehicle OEM documentation identifies the "
+            "ICS as the CAN-IHS HVAC/audio/hazard/ACC button-and-knob interface."
+        ),
+    ),
+    "uconnect_bcan": Module(
+        key="uconnect_bcan",
+        name="Uconnect radio/display module",
+        txid=0x18DA87F1,
+        rxid=0x18DAF187,
+        bus="b-can",
+        bitrate=125000,
+        note=(
+            "Live-verified on DLC 3/11 B-CAN 2026-07-21, ignition-on/engine-off; "
+            "F1A5=0024701A19 and F187=60986318. The live subtype is absent from the model-88 "
+            "Device 6052 list but exactly matches another APK UCONNECT subtype at address 0x87; "
+            "the confirmed Radio/DSM DTC families independently support the role."
+        ),
+    ),
+    "climate_bcan": Module(
+        key="climate_bcan",
+        name="Electronic Climate Control / HVAC module",
+        txid=0x18DA98F1,
+        rxid=0x18DAF198,
+        bus="b-can",
+        bitrate=125000,
+        note=(
+            "Live-verified on DLC 3/11 B-CAN 2026-07-21, ignition-on/engine-off; "
+            "F1A5=000A702520 and F187=68516124AE. Address/role comes from the model-88 "
+            "AlfaOBD COND_MARELLI_EP row and exact-vehicle HVAC U1427-87 documentation; "
+            "the live subtype shares its catalog family prefix but has no exact APK match."
+        ),
+    ),
+    "emcm2_bcan": Module(
+        key="emcm2_bcan",
+        name="Entertainment Multimedia Control Module 2 (center-stack controls)",
+        txid=0x18DAD9F1,
+        rxid=0x18DAF1D9,
+        bus="b-can",
+        bitrate=125000,
+        note=(
+            "Live-verified on DLC 3/11 B-CAN 2026-07-21, ignition-on/engine-off; "
+            "F1A5=0066708320 and F187=7DN14LXHAF. The F1A5 value exactly matches the "
+            "AlfaOBD EMCM2 subtype; exact-vehicle OEM documentation identifies this as the "
+            "CAN-IHS menu/volume control panel below the radio/display, not the radio itself."
+        ),
+    ),
     # e.g. add more modules here as the project expands:
-    # BCM's C-CAN endpoint is registered above. No direct B-CAN diagnostic endpoint is verified:
-    # formerly suggested high 11-bit IDs on B-CAN / CAN-IHS are periodic application broadcasts,
-    # not ISO-TP pair evidence. Register one only after a captured request/response exchange.
+    # Four B-CAN endpoints are registered above. Formerly suggested high 11-bit IDs on B-CAN /
+    # CAN-IHS are periodic application broadcasts, not ISO-TP pair evidence. Register another
+    # B-CAN module only after a captured request/response exchange.
 }
 
 

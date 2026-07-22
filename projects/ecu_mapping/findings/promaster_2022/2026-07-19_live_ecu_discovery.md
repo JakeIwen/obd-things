@@ -99,9 +99,10 @@ repeat would isolate that variable, but it is no longer required to register or 
 4. **Initial bounded pass completed 2026-07-21:** per-module non-clearing DTC inventories and
    result-only (`31 03`) samples. Continue to keep the potentially large `19 0A` supported-DTC
    catalog opt-in and do not treat requestSequenceError as proof a routine exists.
-5. The next new-address experiment is the eight-target, vendor-routed B-CAN profile rather than
-   another full C-CAN address sweep: `python3 tools/ecu_discover.py --profile promaster88-bcan`
-   dry-runs the exact plan. These remain candidates until an exact response is captured.
+5. **Completed 2026-07-21:** the eight-target vendor-routed B-CAN profile verified exact physical
+   endpoints at `85`, `87`, `98`, and `D9`; `4A`, `62`, `65`, and `6A` timed out to both identity
+   reads and remain unresolved. See
+   [`2026-07-21_bcan_live_ecu_discovery.md`](2026-07-21_bcan_live_ecu_discovery.md).
 
 ## Identity-source cross-checks
 

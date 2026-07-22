@@ -24,9 +24,9 @@ after an interrupted/failed scan and writes a JSON report under tmp/discovery/.
 
 For an independently researched 11-bit pair, replace the profile with one or more
 ``--target LABEL=TX:RX`` arguments and select ``--addressing-mode normal_11bits``.
-Custom targets are dry-run by default too. No ProMaster B-CAN diagnostic pair is currently
-verified, so do not invent an 11-bit ``+8`` pair; the vendor-routed named profile below is the
-only maintained B-CAN candidate set.
+Custom targets are dry-run by default too. No ProMaster B-CAN **11-bit** diagnostic pair is
+currently verified, so do not invent a ``+8`` pair. Four 29-bit endpoints from the vendor-routed
+named profile below are live-verified; its other four targets remain unresolved.
 
 An expanded 29-bit normal-fixed address-byte sweep is available only with an explicit flag and
 confirmation. It still sends physical 0x18DAxxF1 requests, never functional broadcast:
@@ -43,9 +43,11 @@ A bounded portion of that address-byte space can be selected without repeating a
 Live use of a range is also an unverified-address scan and requires ``--confirm-expanded-scan``.
 
 The owner-supplied AlfaOBD 2.4.4.0 model-88 catalog and its on-tablet unit selector identify
-eight adapter-6 targets as MS-CAN/BLUE-adapter modules.  This is a vendor-derived candidate
-profile for the van's independently verified 125-kbit/s B-CAN pair, not proof that any listed
-module is installed.  Dry-run it before moving the PEAK connection to the B-CAN DB9::
+eight adapter-6 targets as MS-CAN/BLUE-adapter modules. A 2026-07-21 live pass on the van's
+independently verified 125-kbit/s B-CAN pair established exact 29-bit UDS endpoints at addresses
+``85``, ``87``, ``98``, and ``D9``; ``4A``, ``62``, ``65``, and ``6A`` timed out to both F1A5
+and F187 and remain unresolved rather than proven absent. Dry-run the bounded profile before
+moving the PEAK connection to the B-CAN DB9::
 
     python3 tools/ecu_discover.py --profile promaster88-bcan
 
@@ -197,12 +199,51 @@ PROMASTER_CCAN_CANDIDATES = (
 )
 
 
-PROMASTER88_BCAN_SOURCE = (
+PROMASTER88_BCAN_COMMON_SOURCE = (
     "owner-supplied AlfaOBD 2.4.4.0 model-code-88 ECUList adapter=6; "
     "the app's on-tablet selector identifies adapter 6 as MS-CAN BLUE; "
-    "DLC 3/11 at 125 kbit/s independently live-verified on this van 2026-07-20; "
-    "candidate only, presence unverified"
+    "DLC 3/11 at 125 kbit/s independently live-verified on this van 2026-07-20"
 )
+PROMASTER88_BCAN_LIVE_STATUS = {
+    0x4A: (
+        "physical 22 F1A5 and 22 F187 both timed out on 2026-07-21; "
+        "unresolved/optional, absence not proven"
+    ),
+    0x62: (
+        "physical 22 F1A5 and 22 F187 both timed out on 2026-07-21; "
+        "unresolved/optional, absence not proven"
+    ),
+    0x65: (
+        "physical 22 F1A5 and 22 F187 both timed out on 2026-07-21; "
+        "unresolved/optional, absence not proven"
+    ),
+    0x6A: (
+        "physical 22 F1A5 and 22 F187 both timed out on 2026-07-21; "
+        "unresolved/optional, absence not proven"
+    ),
+    0x85: (
+        "exact positive 22 F1A5 and 22 F187 responses live-captured 2026-07-21; "
+        "registry key=ics_bcan"
+    ),
+    0x87: (
+        "exact positive 22 F1A5 and 22 F187 responses live-captured 2026-07-21; "
+        "registry key=uconnect_bcan"
+    ),
+    0x98: (
+        "exact positive 22 F1A5 and 22 F187 responses live-captured 2026-07-21; "
+        "registry key=climate_bcan"
+    ),
+    0xD9: (
+        "exact positive 22 F1A5 and 22 F187 responses live-captured 2026-07-21; "
+        "registry key=emcm2_bcan"
+    ),
+}
+PROMASTER88_BCAN_REGISTRY_KEYS = {
+    0x85: "ics_bcan",
+    0x87: "uconnect_bcan",
+    0x98: "climate_bcan",
+    0xD9: "emcm2_bcan",
+}
 PROFILE_EXPECTED_PAIRS = {"promaster88-bcan": "3/11"}
 PROFILE_DEFAULT_PROBES = {"promaster88-bcan": "uds-f1a5"}
 PROMASTER88_BCAN_CANDIDATE_SPECS = (
@@ -220,7 +261,7 @@ PROMASTER88_BCAN_CANDIDATES = tuple(
         label,
         name,
         address,
-        PROMASTER88_BCAN_SOURCE,
+        f"{PROMASTER88_BCAN_COMMON_SOURCE}; {PROMASTER88_BCAN_LIVE_STATUS[address]}",
         bus="b-can",
         bitrate=125000,
     )
@@ -578,7 +619,7 @@ def parser():
     target_group.add_argument(
         "--profile",
         choices=("promaster88-bcan",),
-        help="bounded researched candidate profile; dry-run by default",
+        help="bounded researched profile (four verified plus four unresolved); dry-run by default",
     )
     target_group.add_argument(
         "--all-29bit-targets",
@@ -702,10 +743,20 @@ def main(argv=None):
     if args.session is not None:
         print(f"session preamble: physical 10 {args.session:02X}; exact 50 {args.session:02X} echo required")
     for candidate in targets:
+        profile_status = ""
+        if args.profile == "promaster88-bcan":
+            address = (candidate.txid >> 8) & 0xFF
+            registry_key = PROMASTER88_BCAN_REGISTRY_KEYS.get(address)
+            profile_status = (
+                f" status=verified:{registry_key}"
+                if registry_key
+                else " status=unresolved"
+            )
         print(
             f"  {candidate.label:<22} {candidate.addressing_mode:<13} "
             f"{candidate.bitrate:>6} bit/s TX={candidate.txid:X} RX={candidate.rxid:X}"
             + (f" txpad={candidate.tx_padding:02X}" if candidate.tx_padding is not None else "")
+            + profile_status
         )
 
     if not args.execute:
