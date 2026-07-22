@@ -73,6 +73,56 @@ comparison documented below proves that these two DIDs are session-gated on this
 Raw report:
 `tmp/inventories/bcm_ccan/identity_20260721_013810_984496-0600.json`.
 
+## Fresh BCM status-label correlation
+
+A later fresh AlfaOBD status refresh at 20:57 aligned 89 distinct BCM DID reads with the rendered
+current-vehicle status snapshot: 62 positive and 27 explicit negative. The complete evidence and
+confidence rules are in the
+[`live AlfaOBD status correlation`](2026-07-21_alfaobd_live_status_correlation.md). This promotes
+the following associations within the BCM namespace:
+
+| DID | BCM interpretation | decode / boundary |
+|---|---|---|
+| `0103` | VIN-odometer counter/lock group | group association exact; `FFFF` rendered counter 255 + locked |
+| `2013` | separate VIN-lock state | association exact; Alfa's enum renderer was inconsistent in the fresh snapshot |
+| `2001` | odometer | unsigned 24-bit big-endian x `0.1 km` |
+| `2002` | odometer at last rewrite | unsigned 24-bit big-endian x `0.1 km` |
+| `2003` | flash-rewrite count | direct integer |
+| `1008` | ECU lifetime / RAM timestamp | direct minutes |
+| `2008` | EEPROM functioning time | direct minutes |
+| `1009` | RAM time since key-on | raw x `15 sec` |
+| `2009` | EEPROM time since key-on | raw x `15 sec` |
+| `200A` | key-on counter | direct integer |
+| `200B` | ECU lifetime at first DTC | direct minutes |
+| `200C` | key-on time at first DTC | raw x `15 sec` |
+| `013B` | fuel level | `64 -> 100%`; one physical point |
+| `013C` | ambient temperature | two snapshots establish `raw x 0.5 - 40 deg C` |
+| `1000` | engine speed | exact association; zero-only scale unresolved |
+| `1002` | vehicle speed | exact association; zero-only scale unresolved |
+| `1004` | battery voltage | raw x `0.1 V` |
+| `1204` | battery ADC voltage | unsigned 16-bit big-endian `/1000 V` |
+| `2949` | Logistic Mode | exact association |
+| `0133` | External Lights Inputs | group-exact; duplicated request produced the duplicated four-label block |
+| `0135` | steering-wheel-switch states | group-exact for the 14-label block |
+| `0136` | wiper/climate inputs | group-exact for the four-label block |
+| `0150` | external-light outputs | group-exact; individual bits unresolved |
+| `292D` | configuration-check-fail counter | direct integer |
+| `292E` | PROXI write counter | direct integer |
+| `2023` | PROXI/system-configuration readback | 250-byte record; field decode remains separate |
+
+The following remain order-based groups rather than exact field maps: `0130` for door inputs;
+`0131/0132` for vehicle-status and brake material; `0137/0138` for Generic Inputs; `0151` for
+windows/doors actuators; `0152/0153/0154` for internal-light, wiper/climate-output, and FPS
+material; and `2010/1921` for the ignition/power-mode section. The structured
+`40A1/40A2/40A3/40A6/40AA` values feed the configuration-fail snapshot, but their individual
+module/bit assignments remain unresolved.
+
+The same observation exposes three AlfaOBD rendering defects. `1008=000389A0` is 231,840 minutes,
+but the UI displayed `905` after truncating the last response byte; `1009=0023` should be 525 seconds
+under the cross-module x15 convention but displayed zero; and `2013=02` displayed `Not defined`
+despite rendering as locked in other current-vehicle module snapshots. Preserve raw responses over
+an isolated Alfa text value when they conflict.
+
 ## Complete default-session BCM pages
 
 The follow-on `--bcm-pages` campaign ran parked with ignition ON and engine OFF, then the owner

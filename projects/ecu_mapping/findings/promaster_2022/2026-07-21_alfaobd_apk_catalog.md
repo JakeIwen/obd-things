@@ -174,6 +174,13 @@ is not a safe mapping. Treat `31 01 02 01` as an actuation lead only. It was not
 and it requires a separate payload review, safe-state plan, and owner authorization before any
 future test. The returned result bytes `00 02` remain unresolved.
 
+A later live non-actuating diagnostic observation confirmed the compatibility warning in practice.
+AlfaOBD failed model/ISO verification against live `F1A5=000A702520`; continuing only to observe Plots produced an
+eight-DID loop with two NRC-`31` reads and six positive responses, but its eight rendered values were
+constant, nonsensical, or `NA` for known vehicle state. Those Climate gauge labels and scales are not
+valid for the installed ECU. A positive DID response does not repair the subtype mismatch. See the
+[`live AlfaOBD status correlation`](2026-07-21_alfaobd_live_status_correlation.md).
+
 ## BCM read-data catalog
 
 `FGA_BCM_DATA` associates current BCM `Device_ID=55851` with 75 distinct `22xxxx` requests and
@@ -254,10 +261,12 @@ provenance boundaries prevent old labels or scaling from leaking into the 2022 m
 2. The structural decode is complete. Spot-check names/units/scaling against controlled vehicle
    state before promoting fields; do not repeat the already complete 75-request set without a new
    question.
-3. The guarded adapter-6 B-CAN survey is complete: four endpoints are verified and four timed out to
-   both F1A5 and F187. Do not repeat it without a new state/session question. Use the verified module
-   identities to select small labeled AlfaOBD Gauges + Debug Data batches for DID correlation.
+3. The guarded adapter-6 B-CAN survey and broad AlfaOBD status observation are complete. Four
+   endpoints are verified; four optional profiles timed out again. Do not repeat them without a new
+   state/session or installed-equipment question. The selected Climate profile failed live subtype
+   verification and its gauge interpretations are invalid for this ECU.
 4. With ignition on and PCAN listen-only, run one front-door lock/unlock output action at a time in
    AlfaOBD while recording Debug Data. Do not enter Tools/PROXI or car-configuration menus.
-5. For other modules, record fresh simultaneous Gauges Data and Debug Data in small labeled batches.
-   That supplies the timestamp bridge between human labels/scaled values and raw DID responses.
+5. For ICS, Uconnect, and EMCM2, use one controlled button/knob/value change against the status-DID
+   groups already bounded in the linked live observation; another broad gauge/status pass is not
+   needed.

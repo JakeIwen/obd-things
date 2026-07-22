@@ -113,6 +113,19 @@ The 24-DID common set is `F180 F181 F182 F183 F184 F185 F186 F187 F188 F18A F18B
 F191 F192 F193 F194 F195 F196 F1A0 F1A1 F1A4 F1A5 F1B0`. The reports mask VIN-bearing data;
 the large Uconnect `F1B6` certificate remains only in gitignored raw output and is not reproduced.
 
+## Follow-on AlfaOBD status observation
+
+The same day, a fresh Debug Data/Gauges Data session with a simultaneous listen-only PCAN capture
+connected successfully to ICS, Uconnect, Climate, and EMCM2 through AlfaOBD's adapter-6 route. ICS,
+Uconnect, and EMCM2 yielded bounded status snapshots and several exact scalar or packed-group DID
+correlations. The selected Climate profile failed live subtype verification; its eight rendered
+gauges were constant, nonsensical, or `NA`, so none of their labels/scales is accepted for this ECU.
+Alfa's full connection retries also sent exactly 24 session requests to each of `4A`, `62`, `65`,
+and `6A` without a response. This strengthens likely-optional/unfitted evidence but still does not
+prove absence. See the
+[`live AlfaOBD status correlation`](2026-07-21_alfaobd_live_status_correlation.md) for the
+per-ECU confidence boundaries and raw provenance.
+
 ## Raw provenance
 
 Discovery reports:
@@ -144,12 +157,14 @@ remain gitignored; this finding is the deliberately promoted, VIN-safe interpret
 ## What remains unresolved
 
 1. Do not classify the four timeouts as absent without a new reason to test another power/session
-   condition; trailer, blind-spot, and separate display hardware may simply not be fitted.
-2. Most positive F1xx DIDs are identity/certificate data, not live sensor values. Names and scaling
-   for ordinary live-data DIDs still require catalog/log correlation plus controlled ground truth.
+   condition; the later AlfaOBD retries strengthen the likely-unfitted interpretation, but trailer,
+   blind-spot, and separate display hardware may simply not be powered in the observed state.
+2. Most positive F1xx DIDs are identity/certificate data, not live sensor values. The later status
+   observation supplies exact common scalars and bounded group candidates, but button/knob bitfields
+   still require a controlled one-variable change before promotion.
 3. Climate RID `0201` remains a result-only lead. Offline APK inspection found a profile start
    payload but no defensible name or result decode. Do not start it without new exact-variant evidence,
    a separate actuation review, and owner authorization.
-4. The next high-yield mapping step is a fresh AlfaOBD Gauges + Debug Data recording in small,
-   labeled batches while PCAN records the same B-CAN traffic. That can join human labels/rendered
-   values to exact per-module DIDs without manually changing hundreds of individual values.
+4. The broad AlfaOBD observation is complete. Next, refresh only the bounded ICS `027E/027F/0300`,
+   Uconnect `180C/1820/1821`, and EMCM2 `2A00/2A01` groups around one deliberate button, dimmer,
+   volume, or knob change. Do not repeat the invalid Climate gauge profile.

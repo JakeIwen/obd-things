@@ -90,6 +90,13 @@ the bounded set with `python3 tools/ecu_discover.py --profile promaster88-bcan`;
 active diagnostic traffic and still requires the profile-specific confirmation and normal safety
 gates. [Catalog/UI evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_alfaobd_apk_catalog.md#adapter-routing-recovered-from-the-live-application-selector).
 
+A later simultaneous AlfaOBD/PCAN observation corroborated the branch routing: time-aligned
+`0x85/87/98/D9` exchanges appeared on the pins-3/11 B-CAN capture, while a BCM `0x40` status sweep
+inside the same capture window produced no `18DA40F1/18DAF140` B-CAN frame. The standard BCM
+profile therefore used C-CAN in this setup while adapter-6 profiles used B-CAN. The same observation
+yielded status-DID candidates but rejected the selected Climate profile's gauge labels/scales for
+the installed unmatched subtype. [Evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_alfaobd_live_status_correlation.md).
+
 > **PCM legacy-session requirement:** `0x10` was independently verified from the PCAN tap on
 > 2026-07-21. While parked with the engine idling, fixed-DLC-8 zero-padded
 > `18DA10F1 -> 18DAF110` traffic produced exact `10 92 -> 50 92`, followed by a positive
@@ -151,7 +158,7 @@ unrelated. Each module keeps its own canonical map next to its analysis:
 - **radar_acc** → [`projects/radar/findings/did_map.md`](../projects/radar/findings/did_map.md) — canonical 56-DID map (sessions, security, routines, DTCs, angle scaling). Full sweep: `projects/radar/findings/radar_acc_did_sweep.txt`.
 - **rf_hub** → [`projects/tpms/README.md`](../projects/tpms/README.md) — TPMS/RKE DID map inline (pressure `31D0-31D3`, sensor-ID `31CB-31CE`, snapshot/extended-data DIDs, the verified wheel↔slot table). Full sweep: `projects/tpms/findings/rf_hub_did_sweep.txt`.
 - **tcm / shifter / bcm_ccan / cluster / telematics** → [`2026-07-21 candidate DID inventory`](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_candidate_did_inventory.md) — complete inherited-session `F100-F1FF` results per ECU plus BCM candidate/page inventories. The complete BCM session-03 `4000-40FF` page found only default-visible `40A1`, `40A2`, `40AA` and session-gated `40A3`, `40A6`; no other session-only positive appeared. Keep these namespaces separate; labels/scaling outside established identity strings remain unresolved.
-- **ics_bcan / uconnect_bcan / climate_bcan / emcm2_bcan** → [`2026-07-21 B-CAN live ECU discovery`](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_bcan_live_ecu_discovery.md) — exact 29-bit addressing and identity, DTC semantics, bounded result-only routine responses, and complete inherited-session `F100-F1FF` inventories for each B-CAN ECU. Ordinary live-data DID labels/scaling remain unresolved.
+- **ics_bcan / uconnect_bcan / climate_bcan / emcm2_bcan** → [`2026-07-21 B-CAN live ECU discovery`](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_bcan_live_ecu_discovery.md) for exact addressing/identity, DTC semantics, result-only routines, and inherited-session `F100-F1FF`; [`live AlfaOBD status correlation`](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_alfaobd_live_status_correlation.md) for exact common scalars plus candidate ICS/Uconnect/EMCM2 status groups. The selected Climate profile failed variant verification, so its observed gauge labels/scales are explicitly invalid for the installed ECU.
 
 To plan a new module inventory without touching CAN, run
 `python3 tools/did_sweep.py <key> START END` (dry-run is the default). A parked live run requires

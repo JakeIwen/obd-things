@@ -3,8 +3,10 @@
 Goal: turn AlfaOBD's own diagnostic sessions into per-module maps for our 2022 Ram Promaster
 (**VIN `3C6LRVDG4NE######`**) — which DIDs each ECU exposes, what routines/actuations
 AlfaOBD runs, and their addressing — to feed the radar, TPMS, and BCM/remote-unlock work
-without re-deriving from scratch. AlfaOBD is a *DID oracle*: it only touches DIDs that exist
-and it labels them, so its logs are a shortcut.
+without re-deriving from scratch. AlfaOBD is a high-yield *candidate source*, not an infallible
+DID oracle: a mismatched profile can poll unsupported DIDs or apply the wrong labels/scaling.
+Treat its raw request/response trace as evidence and verify rendered interpretations against the
+installed subtype or controlled ground truth.
 
 ## ⚠️ Provenance — two vans in the data (read before trusting anything)
 
@@ -133,7 +135,7 @@ model descriptor. Raw logs under `tmp/` (gitignored) keep the full VIN.
   - `promaster_2015_diesel/module_did_map.txt` — 2015 reference van (same family; candidate cross-ref)
   - `promaster_2022/command_log.txt` — reassembled + interpreted command sequences (2022 ProMaster)
 
-## Findings so far (fresh 2022 ProMaster bin, 2026-07-07)
+## Findings so far (current 2022 ProMaster evidence)
 
 Modules seen (ATSH → phys addr): radar `DA2AF1`/0x2A, **BCM `DA40F1`/0x40**, RFH `DAC7F1`/0xC7,
 trans `DA18F1`/0x18, engine `DA10F1`/0x10 + `7E0`, shifter `DA1FF1`/0x1F.
@@ -172,6 +174,11 @@ then verified four independent 29-bit endpoints on pins 3/11: ICS `0x85`, Uconne
 Climate `0x98`, and EMCM2 `0xD9`. It records identity, non-clearing DTC, result-only routine, and
 complete inherited-session `F100-F1FF` inventories for each. Trailer `0x4A`, blind-spot `0x62/65`,
 and display `0x6A` timed out to both F1A5 and F187 and remain unresolved/possibly optional.
+The follow-on [`live AlfaOBD status correlation`](findings/promaster_2022/2026-07-21_alfaobd_live_status_correlation.md)
+adds exact common environmental scalars and bounded status-group candidates for ICS, Uconnect, and
+EMCM2 while a listen-only PCAN observed the B-CAN branch. It also rejects the selected Climate
+profile's eight gauge labels/scales for this unmatched ECU variant and records stronger, but still
+non-conclusive, timeout evidence for the four optional profiles.
 The [`2026-07-19 passive drive analysis`](findings/promaster_2022/2026-07-19_ccan_drive_signal_analysis.md)
 corrects CAN ID `0x101` from the old odometer hypothesis to a packed instantaneous-speed field,
 corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one known-speed reference.
@@ -219,9 +226,11 @@ corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one
 3. **BCM structural decode completed:** all 75 definitions are represented in the offline report;
    55 DIDs have positive trace evidence and 20 are negative. Continue with controlled scaling/name
    validation, not another live sweep of the same requests.
-4. **B-CAN discovery and first inventories completed:** do not repeat the same eight-target/F1xx
-   campaign without a new state/session question. Next, use small fresh AlfaOBD Gauges + Debug Data
-   batches alongside a listen-only PCAN capture to join labels/rendered values to exact per-module
-   DIDs. Climate result-only RID `0201` is an offline identification lead only; do not start/stop it.
+4. **B-CAN discovery, inventories, and broad AlfaOBD status observation completed:** do not repeat
+   the same eight-target/F1xx campaign or broad status pass without a new state/session question.
+   Next, use controlled one-variable refreshes of the already bounded ICS `027E/027F/0300`, Uconnect
+   `180C/1820/1821`, and EMCM2 `2A00/2A01` candidates. The selected Climate profile failed live
+   variant verification, so its gauge labels/scales are invalid here. Climate result-only RID `0201`
+   remains an offline identification lead only; do not start/stop it.
 5. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps
    (`../../docs/bus-map.md`, `../../lib/modules.py`, project DID maps) per the maintenance rule.

@@ -23,10 +23,13 @@ service, cron, network, and vehicle state before acting.
 - The vehicle's Security Gateway is intentionally bypassed. Do not attribute failed UDS writes,
   routines, or actuations to stock SGW authentication; investigate session, addressing, ECU security,
   power mode, and bus state instead.
-- The Pi PCAN and AlfaOBD adapter can share a Y-splitter downstream of the bypass on internal C-CAN.
-  This permits listen-only PCAN capture of AlfaOBD module-addressed UDS traffic without recabling.
-  Legislated OBD-II Mode 01 traffic does not appear on this internal tap; do not retry it as a generic
-  signal source. AlfaOBD UDS is visible on C-CAN; B-CAN generally exposes only resulting body-bus effects.
+- The Pi PCAN and AlfaOBD adapter can share a Y-splitter downstream of the bypass on internal C-CAN;
+  the owner's dual-pair pigtail also exposes dedicated C-CAN and B-CAN DB9 branches. This permits
+  listen-only PCAN capture on the selected physical pair while the OBDLink MX+ remains on the OBD
+  branch. Legislated OBD-II Mode 01 traffic does not appear on the internal C-CAN tap; do not retry it
+  as a generic signal source. A 2026-07-21 simultaneous observation directly captured AlfaOBD UDS to
+  `0x85/87/98/D9` on pins-3/11 B-CAN while the standard BCM `0x40` profile routed over C-CAN. Check
+  `docs/bus-map.md` and the linked finding before assuming which branch a selected profile uses.
 - PCAN `listen-only` is sticky: a later ordinary interface bring-up does not clear it. Any intentional
   TX setup must explicitly use `listen-only off` and then restore the documented passive state. The
   adapter/driver does not support `berr-reporting on`; use received-frame and RX-error counters.
