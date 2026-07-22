@@ -7,7 +7,8 @@ simultaneous listen-only PCAN capture established useful DID correlations for th
 The session produced valid status reads from the C-CAN BCM and the B-CAN ICS, Uconnect, and EMCM2;
 the EMCM2 connection survived a brief ignition sleep. It also showed that the selected AlfaOBD
 Climate profile is not compatible enough with the installed `0x98` variant to use its gauge labels
-or scaling.
+or scaling. A later controlled direct-read follow-up resolved the two EMCM2 rotary bytes plus the
+Mute and Screen-button states that were at rest in the AlfaOBD snapshot.
 
 The useful result is not a globally interchangeable DID list. Every mapping below remains in its
 ECU namespace. Confidence labels mean:
@@ -176,9 +177,38 @@ those reads ended in explicit negative responses, so the UI may merely have show
 ## EMCM2 `0xD9`
 
 The common odometer/lifetime DIDs align exactly. `1921` is group-exact for the 16-item operational
-mode/ignition block. `2A00` and `2A01` jointly supply rotary-knob direction, power-button, and
-mute-button status, but all three were at rest, so the split remains an order candidate. A short
-capture during one knob step and one button press should resolve it.
+mode/ignition block. The initial AlfaOBD snapshot read both `2A00=0000` and `2A01=0000`, so its
+rendered rotary/power/mute group could not establish the internal split.
+
+A controlled follow-up disconnected AlfaOBD and alternated only physical `22 2A00` and `22 2A01`
+reads through the PCAN after an exact `10 03` response. The vehicle was parked, ignition on, engine
+off, and the owner changed one physical control at a time:
+
+| DID response data | controlled input | result |
+|---|---|---|
+| `2A00=0000` | all controls at rest | repeated baseline |
+| `2A00=4100` | left Volume/Power knob clockwise | exact; two captured samples |
+| `2A00=8100` | left Volume/Power knob counterclockwise | exact; one captured sample |
+| `2A00=0041` | right Tune/Enter/Scroll knob clockwise | exact; three captured samples across two bursts |
+| `2A01=0100` | discrete Mute button held briefly | exact; eight consecutive samples over about 1.4 seconds |
+| `2A01=0010` | discrete Screen Off button held briefly | exact; ten consecutive samples over about 1.9 seconds |
+
+This establishes that `2A00` uses separate direction bytes for the left and right knobs. `41` means
+clockwise and `81` means counterclockwise for the left knob; `41` also means clockwise for the right
+knob. The corresponding right-knob counterclockwise value `0081` is a symmetry hypothesis only: a
+later attempt produced no nonzero sample and does not verify it. That retry followed the Screen Off
+test and the display state was not recorded, so screen state remains a plausible confounder. `2A01`
+independently contains the Mute and Screen-button states above. Do not relabel the observed Screen bit
+as AlfaOBD's generic `Power Button` without the still-missing decoder association.
+
+The exact-vehicle OEM `ENTERTAINMENT MULTIMEDIA CONTROL MODULE (EMCM) - OPERATION` page says both
+knobs can be twisted, shifted in four directions, or pressed; it describes a long left-knob press as
+Radio On/Off and a brief right-knob press as confirm/OK. The source is the local OEM mirror file
+`~/dev/ram_2022_GAS/vehicle/accessories_and_optional_equipment/relays_and_modules_-_accessories_and_optional_equipment/entertainment_system_control_module/description_and_operation/components/entertainment_multimedia_control_module_(emcm)_-_operation.html`.
+The owner reported no perceptible axial travel on either installed knob, and ordinary attempted
+presses produced no `2A00/2A01` change. No extra force was applied. Preserve this as an
+OEM-versus-installed-control discrepancy: the no-event attempt is not evidence that the input cannot
+exist, and the knobs should not be forced.
 
 `1004=7A` is consistent with 12.2 V under the convention above, but this EMCM2 renderer emitted no
 corresponding label. Keep it unresolved in the EMCM2 namespace until independently observed.
@@ -235,6 +265,14 @@ control, coding, or PROXI operation in this fresh session. Session control and D
 diagnostic traffic: successful `10 03` requests transiently changed ECU diagnostic-session state,
 but no mutating or actuation service was observed.
 
+The controlled EMCM2 follow-up likewise used only extended-session control, TesterPresent, and
+physical reads of `2A00/2A01`. Across its three bounded files, all 5,733 request attempts received
+positive responses and produced 2,729 sample rows: 2,728 complete `2A00/2A01` pairs plus one final
+`2A00`-only row at the duration boundary. The first file ended at its duration limit; the two
+follow-ups were intentionally interrupted after their action windows. All three persisted reports
+record `restored_passive=true`. The third file's all-zero right-counterclockwise window is preserved
+as an unresolved attempt, not promoted as a negative control result.
+
 The complete B-CAN wire capture independently contains 101 single-frame service-`10` requests,
 930 service-`22` requests, 509 service-`3E` requests, and 33 ISO-TP flow-control frames across
 physical tester IDs. It contains no other request service. After separating the 68 unattributed
@@ -265,6 +303,12 @@ All raw/machine output remains gitignored:
   SHA-256 `a9710f326142e7d2c105ca17f24104930e79cacc063d1d9ab460382f013357ab`.
 - `tmp/compute/done/20260722T044043Z-8b68bb4c/result/summary.json` — bounded worker summary;
   SHA-256 `b41f9a42d40a7b59ebc0fd90d59ee3d2c286f00ea9e5acbc96a7761a5aa5db23`.
+- `tmp/sweeps/emcm2_controls_20260721_2340.json` — 1,426 samples / 2,994 positive requests;
+  SHA-256 `86e0e2b76679031dd6f9a4e877f0c774ec000c08f1e9291b1ae567afa2671282`.
+- `tmp/sweeps/emcm2_controls_part2_20260721_2345.json` — 639 samples / 1,343 positive requests;
+  SHA-256 `c522de0ffe35031e58d51d4cc50f0ddb3a21ca321852feb8cb1432db2c675e3b`.
+- `tmp/sweeps/emcm2_right_ccw_20260721_2350.json` — 664 samples / 1,396 positive requests;
+  SHA-256 `e3d24057fd2e7246299b0575d45d8b6b00b0d51240238321c7246680bbf0858e`.
 
 The pulled BCM text log contains the full VIN and must remain under `tmp/`. This finding deliberately
 contains no unique VIN serial.
@@ -278,7 +322,11 @@ change against the existing candidate groups:
    `027F`, and `0300`.
 2. Uconnect: change volume by one step and press one panel/steering-wheel button; compare `180C`,
    `1820`, and `1821`.
-3. EMCM2: move the rotary knob one detent, then press power and mute separately; compare `2A00/2A01`.
+3. EMCM2: the left-knob directions, right-knob clockwise direction, Mute, and Screen inputs are now
+   controlled mappings in `2A00/2A01`; do not repeat them. A future short capture may isolate the
+   unresolved right-knob counterclockwise value by polling only `2A00` with the screen known on and
+   using baseline -> counterclockwise -> rest -> repeat. Revisit OEM-described knob press/shift
+   inputs only if the owner first confirms their normal physical operation; never force the controls.
 4. BCM work remains on C-CAN. Refresh one bounded status group around a deliberate door/lock/input
    change rather than repeating the complete status sweep.
 5. Do not reuse the current Climate gauge profile unless an exact installed-subtype definition is

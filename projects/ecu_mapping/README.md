@@ -178,7 +178,10 @@ The follow-on [`live AlfaOBD status correlation`](findings/promaster_2022/2026-0
 adds exact common environmental scalars and bounded status-group candidates for ICS, Uconnect, and
 EMCM2 while a listen-only PCAN observed the B-CAN branch. It also rejects the selected Climate
 profile's eight gauge labels/scales for this unmatched ECU variant and records stronger, but still
-non-conclusive, timeout evidence for the four optional profiles.
+non-conclusive, timeout evidence for the four optional profiles. Its controlled EMCM2 follow-up
+maps `2A00` to independent left/right rotary bytes and `2A01` to the discrete Mute and Screen-button
+states. Right-knob counterclockwise remains unresolved, and an OEM-described knob-press behavior
+conflicts with the installed controls' observed feel; do not force either knob.
 The [`2026-07-19 passive drive analysis`](findings/promaster_2022/2026-07-19_ccan_drive_signal_analysis.md)
 corrects CAN ID `0x101` from the old odometer hypothesis to a packed instantaneous-speed field,
 corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one known-speed reference.
@@ -228,9 +231,10 @@ corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one
    validation, not another live sweep of the same requests.
 4. **B-CAN discovery, inventories, and broad AlfaOBD status observation completed:** do not repeat
    the same eight-target/F1xx campaign or broad status pass without a new state/session question.
-   Next, use controlled one-variable refreshes of the already bounded ICS `027E/027F/0300`, Uconnect
-   `180C/1820/1821`, and EMCM2 `2A00/2A01` candidates. The selected Climate profile failed live
-   variant verification, so its gauge labels/scales are invalid here. Climate result-only RID `0201`
-   remains an offline identification lead only; do not start/stop it.
+   Next, use controlled one-variable refreshes of the already bounded ICS `027E/027F/0300` and
+   Uconnect `180C/1820/1821` candidates. EMCM2 `2A00/2A01` control mapping is complete except for
+   right-knob counterclockwise and the unresolved OEM-versus-installed knob-press discrepancy. The
+   selected Climate profile failed live variant verification, so its gauge labels/scales are invalid
+   here. Climate result-only RID `0201` remains an offline identification lead only; do not start/stop it.
 5. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps
    (`../../docs/bus-map.md`, `../../lib/modules.py`, project DID maps) per the maintenance rule.
