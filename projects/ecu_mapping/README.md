@@ -56,6 +56,7 @@ Preferences, drive the modules/live-data, then pull from
 tools/alfaobd_decode.py  <in.bin> [out.txt]      # generic: .bin -> decoded text (reusable)
 tools/alfaobd_gauges.py  <Gauges_Data.csv>       # offline section/profile/metric inventory -> tmp/
 tools/alfaobd_gauge_join.py <Gauges_Data.csv> <decoded.txt> --section N  # offline DID candidates
+tools/alfaobd_dat.py <post.dat> --baseline <pre.dat>  # detect cached/duplicated plot series
 tools/alfaobd_apk_db.py  <base.apk>              # reconstruct catalog DB + label resource -> tmp/
 tools/alfaobd_catalog.py <db> <labels> --device-id N  # read-only model/device export -> tmp/
 tools/alfaobd_bcm_decode.py                   # apply current-BCM field layouts to existing evidence
@@ -100,6 +101,14 @@ boundary; inspect the trace and supply `--boundary-did` explicitly in that case.
 Even an exact historical fit is reference-only until the same ECU/DID/scaling is established on
 the current van; correlation by itself is not controlled ground truth.
 
+`alfaobd_dat.py` inspects the separate `Data/*.dat` plot caches, whose observed format alternates
+an opaque decimal series ID with a semicolon-delimited value row. These files carry no timestamps
+or verified DID/label mapping. Supply a pre-campaign `--baseline` to classify each series as
+unchanged, appended, truncated, changed, or an exact mechanical repetition; use `--json` only with
+an explicit report path under `tmp/`. The 2026-07-22 C-CAN campaign is the motivating case:
+all 16 ZF series became exact twofold repetitions, while all 12 PCM series were unchanged, so
+neither file was fresh labeled evidence.
+
 The APK tools operate only on an owner-supplied local package and default all generated artifacts
 under `tmp/`. The catalog exporter opens SQLite in read-only mode, preserves source hashes and raw
 fields, and marks its mechanical English-resource substitutions as unverified: the APK's numeric
@@ -142,8 +151,9 @@ trans `DA18F1`/0x18, engine `DA10F1`/0x10 + `7E0`, shifter `DA1FF1`/0x1F.
 
 Direct live discovery on 2026-07-19 independently verified C-CAN endpoints `0x18`, `0x1F`,
 `0x2A`, `0x40`, `0x60`, `0xC6`, and `0xC7`. A fixed-DLC-8 legacy-session probe on 2026-07-21
-then independently verified PCM `0x10` while parked with the engine idling; ordinary default-session
-reads remain unsupported/unresolved. See
+then independently verified PCM `0x10` while parked with the engine idling. A 2026-07-22 AlfaOBD
+follow-up repeated the positive legacy session and live-data reads ignition-on/engine-off, proving
+engine running is not required; ordinary default-session reads remain unsupported/unresolved. See
 [`2026-07-19_live_ecu_discovery.md`](findings/promaster_2022/2026-07-19_live_ecu_discovery.md).
 The companion [`ODX/PDX source research`](findings/promaster_2022/2026-07-19_odx_pdx_source_research.md)
 records the free local toolchain, searched sources, and remaining acquisition paths.
@@ -182,6 +192,13 @@ non-conclusive, timeout evidence for the four optional profiles. Its controlled 
 maps `2A00` to independent left/right rotary bytes and `2A01` to the discrete Mute and Screen-button
 states. Right-knob counterclockwise remains unresolved, and an OEM-described knob-press behavior
 conflicts with the installed controls' observed feel; do not force either knob.
+The companion [`C-CAN AlfaOBD live correlation`](findings/promaster_2022/2026-07-22_ccan_alfaobd_live_correlation.md)
+ties the installed cluster, TBM2, shifter, TCM, BCM, and PCM identities to their runtime profiles
+and recovers bounded raw polling loops for cluster, TCM, and PCM. Controlled driver-door and brake
+changes map BCM `0130/0152` and `0132/0150` groups plus passive C-CAN candidates led by door frame
+`0x4B1` and brake frames `0x1FA`, `0x0FA`, and `0x10F`. It also documents that the Gauges CSV did
+not grow and the ZF `.dat` update merely duplicated cached series, so those files are not fresh
+labeled evidence.
 The [`2026-07-19 passive drive analysis`](findings/promaster_2022/2026-07-19_ccan_drive_signal_analysis.md)
 corrects CAN ID `0x101` from the old odometer hypothesis to a packed instantaneous-speed field,
 corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one known-speed reference.
@@ -212,16 +229,17 @@ corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one
   `U0001/B1040/C1502-FR/C1501-FL`) for the TPMS project. See `../tpms/`.
 - **PCM (0x10)** is independently live-verified at `18DA10F1 -> 18DAF110`: fixed-DLC-8 padded
   `10 92 -> 50 92`, then `1A 87 -> 5A 87 ... 68532157AI`. The successful run was parked with the
-  engine idling. Because both padding and engine power state differed from the failed unpadded
-  ignition-on run, the exact cause of the earlier timeout remains unisolated; use the specialized
-  legacy probe until default-session/DID behavior is mapped.
+  engine idling; the later AlfaOBD pass repeated `50 92` and positive live reads with ignition on
+  and the engine off. Engine running is not required. Fixed-DLC-8 padding remains part of the
+  known-good direct recipe; use the specialized legacy probe until default-session/DID behavior is
+  mapped.
 
 ## Next steps
 
 1. **PCM and BCM session follow-up completed:** the PCM endpoint is verified and the BCM session-03
    `4000-40FF` namespace is bounded. Do not repeat either scan without a new experimental question.
-   An optional padded PCM engine-off repeat could isolate framing from power state, but is not needed
-   for endpoint verification.
+   The AlfaOBD engine-off success has eliminated engine-running state as a requirement; a direct
+   unpadded repeat is not useful unless testing framing itself.
 2. **Unlock:** the APK catalog confirms that the current BCM profile offers separate front/rear
    door-lock relay actions, but not which captured `2F` DID implements each. Correlate one deliberate
    AlfaOBD action at a time with Debug Data plus listen-only PCAN, then verify the result before any
@@ -236,5 +254,9 @@ corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one
    right-knob counterclockwise and the unresolved OEM-versus-installed knob-press discrepancy. The
    selected Climate profile failed live variant verification, so its gauge labels/scales are invalid
    here. Climate result-only RID `0201` remains an offline identification lead only; do not start/stop it.
-5. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps
+5. **C-CAN broad AlfaOBD observation completed:** do not repeat the six-profile status/monitor pass.
+   Next use the recovered raw loops for one controlled engine-off/idle comparison, and use passenger-
+   door plus parking-brake discriminators to refine the new passive and BCM candidates. Alfa's
+   shifter `Drive` rendering in Park and TCM `Brake switch` watcher are explicitly invalid here.
+6. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps
    (`../../docs/bus-map.md`, `../../lib/modules.py`, project DID maps) per the maintenance rule.

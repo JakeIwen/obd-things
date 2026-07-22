@@ -80,9 +80,13 @@ sign of early termination. The JSON report records 2/2 responses, `partial=false
 and `restored_passive=true`; the wrapper then restarted `tpms-logger` as designed.
 
 This independently verifies the address pair, session preamble, fixed-DLC-compatible framing, and
-identity. It does **not** distinguish whether padding or the engine-running power state resolved the
-earlier timeout because both changed between the failed and successful attempts. An engine-off padded
-repeat would isolate that variable, but it is no longer required to register or use this endpoint.
+identity. This run alone did **not** distinguish whether padding or the engine-running power state
+resolved the earlier timeout because both changed between the failed and successful attempts. A
+2026-07-22 AlfaOBD follow-up later received exact `50 92` and positive status/live-data responses
+with ignition on and the engine off; the same profile timed out while ignition was asleep and
+connected after rearm. Engine running is therefore not required. Fixed-DLC-8 framing remains part
+of the known-good direct recipe. See the
+[`C-CAN AlfaOBD live correlation`](2026-07-22_ccan_alfaobd_live_correlation.md#pcm-engine-off-legacy-session-result).
 
 ## Next bounded steps
 
@@ -92,10 +96,11 @@ repeat would isolate that variable, but it is no longer required to register or 
 2. Confirm the TBM2 `0xC6` assignment with an official FCA part-number source if one becomes
    available; the live `TBM200A11P` identity, Mopar part supersession, and exact-vehicle OEM TBM2
    documentation already make it high-confidence.
-3. **Completed 2026-07-21, parked/engine-idling:** the fixed-DLC-8 padded PCM probe received exact
-   positive responses to both `10 92` and `1A 87`, independently verifying the `0x10` endpoint and
-   expected identity. It is now registered as `pcm`; keep using the specialized legacy probe until
-   its default-session and DID behavior are mapped.
+3. **Completed 2026-07-21 and engine-off corroborated 2026-07-22:** the fixed-DLC-8 padded PCM
+   probe received exact positive responses to both `10 92` and `1A 87`, independently verifying the
+   `0x10` endpoint and expected identity. AlfaOBD later repeated the positive legacy session and
+   live reads ignition-on/engine-off. It is registered as `pcm`; keep using the specialized legacy
+   probe until its default-session and DID behavior are mapped.
 4. **Initial bounded pass completed 2026-07-21:** per-module non-clearing DTC inventories and
    result-only (`31 03`) samples. Continue to keep the potentially large `19 0A` supported-DTC
    catalog opt-in and do not treat requestSequenceError as proof a routine exists.

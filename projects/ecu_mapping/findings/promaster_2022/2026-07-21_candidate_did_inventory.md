@@ -254,6 +254,10 @@ decodes those values as 29-bit, fixed eight-byte CAN frames, ISO-15765 formattin
 500 kbit/s. Our SocketCAN ISO-TP default uses the minimum DLC for a single frame. A later fixed-DLC-8
 retry while parked with the engine idling received `50 92` and a positive `5A 87` response containing
 `68532157AI`, independently verifying the endpoint. The successful run changed both framing and engine
-power state, so it does not isolate which difference resolved the timeout. Exact evidence and report
-provenance are recorded in
+power state, so that run alone did not isolate which difference resolved the timeout. A 2026-07-22
+AlfaOBD follow-up subsequently repeated `50 92` plus positive status/live-data reads with ignition on
+and the engine off. Engine running is therefore not required; fixed-DLC-8 framing remains part of the
+known-good recipe. Exact evidence and report provenance are recorded in
 [`2026-07-19_live_ecu_discovery.md`](2026-07-19_live_ecu_discovery.md).
+The later engine-off evidence is in
+[`2026-07-22_ccan_alfaobd_live_correlation.md`](2026-07-22_ccan_alfaobd_live_correlation.md#pcm-engine-off-legacy-session-result).

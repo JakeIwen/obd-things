@@ -40,6 +40,7 @@ tools/                     GENERIC, module-agnostic CLI tools (take a module key
   identity_inventory.py      bounded per-ECU identity reads -> tmp/inventories/<key>/
   dtc_inventory.py           non-clearing per-ECU DTC inventory -> tmp/inventories/<key>/
   can_capture_summary.py     streaming offline candump summary (`--snapshot` bounds growing logs)
+  alfaobd_dat.py             offline AlfaOBD .dat cache inventory/baseline comparison
   did_sweep.py               dry-run-first, checkpointed ReadDataByIdentifier inventory (22)
   routine_scan.py            dry-run-first, checkpointed result-only RoutineControl inventory (31 03)
   ccan_inventory_campaign.sh one-command parked baseline, DID-page, or session-compare campaigns
@@ -300,8 +301,12 @@ it will send `1A 87`; it never uses functional broadcast. The explicit zero padd
 AlfaOBD's ELM `PP 2C=01` fixed-eight-byte CAN framing. The first independent attempt omitted this
 padding and timed out before the identity request. A parked engine-idling retry on 2026-07-21
 received `50 92` and a positive multi-frame `5A 87` containing `68532157AI`, verifying the
-registered `pcm` endpoint. Because both padding and engine state changed, that run did not isolate
-which condition caused the earlier timeout.
+registered `pcm` endpoint. A 2026-07-22 AlfaOBD follow-up then repeated the positive `50 92` and
+legacy live-data reads with ignition on and the engine off; the same profile timed out while the
+ignition was asleep and connected after rearm. Engine running is therefore not required. Padding
+remains part of the known-good direct-probe recipe because the unpadded SocketCAN case has not
+produced a positive response. See the
+[`C-CAN AlfaOBD correlation`](projects/ecu_mapping/findings/promaster_2022/2026-07-22_ccan_alfaobd_live_correlation.md#pcm-engine-off-legacy-session-result).
 
 The campaign wrapper supplies the service/interface lifecycle and those fixed target arguments so
 the owner can run the same probe with one command after separately authorizing the session change:

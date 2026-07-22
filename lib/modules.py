@@ -57,10 +57,11 @@ MODULES = {
         rxid=0x18DAF110,
         bus="c-can",
         note=(
-            "Live-verified 2026-07-21 while parked/engine-idling with fixed-DLC-8 zero padding: "
-            "10 92 -> 50 92, then 1A 87 -> identity containing 68532157AI. Default-session "
-            "22 F187 and unpadded probes timed out; use the bounded legacy PCM probe until its "
-            "session/DID behavior is mapped."
+            "Live-verified with fixed-DLC-8 zero padding: 10 92 -> 50 92, then 1A 87 -> "
+            "identity containing 68532157AI. A 2026-07-22 AlfaOBD follow-up repeated the "
+            "positive session and status reads ignition-on/engine-off; the same profile timed "
+            "out while ignition was asleep. Default-session 22 F187 and unpadded probes timed "
+            "out; use the bounded legacy PCM probe until its session/DID behavior is mapped."
         ),
     ),
     "rf_hub": Module(

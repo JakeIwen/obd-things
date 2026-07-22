@@ -61,7 +61,7 @@ registry can't hold; keep the addresses in sync with `lib/modules.py`.
 | key | module | bus | TX → RX | quirks |
 |---|---|---|---|---|
 | `radar_acc` | Bosch ACC radar (DASM / MRR1evo) | C-CAN | `18DA2AF1` → `18DAF12A` | ACKs our frames even with ignition cut mid-sweep. Speed only via DID `0x1002` (no OBD PIDs behind SGW). |
-| `pcm` | Powertrain Control Module (3.6L Pentastar) | C-CAN | `18DA10F1` → `18DAF110` | Live-verified 2026-07-21 while parked/engine-idling: fixed-DLC-8 padded `10 92 → 50 92`, then `1A 87 → 5A 87` containing `68532157AI`. Default-session and unpadded probes had timed out. |
+| `pcm` | Powertrain Control Module (3.6L Pentastar) | C-CAN | `18DA10F1` → `18DAF110` | Fixed-DLC-8 padded `10 92 → 50 92`, then `1A 87 → 5A 87` containing `68532157AI`, was independently verified while idling on 2026-07-21. AlfaOBD repeated the positive `50 92` ignition-on/engine-off on 2026-07-22; the identical Alfa profile/setup timed out while ignition was asleep and succeeded after rearm. Default-session and unpadded probes had timed out. |
 | `rf_hub` | RF Hub (Continental) — TPMS/RKE | C-CAN | `18DAC7F1` → `18DAF1C7` | **Answers with ignition OFF** (battery-powered RKE receiver). |
 | `tcm` | ZF 948TE transmission controller | C-CAN | `18DA18F1` → `18DAF118` | Live identity on 2026-07-19: `F187=46342086`, `F194/F132=68532161AF`, `F192=ES11-1065 D`. |
 | `shifter` | SILATECH electronic shifter | C-CAN | `18DA1FF1` → `18DAF11F` | Live identity on 2026-07-19: `F187=P7FK46LXHAD`, `F188/F194=AGSM637FCA`. |
@@ -101,11 +101,12 @@ the installed unmatched subtype. [Evidence](../projects/ecu_mapping/findings/pro
 > 2026-07-21. While parked with the engine idling, fixed-DLC-8 zero-padded
 > `18DA10F1 -> 18DAF110` traffic produced exact `10 92 -> 50 92`, followed by a positive
 > multi-frame `1A 87 -> 5A 87` identity containing `68532157AI`; FCA's official J2534 report maps
-> that part to a 2022 VF 3.6L PCM calibration. Earlier default-session and unpadded probes timed
-> out. Because padding and engine power state changed between the failed and successful attempts,
-> this run verifies the endpoint and recipe but does not isolate which condition was decisive.
-> Keep using the bounded legacy probe rather than assuming ordinary default-session `22` support. See
-> [`2026-07-19_live_ecu_discovery.md`](../projects/ecu_mapping/findings/promaster_2022/2026-07-19_live_ecu_discovery.md).
+> that part to a 2022 VF 3.6L PCM calibration. A 2026-07-22 AlfaOBD follow-up repeated `50 92` with
+> ignition on and the engine off, then collected positive legacy status/live-data reads. The same
+> app/profile timed out while ignition was asleep and succeeded after rearm, so engine running is
+> not required. Fixed-DLC-8 padding remains part of the known-good recipe; do not infer ordinary
+> default-session `22` support. See
+> [`2026-07-22 C-CAN live correlation`](../projects/ecu_mapping/findings/promaster_2022/2026-07-22_ccan_alfaobd_live_correlation.md#pcm-engine-off-legacy-session-result).
 
 ---
 
@@ -116,11 +117,25 @@ the installed unmatched subtype. [Evidence](../projects/ecu_mapping/findings/pro
 | `0x2EF` | bytes[0:1] LE u16 | `/ ~400` | **system voltage (fine)** — same ÷~400 family as B-CAN 0x46C; engine/ignition ratio 1.17 (alternator) | **ignition ON / running only** | field confirmed; **divisor not pinned** (needs one ground-truth cal via `ccan_voltage.py --calibrate`) |
 | `0x2EF` | presence | — | **ignition-on gate** — its presence = key-on; tpms-logger uses it as the drive/park gate | ignition ON | verified (frame-count gates failed; presence gate works) |
 | `0x41A` | byte0 | `/ ~14.2` | **system voltage (coarse)** — C-CAN analogue of 0x46C, readable in a parked *wake* (~12.5 V resting) | any awake C-CAN incl. parked wake | field confirmed; divisor coarse/approx |
+| `0x4B1` | byte0 bit0 | `0=closed`, `1=open` in one driver-door trial | **driver-door-correlated candidate** — exact open/close edges; another door must be tested before calling it driver-exclusive | ignition ON | controlled candidate, [2026-07-22 evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-22_ccan_alfaobd_live_correlation.md#passive-driver-door-candidates) |
+| `0x419` | byte2 | `0x77=closed`, `0x97=open` in the same trial | second exact **door-correlated candidate**; the `0xE0` XOR may combine several states | ignition ON | controlled candidate, same evidence |
+| `0x1FA` | byte3 bit1 | `0=released`, `1=held` | strongest high-rate binary **service-brake-correlated candidate** | ignition ON | one controlled hold/release; repeat and parking-brake discriminator pending |
+| `0x0FA` | byte0 | `0x40` released; `0x48` transition; `0x4C` held | high-rate brake state/pressure candidate; exact two-bit split unresolved | ignition ON | one controlled hold/release, [2026-07-22 evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-22_ccan_alfaobd_live_correlation.md#passive-service-brake-candidates) |
+| `0x10F` | bytes1-3 | zero released; nonzero/varying held | high-rate analogue pedal/pressure candidate; scaling unresolved | ignition ON | one controlled hold/release, same evidence |
+| `0x1F1` | byte0 bit1 + byte2 | binary bit and varying analogue field | corroborating service-brake candidate; unrelated byte0 bits also drift | ignition ON | one controlled hold/release, same evidence |
+| `0x417` | byte4 | `0x60` released; mostly `0x40`, with `0x20` excursions, held | propagated brake state/load candidate, not a stable enum yet | ignition ON | one controlled hold/release, same evidence |
+| `0x5A8` | byte3 | `0x56 -> 0x76 -> 0x56` | low-rate propagated service-brake candidate | ignition ON | one controlled hold/release, same evidence |
+| `0x5BE` | byte2 | `0x00 -> 0x18 -> 0x00` | low-rate propagated service-brake candidate | ignition ON | one controlled hold/release, same evidence |
 | `0x101` | `((b0 & 1) << 11) \| (b1 << 3) \| (b2 >> 5)` | **scale unresolved:** leading candidates `/16` or `/32` km/h | **instantaneous vehicle speed**, not an odometer accumulator. It ramps reversibly, is flat at zero when stopped, crosses 2047→2048 continuously, and tracks `0x0EE` at ≈8:1. A known-speed reference is still required before choosing the scale. | ignition ON; moving value while driving | **field/meaning high confidence; scale unverified**, 2026-07-19 drive captures; [analysis](../projects/ecu_mapping/findings/promaster_2022/2026-07-19_ccan_drive_signal_analysis.md) |
 | `0x101` | `((b2 & 3) << 6) \| (b3 >> 2)` | raw | braking/deceleration-like field; correlated with braking magnitude and near zero at steady speed. Not yet ground-truthed. | driving | candidate, same 2026-07-19 analysis |
 | `0x101` | byte6 low nibble; byte7 | counter `0..15`; CRC-8/SAE-J1850 over bytes0–6 | rolling frame counter and checksum. CRC matched every one of 224,137 continuation frames. | ignition ON | verified in the 2026-07-19 continuation capture |
 | `0x0EE` | bytes[0:2] BE u16 | ≈`8 × 0x101_speed_raw`; paired scale candidates `/128` or `/256` km/h | independent higher-resolution vehicle-speed field corroborating `0x101`; Pearson `r=0.9999919` while moving. Absolute scale remains tied to the same ground-truth question. | ignition ON / driving | field relationship high confidence; scale unverified, [analysis](../projects/ecu_mapping/findings/promaster_2022/2026-07-19_ccan_drive_signal_analysis.md) |
 | signature set | — | — | C-CAN identity guard: `0x100 101 103 104 10F 110 116 0EA 0EE 0FA 0FE` (+ `2EF 41A`) | high-rate, ignition-on & in parked wakes | used by `classify_bus()` |
+
+During the controlled brake hold, the already-known `0x41A` voltage byte fell from `0xA0` to
+`0x9E/0x9C` and recovered after release. That is a secondary voltage/load effect consistent with
+the brake lamps, not a second meaning for the voltage byte. Cadence-driven changes in `0x412` and
+`0x73A` were likewise rejected rather than promoted as door fields.
 
 ---
 
@@ -157,7 +172,7 @@ unrelated. Each module keeps its own canonical map next to its analysis:
 
 - **radar_acc** → [`projects/radar/findings/did_map.md`](../projects/radar/findings/did_map.md) — canonical 56-DID map (sessions, security, routines, DTCs, angle scaling). Full sweep: `projects/radar/findings/radar_acc_did_sweep.txt`.
 - **rf_hub** → [`projects/tpms/README.md`](../projects/tpms/README.md) — TPMS/RKE DID map inline (pressure `31D0-31D3`, sensor-ID `31CB-31CE`, snapshot/extended-data DIDs, the verified wheel↔slot table). Full sweep: `projects/tpms/findings/rf_hub_did_sweep.txt`.
-- **tcm / shifter / bcm_ccan / cluster / telematics** → [`2026-07-21 candidate DID inventory`](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_candidate_did_inventory.md) — complete inherited-session `F100-F1FF` results per ECU plus BCM candidate/page inventories. The complete BCM session-03 `4000-40FF` page found only default-visible `40A1`, `40A2`, `40AA` and session-gated `40A3`, `40A6`; no other session-only positive appeared. Keep these namespaces separate; labels/scaling outside established identity strings remain unresolved.
+- **tcm / shifter / bcm_ccan / cluster / telematics / pcm** → [`2026-07-21 candidate DID inventory`](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_candidate_did_inventory.md) for complete inherited-session `F100-F1FF` results and BCM candidate/page inventories; [`2026-07-22 C-CAN AlfaOBD correlation`](../projects/ecu_mapping/findings/promaster_2022/2026-07-22_ccan_alfaobd_live_correlation.md) for installed runtime-profile aliases, bounded cluster/TCM/PCM polling sets, controlled BCM `0130/0152` door and `0132/0150` brake groups, and the engine-off PCM legacy-session result. The complete BCM session-03 `4000-40FF` page found only default-visible `40A1`, `40A2`, `40AA` and session-gated `40A3`, `40A6`; no other session-only positive appeared. Keep these namespaces separate; Alfa-rendered labels/scaling remain candidates unless controlled state or an exact decoder verifies them.
 - **ics_bcan / uconnect_bcan / climate_bcan / emcm2_bcan** → [`2026-07-21 B-CAN live ECU discovery`](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_bcan_live_ecu_discovery.md) for exact addressing/identity, DTC semantics, result-only routines, and inherited-session `F100-F1FF`; [`live AlfaOBD status correlation`](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_alfaobd_live_status_correlation.md) for exact common scalars, candidate ICS/Uconnect status groups, and controlled EMCM2 `2A00/2A01` rotary/Mute/Screen mappings. The selected Climate profile failed variant verification, so its observed gauge labels/scales are explicitly invalid for the installed ECU.
 
 To plan a new module inventory without touching CAN, run
