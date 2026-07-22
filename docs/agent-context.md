@@ -41,22 +41,13 @@ service, cron, network, and vehicle state before acting.
   The user approved low-frequency parked TX without a separate prompt, but it is still an observer and
   battery effect. Avoid gratuitous traffic. See `docs/bus-map.md` for verified wake behavior.
 
-## Environment and secrets
+## Private environment context
 
-- Historical source of environment configuration: `~/secrets/.bash_variables`, with exported
-  `OBD_VIN` and `NTFY_VOLTAGE_URL`. Interactive shells sourced it from `.bashrc`; cron used it through
-  `BASH_ENV`. Confirm this is still true rather than rewriting shell configuration.
-- systemd does not inherit `.bashrc` or cron's `BASH_ENV`; add an appropriate `EnvironmentFile=` only
-  when a unit actually needs these variables and the user authorizes the service change.
-- Never print or commit secret values or the full current VIN. The secret file was historically mode
-  0644; recommend mode 0600 if it is still too broad, but do not change it outside the requested scope.
-- `system-event-monitor.service` continuously records five-second resource/thermal/process samples in
-  `/var/lib/vanpi-monitor/events.sqlite3` and writes per-boot crash reports under
-  `/var/lib/vanpi-monitor/crash-reports/`. A 2026-07-21 lockup was captured at 247 MiB available,
-  effectively full swap, 97% CPU, load 11.85, and 87.65 °C with four concurrent APK-analysis Python
-  workers using roughly 508/480/374/186 MiB RSS. Serialize APK/decompiler work on this 4 GiB Pi;
-  never launch multiple Androguard/jadx analyses concurrently. Lightweight agents are fine while
-  one agent watches the persistent recorder, available memory, swap, and task-worker RSS.
+Machine-specific environment/secret locations, local monitoring paths, and private compute-worker
+instructions live in the ignored root `AGENTS.secret.md`. Read that companion when it exists. Never
+print or commit secret values or a full VIN. Systemd does not inherit interactive-shell or cron
+environments; configure an `EnvironmentFile=` only when a unit needs it and the user authorizes the
+service change.
 
 ## AlfaOBD data provenance
 

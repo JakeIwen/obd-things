@@ -9,7 +9,22 @@ venv/
 .vscode/
 .idea/
 *.swp
+*.swo
+*~
 .DS_Store
+._*
+__MACOSX/
+.Spotlight-V100/
+.Trashes/
+.fseventsd/
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Private machine/owner agent context. Tracked AGENTS.md files may reference a same-directory
+# AGENTS.secret.md, but these local companion files must never be committed.
+[Aa][Gg][Ee][Nn][Tt][Ss].secret.md
 
 *.tmp
 

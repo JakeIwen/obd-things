@@ -4,6 +4,15 @@ This file is the Codex entry point for the repository. Treat tracked documentati
 durable memory of the project: verify it before experimenting, and update it when new facts are
 established. Do not leave important findings only in chat/session memory or code comments.
 
+## Local private context
+
+If `AGENTS.secret.md` exists beside this file, read it after this file whenever a task involves
+machine-specific infrastructure, private owner resources, secret locations, local network access, or
+offline compute workers. It is an intentionally untracked local companion; never stage, commit, quote,
+or promote its private contents into tracked documentation. Tracked agent files may reference a
+same-directory `AGENTS.secret.md` when private context is necessary, but must remain complete and safe
+when that file is absent.
+
 ## Start every task here
 
 1. Read `git status` and preserve all existing work. A dirty worktree may be an in-progress handoff,
