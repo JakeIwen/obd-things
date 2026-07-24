@@ -45,11 +45,14 @@ from typing import Callable, Iterable
 import xml.etree.ElementTree as ET
 import zlib
 
+REPO = Path(__file__).resolve().parents[1]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
 from lib import diagnostic_safety
 from lib.modules import MODULES
 
 
-REPO = Path(__file__).resolve().parents[1]
 DEFAULT_OUT_ROOT = REPO / "tmp" / "ecu_mapping" / "alfaobd_singleton"
 LOCK_DIR = REPO / "tmp" / "locks"
 PACKAGE = "com.AlfaOBD.AlfaOBD"

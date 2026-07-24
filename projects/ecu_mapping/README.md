@@ -183,7 +183,7 @@ python3 tools/passive_drive_capture.py \
   --require-mount /mnt/EXFAT512 \
   --campaign "RUN_ID" \
   --duration-seconds 600 \
-  --soft-free-gib 15 --hard-free-gib 10 \
+  --soft-free-gib 30 --hard-free-gib 25 \
   --execute --confirm-passive \
   --conditions "parked; ignition ON; engine OFF; PCAN C-CAN 6/14; OBDLink MX+ parallel"
 ```
@@ -214,7 +214,8 @@ automatic resume from that state.
 For the upcoming 20-hour drive, the passive recorder can use
 `--duration-seconds 72000` with an ordinary-driving conditions note. The measured C-CAN rate is
 about 653 MB/hour as uncompressed candump text, or roughly 13.1 GB for 20 hours before zstd.
-Keep the 15/10 GiB soft/hard floors and verify EXFAT512 is actually mounted writable; the tool
+Keep the 30/25 GiB soft/hard floors so ordinary use retains at least 25 GiB, and verify EXFAT512
+is actually mounted writable; the tool
 requires the named mount and rechecks its device identity so a missing external disk cannot
 silently redirect logs onto the Pi's root filesystem. It enables SocketCAN drop accounting and
 stops rather than silently accepting a reported drop. A socket/driver drop, unexpected `candump`
