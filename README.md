@@ -345,12 +345,15 @@ Both halves completed successfully on 2026-07-21. The BCM session-03 page expose
 known session-gated `40A3` and `40A6` beyond the three default-visible positives. These modes remain
 available for reproducibility, but should not be repeated without a new experimental reason.
 
-Participating active diagnostic tools also take a nonblocking per-channel advisory lock under
-`tmp/locks/`, so two of them cannot transmit through the same SocketCAN channel concurrently. The
-participants are the guarded inventory/discovery tools, `uds_send.py`, `signal_correlate.py capture`,
-direct-bus `live_data` viewers, and `tpms_logger.py` while it is polling. Offline analysis, passive
-capture, and the TPMS logger's ignition-watch idle state do not take the lock. The lock is cooperative:
-stop any older/project-specific transmitter that has not adopted it before starting manual bus work.
+Participating active diagnostic tools take a nonblocking exclusive per-channel advisory lock under
+`tmp/locks/`, so two of them cannot transmit through the same SocketCAN channel concurrently.
+Guarded passive recorders and external-bus observers may instead take shared observer locks: those
+observers can coexist with each other while still excluding every participating Pi-side transmitter
+and interface reconfiguration. The participants include the guarded inventory/discovery tools,
+`uds_send.py`, `signal_correlate.py capture`, direct-bus `live_data` viewers, `tpms_logger.py` while
+it is polling, `passive_drive_capture.py`, and the guarded AlfaOBD supervisor. Offline analysis and
+the TPMS logger's ignition-watch idle state do not take the lock. The lock is cooperative: stop any
+older/project-specific transmitter that has not adopted it before starting manual bus work.
 
 ## Adding another module / project
 

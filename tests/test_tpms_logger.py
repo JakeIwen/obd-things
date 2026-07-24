@@ -223,6 +223,15 @@ class TpmsResponseIntegrityTests(unittest.TestCase):
 
 
 class TpmsInterfaceCoordinationTests(unittest.TestCase):
+    @mock.patch.multiple(
+        tpms_logger.socket,
+        AF_CAN=29,
+        SOCK_RAW=3,
+        CAN_RAW=1,
+        SOL_CAN_RAW=101,
+        CAN_RAW_FILTER=1,
+        create=True,
+    )
     def test_idle_watch_closes_socket_when_setup_fails(self):
         sock = mock.Mock()
         sock.bind.side_effect = OSError("interface disappeared")

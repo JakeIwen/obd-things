@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "campaign_id": "cluster-singleton-shakedown",
+  "module_key": "cluster",
+  "expected_runtime": "Instrument panel Continental",
+  "expected_app_version": "2.4.4.0",
+  "expected_screen": {
+    "width": 800,
+    "height": 1280,
+    "rotation": 0
+  },
+  "dialog_labels": [
+    "Dimming",
+    "Buzzer volume level",
+    "Actual Gear",
+    "Engine speed",
+    "Fuel level",
+    "Vehicle speed",
+    "Battery Voltage (+30)",
+    "Outside temperature"
+  ],
+  "gauges": [
+    "Engine speed",
+    "Vehicle speed",
+    "Actual Gear",
+    "Battery Voltage (+30)",
+    "Outside temperature"
+  ],
+  "repeat_anchors": [
+    "Engine speed",
+    "Battery Voltage (+30)"
+  ],
+  "segment_seconds": 12,
+  "settle_seconds": 2,
+  "verify_seconds": 2,
+  "min_free_bytes": 1073741824,
+  "min_tablet_free_bytes": 536870912,
+  "artifacts": [
+    "AlfaOBD_Debug.bin",
+    "MARELLI_DASH_EP_Info.log",
+    "Gauges_Data.csv"
+  ],
+  "required_segment_growth": [
+    "AlfaOBD_Debug.bin",
+    "MARELLI_DASH_EP_Info.log"
+  ],
+  "required_stop_stability": [
+    "MARELLI_DASH_EP_Info.log"
+  ],
+  "screenshot_each_segment": false
+}

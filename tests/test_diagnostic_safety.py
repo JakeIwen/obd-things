@@ -36,6 +36,28 @@ class DiagnosticLockTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "held can0"):
                 diagnostic_safety.validate_channel_lock(handle, "can0")
 
+    def test_observers_coexist_but_exclude_transmitters(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            diagnostic_safety, "LOCK_DIR", directory
+        ):
+            first = diagnostic_safety.acquire_channel_observer_lock("can0")
+            second = diagnostic_safety.acquire_channel_observer_lock("can0")
+            try:
+                with self.assertRaisesRegex(RuntimeError, "already holds"):
+                    diagnostic_safety.acquire_channel_lock("can0")
+                with self.assertRaisesRegex(RuntimeError, "held can0"):
+                    diagnostic_safety.validate_channel_lock(first, "can0")
+            finally:
+                diagnostic_safety.release_channel_lock(second)
+                diagnostic_safety.release_channel_lock(first)
+
+            exclusive = diagnostic_safety.acquire_channel_lock("can0")
+            try:
+                with self.assertRaisesRegex(RuntimeError, "already holds"):
+                    diagnostic_safety.acquire_channel_observer_lock("can0")
+            finally:
+                diagnostic_safety.release_channel_lock(exclusive)
+
     def test_context_manager_releases_after_exception(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(
             diagnostic_safety, "LOCK_DIR", directory

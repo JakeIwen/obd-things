@@ -181,12 +181,18 @@ Continental`, and the installed identity fields identify Magneti Marelli. The ge
 said `Marelli AUTO SHIFT` before resolving to ZF 948TE. Treat these names as route/definition aliases,
 not hardware identity.
 
-**Artifact/recording limitation — enabled recording did not guarantee fresh labeled data.** Debug
-Data grew normally, but `Gauges_Data.csv` did not grow during the C-CAN campaign. `ZF9HP.dat` doubled
-in size only because every one of its 16 baseline series was concatenated with an exact copy of
-itself; all 12 `TIGERSHARK_CUSW.dat` series were unchanged. These `.dat` files are opaque plot caches
-without a label/DID/timestamp join, not fresh campaign evidence. Compare pre/post hashes and series
-content before using any of them.
+**Artifact/recording limitation — the Status monitor and Plots/Gauges paths write different
+evidence.** The C-CAN parameter selections were made through the Status tab's `Monitor parameters`
+surface, not the Plots tab. Debug Data grew normally and the profile `*_Info.log` files accumulated
+repeated human-readable label/value blocks, but `Gauges_Data.csv` did not grow. The Info blocks carry
+no per-cycle timestamp or DID number, so they need bounded byte offsets plus singleton selection or
+raw request-order evidence; the unchanged Gauges CSV cannot be passed to the timestamp joiner. Do not
+interpret an unchanged Gauges file as proof that the Status monitor produced no labeled evidence.
+
+Separately, `ZF9HP.dat` doubled in size only because every one of its 16 baseline series was
+concatenated with an exact copy of itself; all 12 `TIGERSHARK_CUSW.dat` series were unchanged. These
+`.dat` files are opaque plot caches without a label/DID/timestamp join, not fresh campaign evidence.
+Compare pre/post hashes and series content before using any of them.
 
 **Not a profile defect — `NO DATA` can be power state.** The PCM profile made 24 unanswered
 fixed-eight-byte `10 92` attempts after the ignition had slept, then received `50 92` and positive
@@ -203,6 +209,7 @@ Source: [C-CAN AlfaOBD live correlation](../projects/ecu_mapping/findings/promas
 | Live `F190` / `F1A5` and identity DIDs | Vehicle/source scope and strong exact-subtype evidence | That every selected-profile definition matches that subtype |
 | Selected menu/runtime name | A useful route and definition-family candidate | Installed manufacturer, exact ECU subtype, or exact vehicle model year |
 | Status/Plots rendered values | Candidate vocabulary and an efficient controlled-correlation surface | Ground truth when raw bytes, known state, or exact subtype contradict it |
+| Status `Monitor parameters` / `*_Info.log` | Repeated labeled values and field groups when the Info file grows | Per-cycle timestamps, DID numbers, or a one-to-one join without bounded selection/Debug evidence |
 | Gauges Data CSV | Rendered labels and sample times when it actually grows | DID numbers; a label-to-DID join without synchronized Debug Data |
 | `Data/*.dat` | Opaque cache-series change detection | Freshness, timestamps, DID identity, or label identity |
 | APK model/catalog rows | High-yield address, profile, field-layout, and routine candidates | Installed equipment or verified human labels/scales |
@@ -222,8 +229,9 @@ Source: [C-CAN AlfaOBD live correlation](../projects/ecu_mapping/findings/promas
    action. A positive DID response proves only that the DID exists in that ECU/state.
 6. Never infer an actuation payload from menu order, neighboring labels, or timing alone. Capture one
    authorized action at a time and independently verify its effect before considering replay.
-7. Baseline every AlfaOBD output artifact before a campaign. Confirm that Debug/Gauges files grew and
-   that `.dat` content is newly appended rather than unchanged, truncated, or mechanically repeated.
+7. Baseline every AlfaOBD output artifact before a campaign. Track Debug, Gauges, and profile Info
+   files independently; confirm which grew, and verify that `.dat` content is newly appended rather
+   than unchanged, truncated, or mechanically repeated.
 8. Treat a timeout as conditional evidence. Recheck power, routing, bitrate, session, addressing, and
    framing before calling a module absent or a profile incompatible.
 

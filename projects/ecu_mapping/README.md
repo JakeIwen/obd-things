@@ -64,6 +64,8 @@ tools/alfaobd_dat.py <post.dat> --baseline <pre.dat>  # detect cached/duplicated
 tools/alfaobd_apk_db.py  <base.apk>              # reconstruct catalog DB + label resource -> tmp/
 tools/alfaobd_catalog.py <db> <labels> --device-id N  # read-only model/device export -> tmp/
 tools/alfaobd_bcm_decode.py                   # apply current-BCM field layouts to existing evidence
+tools/alfaobd_singleton_campaign.py plan <plan.json>  # guarded one-label Status monitor
+tools/passive_drive_capture.py --out-root <path>      # bounded C-CAN recorder; plan by default
 projects/ecu_mapping/vin_scan.py        <decoded.txt> [vin]   # which van? (run FIRST)
 projects/ecu_mapping/extract_did_map.py <decoded.txt> <out>   # per-module DID/service map
 projects/ecu_mapping/alfalog.py                  # shared log parser + ELM reassembly
@@ -125,6 +127,119 @@ paired summary against the BCM module key and exact TX/RX endpoint, carries diag
 vehicle-condition provenance into each observation, and keeps all names/units as unresolved raw
 catalog references. Its default JSON report lives under `tmp/ecu_mapping/android_tablet/`; it does
 not open CAN or ADB.
+
+## Prepared AlfaOBD + passive-PCAN correlation campaign
+
+Two guarded tools now turn the useful part of the 2026-07-22 AlfaOBD experiment into a repeatable
+campaign:
+
+- `alfaobd_singleton_campaign.py` operates only on an already-connected ECU's **System status**
+  page. It selects exactly one visible `Monitor parameters` label, records Debug/Info byte
+  boundaries, and repeats anchor labels. It never chooses a vehicle/profile, connects an ECU,
+  enters Active Diagnostics, changes Android settings, or touches network/proxy configuration.
+- `passive_drive_capture.py` records one persistent `candump` stream into ten-minute zstd chunks.
+  Its built-in `ccan-correlation` priority stream includes the verified speed/brake/door/voltage
+  anchors and all registered C-CAN diagnostic request/response IDs. It never configures or
+  transmits on CAN and stops if `can0` ceases to be UP, 500 kbit/s, listen-only, and ERROR-ACTIVE.
+
+Both hold shared observer locks, so they may run together while every participating Pi-side
+transmitter or interface reconfiguration remains excluded. They also refuse to compete with
+`tpms-logger` or `tpms-drivesniff`; neither tool stops or restarts a service.
+
+The first live step is the tracked five-signal cluster shakedown:
+
+```bash
+python3 tools/alfaobd_singleton_campaign.py plan \
+  projects/ecu_mapping/configs/alfaobd_cluster_singleton_shakedown.json
+```
+
+Before executing it, connect the tablet by USB, connect AlfaOBD to
+`Instrument panel Continental`, open System status with `Monitor parameters` enabled, and leave
+the red **play triangle** visible (monitor stopped). AlfaOBD Debug Data recording must already be
+enabled, and both `AlfaOBD_Debug.bin` and `MARELLI_DASH_EP_Info.log` must already exist so their
+starting offsets are unambiguous. Put PCAN on C-CAN pins 6/14, stop the TPMS logger, raise the
+receive-buffer ceiling for the long recorder, and explicitly restore passive C-CAN:
+
+The 2026-07-23 vanpi storage audit (`findmnt`, numeric ownership, and the kernel exFAT warning)
+found that EXFAT512 needed a clean fsck/remount and that its automatic exFAT mount lacked
+`uid=1000,gid=1000`; without those options it maps files to UID/GID 65534 and is not writable by
+`pi`. Repair it from the ordinary SSH host shell and add the ownership options to
+`/home/pi/scripts/mount_disks.sh` before using it for the shakedown or long drive. Recheck the
+exact mount after every reconnect; this is temporal host state, not a permanent disk fact.
+
+```bash
+sudo systemctl stop tpms-logger
+sudo sysctl -w net.core.rmem_max=4194304
+./bringup.sh
+```
+
+For a simultaneous ten-minute shakedown, choose one safe timestamped identifier (for example
+`cluster-shakedown-20260724-120000`), replace `RUN_ID` with that exact value in both panes, and
+start the recorder pane first:
+
+```bash
+python3 tools/passive_drive_capture.py \
+  --out-root /mnt/EXFAT512/obd-things/tmp/captures/ccan/drive-correlation \
+  --require-mount /mnt/EXFAT512 \
+  --campaign "RUN_ID" \
+  --duration-seconds 600 \
+  --soft-free-gib 15 --hard-free-gib 10 \
+  --execute --confirm-passive \
+  --conditions "parked; ignition ON; engine OFF; PCAN C-CAN 6/14; OBDLink MX+ parallel"
+```
+
+The AlfaOBD pane is:
+
+```bash
+python3 tools/alfaobd_singleton_campaign.py run \
+  projects/ecu_mapping/configs/alfaobd_cluster_singleton_shakedown.json \
+  --campaign-id "RUN_ID" \
+  --out-root /mnt/EXFAT512/obd-things/tmp/ecu_mapping/alfaobd-drive \
+  --require-mount /mnt/EXFAT512 \
+  --execute --confirm-read-only-diagnostics --confirm-parked-shakedown \
+  --confirm-monitor-stopped \
+  --conditions "parked; ignition ON; engine OFF; cluster System-status page"
+```
+
+The supervisor requires both Debug and profile-Info growth during every segment, while only the
+profile Info file must become stable after the stop tap (the connected app can continue writing
+non-parameter traffic to Debug). The play triangle must be present before start, the white
+stop-hand while running, and the play triangle again after stop. If a tap, crash, modal, UI
+version, log-growth check, tablet-space check, or state transition is ambiguous, it sends no
+guessed compensating tap and leaves `manual_reconcile: true` in `state.json`. It also rechecks
+EXFAT512's mount identity and writability before creating output and before every final artifact
+pull; a missing, short, or failed pull prevents campaign completion. There is deliberately no
+automatic resume from that state.
+
+For the upcoming 20-hour drive, the passive recorder can use
+`--duration-seconds 72000` with an ordinary-driving conditions note. The measured C-CAN rate is
+about 653 MB/hour as uncompressed candump text, or roughly 13.1 GB for 20 hours before zstd.
+Keep the 15/10 GiB soft/hard floors and verify EXFAT512 is actually mounted writable; the tool
+requires the named mount and rechecks its device identity so a missing external disk cannot
+silently redirect logs onto the Pi's root filesystem. It enables SocketCAN drop accounting and
+stops rather than silently accepting a reported drop. A socket/driver drop, unexpected `candump`
+exit, forced child termination, compressor/verification failure, mount change, stalled chunk
+finalization, or pre-duration hard-floor stop makes the command fail and the final manifest says
+`success: false`. A deliberate soft-floor transition can continue with the bounded priority
+stream, but the manifest then says `full_stream_complete: false`. Raw output remains under the
+external disk's `obd-things/tmp/` tree and is never committed in place.
+
+An interrupted run retains `.zst.partial` evidence. Recovery is offline, plan-only by default,
+restricted to one exact existing campaign, and never deletes a partial that fails zstd
+verification:
+
+```bash
+python3 tools/passive_drive_capture.py \
+  --out-root /mnt/EXFAT512/obd-things/tmp/captures/ccan/drive-correlation \
+  --require-mount /mnt/EXFAT512 \
+  --campaign EXACT_EXISTING_CAMPAIGN \
+  --recover-partials --execute --confirm-recovery
+```
+
+This first supervisor intentionally supports one complete, visible parameter dialog at a time.
+It is sufficient for the eight-row cluster page and the initial singleton proof. Scrollable
+hundreds-item profiles and automatic vehicle/module navigation remain out of scope until the
+small shakedown validates the Android-7 UI and artifact behavior.
 
 `reassemble_commands.py <decoded.txt> <out.txt> [atsh]` — rebuilds multi-frame COMMANDS.
 AlfaOBD sends long requests as MANUAL ISO-TP frames: First Frame `1L LL <6 data>` + a trailing
@@ -259,8 +374,15 @@ corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one
    selected Climate profile failed live variant verification, so its gauge labels/scales are invalid
    here. Climate result-only RID `0201` remains an offline identification lead only; do not start/stop it.
 5. **C-CAN broad AlfaOBD observation completed:** do not repeat the six-profile status/monitor pass.
-   Next use the recovered raw loops for one controlled engine-off/idle comparison, and use passenger-
-   door plus parking-brake discriminators to refine the new passive and BCM candidates. Alfa's
-   shifter `Drive` rendering in Park and TCM `Brake switch` watcher are explicitly invalid here.
+   The next capture is the guarded five-signal cluster singleton shakedown above, paired with passive
+   PCAN. If it passes, the immediate offline task is an offset-aware singleton joiner: validate the
+   completed campaign/manifests, slice each Info/Debug byte interval, discard TesterPresent, require
+   repeated anchors to select the same request/DID, and corroborate the request/response sequence
+   against the passive 11-/29-bit wire capture. The timestamped Gauges joiner cannot substitute for
+   this because Status Info blocks have no per-cycle timestamps. After that proof, use the drive
+   recorder for the known-speed scale and broader driving variation, then expand only the
+   already-validated Status workflow. Also use passenger-door plus parking-brake discriminators to
+   refine the passive and BCM candidates. Alfa's shifter `Drive` rendering in Park and TCM `Brake
+   switch` watcher are explicitly invalid here.
 6. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps
    (`../../docs/bus-map.md`, `../../lib/modules.py`, project DID maps) per the maintenance rule.

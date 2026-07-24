@@ -39,6 +39,13 @@ def fake_channel_lock(events=None):
         yield handle
 
 
+@mock.patch.multiple(
+    canbus.socket,
+    AF_CAN=29,
+    SOCK_RAW=3,
+    CAN_RAW=1,
+    create=True,
+)
 class WakeBurstSafetyTests(unittest.TestCase):
     def test_burst_locks_closes_and_restores_before_success(self):
         events = []

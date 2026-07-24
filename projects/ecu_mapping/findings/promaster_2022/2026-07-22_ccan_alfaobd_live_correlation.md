@@ -46,6 +46,7 @@ three `F190` VIN reads and only the expected current van, masked here as `3C6LRV
 | `alfaobd_campaign_suffix.bin` | 2,232,618 bytes | `f0042e9e40428572958d2900eab0af4550bc8b642d61bdb30587dbb749c67912` |
 | `alfaobd_campaign.decoded.txt` | 1,116,309 bytes | `6fe10e77ba22cd22355d8aa18603351bb46f686fe4a8606f73bdef8371593eef` |
 | final `AlfaOBD_Debug.bin` | 2,962,534 bytes | `3d34fb2101fc064660f994b2139aba8c8ac54feb84b109c7bffcadda67447334` |
+| final `MARELLI_DASH_EP_Info.log` | 35,576 bytes | `d103dfb3ad8b185089fcdb1fbce0381f69540685f3b29c6d558c36c041167653` |
 | C-CAN `..._0010.log` | 4,693,618 frames; 0 unparsed | 1,728.167456 s; `b51187de3dbacb819ab0268c5728eda5ba4c0e31132188f2546f1a5ad84c0086` |
 | C-CAN `..._0041.log` | 4,886,380 frames; 0 unparsed | 1,799.997402 s; `a0029e1c5d880a1cca8c1153adbe6ccfa29b7b8d15a77c4752159fa91be562e5` |
 | C-CAN `..._0113.log` | 1,481,255 frames; 0 unparsed | 874.866003 s; `cc94273166401fca1de43eeb204ad119a8033dca3e38c7679d71ae45e6cb8468` |
@@ -101,6 +102,37 @@ This establishes bounded raw polling sets, not a one-to-one label assignment for
 CSV did not record new rows, and several labels failed controlled-state checks. Known conventions
 such as cluster `1000` engine speed, `1002` vehicle speed, and `1004` battery voltage remain
 supported, but the other internal joins need controlled variation or the exact decoder.
+
+### Cluster Status Info/Debug ordinal evidence
+
+The Status monitor did leave useful labeled evidence outside the unchanged Gauges CSV. The final
+cluster Info log's repeated-monitor block is bytes `[4562,35576)` (SHA-256
+`6825fc957dc7c1bf5b6b80a6959b33c8f8c62e33181b03abb1ecb815f2910c`). The corresponding decoded
+Debug exchange envelope is bytes `[27255,149539)` / lines 952–5025 (SHA-256
+`d93c7c0fc3503cbccd5f9bbe928b1c0f9e122a480910d0af430f59f24770ac75`), equivalent to final raw
+Debug bytes `[784426,1028994)`.
+
+After excluding the one complete System-status read immediately before the repeated loop, the
+label-row counts exactly equal the request counts and both repeat in the same eight-item order:
+
+| Info label | rows | repeated request | requests |
+|---|---:|---|---:|
+| Dimming | 167 | `22 0104` | 167 |
+| Buzzer volume level | 167 | `22 0105` | 167 |
+| Actual Gear | 166 | `22 0107` | 166 |
+| Engine speed | 166 | `22 1000` | 166 |
+| Fuel level | 166 | `22 1001` | 166 |
+| Vehicle speed | 166 | `22 1002` | 166 |
+| Battery Voltage (+30) | 165 | `22 1004` | 165 |
+| Outside temperature | 165 | `22 1005` | 165 |
+
+Battery voltage also supplies one nonconstant ordinal check: Info sample 20 is `12.10 V` and the
+same-ordinal `1004` response is `62 1004 79`; the other 164 paired samples render `12.00 V` with
+`62 1004 78`. This demonstrates that bounded Info/Debug joining is viable and strengthens the
+ordered label/DID candidates. It still does **not** independently prove all eight one-to-one
+mappings: most fields were constant, equal-count groups remain order-dependent, and the Debug
+envelope contains one truncated response apiece for `0104`, `0107`, and `1001`. The guarded
+singleton shakedown remains the clean discriminator.
 
 The profile `.dat` files are also unsafe as campaign evidence. `ZF9HP.dat` was rewritten from
 57,483 to 114,875 bytes, but every value row in the final file is exactly its baseline sequence

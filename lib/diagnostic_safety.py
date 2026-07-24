@@ -22,33 +22,35 @@ def _validate_channel_name(channel):
     return channel
 
 
-def acquire_channel_lock(channel):
-    """Acquire a nonblocking exclusive lock for one SocketCAN channel.
-
-    Returns an open handle that must be passed to :func:`release_channel_lock`. The file lives
-    under gitignored ``tmp/`` and carries diagnostic PID/time metadata for troubleshooting.
-    """
+def _acquire_channel_lock(channel, *, observer):
+    """Acquire the underlying nonblocking shared/exclusive channel lock."""
     _validate_channel_name(channel)
     os.makedirs(LOCK_DIR, exist_ok=True)
     path = os.path.join(LOCK_DIR, f"active-diagnostics-{channel}.lock")
     handle = open(path, "a+", encoding="utf-8")
     locked = False
+    operation = fcntl.LOCK_SH if observer else fcntl.LOCK_EX
+    mode = "observer" if observer else "exclusive"
     try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(handle.fileno(), operation | fcntl.LOCK_NB)
         locked = True
-        handle.seek(0)
-        handle.truncate()
-        handle.write(f"pid={os.getpid()} acquired_epoch={time.time():.6f}\n")
+        if observer:
+            handle.write(
+                f"observer_pid={os.getpid()} acquired_epoch={time.time():.6f}\n"
+            )
+        else:
+            handle.seek(0)
+            handle.truncate()
+            handle.write(f"pid={os.getpid()} acquired_epoch={time.time():.6f}\n")
         handle.flush()
-        # Treat the returned handle as a small capability: interface-changing helpers can verify
-        # that their caller still owns the lock for the exact channel before mutating SocketCAN.
         handle._diagnostic_lock_channel = channel
         handle._diagnostic_lock_held = True
+        handle._diagnostic_lock_mode = mode
         return handle
     except BlockingIOError:
         handle.close()
         raise ChannelLockError(
-            f"another active diagnostic tool already holds the {channel} lock"
+            f"another active diagnostic or observer already holds the {channel} lock"
         ) from None
     except BaseException:
         try:
@@ -57,6 +59,25 @@ def acquire_channel_lock(channel):
         finally:
             handle.close()
         raise
+
+
+def acquire_channel_lock(channel):
+    """Acquire a nonblocking exclusive lock for one SocketCAN channel.
+
+    Returns an open handle that must be passed to :func:`release_channel_lock`. The file lives
+    under gitignored ``tmp/`` and carries diagnostic PID/time metadata for troubleshooting.
+    """
+    return _acquire_channel_lock(channel, observer=False)
+
+
+def acquire_channel_observer_lock(channel):
+    """Acquire a shared lock for passive capture or an external-bus observer.
+
+    Multiple observers may coexist. Every participating Pi-side diagnostic transmitter and
+    interface-changing helper uses the exclusive lock and is therefore excluded until all
+    observers finish. An observer handle is deliberately not a mutation capability.
+    """
+    return _acquire_channel_lock(channel, observer=True)
 
 
 def release_channel_lock(handle):
@@ -83,6 +104,7 @@ def validate_channel_lock(handle, channel):
         or getattr(handle, "closed", True)
         or not getattr(handle, "_diagnostic_lock_held", False)
         or getattr(handle, "_diagnostic_lock_channel", None) != channel
+        or getattr(handle, "_diagnostic_lock_mode", None) != "exclusive"
     ):
         raise ChannelLockError(f"a held {channel} active-diagnostics lock is required")
     try:
@@ -96,6 +118,16 @@ def validate_channel_lock(handle, channel):
 def channel_lock(channel):
     """Hold a channel lock for the complete body of a ``with`` statement."""
     handle = acquire_channel_lock(channel)
+    try:
+        yield handle
+    finally:
+        release_channel_lock(handle)
+
+
+@contextmanager
+def channel_observer_lock(channel):
+    """Hold a shared observer lock for the complete body of a ``with`` statement."""
+    handle = acquire_channel_observer_lock(channel)
     try:
         yield handle
     finally:
