@@ -50,8 +50,8 @@ RMEM_MAX_PATH = Path("/proc/sys/net/core/rmem_max")
 DEFAULT_ROTATION_SECONDS = 600
 DEFAULT_DURATION_SECONDS = 22 * 60 * 60
 MAX_PENDING_FINALIZATION_SECONDS = 120
-DEFAULT_SOFT_FREE_BYTES = 3 * 1024**3
-DEFAULT_HARD_FREE_BYTES = 2 * 1024**3
+DEFAULT_SOFT_FREE_BYTES = 30 * 1024**3
+DEFAULT_HARD_FREE_BYTES = 25 * 1024**3
 SERVICE_BLOCKLIST = ("tpms-logger", "tpms-drivesniff")
 CAMPAIGN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
 CANDUMP_RE = re.compile(
@@ -877,8 +877,14 @@ class Recorder:
         fatal: Exception | None = None
         detected_drops = 0
         storage_available = True
+        stop_signal: int | None = None
+        stop_requested_at: float | None = None
 
-        def request_stop(_signum, _frame) -> None:
+        def request_stop(signum, _frame) -> None:
+            nonlocal stop_requested_at, stop_signal
+            if stop_requested_at is None:
+                stop_requested_at = time.monotonic()
+                stop_signal = signum
             self.stop_requested = True
 
         def submit_chunk(finished: Chunk) -> None:
@@ -1028,8 +1034,18 @@ class Recorder:
                     )
                 now = time.monotonic()
                 if self.stop_requested:
-                    reason = "signal"
-                    break
+                    signal_time = (
+                        stop_requested_at
+                        if stop_requested_at is not None
+                        else now
+                    )
+                    if signal_time - started < self.duration_seconds:
+                        reason = "signal"
+                        fatal = CaptureError(
+                            "capture interrupted by signal "
+                            f"{stop_signal} before the requested duration completed"
+                        )
+                        break
                 if now - started >= self.duration_seconds:
                     break
                 if now - chunk.started_monotonic >= self.rotation_seconds:
@@ -1189,6 +1205,12 @@ class Recorder:
             "reason": reason,
             "success": fatal is None,
             "duration_complete": reason == "duration_complete",
+            "signal_number": stop_signal if reason == "signal" else None,
+            "signal_elapsed_seconds": (
+                stop_requested_at - started
+                if reason == "signal" and stop_requested_at is not None
+                else None
+            ),
             "full_stream_complete": full_stream_complete,
             "requested_duration_seconds": self.duration_seconds,
             "elapsed_seconds": time.monotonic() - started,

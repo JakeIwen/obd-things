@@ -17,7 +17,7 @@ restart after a tap intent is ambiguous by design: this tool never guesses or pe
 compensating tap on resume.  A live run writes an intent event and fsyncs it before every tap.
 
 Machine output defaults below ``tmp/ecu_mapping/alfaobd_singleton/``.  For a long campaign,
-pass ``--out-root /mnt/EXFAT512/obd-things/tmp/ecu_mapping/alfaobd_drive`` together with
+pass ``--out-root /mnt/EXFAT512/obd-things/tmp/ecu_mapping/alfaobd-drive`` together with
 ``--require-mount /mnt/EXFAT512``; the campaign ID is appended only after the named mount's
 identity and writability have been verified.
 """
@@ -34,7 +34,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shlex
 import shutil
 import struct
 import subprocess
@@ -729,18 +728,19 @@ class AdbClient:
     def artifact_stat(self, filename: str) -> ArtifactStat:
         remote = f"{REMOTE_LOG_ROOT}/{filename}"
         errors: list[str] = []
-        for shell in (
-            f"stat -c %s {shlex.quote(remote)}",
-            f"wc -c < {shlex.quote(remote)}",
+        for command in (
+            self._base() + ["shell", "stat", "-c", "%s", remote],
+            self._base() + ["shell", "wc", "-c", remote],
         ):
             result = self.runner.run(
-                self._base() + ["shell", "sh", "-c", shell],
+                command,
                 timeout=10,
                 check=False,
             )
             text = result.stdout.strip()
-            if result.returncode == 0 and text.isdigit():
-                return ArtifactStat(path=remote, size=int(text))
+            fields = text.split()
+            if result.returncode == 0 and fields and fields[0].isdigit():
+                return ArtifactStat(path=remote, size=int(fields[0]))
             errors.append(f"{text} {result.stderr}".strip())
         combined = " ".join(errors).lower()
         # Do not treat a missing ``stat`` executable ("stat: not found") as a
@@ -752,8 +752,7 @@ class AdbClient:
 
     def log_filesystem_free_bytes(self) -> int:
         result = self.runner.run(
-            self._base()
-            + ["shell", "sh", "-c", f"df -k {shlex.quote(REMOTE_LOG_ROOT)}"],
+            self._base() + ["shell", "df", "-k", REMOTE_LOG_ROOT],
             timeout=15,
         )
         lines = [line.split() for line in result.stdout.splitlines() if line.strip()]
@@ -939,18 +938,25 @@ def _validate_required_preexisting(
         )
 
 
-def _required_artifacts_grew(
+def _any_required_artifact_grew(
     plan: CampaignPlan,
     before: dict[str, ArtifactStat],
     after: dict[str, ArtifactStat],
 ) -> bool:
-    """Return true only when every configured activity witness grew."""
+    """Return true when at least one configured early activity witness grew.
+
+    AlfaOBD does not update all enabled log files on the same cadence.  The
+    binary Debug log can grow immediately while an ECU-specific Info log is
+    still buffered.  This check is only an early liveness witness after the
+    running icon appears; ``_validate_growth`` still requires every configured
+    segment artifact to grow before the segment is accepted.
+    """
     for name in plan.required_segment_growth:
         old = before[name].size
         new = after[name].size
-        if old is None or new is None or new <= old:
-            return False
-    return True
+        if old is not None and new is not None and new > old:
+            return True
+    return False
 
 
 def _required_artifacts_stable(
@@ -1412,11 +1418,11 @@ def _run_campaign_locked(
                     gauge=target,
                     artifacts=_stats_dict(running_stats),
                 )
-                if not _required_artifacts_grew(plan, before, running_stats):
+                if not _any_required_artifact_grew(plan, before, running_stats):
                     abnormal_reconcile = True
                     raise CampaignError(
-                        "monitor start did not produce growth in every required "
-                        "activity artifact; toggle state is ambiguous"
+                        "monitor start produced no growth in any configured "
+                        "activity artifact; monitor activity is ambiguous"
                     )
                 writer.state(
                     {
@@ -1912,6 +1918,7 @@ def main(argv: list[str] | None = None, *, runner: CommandRunner | None = None) 
         if args.command == "audit":
             with _ui_supervisor_lock():
                 xml_text, nodes = audit_device(plan, adb)
+                monitor_state = _capture_monitor_state(plan, adb, nodes)
                 stats = _artifact_stats(adb, plan)
                 tablet_free_bytes = adb.log_filesystem_free_bytes()
             print(
@@ -1922,6 +1929,7 @@ def main(argv: list[str] | None = None, *, runner: CommandRunner | None = None) 
                         "version": plan.expected_app_version,
                         "runtime": plan.expected_runtime,
                         "monitor_labels": list(monitor_labels(nodes)),
+                        "monitor_state": monitor_state,
                         "ui_sha256": hashlib.sha256(
                             xml_text.encode("utf-8")
                         ).hexdigest(),

@@ -506,6 +506,40 @@ class ProvenanceTests(unittest.TestCase):
         )
         self.assertIsNone(adb.artifact_stat("AlfaOBD_Debug.bin").size)
 
+    def test_artifact_stat_uses_direct_android_argv_and_parses_wc_filename(self):
+        class Result:
+            def __init__(self, returncode, stdout="", stderr=""):
+                self.returncode = returncode
+                self.stdout = stdout
+                self.stderr = stderr
+
+        class Runner:
+            def __init__(self):
+                self.commands = []
+
+            def run(self, command, **_kwargs):
+                self.commands.append(command)
+                if "stat" in command:
+                    return Result(1, stderr="stat unavailable")
+                return Result(
+                    0,
+                    stdout=(
+                        "2962706 "
+                        "/sdcard/Android/data/com.android.AlfaOBD/files/logs/"
+                        "AlfaOBD_Debug.bin\n"
+                    ),
+                )
+
+        runner = Runner()
+        adb = campaign.AdbClient(runner, "fixture")
+        self.assertEqual(adb.artifact_stat("AlfaOBD_Debug.bin").size, 2962706)
+        self.assertEqual(
+            runner.commands[0][-5:-1], ["shell", "stat", "-c", "%s"]
+        )
+        self.assertEqual(runner.commands[1][-4:-1], ["shell", "wc", "-c"])
+        self.assertNotIn("sh", runner.commands[0][2:])
+        self.assertNotIn("sh", runner.commands[1][2:])
+
     def test_required_growth_and_artifact_shrink_fail_closed(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "plan.json"
@@ -544,7 +578,7 @@ class ProvenanceTests(unittest.TestCase):
         with self.assertRaisesRegex(campaign.CampaignError, "disappeared"):
             campaign._validate_growth(plan, before, after)
 
-    def test_activity_witness_requires_growth_then_stability(self):
+    def test_early_activity_accepts_one_witness_but_segment_requires_all(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "plan.json"
             path.write_text(json.dumps(plan_payload()), encoding="utf-8")
@@ -560,9 +594,17 @@ class ProvenanceTests(unittest.TestCase):
         one_stale["MARELLI_DASH_EP_Info.log"] = campaign.ArtifactStat(
             "MARELLI_DASH_EP_Info.log", 100
         )
-        self.assertTrue(campaign._required_artifacts_grew(plan, before, grew))
+        self.assertTrue(campaign._any_required_artifact_grew(plan, before, grew))
+        self.assertTrue(
+            campaign._any_required_artifact_grew(plan, before, one_stale)
+        )
+        with self.assertRaisesRegex(campaign.CampaignError, "did not grow"):
+            campaign._validate_growth(plan, before, one_stale)
+        none_grew = {
+            name: campaign.ArtifactStat(name, 100) for name in plan.artifacts
+        }
         self.assertFalse(
-            campaign._required_artifacts_grew(plan, before, one_stale)
+            campaign._any_required_artifact_grew(plan, before, none_grew)
         )
         self.assertTrue(campaign._required_artifacts_stable(plan, grew, grew))
         debug_only_changed = dict(grew)

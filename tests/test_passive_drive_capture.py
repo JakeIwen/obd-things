@@ -185,6 +185,12 @@ class PassiveDriveCaptureTests(unittest.TestCase):
         )
         self.assertEqual(capture.resolved_priority_ids(args), frozenset({0x123}))
 
+    def test_default_disk_policy_preserves_25_gib(self):
+        args = capture.build_parser().parse_args(["--out-root", "/tmp/plan"])
+        policy = capture.validate_args(args)
+        self.assertEqual(policy.soft_free_bytes, 30 * 1024**3)
+        self.assertEqual(policy.hard_free_bytes, 25 * 1024**3)
+
     def test_disk_policy_has_two_stage_degradation(self):
         policy = capture.DiskPolicy(soft_free_bytes=300, hard_free_bytes=200)
         self.assertEqual(policy.action(301), "full")
@@ -690,6 +696,72 @@ class PassiveDriveCaptureTests(unittest.TestCase):
             self.assertEqual(checkpoint["status"], "error")
             self.assertFalse(checkpoint["success"])
             self.assertFalse(checkpoint["duration_complete"])
+
+    def test_signal_before_duration_is_error_even_if_observed_after_deadline(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            process = FakeProcess(exit_on_signal=True, descriptor=97)
+            clock = [0.0]
+            installed_handlers = {}
+
+            def fake_signal(signum, handler):
+                previous = installed_handlers.get(signum, capture.signal.SIG_DFL)
+                installed_handlers[signum] = handler
+                return previous
+
+            def request_stop(_timeout):
+                clock[0] = 99.5
+                installed_handlers[capture.signal.SIGTERM](
+                    capture.signal.SIGTERM, None
+                )
+                clock[0] = 100.5
+
+            selector = FakeSelector(
+                process.stdout.fileno(),
+                [False],
+                on_select=request_stop,
+            )
+            baseline = interface_state_with_counters(0, 0)
+            recorder = capture.Recorder(
+                run_dir,
+                frozenset({0x101}),
+                rotation_seconds=600,
+                duration_seconds=100,
+                policy=capture.DiskPolicy(300, 200),
+                popen=lambda *_args, **_kwargs: process,
+                disk_free=lambda _path: 1000,
+                safety_check=lambda: baseline,
+                mount_check=lambda: None,
+            )
+            RecordingChunk.writes = []
+            with mock.patch.object(capture, "Chunk", RecordingChunk), mock.patch.object(
+                capture.selectors, "DefaultSelector", return_value=selector
+            ), mock.patch.object(capture.os, "set_blocking"), mock.patch.object(
+                capture.os, "read", return_value=b""
+            ), mock.patch.object(
+                capture.signal, "signal", side_effect=fake_signal
+            ), mock.patch.object(
+                capture.time, "monotonic", side_effect=lambda: clock[0]
+            ):
+                with self.assertRaisesRegex(
+                    capture.CaptureError, "interrupted by signal"
+                ):
+                    recorder.run()
+
+            records = [
+                json.loads(line)
+                for line in (run_dir / "manifest.jsonl").read_text().splitlines()
+            ]
+            capture_end = next(row for row in records if row["type"] == "capture_end")
+            checkpoint = json.loads((run_dir / "checkpoint.json").read_text())
+            self.assertEqual(capture_end["reason"], "signal")
+            self.assertEqual(capture_end["signal_number"], capture.signal.SIGTERM)
+            self.assertEqual(capture_end["signal_elapsed_seconds"], 99.5)
+            self.assertFalse(capture_end["success"])
+            self.assertFalse(capture_end["duration_complete"])
+            self.assertGreater(capture_end["elapsed_seconds"], 100)
+            self.assertEqual(checkpoint["status"], "error")
+            self.assertFalse(checkpoint["success"])
 
     def test_priority_only_degradation_marks_full_stream_incomplete(self):
         with tempfile.TemporaryDirectory() as temporary:

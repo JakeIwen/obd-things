@@ -146,7 +146,7 @@ Both hold shared observer locks, so they may run together while every participat
 transmitter or interface reconfiguration remains excluded. They also refuse to compete with
 `tpms-logger` or `tpms-drivesniff`; neither tool stops or restarts a service.
 
-The first live step is the tracked five-signal cluster shakedown:
+The tracked five-signal cluster shakedown was completed on 2026-07-24:
 
 ```bash
 python3 tools/alfaobd_singleton_campaign.py plan \
@@ -173,16 +173,19 @@ sudo sysctl -w net.core.rmem_max=4194304
 ./bringup.sh
 ```
 
-For a simultaneous ten-minute shakedown, choose one safe timestamped identifier (for example
+For a simultaneous shakedown, choose one safe timestamped identifier (for example
 `cluster-shakedown-20260724-120000`), replace `RUN_ID` with that exact value in both panes, and
-start the recorder pane first:
+start the recorder pane first. Use at least 20 minutes: the Android 7 tablet's repeated guarded UI
+dumps made the seven-segment run take about 15 minutes 40 seconds even though the actual monitor
+dwell was only 12 seconds per segment. Run both commands in detached `tmux` sessions for live work;
+an SSH/tool-session lifetime must not determine capture lifetime.
 
 ```bash
 python3 tools/passive_drive_capture.py \
   --out-root /mnt/EXFAT512/obd-things/tmp/captures/ccan/drive-correlation \
   --require-mount /mnt/EXFAT512 \
   --campaign "RUN_ID" \
-  --duration-seconds 600 \
+  --duration-seconds 1200 \
   --soft-free-gib 30 --hard-free-gib 25 \
   --execute --confirm-passive \
   --conditions "parked; ignition ON; engine OFF; PCAN C-CAN 6/14; OBDLink MX+ parallel"
@@ -201,9 +204,12 @@ python3 tools/alfaobd_singleton_campaign.py run \
   --conditions "parked; ignition ON; engine OFF; cluster System-status page"
 ```
 
-The supervisor requires both Debug and profile-Info growth during every segment, while only the
-profile Info file must become stable after the stop tap (the connected app can continue writing
-non-parameter traffic to Debug). The play triangle must be present before start, the white
+The supervisor requires at least one configured activity witness to grow during the early
+post-start liveness check and requires **both** Debug and profile-Info growth by the end of every
+segment. The distinction matters on this tablet: Debug grew within two seconds, while the Info
+writer flushed later in 8 KiB increments. Only the profile Info file must become stable after the
+stop tap (the connected app can continue writing non-parameter traffic to Debug). The play
+triangle must be present before start, the white
 stop-hand while running, and the play triangle again after stop. If a tap, crash, modal, UI
 version, log-growth check, tablet-space check, or state transition is ambiguous, it sends no
 guessed compensating tap and leaves `manual_reconcile: true` in `state.json`. It also rechecks
@@ -218,7 +224,8 @@ Keep the 30/25 GiB soft/hard floors so ordinary use retains at least 25 GiB, and
 is actually mounted writable; the tool
 requires the named mount and rechecks its device identity so a missing external disk cannot
 silently redirect logs onto the Pi's root filesystem. It enables SocketCAN drop accounting and
-stops rather than silently accepting a reported drop. A socket/driver drop, unexpected `candump`
+stops rather than silently accepting a reported drop. A socket/driver drop, pre-duration process
+signal, unexpected `candump`
 exit, forced child termination, compressor/verification failure, mount change, stalled chunk
 finalization, or pre-duration hard-floor stop makes the command fail and the final manifest says
 `success: false`. A deliberate soft-floor transition can continue with the bounded priority
@@ -238,9 +245,36 @@ python3 tools/passive_drive_capture.py \
 ```
 
 This first supervisor intentionally supports one complete, visible parameter dialog at a time.
-It is sufficient for the eight-row cluster page and the initial singleton proof. Scrollable
-hundreds-item profiles and automatic vehicle/module navigation remain out of scope until the
-small shakedown validates the Android-7 UI and artifact behavior.
+It is sufficient for the eight-row cluster page and the initial singleton proof. The shakedown
+validated that bounded surface; scrollable hundreds-item profiles and automatic vehicle/module
+navigation remain unsupported and require a separate guarded extension.
+
+`alfaobd_singleton_join.py` is the strictly offline verifier for a completed singleton campaign.
+It validates campaign state and artifact hashes, requires successful zero-drop passive-recorder
+coverage across every segment, merges explicitly hash-pinned overlapping recorder runs, and refuses
+to overwrite a prior report. On this tablet and campaign, AlfaOBD's Android writers flushed Debug
+and Info in 8 KiB blocks, so sampled file sizes are activity/provenance witnesses rather than
+logical segment boundaries. The joiner instead verifies whole-envelope Info label-run order and
+independent Debug send/receive streams, then resolves each singleton from its host-timed passive-wire
+interval. Every wire segment must contain one distinct `22 DID` request payload, repeated with
+strictly alternating exact-positive `62` responses and no competing non-TesterPresent traffic;
+repeated anchors must resolve identically.
+
+For the completed run, `capture-set.json` binds the two overlapping recorder directories and their
+`run.json`, checkpoint, and `manifest.jsonl` hashes:
+
+```bash
+python3 tools/alfaobd_singleton_join.py \
+  /mnt/EXFAT512/obd-things/tmp/ecu_mapping/alfaobd-drive/cluster-shakedown-20260724-005100 \
+  --capture-set /mnt/EXFAT512/obd-things/tmp/ecu_mapping/alfaobd-drive/cluster-shakedown-20260724-005100/capture-set.json \
+  --output /mnt/EXFAT512/obd-things/tmp/sweeps/cluster-shakedown-20260724-005100-singleton-join.json
+```
+
+The output remains `candidate_only`: exact scheduled Info label-run order plus independent
+Debug/wire payload corroboration establishes a strong label-to-DID association but cannot by itself
+prove a non-observed scale or enum. The completed schema-2 report resolved all seven scheduled
+segments, passed both repeated-anchor checks, and has SHA-256
+`8f7e198ea2a9fedf55a64b4d1c44e970eadb48d69136b3a2d11acb058c21f1e1`.
 
 `reassemble_commands.py <decoded.txt> <out.txt> [atsh]` — rebuilds multi-frame COMMANDS.
 AlfaOBD sends long requests as MANUAL ISO-TP frames: First Frame `1L LL <6 data>` + a trailing
@@ -260,7 +294,8 @@ model descriptor. Raw logs under `tmp/` (gitignored) keep the full VIN.
 - **`tmp/ecu_mapping/`** (gitignored): `raw/` = copied `.bin`/`.log`; decoded `*.decoded.txt`.
   Raw CAN/log data is never git-tracked.
 - **`findings/`** (tracked): *extrapolations* only — the derived maps.
-  - `promaster_2022/module_did_map.txt` — 2022 ProMaster, per-module DID/service inventory (ground truth)
+  - `promaster_2022/module_did_map.txt` — historical 2022 trace inventory; use the dated live
+    findings for current canonical module evidence
   - `promaster_2015_diesel/module_did_map.txt` — 2015 reference van (same family; candidate cross-ref)
   - `promaster_2022/command_log.txt` — reassembled + interpreted command sequences (2022 ProMaster)
 
@@ -319,6 +354,13 @@ changes map BCM `0130/0152` and `0132/0150` groups plus passive C-CAN candidates
 `0x4B1` and brake frames `0x1FA`, `0x0FA`, and `0x10F`. It also documents that the Gauges CSV did
 not grow and the ZF `.dat` update merely duplicated cached series, so those files are not fresh
 labeled evidence.
+The guarded [`cluster singleton correlation`](findings/promaster_2022/2026-07-24_cluster_singleton_correlation.md)
+then independently discriminates cluster `1000/1002/0107/1004/1005` as the Engine-speed,
+Vehicle-speed, Actual-Gear, Battery-voltage, and Outside-temperature associations. Repeated Engine
+and Battery anchors agree, and Battery raw values `0x76-0x79` support AlfaOBD's `raw x 0.1 V`
+rendering. RPM/speed scales,
+non-P gear values, the temperature formula, and standalone session requirements remain bounded
+follow-ups.
 The [`2026-07-19 passive drive analysis`](findings/promaster_2022/2026-07-19_ccan_drive_signal_analysis.md)
 corrects CAN ID `0x101` from the old odometer hypothesis to a packed instantaneous-speed field,
 corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one known-speed reference.
@@ -374,16 +416,14 @@ corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one
    right-knob counterclockwise and the unresolved OEM-versus-installed knob-press discrepancy. The
    selected Climate profile failed live variant verification, so its gauge labels/scales are invalid
    here. Climate result-only RID `0201` remains an offline identification lead only; do not start/stop it.
-5. **C-CAN broad AlfaOBD observation completed:** do not repeat the six-profile status/monitor pass.
-   The next capture is the guarded five-signal cluster singleton shakedown above, paired with passive
-   PCAN. If it passes, the immediate offline task is an offset-aware singleton joiner: validate the
-   completed campaign/manifests, slice each Info/Debug byte interval, discard TesterPresent, require
-   repeated anchors to select the same request/DID, and corroborate the request/response sequence
-   against the passive 11-/29-bit wire capture. The timestamped Gauges joiner cannot substitute for
-   this because Status Info blocks have no per-cycle timestamps. After that proof, use the drive
-   recorder for the known-speed scale and broader driving variation, then expand only the
-   already-validated Status workflow. Also use passenger-door plus parking-brake discriminators to
-   refine the passive and BCM candidates. Alfa's shifter `Drive` rendering in Park and TCM `Brake
-   switch` watcher are explicitly invalid here.
+5. **C-CAN cluster singleton proof completed:** do not repeat the six-profile broad pass or this
+   parked five-signal shakedown. The buffered-envelope join discriminates the five cluster DIDs and
+   repeats both anchors without a wire mismatch. Before calling the reader Alfa-independent, run one
+   bounded parked default-versus-session-03 comparison; this capture inherited Alfa's held session
+   and did not observe entry. Then pair the drive recorder with AlfaOBD or the validated standalone
+   poller for nonzero RPM/speed scaling and ordinary gear transitions; the passive recorder alone
+   does not generate DID traffic. Expand only the validated singleton Status workflow. Also use
+   passenger-door plus parking-brake discriminators to refine the passive and BCM candidates. Alfa's
+   shifter `Drive` rendering in Park and TCM `Brake switch` watcher remain explicitly invalid.
 6. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps
    (`../../docs/bus-map.md`, `../../lib/modules.py`, project DID maps) per the maintenance rule.

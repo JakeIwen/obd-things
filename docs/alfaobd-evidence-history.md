@@ -185,9 +185,10 @@ not hardware identity.
 evidence.** The C-CAN parameter selections were made through the Status tab's `Monitor parameters`
 surface, not the Plots tab. Debug Data grew normally and the profile `*_Info.log` files accumulated
 repeated human-readable label/value blocks, but `Gauges_Data.csv` did not grow. The Info blocks carry
-no per-cycle timestamp or DID number, so they need bounded byte offsets plus singleton selection or
-raw request-order evidence; the unchanged Gauges CSV cannot be passed to the timestamp joiner. Do not
-interpret an unchanged Gauges file as proof that the Status monitor produced no labeled evidence.
+no per-cycle timestamp or DID number, so they need a bounded whole-campaign byte envelope plus
+singleton selection or raw request-order evidence; sampled per-segment offsets are not record
+boundaries. The unchanged Gauges CSV cannot be passed to the timestamp joiner. Do not interpret an
+unchanged Gauges file as proof that the Status monitor produced no labeled evidence.
 
 Separately, `ZF9HP.dat` doubled in size only because every one of its 16 baseline series was
 concatenated with an exact copy of itself; all 12 `TIGERSHARK_CUSW.dat` series were unchanged. These
@@ -201,6 +202,31 @@ wrong profile, routing, framing, session, missing hardware, or a sleeping ECU.
 
 Source: [C-CAN AlfaOBD live correlation](../projects/ecu_mapping/findings/promaster_2022/2026-07-22_ccan_alfaobd_live_correlation.md).
 
+### 2026-07-24 — Android log buffering during singleton monitoring
+
+**Artifact/recording limitation — sampled file sizes are not logical record boundaries.** A
+seven-segment guarded cluster campaign sampled the Debug and profile-Info sizes immediately before
+and after each one-label monitor run. Both files grew during every accepted segment, but the Android
+writers flushed buffered blocks: the Info file advanced in exact 8,192-byte increments and Debug
+advanced in larger blocks. A literal per-segment byte slice therefore contained a shifted mixture of
+logical monitor runs. The first slice lost part of its current Debug loop, while the campaign's outer
+Info range included an earlier tail at the start and omitted an unflushed tail at the end.
+
+This does not invalidate file-size checks as liveness or pulled-artifact provenance. A no-growth
+window is only a short-window stability witness when the UI also verifies that monitoring stopped;
+buffering alone can hide ongoing writes. The result invalidates the stronger assumption that a
+`stat` result timestamps the records before it. The safe singleton join uses sampled sizes only for
+a whole-campaign envelope, verifies the Info envelope's contiguous label-run order, and resolves
+each request from the independently host-timed passive CAN interval. It does not require Info/Debug
+sample counts to match at the two outer boundaries. Internal runs can provide stronger ordinal
+evidence when their counts do match.
+
+The same campaign also reconfirmed that Status monitoring need not update `Gauges_Data.csv`: Debug
+and `MARELLI_DASH_EP_Info.log` grew while the Gauges file remained fixed. This is an artifact-path
+distinction, not evidence that monitoring stopped.
+
+Source: [cluster singleton correlation](../projects/ecu_mapping/findings/promaster_2022/2026-07-24_cluster_singleton_correlation.md).
+
 ## Current trust model
 
 | AlfaOBD surface | What it can establish | What it cannot establish alone |
@@ -209,7 +235,7 @@ Source: [C-CAN AlfaOBD live correlation](../projects/ecu_mapping/findings/promas
 | Live `F190` / `F1A5` and identity DIDs | Vehicle/source scope and strong exact-subtype evidence | That every selected-profile definition matches that subtype |
 | Selected menu/runtime name | A useful route and definition-family candidate | Installed manufacturer, exact ECU subtype, or exact vehicle model year |
 | Status/Plots rendered values | Candidate vocabulary and an efficient controlled-correlation surface | Ground truth when raw bytes, known state, or exact subtype contradict it |
-| Status `Monitor parameters` / `*_Info.log` | Repeated labeled values and field groups when the Info file grows | Per-cycle timestamps, DID numbers, or a one-to-one join without bounded selection/Debug evidence |
+| Status `Monitor parameters` / `*_Info.log` | Repeated labeled values and field groups when the Info file grows; logical label-run order in a bounded campaign envelope | Per-cycle timestamps, DID numbers, or logical record boundaries at sampled file sizes |
 | Gauges Data CSV | Rendered labels and sample times when it actually grows | DID numbers; a label-to-DID join without synchronized Debug Data |
 | `Data/*.dat` | Opaque cache-series change detection | Freshness, timestamps, DID identity, or label identity |
 | APK model/catalog rows | High-yield address, profile, field-layout, and routine candidates | Installed equipment or verified human labels/scales |
@@ -230,8 +256,9 @@ Source: [C-CAN AlfaOBD live correlation](../projects/ecu_mapping/findings/promas
 6. Never infer an actuation payload from menu order, neighboring labels, or timing alone. Capture one
    authorized action at a time and independently verify its effect before considering replay.
 7. Baseline every AlfaOBD output artifact before a campaign. Track Debug, Gauges, and profile Info
-   files independently; confirm which grew, and verify that `.dat` content is newly appended rather
-   than unchanged, truncated, or mechanically repeated.
+   files independently; confirm which grew, but treat sampled file sizes as flush/liveness witnesses
+   rather than record timestamps. Verify that `.dat` content is newly appended rather than
+   unchanged, truncated, or mechanically repeated.
 8. Treat a timeout as conditional evidence. Recheck power, routing, bitrate, session, addressing, and
    framing before calling a module absent or a profile incompatible.
 
