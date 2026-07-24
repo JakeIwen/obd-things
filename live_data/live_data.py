@@ -2,8 +2,10 @@
 
 Per-module scripts (e.g. radar_acc.py) define a list of Metric(...) and call run(). This file is
 generic - it knows nothing about any particular ECU. Direct mode is active diagnostic traffic,
-dry-run by default, and bounded by explicit time/rate/request limits. It enters an extended
-session and sends TesterPresent plus ReadDataByIdentifier requests only after parked safety gates.
+dry-run by default, and bounded by explicit time/rate/request limits. The historical/default policy
+enters extended session 03 and sends TesterPresent; a wrapper whose DIDs are independently verified
+without a session change may explicitly select ``session=None`` and send only
+ReadDataByIdentifier requests. Both policies retain the parked safety gates.
 """
 import argparse
 import math
@@ -19,7 +21,8 @@ from lib import canbus, diagnostic_safety, uds
 from lib.uds import s16, s32, u8        # re-export so metric tables can `from ... import s16,...`
 from tools.ecu_discover import preflight
 
-# A displayed row: which DID to read, friendly name, fn(data)->number, scale, unit string.
+# A displayed row: which DID to read, friendly name, fn(data)->number (or None for raw-only),
+# scale, unit string.
 # unit beginning with "deg" gets the spec-window colour cue; others (V, C, ...) are neutral.
 Metric = namedtuple("Metric", "did name fn scale unit")
 
@@ -55,15 +58,29 @@ class LinkError(RuntimeError):
 
 class Link:
     """Own one bounded socket/session without reconfiguring or re-arming the CAN interface."""
-    def __init__(self, module, request_rate=5.0, max_requests=1000, timeout=0.75):
+    def __init__(
+        self,
+        module,
+        request_rate=5.0,
+        max_requests=1000,
+        timeout=0.75,
+        session=0x03,
+    ):
+        if session is not None and (
+            not isinstance(session, int)
+            or isinstance(session, bool)
+            or not 0x01 <= session <= 0x7F
+        ):
+            raise ValueError("session must be None or an unsuppressed byte from 01 through 7F")
         self.m = module
         self.sock = None
         self.connected = False
-        self.last_tp = 0.0
+        self.last_tp = None
         self.last_send = None
         self.request_rate = request_rate
         self.max_requests = max_requests
         self.timeout = timeout
+        self.session = session
         self.request_attempts = 0
 
     def _request(self, payload, timeout=None):
@@ -92,14 +109,22 @@ class Link:
             return True
         try:
             self.sock = uds.open_module_socket(self.m, timeout=self.timeout)
-            response, _ = self._request(bytes.fromhex("10 03"), timeout=max(1.0, self.timeout))
-            if response is None or bytes(response)[:2] != bytes.fromhex("50 03"):
-                detail = uds.hx(response) if response else "timeout"
-                raise LinkError(f"extended session lacked exact 50 03 echo ({detail})")
+            if self.session is not None:
+                response, _ = self._request(
+                    bytes((0x10, self.session)),
+                    timeout=max(1.0, self.timeout),
+                )
+                expected = bytes((0x50, self.session))
+                if response is None or bytes(response)[:2] != expected:
+                    detail = uds.hx(response) if response else "timeout"
+                    raise LinkError(
+                        f"session {self.session:02X} lacked exact "
+                        f"50 {self.session:02X} echo ({detail})"
+                    )
+                self.last_tp = time.monotonic()
         except Exception:
             self.drop()
             raise
-        self.last_tp = time.monotonic()
         return True
 
     def drop(self):
@@ -117,7 +142,10 @@ class Link:
         self.ensure()
         hi, lo = (did >> 8) & 0xFF, did & 0xFF
         try:
-            if time.monotonic() - self.last_tp >= TESTER_PRESENT_INTERVAL_S:
+            if (
+                self.session is not None
+                and time.monotonic() - self.last_tp >= TESTER_PRESENT_INTERVAL_S
+            ):
                 response, _ = self._request(bytes.fromhex("3E 00"), timeout=min(0.5, self.timeout))
                 if response is None or bytes(response)[:2] != bytes.fromhex("7E 00"):
                     detail = uds.hx(response) if response else "timeout"
@@ -167,6 +195,9 @@ def render(link, metrics, title, spec_deg, interval, tick):
         if data is None:
             cell = f"{DIM}{'---':>{W_VAL}}{RST}"
             rawhex = f"{DIM}(no response){RST}"
+        elif mtr.fn is None:
+            cell = f"{CYA}{'raw':>{W_VAL}}{RST}"
+            rawhex = uds.hx(data)[:raw_room]
         else:
             try:
                 cell = reading_cell(mtr.fn(data) * mtr.scale, mtr.unit, spec_deg)
@@ -176,15 +207,18 @@ def render(link, metrics, title, spec_deg, interval, tick):
         lines.append(f"{mtr.did:0{W_DID}X}  {mtr.name:<{W_NAME}} {cell} {mtr.unit:<{W_UNIT}} {rawhex}")
 
     lines.append("")
-    lines.append(f"{DIM}spec +/-{spec_deg:.1f} deg  {GRN}green{RST}{DIM}=in spec "
-                 f"{YEL}yellow{RST}{DIM}=marginal {RED}red{RST}{DIM}=out of spec{RST}")
-    lines.append(f"{DIM}angle units/labels inferred - see findings/. Ctrl-C quits.{RST}")
+    if any(metric.unit.startswith("deg") for metric in metrics):
+        lines.append(f"{DIM}spec +/-{spec_deg:.1f} deg  {GRN}green{RST}{DIM}=in spec "
+                     f"{YEL}yellow{RST}{DIM}=marginal {RED}red{RST}{DIM}=out of spec{RST}")
+        lines.append(f"{DIM}angle units/labels inferred - see findings/. Ctrl-C quits.{RST}")
+    else:
+        lines.append(f"{DIM}labels/scales are target-specific; see findings/. Ctrl-C quits.{RST}")
 
     sys.stdout.write(HOME + "".join(ln + CLR_EOL + "\r\n" for ln in lines) + "\033[J")
     sys.stdout.flush()
 
 
-def _run_parser():
+def _run_parser(default_session):
     p = argparse.ArgumentParser(
         description="Bounded direct UDS live-data view (dry-run by default)."
     )
@@ -198,7 +232,15 @@ def _run_parser():
     p.add_argument("--rate", type=float, default=5.0, help="maximum total UDS requests/s")
     p.add_argument("--max-requests", type=int, default=1000)
     p.add_argument("--timeout", type=float, default=0.75)
-    p.add_argument("--session", default="03", choices=("03",), help="fixed reviewed session")
+    p.add_argument(
+        "--session",
+        default=default_session,
+        choices=("03",),
+        help=(
+            "explicit reviewed session; wrappers with verified default-compatible DIDs may "
+            "default to no session change"
+        ),
+    )
     p.add_argument("--execute", action="store_true")
     p.add_argument("--confirm-parked", action="store_true")
     p.add_argument("--confirm-engine-off", action="store_true")
@@ -209,9 +251,21 @@ def _run_parser():
     return p
 
 
-def run(module, metrics, title=None, spec_deg=1.0, refresh_hz=5.0, argv=None):
+def run(
+    module,
+    metrics,
+    title=None,
+    spec_deg=1.0,
+    refresh_hz=5.0,
+    argv=None,
+    session=0x03,
+):
     """Plan or drive a bounded live view; direct CAN access is never implicit."""
-    args = _run_parser().parse_args(sys.argv[1:] if argv is None else argv)
+    if session not in (None, 0x03):
+        raise ValueError("live-data wrappers may currently select only session 03 or no session")
+    default_session = None if session is None else f"{session:02X}"
+    args = _run_parser(default_session).parse_args(sys.argv[1:] if argv is None else argv)
+    selected_session = int(args.session, 16) if args.session is not None else None
     interval = args.refresh_seconds if args.refresh_seconds is not None else 1.0 / refresh_hz
     if not math.isfinite(interval) or interval <= 0:
         raise SystemExit("refresh_seconds must be a positive finite number")
@@ -229,8 +283,14 @@ def run(module, metrics, title=None, spec_deg=1.0, refresh_hz=5.0, argv=None):
     title = title or module.name
     unique_dids = tuple(dict.fromkeys(metric.did for metric in metrics))
     print(f"ACTIVE LIVE-DATA PLAN: {module.key} ({module.name})")
+    session_plan = (
+        f"10 {selected_session:02X} plus bounded 3E 00"
+        if selected_session is not None
+        else "no requested session change; no 10 or 3E"
+    )
     print(
-        f"session=10 03; DIDs={' '.join(f'{did:04X}' for did in unique_dids) or '(none)'}; "
+        f"session={session_plan}; "
+        f"DIDs={' '.join(f'{did:04X}' for did in unique_dids) or '(none)'}; "
         f"duration<={args.seconds:g}s; rate<={args.rate:g}/s; requests<={args.max_requests}"
     )
     if not args.execute:
@@ -239,14 +299,18 @@ def run(module, metrics, title=None, spec_deg=1.0, refresh_hz=5.0, argv=None):
     if (
         not args.confirm_parked
         or not args.confirm_engine_off
-        or not args.confirm_session_change
-        or not args.confirm_no_active_routine
         or not args.pair
         or not args.conditions
     ):
         raise SystemExit(
-            "--execute requires --confirm-parked, --confirm-engine-off, "
-            "--confirm-session-change, --confirm-no-active-routine, --pair, and --conditions"
+            "--execute requires --confirm-parked, --confirm-engine-off, --pair, and --conditions"
+        )
+    if selected_session is not None and (
+        not args.confirm_session_change or not args.confirm_no_active_routine
+    ):
+        raise SystemExit(
+            "an explicit session requires --confirm-session-change and "
+            "--confirm-no-active-routine with --execute"
         )
 
     errors = preflight(module.channel, module.bitrate)
@@ -269,6 +333,7 @@ def run(module, metrics, title=None, spec_deg=1.0, refresh_hz=5.0, argv=None):
                 request_rate=args.rate,
                 max_requests=args.max_requests,
                 timeout=args.timeout,
+                session=selected_session,
             )
             tick = 0
             deadline = time.monotonic() + args.seconds

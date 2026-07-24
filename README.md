@@ -167,11 +167,30 @@ listen-only mode. Consequently, explicitly re-run `./bringup.sh --tx` before eac
 | `routine_scan.py` | result-only `31 03` | common live gates; cannot start/stop a routine; expanded ranges and explicit sessions have separate confirmations |
 | `signal_correlate.py capture` | bounded capture plan | common live gates plus `--confirm-session-change --confirm-no-active-routine`; fixed extended session |
 | `uds_send.py` | classify and print one exact physical request | reads use common live gates; session or mutation payloads add the exact confirmations printed by the plan |
-| module wrapper around `live_data.run()` | bounded direct-view plan | common live gates plus engine-off/session/no-active-routine confirmations; parked use only |
+| module wrapper around `live_data.run()` | bounded direct-view plan | common live gates plus engine-off; explicit-session wrappers also require session/no-active-routine confirmations. `cluster_live.py` defaults to its separately verified session-unchanged, `22`-only policy; parked use only |
 
 `live_data/live_data.py` is a library, not a standalone command. Create a thin project wrapper that
 defines only its module key and `Metric` table and calls `run()`; do not copy radar-specific `--follow`
-imports into an unrelated module.
+imports into an unrelated module. Its historical default remains explicit session `03` with
+bounded TesterPresent. A wrapper may opt out only after direct evidence proves its DIDs are
+compatible with the session-unchanged policy.
+
+The cluster wrapper is that first verified exception. Its dry run opens nothing; the default live
+invocation is a bounded parked viewer that sends only the five physical `22` reads and fails rather
+than requesting a session change or re-arming after a link error. Those reads can refresh the ECU's
+S3 timer and therefore may prolong an inherited non-default session even though the wrapper sends
+no `10` or `3E`. An explicit `--session 03` override remains available behind the normal additional
+session-change gates. RPM, speed, gear, and temperature remain raw/candidate rows; only battery uses
+the visibly qualified Alfa `raw x 0.1 V` rendering:
+
+```bash
+python3 projects/ecu_mapping/cluster_live.py
+
+./bringup.sh --tx
+python3 projects/ecu_mapping/cluster_live.py \
+  --execute --confirm-parked --confirm-engine-off --pair 6/14 \
+  --conditions "parked, ignition ON, engine OFF"
+```
 
 The named `promaster88-bcan` discovery profile is the only maintained direct-diagnostic target
 set for pins 3/11. Its eight 29-bit pairs come from AlfaOBD model-88 adapter-6 rows, while the

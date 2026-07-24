@@ -107,7 +107,11 @@ MODULES = {
         bus="c-can",
         note=(
             "Live-verified 2026-07-19 ignition-on; F187=68517084AD and F192=50019990002. "
-            "FCA's NHTSA Part 573 filing identifies 68517084AD as the Marelli IPC."
+            "FCA's NHTSA Part 573 filing identifies 68517084AD as the Marelli IPC. "
+            "Default-session reads independently verified 2026-07-24 for 0107, 1000, 1002, "
+            "1004, and 1005; explicit 10 01 and 10 03 returned identical DID payloads. A "
+            "session-unchanged bounded pass also succeeded, but its inherited session was not "
+            "positively identified."
         ),
     ),
     "telematics": Module(

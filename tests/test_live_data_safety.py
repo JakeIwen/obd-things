@@ -31,6 +31,17 @@ LIVE_ARGS = [
     "--seconds",
     "1",
 ]
+NO_SESSION_LIVE_ARGS = [
+    "--execute",
+    "--confirm-parked",
+    "--confirm-engine-off",
+    "--pair",
+    "6/14",
+    "--conditions",
+    "parked fixture",
+    "--seconds",
+    "1",
+]
 
 
 class LiveDataLinkTests(unittest.TestCase):
@@ -57,6 +68,41 @@ class LiveDataLinkTests(unittest.TestCase):
         self.assertEqual(request.call_args_list[1].args[1], bytes.fromhex("22 F1 87"))
         self.assertEqual(drain.call_count, 2)
         bring_up.assert_not_called()
+
+    def test_no_session_link_sends_only_did_reads_without_tester_present(self):
+        sock = mock.Mock()
+        responses = [
+            (bytes.fromhex("62 10 00 00 00"), "POSITIVE"),
+            (bytes.fromhex("62 10 00 00 04"), "POSITIVE"),
+        ]
+        with (
+            mock.patch.object(live_data.uds, "open_module_socket", return_value=sock),
+            mock.patch.object(live_data.uds, "drain") as drain,
+            mock.patch.object(live_data.uds, "request", side_effect=responses) as request,
+            mock.patch.object(live_data.time, "sleep"),
+            mock.patch.object(
+                live_data.time,
+                "monotonic",
+                side_effect=(0.0, 0.0, 10.0, 10.0, 10.0, 20.0, 20.0, 20.0),
+            ),
+        ):
+            link = live_data.Link(
+                MODULE,
+                request_rate=5.0,
+                max_requests=2,
+                session=None,
+            )
+            first = link.read_did(0x1000)
+            second = link.read_did(0x1000)
+
+        self.assertEqual(first, bytes.fromhex("00 00"))
+        self.assertEqual(second, bytes.fromhex("00 04"))
+        self.assertEqual(link.request_attempts, 2)
+        self.assertEqual(
+            [call.args[1] for call in request.call_args_list],
+            [bytes.fromhex("22 10 00"), bytes.fromhex("22 10 00")],
+        )
+        self.assertEqual(drain.call_count, 2)
 
     def test_bad_session_echo_closes_and_aborts_without_rearming(self):
         sock = mock.Mock()
@@ -116,6 +162,35 @@ class LiveDataCliSafetyTests(unittest.TestCase):
         self.assertIn("request cap 3/s", display)
         self.assertNotIn(" refresh ", display)
 
+    def test_raw_only_metric_renders_bytes_without_decoder(self):
+        link = SimpleNamespace(
+            m=MODULE,
+            connected=True,
+            request_rate=3.0,
+            read_did=mock.Mock(return_value=bytes.fromhex("12 AB")),
+        )
+        metric = live_data.Metric(0x1000, "candidate raw", None, 1.0, "raw")
+        with contextlib.redirect_stdout(io.StringIO()) as stdout:
+            live_data.render(link, [metric], "fixture", 1.0, 0.5, 1)
+
+        display = stdout.getvalue()
+        self.assertIn("raw", display)
+        self.assertIn("12 AB", display)
+        self.assertNotIn("spec +/-", display)
+
+    def test_no_session_plan_explicitly_promises_no_session_or_keepalive(self):
+        with (
+            mock.patch.object(live_data, "preflight") as preflight,
+            mock.patch.object(live_data.uds, "open_module_socket") as open_socket,
+            contextlib.redirect_stdout(io.StringIO()) as stdout,
+        ):
+            result = live_data.run(MODULE, METRICS, argv=[], session=None)
+
+        self.assertEqual(result, 0)
+        self.assertIn("no 10 or 3E", stdout.getvalue())
+        preflight.assert_not_called()
+        open_socket.assert_not_called()
+
     def test_direct_view_is_dry_run_by_default(self):
         with (
             mock.patch.object(live_data, "preflight") as preflight,
@@ -141,6 +216,51 @@ class LiveDataCliSafetyTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "tpms-logger.*drive capture"):
                 live_data.run(MODULE, METRICS, argv=LIVE_ARGS)
         lock.assert_not_called()
+
+    def test_no_session_execute_does_not_require_session_change_confirmations(self):
+        link = mock.Mock(request_attempts=0)
+        lock_handle = object()
+        with (
+            mock.patch.object(live_data, "preflight", return_value=[]),
+            mock.patch.object(
+                live_data.diagnostic_safety,
+                "acquire_channel_lock",
+                return_value=lock_handle,
+            ),
+            mock.patch.object(live_data.diagnostic_safety, "release_channel_lock") as release,
+            mock.patch.object(live_data, "Link", return_value=link) as link_type,
+            mock.patch.object(live_data, "render", side_effect=KeyboardInterrupt),
+            mock.patch.object(live_data.canbus, "restore_passive", return_value=True),
+            mock.patch.object(live_data.sys.stdout, "write"),
+            mock.patch.object(live_data.sys.stdout, "flush"),
+            mock.patch("builtins.print"),
+        ):
+            result = live_data.run(
+                MODULE,
+                METRICS,
+                argv=NO_SESSION_LIVE_ARGS,
+                session=None,
+            )
+
+        self.assertEqual(result, 130)
+        self.assertIsNone(link_type.call_args.kwargs["session"])
+        link.drop.assert_called_once_with()
+        release.assert_called_once_with(lock_handle)
+
+    def test_explicit_session_override_retains_session_change_gates(self):
+        with (
+            mock.patch.object(live_data, "preflight") as preflight,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            with self.assertRaisesRegex(SystemExit, "explicit session requires"):
+                live_data.run(
+                    MODULE,
+                    METRICS,
+                    argv=[*NO_SESSION_LIVE_ARGS, "--session", "03"],
+                    session=None,
+                )
+
+        preflight.assert_not_called()
 
     def test_keyboard_interrupt_closes_restores_and_releases(self):
         link = mock.Mock(request_attempts=0)

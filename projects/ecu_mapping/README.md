@@ -276,6 +276,26 @@ prove a non-observed scale or enum. The completed schema-2 report resolved all s
 segments, passed both repeated-anchor checks, and has SHA-256
 `8f7e198ea2a9fedf55a64b4d1c44e970eadb48d69136b3a2d11acb058c21f1e1`.
 
+The follow-up direct comparison proved the five mapped DIDs are compatible with both explicit
+default session `01` and extended session `03`; a session-unchanged pass also succeeded. The
+resulting parked viewer defaults to physical `22` reads and sends no DiagnosticSessionControl or
+TesterPresent. Repeated `22` traffic can refresh S3 and may therefore prolong an inherited session;
+the viewer does not claim that inherited state is default or that it forces an S3 timeout. An
+explicit `--session 03` override is available only behind the normal session-change confirmations.
+It is dry-run-first, bounded, lock-protected, and restores passive mode. It is not a drive logger:
+
+```bash
+python3 projects/ecu_mapping/cluster_live.py
+
+./bringup.sh --tx
+python3 projects/ecu_mapping/cluster_live.py \
+  --execute --confirm-parked --confirm-engine-off --pair 6/14 \
+  --conditions "parked, ignition ON, engine OFF"
+```
+
+Its RPM, speed, gear, and temperature rows remain raw/candidate displays. Battery alone uses the
+qualified Alfa `raw x 0.1 V` rendering; the raw bytes remain visible for every row.
+
 `reassemble_commands.py <decoded.txt> <out.txt> [atsh]` — rebuilds multi-frame COMMANDS.
 AlfaOBD sends long requests as MANUAL ISO-TP frames: First Frame `1L LL <6 data>` + a trailing
 ELM responses-hint digit (17 hex chars), ECU Flow Control `30 00 00`, Consecutive Frames
@@ -358,9 +378,12 @@ The guarded [`cluster singleton correlation`](findings/promaster_2022/2026-07-24
 then independently discriminates cluster `1000/1002/0107/1004/1005` as the Engine-speed,
 Vehicle-speed, Actual-Gear, Battery-voltage, and Outside-temperature associations. Repeated Engine
 and Battery anchors agree, and Battery raw values `0x76-0x79` support AlfaOBD's `raw x 0.1 V`
-rendering. RPM/speed scales,
-non-P gear values, the temperature formula, and standalone session requirements remain bounded
-follow-ups.
+rendering. An Alfa-closed direct comparison then returned byte-identical DID results after exact
+`10 01` and `10 03` positive echoes, establishing that default session suffices and extended
+session adds no access for this set. A separate session-unchanged pass also succeeded without `10`
+or `3E`, although its inherited session was not positively identified and the `22` reads may have
+refreshed its S3 timer. RPM/speed scales, non-P gear values, and the temperature formula remain
+bounded follow-ups.
 The [`2026-07-19 passive drive analysis`](findings/promaster_2022/2026-07-19_ccan_drive_signal_analysis.md)
 corrects CAN ID `0x101` from the old odometer hypothesis to a packed instantaneous-speed field,
 corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one known-speed reference.
@@ -416,14 +439,17 @@ corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one
    right-knob counterclockwise and the unresolved OEM-versus-installed knob-press discrepancy. The
    selected Climate profile failed live variant verification, so its gauge labels/scales are invalid
    here. Climate result-only RID `0201` remains an offline identification lead only; do not start/stop it.
-5. **C-CAN cluster singleton proof completed:** do not repeat the six-profile broad pass or this
-   parked five-signal shakedown. The buffered-envelope join discriminates the five cluster DIDs and
-   repeats both anchors without a wire mismatch. Before calling the reader Alfa-independent, run one
-   bounded parked default-versus-session-03 comparison; this capture inherited Alfa's held session
-   and did not observe entry. Then pair the drive recorder with AlfaOBD or the validated standalone
-   poller for nonzero RPM/speed scaling and ordinary gear transitions; the passive recorder alone
-   does not generate DID traffic. Expand only the validated singleton Status workflow. Also use
-   passenger-door plus parking-brake discriminators to refine the passive and BCM candidates. Alfa's
-   shifter `Drive` rendering in Park and TCM `Brake switch` watcher remain explicitly invalid.
+5. **C-CAN cluster singleton and session proofs completed:** do not repeat the six-profile broad pass,
+   parked five-signal shakedown, or default/session-03 comparison without a new question. The
+   buffered-envelope join discriminates the five cluster DIDs and repeats both anchors without a wire
+   mismatch. Direct PCAN reads then produced identical results after exact `10 01` and `10 03` echoes,
+   proving default compatibility without requiring extended session. The bounded standalone viewer
+   may leave the inherited session unchanged and fail closed rather than sending `10`/`3E`; do not
+   label that inherited state as positively identified default. Pair a purpose-built drive logger,
+   not the parked viewer, with the passive recorder for nonzero RPM/speed scaling and ordinary gear
+   transitions; the passive recorder alone does not generate DID traffic. Expand only the validated
+   singleton Status workflow. Also use passenger-door plus parking-brake discriminators to refine
+   the passive and BCM candidates. Alfa's shifter `Drive` rendering in Park and TCM `Brake switch`
+   watcher remain explicitly invalid.
 6. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps
    (`../../docs/bus-map.md`, `../../lib/modules.py`, project DID maps) per the maintenance rule.

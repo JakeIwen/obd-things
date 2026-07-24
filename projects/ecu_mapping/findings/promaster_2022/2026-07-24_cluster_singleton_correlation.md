@@ -28,8 +28,10 @@ physical `22` reads and `62` responses.
 
 AlfaOBD was already connected before the bounded campaign began. The capture therefore starts in an
 inherited Alfa-held diagnostic session and shows repeated `3E 00 -> 7E 00`, not the session-opening
-exchange. The earlier 2026-07-22 cluster connection used `10 03`, but this shakedown does not prove
-whether the five DIDs answer in default session or which standalone session recipe is required.
+exchange. The earlier 2026-07-22 cluster connection used `10 03`, so the singleton capture alone did
+not establish the standalone session recipe. The direct comparison later in this finding closes
+that gap: all five reads work after an explicit, positively acknowledged `10 01`, and their payloads
+are identical after `10 03`.
 
 ## Conditions and topology
 
@@ -94,12 +96,13 @@ log-writer flushes.
   scales.
 - Gear DID `0107` observed only `00 -> P`. Ordinary PRND transitions are still required before
   assigning the rest of the enum.
-- Temperature DID `1005` observed only `7A -> 21.00 °C`. That point is consistent with
+- Temperature DID `1005` now has two Alfa-rendered points across the July 22 ordinal trace and July
+  24 singleton run: `0x77 -> 19.50 °C` and `0x7A -> 21.00 °C`. They exactly follow
   `raw x 0.5 - 40 °C`. The installed APK catalog contains a one-byte `22 1005` IPC decoder
   candidate with that slope and offset, and its length/result match this capture. The catalog also
-  contains other IPC variants and its profile-to-row indirection remains unresolved, so one
-  installed-ECU raw/rendered point plus a candidate decoder is still not independent proof of the
-  formula.
+  contains other IPC variants and its profile-to-row indirection remains unresolved, so this
+  establishes AlfaOBD's observed rendering over two points, not independently ground-truthed
+  physical temperature.
 
 ## AlfaOBD buffered-artifact finding
 
@@ -136,10 +139,60 @@ callbacks and occasionally records an `R` callback just before its `S` line, so 
 compares independently reconstructed send and prompt-delimited receive streams rather than pairing
 adjacent text lines.
 
+## Standalone default-versus-extended-session follow-up
+
+With AlfaOBD closed and its Android process absent, the same cluster endpoint was queried directly
+through PCAN while parked, ignition on, and engine off. The C-CAN interface was 500 kbit/s,
+ERROR-ACTIVE, and error-free. Six checkpointed `did_sweep.py` runs covered `0107` and `1000-1005`
+in three states:
+
+1. after a diagnostic-idle interval, with no session or TesterPresent request;
+2. after exact `10 03 -> 50 03 00 32 01 F4`; and
+3. after exact `10 01 -> 50 01 00 32 01 F4`.
+
+The longer explicit-session runs also received exact `3E 00 -> 7E 00` keepalive echoes. Every run
+completed, received a response to every request attempt, and restored `can0` to verified
+listen-only mode. All seven DID results were byte-for-byte identical in all three states:
+
+| DID | response in idle/inherited state | response after `10 01` | response after `10 03` | interpretation |
+|---:|---|---|---|---|
+| `0107` | `62 01 07 00` | same | same | mapped Actual Gear candidate; `00 -> P` in Park |
+| `1000` | `62 10 00 00 00` | same | same | mapped Engine-speed candidate; zero while stopped |
+| `1001` | `62 10 01 64` | same | same | prior ordinal trace suggests Fuel level; not singleton-discriminated |
+| `1002` | `62 10 02 00` | same | same | mapped Vehicle-speed candidate; zero while stopped |
+| `1003` | `7F 22 31` | same | same | negative control; unavailable in both sessions |
+| `1004` | `62 10 04 73` | same | same | mapped Battery-voltage candidate; Alfa renders `11.5 V` |
+| `1005` | `62 10 05 75` | same | same | mapped Outside-temperature candidate; Alfa formula not independently proven here |
+
+This establishes default-session access rather than merely inferring it from an S3 timeout.
+Extended session `03` is accepted by this IPC, but it is neither required for these five mapped
+reads nor sufficient to expose control DID `1003`. The no-session runs prove the same physical
+reads also work when the reader leaves the inherited ECU session unchanged; those runs must not be
+misreported as a positively identified default session. A bounded standalone viewer can therefore
+use a fail-closed, session-unchanged policy—physical `22` requests only, with no gratuitous `10` or
+`3E` traffic—because both explicitly tested sessions are compatible. Repeated `22` requests may
+refresh S3 and prolong the inherited state even though they do not select a session, so
+“session-unchanged” must not be read as “forced to default.” The viewer should not silently enter
+session `03` if a future vehicle-state check fails.
+
+### Direct-comparison artifact integrity
+
+The raw checkpointed reports remain gitignored under `tmp/inventories/cluster/`. Each row below
+binds one complete summary to its append-only result stream:
+
+| state / DID range | summary SHA-256 | results JSONL SHA-256 |
+|---|---|---|
+| idle/inherited `0107` | `9b2d7f0d52a7f84391fead72156e51f9807fcd0a69f4dda1fc69d7bceccb81c0` | `e9347d94980edb10c14f0086ebbc43dc7ca442ddc779f978a102d8ef70035602` |
+| idle/inherited `1000-1005` | `594adaef9a570d1c2e8ece69199edbf725d7bf13ed52a3251fd4c95eb5b45af1` | `a279e01f051d81346f9ba3c9984589dff5d7d6ee7806ed41deb6f30761471d7d` |
+| explicit session `03`, `0107` | `aeeaa3dd060b14621ef70cb432a25508b06fb2a20f79fceb5a2d74cd8a3b47df` | `1416718ebe1b8d7d1d9d20e1e660304a9187637ec128748ac331001b4a149d4a` |
+| explicit session `03`, `1000-1005` | `fb71755d49774558a3a766ad49ee9039575e73750d315efb6edbef27a00446db` | `07a161eafd7fed3ff7b8e38cd878d78c7c70ad6b64d35798bf41e95366912124` |
+| explicit session `01`, `0107` | `c216b0c652dcb67c673ea255a3d29b7b04783be74771ca627a7cbd7f078af6f4` | `420cea3672b88ea563380ebbd5e6f7164e24ae7c7b61985d0af15b21e4466e6b` |
+| explicit session `01`, `1000-1005` | `91aa7919664d071e0c2f6ff8d9e507aae08a03590e1920dcb7534bc6546e46e1` | `abc330d686dcf978c55650418c6a7a0e22f447459c993eba071f9284d825af08` |
+
 ## What this buys
 
-The cluster endpoint `18DA60F1 -> 18DAF160` now has a small, exact read-only request set from which to
-build a standalone monitor:
+The cluster endpoint `18DA60F1 -> 18DAF160` now has a small, exact default-session request set from
+which to build an Alfa-independent monitor:
 
 - RPM candidate: `22 1000`
 - road-speed candidate: `22 1002`
@@ -147,12 +200,12 @@ build a standalone monitor:
 - battery-voltage candidate: `22 1004`, with Alfa rendering `raw x 0.1 V`
 - outside-temperature candidate: `22 1005`
 
-Do not yet present that monitor as Alfa-independent: first run a bounded parked
-default-versus-`10 03` comparison to establish the required session and keepalive recipe. Once that transport
-precondition is known, collect these exact DIDs during ordinary driving to establish nonzero
-RPM/speed scaling and normal gear transitions, while a stable ambient-temperature change can test
-the `1005` formula. The validated singleton workflow can then be expanded in bounded groups to the
-remaining cluster labels, retaining repeated anchors and continuous passive coverage.
+Default session is sufficient, and a session-unchanged bounded pass also succeeded without `10` or
+`3E`. Its repeated `22` reads may nevertheless have refreshed S3. The next evidence step is to
+collect these exact DIDs during ordinary driving to establish nonzero RPM/speed scaling and normal
+gear transitions, while a stable ambient-temperature change can test the `1005` formula. The
+validated singleton workflow can then be expanded in bounded groups to the remaining cluster
+labels, retaining repeated anchors and continuous passive coverage.
 
 Source context: [2026-07-22 C-CAN AlfaOBD live correlation](2026-07-22_ccan_alfaobd_live_correlation.md)
 and [installed APK catalog extraction](2026-07-21_alfaobd_apk_catalog.md).
