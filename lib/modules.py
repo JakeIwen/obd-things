@@ -181,6 +181,50 @@ MODULES = {
             "CAN-IHS menu/volume control panel below the radio/display, not the radio itself."
         ),
     ),
+    "abs_canch": Module(
+        key="abs_canch",
+        name="Antilock Brake System (ABS/ESC)",
+        txid=0x18DA28F1,
+        rxid=0x18DAF128,
+        bus="can-ch",
+        note=(
+            "Live-verified through the grey adapter on DLC pins 12/13 at 500 kbit/s "
+            "2026-07-25; AlfaOBD identity F1A5=0006501520 and F187=68516283AD."
+        ),
+    ),
+    "eps_canch": Module(
+        key="eps_canch",
+        name="Electric Power Steering (EPS, ZF/TRW)",
+        txid=0x18DA30F1,
+        rxid=0x18DAF130,
+        bus="can-ch",
+        note=(
+            "Live-verified through the grey adapter on DLC pins 12/13 at 500 kbit/s "
+            "2026-07-25; AlfaOBD identity F1A5=0002507919 and F187=68509191AD."
+        ),
+    ),
+    "half_canch": Module(
+        key="half_canch",
+        name="HALF driver-assistance / forward-camera module",
+        txid=0x18DA31F1,
+        rxid=0x18DAF131,
+        bus="can-ch",
+        note=(
+            "Live-verified through the grey adapter on DLC pins 12/13 at 500 kbit/s "
+            "2026-07-25; AlfaOBD identity F1A5=001E502920 and F187=68567254AA."
+        ),
+    ),
+    "orc_canch": Module(
+        key="orc_canch",
+        name="Occupant Restraint Controller (ORC / airbag)",
+        txid=0x18DAC0F1,
+        rxid=0x18DAF1C0,
+        bus="can-ch",
+        note=(
+            "Live-verified through the grey adapter on DLC pins 12/13 at 500 kbit/s "
+            "2026-07-25; AlfaOBD identity F1A5=001A507720 and F187=68518674AC."
+        ),
+    ),
     # e.g. add more modules here as the project expands:
     # Four B-CAN endpoints are registered above. Formerly suggested high 11-bit IDs on B-CAN /
     # CAN-IHS are periodic application broadcasts, not ISO-TP pair evidence. Register another

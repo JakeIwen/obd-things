@@ -80,6 +80,39 @@ class PassiveRestoreTests(unittest.TestCase):
         bring_up.assert_called_once_with("can9", 125000)
 
 
+class IdentifyBusTests(unittest.TestCase):
+    def test_controller_state_accepts_listen_only_option_group(self):
+        with mock.patch.object(canbus.subprocess, "run", return_value=ip_details()):
+            self.assertEqual(canbus.controller_state("can0"), "ERROR-ACTIVE")
+
+    def test_canch_broadcast_signature_wins_over_forwarded_ccan_ids(self):
+        ids = {
+            0x0DA, 0x0DC, 0x106, 0x10E, 0x117,
+            0x0EE,  # also present in the ordinary C-CAN signature
+        }
+        with mock.patch.object(canbus, "probe_ids", return_value=(ids, 0)):
+            self.assertEqual(canbus.identify_bus("can9"), "can-ch")
+
+    def test_one_canch_broadcast_id_is_not_enough_to_claim_grey(self):
+        with mock.patch.object(canbus, "probe_ids", return_value=({0x0DA, 0x0EE}, 0)):
+            self.assertEqual(canbus.identify_bus("can9"), "c-can")
+
+    def test_canch_physical_diagnostic_exchange_is_decisive(self):
+        with mock.patch.object(canbus, "probe_ids", return_value=({0x18DAF128}, 0)):
+            self.assertEqual(canbus.identify_bus("can9"), "can-ch")
+
+    def test_wake_returns_awake_canch_without_any_transmission(self):
+        with (
+            mock.patch.object(canbus, "detect_bus", return_value=("can-ch", 500000)),
+            mock.patch.object(canbus, "poke_wake") as poke,
+            mock.patch.object(canbus, "tx_wake_burst") as burst,
+        ):
+            self.assertEqual(canbus.wake("can9"), ("can-ch", True))
+
+        poke.assert_not_called()
+        burst.assert_not_called()
+
+
 class DetectBusCoordinationTests(unittest.TestCase):
     @staticmethod
     def _lock_patches(events):
@@ -154,6 +187,22 @@ class DetectBusCoordinationTests(unittest.TestCase):
             bring_up.call_args_list,
             [mock.call("can9", 500000), mock.call("can9", 125000)],
         )
+        restore.assert_not_called()
+        self.assertEqual(events, [("lock", "can9"), ("unlock", None)])
+
+    def test_detected_canch_stops_at_500k_without_wake_or_rate_switch(self):
+        events = []
+        acquire, release = self._lock_patches(events)
+        with (
+            acquire,
+            release,
+            mock.patch.object(canbus, "bring_up_passive", return_value=True) as bring_up,
+            mock.patch.object(canbus, "identify_bus", return_value="can-ch"),
+            mock.patch.object(canbus, "restore_passive") as restore,
+        ):
+            self.assertEqual(canbus.detect_bus("can9"), ("can-ch", 500000))
+
+        bring_up.assert_called_once_with("can9", 500000)
         restore.assert_not_called()
         self.assertEqual(events, [("lock", "can9"), ("unlock", None)])
 

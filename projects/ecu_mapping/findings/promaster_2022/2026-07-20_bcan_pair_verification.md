@@ -64,5 +64,7 @@ AlfaOBD diagnostics are visible on C-CAN and B-CAN exposes the resulting body-bu
 - **Current diagnostic path:** use the independently verified 29-bit C-CAN endpoints for module
   identity, DID, DTC, and result-only routine inventories. Keep B-CAN passive for signal/event
   mapping unless a real scan-tool request/response trace proves direct diagnostic addressing.
-- **Separate branch:** CAN CH on DLC pins 12/13 remains unverified and is outside the current
-  C-CAN/B-CAN priority.
+- **Separate branch (status at the time of this 2026-07-20 finding):** CAN CH on DLC pins 12/13
+  was unverified and outside the C-CAN/B-CAN priority. It was later live-verified at 500 kbit/s
+  through the grey adapter on 2026-07-25; see
+  [`2026-07-25_canch_live_verification.md`](2026-07-25_canch_live_verification.md).

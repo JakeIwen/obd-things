@@ -202,10 +202,25 @@ which to build an Alfa-independent monitor:
 
 Default session is sufficient, and a session-unchanged bounded pass also succeeded without `10` or
 `3E`. Its repeated `22` reads may nevertheless have refreshed S3. The next evidence step is to
-collect these exact DIDs during ordinary driving to establish nonzero RPM/speed scaling and normal
-gear transitions, while a stable ambient-temperature change can test the `1005` formula. The
-validated singleton workflow can then be expanded in bounded groups to the remaining cluster
-labels, retaining repeated anchors and continuous passive coverage.
+collect these exact DIDs during ordinary driving to establish nonzero RPM/speed ranges and normal
+gear transitions, while a stable ambient-temperature change can test the `1005` formula.
+
+`projects/ecu_mapping/cluster_drive_log.py` now implements that fixed-profile collection without
+reusing the parked viewer. It leaves the inherited session unchanged, sends only those five
+physical `22` requests at most five total attempts per second, and owns an integrated full-bus
+recorder because an armed transmitter cannot coexist with the separate listen-only recorder on
+one PCAN. Append-only DID attempts are count-cross-checked by echoed DID against
+kernel-timestamped cluster wire records; the retained payload/sequence fields permit a stricter
+offline join. Full CAN evidence is stored as independently validated ten-minute zstd chunks. This
+is a prepared collection path, not new vehicle evidence: it still needs a parked/idling
+real-hardware rotation shakedown before the long drive.
+
+The resulting correlation remains candidate-only for absolute scaling. Nonzero co-movement can
+establish association and relative behavior, but radar/GPS/tachometer or another controlled
+reference is still needed for absolute RPM/speed; observed gear states and temperature range bound
+only the states actually encountered. The validated singleton workflow can then be expanded in
+bounded groups to the remaining cluster labels, retaining repeated anchors and independent wire
+coverage.
 
 Source context: [2026-07-22 C-CAN AlfaOBD live correlation](2026-07-22_ccan_alfaobd_live_correlation.md)
 and [installed APK catalog extraction](2026-07-21_alfaobd_apk_catalog.md).

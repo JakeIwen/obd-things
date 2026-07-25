@@ -114,6 +114,36 @@ class WakeBurstSafetyTests(unittest.TestCase):
         ip_up.assert_not_called()
         release.assert_called_once_with(None)
 
+    def test_borrowed_lock_is_validated_but_not_acquired_or_released(self):
+        borrowed = object()
+        sock = mock.Mock()
+        with (
+            mock.patch.object(
+                canbus.diagnostic_safety, "validate_channel_lock"
+            ) as validate,
+            mock.patch.object(
+                canbus.diagnostic_safety, "acquire_channel_lock"
+            ) as acquire,
+            mock.patch.object(
+                canbus.diagnostic_safety, "release_channel_lock"
+            ) as release,
+            mock.patch.object(canbus, "ip_up", return_value=True),
+            mock.patch.object(canbus, "is_listen_only", return_value=False),
+            mock.patch.object(canbus.socket, "socket", return_value=sock),
+            mock.patch.object(canbus, "WAKE_N", 1),
+            mock.patch.object(canbus.time, "sleep"),
+            mock.patch.object(canbus, "restore_passive", return_value=True),
+        ):
+            self.assertTrue(
+                canbus.tx_wake_burst(
+                    "can9", 125000, lock_handle=borrowed
+                )
+            )
+
+        validate.assert_called_once_with(borrowed, "can9")
+        acquire.assert_not_called()
+        release.assert_not_called()
+
     def test_sigterm_during_burst_runs_close_restore_and_unlock_before_propagating(self):
         events = []
         sock = mock.Mock()
@@ -221,6 +251,41 @@ class AddressedWakeSafetyTests(unittest.TestCase):
 
         sock.close.assert_called_once_with()
         restore.assert_called_once_with("can9", 500000)
+
+    def test_borrowed_lock_is_validated_and_retained(self):
+        borrowed = object()
+        sock = mock.Mock()
+        with (
+            mock.patch.object(
+                canbus.diagnostic_safety, "validate_channel_lock"
+            ) as validate,
+            mock.patch.object(
+                canbus.diagnostic_safety, "acquire_channel_lock"
+            ) as acquire,
+            mock.patch.object(
+                canbus.diagnostic_safety, "release_channel_lock"
+            ) as release,
+            mock.patch.object(canbus, "ip_up", return_value=True),
+            mock.patch.object(canbus, "is_listen_only", return_value=False),
+            mock.patch.object(modules, "get", return_value=MODULE),
+            mock.patch.object(uds, "open_module_socket", return_value=sock),
+            mock.patch.object(uds, "drain"),
+            mock.patch.object(
+                uds,
+                "request",
+                return_value=(bytes.fromhex("62 F1 90 31"), "POSITIVE"),
+            ),
+            mock.patch.object(canbus, "restore_passive", return_value=True),
+        ):
+            self.assertTrue(
+                canbus.poke_wake(
+                    "can9", 500000, lock_handle=borrowed
+                )
+            )
+
+        validate.assert_called_once_with(borrowed, "can9")
+        acquire.assert_not_called()
+        release.assert_not_called()
 
 
 class WakeOrchestrationSafetyTests(unittest.TestCase):

@@ -469,6 +469,29 @@ def _label(text):
 
 
 class ProvenanceTests(unittest.TestCase):
+    def test_dump_ui_uses_one_compressed_adb_round_trip(self):
+        class Result:
+            returncode = 0
+            stdout = '<hierarchy rotation="0"></hierarchy>'
+            stderr = ""
+
+        class Runner:
+            def __init__(self):
+                self.commands = []
+
+            def run(self, command, **_kwargs):
+                self.commands.append(command)
+                return Result()
+
+        runner = Runner()
+        adb = campaign.AdbClient(runner, "fixture")
+        self.assertEqual(adb.dump_ui(), Result.stdout)
+        self.assertEqual(len(runner.commands), 1)
+        command = runner.commands[0]
+        self.assertEqual(command[-4:-1], ["exec-out", "sh", "-c"])
+        self.assertIn("uiautomator dump --compressed", command[-1])
+        self.assertIn("&& cat ", command[-1])
+
     def test_artifact_stat_does_not_confuse_missing_utility_with_missing_file(self):
         class Result:
             def __init__(self, returncode, stdout="", stderr=""):

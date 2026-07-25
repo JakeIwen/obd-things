@@ -49,6 +49,13 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from lib import diagnostic_safety
+from lib.alfaobd_adb import (
+    AlfaUiError,
+    UiPoller,
+    UiSnapshot as GeneralUiSnapshot,
+    UiState as GeneralUiState,
+    WaitOutcome as UiWaitOutcome,
+)
 from lib.modules import MODULES
 
 
@@ -84,6 +91,10 @@ GLOBAL_UI_LOCK = LOCK_DIR / "alfaobd-singleton.lock"
 MIN_PULL_TIMEOUT_SECONDS = 180.0
 MAX_PULL_TIMEOUT_SECONDS = 3600.0
 MIN_PULL_BYTES_PER_SECOND = 512 * 1024
+UI_POLL_INTERVAL_SECONDS = 0.75
+UI_DIALOG_TIMEOUT_SECONDS = 12.0
+UI_TOGGLE_TIMEOUT_SECONDS = 8.0
+UI_MONITOR_TRANSITION_TIMEOUT_SECONDS = 15.0
 
 
 class CampaignError(RuntimeError):
@@ -701,11 +712,11 @@ class AdbClient:
 
     def dump_ui(self) -> str:
         remote = f"/sdcard/window-obd-things-{os.getpid()}.xml"
-        self.runner.run(
-            self._base() + ["shell", "uiautomator", "dump", remote], timeout=20
+        script = (
+            f"uiautomator dump --compressed {remote} >/dev/null && cat {remote}"
         )
         result = self.runner.run(
-            self._base() + ["exec-out", "cat", remote], timeout=20
+            self._base() + ["exec-out", "sh", "-c", script], timeout=20
         )
         return result.stdout
 
@@ -1086,6 +1097,111 @@ def _tap_with_intent(
     writer.event("tap_returned", purpose=purpose)
 
 
+def _adaptive_ui_wait(
+    *,
+    adb: AdbClient,
+    writer: EventWriter,
+    artifact_dir: Path,
+    operation: str,
+    timeout_seconds: float,
+    predicate: Callable[[GeneralUiSnapshot], bool],
+) -> GeneralUiSnapshot:
+    """Wait on fresh UI dumps and preserve failure evidence.
+
+    Adapter and ISO-verification dialogs are terminal here because this
+    specialized monitor campaign is never authorized to dismiss either one.
+    """
+
+    poller = UiPoller(
+        adb,
+        interval_seconds=UI_POLL_INTERVAL_SECONDS,
+        failure_root=artifact_dir / "ui_wait_failures",
+        logger=lambda event, fields: writer.event(event, **fields),
+    )
+    try:
+        result = poller.wait_for_predicate(
+            operation=operation,
+            predicate=predicate,
+            timeout_seconds=timeout_seconds,
+            fail_on=(
+                GeneralUiState.FAILURE,
+                GeneralUiState.ADAPTER_PROMPT,
+                GeneralUiState.ISO_WARNING,
+            ),
+        )
+    except AlfaUiError as exc:
+        raise CampaignError(f"{operation} UI wait failed: {exc}") from exc
+    if result.outcome is not UiWaitOutcome.MATCHED:
+        raise CampaignError(
+            f"{operation} UI wait {result.outcome.value}; "
+            f"state={result.snapshot.primary.value}; "
+            f"evidence={result.evidence_prefix}"
+        )
+    return result.snapshot
+
+
+def _wait_for_monitor_visual_state(
+    *,
+    plan: CampaignPlan,
+    adb: AdbClient,
+    writer: EventWriter,
+    artifact_dir: Path,
+    operation: str,
+    expected_state: str,
+    expected_label: str,
+    timeout_seconds: float,
+    destination: Path,
+) -> tuple[str, list[UiNode]]:
+    last_screenshot: bytes | None = None
+
+    def matched(snapshot: GeneralUiSnapshot) -> bool:
+        nonlocal last_screenshot
+        try:
+            nodes = validate_monitor_page(
+                snapshot.xml,
+                expected_runtime=plan.expected_runtime,
+                expected_rotation=plan.expected_rotation,
+                expected_width=plan.expected_width,
+                expected_height=plan.expected_height,
+                expected_labels=(expected_label,),
+            )
+            button = _one_by_id(
+                nodes, f"{SAFE_ID_PREFIX}bStartmonitoring"
+            )
+            screenshot = adb.screenshot()
+            state = monitor_visual_state(
+                screenshot,
+                button,
+                expected_width=plan.expected_width,
+                expected_height=plan.expected_height,
+            )
+        except (CampaignError, AlfaUiError):
+            return False
+        last_screenshot = screenshot
+        return state == expected_state
+
+    snapshot = _adaptive_ui_wait(
+        adb=adb,
+        writer=writer,
+        artifact_dir=artifact_dir,
+        operation=operation,
+        timeout_seconds=timeout_seconds,
+        predicate=matched,
+    )
+    if last_screenshot is None:
+        raise CampaignError(f"{operation} matched without a screenshot witness")
+    _write_bytes(destination, last_screenshot)
+    nodes = validate_monitor_page(
+        snapshot.xml,
+        expected_runtime=plan.expected_runtime,
+        expected_rotation=plan.expected_rotation,
+        expected_width=plan.expected_width,
+        expected_height=plan.expected_height,
+        expected_labels=(expected_label,),
+    )
+    return snapshot.xml, nodes
+
+
 def audit_device(plan: CampaignPlan, adb: AdbClient) -> tuple[str, list[UiNode]]:
     adb.resolve_serial()
     version = adb.package_version()
@@ -1151,8 +1267,23 @@ def _select_singleton(
     _tap_with_intent(
         adb=adb, writer=writer, purpose="open_parameter_dialog", node=add_remove
     )
-    time.sleep(0.4)
-    dialog_xml = adb.dump_ui()
+
+    def dialog_ready(snapshot: GeneralUiSnapshot) -> bool:
+        try:
+            dialog_rows(snapshot.xml, plan.dialog_labels)
+        except CampaignError:
+            return False
+        return True
+
+    dialog_snapshot = _adaptive_ui_wait(
+        adb=adb,
+        writer=writer,
+        artifact_dir=artifact_dir,
+        operation=f"open_parameter_dialog:{target}",
+        timeout_seconds=UI_DIALOG_TIMEOUT_SECONDS,
+        predicate=dialog_ready,
+    )
+    dialog_xml = dialog_snapshot.xml
     rows, _ = dialog_rows(dialog_xml, plan.dialog_labels)
     _write_text(
         artifact_dir / f"{sequence:04d}_{file_label}_dialog_initial.xml",
@@ -1174,8 +1305,37 @@ def _select_singleton(
                 purpose=f"{'check' if should_be_checked else 'uncheck'}:{label}",
                 node=row,
             )
-            time.sleep(0.15)
-            after_toggle = adb.dump_ui()
+
+            def toggle_verified(
+                snapshot: GeneralUiSnapshot,
+                *,
+                expected_label: str = label,
+                expected_checked: bool = should_be_checked,
+            ) -> bool:
+                try:
+                    candidate_rows, _ = dialog_rows(
+                        snapshot.xml, plan.dialog_labels
+                    )
+                except CampaignError:
+                    return False
+                by_label = {
+                    _clean_label(item.text): item for item in candidate_rows
+                }
+                candidate = by_label.get(expected_label)
+                return (
+                    candidate is not None
+                    and candidate.checked == expected_checked
+                )
+
+            toggle_snapshot = _adaptive_ui_wait(
+                adb=adb,
+                writer=writer,
+                artifact_dir=artifact_dir,
+                operation=f"toggle_parameter:{label}",
+                timeout_seconds=UI_TOGGLE_TIMEOUT_SECONDS,
+                predicate=toggle_verified,
+            )
+            after_toggle = toggle_snapshot.xml
             after_rows, _ = dialog_rows(after_toggle, plan.dialog_labels)
             after_by_label = {
                 _clean_label(item.text): item for item in after_rows
@@ -1195,16 +1355,30 @@ def _select_singleton(
         verified_xml,
     )
     _tap_with_intent(adb=adb, writer=writer, purpose="confirm_parameter_dialog", node=ok)
-    time.sleep(0.5)
-    monitor_xml = adb.dump_ui()
-    validate_monitor_page(
-        monitor_xml,
-        expected_runtime=plan.expected_runtime,
-        expected_rotation=plan.expected_rotation,
-        expected_width=plan.expected_width,
-        expected_height=plan.expected_height,
-        expected_labels=(target,),
+
+    def selected_monitor_ready(snapshot: GeneralUiSnapshot) -> bool:
+        try:
+            validate_monitor_page(
+                snapshot.xml,
+                expected_runtime=plan.expected_runtime,
+                expected_rotation=plan.expected_rotation,
+                expected_width=plan.expected_width,
+                expected_height=plan.expected_height,
+                expected_labels=(target,),
+            )
+        except CampaignError:
+            return False
+        return True
+
+    monitor_snapshot = _adaptive_ui_wait(
+        adb=adb,
+        writer=writer,
+        artifact_dir=artifact_dir,
+        operation=f"confirm_parameter_dialog:{target}",
+        timeout_seconds=UI_DIALOG_TIMEOUT_SECONDS,
+        predicate=selected_monitor_ready,
     )
+    monitor_xml = monitor_snapshot.xml
     _write_text(
         artifact_dir / f"{sequence:04d}_{file_label}_selected.xml", monitor_xml
     )
@@ -1379,51 +1553,59 @@ def _run_campaign_locked(
                         "manual_reconcile": True,
                     }
                 )
+                monitor_start_tap_s = time.monotonic()
                 _tap_with_intent(
                     adb=adb,
                     writer=writer,
                     purpose=f"start_monitor:{target}",
                     node=start_stop,
                 )
-                time.sleep(plan.verify_seconds)
-                started_xml, started_nodes = audit_device(plan, adb)
-                validate_monitor_page(
-                    started_xml,
-                    expected_runtime=plan.expected_runtime,
-                    expected_rotation=plan.expected_rotation,
-                    expected_width=plan.expected_width,
-                    expected_height=plan.expected_height,
-                    expected_labels=(target,),
+                started_xml, started_nodes = _wait_for_monitor_visual_state(
+                    plan=plan,
+                    adb=adb,
+                    writer=writer,
+                    artifact_dir=artifact_dir,
+                    operation=f"monitor_start:{target}",
+                    expected_state="running",
+                    expected_label=target,
+                    timeout_seconds=UI_MONITOR_TRANSITION_TIMEOUT_SECONDS,
+                    destination=(
+                        artifact_dir
+                        / f"{sequence:04d}_{file_label}_after_start_running.png"
+                    ),
                 )
-                started_state = _capture_monitor_state(
-                    plan,
-                    adb,
-                    started_nodes,
-                    artifact_dir
-                    / f"{sequence:04d}_{file_label}_after_start_running.png",
-                )
-                if started_state != "running":
-                    abnormal_reconcile = True
-                    if started_state == "stopped":
-                        toggle_ambiguous = False
-                    raise CampaignError(
-                        f"monitor icon after start is {started_state}, not running"
-                    )
                 monitoring = True
                 toggle_ambiguous = False
-                running_stats = _artifact_stats(adb, plan)
+                running_stats: dict[str, ArtifactStat] | None = None
+
+                def activity_grew(_snapshot: GeneralUiSnapshot) -> bool:
+                    nonlocal running_stats
+                    running_stats = _artifact_stats(adb, plan)
+                    return _any_required_artifact_grew(
+                        plan, before, running_stats
+                    )
+
+                _adaptive_ui_wait(
+                    adb=adb,
+                    writer=writer,
+                    artifact_dir=artifact_dir,
+                    operation=f"monitor_log_growth:{target}",
+                    timeout_seconds=max(
+                        UI_MONITOR_TRANSITION_TIMEOUT_SECONDS,
+                        plan.verify_seconds,
+                    ),
+                    predicate=activity_grew,
+                )
+                if running_stats is None:
+                    raise CampaignError(
+                        "monitor activity matched without artifact statistics"
+                    )
                 writer.event(
                     "start_transition_observation",
                     sequence=sequence,
                     gauge=target,
                     artifacts=_stats_dict(running_stats),
                 )
-                if not _any_required_artifact_grew(plan, before, running_stats):
-                    abnormal_reconcile = True
-                    raise CampaignError(
-                        "monitor start produced no growth in any configured "
-                        "activity artifact; monitor activity is ambiguous"
-                    )
                 writer.state(
                     {
                         "schema_version": 1,
@@ -1440,7 +1622,11 @@ def _run_campaign_locked(
                     gauge=target,
                     dwell_seconds=plan.segment_seconds,
                 )
-                remaining = max(0.0, plan.segment_seconds - plan.verify_seconds)
+                remaining = max(
+                    0.0,
+                    plan.segment_seconds
+                    - (time.monotonic() - monitor_start_tap_s),
+                )
                 time.sleep(remaining)
 
                 end_xml, nodes = audit_device(plan, adb)
@@ -1501,30 +1687,23 @@ def _run_campaign_locked(
                     purpose=f"stop_monitor:{target}",
                     node=start_stop,
                 )
-                time.sleep(plan.settle_seconds)
-                stopped_xml, stopped_nodes = audit_device(plan, adb)
-                validate_monitor_page(
-                    stopped_xml,
-                    expected_runtime=plan.expected_runtime,
-                    expected_rotation=plan.expected_rotation,
-                    expected_width=plan.expected_width,
-                    expected_height=plan.expected_height,
-                    expected_labels=(target,),
+                stopped_xml, stopped_nodes = _wait_for_monitor_visual_state(
+                    plan=plan,
+                    adb=adb,
+                    writer=writer,
+                    artifact_dir=artifact_dir,
+                    operation=f"monitor_stop:{target}",
+                    expected_state="stopped",
+                    expected_label=target,
+                    timeout_seconds=max(
+                        UI_MONITOR_TRANSITION_TIMEOUT_SECONDS,
+                        plan.settle_seconds,
+                    ),
+                    destination=(
+                        artifact_dir
+                        / f"{sequence:04d}_{file_label}_after_stop_stopped.png"
+                    ),
                 )
-                stopped_state = _capture_monitor_state(
-                    plan,
-                    adb,
-                    stopped_nodes,
-                    artifact_dir
-                    / f"{sequence:04d}_{file_label}_after_stop_stopped.png",
-                )
-                if stopped_state == "running":
-                    abnormal_reconcile = True
-                    toggle_ambiguous = False
-                if stopped_state != "stopped":
-                    raise CampaignError(
-                        f"monitor icon after stop is {stopped_state}, not stopped"
-                    )
                 monitoring = False
                 toggle_ambiguous = False
                 try:
@@ -1627,28 +1806,23 @@ def _run_campaign_locked(
                         node=stop,
                     )
                     toggle_ambiguous = True
-                    time.sleep(plan.settle_seconds)
-                    cleanup_stopped_xml, cleanup_stopped_nodes = audit_device(
-                        plan, adb
-                    )
-                    validate_monitor_page(
+                    (
                         cleanup_stopped_xml,
-                        expected_runtime=plan.expected_runtime,
-                        expected_rotation=plan.expected_rotation,
-                        expected_width=plan.expected_width,
-                        expected_height=plan.expected_height,
-                        expected_labels=(current_target,),
-                    )
-                    cleanup_stopped_state = _capture_monitor_state(
-                        plan,
-                        adb,
                         cleanup_stopped_nodes,
-                        artifact_dir / "cleanup_after_stopped.png",
+                    ) = _wait_for_monitor_visual_state(
+                        plan=plan,
+                        adb=adb,
+                        writer=writer,
+                        artifact_dir=artifact_dir,
+                        operation=f"cleanup_monitor_stop:{current_target}",
+                        expected_state="stopped",
+                        expected_label=current_target,
+                        timeout_seconds=max(
+                            UI_MONITOR_TRANSITION_TIMEOUT_SECONDS,
+                            plan.settle_seconds,
+                        ),
+                        destination=artifact_dir / "cleanup_after_stopped.png",
                     )
-                    if cleanup_stopped_state != "stopped":
-                        raise CampaignError(
-                            "cleanup stop did not produce the stopped play icon"
-                        )
                     monitoring = False
                     toggle_ambiguous = False
                     cleanup_icon_stopped = True

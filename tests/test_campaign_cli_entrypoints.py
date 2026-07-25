@@ -175,6 +175,43 @@ class CampaignCliEntrypointTests(unittest.TestCase):
             str(output / "EXACT_EXISTING_CAMPAIGN"),
         )
 
+    def test_documented_cluster_drive_arguments_are_inert_without_execute(self):
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            output = temporary / "must-not-exist-dids"
+            raw_output = temporary / "must-not-exist-raw"
+            result = self._run(
+                [
+                    "projects/ecu_mapping/cluster_drive_log.py",
+                    "--out-root",
+                    str(output),
+                    "--raw-root",
+                    str(raw_output),
+                    "--require-mount",
+                    "/mnt/EXFAT512",
+                    "--campaign",
+                    "cluster-drive-shakedown-20260724-120000",
+                    "--duration-seconds",
+                    "720",
+                ],
+                temporary,
+            )
+
+            self.assertFalse(output.exists())
+            self.assertFalse(raw_output.exists())
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload_text, marker, _footer = result.stdout.partition("\nDRY RUN:")
+        self.assertTrue(marker)
+        payload = json.loads(payload_text)
+        self.assertEqual(payload["mode"], "plan_only")
+        self.assertEqual(payload["duration_seconds"], 720)
+        self.assertEqual(payload["maximum_total_request_rate_hz"], 5.0)
+        self.assertEqual(
+            payload["raw_output"],
+            str(raw_output / "cluster-drive-shakedown-20260724-120000"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

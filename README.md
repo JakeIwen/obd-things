@@ -35,6 +35,7 @@ lib/                       GENERIC, module-agnostic plumbing
   uds.py                     ISO-TP socket, UDS request, NRC table, byte decoders, USB-drop recovery
   modules.py                 module registry — SOURCE OF TRUTH for addressing; ADD A MODULE HERE
   diagnostic_safety.py       per-SocketCAN-channel lock for guarded active diagnostic tools
+  can_operation_state.py     same-boot physical-topology + external-campaign wake inhibits
 live_data/                 GENERIC top-style live-view library (not a standalone CLI)
   live_data.py               BASE: a thin module wrapper passes Module + Metric rows to run()
 tools/                     GENERIC, module-agnostic CLI tools (take a module key)
@@ -44,6 +45,7 @@ tools/                     GENERIC, module-agnostic CLI tools (take a module key
   dtc_inventory.py           non-clearing per-ECU DTC inventory -> tmp/inventories/<key>/
   can_capture_summary.py     streaming offline candump summary (`--snapshot` bounds growing logs)
   alfaobd_dat.py             offline AlfaOBD .dat cache inventory/baseline comparison
+  can_operation_state.py     explicit topology/inhibit status CLI; performs no CAN I/O
   did_sweep.py               dry-run-first, checkpointed ReadDataByIdentifier inventory (22)
   routine_scan.py            dry-run-first, checkpointed result-only RoutineControl inventory (31 03)
   ccan_inventory_campaign.sh one-command parked baseline, DID-page, or session-compare campaigns
@@ -82,8 +84,9 @@ simpler `REPO = dirname(__file__)/..`.
   - **C-CAN / HS-CAN, 500 kbit/s** — OBD pins **6/14**; powertrain + diagnostics. `bringup.sh` default.
   - **B-CAN / CAN-IHS, 125 kbit/s** — OBD pins **3/11**, reached through the B-CAN leg of the
     labeled dual-DB9 pigtail; comfort/body traffic. Live-verified 2026-07-20; `bringup.sh --bcan`.
-  - OEM wiring identifies **CAN CH on pins 12/13**. That branch remains unverified live and is not
-    required for the current C-CAN/B-CAN campaign.
+  - **CAN CH / second HS-CAN, 500 kbit/s** — OBD pins **12/13**, reached through the grey adapter.
+    Live-verified 2026-07-25 with passive PCAN traffic and captured AlfaOBD request/response pairs
+    for ABS, EPS, HALF, and ORC. See `docs/bus-map.md`.
   - One PCAN channel = one physical pair = **one bus at a time**; the OBD splitter parallels a single bus
     (lets PCAN + a scan tool share it), it does **not** merge C-CAN and B-CAN.
 - **Diagnostic addressing:** verified C-CAN modules and the four verified B-CAN modules use UDS over
@@ -168,6 +171,7 @@ listen-only mode. Consequently, explicitly re-run `./bringup.sh --tx` before eac
 | `signal_correlate.py capture` | bounded capture plan | common live gates plus `--confirm-session-change --confirm-no-active-routine`; fixed extended session |
 | `uds_send.py` | classify and print one exact physical request | reads use common live gates; session or mutation payloads add the exact confirmations printed by the plan |
 | module wrapper around `live_data.run()` | bounded direct-view plan | common live gates plus engine-off; explicit-session wrappers also require session/no-active-routine confirmations. `cluster_live.py` defaults to its separately verified session-unchanged, `22`-only policy; parked use only |
+| `cluster_drive_log.py` | inert plan for the fixed five-DID cluster drive profile | drive-only one-time gates, exact C-CAN pair, external DID/raw roots, and an already-armed interface; sends only physical `22` at most 5 requests/s, owns integrated full-bus capture, and stops after ten seconds without the verified ignition-presence frame |
 
 `live_data/live_data.py` is a library, not a standalone command. Create a thin project wrapper that
 defines only its module key and `Metric` table and calls `run()`; do not copy radar-specific `--follow`
@@ -191,6 +195,15 @@ python3 projects/ecu_mapping/cluster_live.py \
   --execute --confirm-parked --confirm-engine-off --pair 6/14 \
   --conditions "parked, ignition ON, engine OFF"
 ```
+
+The separate cluster drive logger is the unattended, moving-vehicle tool; never substitute the
+parked viewer. It owns both the active cluster polling and raw observation under one exclusive
+channel lock, so `passive_drive_capture.py` cannot run beside it on the same PCAN. It writes DID
+attempts under `tmp/ecu_mapping/` and ten-minute zstd CAN chunks under
+`tmp/captures/ccan/`, count-cross-validates the two streams, and attempts and verifies a return
+to passive `can0` on exit (a failure is loud and makes the run unsuccessful). See
+[`projects/ecu_mapping/README.md`](projects/ecu_mapping/README.md#bounded-cluster-drive-logger)
+for the exact plan/live commands and operating limits.
 
 The named `promaster88-bcan` discovery profile is the only maintained direct-diagnostic target
 set for pins 3/11. Its eight 29-bit pairs come from AlfaOBD model-88 adapter-6 rows, while the

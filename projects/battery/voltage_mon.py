@@ -1,18 +1,26 @@
 #!/usr/bin/env python3
-"""Scheduled low-battery monitor: read system voltage from B-CAN and push an ntfy alert when low.
+"""Scheduled low-battery monitor: passively read system voltage and push an ntfy alert when low.
 
-Source: the passive B-CAN frame 0x46C via bcan_voltage.read_with_wake() --
-  * bus ASLEEP   -> briefly TX-wakes it (0x7FF burst), reads 0x46C, restores listen-only;
-  * bus ALREADY AWAKE (fob/ignition/ENGINE RUNNING) -> never transmits, just reads what's on the wire.
-No wlan0 / ignitionmon involvement (that was the retired ELM327-dongle path).
+This scheduler-facing monitor is passive unless every autonomous-wake gate succeeds:
+  * awake recognized buses are read without interface changes or transmission;
+  * a silent bus may be woken only while holding the exclusive can0 diagnostics lock, with no
+    same-boot external-operation inhibit and an explicit same-boot C-CAN/B-CAN topology record;
+  * the interface and passive-silence conditions are rechecked under the lock immediately before TX;
+  * it skips silent buses unless all wake gates pass, plus every unknown, wrong-rate, armed, down,
+    and BUS-OFF interface;
+  * CAN-CH/grey is never woken; it sends one grey-adapter notice and exits untouched.
+
+The cooperative lock excludes participating Pi tools. External tools such as AlfaOBD must hold an
+explicit campaign inhibit; controller diagnostic actions create it automatically and only an explicit
+campaign-end removes it. Physical adapter changes must invalidate/set topology through
+tools/can_operation_state.py. Missing, stale-boot, malformed, unknown, or CAN-CH topology fails closed.
 
 Alerts go to ntfy (free push, no account): edge-triggered when it first drops below WARN_V, a
 throttled re-alert while it stays low, and one 'recovered' note on the way back up. Every message
 is datestamped. NTFY_VOLTAGE_URL sets the topic (defined in ~/secrets/.bash_variables, kept out of git).
 
-CONNECTIVITY GATE: before touching the bus it checks the ntfy host is reachable -- if not, it SKIPS
-without waking CAN (no point spending battery to wake the bus if the alert can't be delivered anyway).
---no-notify bypasses the gate so the read path can be tested offline.
+CONNECTIVITY GATE: before opening a passive CAN socket it checks the ntfy host is reachable -- if not,
+it skips. --no-notify bypasses the gate so the passive classification/read path can be tested offline.
 
     python3 projects/battery/voltage_mon.py             # one run (pushes ntfy if low)
     python3 projects/battery/voltage_mon.py --no-notify  # one run, never pushes (test the read path)
@@ -33,6 +41,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import bcan_voltage as bv            # sibling reader: read_with_wake, append_csv, CSV_PATH, _ROOT
 import ccan_voltage as cv            # C-CAN voltage BROADCAST reader (0x2EF/0x41A); stdlib-only, no isotp
+from lib import can_operation_state, diagnostic_safety
 
 NTFY_VOLTAGE_URL = os.environ.get("NTFY_VOLTAGE_URL", "")  # topic in ~/secrets/.bash_variables (sourced by .bashrc + cron BASH_ENV); never hardcode
 WARN_V    = 12.0                 # alert below this resting voltage (tune to taste)
@@ -51,7 +60,7 @@ def _load_state():
         with open(STATE) as f:
             return json.load(f)
     except Exception:
-        return {"low": False, "last_alert": None}
+        return {"low": False, "last_alert": None, "grey_connected": False}
 
 
 def _save_state(s):
@@ -60,14 +69,14 @@ def _save_state(s):
         json.dump(s, f)
 
 
-def notify(msg, allow_send):
+def notify(msg, allow_send, title="Van battery"):
     """Push a datestamped message to ntfy. Datestamp is in the body per request."""
     stamped = f"{datetime.datetime.now():%Y-%m-%d %H:%M}  {msg}"
     log("ALERT: " + stamped)
     if not allow_send:
         return
     try:
-        subprocess.run(["curl", "-fsS", "-m", "20", "-H", "Title: Van battery",
+        subprocess.run(["curl", "-fsS", "-m", "20", "-H", f"Title: {title}",
                         "-d", stamped, NTFY_VOLTAGE_URL], capture_output=True, timeout=25)
     except subprocess.SubprocessError as e:
         log(f"ntfy send failed: {e}")
@@ -92,33 +101,168 @@ def maybe_alert(volts, allow_send):
     _save_state(st)
 
 
-CCAN_BITRATE = 500000   # if can0 is already here (manual radar/C-CAN work, or a drive logger) read the
-                        # C-CAN voltage broadcast passively rather than reconfigure/hijack the bus.
+CCAN_BITRATE = 500000
+BCAN_BITRATE = 125000
+CAN_CH_STATUS = "CAN-CH confirmed: grey adapter connected"
+CHANNEL = "can0"
+PAIR_BY_BUS = {"c-can": "6/14", "b-can": "3/11", "can-ch": "12/13"}
+
+
+def _passive_read(bus, bitrate, *, suffix):
+    if bus == "c-can" and bitrate == CCAN_BITRATE:
+        volts, status = cv.read_voltage(timeout=2.0)
+        return volts, f"{status} [passive C-CAN; {suffix}]"
+    if bus == "b-can" and bitrate == BCAN_BITRATE:
+        volts, status = bv.read_voltage(timeout=2.0)
+        return volts, f"{status} [passive B-CAN; {suffix}]"
+    return None, f"bus/bitrate mismatch ({bus} at {bitrate}); skipped unchanged"
+
+
+def _record_observed_topology(bus):
+    try:
+        can_operation_state.set_topology(
+            CHANNEL,
+            bus,
+            pair=PAIR_BY_BUS[bus],
+            source="voltage_mon_passive_signature",
+            note="passively identified before any wake decision",
+        )
+    except (KeyError, OSError, RuntimeError, ValueError) as exc:
+        log(f"could not persist passively observed topology: {exc}")
+
+
+def _interface_gate():
+    bitrate = cv.iface_bitrate()
+    if bitrate is None:
+        return None, "can0 is down or bitrate is unavailable; skipped without interface changes"
+    if not cv.canbus.is_listen_only():
+        return None, "can0 is armed (listen-only off); skipped without touching an active operation"
+    state = cv.canbus.controller_state()
+    if state != "ERROR-ACTIVE":
+        return None, f"can0 controller state is {state or 'unavailable'}; skipped without interface changes"
+    if bitrate not in (CCAN_BITRATE, BCAN_BITRATE):
+        return None, f"can0 is at unsupported bitrate {bitrate}; skipped without interface changes"
+    return bitrate, ""
+
+
+def _autonomous_wake(bitrate):
+    lock_handle = None
+    try:
+        try:
+            lock_handle = diagnostic_safety.acquire_channel_lock(CHANNEL)
+        except diagnostic_safety.ChannelLockError:
+            return None, "bus silent; another participating CAN operation holds can0"
+
+        topology = can_operation_state.load_topology(CHANNEL)
+        if topology.bus == "can-ch":
+            return None, CAN_CH_STATUS
+
+        # CAN-CH is a terminal no-TX status, so report it even while another
+        # diagnostic campaign is inhibiting ordinary-bus wake. For every
+        # wake-capable topology, the external-operation inhibit still wins.
+        inhibits = can_operation_state.active_inhibits(CHANNEL)
+        if inhibits:
+            names = ",".join(str(item.get("name", "invalid")) for item in inhibits)
+            return None, f"bus silent; autonomous wake inhibited by {names}"
+
+        if not topology.usable or topology.bus not in ("c-can", "b-can"):
+            return None, f"bus silent; autonomous wake denied: {topology.reason}"
+
+        expected_bitrate = (
+            CCAN_BITRATE if topology.bus == "c-can" else BCAN_BITRATE
+        )
+        if bitrate != expected_bitrate:
+            return None, (
+                f"bus silent; topology {topology.bus} expects {expected_bitrate}, "
+                f"interface is {bitrate}; refusing reconfiguration"
+            )
+
+        # Close the time-of-check/time-of-use window under the exclusive lock.
+        checked_bitrate, failure = _interface_gate()
+        if checked_bitrate is None:
+            return None, failure
+        bus = cv.canbus.identify_bus(probe=1.0)
+        if bus in ("c-can", "b-can", "can-ch"):
+            _record_observed_topology(bus)
+            if bus == "can-ch":
+                return None, CAN_CH_STATUS
+            return _passive_read(
+                bus, checked_bitrate, suffix="became active under wake lock"
+            )
+        if bus != "silent":
+            return None, f"wake recheck found {bus}; refusing TX"
+
+        try:
+            if topology.bus == "c-can":
+                woke = cv.canbus.poke_wake(
+                    CHANNEL,
+                    CCAN_BITRATE,
+                    lock_handle=lock_handle,
+                )
+            else:
+                woke = cv.canbus.tx_wake_burst(
+                    CHANNEL,
+                    BCAN_BITRATE,
+                    lock_handle=lock_handle,
+                )
+        except cv.canbus.PassiveRestoreError as exc:
+            return None, f"wake cleanup failed: {exc}"
+        if not woke:
+            return None, f"{topology.bus} autonomous wake produced no validated wake"
+
+        verified = cv.canbus.identify_bus(probe=1.0)
+        if verified != topology.bus:
+            return None, (
+                f"post-wake topology mismatch: expected {topology.bus}, got {verified}"
+            )
+        volts, status = _passive_read(
+            verified,
+            checked_bitrate,
+            suffix=f"autonomous wake; topology source={topology.source}",
+        )
+        return volts, status
+    finally:
+        diagnostic_safety.release_channel_lock(lock_handle)
 
 
 def acquire():
-    """Read voltage from whichever bus the PCAN is on (the iface BITRATE declares it). BOTH buses are now
-    Pi-wakeable when parked: B-CAN via a 0x7FF burst, C-CAN via an addressed rf_hub UDS poke (verified
-    2026-07-08; see docs/bus-map.md -- the rf_hub poke also briefly powers the BCM accessory rails/dashcam).
-      - @500k (C-CAN): cv.read_with_wake() -- read if live, else poke rf_hub to wake + read 0x41A.
-      - @125k or down (B-CAN): bv.read_with_wake() -- read if live, else TX-wake the body bus + read 0x46C.
-    Each read_with_wake ABORTS ('not C-CAN'/'not B-CAN') if the adapter is really on the OTHER bus, so we then
-    read that one passively -- a bitrate/bus mismatch self-corrects. Waking is self-validating: the rf_hub
-    poke only wakes if rf_hub answers (= we're on C-CAN); the B-CAN burst path aborts on a foreign classify."""
-    if cv.iface_bitrate() == CCAN_BITRATE:            # declared C-CAN -> read live, else rf_hub-poke wake
-        volts, status = cv.read_with_wake()
-        if "not C-CAN" not in status:
-            return volts, status
-        if not bv.bring_up_passive():                 # really B-CAN @500k -> read it passively @125k
-            return None, "detected B-CAN but could not bring up can0 @125k"
-        return bv.read_voltage() if bv.classify_bus()[0] == "bcan" else (None, "bus unrecognized")
-    volts, status = bv.read_with_wake()               # declared B-CAN -> read live, else 0x7FF-burst wake
-    if "not B-CAN" not in status:
-        return volts, status
-    if not cv.bring_up_passive():                     # really C-CAN @125k -> read it passively @500k
-        return None, "detected C-CAN but could not bring up can0 @500k passive"
-    verdict, detail = cv.classify_bus()
-    return cv.read_voltage() if verdict == "ccan" else (None, f"bus unrecognized ({detail})")
+    """Read passively, or wake a silent known-safe topology behind every coordination gate."""
+    bitrate, failure = _interface_gate()
+    if bitrate is None:
+        return None, failure
+
+    bus = cv.canbus.identify_bus(probe=1.0)
+    if bus == "can-ch":
+        _record_observed_topology(bus)
+        return None, CAN_CH_STATUS
+    if bus in ("c-can", "b-can"):
+        _record_observed_topology(bus)
+        return _passive_read(bus, bitrate, suffix="interface unchanged")
+    if bus == "silent":
+        return _autonomous_wake(bitrate)
+    return None, f"bus/topology not safely recognized ({bus} at {bitrate}); skipped unchanged"
+
+
+def handle_grey_adapter(status, allow_send):
+    """Edge-trigger one notice while a live CAN-CH signature remains connected."""
+    st = _load_state()
+    if status == CAN_CH_STATUS:
+        if not st.get("grey_connected"):
+            notify(
+                "Grey adapter / CAN-CH is connected. Voltage monitor skipped CAN without "
+                "reconfiguring the interface or transmitting.",
+                allow_send,
+                title="Van CAN monitor",
+            )
+        st["grey_connected"] = True
+        _save_state(st)
+        return True
+    # Only a positively identified ordinary bus proves that grey is no longer selected.
+    if "passive C-CAN" in status or "passive B-CAN" in status:
+        if st.get("grey_connected"):
+            st["grey_connected"] = False
+            _save_state(st)
+    return False
 
 
 def have_connectivity(url=NTFY_VOLTAGE_URL, timeout=6):
@@ -156,8 +300,11 @@ def main():
         log("no internet (ntfy host unreachable) -- skipping; not waking the bus")
         return
 
-    volts, status = acquire()                  # B-CAN wake-read, or C-CAN broadcast if can0 is already there
+    volts, status = acquire()
     bv.append_csv(bv.CSV_PATH, volts if volts is not None else "", status)
+    if handle_grey_adapter(status, allow_send):
+        log(f"{status}; battery read intentionally skipped")
+        return
     if volts is None:
         log(f"voltage read FAILED: {status}")
         sys.exit(1)

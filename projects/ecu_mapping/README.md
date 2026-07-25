@@ -217,7 +217,7 @@ EXFAT512's mount identity and writability before creating output and before ever
 pull; a missing, short, or failed pull prevents campaign completion. There is deliberately no
 automatic resume from that state.
 
-For the upcoming 20-hour drive, the passive recorder can use
+For a passive/AlfaOBD pane during the upcoming 20-hour drive, the passive recorder can use
 `--duration-seconds 72000` with an ordinary-driving conditions note. The measured C-CAN rate is
 about 653 MB/hour as uncompressed candump text, or roughly 13.1 GB for 20 hours before zstd.
 Keep the 30/25 GiB soft/hard floors so ordinary use retains at least 25 GiB, and verify EXFAT512
@@ -295,6 +295,106 @@ python3 projects/ecu_mapping/cluster_live.py \
 
 Its RPM, speed, gear, and temperature rows remain raw/candidate displays. Battery alone uses the
 qualified Alfa `raw x 0.1 V` rendering; the raw bytes remain visible for every row.
+
+## Bounded cluster drive logger
+
+`cluster_drive_log.py` is the unattended moving-vehicle companion to the parked viewer. Its
+profile is immutable: cluster `18DA60F1 -> 18DAF160`, physical `22` reads of
+`1000/1002/0107/1004/1005`, and at most five total request attempts per second. It sends no
+DiagnosticSessionControl, TesterPresent, DTC, routine, write, IO-control, security, reset,
+functional, retry, wake, re-arm, or recovery traffic. Repeated `22` requests may still refresh
+the cluster's inherited S3 timer.
+
+The logger must be launched while parked, preferably after the engine is running. Before opening
+ISO-TP it requires the verified ignition-presence frame `0x2EF`, persists a first raw CAN frame,
+and obtains one exact positive response of the reviewed length from every DID. It then tracks
+failures separately per DID and stops after three consecutive failures of any one signal. Loss of
+`0x2EF` for ten seconds ends the campaign, so each ignition leg is a separate run.
+
+Raw capture is integrated because an active diagnostic owner and
+`passive_drive_capture.py` cannot share one PCAN: the former requires armed CAN plus the exclusive
+lock, while the latter requires listen-only plus an observer lock. The integrated recorder drains
+one full-bus `candump`, rotates ten-minute zstd chunks asynchronously, detects socket-drop notices,
+and writes a small kernel-timestamped wire stream for the exact cluster endpoint. Finalization
+requires its request/positive/NRC counts to agree with the append-only high-level attempt records.
+AlfaOBD and every other diagnostic client must remain closed for the whole run.
+
+First inspect the inert plan:
+
+```bash
+python3 projects/ecu_mapping/cluster_drive_log.py \
+  --out-root /mnt/EXFAT512/obd-things/tmp/ecu_mapping/cluster-drive \
+  --raw-root /mnt/EXFAT512/obd-things/tmp/captures/ccan/cluster-drive \
+  --require-mount /mnt/EXFAT512 \
+  --campaign cluster-drive-shakedown-YYYYMMDD-HHMMSS \
+  --duration-seconds 720
+```
+
+Before the first long run, use a parked, engine-idling 12-minute shakedown so real candump/zstd/
+EXFAT operation crosses one ten-minute rotation boundary. Confirm that `tpms-logger`,
+`tpms-drivesniff`, and `promaster-drive-capture` are inactive, AlfaOBD is closed, and the PCAN is
+on C-CAN pins 6/14. Then:
+
+```bash
+sudo sysctl -w net.core.rmem_max=4194304
+./bringup.sh --tx
+
+python3 projects/ecu_mapping/cluster_drive_log.py \
+  --out-root /mnt/EXFAT512/obd-things/tmp/ecu_mapping/cluster-drive \
+  --raw-root /mnt/EXFAT512/obd-things/tmp/captures/ccan/cluster-drive \
+  --require-mount /mnt/EXFAT512 \
+  --campaign cluster-drive-shakedown-YYYYMMDD-HHMMSS \
+  --duration-seconds 720 \
+  --execute --confirm-driving-read-only --confirm-started-parked \
+  --confirm-no-other-diagnostics --pair 6/14 \
+  --conditions "started parked, engine running; parked idling rotation shakedown; AlfaOBD closed; PCAN on C-CAN 6/14"
+```
+
+Use `--duration-seconds 72000` and a new campaign name for a 20-hour ignition leg only after that
+shakedown passes. The process is noninteractive once started; do not interact with it while driving.
+It stops on duration, ignition loss, disk floor, interface/drop change, child failure, signal, or
+evidence mismatch and never auto-recovers while moving. Socket/observer close, final active drop
+counter sampling, passive restoration, and lock release occur before the remaining current-chunk
+finalization and final hashes; completed earlier chunks are verified asynchronously while live.
+External-mount identity is sticky: once loss, change, or read-only state of the expected EXFAT
+mount is detected, every later path-based publication is suppressed, preventing subsequent
+metadata helpers from recreating the campaign tree on the Pi root filesystem. A hard storage I/O
+stall can still delay a userspace write or filesystem call; no userspace timeout can make a
+blocked kernel filesystem operation instantaneously return.
+
+The two campaign directories have the same name but distinct canonical roots:
+
+- DID evidence: `tmp/ecu_mapping/cluster-drive/<campaign>/samples.jsonl` plus `run.json` and
+  `summary.json`.
+- Raw evidence: `tmp/captures/ccan/cluster-drive/<campaign>/`, with zstd chunks,
+  `manifest.jsonl`, `cluster_wire.jsonl`, and recorder diagnostics.
+
+The external-volume start/stop floors remain 30/25 GiB. A crash can leave a recoverable
+`*.zst.partial` and `cluster_wire.jsonl.partial`; do not mistake either for a clean campaign.
+A zstd partial is automatically recoverable only when it contains a complete, verifiable zstd
+frame; a truncated partial is retained for manual salvage. Recovery is a separate explicit
+evidence-preservation operation.
+
+Accept a shakedown or drive leg only from the final DID `summary.json`, not from `run.json`,
+`owner.json`, a renamed raw file, or the mere absence of `.partial` names. The final summary must
+report `status: complete`, `startup_profile_validated: true`, `restored_passive: true`,
+`lock_released: true`, no fatal errors, complete wire count cross-validation, zero drops, and
+complete raw chunks with matching internal frame accounting. Also inspect `stop_reason` and
+`duration_complete`: `status: complete` means clean finalization, while ignition loss or the soft
+disk floor can intentionally end a shorter leg; `request_limit` is also a normal near-deadline
+bound but does not set `duration_complete`. If the mount disappears, its last on-disk summary can
+remain `running` or `finalizing` because the logger deliberately refuses to redirect a replacement
+summary onto the root disk.
+
+Wire cross-validation is count-level by exact echoed DID: it reconciles requests, exact-length
+positives, and aggregate negative responses. It does not yet prove a chronological or
+payload-byte join between every high-level row and raw frame. Both streams retain sequence,
+payload, and timestamp fields for that stricter offline join.
+
+This campaign can establish nonzero raw ranges, ordering, lag, gear transitions, relative
+relationships, and broadcast candidates. It does not by itself prove absolute RPM/speed,
+temperature, or every gear enum. Radar/GPS/tachometer, a stable temperature reference, or another
+controlled ground truth is still required before promoting those scalings.
 
 `reassemble_commands.py <decoded.txt> <out.txt> [atsh]` — rebuilds multi-frame COMMANDS.
 AlfaOBD sends long requests as MANUAL ISO-TP frames: First Frame `1L LL <6 data>` + a trailing
@@ -445,11 +545,13 @@ corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one
    mismatch. Direct PCAN reads then produced identical results after exact `10 01` and `10 03` echoes,
    proving default compatibility without requiring extended session. The bounded standalone viewer
    may leave the inherited session unchanged and fail closed rather than sending `10`/`3E`; do not
-   label that inherited state as positively identified default. Pair a purpose-built drive logger,
-   not the parked viewer, with the passive recorder for nonzero RPM/speed scaling and ordinary gear
-   transitions; the passive recorder alone does not generate DID traffic. Expand only the validated
-   singleton Status workflow. Also use passenger-door plus parking-brake discriminators to refine
-   the passive and BCM candidates. Alfa's shifter `Drive` rendering in Park and TCM `Brake switch`
-   watcher remain explicitly invalid.
+   label that inherited state as positively identified default. The fixed-profile
+   `cluster_drive_log.py` is now prepared for nonzero RPM/speed evidence and ordinary gear
+   transitions; run its 12-minute parked/idling rotation shakedown before the long campaign. It
+   owns integrated raw capture under the active lock, so do not pair it with the separate passive
+   recorder on the same PCAN. Expand only the validated singleton Status workflow. Also use
+   passenger-door plus parking-brake discriminators to refine the passive and BCM candidates.
+   Alfa's shifter `Drive` rendering in Park and TCM `Brake switch` watcher remain explicitly
+   invalid.
 6. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps
    (`../../docs/bus-map.md`, `../../lib/modules.py`, project DID maps) per the maintenance rule.

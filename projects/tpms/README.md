@@ -138,11 +138,14 @@ campaign status and
 - **`isotp_decode_rfh.py` (this dir)** — offline ISO-TP transcript decoder for candump logs
   (hardcoded to the RFH ID pair); used to decode the AlfaOBD session sniffs in
   `tmp/tpms/rfh_alfaobd_sniff_ccan_resilient.log`.
-- **voltage_mon cron is COMMENTED OUT** (dated tag in `crontab -l`): it was crashing
-  (`iface_bitrate()` TypeError, mid-refactor), its B-CAN path is physically moot while the
-  PCAN sits on the C-CAN tap, and its iface flips would blind this logger. Re-enable by
-  uncommenting when the PCAN returns to the B-CAN tap. **No low-battery ntfy alerts while
-  disabled.** A separate Claude session owns the voltage_mon refactor — coordinate.
+- **voltage_mon cron remains COMMENTED OUT** (dated tag in `crontab -l`), so there are no
+  scheduled low-battery ntfy alerts. The 2026-07-25 hardening keeps awake-bus reads passive and
+  permits a sleeping-bus wake only behind the exclusive SocketCAN lock, absence of same-boot
+  external-tool inhibits, an explicit same-boot C-CAN/B-CAN topology record, and an immediate
+  under-lock interface/silence recheck. Armed/down/unhealthy/unknown/CAN-CH states never wake.
+  AlfaOBD controller actions automatically inhibit unattended wake. It no longer needs to wait for
+  PCAN to return to B-CAN for contention safety, but re-enabling cron remains a separate owner
+  decision.
 - **Before any manual bus work**: `sudo systemctl stop tpms-logger` (restart after).
   Gotcha: `pkill -f`/`pgrep -f` with a pattern that appears in your own command line kills
   your own shell — use `pkill -x candump` or exact PIDs.

@@ -46,10 +46,10 @@ database join did not expose one for that profile variant.
 | `0x18` | `AUTO_SHIFT` | verified live TCM address; profile label is generic/mismatched to the installed 948TE |
 | `0x1F` | `ESM` | verified live shifter address |
 | `0x26` | `PAM2` | unverified candidate |
-| `0x28` | `ABS9_CAN` | unverified candidate |
+| `0x28` | `ABS9_CAN` | verified live on CAN-CH/grey 2026-07-25; `F1A5=0006501520`, `F187=68516283AD` |
 | `0x2A` | `ADAPTIVE_CRUISE` | verified live |
-| `0x30` | `ESTEER_DELPHI_CAN` | unverified EPS candidate |
-| `0x31` | `HALF_DUCATO` | unverified candidate |
+| `0x30` | `ESTEER_DELPHI_CAN` | verified live EPS on CAN-CH/grey 2026-07-25; `F1A5=0002507919`, `F187=68509191AD` |
+| `0x31` | `HALF_DUCATO` | verified live CAN-CH/grey 2026-07-25; `F1A5=001E502920`, `F187=68567254AA` |
 | `0x40` | `BCDELPHI` | verified live |
 | `0x4A` | `TRAILER_TOW` | F1A5 and F187 timed out on B-CAN 2026-07-21; unresolved/possibly absent |
 | `0x60` | `MARELLI_DASH_EP` | verified live |
@@ -59,7 +59,7 @@ database join did not expose one for that profile variant.
 | `0x87` | `UCONNECT` | verified live B-CAN Uconnect endpoint; `F1A5=0024701A19`, `F187=60986318` |
 | `0x98` | `COND_MARELLI_EP` | verified live B-CAN HVAC endpoint; `F1A5=000A702520`, `F187=68516124AE` |
 | `0xA0` | `PARK_BOSCH_EP` | unverified candidate |
-| `0xC0` | `BOSCH_EP` airbag | unverified candidate |
+| `0xC0` | `BOSCH_EP` airbag | verified live ORC on CAN-CH/grey 2026-07-25; `F1A5=001A507720`, `F187=68518674AC` |
 | `0xC6` | `TBM2` | verified live |
 | `0xC7` | `RFH_CUSW` | verified live RF Hub address |
 | `0xCB` | `SGW_FGA` | unverified candidate; the physical SGW bypass changes reachability assumptions |
@@ -96,7 +96,7 @@ That resolves the model-code-88 candidates into useful physical-bus groups:
 |---:|---|---|---|
 | `0` | ordinary C-CAN/profile connection | `10,18,1F,2A,40,60,C6,C7,CB` | first eight verified; SGW `CB` unresolved behind the bypass |
 | `6` | B-CAN / MS-CAN BLUE | `4A,62,65,6A,85,87,98,D9` | `85,87,98,D9` verified; `4A,62,65,6A` timed out twice and remain unresolved |
-| `7` | C-CAN2 / GREY / CAN-CH | `26,28,30,31,A0,C0` | outside the current C-CAN/B-CAN scope |
+| `7` | C-CAN2 / GREY / CAN-CH | `26,28,30,31,A0,C0` | `28,30,31,C0` verified at 500 kbit/s on pins 12/13; optional/configured-absent `26,A0` remain unverified |
 
 This explains why adapter-6/7 candidates timed out during exhaustive pins-6/14 address scans: the
 scan covered their address bytes but not their catalog-selected physical branches. The bounded

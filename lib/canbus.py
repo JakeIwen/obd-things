@@ -1,6 +1,6 @@
 """Shared CAN-interface plumbing + bus detection/wake -- generic, module-agnostic (same role as lib/uds.py).
-Used by the voltage readers and any project that needs to find and rouse whichever bus (B-CAN 125k /
-C-CAN 500k) the PCAN is physically on.
+Used by the voltage readers and any project that needs to identify the bus (B-CAN 125k, C-CAN
+500k, or CAN-CH 500k) the PCAN is physically on.
 
   plumbing:  ip_up / bring_up_passive / iface_bitrate / rx_errors / probe_ids / append_csv
              (the STICKY listen-only flag is handled explicitly).
@@ -68,7 +68,7 @@ def controller_state(channel=DEFAULT_CHANNEL):
     out = subprocess.run(
         ["ip", "-details", "link", "show", channel], capture_output=True, text=True
     ).stdout
-    match = re.search(r"can state ([A-Z-]+)", out)
+    match = re.search(r"\bcan(?:\s+<[^>\n]*>)?\s+state\s+([A-Z-]+)\b", out)
     return match.group(1) if match else None
 
 
@@ -159,22 +159,37 @@ def append_csv(path, volts, status):
 
 # --- bus identity (signature id sets are bus facts: docs/bus-map.md) ----------
 BITRATE_CCAN = 500000        # C-CAN / HS-CAN powertrain bus
+BITRATE_CANCH = 500000       # CAN-CH / second high-speed bus, DLC pins 12/13
 BITRATE_BCAN = 125000        # B-CAN body bus
 # High-rate frames unique to each bus (present ignition-on AND in parked wakes). Source: docs/bus-map.md.
 CCAN_SIG = {0x100, 0x101, 0x103, 0x104, 0x10F, 0x110, 0x116, 0x0EA, 0x0EE, 0x0FA, 0x0FE, 0x2EF, 0x41A}
 BCAN_SIG = {0x46C, 0x0A0, 0x0E0, 0x2EA, 0x3DC, 0x3DE, 0x3E0, 0x3E2, 0x3E4, 0x3E6, 0x354, 0x356}
+# CAN-CH shares some gateway-forwarded identifiers with ordinary C-CAN. These seven high-rate
+# identifiers were all present on pins 12/13 and absent from the same campaign's pins-6/14
+# reference capture. Require several of them together instead of treating one identifier as proof.
+CANCH_SIG = {0x0DA, 0x0DC, 0x0F1, 0x106, 0x10E, 0x117, 0x1F6}
+# A captured physical request or response for an installed grey-routed ECU is independently decisive.
+CANCH_DIAG_SIG = {
+    0x18DA28F1, 0x18DAF128,  # ABS
+    0x18DA30F1, 0x18DAF130,  # EPS
+    0x18DA31F1, 0x18DAF131,  # HALF
+    0x18DAC0F1, 0x18DAF1C0,  # ORC
+}
+CANCH_MIN_BROADCAST_HITS = 3
 RX_ERR_ABORT = 200           # rx-error climb over a probe -> a bus sampled at the WRONG bitrate
 
 
 def identify_bus(channel=DEFAULT_CHANNEL, probe=2.0):
     """PASSIVE (no TX): which physical bus is `channel` on, AT ITS CURRENT BITRATE? Returns one of
-    'c-can' | 'b-can' | 'silent' | 'wrong-rate' | 'unknown'. Caller brings the iface up first.
+    'c-can' | 'b-can' | 'can-ch' | 'silent' | 'wrong-rate' | 'unknown'. Caller brings the iface up first.
       wrong-rate = traffic present but mis-sampled (rx-errors climb) -> the bus runs at the OTHER bitrate.
       silent     = no traffic (asleep) -- can't tell which bus passively; rouse it with wake()."""
     try:
         ids, rxd = probe_ids(channel, probe)
     except OSError:
         return "unknown"
+    if ids & CANCH_DIAG_SIG or len(ids & CANCH_SIG) >= CANCH_MIN_BROADCAST_HITS:
+        return "can-ch"
     if ids & CCAN_SIG:
         return "c-can"
     if (ids & BCAN_SIG) or any((c & 0x1FFF0000) == 0x1E340000 for c in ids):   # 0x1E34xxxx = B-CAN NM
@@ -186,7 +201,7 @@ def identify_bus(channel=DEFAULT_CHANNEL, probe=2.0):
 
 def detect_bus(channel=DEFAULT_CHANNEL):
     """Auto-detect the connected bus: bring the iface up PASSIVE and probe at 500k (C-CAN) then 125k (B-CAN).
-    Returns (bus, bitrate) with bus in 'c-can'/'b-can'/'silent'. 'silent' = both rates quiet (bus asleep);
+    Returns (bus, bitrate) with bus in 'c-can'/'b-can'/'can-ch'/'silent'. 'silent' = both rates quiet (bus asleep);
     leaves the iface verified passive @500k -- rouse it with wake(). All bitrate changes and
     probes are serialized under the active-diagnostics channel lock."""
     with diagnostic_safety.interrupt_on_termination() as termination:
@@ -200,7 +215,7 @@ def detect_bus(channel=DEFAULT_CHANNEL):
                 if not bring_up_passive(channel, rate):
                     continue
                 bus = identify_bus(channel)
-                if bus in ("c-can", "b-can"):
+                if bus in ("c-can", "b-can", "can-ch"):
                     restore_default = False
                     return bus, rate
 
@@ -261,19 +276,28 @@ RFH_MODULE = "rf_hub"       # KL30-always-awake C-CAN module (lib/modules.py); a
 RFH_WAKE_DID = 0xF190       # benign identification read; any response = module awake = wake triggered
 
 
-def tx_wake_burst(channel=DEFAULT_CHANNEL, bitrate=BITRATE_BCAN):
+def tx_wake_burst(
+    channel=DEFAULT_CHANNEL,
+    bitrate=BITRATE_BCAN,
+    *,
+    lock_handle=None,
+):
     """ACTIVE: arm the iface and TX a brief benign 0x7FF burst to wake a sleeping bus via wake-on-activity.
     Verified on the legacy observed 125-kbit/s body capture. The helper owns the per-channel
-    diagnostic lock and restores verified listen-only mode before returning. It returns True only
+    diagnostic lock (or validates a caller-supplied held exclusive lock) and restores verified
+    listen-only mode before returning. It returns True only
     if at least one frame was accepted by the local CAN socket. (Does NOT wake C-CAN -- selective
     wake there; use poke_wake for C-CAN.) A cleanup failure raises PassiveRestoreError."""
     with diagnostic_safety.interrupt_on_termination() as termination:
-        lock_handle = None
+        manage_lock = lock_handle is None
         sock = None
         sent = 0
         mutation_started = False
         try:
-            lock_handle = diagnostic_safety.acquire_channel_lock(channel)
+            if manage_lock:
+                lock_handle = diagnostic_safety.acquire_channel_lock(channel)
+            else:
+                diagnostic_safety.validate_channel_lock(lock_handle, channel)
             # ``ip_up`` runs multiple commands; assume the interface may need cleanup as soon as
             # the call starts, even if it raises or returns False partway through.
             mutation_started = True
@@ -313,16 +337,25 @@ def tx_wake_burst(channel=DEFAULT_CHANNEL, bitrate=BITRATE_BCAN):
                     if lock_handle is not None and mutation_started:
                         _require_passive_restore(channel, bitrate)
                 finally:
-                    diagnostic_safety.release_channel_lock(lock_handle)
+                    if manage_lock:
+                        diagnostic_safety.release_channel_lock(lock_handle)
 
 
-def poke_wake(channel=DEFAULT_CHANNEL, bitrate=BITRATE_CCAN, module_key=RFH_MODULE, did=RFH_WAKE_DID):
+def poke_wake(
+    channel=DEFAULT_CHANNEL,
+    bitrate=BITRATE_CCAN,
+    module_key=RFH_MODULE,
+    did=RFH_WAKE_DID,
+    *,
+    lock_handle=None,
+):
     """ACTIVE: wake a bus by sending ONE addressed UDS read to an always-awake module (default rf_hub on
     C-CAN). The diag exchange trips the gateway's network-management wake -> full broadcast for ~15s.
     SELF-VALIDATING: returns True iff the module answered with the requested DID echo or a valid
     negative response for service 22 (= an ECU at the physical address completed the exchange).
-    The helper owns the per-channel diagnostic lock and restores verified listen-only mode before
-    returning. SIDE EFFECT on this van: also wakes the BCM -> accessory rails briefly power up
+    The helper owns the per-channel diagnostic lock, or validates a caller-supplied held exclusive
+    lock, and restores verified listen-only mode before returning. SIDE EFFECT on this van: also
+    wakes the BCM -> accessory rails briefly power up
     (dashcam). A cleanup failure raises PassiveRestoreError. Lazy-imports isotp so this module stays
     stdlib-only unless a poke is actually requested."""
     from lib import uds                    # lazy: only poke_wake needs isotp
@@ -330,11 +363,14 @@ def poke_wake(channel=DEFAULT_CHANNEL, bitrate=BITRATE_CCAN, module_key=RFH_MODU
     m = get(module_key)
     payload = bytes((0x22, did >> 8, did & 0xFF))
     with diagnostic_safety.interrupt_on_termination() as termination:
-        lock_handle = None
+        manage_lock = lock_handle is None
         sock = None
         mutation_started = False
         try:
-            lock_handle = diagnostic_safety.acquire_channel_lock(channel)
+            if manage_lock:
+                lock_handle = diagnostic_safety.acquire_channel_lock(channel)
+            else:
+                diagnostic_safety.validate_channel_lock(lock_handle, channel)
             mutation_started = True
             try:
                 armed = ip_up(channel, bitrate, listen_only=False, restart_ms=100)
@@ -371,19 +407,21 @@ def poke_wake(channel=DEFAULT_CHANNEL, bitrate=BITRATE_CCAN, module_key=RFH_MODU
                     if lock_handle is not None and mutation_started:
                         _require_passive_restore(channel, bitrate)
                 finally:
-                    diagnostic_safety.release_channel_lock(lock_handle)
+                    if manage_lock:
+                        diagnostic_safety.release_channel_lock(lock_handle)
 
 
 def wake(channel=DEFAULT_CHANNEL):
     """Detect the connected bus and WAKE it if silent -- the 'keep the bus awake' primitive. Returns
-    (bus, awake): bus in 'c-can'/'b-can'/None, awake True if it's (now) broadcasting. Leaves the iface passive.
+    (bus, awake): bus in 'c-can'/'b-can'/'can-ch'/None, awake True if it is broadcasting. Leaves the iface passive.
       * already awake -> (bus, True), no TX.
+      * awake CAN-CH -> ('can-ch', True), no TX; CAN-CH wake behavior is intentionally unimplemented.
       * silent        -> try the self-validating C-CAN rf_hub poke (only wakes if we're on C-CAN), else the
                          B-CAN 0x7FF burst; whichever produces traffic is the connected bus.
     Call on a cadence to hold a parked bus awake. (For a tight loop, prefer detect_bus() ONCE then repeat the
     matching wake primitive -- wake() re-detects every call.) NOTE: each C-CAN wake blips accessory rails."""
     bus, _ = detect_bus(channel)
-    if bus in ("c-can", "b-can"):
+    if bus in ("c-can", "b-can", "can-ch"):
         return bus, True
     # silent: rouse-and-identify. C-CAN poke first (self-validating), then B-CAN burst.
     if poke_wake(channel, BITRATE_CCAN):
