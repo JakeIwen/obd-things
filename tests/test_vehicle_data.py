@@ -23,7 +23,11 @@ from projects.vehicle_data.broker import TelemetryBroker
 from projects.vehicle_data.metrics import METRICS
 from projects.vehicle_data.models import failure, success
 from projects.vehicle_data.sources import DecodedVoltage, VoltageAcquirer
-from projects.vehicle_data.web import TelemetryWebHandler, TelemetryWebServer
+from projects.vehicle_data.web import (
+    TelemetryWebHandler,
+    TelemetryWebServer,
+    validate_bind,
+)
 
 
 def interface(
@@ -614,6 +618,15 @@ class WebTests(unittest.TestCase):
 
         handler._json(200, {"available": False})
         handler.wfile.write.assert_called_once()
+
+    def test_non_loopback_bind_requires_explicit_opt_in(self):
+        with self.assertRaises(SystemExit):
+            validate_bind("192.0.2.10", allow_remote_bind=False)
+
+        validate_bind("192.0.2.10", allow_remote_bind=True)
+
+    def test_loopback_bind_remains_allowed_by_default(self):
+        validate_bind("127.0.0.1", allow_remote_bind=False)
 
 
 class InterfaceStateTests(unittest.TestCase):

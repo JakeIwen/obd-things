@@ -106,8 +106,18 @@ python3 projects/vehicle_data/web.py --bind 127.0.0.1 --port 8765
 ```
 
 The dashboard uses server-sent events, but every stream update is still made
-from broker GET endpoints and cannot trigger CAN traffic. Bind is deliberately
-restricted to loopback; remote access belongs behind an authenticated proxy.
+from broker GET endpoints and cannot trigger CAN traffic. Bind defaults to
+loopback; remote access normally belongs behind an authenticated proxy. A
+deliberately trusted interface can instead be selected explicitly:
+
+```bash
+python3 projects/vehicle_data/web.py \
+  --bind <interface-address> --port 8765 --allow-remote-bind
+```
+
+This opt-in does not add authentication. Bind to one intended interface address
+and keep the service cache-only; avoid a wildcard bind unless another layer
+restricts clients.
 
 ## Existing voltage monitor
 

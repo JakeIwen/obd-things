@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Loopback-only cached telemetry web proxy and dashboard."""
+"""Explicitly gated cached telemetry web proxy and dashboard."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from projects.vehicle_data.broker import DEFAULT_SOCKET
 
 STATIC = pathlib.Path(__file__).with_name("static")
 MAX_STREAM_SECONDS = 300.0
+LOOPBACK_BINDS = frozenset(("127.0.0.1", "::1", "localhost"))
 
 
 class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
@@ -244,6 +245,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--socket", default=DEFAULT_SOCKET)
     parser.add_argument("--bind", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument(
+        "--allow-remote-bind",
+        action="store_true",
+        help=(
+            "permit an explicitly selected non-loopback bind; this does not "
+            "provide authentication"
+        ),
+    )
     parser.add_argument("--stream-interval", type=float, default=2.0)
     parser.add_argument("--stream-max-seconds", type=float, default=MAX_STREAM_SECONDS)
     parser.add_argument(
@@ -254,12 +263,17 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def validate_bind(bind: str, *, allow_remote_bind: bool) -> None:
+    if bind not in LOOPBACK_BINDS and not allow_remote_bind:
+        raise SystemExit(
+            "refusing a non-loopback bind without --allow-remote-bind; "
+            "prefer an authenticated external proxy"
+        )
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    if args.bind not in ("127.0.0.1", "::1", "localhost"):
-        raise SystemExit(
-            "refusing a non-loopback bind; use an authenticated external proxy"
-        )
+    validate_bind(args.bind, allow_remote_bind=args.allow_remote_bind)
     if not 0 < args.port < 65536:
         raise SystemExit("--port must be between 1 and 65535")
     if args.stream_interval <= 0 or args.stream_max_seconds <= 0:
