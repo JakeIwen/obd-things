@@ -9,12 +9,15 @@ The implementation has two trust zones:
 - `broker.py` owns CAN access and serves a Unix-domain HTTP API. Its GET
   endpoints only read cache. Only an allowlisted acquisition POST can touch a
   source.
-- `web.py` has no CAN imports and proxies cache/status over loopback HTTP. It
+- `web.py` has no CAN imports and proxies cache/status over HTTP. It defaults
+  to loopback and requires `--allow-remote-bind` for any other address. It
   rejects all acquisition requests unless deliberately started with
-  `--allow-acquisitions`; the tracked systemd unit does not enable that flag.
+  `--allow-acquisitions`; neither the tracked nor live systemd service enables
+  that flag.
 
-Nothing here installs or enables a service. The units under `systemd/` are
-deployment examples and must be reviewed against the live Pi before use.
+The code does not install or enable itself. The units under `systemd/` retain
+safe loopback defaults and must be reviewed against the target host. The
+current vanpi deployment is recorded below.
 
 ## Metric and quality
 
@@ -119,6 +122,41 @@ This opt-in does not add authentication. Bind to one intended interface address
 and keep the service cache-only; avoid a wildcard bind unless another layer
 restricts clients.
 
+## Current vanpi deployment
+
+Last verified 2026-07-25:
+
+- `van-telemetry.service` and `van-telemetry-web.service` are installed,
+  enabled at boot, and running.
+- The broker is available only through
+  `/run/van-telemetry/api.sock`, owned by the unprivileged `pi` user/group.
+- The tracked web unit remains loopback-only. A machine-local systemd drop-in
+  at
+  `/etc/systemd/system/van-telemetry-web.service.d/10-lan.conf`
+  deliberately adds `--allow-remote-bind` and binds one selected Ethernet
+  address. The address is operational host configuration and is not tracked.
+- Trusted devices on the van LAN use `http://vanpi.lan:8765/`. The service is
+  unauthenticated, so it must not be port-forwarded or exposed beyond a trusted
+  network.
+- The live web service omits `--allow-acquisitions`. Dashboard GETs and stream
+  updates are cache-only, and acquisition POSTs fail closed with HTTP 403.
+
+Inspect the effective unit rather than assuming the tracked example matches the
+host:
+
+```bash
+systemctl is-enabled van-telemetry.service van-telemetry-web.service
+systemctl is-active van-telemetry.service van-telemetry-web.service
+systemctl cat van-telemetry-web.service
+ss -lntp | grep ':8765'
+curl --fail http://vanpi.lan:8765/v1/status
+```
+
+If the selected LAN address changes, update the machine-local drop-in, run
+`systemctl daemon-reload`, and restart only `van-telemetry-web.service`. Do not
+replace the explicit address with a wildcard merely to avoid maintaining the
+override.
+
 ## Existing voltage monitor
 
 `projects/battery/voltage_mon.py` uses the broker when its Unix socket exists.
@@ -134,5 +172,6 @@ cache-only GETs, allowlist enforcement, source metadata, passive acquisition,
 silent-bus wake gates, coalescing/rate limits, post-wake restoration failure,
 Unix API behavior, and cache-only web defaults.
 
-No tracked service is installed or enabled by this project, and offline
-validation is not evidence of a successful live CAN acquisition.
+The services are deployed on vanpi as described above. Service health and
+offline validation are not evidence of a successful live CAN acquisition;
+inspect metric provenance and quality on every available observation.
