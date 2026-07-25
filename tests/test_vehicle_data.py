@@ -15,6 +15,7 @@ from unittest import mock
 from lib import canbus
 from projects.battery import bcan_voltage, ccan_voltage
 from projects.vehicle_data.api import (
+    TelemetryApiHandler,
     TelemetryClient,
     UnixHTTPServer,
 )
@@ -22,7 +23,7 @@ from projects.vehicle_data.broker import TelemetryBroker
 from projects.vehicle_data.metrics import METRICS
 from projects.vehicle_data.models import failure, success
 from projects.vehicle_data.sources import DecodedVoltage, VoltageAcquirer
-from projects.vehicle_data.web import TelemetryWebServer
+from projects.vehicle_data.web import TelemetryWebHandler, TelemetryWebServer
 
 
 def interface(
@@ -515,6 +516,18 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertEqual(payload["reason"], "unknown_metric")
 
+    def test_disconnected_client_does_not_escape_json_writer(self):
+        handler = object.__new__(TelemetryApiHandler)
+        handler.send_response = mock.Mock()
+        handler.send_header = mock.Mock()
+        handler.end_headers = mock.Mock()
+        handler.wfile = SimpleNamespace(
+            write=mock.Mock(side_effect=BrokenPipeError)
+        )
+
+        handler._json(200, {"available": False})
+        handler.wfile.write.assert_called_once()
+
 
 class WebTests(unittest.TestCase):
     def setUp(self):
@@ -589,6 +602,18 @@ class WebTests(unittest.TestCase):
         self.assertIn("default-src", response.getheader("Content-Security-Policy"))
         self.assertIn(b"Van telemetry", body)
         connection.close()
+
+    def test_disconnected_client_does_not_escape_web_json_writer(self):
+        handler = object.__new__(TelemetryWebHandler)
+        handler.send_response = mock.Mock()
+        handler.send_header = mock.Mock()
+        handler.end_headers = mock.Mock()
+        handler.wfile = SimpleNamespace(
+            write=mock.Mock(side_effect=ConnectionResetError)
+        )
+
+        handler._json(200, {"available": False})
+        handler.wfile.write.assert_called_once()
 
 
 class InterfaceStateTests(unittest.TestCase):
