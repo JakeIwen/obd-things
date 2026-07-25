@@ -51,6 +51,7 @@ tools/                     GENERIC, module-agnostic CLI tools (take a module key
   ccan_inventory_campaign.sh one-command parked baseline, DID-page, or session-compare campaigns
   signal_correlate.py        DID byte-slice <-> signal correlator (lstsq), capture + analyze
 projects/                  per-target investigations and durable findings
+  vehicle_configuration/    BCM/PROXI configuration campaigns and recovery handoffs
   radar/                     2022 Promaster ACC radar (Bosch DASM / MRR1evo14F) — see its README
     *.py                       radar-specific scripts (baseline, live, drive log, 0x0251 actuation, …)
     docs/ findings/            radar narrative docs, decoded data + promoted (tracked) captures
