@@ -1,0 +1,32 @@
+:root {
+  color-scheme: dark;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: #0c1211;
+  color: #e8f3ec;
+}
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; background:
+  radial-gradient(circle at 75% 12%, #183d32 0, transparent 34rem),
+  linear-gradient(150deg, #0c1211, #101918); }
+main { width: min(48rem, calc(100% - 2rem)); margin: 0 auto; padding: 4rem 0; }
+header { border-bottom: 1px solid #30473f; padding-bottom: 1.5rem; }
+h1 { font: 500 clamp(2.2rem, 8vw, 5rem)/.95 Georgia, serif; margin: .25rem 0 1rem; }
+.eyebrow, .label, dt { color: #8dbea8; letter-spacing: .15em; text-transform: uppercase; }
+.muted { color: #9aaba4; }
+.gauge { display: flex; align-items: center; justify-content: space-between; padding: 3rem 0 2rem; }
+.gauge p { margin: 0; }
+#voltage { font: 500 clamp(4rem, 16vw, 8rem)/1 Georgia, serif; }
+.unit { color: #8dbea8; font-size: 1.5rem; }
+.badge { border: 1px solid #547565; border-radius: 99px; padding: .45rem .7rem; color: #b9d8c9; }
+.details, .controls { border-top: 1px solid #30473f; padding: 1.5rem 0; }
+dl { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.2rem; margin: 0; }
+dt { font-size: .75rem; }
+dd { margin: .35rem 0 0; overflow-wrap: anywhere; }
+button { margin: 0 .6rem .6rem 0; padding: .7rem 1rem; color: #e8f3ec;
+  background: #294c3e; border: 1px solid #547565; border-radius: .25rem; cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: .4; }
+@media (max-width: 34rem) {
+  main { padding-top: 2rem; }
+  .gauge { align-items: flex-start; flex-direction: column; gap: 1.5rem; }
+  dl { grid-template-columns: 1fr; }
+}

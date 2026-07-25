@@ -10,9 +10,10 @@ This scheduler-facing monitor is passive unless every autonomous-wake gate succe
     and BUS-OFF interface;
   * CAN-CH/grey is never woken; it sends one grey-adapter notice and exits untouched.
 
-The cooperative lock excludes participating Pi tools. External tools such as AlfaOBD must hold an
-explicit campaign inhibit; controller diagnostic actions create it automatically and only an explicit
-campaign-end removes it. Physical adapter changes must invalidate/set topology through
+Acquisition delegates to a running projects/vehicle_data broker when present, otherwise to that project's
+shared guarded acquirer. Its cooperative lock excludes participating Pi tools. External tools such as
+AlfaOBD must hold an explicit campaign inhibit; controller diagnostic actions create it automatically and
+only an explicit campaign-end removes it. Physical adapter changes must invalidate/set topology through
 tools/can_operation_state.py. Missing, stale-boot, malformed, unknown, or CAN-CH topology fails closed.
 
 Alerts go to ntfy (free push, no account): edge-triggered when it first drops below WARN_V, a
@@ -32,6 +33,7 @@ import os
 import sys
 import json
 import fcntl
+import pathlib
 import socket
 import datetime
 import subprocess
@@ -39,9 +41,10 @@ import urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import bcan_voltage as bv            # sibling reader: read_with_wake, append_csv, CSV_PATH, _ROOT
-import ccan_voltage as cv            # C-CAN voltage BROADCAST reader (0x2EF/0x41A); stdlib-only, no isotp
-from lib import can_operation_state, diagnostic_safety
+import bcan_voltage as bv            # sibling module owns CSV path/root and append helper
+from projects.vehicle_data.api import TelemetryClient
+from projects.vehicle_data.broker import DEFAULT_SOCKET
+from projects.vehicle_data.sources import VoltageAcquirer
 
 NTFY_VOLTAGE_URL = os.environ.get("NTFY_VOLTAGE_URL", "")  # topic in ~/secrets/.bash_variables (sourced by .bashrc + cron BASH_ENV); never hardcode
 WARN_V    = 12.0                 # alert below this resting voltage (tune to taste)
@@ -101,146 +104,88 @@ def maybe_alert(volts, allow_send):
     _save_state(st)
 
 
-CCAN_BITRATE = 500000
-BCAN_BITRATE = 125000
 CAN_CH_STATUS = "CAN-CH confirmed: grey adapter connected"
-CHANNEL = "can0"
-PAIR_BY_BUS = {"c-can": "6/14", "b-can": "3/11", "can-ch": "12/13"}
+BROKER_SOCKET = pathlib.Path(DEFAULT_SOCKET)
+_VOLTAGE_ACQUIRER = VoltageAcquirer()
 
 
-def _passive_read(bus, bitrate, *, suffix):
-    if bus == "c-can" and bitrate == CCAN_BITRATE:
-        volts, status = cv.read_voltage(timeout=2.0)
-        return volts, f"{status} [passive C-CAN; {suffix}]"
-    if bus == "b-can" and bitrate == BCAN_BITRATE:
-        volts, status = bv.read_voltage(timeout=2.0)
-        return volts, f"{status} [passive B-CAN; {suffix}]"
-    return None, f"bus/bitrate mismatch ({bus} at {bitrate}); skipped unchanged"
-
-
-def _record_observed_topology(bus):
-    try:
-        can_operation_state.set_topology(
-            CHANNEL,
-            bus,
-            pair=PAIR_BY_BUS[bus],
-            source="voltage_mon_passive_signature",
-            note="passively identified before any wake decision",
-        )
-    except (KeyError, OSError, RuntimeError, ValueError) as exc:
-        log(f"could not persist passively observed topology: {exc}")
-
-
-def _interface_gate():
-    bitrate = cv.iface_bitrate()
-    if bitrate is None:
-        return None, "can0 is down or bitrate is unavailable; skipped without interface changes"
-    if not cv.canbus.is_listen_only():
-        return None, "can0 is armed (listen-only off); skipped without touching an active operation"
-    state = cv.canbus.controller_state()
-    if state != "ERROR-ACTIVE":
-        return None, f"can0 controller state is {state or 'unavailable'}; skipped without interface changes"
-    if bitrate not in (CCAN_BITRATE, BCAN_BITRATE):
-        return None, f"can0 is at unsupported bitrate {bitrate}; skipped without interface changes"
-    return bitrate, ""
-
-
-def _autonomous_wake(bitrate):
-    lock_handle = None
-    try:
-        try:
-            lock_handle = diagnostic_safety.acquire_channel_lock(CHANNEL)
-        except diagnostic_safety.ChannelLockError:
-            return None, "bus silent; another participating CAN operation holds can0"
-
-        topology = can_operation_state.load_topology(CHANNEL)
-        if topology.bus == "can-ch":
-            return None, CAN_CH_STATUS
-
-        # CAN-CH is a terminal no-TX status, so report it even while another
-        # diagnostic campaign is inhibiting ordinary-bus wake. For every
-        # wake-capable topology, the external-operation inhibit still wins.
-        inhibits = can_operation_state.active_inhibits(CHANNEL)
-        if inhibits:
-            names = ",".join(str(item.get("name", "invalid")) for item in inhibits)
-            return None, f"bus silent; autonomous wake inhibited by {names}"
-
-        if not topology.usable or topology.bus not in ("c-can", "b-can"):
-            return None, f"bus silent; autonomous wake denied: {topology.reason}"
-
-        expected_bitrate = (
-            CCAN_BITRATE if topology.bus == "c-can" else BCAN_BITRATE
-        )
-        if bitrate != expected_bitrate:
-            return None, (
-                f"bus silent; topology {topology.bus} expects {expected_bitrate}, "
-                f"interface is {bitrate}; refusing reconfiguration"
-            )
-
-        # Close the time-of-check/time-of-use window under the exclusive lock.
-        checked_bitrate, failure = _interface_gate()
-        if checked_bitrate is None:
-            return None, failure
-        bus = cv.canbus.identify_bus(probe=1.0)
-        if bus in ("c-can", "b-can", "can-ch"):
-            _record_observed_topology(bus)
-            if bus == "can-ch":
-                return None, CAN_CH_STATUS
-            return _passive_read(
-                bus, checked_bitrate, suffix="became active under wake lock"
-            )
-        if bus != "silent":
-            return None, f"wake recheck found {bus}; refusing TX"
-
-        try:
-            if topology.bus == "c-can":
-                woke = cv.canbus.poke_wake(
-                    CHANNEL,
-                    CCAN_BITRATE,
-                    lock_handle=lock_handle,
-                )
-            else:
-                woke = cv.canbus.tx_wake_burst(
-                    CHANNEL,
-                    BCAN_BITRATE,
-                    lock_handle=lock_handle,
-                )
-        except cv.canbus.PassiveRestoreError as exc:
-            return None, f"wake cleanup failed: {exc}"
-        if not woke:
-            return None, f"{topology.bus} autonomous wake produced no validated wake"
-
-        verified = cv.canbus.identify_bus(probe=1.0)
-        if verified != topology.bus:
-            return None, (
-                f"post-wake topology mismatch: expected {topology.bus}, got {verified}"
-            )
-        volts, status = _passive_read(
-            verified,
-            checked_bitrate,
-            suffix=f"autonomous wake; topology source={topology.source}",
-        )
-        return volts, status
-    finally:
-        diagnostic_safety.release_channel_lock(lock_handle)
+def _monitor_result(
+    *,
+    available,
+    value,
+    bus,
+    acquisition,
+    source,
+    quality,
+    detail,
+):
+    if bus == "can-ch":
+        return None, CAN_CH_STATUS
+    if not available:
+        return None, detail
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None, "telemetry acquisition returned an invalid voltage value"
+    bus_label = {"c-can": "C-CAN", "b-can": "B-CAN"}.get(
+        bus, bus or "unknown bus"
+    )
+    mode = (
+        "passive"
+        if acquisition == "passive"
+        else "wake-assisted"
+    )
+    return (
+        value,
+        f"{detail} [{mode} {bus_label}; source={source}; "
+        f"quality={quality}]",
+    )
 
 
 def acquire():
-    """Read passively, or wake a silent known-safe topology behind every coordination gate."""
-    bitrate, failure = _interface_gate()
-    if bitrate is None:
-        return None, failure
+    """Use an authoritative running broker, otherwise its shared acquirer in-process."""
+    if BROKER_SOCKET.exists():
+        if not BROKER_SOCKET.is_socket():
+            return None, (
+                f"telemetry broker path {BROKER_SOCKET} is not a Unix socket; "
+                "direct CAN fallback withheld"
+            )
+        try:
+            status_code, payload = TelemetryClient(
+                str(BROKER_SOCKET), timeout=30.0
+            ).request(
+                "POST",
+                "/v1/acquisitions/battery.voltage",
+                {"mode": "wake_if_asleep"},
+            )
+        except (OSError, RuntimeError, json.JSONDecodeError) as exc:
+            return None, (
+                f"telemetry broker unavailable ({exc}); "
+                "direct CAN fallback withheld"
+            )
+        detail = str(
+            payload.get("detail")
+            or payload.get("reason")
+            or f"broker returned HTTP {status_code}"
+        )
+        return _monitor_result(
+            available=bool(payload.get("available")),
+            value=payload.get("value"),
+            bus=payload.get("bus"),
+            acquisition=payload.get("acquisition"),
+            source=payload.get("source"),
+            quality=payload.get("quality"),
+            detail=detail,
+        )
 
-    bus = cv.canbus.identify_bus(probe=1.0)
-    if bus == "can-ch":
-        _record_observed_topology(bus)
-        return None, CAN_CH_STATUS
-    if bus in ("c-can", "b-can"):
-        _record_observed_topology(bus)
-        return _passive_read(bus, bitrate, suffix="interface unchanged")
-    if bus == "silent":
-        return _autonomous_wake(bitrate)
-    return None, f"bus/topology not safely recognized ({bus} at {bitrate}); skipped unchanged"
+    result = _VOLTAGE_ACQUIRER.acquire("wake_if_asleep")
+    return _monitor_result(
+        available=result.available,
+        value=result.value,
+        bus=result.bus,
+        acquisition=result.acquisition,
+        source=result.source,
+        quality=result.quality,
+        detail=result.detail,
+    )
 
 
 def handle_grey_adapter(status, allow_send):

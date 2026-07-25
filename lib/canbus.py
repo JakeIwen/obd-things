@@ -21,6 +21,7 @@ import socket
 import struct
 import datetime
 import subprocess
+from dataclasses import dataclass
 
 from lib import diagnostic_safety
 
@@ -29,6 +30,68 @@ DEFAULT_CHANNEL = "can0"
 
 class PassiveRestoreError(RuntimeError):
     """An interface-changing helper could not prove that it returned CAN to listen-only mode."""
+
+
+@dataclass(frozen=True)
+class InterfaceState:
+    """One atomic ``ip -details`` snapshot of a SocketCAN interface."""
+
+    channel: str
+    present: bool
+    up: bool
+    bitrate: int | None
+    listen_only: bool
+    controller_state: str | None
+    restart_ms: int | None
+
+    def same_configuration(self, other):
+        """Whether two snapshots prove the same safety-relevant link configuration."""
+        return (
+            isinstance(other, InterfaceState)
+            and self.channel == other.channel
+            and self.present == other.present
+            and self.up == other.up
+            and self.bitrate == other.bitrate
+            and self.listen_only == other.listen_only
+            and self.controller_state == other.controller_state
+            and self.restart_ms == other.restart_ms
+        )
+
+
+def interface_state(channel=DEFAULT_CHANNEL):
+    """Return a fail-closed interface snapshot from one command/readback.
+
+    Unlike the older scalar helpers, this captures link flags, bitrate, listen-only,
+    controller state, and restart timing from the same output. Callers that may mutate
+    the interface can compare a later snapshot with :meth:`InterfaceState.same_configuration`.
+    """
+    result = subprocess.run(
+        ["ip", "-details", "link", "show", channel],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return InterfaceState(channel, False, False, None, False, None, None)
+    out = result.stdout
+    link_flags = re.search(r"^\s*\d+:\s+[^\n]*<([^>\n]*)>", out, re.MULTILINE)
+    flags = set(link_flags.group(1).split(",")) if link_flags else set()
+    bitrate_match = re.search(r"\bbitrate\s+(\d+)\b", out)
+    state_match = re.search(
+        r"\bcan(?:\s+<[^>\n]*>)?\s+state\s+([A-Z-]+)\b", out
+    )
+    restart_match = re.search(r"\brestart-ms\s+(\d+)\b", out)
+    option_groups = re.findall(r"<([^>\n]*)>", out)
+    return InterfaceState(
+        channel=channel,
+        present=True,
+        up="UP" in flags,
+        bitrate=int(bitrate_match.group(1)) if bitrate_match else None,
+        listen_only=any(
+            "LISTEN-ONLY" in group.split(",") for group in option_groups
+        ),
+        controller_state=state_match.group(1) if state_match else None,
+        restart_ms=int(restart_match.group(1)) if restart_match else None,
+    )
 
 
 def ip_up(channel, bitrate, listen_only, restart_ms=None):
@@ -242,11 +305,43 @@ def restore_passive(channel=DEFAULT_CHANNEL, bitrate=BITRATE_CCAN):
     return bring_up_passive(channel, bitrate)
 
 
+def restore_interface_state(state):
+    """Restore and verify one previously captured UP CAN interface configuration.
+
+    This is intentionally narrower than a general network configurator. It accepts
+    only an :class:`InterfaceState` that proves the adapter was present, UP, and had
+    a readable bitrate. ``restart-ms`` is set explicitly (including zero) so an
+    active helper cannot leave behind its temporary bus-off recovery setting.
+    """
+    if (
+        not isinstance(state, InterfaceState)
+        or not state.present
+        or not state.up
+        or state.bitrate is None
+    ):
+        return False
+    if not ip_up(
+        state.channel,
+        state.bitrate,
+        listen_only=state.listen_only,
+        restart_ms=state.restart_ms if state.restart_ms is not None else 0,
+    ):
+        return False
+    return state.same_configuration(interface_state(state.channel))
+
+
 def _require_passive_restore(channel, bitrate):
     """Restore passive mode or surface the cleanup failure to the interface-changing caller."""
     if not restore_passive(channel, bitrate):
         raise PassiveRestoreError(
             f"could not verify {channel} passive at {bitrate} bit/s after CAN interface use"
+        )
+
+
+def _require_interface_restore(state):
+    if not restore_interface_state(state):
+        raise PassiveRestoreError(
+            f"could not verify exact {state.channel} interface restoration after CAN use"
         )
 
 
@@ -281,6 +376,7 @@ def tx_wake_burst(
     bitrate=BITRATE_BCAN,
     *,
     lock_handle=None,
+    restore_state=None,
 ):
     """ACTIVE: arm the iface and TX a brief benign 0x7FF burst to wake a sleeping bus via wake-on-activity.
     Verified on the legacy observed 125-kbit/s body capture. The helper owns the per-channel
@@ -335,7 +431,10 @@ def tx_wake_burst(
             finally:
                 try:
                     if lock_handle is not None and mutation_started:
-                        _require_passive_restore(channel, bitrate)
+                        if restore_state is None:
+                            _require_passive_restore(channel, bitrate)
+                        else:
+                            _require_interface_restore(restore_state)
                 finally:
                     if manage_lock:
                         diagnostic_safety.release_channel_lock(lock_handle)
@@ -348,6 +447,7 @@ def poke_wake(
     did=RFH_WAKE_DID,
     *,
     lock_handle=None,
+    restore_state=None,
 ):
     """ACTIVE: wake a bus by sending ONE addressed UDS read to an always-awake module (default rf_hub on
     C-CAN). The diag exchange trips the gateway's network-management wake -> full broadcast for ~15s.
@@ -405,7 +505,10 @@ def poke_wake(
             finally:
                 try:
                     if lock_handle is not None and mutation_started:
-                        _require_passive_restore(channel, bitrate)
+                        if restore_state is None:
+                            _require_passive_restore(channel, bitrate)
+                        else:
+                            _require_interface_restore(restore_state)
                 finally:
                     if manage_lock:
                         diagnostic_safety.release_channel_lock(lock_handle)

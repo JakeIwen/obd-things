@@ -1,0 +1,21 @@
+[Unit]
+Description=Loopback cached van telemetry dashboard
+After=van-telemetry.service
+Requires=van-telemetry.service
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/dev/obd-things
+ExecStart=/usr/bin/python3 /home/pi/dev/obd-things/projects/vehicle_data/web.py --socket /run/van-telemetry/api.sock --bind 127.0.0.1 --port 8765
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

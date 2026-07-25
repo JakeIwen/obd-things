@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Van telemetry</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">VAN TELEMETRY</p>
+      <h1>Electrical pulse</h1>
+      <p id="service-state" class="muted">Connecting to the local broker…</p>
+    </header>
+    <section class="gauge" aria-labelledby="battery-label">
+      <div>
+        <p id="battery-label" class="label">12 V battery</p>
+        <p><span id="voltage">—</span><span class="unit"> V</span></p>
+      </div>
+      <div id="quality" class="badge">NO SAMPLE</div>
+    </section>
+    <section class="details">
+      <dl>
+        <div><dt>Bus</dt><dd id="bus">—</dd></div>
+        <div><dt>Source</dt><dd id="source">—</dd></div>
+        <div><dt>Age</dt><dd id="age">—</dd></div>
+        <div><dt>Acquisition</dt><dd id="acquisition">—</dd></div>
+      </dl>
+      <p id="detail" class="muted">Awaiting a cached observation.</p>
+    </section>
+    <section class="controls">
+      <button id="refresh" type="button">Refresh cache</button>
+      <button id="acquire" type="button" disabled>Wake if asleep</button>
+      <p id="control-note" class="muted">Web acquisition is disabled by default.</p>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

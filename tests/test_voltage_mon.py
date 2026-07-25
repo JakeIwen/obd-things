@@ -4,6 +4,8 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+from projects.vehicle_data.models import failure, success
+
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 MODULE_PATH = REPO / "projects" / "battery" / "voltage_mon.py"
@@ -16,277 +18,122 @@ voltage_mon = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(voltage_mon)
 
 
-class PassiveAcquireTests(unittest.TestCase):
-    def safe_interface(self, bitrate=500000, bus="c-can"):
-        return (
-            mock.patch.object(voltage_mon.cv, "iface_bitrate", return_value=bitrate),
-            mock.patch.object(voltage_mon.cv.canbus, "is_listen_only", return_value=True),
-            mock.patch.object(voltage_mon.cv.canbus, "controller_state", return_value="ERROR-ACTIVE"),
-            mock.patch.object(voltage_mon.cv.canbus, "identify_bus", return_value=bus),
+class SharedAcquireTests(unittest.TestCase):
+    def test_available_shared_result_preserves_monitor_status_contract(self):
+        result = success(
+            metric="battery.voltage",
+            unit="V",
+            value=12.7,
+            source="ccan.broadcast.0x2ef",
+            bus="c-can",
+            acquisition="passive",
+            quality="approximate",
+            observed_monotonic=10.0,
+            detail="ok 0x2EF",
         )
-
-    def test_canch_is_detected_passively_without_read_wake_or_bringup(self):
-        bitrate, listen_only, state, identify = self.safe_interface(bus="can-ch")
-        with (
-            bitrate,
-            listen_only,
-            state,
-            identify,
-            mock.patch.object(voltage_mon.cv, "read_voltage") as c_read,
-            mock.patch.object(voltage_mon.bv, "read_voltage") as b_read,
-            mock.patch.object(voltage_mon.cv, "read_with_wake") as c_wake,
-            mock.patch.object(voltage_mon.bv, "read_with_wake") as b_wake,
-            mock.patch.object(voltage_mon.cv, "bring_up_passive") as c_up,
-            mock.patch.object(voltage_mon.bv, "bring_up_passive") as b_up,
-            mock.patch.object(voltage_mon, "_record_observed_topology"),
-        ):
-            self.assertEqual(voltage_mon.acquire(), (None, voltage_mon.CAN_CH_STATUS))
-
-        c_read.assert_not_called()
-        b_read.assert_not_called()
-        c_wake.assert_not_called()
-        b_wake.assert_not_called()
-        c_up.assert_not_called()
-        b_up.assert_not_called()
-
-    def test_awake_ccan_read_is_passive_and_bounded(self):
-        bitrate, listen_only, state, identify = self.safe_interface()
-        with (
-            bitrate,
-            listen_only,
-            state,
-            identify,
-            mock.patch.object(
-                voltage_mon.cv, "read_voltage", return_value=(12.7, "ok")
-            ) as read,
-            mock.patch.object(voltage_mon.cv.canbus, "ip_up") as ip_up,
-            mock.patch.object(voltage_mon, "_record_observed_topology"),
+        with mock.patch.object(
+            voltage_mon._VOLTAGE_ACQUIRER, "acquire", return_value=result
+        ) as acquire, mock.patch.object(
+            voltage_mon, "BROKER_SOCKET", SimpleNamespace(exists=lambda: False)
         ):
             volts, status = voltage_mon.acquire()
 
         self.assertEqual(volts, 12.7)
         self.assertIn("passive C-CAN", status)
-        read.assert_called_once_with(timeout=2.0)
-        ip_up.assert_not_called()
+        self.assertIn("quality=approximate", status)
+        acquire.assert_called_once_with("wake_if_asleep")
 
-    def test_down_interface_skips_before_bus_probe(self):
-        with (
-            mock.patch.object(voltage_mon.cv, "iface_bitrate", return_value=None),
-            mock.patch.object(voltage_mon.cv.canbus, "identify_bus") as identify,
-            mock.patch.object(voltage_mon.cv.canbus, "ip_up") as ip_up,
+    def test_shared_failure_is_returned_without_fallback_can_action(self):
+        result = failure(
+            metric="battery.voltage",
+            unit="V",
+            reason="can_busy",
+            detail="active acquisition inhibited by alfaobd",
+        )
+        with mock.patch.object(
+            voltage_mon._VOLTAGE_ACQUIRER, "acquire", return_value=result
+        ), mock.patch.object(
+            voltage_mon, "BROKER_SOCKET", SimpleNamespace(exists=lambda: False)
         ):
-            volts, status = voltage_mon.acquire()
+            self.assertEqual(
+                voltage_mon.acquire(),
+                (None, "active acquisition inhibited by alfaobd"),
+            )
 
-        self.assertIsNone(volts)
-        self.assertIn("skipped without interface changes", status)
-        identify.assert_not_called()
-        ip_up.assert_not_called()
-
-    def test_armed_interface_skips_without_probe_or_mutation(self):
-        with (
-            mock.patch.object(voltage_mon.cv, "iface_bitrate", return_value=500000),
-            mock.patch.object(voltage_mon.cv.canbus, "is_listen_only", return_value=False),
-            mock.patch.object(voltage_mon.cv.canbus, "identify_bus") as identify,
-            mock.patch.object(voltage_mon.cv.canbus, "ip_up") as ip_up,
-        ):
-            volts, status = voltage_mon.acquire()
-
-        self.assertIsNone(volts)
-        self.assertIn("active operation", status)
-        identify.assert_not_called()
-        ip_up.assert_not_called()
-
-    def test_silent_bus_with_unknown_topology_is_never_woken(self):
-        bitrate, listen_only, state, identify = self.safe_interface(bus="silent")
-        lock_handle = object()
-        with (
-            bitrate,
-            listen_only,
-            state,
-            identify,
-            mock.patch.object(
-                voltage_mon.diagnostic_safety,
-                "acquire_channel_lock",
-                return_value=lock_handle,
-            ),
-            mock.patch.object(
-                voltage_mon.diagnostic_safety, "release_channel_lock"
-            ) as release,
-            mock.patch.object(
-                voltage_mon.can_operation_state,
-                "active_inhibits",
-                return_value=(),
-            ),
-            mock.patch.object(
-                voltage_mon.can_operation_state,
-                "load_topology",
-                return_value=SimpleNamespace(
-                    bus="unknown",
-                    usable=False,
-                    reason="topology record missing",
-                ),
-            ),
-            mock.patch.object(voltage_mon.cv.canbus, "poke_wake") as poke,
-            mock.patch.object(voltage_mon.cv.canbus, "tx_wake_burst") as burst,
-            mock.patch.object(voltage_mon.cv.canbus, "ip_up") as ip_up,
-        ):
-            volts, status = voltage_mon.acquire()
-
-        self.assertIsNone(volts)
-        self.assertIn("topology record missing", status)
-        poke.assert_not_called()
-        burst.assert_not_called()
-        ip_up.assert_not_called()
-        release.assert_called_once_with(lock_handle)
-
-    def test_silent_bus_external_inhibit_blocks_wake_capable_topology(self):
-        bitrate, listen_only, state, identify = self.safe_interface(bus="silent")
-        lock_handle = object()
-        with (
-            bitrate,
-            listen_only,
-            state,
-            identify,
-            mock.patch.object(
-                voltage_mon.diagnostic_safety,
-                "acquire_channel_lock",
-                return_value=lock_handle,
-            ),
-            mock.patch.object(
-                voltage_mon.diagnostic_safety, "release_channel_lock"
-            ),
-            mock.patch.object(
-                voltage_mon.can_operation_state,
-                "active_inhibits",
-                return_value=({"name": "alfaobd"},),
-            ),
-            mock.patch.object(
-                voltage_mon.can_operation_state,
-                "load_topology",
-                return_value=SimpleNamespace(bus="c-can", usable=True),
-            ) as topology,
-            mock.patch.object(voltage_mon.cv.canbus, "poke_wake") as poke,
-            mock.patch.object(voltage_mon.cv.canbus, "tx_wake_burst") as burst,
-        ):
-            volts, status = voltage_mon.acquire()
-
-        self.assertIsNone(volts)
-        self.assertIn("inhibited by alfaobd", status)
-        topology.assert_called_once_with("can0")
-        poke.assert_not_called()
-        burst.assert_not_called()
-
-    def test_silent_canch_topology_notifies_despite_inhibit_without_wake(self):
-        bitrate, listen_only, state, identify = self.safe_interface(bus="silent")
-        with (
-            bitrate,
-            listen_only,
-            state,
-            identify,
-            mock.patch.object(
-                voltage_mon.diagnostic_safety,
-                "acquire_channel_lock",
-                return_value=object(),
-            ),
-            mock.patch.object(
-                voltage_mon.diagnostic_safety, "release_channel_lock"
-            ),
-            mock.patch.object(
-                voltage_mon.can_operation_state,
-                "active_inhibits",
-                return_value=({"name": "alfaobd"},),
-            ) as inhibits,
-            mock.patch.object(
-                voltage_mon.can_operation_state,
-                "load_topology",
-                return_value=SimpleNamespace(bus="can-ch", usable=True),
-            ),
-            mock.patch.object(voltage_mon.cv.canbus, "poke_wake") as poke,
-            mock.patch.object(voltage_mon.cv.canbus, "tx_wake_burst") as burst,
+    def test_canch_result_maps_to_existing_edge_notice_status(self):
+        result = failure(
+            metric="battery.voltage",
+            unit="V",
+            reason="wrong_bus",
+            detail="CAN-CH is connected",
+            bus="can-ch",
+        )
+        with mock.patch.object(
+            voltage_mon._VOLTAGE_ACQUIRER, "acquire", return_value=result
+        ), mock.patch.object(
+            voltage_mon, "BROKER_SOCKET", SimpleNamespace(exists=lambda: False)
         ):
             self.assertEqual(
                 voltage_mon.acquire(), (None, voltage_mon.CAN_CH_STATUS)
             )
-        poke.assert_not_called()
-        burst.assert_not_called()
-        inhibits.assert_not_called()
 
-    def test_silent_ccan_wakes_only_under_lock_and_revalidates(self):
-        bitrate, listen_only, state, _identify = self.safe_interface(bus="silent")
-        lock_handle = object()
+    def test_running_broker_is_authoritative(self):
+        payload = {
+            "available": True,
+            "value": 12.55,
+            "bus": "b-can",
+            "acquisition": "wake_assisted",
+            "source": "bcan.broadcast.0x46c",
+            "quality": "verified",
+            "detail": "broker result",
+        }
+        client = mock.Mock()
+        client.request.return_value = (200, payload)
+        broker_path = SimpleNamespace(
+            exists=lambda: True,
+            is_socket=lambda: True,
+            __str__=lambda _self: "/run/van-telemetry/api.sock",
+        )
         with (
-            bitrate,
-            listen_only,
-            state,
+            mock.patch.object(voltage_mon, "BROKER_SOCKET", broker_path),
             mock.patch.object(
-                voltage_mon.cv.canbus,
-                "identify_bus",
-                side_effect=("silent", "silent", "c-can"),
-            ),
+                voltage_mon, "TelemetryClient", return_value=client
+            ) as client_class,
             mock.patch.object(
-                voltage_mon.diagnostic_safety,
-                "acquire_channel_lock",
-                return_value=lock_handle,
-            ),
-            mock.patch.object(
-                voltage_mon.diagnostic_safety, "release_channel_lock"
-            ) as release,
-            mock.patch.object(
-                voltage_mon.can_operation_state,
-                "active_inhibits",
-                return_value=(),
-            ),
-            mock.patch.object(
-                voltage_mon.can_operation_state,
-                "load_topology",
-                return_value=SimpleNamespace(
-                    bus="c-can",
-                    usable=True,
-                    reason="",
-                    source="explicit_test",
-                ),
-            ),
-            mock.patch.object(
-                voltage_mon.cv.canbus, "poke_wake", return_value=True
-            ) as poke,
-            mock.patch.object(
-                voltage_mon.cv,
-                "read_voltage",
-                return_value=(12.6, "ok"),
-            ),
+                voltage_mon._VOLTAGE_ACQUIRER, "acquire"
+            ) as direct,
         ):
             volts, status = voltage_mon.acquire()
 
-        self.assertEqual(volts, 12.6)
-        self.assertIn("autonomous wake", status)
-        poke.assert_called_once_with(
-            "can0", 500000, lock_handle=lock_handle
+        self.assertEqual(volts, 12.55)
+        self.assertIn("wake-assisted B-CAN", status)
+        client_class.assert_called_once_with(
+            str(broker_path), timeout=30.0
         )
-        release.assert_called_once_with(lock_handle)
+        direct.assert_not_called()
 
-    def test_lock_contention_blocks_silent_wake(self):
-        bitrate, listen_only, state, identify = self.safe_interface(bus="silent")
+    def test_broker_socket_failure_does_not_bypass_owner(self):
+        broker_path = SimpleNamespace(
+            exists=lambda: True,
+            is_socket=lambda: True,
+            __str__=lambda _self: "/run/van-telemetry/api.sock",
+        )
+        client = mock.Mock()
+        client.request.side_effect = OSError("connection refused")
         with (
-            bitrate,
-            listen_only,
-            state,
-            identify,
+            mock.patch.object(voltage_mon, "BROKER_SOCKET", broker_path),
             mock.patch.object(
-                voltage_mon.diagnostic_safety,
-                "acquire_channel_lock",
-                side_effect=voltage_mon.diagnostic_safety.ChannelLockError(
-                    "busy"
-                ),
+                voltage_mon, "TelemetryClient", return_value=client
             ),
-            mock.patch.object(voltage_mon.cv.canbus, "poke_wake") as poke,
-            mock.patch.object(voltage_mon.cv.canbus, "tx_wake_burst") as burst,
+            mock.patch.object(
+                voltage_mon._VOLTAGE_ACQUIRER, "acquire"
+            ) as direct,
         ):
             volts, status = voltage_mon.acquire()
 
         self.assertIsNone(volts)
-        self.assertIn("another participating CAN operation", status)
-        poke.assert_not_called()
-        burst.assert_not_called()
+        self.assertIn("direct CAN fallback withheld", status)
+        direct.assert_not_called()
 
 
 class GreyNoticeTests(unittest.TestCase):

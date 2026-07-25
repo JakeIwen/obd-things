@@ -52,6 +52,7 @@ tools/                     GENERIC, module-agnostic CLI tools (take a module key
   signal_correlate.py        DID byte-slice <-> signal correlator (lstsq), capture + analyze
 projects/                  per-target investigations and durable findings
   vehicle_configuration/    BCM/PROXI configuration campaigns and recovery handoffs
+  vehicle_data/             allowlisted cached telemetry broker, CLI, and loopback dashboard
   radar/                     2022 Promaster ACC radar (Bosch DASM / MRR1evo14F) — see its README
     *.py                       radar-specific scripts (baseline, live, drive log, 0x0251 actuation, …)
     docs/ findings/            radar narrative docs, decoded data + promoted (tracked) captures

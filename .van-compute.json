@@ -3,23 +3,23 @@
   "tasks": [
     {
       "name": "repo-tests",
-      "description": "Run portable selected offline obd-things tests (AlfaOBD DAT smoke tests by default).",
+      "description": "Run the portable offline obd-things test suite, optionally filtered by pytest arguments.",
       "profile": "repo-test",
       "source_paths": [
         "lib",
         "tools",
         "tests",
         "live_data",
+        "projects/battery",
         "projects/ecu_mapping",
-        "projects/tpms"
+        "projects/tpms",
+        "projects/vehicle_data"
       ],
       "minimum_inputs": 0,
       "maximum_inputs": 0,
       "argv": [
         "-q",
         "tests",
-        "-k",
-        "alfaobd_dat",
         "{arguments}"
       ],
       "outputs": []

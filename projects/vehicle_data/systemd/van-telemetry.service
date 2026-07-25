@@ -1,0 +1,19 @@
+[Unit]
+Description=Allowlisted van telemetry CAN broker
+After=local-fs.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/dev/obd-things
+RuntimeDirectory=van-telemetry
+RuntimeDirectoryMode=0750
+UMask=0007
+ExecStart=/usr/bin/python3 /home/pi/dev/obd-things/projects/vehicle_data/broker.py serve --socket /run/van-telemetry/api.sock
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target
