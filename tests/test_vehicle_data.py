@@ -331,14 +331,17 @@ class FakeClock:
 class FakeAcquirer:
     channel = "can0"
 
-    def __init__(self, *, block=None):
+    def __init__(self, *, block=None, result=None):
         self.calls = []
         self.block = block
+        self.result = result
 
     def acquire(self, mode):
         self.calls.append(mode)
         if self.block:
             self.block.wait()
+        if self.result is not None:
+            return self.result
         return success(
             metric="battery.voltage",
             unit="V",
@@ -396,7 +399,15 @@ class BrokerTests(unittest.TestCase):
         )
         broker.status_response()
         broker.list_metrics()
+        snapshot = broker.snapshot_response()
         self.assertEqual(acquirer.calls, [])
+        self.assertEqual(
+            [item["name"] for item in snapshot["catalog"]],
+            ["battery.voltage"],
+        )
+        self.assertEqual(
+            snapshot["metrics"]["battery.voltage"]["reason"], "stale"
+        )
 
     def test_acquisition_caches_source_metadata_and_then_rate_limits(self):
         clock = FakeClock()
@@ -412,6 +423,88 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(payload["source"], "bcan.broadcast.0x46c")
         self.assertEqual(payload["quality"], "verified")
         self.assertEqual(acquirer.calls, ["passive"])
+
+    def test_passive_activity_reports_awake_without_guessing_running(self):
+        clock = FakeClock()
+        broker = TelemetryBroker(
+            acquirer=FakeAcquirer(), monotonic=clock
+        )
+
+        broker.acquire("battery.voltage", "passive")
+        state = broker.status_response()["vehicle_state"]
+
+        self.assertEqual(state["state"], "awake")
+        self.assertIsNone(state["running"])
+        self.assertEqual(state["basis"], "passive_bus_activity")
+        self.assertEqual(state["age_ms"], 0)
+        self.assertIn("not yet distinguished", state["detail"])
+
+    def test_passive_silence_reports_inferred_asleep_with_caveat(self):
+        asleep = failure(
+            metric="battery.voltage",
+            unit="V",
+            reason="bus_asleep",
+            detail="passive bus identification returned silent",
+            bus="silent",
+            acquisition="passive",
+        )
+        broker = TelemetryBroker(
+            acquirer=FakeAcquirer(result=asleep),
+            monotonic=FakeClock(),
+        )
+
+        broker.acquire("battery.voltage", "passive")
+        state = broker.status_response()["vehicle_state"]
+
+        self.assertEqual(state["state"], "asleep")
+        self.assertFalse(state["running"])
+        self.assertEqual(state["confidence"], "inferred")
+        self.assertIn("unplugged", state["detail"])
+
+    def test_wake_assisted_read_is_not_reported_as_running_evidence(self):
+        wake_result = success(
+            metric="battery.voltage",
+            unit="V",
+            value=12.5,
+            source="ccan.broadcast.0x41a",
+            bus="c-can",
+            acquisition="wake_assisted",
+            quality="verified",
+            observed_monotonic=100.0,
+        )
+        broker = TelemetryBroker(
+            acquirer=FakeAcquirer(result=wake_result),
+            monotonic=FakeClock(),
+        )
+
+        broker.acquire("battery.voltage", "wake_if_asleep")
+        state = broker.status_response()["vehicle_state"]
+
+        self.assertEqual(state["state"], "awake")
+        self.assertIsNone(state["running"])
+        self.assertEqual(state["basis"], "broker_wake_activity")
+        self.assertIn("not evidence", state["detail"])
+
+    def test_wrong_rate_activity_never_claims_running_state(self):
+        wrong_rate = failure(
+            metric="battery.voltage",
+            unit="V",
+            reason="wrong_bus",
+            detail="passive bus identification returned wrong-rate",
+            bus="wrong-rate",
+            acquisition="passive",
+        )
+        broker = TelemetryBroker(
+            acquirer=FakeAcquirer(result=wrong_rate),
+            monotonic=FakeClock(),
+        )
+
+        broker.acquire("battery.voltage", "passive")
+        state = broker.status_response()["vehicle_state"]
+
+        self.assertEqual(state["state"], "awake")
+        self.assertIsNone(state["running"])
+        self.assertEqual(state["basis"], "wrong_rate_rx_activity")
 
     def test_unknown_metric_never_reaches_source(self):
         acquirer = FakeAcquirer()
@@ -690,6 +783,16 @@ class ApiTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_get_is_cache_only_and_post_is_allowlisted(self):
+        status, snapshot = self.client.request("GET", "/v1/snapshot")
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            snapshot["metrics"]["battery.voltage"]["reason"], "stale"
+        )
+        self.assertEqual(
+            snapshot["status"]["vehicle_state"]["state"], "unknown"
+        )
+        self.assertEqual(self.acquirer.calls, [])
+
         status, payload = self.client.request(
             "GET", "/v1/metrics/battery.voltage"
         )
@@ -770,6 +873,16 @@ class WebTests(unittest.TestCase):
         return response.status, raw
 
     def test_web_gets_are_cache_only_and_posts_default_closed(self):
+        status, raw = self.request("GET", "/v1/snapshot")
+        self.assertEqual(status, 200)
+        snapshot = json.loads(raw)
+        self.assertEqual(
+            snapshot["metrics"]["battery.voltage"]["reason"], "stale"
+        )
+        self.assertFalse(
+            snapshot["web"]["active_acquisition_enabled"]
+        )
+
         status, raw = self.request(
             "GET", "/v1/metrics/battery.voltage"
         )
@@ -797,8 +910,14 @@ class WebTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertIn("default-src", response.getheader("Content-Security-Policy"))
         self.assertIn(b"Van telemetry", body)
-        self.assertIn(b"Auto bus switch", body)
+        self.assertIn(b"Automatic bus switch", body)
+        self.assertIn(b"Customize this device", body)
         connection.close()
+
+        status, profiles = self.request("GET", "/profiles.js")
+        self.assertEqual(status, 200)
+        self.assertIn(b"localStorage", profiles)
+        self.assertIn(b"automaticProfile", profiles)
 
     def test_disconnected_client_does_not_escape_web_json_writer(self):
         handler = object.__new__(TelemetryWebHandler)

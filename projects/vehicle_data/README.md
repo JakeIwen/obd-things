@@ -42,6 +42,35 @@ class, quality, wall-clock timestamp, age, and staleness. Failures use a stable
 reason such as `adapter_absent`, `wrong_bus`, `bus_asleep`, `can_busy`,
 `rate_limited`, or `restoration_failed`.
 
+## Dashboard profiles and vehicle state
+
+The dashboard is registry-driven rather than hard-coded to one final set of
+cards. `GET /v1/snapshot` returns the public metric catalog, every metric's
+cache-only response, broker/interface status, and an evidence-qualified
+`vehicle_state` object in one request. A future allowlisted metric therefore
+becomes available to the generic metric and catalog panels without adding
+another web proxy route or SSE request.
+
+Built-in dashboard profiles are **Overview**, **Parked**, **Driving**, and
+**Diagnostics**. The user can select one manually, choose **Automatic**, or
+choose exactly which panels appear in a **Custom** profile. The selection and
+custom panel list use browser `localStorage`; they are per-device preferences
+and never write broker configuration or touch CAN.
+
+Automatic mode currently makes only these evidence-backed choices:
+
+- `asleep`/`parked` selects the Parked electrical layout;
+- a future verified `moving`, `running`, or `ignition_on` state selects Driving;
+- `awake` or `unknown` selects Overview.
+
+The broker deliberately does **not** infer engine-running state from charging
+voltage. An external charger can overlap alternator voltage, and ordinary bus
+activity can be ignition-on, a key-fob wake, or a broker-assisted wake. Current
+passive acquisition can report `awake`, inferred `asleep`, or `unknown`, with
+`running: null` whenever the evidence cannot distinguish those cases. This
+keeps the automatic layout engine ready for a separately verified
+ignition/motion metric without silently promoting a voltage heuristic.
+
 ## Safety contract
 
 Passive reads:
@@ -123,6 +152,7 @@ The default Unix socket is `/run/van-telemetry/api.sock`.
 
 ```text
 GET  /v1/status
+GET  /v1/snapshot
 GET  /v1/metrics
 GET  /v1/metrics/battery.voltage
 POST /v1/acquisitions/battery.voltage
@@ -132,6 +162,19 @@ POST /v1/acquisitions/battery.voltage
 
 GETs are cache-only. There is no raw frame, arbitrary DID, diagnostic session,
 DTC, reset, calibration, configuration, or PROXI endpoint.
+
+`/v1/snapshot` is the preferred dashboard endpoint. Its shape is:
+
+```text
+{
+  "status": { ..., "vehicle_state": {...} },
+  "catalog": [ ...public metric definitions... ],
+  "metrics": { "battery.voltage": {...} }
+}
+```
+
+The web SSE stream uses that same cache-only snapshot. It does not acquire or
+poll CAN when a browser connects.
 
 Examples:
 
@@ -211,7 +254,8 @@ continue to work while acquisition safety still has one implementation.
 Offline tests use fake interfaces, locks, sources, and clocks. They cover
 cache-only GETs, allowlist enforcement, source metadata, passive acquisition,
 silent-bus wake gates, coalescing/rate limits, post-wake restoration failure,
-Unix API behavior, and cache-only web defaults.
+Unix API behavior, the registry-driven snapshot, evidence-qualified vehicle
+state, dashboard profile assets, and cache-only web defaults.
 
 The services are deployed on vanpi as described above. Service health and
 offline validation are not evidence of a successful live CAN acquisition;

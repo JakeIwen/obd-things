@@ -3,39 +3,143 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#09110f">
   <title>Van telemetry</title>
+  <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <main>
-    <header>
-      <p class="eyebrow">VAN TELEMETRY</p>
-      <h1>Electrical pulse</h1>
-      <p id="service-state" class="muted">Connecting to the local broker…</p>
-    </header>
-    <section class="gauge" aria-labelledby="battery-label">
+    <header class="masthead">
       <div>
-        <p id="battery-label" class="label">12 V battery</p>
-        <p><span id="voltage">—</span><span class="unit"> V</span></p>
+        <p class="eyebrow">VAN TELEMETRY</p>
+        <h1 id="dashboard-title">Overview</h1>
+        <p id="service-state" class="muted">Connecting to the local broker…</p>
+      </div>
+      <div class="profile-picker">
+        <label for="profile">Dashboard</label>
+        <select id="profile" aria-describedby="profile-reason"></select>
+        <p id="profile-reason" class="muted">Loading dashboard profile…</p>
+      </div>
+    </header>
+
+    <section class="panel state-panel" data-widget="vehicle" aria-labelledby="vehicle-heading">
+      <div>
+        <p class="eyebrow">VEHICLE STATE</p>
+        <h2 id="vehicle-heading"><span id="vehicle-state">Unknown</span></h2>
+      </div>
+      <dl class="compact-grid">
+        <div><dt>Running</dt><dd id="running-state">Unknown</dd></div>
+        <div><dt>Confidence</dt><dd id="state-confidence">—</dd></div>
+        <div><dt>Evidence</dt><dd id="state-basis">—</dd></div>
+        <div><dt>Age</dt><dd id="state-age">—</dd></div>
+      </dl>
+      <p id="state-detail" class="muted panel-note">
+        Awaiting passive state evidence.
+      </p>
+    </section>
+
+    <section class="panel battery-panel" data-widget="battery" aria-labelledby="battery-label">
+      <div class="battery-reading">
+        <p id="battery-label" class="eyebrow">12 V SYSTEM</p>
+        <p class="reading"><span id="voltage">—</span><span class="unit"> V</span></p>
       </div>
       <div id="quality" class="badge">NO SAMPLE</div>
+      <p id="battery-detail" class="muted panel-note">Awaiting a cached observation.</p>
     </section>
-    <section class="details">
-      <dl>
+
+    <section class="panel" data-widget="metrics" aria-labelledby="metrics-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">ALLOWLIST</p>
+          <h2 id="metrics-heading">Additional metrics</h2>
+        </div>
+        <span id="metric-count" class="count">0</span>
+      </div>
+      <div id="metric-grid" class="metric-grid"></div>
+      <p id="metrics-empty" class="muted panel-note">
+        No additional allowlisted metrics are registered yet.
+      </p>
+    </section>
+
+    <section class="panel" data-widget="source" aria-labelledby="source-heading">
+      <p class="eyebrow">PROVENANCE</p>
+      <h2 id="source-heading">Battery source</h2>
+      <dl class="detail-grid">
         <div><dt>Bus</dt><dd id="bus">—</dd></div>
         <div><dt>Source</dt><dd id="source">—</dd></div>
-        <div><dt>Age</dt><dd id="age">—</dd></div>
+        <div><dt>Sample age</dt><dd id="age">—</dd></div>
         <div><dt>Acquisition</dt><dd id="acquisition">—</dd></div>
-        <div><dt>Auto bus switch</dt><dd id="auto-retune">—</dd></div>
       </dl>
-      <p id="detail" class="muted">Awaiting a cached observation.</p>
+      <p id="source-detail" class="muted panel-note">No provenance is cached.</p>
     </section>
-    <section class="controls">
-      <button id="refresh" type="button">Refresh cache</button>
-      <button id="acquire" type="button" disabled>Wake if asleep</button>
-      <p id="control-note" class="muted">Web acquisition is disabled by default.</p>
+
+    <section class="panel" data-widget="interface" aria-labelledby="interface-heading">
+      <p class="eyebrow">SOCKETCAN</p>
+      <h2 id="interface-heading">Interface</h2>
+      <dl class="detail-grid">
+        <div><dt>Channel</dt><dd id="channel">—</dd></div>
+        <div><dt>Adapter</dt><dd id="adapter-state">—</dd></div>
+        <div><dt>Bitrate</dt><dd id="bitrate">—</dd></div>
+        <div><dt>Controller</dt><dd id="controller-state">—</dd></div>
+        <div><dt>Listen-only</dt><dd id="listen-only">—</dd></div>
+        <div><dt>Topology</dt><dd id="topology">—</dd></div>
+        <div><dt>Current owner</dt><dd id="current-owner">—</dd></div>
+        <div><dt>Inhibits</dt><dd id="inhibits">—</dd></div>
+      </dl>
     </section>
+
+    <section class="panel" data-widget="retune" aria-labelledby="retune-heading">
+      <p class="eyebrow">BUS ROUTING</p>
+      <h2 id="retune-heading">Automatic bus switch</h2>
+      <p id="auto-retune-state" class="status-line">—</p>
+      <p id="auto-retune" class="muted panel-note">No switch status available.</p>
+    </section>
+
+    <section class="panel" data-widget="collector" aria-labelledby="collector-heading">
+      <p class="eyebrow">BROKER</p>
+      <h2 id="collector-heading">Collector health</h2>
+      <dl class="detail-grid">
+        <div><dt>State</dt><dd id="collector-state">—</dd></div>
+        <div><dt>Cycles</dt><dd id="collector-cycles">—</dd></div>
+        <div><dt>Last cycle</dt><dd id="collector-last">—</dd></div>
+        <div><dt>Interval</dt><dd id="collector-interval">—</dd></div>
+      </dl>
+    </section>
+
+    <section class="panel" data-widget="catalog" aria-labelledby="catalog-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">DATA READINESS</p>
+          <h2 id="catalog-heading">Metric catalog</h2>
+        </div>
+      </div>
+      <div id="catalog-list" class="catalog-list"></div>
+    </section>
+
+    <section class="panel controls" data-widget="controls" aria-labelledby="controls-heading">
+      <p class="eyebrow">CACHE CONTROL</p>
+      <h2 id="controls-heading">Acquisition</h2>
+      <div class="button-row">
+        <button id="refresh" type="button">Refresh cache</button>
+        <button id="acquire" type="button" disabled>Wake if asleep</button>
+      </div>
+      <p id="control-note" class="muted panel-note">
+        Web acquisition is disabled by default.
+      </p>
+    </section>
+
+    <details class="panel customizer">
+      <summary>Customize this device</summary>
+      <p class="muted">
+        Choose the panels for the Custom profile. This preference stays in this
+        browser and never changes the broker or vehicle.
+      </p>
+      <div id="widget-options" class="widget-options"></div>
+      <button id="reset-layout" type="button" class="secondary">Reset layout</button>
+    </details>
   </main>
+  <script src="/profiles.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
