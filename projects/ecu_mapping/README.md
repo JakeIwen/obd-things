@@ -616,6 +616,38 @@ relationships, and broadcast candidates. It does not by itself prove absolute RP
 temperature, or every gear enum. Radar/GPS/tachometer, a stable temperature reference, or another
 controlled ground truth is still required before promoting those scalings.
 
+`tools/can_timeseries_correlate.py` performs the first offline broadcast-candidate search against
+one exact-positive cluster DID. It streams saved plain or zstd candump chunks, verifies every
+selected reference against its exact global raw-frame sequence/timestamp/ID/payload, and excludes
+29-bit and standard OBD diagnostic IDs by default so the diagnostic response cannot become a
+trivial perfect match. It requires at least 50 percent reference coverage and four distinct
+candidate values by default, then ranks by `R² × coverage` before the remaining deterministic
+tie-breakers. For the completed idling shakedown:
+
+```bash
+python3 tools/can_timeseries_correlate.py \
+  --wire tmp/captures/ccan/cluster-drive/cluster-drive-shakedown-20260726T050955Z/cluster_wire.jsonl \
+  --did 1000 \
+  --reference-field u16be:0 \
+  --match nearest \
+  --radius-ms 100 \
+  --minimum-samples 20 \
+  --top 100 \
+  --output tmp/sweeps/cluster-drive-shakedown-20260726T050955Z-did1000-broadcast.json \
+  tmp/captures/ccan/cluster-drive/cluster-drive-shakedown-20260726T050955Z/chunk_000000_full.candump.zst \
+  tmp/captures/ccan/cluster-drive/cluster-drive-shakedown-20260726T050955Z/chunk_000001_full.candump.zst
+```
+
+This tool performs no CAN, ADB, service, or network access. Its ranked rows are deliberately marked
+`candidate_only`, `physical_identity_verified: false`, `scale_verified: false`, and
+`telemetry_promotion_allowed: false`. A high correlation means only that a saved broadcast field
+tracked the selected raw DID during that experiment; it does not establish identity, units,
+physical scaling, safety thresholds, or causality. The low-excitation idling trace is a lead
+generator, not promotion evidence; confirm candidates with independent driving variation and
+ground truth. The report exact-links raw frames but deliberately states that it does not itself
+validate the chunk manifest, socket-drop accounting, or final campaign summary; retain and review
+the completed `summary.json` alongside it.
+
 `reassemble_commands.py <decoded.txt> <out.txt> [atsh]` — rebuilds multi-frame COMMANDS.
 AlfaOBD sends long requests as MANUAL ISO-TP frames: First Frame `1L LL <6 data>` + a trailing
 ELM responses-hint digit (17 hex chars), ECU Flow Control `30 00 00`, Consecutive Frames

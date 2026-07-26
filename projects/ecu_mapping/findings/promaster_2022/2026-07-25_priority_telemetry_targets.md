@@ -173,6 +173,18 @@ keys include the request service (`22:DDDD` or `21:LL`), so numerically similar
 identifiers cannot be merged or mislabeled as DIDs. This prepares the offline
 half of the Plots campaign; it does not supply any live PCM mapping by itself.
 
+The offline `tools/can_timeseries_correlate.py` path can independently rank
+passive C-CAN byte/u16/aligned-u32 fields against one exact cluster DID from the
+integrated drive logger. It exact-joins every selected DID response back to the
+global raw frame sequence and excludes diagnostic IDs by default. Every result
+remains promotion-disabled candidate evidence: the idling trace can locate a
+likely broadcast RPM field, but its shared warm-up/time trend cannot prove the
+field's identity or scale. Sparse and low-variation matches are gated before
+the `R² × coverage` ranking. The report does not independently revalidate the
+logger's manifest, drop accounting, or campaign summary, so those completed
+artifacts remain part of the evidence review. Driving excitation and
+independent ground truth are still required.
+
 The separate `tools/alfaobd_plots_scalar_campaign.py` and draft
 `projects/ecu_mapping/configs/alfaobd_pcm_plots_scalars.json` prepare only the
 offline safety gates for the eventual one-scalar runner. `plan` and `audit`
