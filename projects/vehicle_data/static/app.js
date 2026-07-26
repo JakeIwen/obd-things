@@ -44,6 +44,33 @@ const DRIVE_METRICS = Object.freeze({
     roles: ["drive_ignition", "ignition"],
   },
 });
+const ENGINE_HEALTH_METRICS = Object.freeze({
+  oilPressure: {
+    id: "oil-pressure",
+    names: ["engine.oil_pressure", "engine.oil_pressure_kpa"],
+    roles: ["engine_oil_pressure", "oil_pressure"],
+  },
+  coolantTemperature: {
+    id: "coolant-temperature",
+    names: ["engine.coolant_temperature", "engine.coolant_temp"],
+    roles: ["engine_coolant_temperature", "coolant_temperature"],
+  },
+  oilTemperature: {
+    id: "oil-temperature",
+    names: ["engine.oil_temperature", "engine.oil_temp"],
+    roles: ["engine_oil_temperature", "oil_temperature"],
+  },
+  torque: {
+    id: "torque",
+    names: ["engine.crankshaft_torque", "engine.torque"],
+    roles: ["engine_crankshaft_torque", "engine_torque"],
+  },
+  power: {
+    id: "power",
+    names: ["engine.crankshaft_power", "engine.power"],
+    roles: ["engine_crankshaft_power", "engine_power"],
+  },
+});
 const TIRE_METRICS = Object.freeze({
   fl: {
     names: [
@@ -416,7 +443,7 @@ function setCardState(id, state) {
 }
 
 function metricStatus(definition, metric, state) {
-  if (!definition) return "Metric is not registered";
+  if (!definition) return "Mapping pending";
   if (!state.available) {
     return humanize(metric?.reason || "no cached sample");
   }
@@ -530,11 +557,12 @@ function renderHeroMetric(role, catalog, metrics) {
   const cardId = `drive-${role}-card`;
   const unitId = `drive-${role}-unit`;
   const card = byId(cardId);
-  card.hidden = !definition;
+  card.hidden = false;
   if (!definition) {
     text(`drive-${role}`, "—");
     if (byId(unitId)) text(unitId, "", "");
     setCardState(cardId, "unavailable");
+    text(`drive-${role}-status`, metricStatus(definition, metric, state));
     return {definition, state};
   }
   if (state.heroReady) {
@@ -591,7 +619,7 @@ function renderDrive(status, catalog, metrics) {
 
   const ignitionDefinition = findDefinition(catalog, DRIVE_METRICS.ignition);
   const ignitionCard = byId("drive-ignition-card");
-  ignitionCard.hidden = !ignitionDefinition;
+  ignitionCard.hidden = false;
   const ignitionMetric = ignitionDefinition
     ? metrics[ignitionDefinition.name]
     : null;
@@ -644,8 +672,8 @@ function renderDrive(status, catalog, metrics) {
       ? "4/4 LIVE"
       : (
         ready
-          ? `${ready} LIVE · ${registered}/4 REGISTERED`
-          : `${registered}/4 REGISTERED`
+          ? `${ready} LIVE · ${registered}/4 MAPPED`
+          : `${registered}/4 MAPPED`
       ),
   );
   byId("drive-freshness").dataset.state = ready === 4 ? "verified" : "partial";
@@ -654,11 +682,65 @@ function renderDrive(status, catalog, metrics) {
     ready === 4
       ? "All drive essentials are fresh and driver-qualified."
       : (
-        `${registered}/4 drive metrics are registered. ` +
+        `${registered}/4 drive sources are mapped. ` +
         "Only fresh, driver-qualified values are promoted here. " +
         "Candidate and raw diagnostic DIDs are held out."
       ),
   );
+}
+
+function renderEngineMetric(role, catalog, metrics) {
+  const descriptor = ENGINE_HEALTH_METRICS[role];
+  const definition = findDefinition(catalog, descriptor);
+  const metric = definition ? metrics[definition.name] : null;
+  const state = observationState(definition, metric);
+  const cardId = `engine-${descriptor.id}-card`;
+  const valueId = `engine-${descriptor.id}`;
+  const unitId = `${valueId}-unit`;
+  byId(cardId).hidden = false;
+  if (state.heroReady) {
+    text(valueId, formatMetricValue(definition.name, metric.value));
+    text(unitId, metric.unit || definition.unit, "");
+    setCardState(cardId, state.quality);
+  } else {
+    text(valueId, "—");
+    text(unitId, "", "");
+    setCardState(
+      cardId,
+      state.stale ? "stale" : (state.available ? "unqualified" : "unavailable"),
+    );
+  }
+  text(
+    `${valueId}-status`,
+    metricStatus(definition, metric, state),
+  );
+  return {definition, state};
+}
+
+function renderEngineHealth(catalog, metrics) {
+  const states = Object.keys(ENGINE_HEALTH_METRICS)
+    .map((role) => renderEngineMetric(role, catalog, metrics));
+  const mapped = states.filter((state) => state.definition).length;
+  const ready = states.filter((state) => state.state.heroReady).length;
+  text(
+    "engine-health-state",
+    ready
+      ? `${ready}/5 LIVE · ${mapped}/5 MAPPED`
+      : `${mapped}/5 MAPPED`,
+  );
+  byId("engine-health-state").dataset.state = ready === 5
+    ? "verified"
+    : "partial";
+  text(
+    "engine-health-note",
+    ready === 5
+      ? "All five engine-health values are fresh and driver-qualified."
+      : (
+        "Priority gauges remain visible while exact C-CAN sources and " +
+        "scaling are mapped. Candidate values remain available in Diagnostics."
+      ),
+  );
+  return states;
 }
 
 function renderBattery(metrics) {
@@ -736,10 +818,19 @@ function metricCard(definition, metric) {
 
 function featuredMetricNames(catalog) {
   const names = new Set(["battery.voltage"]);
-  [...Object.values(DRIVE_METRICS), ...Object.values(TIRE_METRICS)]
+  [
+    ...Object.values(DRIVE_METRICS),
+    ...Object.values(ENGINE_HEALTH_METRICS),
+    ...Object.values(TIRE_METRICS),
+  ]
     .forEach((descriptor) => {
       const definition = findDefinition(catalog, descriptor);
-      if (definition) names.add(definition.name);
+      if (
+        definition &&
+        DRIVER_QUALITIES.has(definitionQuality(definition))
+      ) {
+        names.add(definition.name);
+      }
     });
   return names;
 }
@@ -762,11 +853,12 @@ function renderTire(position, catalog, metrics) {
   const state = observationState(definition, metric);
   const cardId = `tire-${position}-card`;
   const card = byId(cardId);
-  card.hidden = !definition;
+  card.hidden = false;
   if (!definition) {
     text(`tire-${position}`, "—");
     text(`tire-${position}-unit`, "", "");
     setCardState(cardId, "unavailable");
+    text(`tire-${position}-status`, metricStatus(definition, metric, state));
     return {
       registered: false,
       live: false,
@@ -797,7 +889,7 @@ function renderTires(catalog, metrics) {
   const states = Object.keys(TIRE_METRICS)
     .map((position) => renderTire(position, catalog, metrics));
   const registered = states.filter((state) => state.registered).length;
-  byId("tire-grid").hidden = registered === 0;
+  byId("tire-grid").hidden = false;
   const live = states.filter((state) => state.live);
   const ready = live.length;
   const liveQualities = new Set(live.map((state) => state.quality));
@@ -815,11 +907,11 @@ function renderTires(catalog, metrics) {
       ? `4/4 LIVE · ${qualityLabel}`
       : (
         ready
-          ? `${ready}/4 LIVE · ${registered}/4 REGISTERED`
+          ? `${ready}/4 LIVE · ${registered}/4 MAPPED`
           : (
             registered
-              ? `0/4 LIVE · ${registered}/4 REGISTERED`
-              : "0/4 REGISTERED"
+              ? `0/4 LIVE · ${registered}/4 MAPPED`
+              : "0/4 MAPPED"
           )
       ),
   );
@@ -839,10 +931,10 @@ function renderTires(catalog, metrics) {
           : (
             registered
               ? (
-                `${registered}/4 wheel-position metrics are registered; ` +
+                `${registered}/4 wheel-position sources are mapped; ` +
                 "stale, unavailable, or candidate pressures are not shown as live."
               )
-              : "No wheel-position pressure metrics are registered."
+              : "Wheel-position pressure mapping is pending."
           )
       ),
   );
@@ -958,6 +1050,7 @@ function render(snapshot) {
   );
   renderVehicleState(status);
   renderDrive(status, catalog, metrics);
+  renderEngineHealth(catalog, metrics);
   renderBattery(metrics);
   renderTires(catalog, metrics);
   renderAdditionalMetrics(catalog, metrics);
@@ -983,6 +1076,7 @@ function renderTimeSensitiveSnapshot() {
   const metrics = lastSnapshot.metrics || {};
   renderVehicleState(status);
   renderDrive(status, catalog, metrics);
+  renderEngineHealth(catalog, metrics);
   renderBattery(metrics);
   renderTires(catalog, metrics);
   renderAdditionalMetrics(catalog, metrics);

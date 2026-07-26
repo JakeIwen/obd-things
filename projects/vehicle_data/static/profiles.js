@@ -5,6 +5,7 @@
   const MAX_AUTOMATIC_STATE_AGE_MS = 3000;
   const widgets = Object.freeze([
     {id: "drive", label: "Drive essentials"},
+    {id: "engine", label: "Engine health"},
     {id: "vehicle", label: "Vehicle state"},
     {id: "battery", label: "Battery"},
     {id: "tires", label: "Tire pressure"},
@@ -21,7 +22,15 @@
     overview: {
       label: "Overview",
       title: "Road systems",
-      widgets: ["vehicle", "battery", "tires", "metrics", "interface", "retune"],
+      widgets: [
+        "engine",
+        "vehicle",
+        "battery",
+        "tires",
+        "metrics",
+        "interface",
+        "retune",
+      ],
     },
     parked: {
       label: "Parked",
@@ -31,12 +40,13 @@
     driving: {
       label: "Driving",
       title: "Drive telemetry",
-      widgets: ["drive", "tires", "battery", "metrics"],
+      widgets: ["drive", "engine", "tires", "battery", "metrics"],
     },
     diagnostics: {
       label: "Diagnostics",
       title: "Broker diagnostics",
       widgets: [
+        "engine",
         "vehicle",
         "metrics",
         "interface",

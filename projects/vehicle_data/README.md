@@ -83,19 +83,22 @@ the public registry today. The evidence, exact OEM pressure/thermostat context,
 alert-design constraints, PCM/TCM acquisition sequence, and later mechanical
 and electrical targets are maintained in the
 [`priority telemetry finding`](../ecu_mapping/findings/promaster_2022/2026-07-25_priority_telemetry_targets.md).
-The dashboard's generic metric/catalog architecture can display a promoted
-scalar. Context-aware oil-pressure bands, engine-running/startup gates, and
-fresh time-aligned torque/RPM power derivation still require specialized
-evaluation and presentation logic.
+The dashboard keeps inert roadmap cards visible for oil pressure, coolant
+temperature, engine-oil temperature, crankshaft torque, and crankshaft power.
+Those labels do not create metrics or imply that a source is available. A card
+receives a value only after a matching registry definition and qualified fresh
+observation exist. Context-aware oil-pressure bands, engine-running/startup
+gates, and fresh time-aligned torque/RPM power derivation still require
+specialized evaluation and presentation logic.
 
 ## Dashboard profiles and vehicle state
 
-The dashboard is registry-driven rather than hard-coded to one final set of
-cards. `GET /v1/snapshot` returns the public metric catalog, every metric's
-cache-only response, broker/interface status, and an evidence-qualified
-`vehicle_state` object in one request. A future allowlisted metric therefore
-becomes available to the generic metric and catalog panels without adding
-another web proxy route or SSE request.
+Dashboard values are registry-driven even where the layout keeps a future
+metric role visible. `GET /v1/snapshot` returns the public metric catalog,
+every metric's cache-only response, broker/interface status, and an
+evidence-qualified `vehicle_state` object in one request. A future registered
+metric therefore becomes available to the generic metric and catalog panels
+without adding another web proxy route or SSE request.
 
 Built-in dashboard profiles are **Overview**, **Parked**, **Driving**, and
 **Diagnostics**. The user can select one manually, choose **Automatic**, or
@@ -103,13 +106,13 @@ choose exactly which panels appear in a **Custom** profile. The selection and
 custom panel list use browser `localStorage`; they are per-device preferences
 and never write broker configuration or touch CAN.
 
-Cards for future metric roles are hidden until the broker catalog actually
-registers them; an entirely unregistered four-tire group collapses to one
-`0/4 REGISTERED` summary instead of repeating placeholder warnings. Registry
-membership is a metric-schema and evidence boundary, not a request for human
-approval before each read. Candidate metrics may appear in Diagnostics, but
-they remain withheld from driver-qualified hero values until their identity
-and scaling meet the recorded evidence policy.
+Future drive, engine-health, and tire roles remain visible with `MAPPING
+PENDING` instead of disappearing. This makes the intended dashboard and current
+mapping gaps explicit without inventing a value. Registry membership is a
+metric-schema and evidence boundary, not a request for human approval before
+each read. Candidate metrics may appear in Diagnostics, but they remain
+withheld from driver-qualified hero values until their identity and scaling
+meet the recorded evidence policy.
 
 Automatic mode currently makes only these evidence-backed choices, and every
 state used for a layout must carry a finite nonnegative age no older than three

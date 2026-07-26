@@ -1335,6 +1335,10 @@ class WebTests(unittest.TestCase):
         self.assertIn("default-src", response.getheader("Content-Security-Policy"))
         self.assertIn(b"Van telemetry", body)
         self.assertIn(b"Drive essentials", body)
+        self.assertIn(b"Engine health", body)
+        self.assertIn(b"OIL PRESSURE", body)
+        self.assertIn(b"COOLANT", body)
+        self.assertIn(b"CRANK TORQUE", body)
         self.assertIn(b"Tire pressure", body)
         self.assertIn(b"Only fresh, driver-qualified values", body)
         self.assertIn(b"Automatic bus switch", body)
@@ -1349,6 +1353,7 @@ class WebTests(unittest.TestCase):
         self.assertIn(b"localStorage", profiles)
         self.assertIn(b"automaticProfile", profiles)
         self.assertIn(b'"drive"', profiles)
+        self.assertIn(b'"engine"', profiles)
         self.assertIn(b'"tires"', profiles)
 
         status, app = self.request("GET", "/app.js")
@@ -1364,9 +1369,11 @@ class WebTests(unittest.TestCase):
         self.assertIn(b'"visibilitychange"', app)
         self.assertIn(b'"pageshow"', app)
         self.assertIn(b"ALFA SCALE means", app)
-        self.assertIn(b"/4 REGISTERED", app)
-        self.assertIn(b"card.hidden = !definition", app)
-        self.assertIn(b'byId("tire-grid").hidden = registered === 0', app)
+        self.assertIn(b"ENGINE_HEALTH_METRICS", app)
+        self.assertIn(b"Mapping pending", app)
+        self.assertIn(b"/4 MAPPED", app)
+        self.assertNotIn(b"card.hidden = !definition", app)
+        self.assertNotIn(b'byId("tire-grid").hidden = registered === 0', app)
         self.assertNotIn(b"Not yet allowlisted", app)
         self.assertNotIn(b"allowlisted", app.lower())
         self.assertIn(b"registered", app)
@@ -1429,9 +1436,11 @@ vm.runInThisContext(definitionsOnly + `
   globalThis.dashboardUnderTest = {
     acceptSnapshot,
     advanceDisplayedAges,
+    featuredMetricNames,
     ignitionFromVehicleState,
     invalidateDisplayedFreshness,
     observationState,
+    renderEngineHealth,
     renderHeroMetric,
     renderTires,
     renderedMarkers,
@@ -1594,6 +1603,7 @@ const missingDrive = dashboard.renderHeroMetric("rpm", [], {});
 const missingDriveRender = {
   registered: Boolean(missingDrive.definition),
   hidden: element("drive-rpm-card").hidden,
+  status: element("drive-rpm-status").textContent,
 };
 const candidateDriveCatalog = [{
   name: "engine.rpm",
@@ -1643,6 +1653,12 @@ const verifiedDriveRender = {
   value: element("drive-rpm").textContent,
   status: element("drive-rpm-status").textContent,
 };
+const featuredCandidateDrive = [
+  ...dashboard.featuredMetricNames(candidateDriveCatalog),
+];
+const featuredVerifiedDrive = [
+  ...dashboard.featuredMetricNames(verifiedDriveCatalog),
+];
 
 dashboard.resetDelivery();
 fakeMonotonicMs = 29000;
@@ -1723,6 +1739,54 @@ const emptyTires = {
     (position) => element(`tire-${position}-card`).hidden,
   ),
 };
+const emptyEngineStates = dashboard.renderEngineHealth([], {});
+const emptyEngine = {
+  mapped: emptyEngineStates.filter((state) => state.definition).length,
+  state: element("engine-health-state").textContent,
+  note: element("engine-health-note").textContent,
+  cardsVisible: [
+    "oil-pressure",
+    "coolant-temperature",
+    "oil-temperature",
+    "torque",
+    "power",
+  ].every((name) => element(`engine-${name}-card`).hidden === false),
+  statusesPending: [
+    "oil-pressure",
+    "coolant-temperature",
+    "oil-temperature",
+    "torque",
+    "power",
+  ].every(
+    (name) => element(`engine-${name}-status`).textContent === "Mapping pending",
+  ),
+};
+const coolantDefinition = {
+  name: "engine.coolant_temperature",
+  unit: "\u00b0F",
+  stale_after_seconds: 3,
+  sources: [{quality: "verified"}],
+};
+const coolantStates = dashboard.renderEngineHealth(
+  [coolantDefinition],
+  {
+    "engine.coolant_temperature": {
+      available: true,
+      stale: false,
+      value: 194,
+      unit: "\u00b0F",
+      quality: "verified",
+      age_ms: 100,
+    },
+  },
+);
+const liveCoolant = {
+  ready: coolantStates.filter((state) => state.state.heroReady).length,
+  state: element("engine-health-state").textContent,
+  value: element("engine-coolant-temperature").textContent,
+  unit: element("engine-coolant-temperature-unit").textContent,
+  status: element("engine-coolant-temperature-status").textContent,
+};
 process.stdout.write(JSON.stringify({
   acceptedHttp,
   acceptedStream,
@@ -1741,12 +1805,16 @@ process.stdout.write(JSON.stringify({
   missingDriveRender,
   candidateDriveRender,
   verifiedDriveRender,
+  featuredCandidateDrive,
+  featuredVerifiedDrive,
   locallyAged,
   lifecycleInvalidated,
   renderedMarkers: dashboard.renderedMarkers,
   alfaTires,
   registeredStale,
   emptyTires,
+  emptyEngine,
+  liveCoolant,
 }));
 """
         completed = subprocess.run(
@@ -1799,7 +1867,8 @@ process.stdout.write(JSON.stringify({
             )
         )
         self.assertFalse(result["missingDriveRender"]["registered"])
-        self.assertTrue(result["missingDriveRender"]["hidden"])
+        self.assertFalse(result["missingDriveRender"]["hidden"])
+        self.assertEqual(result["missingDriveRender"]["status"], "Mapping pending")
         self.assertFalse(result["candidateDriveRender"]["hidden"])
         self.assertFalse(result["candidateDriveRender"]["heroReady"])
         self.assertEqual(result["candidateDriveRender"]["value"], "\u2014")
@@ -1810,6 +1879,8 @@ process.stdout.write(JSON.stringify({
         self.assertTrue(result["verifiedDriveRender"]["heroReady"])
         self.assertEqual(result["verifiedDriveRender"]["value"], "1,234")
         self.assertIn("VERIFIED", result["verifiedDriveRender"]["status"])
+        self.assertNotIn("engine.rpm", result["featuredCandidateDrive"])
+        self.assertIn("engine.rpm", result["featuredVerifiedDrive"])
         self.assertTrue(result["locallyAged"]["metric"]["stale"])
         self.assertEqual(result["locallyAged"]["vehicle"]["state"], "unknown")
         self.assertEqual(result["locallyAged"]["vehicle"]["confidence"], "stale")
@@ -1829,14 +1900,24 @@ process.stdout.write(JSON.stringify({
             "not independent verification",
             result["alfaTires"]["note"],
         )
-        self.assertEqual(result["registeredStale"], "0/4 LIVE · 4/4 REGISTERED")
-        self.assertEqual(result["emptyTires"]["state"], "0/4 REGISTERED")
+        self.assertEqual(result["registeredStale"], "0/4 LIVE · 4/4 MAPPED")
+        self.assertEqual(result["emptyTires"]["state"], "0/4 MAPPED")
         self.assertIn(
-            "No wheel-position pressure metrics",
+            "mapping is pending",
             result["emptyTires"]["note"],
         )
-        self.assertTrue(result["emptyTires"]["gridHidden"])
-        self.assertTrue(result["emptyTires"]["cardsHidden"])
+        self.assertFalse(result["emptyTires"]["gridHidden"])
+        self.assertFalse(result["emptyTires"]["cardsHidden"])
+        self.assertEqual(result["emptyEngine"]["mapped"], 0)
+        self.assertEqual(result["emptyEngine"]["state"], "0/5 MAPPED")
+        self.assertIn("remain visible", result["emptyEngine"]["note"])
+        self.assertTrue(result["emptyEngine"]["cardsVisible"])
+        self.assertTrue(result["emptyEngine"]["statusesPending"])
+        self.assertEqual(result["liveCoolant"]["ready"], 1)
+        self.assertEqual(result["liveCoolant"]["state"], "1/5 LIVE · 1/5 MAPPED")
+        self.assertEqual(result["liveCoolant"]["value"], "194")
+        self.assertEqual(result["liveCoolant"]["unit"], "\u00b0F")
+        self.assertIn("VERIFIED", result["liveCoolant"]["status"])
 
     @unittest.skipUnless(
         shutil.which("node"), "node is required for browser JS test"

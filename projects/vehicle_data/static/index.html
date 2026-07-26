@@ -62,6 +62,56 @@
       </p>
     </section>
 
+    <section class="panel engine-health-panel" data-widget="engine" aria-labelledby="engine-health-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">MECHANICAL</p>
+          <h2 id="engine-health-heading">Engine health</h2>
+        </div>
+        <span id="engine-health-state" class="badge">LOADING CATALOG</span>
+      </div>
+      <div class="engine-health-grid">
+        <article class="drive-tile health-tile" id="engine-oil-pressure-card">
+          <p class="eyebrow">OIL PRESSURE</p>
+          <p class="drive-value health-value">
+            <span id="engine-oil-pressure">—</span><span id="engine-oil-pressure-unit" class="drive-unit"></span>
+          </p>
+          <p id="engine-oil-pressure-status" class="drive-status">Loading metric catalog…</p>
+        </article>
+        <article class="drive-tile health-tile" id="engine-coolant-temperature-card">
+          <p class="eyebrow">COOLANT</p>
+          <p class="drive-value health-value">
+            <span id="engine-coolant-temperature">—</span><span id="engine-coolant-temperature-unit" class="drive-unit"></span>
+          </p>
+          <p id="engine-coolant-temperature-status" class="drive-status">Loading metric catalog…</p>
+        </article>
+        <article class="drive-tile health-tile" id="engine-oil-temperature-card">
+          <p class="eyebrow">ENGINE OIL</p>
+          <p class="drive-value health-value">
+            <span id="engine-oil-temperature">—</span><span id="engine-oil-temperature-unit" class="drive-unit"></span>
+          </p>
+          <p id="engine-oil-temperature-status" class="drive-status">Loading metric catalog…</p>
+        </article>
+        <article class="drive-tile health-tile" id="engine-torque-card">
+          <p class="eyebrow">CRANK TORQUE</p>
+          <p class="drive-value health-value">
+            <span id="engine-torque">—</span><span id="engine-torque-unit" class="drive-unit"></span>
+          </p>
+          <p id="engine-torque-status" class="drive-status">Loading metric catalog…</p>
+        </article>
+        <article class="drive-tile health-tile" id="engine-power-card">
+          <p class="eyebrow">CRANK POWER</p>
+          <p class="drive-value health-value">
+            <span id="engine-power">—</span><span id="engine-power-unit" class="drive-unit"></span>
+          </p>
+          <p id="engine-power-status" class="drive-status">Loading metric catalog…</p>
+        </article>
+      </div>
+      <p id="engine-health-note" class="muted panel-note">
+        Priority gauges remain visible while their exact C-CAN sources and scaling are mapped.
+      </p>
+    </section>
+
     <section class="panel state-panel" data-widget="vehicle" aria-labelledby="vehicle-heading">
       <div>
         <p class="eyebrow">VEHICLE STATE</p>
