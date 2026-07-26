@@ -100,9 +100,9 @@ class FakeBackend:
             source=(
                 "bcan.broadcast.0x46c"
                 if bus == "b-can"
-                else "ccan.broadcast.0x2ef"
+                else "ccan.broadcast.0x41a"
             ),
-            quality="verified" if bus == "b-can" else "approximate",
+            quality="verified",
             detail="fake approved broadcast",
         )
 
@@ -129,7 +129,6 @@ class SourceTests(unittest.TestCase):
             {source.name for source in sources},
             {
                 "bcan.broadcast.0x46c",
-                "ccan.broadcast.0x2ef",
                 "ccan.broadcast.0x41a",
             },
         )
@@ -283,32 +282,42 @@ class BroadcastReplayTests(unittest.TestCase):
         self.assertEqual(replay.bound, ("can9",))
         self.assertTrue(replay.closed)
 
-    def test_ccan_0x2ef_replay_decodes_qualified_fine_source(self):
-        data = bytes((0x88, 0x13, 0, 0, 0, 0, 0, 0))
-        frame = struct.pack("=IB3x8s", 0x2EF, 8, data)
-        replay = ReplaySocket([frame] * 7)
-        with (
-            mock.patch.multiple(
-                ccan_voltage.socket,
-                AF_CAN=29,
-                SOCK_RAW=3,
-                CAN_RAW=1,
-                SOL_CAN_RAW=101,
-                CAN_RAW_FILTER=1,
-                create=True,
-            ),
-            mock.patch.object(
-                ccan_voltage.socket, "socket", return_value=replay
-            ),
-        ):
-            volts, detail = ccan_voltage.read_voltage(
-                "can9", timeout=0.1
-            )
+    def test_ccan_0x41a_replay_decodes_verified_affine_scale(self):
+        for raw, expected in ((0xBE, 13.5), (0xB0, 12.8), (0xAE, 12.7)):
+            with self.subTest(raw=raw):
+                data = bytes((raw, 0, 0, 0, 0, 0, 0, 0))
+                frame = struct.pack("=IB3x8s", 0x41A, 8, data)
+                replay = ReplaySocket([frame] * 15)
+                with (
+                    mock.patch.multiple(
+                        ccan_voltage.socket,
+                        AF_CAN=29,
+                        SOCK_RAW=3,
+                        CAN_RAW=1,
+                        SOL_CAN_RAW=101,
+                        CAN_RAW_FILTER=1,
+                        create=True,
+                    ),
+                    mock.patch.object(
+                        ccan_voltage.socket, "socket", return_value=replay
+                    ),
+                ):
+                    volts, detail = ccan_voltage.read_voltage(
+                        "can9", timeout=0.1
+                    )
 
-        self.assertEqual(volts, 12.5)
-        self.assertIn("0x2EF", detail)
-        self.assertEqual(replay.bound, ("can9",))
-        self.assertTrue(replay.closed)
+                self.assertEqual(volts, expected)
+                self.assertIn("0x41A", detail)
+                self.assertIn("verified affine", detail)
+                self.assertEqual(replay.bound, ("can9",))
+                self.assertTrue(replay.closed)
+
+    def test_ccan_0x2ef_payload_is_not_a_voltage_source(self):
+        self.assertIsNone(
+            ccan_voltage._decode(
+                0x2EF, bytes((0x88, 0x13, 0, 0, 0, 0, 0, 0))
+            )
+        )
 
 
 class FakeClock:

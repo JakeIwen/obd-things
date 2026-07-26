@@ -1,32 +1,31 @@
 # LED low beams / IPC lamp-out handoff
 
-Last reviewed: 2026-07-25
+Last reviewed: 2026-07-25 after the supervised change/recovery campaign
 
 ## Decision state
 
-The van is presently on a healthy, internally consistent configuration:
+The labeled AlfaOBD experiment was performed on 2026-07-25 and then rolled
+back. The original 250-byte backup, which records
+`Headlamp LED Management: Absent`, was loaded through `Write custom
+configuration`, successfully decoded by `Verify Custom Proxy`, and written.
+After repeated PROXI alignment attempts, BCM DTC `B10AA-00` did not return
+after an engine start.
 
-- `PROXI Status: OK`
-- configuration-check-fail counter `0`
-- PROXI write counter `15`
-- `Headlamp LED Management: Absent`
-- two independent current 250-byte reads are byte-identical
-- AlfaOBD's native backup decodes to the same 250 bytes
+AlfaOBD reported `Failure connecting to module` for DASM during every
+alignment attempt. That result did not correlate with an observable DASM/ACC
+failure: the module's status loaded directly, ACC remained functional, no ACC
+fault appeared, and the odometer did not flash. It currently has to be treated
+as an AlfaOBD alignment-path/profile problem or unresolved reporting anomaly,
+not proof that the physical DASM is unavailable.
 
-The next supported experiment is one labeled AlfaOBD change:
-`Headlamp LED Management: Absent -> Present`. It has not been performed in the
-fresh controlled campaign. Do not edit a raw byte and do not run PROXI
-alignment as a preliminary test.
+The operational state is recovered, but a fresh post-recovery DID `0x2023`
+readback and BCM status snapshot have not been archived. Do not perform
+another write or alignment solely to obtain them. If more confirmation is
+needed, use read-only status, configuration, and DTC collection.
 
-Procedure 1 is complete. Procedure 2 stopped before any write because:
-
-1. AlfaOBD could not retrieve an authoritative factory/VIN configuration; and
-2. BCM voltage was 12.81 V rather than the documented 13.2–13.5 V programming
-   range.
-
-The owner may explicitly revise the factory/VIN prerequisite and use the
-verified current-state backup as the operational rollback reference. Stable
-regulated voltage remains a hard prerequisite.
+There is no supported next LED-setting experiment at present. Do not retry
+`Absent -> Present` until the AlfaOBD DASM behavior and the headlamp-option
+result have been reviewed from the preserved evidence.
 
 ## Problem being investigated
 
@@ -65,6 +64,10 @@ differences or actions cannot be excluded.
 Use the labeled AlfaOBD operation and compare fresh before/after reads. Never
 write the candidate bit directly. Canonical analysis:
 [`2026-07-21 candidate DID inventory`](../ecu_mapping/findings/promaster_2022/2026-07-21_candidate_did_inventory.md#complete-default-session-bcm-pages).
+
+This historical trace is now superseded for operational planning by the
+2026-07-25 supervised attempt and recovery. See
+[`findings/2026-07-25_led_option_recovery.md`](findings/2026-07-25_led_option_recovery.md).
 
 ## Owner-reported no-shift event
 

@@ -27,8 +27,11 @@ classification:
 | Source | Bus | Quality | Notes |
 |---|---|---|---|
 | `bcan.broadcast.0x46c` | B-CAN, 125 kbit/s | `verified` | low 13-bit word / 400 |
-| `ccan.broadcast.0x2ef` | C-CAN, 500 kbit/s | `approximate` | fine field; exact divisor remains unpinned |
-| `ccan.broadcast.0x41a` | C-CAN, 500 kbit/s | `approximate` | coarse parked-wake field |
+| `ccan.broadcast.0x41a` | C-CAN, 500 kbit/s | `verified` | byte0 x 0.05 V + 4.0 V; readable in a parked wake |
+
+C-CAN `0x2EF` remains an ignition-on presence gate, not an approved voltage
+source. Its payload is mode-dependent and the former low-13-bit `/400` decode
+has been withdrawn.
 
 Canonical decoding and bus evidence remains in
 [`docs/bus-map.md`](../../docs/bus-map.md) and the battery readers; the broker

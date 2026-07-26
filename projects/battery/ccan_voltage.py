@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-"""Read 12 V system voltage PASSIVELY from the C-CAN (500k powertrain) bus.
+"""Read 12 V system voltage PASSIVELY from C-CAN frame 0x41A.
 
-The powertrain bus DOES broadcast system voltage (found 2026-06-28 from tmp/captures/ccan analysis;
-see memory battery-monitor-passive-plan). Two broadcast fields (default mode is passive/no-TX; --wake pokes once):
+The verified decode is ``4.0 + byte0 * 0.05 V``. A controlled charger transition on 2026-07-25
+produced ``BE, BC, BA, ... B0`` while BCM Status stepped from 13.50 V toward its 12.80 V
+maintenance plateau; a fresh later BCM snapshot reported 12.70 V (+30) / 12.80 V (ADC) while
+0x41A was AE/B0. These observations fit the affine decode exactly.
 
-  * 0x2EF  bytes[0:1] little-endian uint16 / DIVISOR  -- FINE. Only present with IGNITION ON / running.
-           ratio engine/ignition = 1.17 (alternator); same 2-byte ÷~400 family as B-CAN 0x46C.
-  * 0x41A  byte0 / COARSE_DIVISOR                      -- COARSE. Present even on a parked WAKE
-           (~12.5 V resting), so it's the C-CAN analogue of B-CAN 0x46C for parked reads.
-
-Reads whichever is on the wire, PREFERRING 0x2EF (finer). So: connected with ignition on -> 0x2EF;
-catching a parked wake -> 0x41A. A fully-asleep van is silent -> use --wake (or "bus asleep" failure).
+Frame 0x2EF remains a verified ignition-on presence gate, but its payload is NOT an approved voltage
+source. The current ``FF 21`` payload disproved the former low-13-bit /400 interpretation and suggests
+mode/multiplex semantics that remain unresolved. This reader deliberately ignores 0x2EF so it cannot
+override the verified 0x41A value.
 
 --wake (ACTIVE parked wake, verified 2026-07-08; see docs/bus-map.md): a raw 0x7FF broadcast burst does NOT
 wake C-CAN (selective wake -- junk frames aren't a wake reason), but ONE addressed UDS read to the RF Hub
@@ -20,16 +19,10 @@ rf_hub, then reads 0x41A. SIDE EFFECT: the wake also powers the BCM's accessory 
 boots) for the awake window -- owner OK'd unprompted parked TX; use a COARSE cadence (battery). Only fires on
 a SILENT bus (never active/foreign); the poke is self-validating -- if rf_hub doesn't answer we're not on C-CAN.
 
-SCALE NOT YET PINNED -- the FIELDS are confirmed voltage (range/ratio/load-response exclude temp+checksum)
-but the exact divisor needs ONE ground-truth reading. `--calibrate V` reads the live raw and prints the
-divisor to use (ignition on, against a multimeter or the radar's 0x1006). Defaults: 0x2EF /400 (->~11.5/13.5,
-consistent with the ~11.9 V battery), 0x41A /14.2.
-
     python3 projects/battery/ccan_voltage.py                  # -> "12.0 V" (passive; needs an awake bus)
     python3 projects/battery/ccan_voltage.py --quiet
     python3 projects/battery/ccan_voltage.py --csv --warn 12.0
     python3 projects/battery/ccan_voltage.py --no-bringup     # assume can0 already up @500k passive
-    python3 projects/battery/ccan_voltage.py --calibrate 12.4 # ignition on: print the divisor that fits
     python3 projects/battery/ccan_voltage.py --wake           # parked: poke rf_hub to wake C-CAN, read 0x41A
 
 Exit codes (match the other readers so one notifier handles all sources):
@@ -59,11 +52,10 @@ CSV_PATH = os.path.join(_ROOT, "tmp", "battery", "ccan_voltage.csv")
 
 CHANNEL = "can0"
 BITRATE = canbus.BITRATE_CCAN  # C-CAN / HS-CAN powertrain bus (500k)
-FINE_ID = 0x2EF               # bytes[0:1] LE uint16 / DIVISOR (ignition-on, fine)
-COARSE_ID = 0x41A             # byte0 / COARSE_DIVISOR (parked-wake-readable, coarse)
+VOLT_ID = 0x41A               # byte0 * 0.05 V + 4.0 V
 SFF_MASK = 0x7FF              # 11-bit id mask
-DIVISOR = 400.0              # 0x2EF: raw/400 = volts (default; pin with --calibrate vs a multimeter)
-COARSE_DIVISOR = 14.2        # 0x41A: raw/14.2 = volts (coarse; likely small offset -- recal near threshold)
+VOLT_SCALE = 0.05
+VOLT_OFFSET = 4.0
 V_SANE = (6.0, 18.0)         # plausible 12 V rail; frames decoding outside are dropped as corrupt
 # Bus identity + wake now live in lib/canbus (identify_bus / poke_wake); classify_bus below just maps them.
 
@@ -85,33 +77,28 @@ def classify_bus(channel=CHANNEL, probe=2.0):
 
 
 def _decode(can_id, data):
-    """Return volts for a 0x2EF/0x41A frame, or None."""
-    if can_id == FINE_ID and len(data) >= 2:
-        return ((data[0] | (data[1] << 8)) & 0x1FFF) / DIVISOR     # bytes[0:1] LE, low 13 bits
-    if can_id == COARSE_ID and len(data) >= 1:
-        return data[0] / COARSE_DIVISOR
+    """Return volts for a verified 0x41A frame, or None."""
+    if can_id == VOLT_ID and len(data) >= 1:
+        return VOLT_OFFSET + data[0] * VOLT_SCALE
     return None
 
 
-def read_voltage(channel=CHANNEL, timeout=4.0, raw=False):
-    """Camp listen-only and decode 0x2EF (preferred) or 0x41A. Returns (volts, status); with raw=True
-    returns (volts, status, fine_raw_list, coarse_raw_list) for --calibrate."""
-    fine, coarse, fine_raw, coarse_raw = [], [], [], []
+def read_voltage(channel=CHANNEL, timeout=4.0):
+    """Camp listen-only and decode 0x41A. Returns ``(volts, status)``."""
+    samples = []
     try:
         s = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
     except OSError as e:
-        r = (None, f"cannot open CAN socket ({e})")
-        return r + ([], []) if raw else r
+        return None, f"cannot open CAN socket ({e})"
     try:
         s.setsockopt(socket.SOL_CAN_RAW, socket.CAN_RAW_FILTER,
-                     struct.pack("=IIII", FINE_ID, SFF_MASK, COARSE_ID, SFF_MASK))  # only our 2 ids
+                     struct.pack("=II", VOLT_ID, SFF_MASK))
         try:
             s.bind((channel,))
         except OSError as e:
-            r = (None, f"cannot bind {channel} (is it up? {e})")
-            return r + ([], []) if raw else r
+            return None, f"cannot bind {channel} (is it up? {e})"
         deadline = time.time() + timeout
-        while time.time() < deadline and len(fine) < 7 and len(coarse) < 15:
+        while time.time() < deadline and len(samples) < 15:
             s.settimeout(max(0.05, deadline - time.time()))
             try:
                 frame = s.recv(16)
@@ -119,8 +106,7 @@ def read_voltage(channel=CHANNEL, timeout=4.0, raw=False):
                 break
             except OSError as e:
                 if e.errno == errno.ENETDOWN:
-                    r = (None, f"{channel} went down mid-read")
-                    return r + ([], []) if raw else r
+                    return None, f"{channel} went down mid-read"
                 break
             can_id, dlc, dat = struct.unpack("=IB3x8s", frame)
             can_id &= 0x7FF
@@ -128,21 +114,14 @@ def read_voltage(channel=CHANNEL, timeout=4.0, raw=False):
             v = _decode(can_id, dat)
             if v is None or not (V_SANE[0] <= v <= V_SANE[1]):
                 continue
-            if can_id == FINE_ID:
-                fine.append(v); fine_raw.append(dat[0] | (dat[1] << 8))
-            else:
-                coarse.append(v); coarse_raw.append(dat[0])
+            samples.append(v)
     finally:
         s.close()
-    if fine:
-        fine.sort(); v = round(fine[len(fine) // 2], 2)
-        r = (v, f"ok 0x2EF [fine, {len(fine)} frames]")
-    elif coarse:
-        coarse.sort(); v = round(coarse[len(coarse) // 2], 2)
-        r = (v, f"ok 0x41A [coarse, {len(coarse)} frames]")
-    else:
-        r = (None, "no 0x2EF/0x41A in window (bus asleep / ignition off?)")
-    return r + (fine_raw, coarse_raw) if raw else r
+    if not samples:
+        return None, "no 0x41A in window (bus asleep / ignition off?)"
+    samples.sort()
+    v = round(samples[len(samples) // 2], 2)
+    return v, f"ok 0x41A [verified affine, {len(samples)} frames]"
 
 
 def read_with_wake(channel=CHANNEL, timeout=6.0, bringup=True):
@@ -168,7 +147,7 @@ def read_with_wake(channel=CHANNEL, timeout=6.0, bringup=True):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Passively read system voltage from C-CAN (0x2EF / 0x41A).")
+    ap = argparse.ArgumentParser(description="Passively read system voltage from C-CAN frame 0x41A.")
     ap.add_argument("--channel", default=CHANNEL)
     ap.add_argument("--quiet", action="store_true", help="print just the number (nothing on failure)")
     ap.add_argument("--csv", action="store_true", help=f"append a timestamped row to {CSV_PATH}")
@@ -177,8 +156,6 @@ def main():
     ap.add_argument("--timeout", type=float, default=4.0, help="seconds to wait for a frame")
     ap.add_argument("--no-bringup", action="store_true",
                     help="don't (re)bring-up the iface; assume it's already up @500k passive")
-    ap.add_argument("--calibrate", type=float, metavar="ACTUAL_V",
-                    help="ignition on: read live raw and print the divisor that fits ACTUAL_V")
     ap.add_argument("--wake", action="store_true",
                     help="parked: poke rf_hub (one UDS read) to wake a SILENT C-CAN, then read 0x41A")
     args = ap.parse_args()
@@ -195,20 +172,6 @@ def main():
             if not args.quiet:
                 print(f"ABORT: not C-CAN -- {detail}", file=sys.stderr)
             sys.exit(1)
-        if args.calibrate is not None:
-            v, status, fine_raw, coarse_raw = read_voltage(args.channel, max(args.timeout, 6.0), raw=True)
-            if fine_raw:
-                fine_raw.sort(); rw = fine_raw[len(fine_raw) // 2]
-                print(f"0x2EF raw median={rw}  -> for {args.calibrate} V use  --divisor {rw / args.calibrate:.1f}"
-                      f"  (current /{DIVISOR:.0f} = {rw / DIVISOR:.2f} V)")
-            elif coarse_raw:
-                coarse_raw.sort(); rw = coarse_raw[len(coarse_raw) // 2]
-                print(f"0x41A raw median={rw}  -> for {args.calibrate} V set COARSE_DIVISOR = {rw / args.calibrate:.2f}"
-                      f"  (current /{COARSE_DIVISOR} = {rw / COARSE_DIVISOR:.2f} V)")
-            else:
-                print(f"calibrate: no 0x2EF/0x41A seen ({status}) -- ignition on?", file=sys.stderr)
-                sys.exit(1)
-            return
         volts, status = read_voltage(args.channel, args.timeout)
     if args.csv:
         append_csv(args.csv_path, volts if volts is not None else "", status)

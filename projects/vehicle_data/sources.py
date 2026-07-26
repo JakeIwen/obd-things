@@ -78,15 +78,10 @@ class SystemVoltageBackend:
             value, detail = ccan_voltage.read_voltage(channel, timeout=timeout)
             if value is None:
                 return None
-            fine = "0x2EF" in detail
             return DecodedVoltage(
                 value=value,
-                source=(
-                    "ccan.broadcast.0x2ef"
-                    if fine
-                    else "ccan.broadcast.0x41a"
-                ),
-                quality="approximate",
+                source="ccan.broadcast.0x41a",
+                quality="verified",
                 detail=detail,
             )
         return None

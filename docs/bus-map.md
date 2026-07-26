@@ -119,9 +119,9 @@ the installed unmatched subtype. [Evidence](../projects/ecu_mapping/findings/pro
 
 | id | field | decode | meaning | when present | confidence |
 |---|---|---|---|---|---|
-| `0x2EF` | bytes[0:1] LE u16 | `/ ~400` | **system voltage (fine)** — same ÷~400 family as B-CAN 0x46C; engine/ignition ratio 1.17 (alternator) | **ignition ON / running only** | field confirmed; **divisor not pinned** (needs one ground-truth cal via `ccan_voltage.py --calibrate`) |
+| `0x2EF` | payload | unresolved / mode-dependent | **not an approved voltage source.** Historical `FF 11` / `0F 15` payloads happened to track ignition/engine state, but live `FF 21` disproved the former low-13-bit `/400` interpretation. Retain only the presence meaning below until multiplexing is mapped. | **ignition ON / running only** | voltage interpretation withdrawn 2026-07-25 |
 | `0x2EF` | presence | — | **ignition-on gate** — its presence = key-on; tpms-logger uses it as the drive/park gate | ignition ON | verified (frame-count gates failed; presence gate works) |
-| `0x41A` | byte0 | `/ ~14.2` | **system voltage (coarse)** — C-CAN analogue of 0x46C, readable in a parked *wake* (~12.5 V resting) | any awake C-CAN incl. parked wake | field confirmed; divisor coarse/approx |
+| `0x41A` | byte0 | `4.0 + raw × 0.05 V` | **system voltage** — C-CAN analogue of 0x46C, readable in a parked wake | any awake C-CAN incl. parked wake | **verified** against BCM +30/ADC status and a controlled charger transition |
 | `0x4B1` | byte0 bit0 | `0=closed`, `1=open` in one driver-door trial | **driver-door-correlated candidate** — exact open/close edges; another door must be tested before calling it driver-exclusive | ignition ON | controlled candidate, [2026-07-22 evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-22_ccan_alfaobd_live_correlation.md#passive-driver-door-candidates) |
 | `0x419` | byte2 | `0x77=closed`, `0x97=open` in the same trial | second exact **door-correlated candidate**; the `0xE0` XOR may combine several states | ignition ON | controlled candidate, same evidence |
 | `0x1FA` | byte3 bit1 | `0=released`, `1=held` | strongest high-rate binary **service-brake-correlated candidate** | ignition ON | one controlled hold/release; repeat and parking-brake discriminator pending |
@@ -141,6 +141,13 @@ During the controlled brake hold, the already-known `0x41A` voltage byte fell fr
 `0x9E/0x9C` and recovered after release. That is a secondary voltage/load effect consistent with
 the brake lamps, not a second meaning for the voltage byte. Cadence-driven changes in `0x412` and
 `0x73A` were likewise rejected rather than promoted as door fields.
+
+The exact `0x41A` scale was established on 2026-07-25 while the starter-battery charger moved from
+charge to maintenance. Raw byte0 stepped `BE -> BC -> BA -> ... -> B0`, which the affine decode
+maps to `13.50 -> 13.40 -> 13.30 -> ... -> 12.80 V`. AlfaOBD BCM Status independently showed
+13.50 V at the charged endpoint, then a fresh snapshot showed 12.70 V (+30) / 12.80 V (ADC) while
+the broadcast was at `AE`/`B0`. The former `/14.2` divisor omitted the 4 V offset and therefore
+under-reported progressively as voltage fell.
 
 ---
 
@@ -182,9 +189,9 @@ and exits; missing, stale, malformed, or unknown topology fails closed.
 - **B-CAN wake:** a **key-fob UNLOCK wakes it (~95 s window)**; **a door-open does NOT** (capture = 0 frames). Ignition/engine wakes it too. `bcan_voltage.py --wake` TX-wakes a silent B-CAN with a `0x7FF` burst. Verified 2026-06-26; captures in `tmp/captures/bcan/events/wake_from_*`.
 - **C-CAN wake — the Pi CAN wake it, but only with an *addressed* poke (verified 2026-07-08, twice):**
   - A raw `0x7FF` broadcast burst @500k does **NOT** wake a parked C-CAN (verified 2026-07-07 — ~490 frames drew only a lone 0x200). Selective wake: junk broadcast frames aren't a wake reason.
-  - But **a single addressed UDS read to `rf_hub`** (KL30-powered / always-awake RKE receiver) **wakes the full C-CAN broadcast schedule**: confirmed-asleep bus (0 frames/3 s) → one `22` read → ~17.5k frames/15 s incl. **`0x41A` @10 Hz (~12.4 V)** → re-sleeps **~30 s** after traffic stops (shorter than B-CAN's ~95 s). A diag exchange with an awake KL30 module is what triggers the gateway's network-management wake.
+  - But **a single addressed UDS read to `rf_hub`** (KL30-powered / always-awake RKE receiver) **wakes the full C-CAN broadcast schedule**: confirmed-asleep bus (0 frames/3 s) → one `22` read → ~17.5k frames/15 s incl. **`0x41A` @10 Hz (~12.8 V)** → re-sleeps **~30 s** after traffic stops (shorter than B-CAN's ~95 s). A diag exchange with an awake KL30 module is what triggers the gateway's network-management wake.
   - **Consequence:** autonomous parked voltage polling works from the C-CAN tap (wake-poke rf_hub → passive `0x41A` read) — no need to sit on B-CAN. This dissolved the old one-adapter B-CAN-vs-C-CAN conflict. (Earlier "C-CAN readable only when something else wakes it" was too narrow — it predated the rf_hub-poke test.)
-  - **Implemented for manual and guarded unattended use:** `ccan_voltage.py --wake` was live-tested 2026-07-08 (one `22 F190` read to rf_hub → **12.39 V** via `0x41A`). `voltage_mon.py` may call the same primitive only after it holds the exclusive SocketCAN lock, finds no same-boot external-operation inhibit, verifies a same-boot C-CAN topology record, and rechecks passive silence under the lock. AlfaOBD controller actions create an external inhibit before ADB opens.
+  - **Implemented for manual and guarded unattended use:** `ccan_voltage.py --wake` was live-tested 2026-07-08 (one `22 F190` read to rf_hub → raw `0x41A=B0`, now correctly decoded as **12.80 V**; the former divisor rendered 12.39 V). `voltage_mon.py` may call the same primitive only after it holds the exclusive SocketCAN lock, finds no same-boot external-operation inhibit, verifies a same-boot C-CAN topology record, and rechecks passive silence under the lock. AlfaOBD controller actions create an external inhibit before ADB opens.
   - **Reusable API (2026-07-09):** the detect + wake logic is factored into **`lib/canbus.py`** — `identify_bus()` / `detect_bus()` (which bus, from the signature sets above), `tx_wake_burst()` (B-CAN), `poke_wake()` (C-CAN rf_hub), and `wake()` (detect + wake, the "keep a parked bus awake" primitive). The signature id sets `CCAN_SIG`/`BCAN_SIG` live there too (sourced from this doc). Both voltage readers now call these; a new project needing to find+rouse whichever bus is connected should import them.
 - **TX side effect (GOTCHA):** the rf_hub wake-poke also wakes the BCM → **switched accessory rails power up** (dash USB / dashcam boots), following the ~30–60 s awake window. Verified 2026-07-08. Owner has OK'd unprompted parked TX; just account for the side effect when reading evidence (an unexplained parked dashcam boot may be our own diag traffic — or a free bus-wake detector). tpms-logger is zero-TX in idle by design.
 - **Remote-unlock status:** BCM diagnostic actuation is power-mode gated (`7F..22` key-off even with bus awake); recommended path is a spare-fob relay, not CAN. Full detail in memory `bcan-bringup` / the B-CAN section above.

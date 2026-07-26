@@ -8,21 +8,32 @@ low-beam investigation.
 
 ## Current status
 
-- The current 250-byte BCM configuration has been independently read twice and
-  both reads are byte-identical.
-- AlfaOBD reports `PROXI Status: OK`, configuration-check-fail counter `0`, and
-  PROXI write counter `15`.
-- `Headlamp LED Management` is currently `Absent`.
-- Procedure 1 completed as a read-only inventory and backup campaign.
-- Procedure 2 stopped before its first write because no factory/VIN
-  configuration was available and voltage support did not meet the documented
-  programming range.
-- No alignment was run during either campaign.
-- No restore has been tested on this vehicle. The retained current
-  configuration is a verified backup, not a demonstrated end-to-end rollback.
+- The pre-change 250-byte BCM configuration was independently read twice and
+  both reads are byte-identical. AlfaOBD's native backup decodes to the same
+  bytes and records `Headlamp LED Management: Absent`.
+- On 2026-07-25 the owner tried AlfaOBD's labeled
+  `Headlamp LED Management: Absent -> Present` change and PROXI alignment.
+  AlfaOBD repeatedly reported `Failure connecting to module` for DASM even
+  though direct DASM status loaded, ACC remained functional, no ACC fault was
+  reported, and the odometer did not flash.
+- The original 250-byte backup was subsequently loaded through AlfaOBD's
+  `Write custom configuration` editor, decoded by `Verify Custom Proxy`, and
+  written as the recovery record. The alignment had to be retried about five
+  times before no module other than DASM reported failure; DASM failed on
+  every attempt.
+- After the recovery alignment and an engine start, BCM DTC `B10AA-00` did not
+  return. This is strong operational evidence that BCM configuration
+  consistency was restored. A fresh post-recovery DID `0x2023` readback and
+  status snapshot have not yet been archived, so the restored byte identity
+  remains to be confirmed without another write.
+- Do not retry the LED option or chase AlfaOBD's DASM alignment result merely
+  to make its report green. Preserve the recovered state and use read-only
+  checks if further confirmation is needed.
 
 The sanitized baseline and provenance are in
 [`findings/2026-07-25_proxi_baseline.md`](findings/2026-07-25_proxi_baseline.md).
+The owner-observed write/alignment and recovery outcome is in
+[`findings/2026-07-25_led_option_recovery.md`](findings/2026-07-25_led_option_recovery.md).
 Raw configuration bytes, full module logs, tablet evidence, and campaign
 manifests remain ignored under `tmp/`.
 

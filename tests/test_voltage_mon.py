@@ -24,12 +24,12 @@ class SharedAcquireTests(unittest.TestCase):
             metric="battery.voltage",
             unit="V",
             value=12.7,
-            source="ccan.broadcast.0x2ef",
+            source="ccan.broadcast.0x41a",
             bus="c-can",
             acquisition="passive",
-            quality="approximate",
+            quality="verified",
             observed_monotonic=10.0,
-            detail="ok 0x2EF",
+            detail="ok 0x41A [verified affine]",
         )
         with mock.patch.object(
             voltage_mon._VOLTAGE_ACQUIRER, "acquire", return_value=result
@@ -40,7 +40,7 @@ class SharedAcquireTests(unittest.TestCase):
 
         self.assertEqual(volts, 12.7)
         self.assertIn("passive C-CAN", status)
-        self.assertIn("quality=approximate", status)
+        self.assertIn("quality=verified", status)
         acquire.assert_called_once_with("wake_if_asleep")
 
     def test_shared_failure_is_returned_without_fallback_can_action(self):
