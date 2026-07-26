@@ -1,14 +1,16 @@
 # Vehicle telemetry broker
 
 This project exposes a small, approved metric vocabulary without exposing raw
-CAN, arbitrary DIDs, or configuration functions. The MVP metric is
-`battery.voltage`.
+CAN, arbitrary DIDs, or configuration functions. It accepts a few deliberately
+named trip-logger observations, including four raw cluster values whose exact
+DIDs, byte widths, sources, and candidate quality are fixed in the registry.
 
 The implementation has two trust zones:
 
 - `broker.py` owns CAN access and serves a Unix-domain HTTP API. Its GET
-  endpoints only read cache. Only an allowlisted acquisition POST can touch a
-  source.
+  endpoints only read cache. An allowlisted acquisition POST may touch the
+  built-in battery reader; a separate strict observation POST may only populate
+  an exact metric/source tuple already approved for a local logger.
 - `web.py` has no CAN imports and proxies cache/status over HTTP. It defaults
   to loopback and requires `--allow-remote-bind` for any other address. It
   rejects all acquisition requests unless deliberately started with
@@ -28,6 +30,7 @@ classification:
 |---|---|---|---|
 | `bcan.broadcast.0x46c` | B-CAN, 125 kbit/s | `verified` | low 13-bit word / 400 |
 | `ccan.broadcast.0x41a` | C-CAN, 500 kbit/s | `verified` | byte0 x 0.05 V + 4.0 V; readable in a parked wake |
+| `cluster.did.1004` | C-CAN, 500 kbit/s | `observed_alfa_scale` | physical `22 1004`; Alfa-observed raw u8 x 0.1 V |
 
 C-CAN `0x2EF` remains an ignition-on presence gate, not an approved voltage
 source. Its payload is mode-dependent and the former low-13-bit `/400` decode
@@ -41,6 +44,49 @@ Every available observation includes value, unit, source, bus, acquisition
 class, quality, wall-clock timestamp, age, and staleness. Failures use a stable
 reason such as `adapter_absent`, `wrong_bus`, `bus_asleep`, `can_busy`,
 `rate_limited`, or `restoration_failed`.
+
+The initial drive-publisher vocabulary is intentionally narrow:
+
+| Metric | Source | Type/unit | Quality |
+|---|---|---|---|
+| `battery.voltage` | `cluster.did.1004` | number, `V` | `observed_alfa_scale` |
+| `vehicle.ignition_on` | `ccan.broadcast.0x2ef` | boolean, `boolean` | `verified` |
+| `diagnostics.cluster.did.1000.raw` | `cluster.did.1000` | integer, `raw_u16_be` | `candidate` |
+| `diagnostics.cluster.did.1002.raw` | `cluster.did.1002` | integer, `raw_u8` | `candidate` |
+| `diagnostics.cluster.did.0107.raw` | `cluster.did.0107` | integer, `raw_u8` | `candidate` |
+| `diagnostics.cluster.did.1005.raw` | `cluster.did.1005` | integer, `raw_u8` | `candidate` |
+
+`vehicle.ignition_on` is a positive-presence witness: a received `0x2EF`
+frame may publish only `true`. A publisher-supplied `false` is rejected
+because silence is not a decoded negative value; the observation instead
+expires to stale/unknown when the frame disappears.
+
+The raw rows preserve evidence without presenting unverified RPM, speed, gear,
+or temperature conversions as facts. They are diagnostics metrics, not a
+general-purpose DID publication namespace.
+
+## Owner-priority telemetry roadmap
+
+The first engine-health additions should be oil pressure, coolant temperature,
+engine-oil temperature, RPM, actual crankshaft torque, and derived power.
+Oil pressure is a particularly strong target: the exact-vehicle OEM material
+confirms a scan-tool-readable EOP sensor and dual-stage pump, while the
+current-vehicle Alfa configuration literally reports `Oil Pressure ABS: Yes`
+and `Oil Pressure Sensor: Enabled`. Those vendor labels are useful navigation
+evidence, not an independent decode of `ABS` or a DID/scale. Expected pressure
+bands differ by RPM, operating temperature, and pump mode, so the display
+cannot use one static good/bad threshold. Power must be labeled as
+ECU-estimated crankshaft power, not wheel horsepower.
+
+The DIDs and scales are not yet qualified, so none of those names belongs in
+the public registry today. The evidence, exact OEM pressure/thermostat context,
+alert-design constraints, PCM/TCM acquisition sequence, and later mechanical
+and electrical targets are maintained in the
+[`priority telemetry finding`](../ecu_mapping/findings/promaster_2022/2026-07-25_priority_telemetry_targets.md).
+The dashboard's generic metric/catalog architecture can display a promoted
+scalar. Context-aware oil-pressure bands, engine-running/startup gates, and
+fresh time-aligned torque/RPM power derivation still require specialized
+evaluation and presentation logic.
 
 ## Dashboard profiles and vehicle state
 
@@ -57,11 +103,18 @@ choose exactly which panels appear in a **Custom** profile. The selection and
 custom panel list use browser `localStorage`; they are per-device preferences
 and never write broker configuration or touch CAN.
 
-Automatic mode currently makes only these evidence-backed choices:
+Automatic mode currently makes only these evidence-backed choices, and every
+state used for a layout must carry a finite nonnegative age no older than three
+seconds:
 
-- `asleep`/`parked` selects the Parked electrical layout;
-- a future verified `moving`, `running`, or `ignition_on` state selects Driving;
+- fresh `asleep`/`parked` selects the Parked electrical layout;
+- the verified `vehicle.ignition_on` observation selects Driving while true;
+- a future verified `moving` or `running` state also selects Driving;
 - `awake` or `unknown` selects Overview.
+
+Automatic Driving selection is only a layout choice. It is not an
+engine-running safety gate for oil-pressure alerts or any other mechanical
+limit evaluator.
 
 The broker deliberately does **not** infer engine-running state from charging
 voltage. An external charger can overlap alternator voltage, and ordinary bus
@@ -158,10 +211,25 @@ GET  /v1/metrics/battery.voltage
 POST /v1/acquisitions/battery.voltage
      {"mode":"passive"}
      {"mode":"wake_if_asleep"}
+POST /v1/observations/<allowlisted-metric>
+     {"value":...,"unit":"...","source":"...","bus":"...","quality":"..."}
 ```
 
-GETs are cache-only. There is no raw frame, arbitrary DID, diagnostic session,
-DTC, reset, calibration, configuration, or PROXI endpoint.
+GETs are cache-only. Observation POSTs exist only on the Unix API and are not
+proxied by `web.py`, even when web acquisition is deliberately enabled. The
+body must contain exactly the five shown fields. Metric, source, unit, bus,
+quality, scalar type, and numeric bounds are validated together; publisher
+timestamps and acquisition labels are rejected. The broker stamps wall-clock
+and monotonic receipt time itself. `TelemetryClient.publish()` also supplies a
+local monotonic queue deadline of at most one second in an HTTP header. The
+serialized broker rejects an expired request instead of accepting a value as
+fresh after the publisher has already timed out behind another acquisition.
+The deadline is only an admission bound; it is never used as the observation
+timestamp. Existing broadcast battery sources are not publisher-enabled,
+preventing a local logger from masquerading as the in-process voltage reader.
+
+There is no raw frame, arbitrary DID, diagnostic session, DTC, reset,
+calibration, configuration, or PROXI endpoint.
 
 `/v1/snapshot` is the preferred dashboard endpoint. Its shape is:
 
@@ -174,7 +242,31 @@ DTC, reset, calibration, configuration, or PROXI endpoint.
 ```
 
 The web SSE stream uses that same cache-only snapshot. It does not acquire or
-poll CAN when a browser connects.
+poll CAN when a browser connects. The web tier adds a `web_delivery` envelope
+to every HTTP and SSE snapshot with a process-instance ID, increasing
+sequence, wall-clock generation time, and process-monotonic generation time.
+The browser establishes an instance with a cache-bypassing HTTP snapshot,
+accepts only newer events from that instance, and bounds HTTP round-trip time
+before using its midpoint to map the web process's monotonic clock onto the
+browser's monotonic clock. Stream age never depends on wall time, so an NTP
+clock step cannot make queued data younger. The full bounded HTTP trip and the
+monotonic-offset uncertainty are conservatively added to embedded observation
+ages. A queued stream event is rejected if it is over ten seconds old **or**
+if its delivery delay would carry any available metric or verified vehicle
+state past its registered freshness window. Missing, nonnumeric, or negative
+ages are never driver-qualified.
+
+A visible-page watchdog advances cached ages using the browser's monotonic
+clock even when no event arrives; expired verified vehicle state becomes
+unknown and can no longer select the automatic Driving layout. A stalled or
+errored stream triggers a new cache-bypassing HTTP baseline. On page
+hide, restoration, or visibility change the browser immediately invalidates
+the displayed cache, closes the old stream, obtains a fresh no-store HTTP
+snapshot when visible, and only then opens a new stream. It does not assume
+that `performance.now()` advanced across Android deep sleep. Obsolete HTTP
+callbacks cannot render. Together these guards prevent Chrome/Android tab
+suspension, buffered SSE, wall-clock adjustment, or a dead stream from
+replaying old relative-age fields as apparently live telemetry.
 
 Examples:
 
@@ -184,7 +276,15 @@ python3 projects/vehicle_data/client.py get battery.voltage
 python3 projects/vehicle_data/client.py acquire battery.voltage --mode passive
 python3 projects/vehicle_data/client.py acquire battery.voltage \
   --mode wake_if_asleep --confirm-wake
+python3 projects/vehicle_data/client.py publish battery.voltage \
+  --value 12.4 --unit V --source cluster.did.1004 --bus c-can \
+  --quality observed_alfa_scale
 ```
+
+Logger code can use
+`TelemetryClient.publish(metric, value=..., unit=..., source=..., bus=...,
+quality=...)`; it returns the same `(HTTP status, response object)` tuple as
+`TelemetryClient.request`.
 
 For a manual cache-only dashboard:
 
@@ -252,7 +352,8 @@ continue to work while acquisition safety still has one implementation.
 ## Validation
 
 Offline tests use fake interfaces, locks, sources, and clocks. They cover
-cache-only GETs, allowlist enforcement, source metadata, passive acquisition,
+cache-only GETs, strict local publication, typed values, source-metadata
+allowlists, broker-stamped age, passive acquisition,
 silent-bus wake gates, coalescing/rate limits, post-wake restoration failure,
 Unix API behavior, the registry-driven snapshot, evidence-qualified vehicle
 state, dashboard profile assets, and cache-only web defaults.

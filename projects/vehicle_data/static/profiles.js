@@ -2,10 +2,13 @@
 
 (() => {
   const STORAGE_KEY = "van-telemetry.dashboard.v1";
+  const MAX_AUTOMATIC_STATE_AGE_MS = 3000;
   const widgets = Object.freeze([
+    {id: "drive", label: "Drive essentials"},
     {id: "vehicle", label: "Vehicle state"},
     {id: "battery", label: "Battery"},
-    {id: "metrics", label: "Additional metrics"},
+    {id: "tires", label: "Tire pressure"},
+    {id: "metrics", label: "Other telemetry"},
     {id: "source", label: "Metric provenance"},
     {id: "interface", label: "CAN interface"},
     {id: "retune", label: "Automatic bus switch"},
@@ -18,7 +21,7 @@
     overview: {
       label: "Overview",
       title: "Road systems",
-      widgets: ["vehicle", "battery", "metrics", "interface", "retune"],
+      widgets: ["vehicle", "battery", "tires", "metrics", "interface", "retune"],
     },
     parked: {
       label: "Parked",
@@ -28,12 +31,20 @@
     driving: {
       label: "Driving",
       title: "Drive telemetry",
-      widgets: ["vehicle", "battery", "metrics", "interface"],
+      widgets: ["drive", "tires", "battery", "metrics"],
     },
     diagnostics: {
       label: "Diagnostics",
       title: "Broker diagnostics",
-      widgets: ["vehicle", "interface", "retune", "collector", "source", "catalog"],
+      widgets: [
+        "vehicle",
+        "metrics",
+        "interface",
+        "retune",
+        "collector",
+        "source",
+        "catalog",
+      ],
     },
   });
 
@@ -80,16 +91,48 @@
 
   function automaticProfile(vehicleState) {
     const state = String(vehicleState?.state || "unknown");
-    if (state === "moving" || state === "running" || state === "ignition_on") {
+    const confidence = String(vehicleState?.confidence || "unknown");
+    const freshState = (
+      typeof vehicleState?.age_ms === "number" &&
+      Number.isFinite(vehicleState.age_ms) &&
+      vehicleState.age_ms >= 0 &&
+      vehicleState.age_ms <= MAX_AUTOMATIC_STATE_AGE_MS
+    );
+    if (
+      confidence === "verified" &&
+      freshState &&
+      (state === "moving" || state === "running" || state === "ignition_on")
+    ) {
       return {
         id: "driving",
         reason: `Automatic · ${state.replaceAll("_", " ")} evidence selects Driving`,
       };
     }
-    if (state === "asleep" || state === "parked") {
+    if (state === "moving" || state === "running" || state === "ignition_on") {
+      const evidenceStatus = confidence !== "verified"
+        ? confidence
+        : (freshState ? "fresh and verified" : "verified but stale");
+      return {
+        id: "overview",
+        reason: (
+          `Automatic · ${state.replaceAll("_", " ")} evidence is ` +
+          `${evidenceStatus}, so Overview remains selected`
+        ),
+      };
+    }
+    if ((state === "asleep" || state === "parked") && freshState) {
       return {
         id: "parked",
         reason: `Automatic · ${state} evidence selects Parked`,
+      };
+    }
+    if (state === "asleep" || state === "parked") {
+      return {
+        id: "overview",
+        reason: (
+          `Automatic · ${state} evidence is stale or undated, ` +
+          "so Overview remains selected"
+        ),
       };
     }
     return {

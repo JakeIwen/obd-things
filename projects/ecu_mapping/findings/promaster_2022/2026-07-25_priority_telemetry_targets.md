@@ -1,0 +1,250 @@
+# C-CAN priority telemetry targets and operating context — 2026-07-25
+
+## Outcome
+
+The owner-priority engine signals are:
+
+1. engine oil pressure, interpreted against engine speed, temperature, and
+   dual-stage pump state;
+2. engine coolant and engine-oil temperatures;
+3. actual crankshaft torque and RPM, with power derived from those two inputs;
+4. transmission and electrical measurements that the stock IPC hides or
+   reduces to a warning lamp.
+
+None of oil pressure, coolant temperature, oil temperature, torque, or power is
+ready for publication as a trusted dashboard metric. Their exact C-CAN
+DIDs/fields and rendering scales remain unresolved. The current telemetry
+registry is correct to expose unresolved cluster RPM, speed, gear, and
+outside-temperature values as raw candidates only.
+
+The acquisition path is nevertheless strong. The exact-vehicle OEM corpus
+confirms real oil-pressure and oil-temperature sensors monitored by the PCM,
+not merely an oil-pressure switch. The PCM is already live-verified on C-CAN at
+`18DA10F1 -> 18DAF110`, including its fixed-DLC-8 padded legacy `10 92`
+session behavior. The TCM at `18DA18F1 -> 18DAF118` has an engine-torque and
+transmission-thermal candidate vocabulary in its selected Alfa profile. The
+next high-value campaign should therefore be a small, label-targeted PCM/TCM
+AlfaOBD correlation, not a broad blind DID sweep.
+
+## Engine-oil pressure: exact OEM context
+
+The OEM `OIL PRESSURE – UPGRADE ENGINE` table applies only when coolant is
+between 89 and 100 °C:
+
+| operating point | OEM expected pressure |
+|---|---:|
+| curb idle, approximately 650 RPM | 103.4–234.4 kPa / **15–34 psi** |
+| 1,000–3,000 RPM | 193–241.3 kPa / **28–35 psi** |
+| above 3,500 RPM | 448.2–551.6 kPa / **65–80 psi** |
+
+The same table says that zero pressure at idle means **do not continue running
+the engine**. The P06DD factory diagnostic description adds:
+
+- approximately **12 psi is the minimum while the engine is operating**;
+  pressure below that could damage critical moving parts;
+- the mechanical relief valve limits maximum pressure to approximately
+  **145 psi**;
+- the scan tool can monitor the Engine Oil Pressure sensor directly.
+
+These values do not support one fixed green/yellow/red gauge. This engine has a
+PCM-controlled dual-stage oil pump. Energizing its solenoid selects the usual
+low-pressure mode; de-energizing it selects high-pressure mode. Engine load can
+request high mode before a simple RPM boundary, and a mode transition can
+produce an abrupt pressure step. The future evaluator must use fresh oil
+pressure together with at least RPM, coolant/oil temperature, and desired pump
+state. The 3,000–3,500 RPM transition region must not be filled in with an
+invented linear threshold.
+
+No alert rule should be enabled until the DID, units, scale, live-state gate,
+and staleness behavior have all been verified. Once they are, the OEM
+below-approximately-12 psi statement and zero-at-idle caution justify a
+prominent critical condition; the warm expected bands are better shown as
+operating context than as universal limits. The critical evaluator must also
+require separately verified **engine-running** state and a defined
+startup/cranking grace period. Verified ignition-on alone is not an
+engine-running safety gate.
+
+OEM provenance in the local exact-vehicle corpus:
+
+- `~/dev/ram_2022_GAS/vehicle/engine,_cooling_and_exhaust/engine/specifications/pressure,_vacuum_and_temperature/engine_-_specifications.html`,
+  `OIL PRESSURE – UPGRADE ENGINE`, lines 72–109;
+- `~/dev/ram_2022_GAS/vehicle/all_diagnostic_trouble_codes_(_dtc_)/testing_and_inspection/p_code_charts/p06dd/powertrain_control_module_(pcm)_-_engine_oil_pressure_control_circuit_stuck_off.html`,
+  theory/specification material beginning at lines 25–36.
+
+The current-vehicle Alfa Info artifact independently reports `Oil Pressure
+ABS: Yes`, `Dual Stage Oil Pump Equipped: Yes`, `Oil Pressure Sensor:
+Enabled`, and the old oil-pressure-switch input as not enabled. It also
+contains observable desired-state rows for the dual-stage pump and cooling-fan
+relays. Source:
+`tmp/ecu_mapping/raw/TIGERSHARK_CUSW_Info.log`, SHA-256
+`86554c7fedc31044d344d9f70b55f1bce9a6cd6ebde6e81673fe0a56ff34a7f7`.
+The current-vehicle identity block begins near line 620; the configuration
+claims are at lines 748, 794, 804, and 812, and the observed fan/pump desired
+states are at lines 1153–1154 and 1162. The preceding claims and line
+provenance are preserved here because the raw file itself is intentionally
+gitignored.
+That raw artifact is a navigation aid, not a DID/scale proof; Alfa profile
+renderings remain subject to the incompatibilities recorded in the evidence
+history.
+
+## Temperature context
+
+The OEM thermostat description says it guarantees a minimum engine operating
+temperature of approximately **88–93 °C** (about **190–199 °F** by direct
+conversion; the OEM text prints 192–199 °F) and becomes approximately fully
+open near **104 °C / 220 °F**. Above that point, coolant temperature is
+governed by radiator, fan, load, ambient temperature, and vehicle speed rather
+than thermostat restriction. Thus 104 °C is a useful cooling-system context
+boundary, but it is **not** by itself an OEM overheat or damage threshold.
+
+No exact-vehicle general overtemperature warning/derate threshold was found in
+this pass. The first dashboard should show the actual temperature and
+thermostat/cooling context without inventing a critical limit. Mapping
+low/high fan commands and a PCM overtemperature state is preferable to a
+generic red line.
+
+The OEM P0298 procedure confirms a physical two-wire Engine Oil Temperature
+sensor whose PCM voltage is converted to temperature. Its diagnostic compares
+actual EOT with a model: the monitor starts below a predicted 58 °C and stops
+above a predicted 88 °C; a difference greater than 40 °C at that point is a
+fault condition. The implied temperature is a model-comparison trigger, **not
+a general safe oil-temperature limit**, and must not be presented as one.
+
+OEM provenance:
+
+- `~/dev/ram_2022_GAS/vehicle/engine,_cooling_and_exhaust/cooling_system/thermostat/description_and_operation/components/engine_coolant_thermostat_-_operation.html`,
+  line 14;
+- `~/dev/ram_2022_GAS/vehicle/all_diagnostic_trouble_codes_(_dtc_)/testing_and_inspection/p_code_charts/p0298/powertrain_control_module_(pcm)_-_engine_oil_temperature_too_high.html`,
+  lines 38–50.
+
+## Torque and derived power
+
+The selected TCM/Alfa profile's diagnostic-event snapshot vocabulary includes
+actual, target, and pre-intervention crankshaft torque, transmission torque
+intervention, turbine speed, torque-converter slip/estimated temperature, and
+gearbox-oil temperature. This makes PCM/TCM C-CAN correlation the right path.
+It does not make the existing renderings trustworthy: that snapshot reported
+impossible values such as `62988 Nm` for actual crankshaft torque. Source:
+`tmp/ecu_mapping/raw/ZF9HP_Info.log`, especially lines 93 and 103–123. Its
+SHA-256 is
+`07f73ace06bd44da1d1ec01ed2e63c037114fa6bf13e78ed389a755f9bf9a9dd`;
+the conflicting scale is recorded here so it is not silently reused.
+
+After actual crankshaft torque and RPM are independently qualified, derived
+power is:
+
+```text
+kW ≈ torque_Nm × RPM / 9549.3
+hp_SAE ≈ torque_Nm × RPM / 7121
+hp_SAE ≈ torque_lb_ft × RPM / 5252.1
+```
+
+The dashboard must call this **ECU-estimated crankshaft power** (or similarly
+explicit wording), not measured wheel horsepower. The ECU torque itself is
+normally model-derived, and driveline/accessory losses mean this is not a
+chassis-dynamometer result. Torque and RPM must also be contemporaneous and
+fresh; combining stale or skewed samples can create false power spikes even
+when both individual scales are correct.
+
+## Acquisition and verification order
+
+AlfaOBD has two separate selector surfaces. Scalar values are under
+**Plots → Select gauges to scan**; with Gauges Data recording enabled, the
+campaign must witness `Gauges_Data.csv` growth. The existing guarded supervisor
+operates **System status → Select parameters to monitor** and its profile Info
+log. Extending only the Status selector would not reach the desired scalar
+gauges.
+
+The selected generic `TIGERSHARK_CUSW` Device-190 Plots catalog supplies these
+high-yield navigation candidates:
+
+| UI order key | catalog label | catalog unit | qualification |
+|---:|---|---|---|
+| 7 | Engine speed | rpm | anchor candidate |
+| 13 | Current engine torque | Nm | candidate; not yet a trustworthy scale |
+| 15 | Coolant temperature | `|C` (UI typically renders °C) | candidate |
+| 16 | Desired PWM Radiator Fan | % | candidate |
+| 17 | Engine oil pressure | kPa | owner-priority candidate |
+| 18 | Oil pressure sensor | V | useful cross-check candidate |
+| 19 | VVT Oil Pressure | kPa | distinct unresolved candidate |
+| 20 | VVT Oil Temperature | `|C` | **not** established as physical engine-oil temperature |
+| 44 | Target Charging Voltage | V | electrical target candidate |
+| 45 | Generator Duty Cycle | % | electrical target candidate |
+| 47 | Battery voltage | V | correlation anchor candidate |
+| 188 | Transmission Oil Temperature | `|C` | late catalog candidate |
+| 191 | Turbine speed | rpm | late catalog candidate |
+| 192 | Output Speed | rpm | late catalog candidate |
+
+The order keys are UI navigation indices, not DIDs or parameter IDs. The
+catalog has no proven physical EOT label: inventorying the full live Plots
+dialog must precede any claim that key 20 represents the OEM-confirmed EOT
+sensor.
+
+1. Add a generic guarded ADB dialog walker with a no-tap catalog mode. It must
+   traverse the Plots list with overlapping bounded swipes, exact-label
+   matching, full count/order/hash verification, stop-state checks, and
+   fail-closed ambiguity handling.
+2. Inventory the complete live PCM Plots list before selecting anything. The
+   SQLite prior predicts 193 rows; a count/order mismatch must fail to
+   `manual_reconcile` rather than being repaired by assumption. Pin the rendered
+   UI catalog rather than assuming the SQLite label formatting.
+3. Capture the high-priority scalar candidates above one at a time with
+   Debug Data, a growing `Gauges_Data.csv`, and a simultaneous listen-only full
+   C-CAN stream. Search the live catalog separately for a true engine-oil
+   temperature label; do not substitute `VVT Oil Temperature`.
+4. Use the existing System-status singleton path separately for discrete
+   `Dual Stage Oil Pump Desired State` and fan desired/relay groups recorded in
+   the current Info artifact.
+5. Inventory the live TCM selector first, retaining the existing warning that
+   its chosen Alfa profile is a generic alias and has already produced an
+   impossible torque rendering. Then run a small one-at-a-time campaign for
+   actual/pre-intervention/target crankshaft torque, gearbox oil temperature,
+   turbine speed, torque-converter slip, current/target gear, and torque
+   intervention.
+6. Reproduce each resolved request using a bounded physical read to the
+   verified ECU endpoint and required session behavior. Do not promote a
+   label merely because AlfaOBD rendered it.
+7. Validate physical behavior:
+   after a sufficiently long cold soak, coolant and oil should begin near
+   ambient; during normal cold-start warm-up, coolant should rise smoothly
+   through the thermostat region and oil should generally lag coolant; oil
+   pressure should track RPM and pump-mode changes. Torque requires natural
+   road load—idling establishes only a baseline.
+8. Search the simultaneous full C-CAN stream for passive equivalents. A
+   verified broadcast signal is preferable for week-long monitoring because it
+   avoids continuous diagnostic polling.
+9. Add a metric only with exact ECU namespace, source, units, scale, quality,
+   provenance, staleness, valid vehicle-state gate, and context-aware display
+   policy.
+
+Standard Mode 01 OBD-II values are semantic priors only. They have not
+responded on this internal SGW-bypass C-CAN tap and should not be retried as
+the acquisition plan.
+
+## Later high-value dashboard targets
+
+After the owner priorities, the most useful mechanically/electrically oriented
+targets are:
+
+- transmission oil temperature, turbine speed, converter slip/temperature,
+  current/target gear, and torque intervention;
+- per-cylinder misfire counters and current/pending DTC state;
+- short/long fuel trims, commanded/actual lambda, MAP, IAT, barometric
+  pressure, throttle/pedal/load, ignition timing, and knock retard;
+- VVT desired-versus-actual angles and cooling-fan command;
+- catalyst temperature;
+- charging voltage plus generator/battery current, duty, and state of charge
+  if the installed configuration exposes them;
+- oil life, engine hours/runtime, and other maintenance counters;
+- verified speed, RPM, gear, brake, doors, and four wheel-position tire
+  pressures.
+
+These are ranked research targets, not claims that every signal is already
+available or correctly scaled. A useful eventual presentation should group
+signals that explain one another rather than show isolated numbers:
+
+- oil pressure, oil-pressure sensor voltage, pump mode, RPM, and temperatures;
+- coolant temperature, fan command, vehicle speed, and ambient temperature;
+- actual/target charging voltage, generator duty/current, and state of charge;
+- torque, RPM, load/throttle, ignition timing, and knock retard; and
+- transmission temperature, turbine/output speeds, converter slip, and gear.

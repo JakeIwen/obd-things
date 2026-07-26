@@ -74,6 +74,11 @@ class ClusterDrivePlanTests(unittest.TestCase):
         )
         self.assertIn("no DiagnosticSessionControl or TesterPresent", payload["diagnostic_session_policy"])
         self.assertIn("may refresh an inherited S3 timer", " ".join(payload["does_not"]))
+        self.assertTrue(payload["telemetry_publication"]["enabled"])
+        self.assertEqual(
+            set(payload["telemetry_publication"]["metrics"]),
+            drive.TELEMETRY_METRICS,
+        )
         self.assertTrue(footer)
         preflight.assert_not_called()
         lock.assert_not_called()
@@ -312,6 +317,145 @@ class ClusterDriveRequestTests(unittest.TestCase):
             )
 
         self.assertEqual(events, ["drain", "pace", "request"])
+
+
+class ClusterDriveTelemetryTests(unittest.TestCase):
+    def test_exact_positive_dids_map_only_to_allowlisted_observations(self):
+        metric, payload = drive.telemetry_observation_for_did(
+            0x1004, bytes.fromhex("8E")
+        )
+        self.assertEqual(metric, "battery.voltage")
+        self.assertAlmostEqual(payload["value"], 14.2)
+        self.assertEqual(payload["quality"], "observed_alfa_scale")
+
+        _metric, payload = drive.telemetry_observation_for_did(
+            0x1004, bytes.fromhex("88")
+        )
+        self.assertEqual(payload["value"], 13.6)
+
+        metric, payload = drive.telemetry_observation_for_did(
+            0x1000, bytes.fromhex("12 34")
+        )
+        self.assertEqual(metric, "diagnostics.cluster.did.1000.raw")
+        self.assertEqual(payload["value"], 0x1234)
+        self.assertEqual(payload["unit"], "raw_u16_be")
+        self.assertEqual(payload["quality"], "candidate")
+
+        metric, payload = drive.telemetry_observation_for_did(
+            0x0107, bytes.fromhex("03")
+        )
+        self.assertEqual(metric, "diagnostics.cluster.did.0107.raw")
+        self.assertEqual(payload["value"], 3)
+        self.assertEqual(payload["source"], "cluster.did.0107")
+
+        with self.assertRaisesRegex(ValueError, "payload length"):
+            drive.telemetry_observation_for_did(0x1000, b"\x01")
+
+    def test_publisher_is_bounded_latest_value_and_drains_on_close(self):
+        class FakeClient:
+            def __init__(self):
+                self.calls = []
+
+            def publish(self, metric, **payload):
+                self.calls.append((metric, payload))
+                return 202, {"accepted": True}
+
+        client = FakeClient()
+        publisher = drive.BestEffortTelemetryPublisher(
+            "/tmp/fixture.sock",
+            client_factory=lambda _path, _timeout: client,
+        )
+        publisher.submit(
+            "diagnostics.cluster.did.1002.raw",
+            {
+                "value": 1,
+                "unit": "raw_u8",
+                "source": "cluster.did.1002",
+                "bus": "c-can",
+                "quality": "candidate",
+            },
+        )
+        publisher.submit(
+            "diagnostics.cluster.did.1002.raw",
+            {
+                "value": 2,
+                "unit": "raw_u8",
+                "source": "cluster.did.1002",
+                "bus": "c-can",
+                "quality": "candidate",
+            },
+        )
+        publisher.start()
+        report = publisher.close()
+
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(client.calls[0][1]["value"], 2)
+        self.assertEqual(report["submitted"], 2)
+        self.assertEqual(report["superseded"], 1)
+        self.assertEqual(report["published"], 1)
+        self.assertEqual(report["pending"], 0)
+        self.assertFalse(report["thread_alive"])
+
+    def test_publisher_clears_transient_error_after_later_success(self):
+        class RecoveringClient:
+            def __init__(self):
+                self.calls = 0
+
+            def publish(self, _metric, **_payload):
+                self.calls += 1
+                if self.calls == 1:
+                    raise FileNotFoundError("broker starting")
+                return 202, {"accepted": True}
+
+        client = RecoveringClient()
+        publisher = drive.BestEffortTelemetryPublisher(
+            "/tmp/fixture.sock",
+            client_factory=lambda _path, _timeout: client,
+        )
+        for metric, payload in (
+            (
+                "diagnostics.cluster.did.1002.raw",
+                {
+                    "value": 0,
+                    "unit": "raw_u8",
+                    "source": "cluster.did.1002",
+                    "bus": "c-can",
+                    "quality": "candidate",
+                },
+            ),
+            (
+                "vehicle.ignition_on",
+                {
+                    "value": True,
+                    "unit": "boolean",
+                    "source": "ccan.broadcast.0x2ef",
+                    "bus": "c-can",
+                    "quality": "verified",
+                },
+            ),
+        ):
+            publisher.submit(metric, payload)
+        publisher.start()
+        report = publisher.close()
+
+        self.assertEqual(report["attempts"], 2)
+        self.assertEqual(report["errors"], 1)
+        self.assertEqual(report["published"], 1)
+        self.assertIsNone(report["last_error"])
+
+    def test_publisher_rejects_any_metric_outside_fixed_allowlist(self):
+        publisher = drive.BestEffortTelemetryPublisher("/tmp/fixture.sock")
+        with self.assertRaisesRegex(ValueError, "non-allowlisted"):
+            publisher.submit(
+                "diagnostics.arbitrary.did",
+                {
+                    "value": 1,
+                    "unit": "raw",
+                    "source": "fixture",
+                    "bus": "c-can",
+                    "quality": "candidate",
+                },
+            )
 
 
 class ClusterDriveInterfaceTests(unittest.TestCase):
@@ -787,6 +931,7 @@ class ClusterDriveLifecycleTests(unittest.TestCase):
             "6/14",
             "--conditions",
             "started parked; ordinary driving fixture; AlfaOBD closed",
+            "--no-telemetry-publish",
         ]
 
     def test_raw_starts_before_reads_and_cleanup_restores_before_unlock(self):

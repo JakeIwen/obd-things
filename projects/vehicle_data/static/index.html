@@ -23,6 +23,45 @@
       </div>
     </header>
 
+    <section class="panel drive-panel" data-widget="drive" aria-labelledby="drive-heading">
+      <div class="section-heading drive-heading">
+        <div>
+          <p class="eyebrow">ON THE ROAD</p>
+          <h2 id="drive-heading">Drive essentials</h2>
+        </div>
+        <span id="drive-freshness" class="badge">NO LIVE DATA</span>
+      </div>
+      <div class="drive-hero-grid">
+        <article class="drive-tile drive-primary" id="drive-speed-card">
+          <p class="eyebrow">SPEED</p>
+          <p class="drive-value">
+            <span id="drive-speed">—</span><span id="drive-speed-unit" class="drive-unit"></span>
+          </p>
+          <p id="drive-speed-status" class="drive-status">Not yet allowlisted</p>
+        </article>
+        <article class="drive-tile" id="drive-rpm-card">
+          <p class="eyebrow">ENGINE</p>
+          <p class="drive-value">
+            <span id="drive-rpm">—</span><span id="drive-rpm-unit" class="drive-unit"></span>
+          </p>
+          <p id="drive-rpm-status" class="drive-status">Not yet allowlisted</p>
+        </article>
+        <article class="drive-tile" id="drive-gear-card">
+          <p class="eyebrow">GEAR</p>
+          <p class="drive-value"><span id="drive-gear">—</span></p>
+          <p id="drive-gear-status" class="drive-status">Not yet allowlisted</p>
+        </article>
+        <article class="drive-tile" id="drive-ignition-card">
+          <p class="eyebrow">IGNITION</p>
+          <p class="drive-value drive-state-value"><span id="drive-ignition">—</span></p>
+          <p id="drive-ignition-status" class="drive-status">Awaiting verified evidence</p>
+        </article>
+      </div>
+      <p id="drive-note" class="muted panel-note">
+        Only fresh, driver-qualified values are promoted to these tiles.
+      </p>
+    </section>
+
     <section class="panel state-panel" data-widget="vehicle" aria-labelledby="vehicle-heading">
       <div>
         <p class="eyebrow">VEHICLE STATE</p>
@@ -48,17 +87,52 @@
       <p id="battery-detail" class="muted panel-note">Awaiting a cached observation.</p>
     </section>
 
+    <section class="panel tires-panel" data-widget="tires" aria-labelledby="tires-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">TPMS</p>
+          <h2 id="tires-heading">Tire pressure</h2>
+        </div>
+        <span id="tires-state" class="badge">NOT ALLOWLISTED</span>
+      </div>
+      <div class="tire-grid">
+        <article class="tire-card" id="tire-fl-card">
+          <p class="tire-position">Front left</p>
+          <p class="tire-value"><span id="tire-fl">—</span><span id="tire-fl-unit" class="tire-unit"></span></p>
+          <p id="tire-fl-status" class="tire-status">No metric</p>
+        </article>
+        <article class="tire-card" id="tire-fr-card">
+          <p class="tire-position">Front right</p>
+          <p class="tire-value"><span id="tire-fr">—</span><span id="tire-fr-unit" class="tire-unit"></span></p>
+          <p id="tire-fr-status" class="tire-status">No metric</p>
+        </article>
+        <article class="tire-card" id="tire-rl-card">
+          <p class="tire-position">Rear left</p>
+          <p class="tire-value"><span id="tire-rl">—</span><span id="tire-rl-unit" class="tire-unit"></span></p>
+          <p id="tire-rl-status" class="tire-status">No metric</p>
+        </article>
+        <article class="tire-card" id="tire-rr-card">
+          <p class="tire-position">Rear right</p>
+          <p class="tire-value"><span id="tire-rr">—</span><span id="tire-rr-unit" class="tire-unit"></span></p>
+          <p id="tire-rr-status" class="tire-status">No metric</p>
+        </article>
+      </div>
+      <p id="tires-note" class="muted panel-note">
+        The four verified wheel-position metrics will group here automatically.
+      </p>
+    </section>
+
     <section class="panel" data-widget="metrics" aria-labelledby="metrics-heading">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">ALLOWLIST</p>
-          <h2 id="metrics-heading">Additional metrics</h2>
+          <p class="eyebrow">ALLOWLISTED TELEMETRY</p>
+          <h2 id="metrics-heading">Other telemetry</h2>
         </div>
         <span id="metric-count" class="count">0</span>
       </div>
       <div id="metric-grid" class="metric-grid"></div>
       <p id="metrics-empty" class="muted panel-note">
-        No additional allowlisted metrics are registered yet.
+        No additional driver-qualified metrics are registered yet.
       </p>
     </section>
 

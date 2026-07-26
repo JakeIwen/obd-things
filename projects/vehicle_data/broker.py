@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import pathlib
 import subprocess
 import sys
@@ -18,7 +19,12 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from projects.vehicle_data.metrics import METRICS, MetricDefinition
-from projects.vehicle_data.models import AcquisitionResult, failure
+from projects.vehicle_data.models import (
+    AcquisitionResult,
+    ScalarValue,
+    failure,
+    success,
+)
 from projects.vehicle_data.sources import VoltageAcquirer
 
 
@@ -275,6 +281,175 @@ class TelemetryBroker:
             "detail": "no observation has been cached",
         }
 
+    @staticmethod
+    def _value_error(
+        definition: MetricDefinition, value: object
+    ) -> str | None:
+        value_type = definition.value_type
+        if value_type == "boolean":
+            valid = type(value) is bool
+        elif value_type == "integer":
+            valid = isinstance(value, int) and not isinstance(value, bool)
+        elif value_type == "number":
+            valid = (
+                isinstance(value, int)
+                and not isinstance(value, bool)
+            ) or (
+                isinstance(value, float)
+                and math.isfinite(value)
+            )
+        elif value_type == "string":
+            valid = isinstance(value, str)
+        else:
+            return f"registry has unsupported value_type {value_type!r}"
+        if not valid:
+            return f"value must have registry type {value_type}"
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if definition.minimum is not None and value < definition.minimum:
+                return f"value is below minimum {definition.minimum}"
+            if definition.maximum is not None and value > definition.maximum:
+                return f"value is above maximum {definition.maximum}"
+        return None
+
+    @staticmethod
+    def _source_for(definition: MetricDefinition, source_name: object):
+        return next(
+            (
+                source
+                for source in definition.sources
+                if source.name == source_name
+            ),
+            None,
+        )
+
+    def _validate_acquirer_result(
+        self,
+        metric: str,
+        definition: MetricDefinition,
+        result: AcquisitionResult,
+    ) -> AcquisitionResult:
+        """Reject a misrouted source result before it can enter another cache."""
+        if not result.available:
+            if result.metric == metric and result.unit == definition.unit:
+                return result
+            return failure(
+                metric=metric,
+                unit=definition.unit,
+                reason="invalid_source_result",
+                detail="acquirer returned failure metadata for another metric",
+            )
+        source = self._source_for(definition, result.source)
+        mismatches = []
+        if result.metric != metric:
+            mismatches.append("metric")
+        if source is None:
+            mismatches.append("source")
+        if result.unit != definition.unit:
+            mismatches.append("unit")
+        if source is not None and result.bus != source.bus:
+            mismatches.append("bus")
+        if source is not None and result.quality != source.quality:
+            mismatches.append("quality")
+        value_error = self._value_error(definition, result.value)
+        if value_error is not None:
+            mismatches.append("value")
+        if mismatches:
+            return failure(
+                metric=metric,
+                unit=definition.unit,
+                reason="invalid_source_result",
+                detail=(
+                    "acquirer result failed allowlist validation: "
+                    + ", ".join(mismatches)
+                ),
+            )
+        return result
+
+    def publish_observation(
+        self,
+        metric: str,
+        *,
+        value: ScalarValue,
+        unit: str,
+        source: str,
+        bus: str,
+        quality: str,
+    ) -> AcquisitionResult:
+        """Accept one exact allowlisted observation over the local Unix API.
+
+        Publisher timestamps are intentionally not accepted. The broker stamps
+        both wall-clock and monotonic receipt time so cache age cannot be
+        forged or accidentally inherited from a logger's clock domain.
+        """
+        received_monotonic = self.monotonic()
+        definition = self.definitions.get(metric)
+        if definition is None:
+            return failure(
+                metric=metric,
+                unit="",
+                reason="unknown_metric",
+                detail="metric is not in the public allowlist",
+            )
+        source_definition = self._source_for(definition, source)
+        if source_definition is None:
+            return failure(
+                metric=metric,
+                unit=definition.unit,
+                reason="invalid_observation",
+                detail="source is not allowlisted for this metric",
+            )
+        if not source_definition.publisher_allowed:
+            return failure(
+                metric=metric,
+                unit=definition.unit,
+                reason="source_not_publishable",
+                detail="source may only be populated by its in-process acquirer",
+            )
+        mismatches = []
+        if unit != definition.unit:
+            mismatches.append("unit")
+        if bus != source_definition.bus:
+            mismatches.append("bus")
+        if quality != source_definition.quality:
+            mismatches.append("quality")
+        value_error = self._value_error(definition, value)
+        if value_error is not None:
+            mismatches.append(value_error)
+        elif (
+            source_definition.publisher_values is not None
+            and value not in source_definition.publisher_values
+        ):
+            mismatches.append(
+                "value is not permitted for publication by this source"
+            )
+        if mismatches:
+            return failure(
+                metric=metric,
+                unit=definition.unit,
+                reason="invalid_observation",
+                detail="observation failed allowlist validation: "
+                + ", ".join(mismatches),
+            )
+        result = success(
+            metric=metric,
+            unit=definition.unit,
+            value=value,
+            source=source_definition.name,
+            bus=source_definition.bus,
+            acquisition=source_definition.acquisition_class,
+            quality=source_definition.quality,
+            observed_monotonic=received_monotonic,
+            detail="received from an allowlisted local observation publisher",
+        )
+        with self._lock:
+            self._cache[metric] = result
+            # Publisher success does not prove that a prior in-process CAN
+            # acquisition failure (for example can_busy or restoration_failed)
+            # has recovered. Keep that diagnostic until the acquirer itself
+            # completes successfully.
+        self._update_vehicle_state(result)
+        return result
+
     def _refresh_interface_status(self) -> None:
         try:
             snapshot = self.acquirer.status_snapshot()
@@ -339,6 +514,26 @@ class TelemetryBroker:
             if vehicle_observed is not None
             else None
         )
+        ignition_definition = self.definitions.get("vehicle.ignition_on")
+        if (
+            vehicle_state.get("basis") == "ccan_0x2ef_ignition_gate"
+            and vehicle_observed is not None
+            and ignition_definition is not None
+            and self.monotonic() - vehicle_observed
+            > ignition_definition.stale_after_seconds
+        ):
+            vehicle_state.update(
+                {
+                    "state": "unknown",
+                    "running": None,
+                    "confidence": "stale",
+                    "basis": "stale_ccan_0x2ef_ignition_gate",
+                    "detail": (
+                        "the last verified ignition-on gate observation is "
+                        "stale; current ignition state is unknown"
+                    ),
+                }
+            )
         topology = interface.get("topology") or {}
         inhibits = interface.get("active_inhibits") or []
         busy_error = next(
@@ -398,8 +593,46 @@ class TelemetryBroker:
         a fob wake, or a charger-powered module wake. In particular, battery
         voltage is never used as an engine-running heuristic.
         """
+        if result.metric not in ("battery.voltage", "vehicle.ignition_on"):
+            return
+        if (
+            result.metric == "battery.voltage"
+            and result.acquisition == "physical_read_data_by_identifier"
+        ):
+            # A solicited cluster response proves neither passive bus activity
+            # nor current ignition state. The separate verified 0x2EF
+            # observation is the authority during a cluster logger run.
+            return
+        if result.metric == "battery.voltage":
+            with self._lock:
+                current_basis = self._vehicle_state.get("basis")
+                current_observed = self._vehicle_state_observed_monotonic
+            ignition_stale_after = self.definitions.get(
+                "vehicle.ignition_on"
+            )
+            if (
+                current_basis == "ccan_0x2ef_ignition_gate"
+                and current_observed is not None
+                and ignition_stale_after is not None
+                and self.monotonic() - current_observed
+                <= ignition_stale_after.stale_after_seconds
+            ):
+                return
         state = None
-        if result.available:
+        if result.available and result.metric == "vehicle.ignition_on":
+            ignition_on = result.value is True
+            state = {
+                "state": "ignition_on" if ignition_on else "parked",
+                "running": None if ignition_on else False,
+                "confidence": "verified",
+                "basis": "ccan_0x2ef_ignition_gate",
+                "detail": (
+                    "verified C-CAN ignition-on gate is present"
+                    if ignition_on
+                    else "verified C-CAN ignition-on gate is absent"
+                ),
+            }
+        elif result.available:
             wake_assisted = result.acquisition == "wake_assisted"
             state = {
                 "state": "awake",
@@ -459,10 +692,18 @@ class TelemetryBroker:
             }
         if state is None:
             return
-        state["observed_at"] = datetime.now(timezone.utc).isoformat()
+        state["observed_at"] = (
+            result.observed_at.isoformat()
+            if result.observed_at is not None
+            else datetime.now(timezone.utc).isoformat()
+        )
         with self._lock:
             self._vehicle_state = state
-            self._vehicle_state_observed_monotonic = self.monotonic()
+            self._vehicle_state_observed_monotonic = (
+                result.observed_monotonic
+                if result.observed_monotonic is not None
+                else self.monotonic()
+            )
 
     def _limit_for(self, definition: MetricDefinition, mode: str) -> float:
         if mode == "wake_if_asleep":
@@ -482,7 +723,7 @@ class TelemetryBroker:
                 reason="unknown_metric",
                 detail="metric is not in the public allowlist",
             )
-        if mode not in ("passive", "wake_if_asleep"):
+        if mode not in definition.allowed_acquisition_modes:
             return failure(
                 metric=metric,
                 unit=definition.unit,
@@ -530,27 +771,51 @@ class TelemetryBroker:
                 )
             )
 
+        result: AcquisitionResult | None = None
         try:
-            with self._source_lock:
-                result = self.acquirer.acquire(mode)
-        except Exception as exc:
-            result = failure(
+            try:
+                with self._source_lock:
+                    result = self.acquirer.acquire(mode)
+            except Exception as exc:
+                result = failure(
+                    metric=metric,
+                    unit=definition.unit,
+                    reason="source_unavailable",
+                    detail=f"acquirer failed closed: {exc}",
+                )
+            try:
+                result = self._validate_acquirer_result(
+                    metric, definition, result
+                )
+                self._refresh_interface_status()
+                self._update_vehicle_state(result)
+            except Exception as exc:
+                result = failure(
+                    metric=metric,
+                    unit=definition.unit,
+                    reason="invalid_source_result",
+                    detail=(
+                        "source result validation failed closed: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                )
+        finally:
+            completed = result or failure(
                 metric=metric,
                 unit=definition.unit,
                 reason="source_unavailable",
-                detail=f"acquirer failed closed: {exc}",
+                detail="acquisition ended before producing a source result",
             )
-        self._refresh_interface_status()
-        self._update_vehicle_state(result)
-        with self._lock:
-            if result.available:
-                self._cache[metric] = result
-                self._last_error.pop(metric, None)
-            elif result.reason != "rate_limited":
-                self._last_error[metric] = result
-            entry.result = result
-            entry.event.set()
-            self._inflight.pop(key, None)
+            with self._lock:
+                if completed.available:
+                    self._cache[metric] = completed
+                    self._last_error.pop(metric, None)
+                elif completed.reason != "rate_limited":
+                    self._last_error[metric] = completed
+                entry.result = completed
+                entry.event.set()
+                self._inflight.pop(key, None)
+            result = completed
         return result
 
     def start_collector(self) -> None:

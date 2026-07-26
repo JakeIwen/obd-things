@@ -14,6 +14,36 @@ if str(REPO) not in sys.path:
 
 from projects.vehicle_data.api import TelemetryClient
 from projects.vehicle_data.broker import DEFAULT_SOCKET
+from projects.vehicle_data.metrics import METRICS
+
+
+GET_METRICS = tuple(sorted(METRICS))
+ACQUIRE_METRICS = tuple(
+    sorted(
+        name
+        for name, definition in METRICS.items()
+        if definition.allowed_acquisition_modes
+    )
+)
+PUBLISH_METRICS = tuple(
+    sorted(
+        name
+        for name, definition in METRICS.items()
+        if any(source.publisher_allowed for source in definition.sources)
+    )
+)
+
+
+def scalar_json(value: str):
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError(
+            "value must be a JSON scalar (quote string values)"
+        ) from exc
+    if decoded is None or isinstance(decoded, (list, dict)):
+        raise argparse.ArgumentTypeError("value must be a non-null JSON scalar")
+    return decoded
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -24,9 +54,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status")
     sub.add_parser("metrics")
     get = sub.add_parser("get")
-    get.add_argument("metric", choices=("battery.voltage",))
+    get.add_argument("metric", choices=GET_METRICS)
     acquire = sub.add_parser("acquire")
-    acquire.add_argument("metric", choices=("battery.voltage",))
+    acquire.add_argument("metric", choices=ACQUIRE_METRICS)
     acquire.add_argument(
         "--mode",
         choices=("passive", "wake_if_asleep"),
@@ -37,6 +67,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="required for wake_if_asleep because it may transmit and power accessory rails",
     )
+    publish = sub.add_parser(
+        "publish",
+        help="publish one exact allowlisted observation over the local Unix API",
+    )
+    publish.add_argument("metric", choices=PUBLISH_METRICS)
+    publish.add_argument("--value", required=True, type=scalar_json)
+    publish.add_argument("--unit", required=True)
+    publish.add_argument("--source", required=True)
+    publish.add_argument("--bus", required=True)
+    publish.add_argument("--quality", required=True)
     return parser
 
 
@@ -61,11 +101,20 @@ def main(argv=None) -> int:
         status, payload = client.request(
             "GET", f"/v1/metrics/{args.metric}"
         )
-    else:
+    elif args.command == "acquire":
         status, payload = client.request(
             "POST",
             f"/v1/acquisitions/{args.metric}",
             {"mode": args.mode},
+        )
+    else:
+        status, payload = client.publish(
+            args.metric,
+            value=args.value,
+            unit=args.unit,
+            source=args.source,
+            bus=args.bus,
+            quality=args.quality,
         )
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0 if 200 <= status < 300 else 1

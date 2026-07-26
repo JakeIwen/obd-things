@@ -8,7 +8,9 @@ import http.server
 import json
 import pathlib
 import sys
+import threading
 import time
+import uuid
 from typing import Any
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -51,14 +53,14 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
 
     def _json(self, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self._common_headers()
-        self.end_headers()
         try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self._common_headers()
+            self.end_headers()
             self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
             return
 
     def _broker_request(
@@ -87,6 +89,9 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
             response["web"] = web_status
         elif path == "/v1/snapshot":
             response["web"] = web_status
+            response["web_delivery"] = (
+                self.server.next_snapshot_delivery()
+            )
             if isinstance(response.get("status"), dict):
                 response["status"]["web"] = web_status
         return self._json(status, response)
@@ -104,14 +109,14 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
                     "detail": filename,
                 },
             )
-        self.send_response(200)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self._common_headers()
-        self.end_headers()
         try:
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self._common_headers()
+            self.end_headers()
             self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
             return
 
     def do_GET(self):
@@ -192,12 +197,19 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
         return self._broker_request("POST", path, payload)
 
     def _stream(self) -> None:
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Connection", "keep-alive")
-        self.send_header("X-Accel-Buffering", "no")
-        self._common_headers()
-        self.end_headers()
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("X-Accel-Buffering", "no")
+            self._common_headers()
+            self.end_headers()
+        except (
+            BrokenPipeError,
+            ConnectionAbortedError,
+            ConnectionResetError,
+        ):
+            return
         deadline = time.monotonic() + self.server.stream_max_seconds
         while time.monotonic() < deadline:
             try:
@@ -210,12 +222,26 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
                 }
                 payload["status_code"] = status_code
                 payload["web"] = web_status
+                delivery = self.server.next_snapshot_delivery()
+                payload["web_delivery"] = delivery
                 if isinstance(payload.get("status"), dict):
                     payload["status"]["web"] = web_status
                 body = json.dumps(payload, separators=(",", ":"))
-                self.wfile.write(f"event: snapshot\ndata: {body}\n\n".encode())
+                event_id = (
+                    f"{delivery['instance_id']}:{delivery['sequence']}"
+                )
+                self.wfile.write(
+                    (
+                        f"id: {event_id}\n"
+                        f"event: snapshot\ndata: {body}\n\n"
+                    ).encode()
+                )
                 self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
+            except (
+                BrokenPipeError,
+                ConnectionAbortedError,
+                ConnectionResetError,
+            ):
                 return
             except (OSError, RuntimeError, json.JSONDecodeError) as exc:
                 body = json.dumps(
@@ -227,7 +253,11 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
                         f"event: error\ndata: {body}\n\n".encode()
                     )
                     self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
+                except (
+                    BrokenPipeError,
+                    ConnectionAbortedError,
+                    ConnectionResetError,
+                ):
                     return
             time.sleep(self.server.stream_interval_seconds)
 
@@ -250,6 +280,23 @@ class TelemetryWebServer(http.server.ThreadingHTTPServer):
         self.allow_acquisitions = allow_acquisitions
         self.stream_interval_seconds = stream_interval_seconds
         self.stream_max_seconds = stream_max_seconds
+        self.snapshot_instance_id = uuid.uuid4().hex
+        self._snapshot_sequence = 0
+        self._snapshot_sequence_lock = threading.Lock()
+
+    def next_snapshot_delivery(self) -> dict[str, int | str]:
+        """Return process-scoped ordering and generation metadata."""
+
+        with self._snapshot_sequence_lock:
+            self._snapshot_sequence += 1
+            generated_at_ms = time.time_ns() // 1_000_000
+            generated_monotonic_ms = time.monotonic_ns() // 1_000_000
+            return {
+                "instance_id": self.snapshot_instance_id,
+                "sequence": self._snapshot_sequence,
+                "generated_at_ms": generated_at_ms,
+                "generated_monotonic_ms": generated_monotonic_ms,
+            }
 
 
 def build_parser() -> argparse.ArgumentParser:
