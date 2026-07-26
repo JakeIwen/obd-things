@@ -130,6 +130,8 @@ class SourceTests(unittest.TestCase):
             set(METRICS),
             {
                 "battery.voltage",
+                "engine.coolant_temperature",
+                "engine.oil_pressure",
                 "vehicle.ignition_on",
                 "diagnostics.cluster.did.0107.raw",
                 "diagnostics.cluster.did.1000.raw",
@@ -160,6 +162,14 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(
             METRICS["diagnostics.cluster.did.1002.raw"].unit,
             "raw_u8",
+        )
+        self.assertEqual(
+            METRICS["engine.oil_pressure"].sources[0].name,
+            "ccan.broadcast.0x41d",
+        )
+        self.assertEqual(
+            METRICS["engine.coolant_temperature"].sources[0].name,
+            "ccan.broadcast.0x2ed",
         )
 
     def test_passive_awake_read_takes_only_observer_lock(self):
@@ -1021,6 +1031,51 @@ class BrokerTests(unittest.TestCase):
             acquirer.calls, ["wake_if_asleep", "passive"]
         )
         self.assertTrue(all(result.available for result in results))
+
+    def test_passive_ccan_cycle_caches_allowlisted_engine_health(self):
+        class Reader:
+            def read(self):
+                return (
+                    SimpleNamespace(
+                        metric="engine.oil_pressure",
+                        value=208.0,
+                        unit="kPa",
+                        source="ccan.broadcast.0x41d",
+                        quality="observed_alfa_scale",
+                    ),
+                    SimpleNamespace(
+                        metric="engine.coolant_temperature",
+                        value=86.0,
+                        unit="°C",
+                        source="ccan.broadcast.0x2ed",
+                        quality="observed_alfa_scale",
+                    ),
+                )
+
+        broker = TelemetryBroker(
+            acquirer=FakeAcquirer(),
+            monotonic=FakeClock(),
+            passive_powertrain_reader=Reader(),
+        )
+        ccan = success(
+            metric="battery.voltage",
+            unit="V",
+            value=14.0,
+            source="ccan.broadcast.0x41a",
+            bus="c-can",
+            acquisition="passive",
+            quality="verified",
+            observed_monotonic=100.0,
+        )
+
+        self.assertEqual(broker._collect_passive_powertrain(ccan), 2)
+        self.assertEqual(
+            broker.metric_response("engine.oil_pressure")["value"], 208.0
+        )
+        self.assertEqual(
+            broker.metric_response("engine.coolant_temperature")["value"],
+            86.0,
+        )
 
 
 class ApiTests(unittest.TestCase):

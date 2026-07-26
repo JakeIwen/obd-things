@@ -578,6 +578,25 @@ class EvidenceValidationTests(unittest.TestCase):
         ):
             correlate.ReferenceDecoder("auto").decode(b"\x01\x02\x03")
 
+    def test_explicit_signed_reference_fields_decode_twos_complement(self):
+        negative_16 = correlate.ReferenceDecoder("i16be:0")
+        self.assertEqual(negative_16.decode(b"\xff\x9c"), -100)
+        self.assertEqual(
+            negative_16.resolved.as_dict(),
+            {
+                "kind": "i16be",
+                "offset": 0,
+                "width_bytes": 2,
+                "byte_order": "big",
+                "signed": True,
+            },
+        )
+
+        negative_32 = correlate.ReferenceDecoder("i32le:1")
+        self.assertEqual(
+            negative_32.decode(b"\x00\x9c\xff\xff\xff"), -100
+        )
+
     def test_candidate_identifier_cap_is_enforced(self):
         references = [correlate.ReferenceSample(1_000_000, 1.0)]
         frames = [

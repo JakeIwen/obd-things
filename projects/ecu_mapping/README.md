@@ -16,7 +16,11 @@ The current owner-priority C-CAN roadmap—oil pressure, coolant/oil temperature
 torque and derived power, OEM operating context, and the targeted PCM/TCM
 acquisition order—is recorded in
 [`2026-07-25_priority_telemetry_targets.md`](findings/promaster_2022/2026-07-25_priority_telemetry_targets.md).
-Those signals are confirmed targets, not yet qualified dashboard metrics.
+The subsequent
+[`2026-07-26 PCM Plots idle mapping`](findings/promaster_2022/2026-07-26_pcm_plots_idle_mapping.md)
+qualified passive oil-pressure and coolant-temperature dashboard sources and
+mapped the selected PCM gauge set. Engine-oil temperature, loaded torque, and
+derived power remain open.
 
 ## ⚠️ Provenance — two vans in the data (read before trusting anything)
 
@@ -72,6 +76,8 @@ do not require immediate live file growth. Pull the resulting files from
 tools/alfaobd_decode.py  <in.bin> [out.txt]      # generic: .bin -> decoded text (reusable)
 tools/alfaobd_gauges.py  <Gauges_Data.csv>       # offline section/profile/metric inventory -> tmp/
 tools/alfaobd_gauge_join.py <Gauges_Data.csv> <decoded.txt> --section N  # offline DID candidates
+tools/candump_diagnostic_wire.py <capture...> --module pcm   # exact 22/62 wire stream
+tools/can_timeseries_correlate.py <capture...> --module pcm  # DID-to-broadcast candidates
 tools/alfaobd_dat.py <post.dat> --baseline <pre.dat>  # detect cached/duplicated plot series
 tools/alfaobd_apk_db.py  <base.apk>              # reconstruct catalog DB + label resource -> tmp/
 tools/alfaobd_catalog.py <db> <labels> --device-id N  # read-only model/device export -> tmp/
@@ -338,9 +344,8 @@ on the incompatible Climate profile. The tool opens only the gauge selector, see
 boundaries, inventories it forward and backward with bounded overlapping swipes, requires two
 matching parsed dialog states after every swipe, hashes the exact rendered Unicode label order, and exits
 with Android BACK. It never taps a gauge row, the dialog's OK button, the scan toggle, a
-vehicle/module selector, or Active Diagnostics. The tracked discovery plan deliberately has no
-catalog hash yet: its first successful live result remains an unpinned candidate until reviewed and
-copied back into the plan.
+vehicle/module selector, or Active Diagnostics. The first successful live
+result was reviewed and its hash is now pinned in the tracked discovery plan.
 
 The plan-only check is inert:
 
@@ -379,8 +384,8 @@ select or scan a scalar.
 **offline-gates-only scaffold**, not live scalar automation. `plan` validates and expands the
 candidate schedule, `audit` checks the referenced catalog plan and any configured reviewed report,
 and `status` only reads an existing `state.json`; none of those modes constructs an ADB client or
-accesses CAN, services, mounts, network, proxy settings, or output. The current draft deliberately
-reports blockers because the live catalog and review fields are still null:
+accesses CAN, services, mounts, network, proxy settings, or output. The live
+catalog and review fields are now pinned:
 
 ```bash
 python3 tools/alfaobd_plots_scalar_campaign.py plan \
@@ -399,10 +404,15 @@ and CLI confirmations pass, `run` is intentionally disabled in this version and 
 CAN, service, mount, or output access. No live selector mutation, scan, or scalar capture path exists
 yet.
 
-The current next live dependency is still the catalog audit and inventory above. Review that
-inventory's complete `catalog.json` and clean-completion `state.json`, then populate the
-catalog/report/state/scalar-plan pins; that does not itself enable `run`. The required priority order is in
-[`2026-07-25_priority_telemetry_targets.md`](findings/promaster_2022/2026-07-25_priority_telemetry_targets.md).
+Catalog campaign `pcm-plots-catalog-20260726T224830Z` completed a matching
+forward/reverse 193-row traversal without manual reconciliation. The separate
+simultaneous eleven-gauge idle recording then preserved the owner's existing
+Plots list and produced the mappings in
+[`2026-07-26_pcm_plots_idle_mapping.md`](findings/promaster_2022/2026-07-26_pcm_plots_idle_mapping.md).
+That efficient multi-gauge result supersedes the need to run the scalar
+supervisor for those eleven rows. Keep the disabled one-at-a-time scaffold for
+future ambiguity resolution and for gauges that cannot be separated by fixed
+polling order.
 
 `alfaobd_singleton_join.py` is the strictly offline verifier for a completed singleton campaign.
 It validates campaign state and artifact hashes, requires successful zero-drop passive-recorder
@@ -830,11 +840,13 @@ verify the `/4` rpm scale or authorize public telemetry promotion.
    consistent with `raw / 4` RPM but remains unverified; use the guarded Alfa scaling drive for
    moving speed, rendered RPM, and non-P gear evidence. The logger owns integrated raw capture
    under the active lock, so do not pair it with the separate passive recorder on the same PCAN.
-   Preserve the validated singleton Status workflow for its bounded labels. For the owner-priority
-   oil pressure, coolant, torque, and charging scalars, complete and review the first live catalog
-   inventory described in the priority telemetry finding; do not pretend Status scrolling reaches
-   that surface. The separate scalar tool is only an offline pin-validation scaffold and its `run`
-   path is intentionally disabled, so no live Plots scalar automation has been established. Also use
+   Preserve the validated singleton Status workflow for its bounded labels. The owner-priority PCM
+   Plots catalog and simultaneous eleven-gauge idle mapping are complete: passive `0x41D` oil
+   pressure and `0x2ED` coolant are telemetry sources, while `0x100` torque needs loaded wrap/mode
+   evidence and engine-oil temperature remains unmapped. Do not repeat the idle campaign merely to
+   rediscover those DIDs. The separate scalar tool remains an offline pin-validation scaffold and
+   its `run` path is intentionally disabled; use it only after implementing and reviewing a genuine
+   one-at-a-time need. Also use
    passenger-door plus parking-brake discriminators to refine the passive and BCM candidates.
    Alfa's shifter `Drive` rendering in Park and TCM `Brake switch` watcher remain explicitly
    invalid.

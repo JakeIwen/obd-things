@@ -135,6 +135,62 @@ IGNITION_ON = MetricDefinition(
 )
 
 
+ENGINE_OIL_PRESSURE = MetricDefinition(
+    name="engine.oil_pressure",
+    unit="kPa",
+    value_type="number",
+    stale_after_seconds=3.0,
+    passive_min_interval_seconds=0.0,
+    wake_min_interval_seconds=0.0,
+    minimum=0.0,
+    maximum=1020.0,
+    sources=(
+        SourceDefinition(
+            name="ccan.broadcast.0x41d",
+            bus="c-can",
+            bitrate=500000,
+            acquisition_class="passive_broadcast",
+            quality="observed_alfa_scale",
+            provenance=(
+                "projects/ecu_mapping/findings/promaster_2022/"
+                "2026-07-26_pcm_plots_idle_mapping.md; "
+                "0x41D byte 2 mirrors PCM DID 022A raw, x 4 kPa"
+            ),
+            side_effects="none; observation is receive-only",
+            publisher_allowed=True,
+        ),
+    ),
+)
+
+
+ENGINE_COOLANT_TEMPERATURE = MetricDefinition(
+    name="engine.coolant_temperature",
+    unit="°C",
+    value_type="number",
+    stale_after_seconds=3.0,
+    passive_min_interval_seconds=0.0,
+    wake_min_interval_seconds=0.0,
+    minimum=-40.0,
+    maximum=215.0,
+    sources=(
+        SourceDefinition(
+            name="ccan.broadcast.0x2ed",
+            bus="c-can",
+            bitrate=500000,
+            acquisition_class="passive_broadcast",
+            quality="observed_alfa_scale",
+            provenance=(
+                "projects/ecu_mapping/findings/promaster_2022/"
+                "2026-07-26_pcm_plots_idle_mapping.md; "
+                "0x2ED byte 0 - 40 °C, exactly linked to PCM DID 011D"
+            ),
+            side_effects="none; observation is receive-only",
+            publisher_allowed=True,
+        ),
+    ),
+)
+
+
 def _raw_cluster_metric(did: str, unit: str, maximum: int) -> MetricDefinition:
     return MetricDefinition(
         name=f"diagnostics.cluster.did.{did}.raw",
@@ -178,6 +234,8 @@ METRICS = {
     for definition in (
         BATTERY_VOLTAGE,
         IGNITION_ON,
+        ENGINE_OIL_PRESSURE,
+        ENGINE_COOLANT_TEMPERATURE,
         CLUSTER_DID_1000_RAW,
         CLUSTER_DID_1002_RAW,
         CLUSTER_DID_0107_RAW,

@@ -145,6 +145,7 @@ class TelemetryBroker:
         auto_retune_enabled: bool = True,
         auto_retune_trigger: int = 3,
         auto_retune_cooldown_seconds: float = 30.0,
+        passive_powertrain_reader=None,
     ):
         self.acquirer = acquirer or VoltageAcquirer()
         self.definitions = definitions or METRICS
@@ -163,6 +164,7 @@ class TelemetryBroker:
             channel=getattr(self.acquirer, "channel", "can0"),
             probe_seconds=getattr(self.acquirer, "probe_seconds", 0.75),
         )
+        self.passive_powertrain_reader = passive_powertrain_reader
 
         self._lock = threading.RLock()
         # Prevent the passive collector from racing a client-triggered active
@@ -970,11 +972,39 @@ class TelemetryBroker:
             last_attempt=attempt,
         )
 
+    def _collect_passive_powertrain(
+        self, bus_result: AcquisitionResult
+    ) -> int:
+        if not (
+            bus_result.available
+            and bus_result.bus == "c-can"
+            and bus_result.acquisition == "passive"
+            and self.passive_powertrain_reader is not None
+        ):
+            return 0
+        try:
+            observations = self.passive_powertrain_reader.read()
+        except Exception:
+            return 0
+        accepted = 0
+        for observation in observations:
+            result = self.publish_observation(
+                observation.metric,
+                value=observation.value,
+                unit=observation.unit,
+                source=observation.source,
+                bus="c-can",
+                quality=observation.quality,
+            )
+            accepted += int(result.available)
+        return accepted
+
     def _collector_loop(self) -> None:
         with self._lock:
             self._collector_state = "running"
         while not self._collector_stop.is_set():
             result = self.acquire("battery.voltage", "passive")
+            self._collect_passive_powertrain(result)
             self._consider_auto_retune(result)
             with self._lock:
                 self._collector_cycles += 1
@@ -1041,6 +1071,7 @@ def main(argv=None) -> int:
         raise SystemExit("refusing a world-accessible broker Unix socket")
 
     from projects.vehicle_data.api import serve_unix
+    from projects.vehicle_data.ccan_powertrain import CcanPowertrainReader
 
     acquirer = VoltageAcquirer(
         channel=args.channel,
@@ -1054,6 +1085,11 @@ def main(argv=None) -> int:
         auto_retune_enabled=not args.no_auto_retune,
         auto_retune_trigger=args.auto_retune_trigger,
         auto_retune_cooldown_seconds=args.auto_retune_cooldown,
+        passive_powertrain_reader=CcanPowertrainReader(
+            channel=args.channel,
+            probe_seconds=min(args.probe_seconds, 0.25),
+            read_timeout=min(args.read_timeout, 0.5),
+        ),
     )
     if not args.no_collector:
         broker.start_collector()

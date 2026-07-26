@@ -50,6 +50,8 @@ The initial drive-publisher vocabulary is intentionally narrow:
 | Metric | Source | Type/unit | Quality |
 |---|---|---|---|
 | `battery.voltage` | `cluster.did.1004` | number, `V` | `observed_alfa_scale` |
+| `engine.oil_pressure` | `ccan.broadcast.0x41d` | number, `kPa` | `observed_alfa_scale` |
+| `engine.coolant_temperature` | `ccan.broadcast.0x2ed` | number, `°C` | `observed_alfa_scale` |
 | `vehicle.ignition_on` | `ccan.broadcast.0x2ef` | boolean, `boolean` | `verified` |
 | `diagnostics.cluster.did.1000.raw` | `cluster.did.1000` | integer, `raw_u16_be` | `candidate` |
 | `diagnostics.cluster.did.1002.raw` | `cluster.did.1002` | integer, `raw_u8` | `candidate` |
@@ -67,7 +69,7 @@ general-purpose DID publication namespace.
 
 ## Owner-priority telemetry roadmap
 
-The first engine-health additions should be oil pressure, coolant temperature,
+The first engine-health additions are oil pressure, coolant temperature,
 engine-oil temperature, RPM, actual crankshaft torque, and derived power.
 Oil pressure is a particularly strong target: the exact-vehicle OEM material
 confirms a scan-tool-readable EOP sensor and dual-stage pump, while the
@@ -78,18 +80,32 @@ bands differ by RPM, operating temperature, and pump mode, so the display
 cannot use one static good/bad threshold. Power must be labeled as
 ECU-estimated crankshaft power, not wheel horsepower.
 
-The DIDs and scales are not yet qualified, so none of those names belongs in
-the public registry today. The evidence, exact OEM pressure/thermostat context,
-alert-design constraints, PCM/TCM acquisition sequence, and later mechanical
-and electrical targets are maintained in the
+The 2026-07-26 simultaneous PCM Plots/wire campaign qualified the first two
+receive-only sources:
+
+| Metric | Passive C-CAN source | Decode | Quality |
+|---|---|---|---|
+| `engine.oil_pressure` | `0x41D` byte 2 | raw x 4 kPa | `observed_alfa_scale` |
+| `engine.coolant_temperature` | `0x2ED` byte 0 | raw - 40 °C | `observed_alfa_scale` |
+
+Both are in the public registry and the passive collector reads them only
+after its normal C-CAN interface and identity gates pass. They require no
+per-reading approval and send no CAN traffic. The exact current-vehicle
+correlation is recorded in the
+[`PCM Plots idle finding`](../ecu_mapping/findings/promaster_2022/2026-07-26_pcm_plots_idle_mapping.md).
+
+Engine-oil temperature, loaded torque, and derived power are not yet
+qualified. Their evidence, exact OEM pressure/thermostat context, alert-design
+constraints, PCM/TCM acquisition sequence, and later mechanical and electrical
+targets are maintained in the
 [`priority telemetry finding`](../ecu_mapping/findings/promaster_2022/2026-07-25_priority_telemetry_targets.md).
 The dashboard keeps inert roadmap cards visible for oil pressure, coolant
 temperature, engine-oil temperature, crankshaft torque, and crankshaft power.
-Those labels do not create metrics or imply that a source is available. A card
-receives a value only after a matching registry definition and qualified fresh
-observation exist. Context-aware oil-pressure bands, engine-running/startup
-gates, and fresh time-aligned torque/RPM power derivation still require
-specialized evaluation and presentation logic.
+The oil-pressure and coolant cards now receive values after fresh observations;
+the other roadmap labels do not create metrics or imply that a source is
+available. Context-aware oil-pressure bands, engine-running/startup gates, and
+fresh time-aligned torque/RPM power derivation still require specialized
+evaluation and presentation logic.
 
 ## Dashboard profiles and vehicle state
 

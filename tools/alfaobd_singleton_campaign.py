@@ -702,12 +702,22 @@ class AdbClient:
         result = self.runner.run(
             self._base() + ["shell", "dumpsys", "window", "windows"], timeout=15
         )
-        focus = next(
+        current_focus = next(
             (line for line in result.stdout.splitlines() if "mCurrentFocus" in line),
             "",
         )
-        if PACKAGE not in focus:
-            raise CampaignError(f"AlfaOBD is not foreground: {focus.strip()!r}")
+        focused_app = next(
+            (line for line in result.stdout.splitlines() if "mFocusedApp" in line),
+            "",
+        )
+        # Android 7 reports an app-owned AlertDialog's title, rather than its
+        # package, in mCurrentFocus.  mFocusedApp still names the owning
+        # activity, so require the package in either authoritative focus line.
+        if PACKAGE not in current_focus and PACKAGE not in focused_app:
+            detail = "; ".join(
+                line.strip() for line in (current_focus, focused_app) if line.strip()
+            )
+            raise CampaignError(f"AlfaOBD is not foreground: {detail!r}")
         return PACKAGE
 
     def dump_ui(self) -> str:

@@ -15,6 +15,7 @@
   "expected_catalog_count": 193,
   "expected_first_label": "Vehicle speed, km/h",
   "expected_last_label": "Transfer speed, rpm",
+  "expected_catalog_sha256": "e1d5e74db311b13a6156cdaa30b0126a0789a502aaaffeaa36be33bca10ef3de",
   "required_labels": [
     "Engine speed, rpm",
     "Current engine torque, Nm",

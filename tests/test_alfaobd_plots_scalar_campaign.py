@@ -293,7 +293,7 @@ def _all_option_strings(parser: argparse.ArgumentParser) -> set[str]:
 
 
 class TrackedPlanTests(unittest.TestCase):
-    def test_tracked_draft_has_exact_target_triples_and_remains_blocked(self):
+    def test_tracked_plan_has_exact_target_triples_and_reviewed_catalog_pins(self):
         plan = scalar.load_plan(TRACKED_SCALAR_PLAN)
         self.assertEqual(
             [
@@ -392,10 +392,11 @@ class TrackedPlanTests(unittest.TestCase):
         self.assertEqual(audit["implementation_status"], "offline_gates_only")
         self.assertFalse(audit["live_execution_enabled"])
         self.assertFalse(audit["execution_ready"])
-        self.assertTrue(audit["pinning_blockers"])
+        self.assertTrue(audit["pinning_prerequisites_ready"])
+        self.assertEqual(audit["pinning_blockers"], [])
         self.assertIn(
-            "catalog expected_catalog_sha256 is null",
-            " ".join(audit["pinning_blockers"]),
+            "live selector mutation/scan execution is intentionally disabled",
+            audit["live_blocker"],
         )
 
     def test_plan_and_audit_are_offline_and_create_no_output(self):

@@ -11,11 +11,13 @@ The owner-priority engine signals are:
 4. transmission and electrical measurements that the stock IPC hides or
    reduces to a warning lamp.
 
-None of oil pressure, coolant temperature, oil temperature, torque, or power is
-ready for publication as a trusted dashboard metric. Their exact C-CAN
-DIDs/fields and rendering scales remain unresolved. The current telemetry
-registry is correct to expose unresolved cluster RPM, speed, gear, and
-outside-temperature values as raw candidates only.
+Update 2026-07-26: the
+[simultaneous PCM Plots/wire campaign](2026-07-26_pcm_plots_idle_mapping.md)
+mapped oil-pressure DID `022A` and coolant DID `011D`, then found strong
+passive `0x41D` and `0x2ED` forms. Those two receive-only sources are now
+qualified as `observed_alfa_scale` dashboard metrics. Engine-oil temperature,
+loaded torque, and power remain unresolved; the torque campaign produced a
+strong idle-range `0x100` lead whose wrap/mode needs driving excitation.
 
 The acquisition path is nevertheless strong. The exact-vehicle OEM corpus
 confirms real oil-pressure and oil-temperature sensors monitored by the PCM,

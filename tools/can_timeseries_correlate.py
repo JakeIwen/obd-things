@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Strictly offline, bounded-memory CAN time-series correlator.
 
-The reference stream is a completed ``cluster_wire.jsonl`` produced by
-``projects/ecu_mapping/cluster_drive_log.py``.  Only rows classified as
+The reference stream is a completed per-module ``*_wire.jsonl`` stream.  The
+original producer is ``projects/ecu_mapping/cluster_drive_log.py``; generic
+streams may also be extracted from a saved parallel diagnostic capture.  Only
+rows classified as
 ``exact_positive_response`` for the explicitly selected DID become reference
 samples.  Saved candump text (plain or ``.zst``) supplies candidate broadcast
 fields.
@@ -46,11 +48,13 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from lib.modules import MODULES
+from lib.modules import MODULES, Module
 
 
 TMP_ROOT = REPO / "tmp"
-CLUSTER_MODULE = MODULES["cluster"]
+DEFAULT_MODULE = MODULES["cluster"]
+# Backward-compatible public alias used by existing callers and evidence tests.
+CLUSTER_MODULE = DEFAULT_MODULE
 
 SCHEMA_VERSION = 1
 MAX_WIRE_LINE_BYTES = 1 << 20
@@ -90,10 +94,12 @@ _COMPACT_FRAME = re.compile(
     rb"(?P<data>(?:[0-9A-Fa-f]{2})*)\s*$"
 )
 _REFERENCE_FIELD_RE = re.compile(
-    r"^(byte|u16be|u16le|u32be|u32le):([0-9]{1,4})$"
+    r"^(byte|[ui]16be|[ui]16le|[ui]32be|[ui]32le):([0-9]{1,4})$"
 )
 _VAN_COMPUTE_JOB_ID_RE = re.compile(r"\d{8}T\d{6}Z-[0-9a-f]{8}")
-_VAN_COMPUTE_WIRE_NAME_RE = re.compile(r"\d{3}-cluster_wire\.jsonl")
+_VAN_COMPUTE_WIRE_NAME_RE = re.compile(
+    r"\d{3}-[a-z][a-z0-9_]{0,63}_wire\.jsonl"
+)
 
 
 class CorrelateError(RuntimeError):
@@ -159,23 +165,27 @@ class FieldSpec:
     def width_bytes(self) -> int:
         if self.kind == "byte":
             return 1
-        if self.kind.startswith("u16"):
+        if self.kind.startswith(("u16", "i16")):
             return 2
-        if self.kind.startswith("u32"):
+        if self.kind.startswith(("u32", "i32")):
             return 4
         raise CorrelateError(f"unsupported field kind {self.kind!r}")
 
     @property
     def byte_order(self) -> str | None:
-        if self.kind == "u16be":
+        if self.kind in ("u16be", "i16be"):
             return "big"
-        if self.kind == "u16le":
+        if self.kind in ("u16le", "i16le"):
             return "little"
-        if self.kind == "u32be":
+        if self.kind in ("u32be", "i32be"):
             return "big"
-        if self.kind == "u32le":
+        if self.kind in ("u32le", "i32le"):
             return "little"
         return None
+
+    @property
+    def signed(self) -> bool:
+        return self.kind.startswith("i")
 
     @property
     def label(self) -> str:
@@ -187,7 +197,7 @@ class FieldSpec:
             "offset": self.offset,
             "width_bytes": self.width_bytes,
             "byte_order": self.byte_order,
-            "signed": False,
+            "signed": self.signed,
         }
 
 
@@ -316,7 +326,11 @@ def _timestamp_to_us(value: bytes | str, *, context: str) -> int:
     return int(rounded)
 
 
-def parse_candump_frame(line: bytes) -> CanFrame | None:
+def parse_candump_frame(
+    line: bytes,
+    *,
+    expected_channel: str = DEFAULT_MODULE.channel,
+) -> CanFrame | None:
     """Parse one classic-CAN candump line; return ``None`` for a blank line."""
     if not line.strip():
         return None
@@ -346,10 +360,10 @@ def parse_candump_frame(line: bytes) -> CanFrame | None:
         interface = match.group("interface").decode("ascii")
     except UnicodeDecodeError as exc:
         raise CorrelateError("candump interface is not ASCII") from exc
-    if interface != CLUSTER_MODULE.channel:
+    if interface != expected_channel:
         raise CorrelateError(
-            f"candump interface must be the pinned cluster channel "
-            f"{CLUSTER_MODULE.channel!r}"
+            f"candump interface must be the pinned module channel "
+            f"{expected_channel!r}"
         )
     can_id_text = match.group("can_id")
     can_id = int(can_id_text, 16)
@@ -386,7 +400,7 @@ def _parse_reference_field(value: str) -> FieldSpec | None:
     if match is None:
         raise CorrelateError(
             "reference field must be auto, byte:N, u16be:N, u16le:N, "
-            "u32be:N, or u32le:N"
+            "u32be:N, u32le:N, i16be:N, i16le:N, i32be:N, or i32le:N"
         )
     return FieldSpec(match.group(1), int(match.group(2), 10))
 
@@ -403,14 +417,22 @@ def _decode_field(payload: bytes, spec: FieldSpec) -> int:
         )
     if spec.kind == "byte":
         return payload[spec.offset]
-    if spec.kind == "u16be":
-        return int.from_bytes(payload[spec.offset:end], "big")
-    if spec.kind == "u16le":
-        return int.from_bytes(payload[spec.offset:end], "little")
-    if spec.kind == "u32be":
-        return int.from_bytes(payload[spec.offset:end], "big")
-    if spec.kind == "u32le":
-        return int.from_bytes(payload[spec.offset:end], "little")
+    if spec.kind in ("u16be", "i16be"):
+        return int.from_bytes(
+            payload[spec.offset:end], "big", signed=spec.signed
+        )
+    if spec.kind in ("u16le", "i16le"):
+        return int.from_bytes(
+            payload[spec.offset:end], "little", signed=spec.signed
+        )
+    if spec.kind in ("u32be", "i32be"):
+        return int.from_bytes(
+            payload[spec.offset:end], "big", signed=spec.signed
+        )
+    if spec.kind in ("u32le", "i32le"):
+        return int.from_bytes(
+            payload[spec.offset:end], "little", signed=spec.signed
+        )
     raise CorrelateError(f"unsupported field kind {spec.kind!r}")
 
 
@@ -441,6 +463,7 @@ def iter_reference_samples(
     did: int,
     decoder: ReferenceDecoder,
     stats: StreamStats,
+    module: Module = DEFAULT_MODULE,
 ) -> Iterator[ReferenceSample]:
     previous_timestamp: int | None = None
     previous_raw_sequence: int | None = None
@@ -526,7 +549,10 @@ def iter_reference_samples(
                 raise CorrelateError(
                     f"{path}:{line_number}: selected row has invalid type"
                 )
-            if row.get("direction") != "cluster_to_tester":
+            valid_directions = {"ecu_to_tester"}
+            if module.key == "cluster":
+                valid_directions.add("cluster_to_tester")
+            if row.get("direction") not in valid_directions:
                 raise CorrelateError(
                     f"{path}:{line_number}: selected row has invalid direction"
                 )
@@ -568,11 +594,11 @@ def iter_reference_samples(
                 raise CorrelateError(
                     f"{path}:{line_number}: selected row can_id exceeds 29 bits"
                 )
-            if expected_can_id != CLUSTER_MODULE.rxid:
+            if expected_can_id != module.rxid:
                 raise CorrelateError(
                     f"{path}:{line_number}: selected DID row is not from the "
-                    f"registered cluster RX endpoint "
-                    f"0x{CLUSTER_MODULE.rxid:08X}"
+                    f"registered {module.key} RX endpoint "
+                    f"0x{module.rxid:08X}"
                 )
             can_data_text = row.get("can_data_hex")
             if not isinstance(can_data_text, str):
@@ -630,6 +656,7 @@ def iter_candump_frames(
     *,
     stats: list[StreamStats],
     decompressor: Decompressor,
+    expected_channel: str = DEFAULT_MODULE.channel,
 ) -> Iterator[CanFrame]:
     previous_timestamp: int | None = None
     raw_line_sequence = 0
@@ -657,7 +684,9 @@ def iter_candump_frames(
                         source_stats.blank_lines += 1
                         continue
                     try:
-                        frame = parse_candump_frame(line)
+                        frame = parse_candump_frame(
+                            line, expected_channel=expected_channel
+                        )
                     except CorrelateError as exc:
                         raise CorrelateError(
                             f"{path}:{line_number}: {exc}"
@@ -1334,6 +1363,7 @@ def _validate_inputs(
     wire: Path,
     captures: Sequence[Path],
     *,
+    module: Module = DEFAULT_MODULE,
     allow_van_compute_staging: bool = False,
 ) -> None:
     if not captures:
@@ -1356,7 +1386,8 @@ def _validate_inputs(
         if canonical in resolved:
             raise CorrelateError(f"duplicate input path: {path}")
         resolved.add(canonical)
-    valid_wire_name = wire.name == "cluster_wire.jsonl"
+    expected_wire_name = f"{module.key}_wire.jsonl"
+    valid_wire_name = wire.name == expected_wire_name
     if allow_van_compute_staging:
         job_root = _van_compute_job_root()
         input_parent = wire.parent
@@ -1383,7 +1414,7 @@ def _validate_inputs(
     if not valid_wire_name:
         raise CorrelateError(
             "reference input must have the finalized recorder basename "
-            "cluster_wire.jsonl (or its validated van-compute staged name)"
+            f"{expected_wire_name} (or its validated van-compute staged name)"
         )
     for capture in captures:
         if not (
@@ -1495,12 +1526,14 @@ def run_analysis(
     did: int,
     reference_field: str,
     config: AnalysisConfig,
+    module: Module = DEFAULT_MODULE,
     decompressor: Decompressor | None = None,
     allow_van_compute_staging: bool = False,
 ) -> dict[str, object]:
     _validate_inputs(
         wire,
         captures,
+        module=module,
         allow_van_compute_staging=allow_van_compute_staging,
     )
     decoder = ReferenceDecoder(reference_field)
@@ -1516,10 +1549,17 @@ def run_analysis(
         decompressor = CliZstdDecompressor()
     correlator = analyze_streams(
         iter_reference_samples(
-            wire, did=did, decoder=decoder, stats=reference_stats
+            wire,
+            did=did,
+            decoder=decoder,
+            stats=reference_stats,
+            module=module,
         ),
         iter_candump_frames(
-            captures, stats=capture_stats, decompressor=decompressor
+            captures,
+            stats=capture_stats,
+            decompressor=decompressor,
+            expected_channel=module.channel,
         ),
         config=config,
     )
@@ -1590,13 +1630,13 @@ def run_analysis(
         },
         "reference": {
             "module": {
-                "key": CLUSTER_MODULE.key,
-                "name": CLUSTER_MODULE.name,
-                "bus": CLUSTER_MODULE.bus,
-                "channel": CLUSTER_MODULE.channel,
-                "txid_hex": f"{CLUSTER_MODULE.txid:08X}",
-                "rxid_hex": f"{CLUSTER_MODULE.rxid:08X}",
-                "addressing_mode": CLUSTER_MODULE.addressing_mode,
+                "key": module.key,
+                "name": module.name,
+                "bus": module.bus,
+                "channel": module.channel,
+                "txid_hex": f"{module.txid:08X}",
+                "rxid_hex": f"{module.rxid:08X}",
+                "addressing_mode": module.addressing_mode,
             },
             "did": f"{did:04X}",
             "requested_field": reference_field,
@@ -1661,15 +1701,24 @@ def run_analysis(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Offline-only: correlate exact cluster DID responses with saved "
+            "Offline-only: correlate exact module DID responses with saved "
             "candump broadcast fields."
         )
+    )
+    parser.add_argument(
+        "--module",
+        choices=tuple(MODULES),
+        default=DEFAULT_MODULE.key,
+        help=(
+            "registered diagnostic module that owns the wire stream "
+            f"(default: {DEFAULT_MODULE.key})"
+        ),
     )
     parser.add_argument(
         "--wire",
         required=True,
         type=Path,
-        help="completed cluster_wire.jsonl reference stream",
+        help="completed <module>_wire.jsonl reference stream",
     )
     parser.add_argument(
         "--did",
@@ -1681,8 +1730,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--reference-field",
         default="auto",
         help=(
-            "auto, byte:N, u16be:N, u16le:N, u32be:N, or u32le:N "
-            "within DID data bytes"
+            "auto, byte:N, unsigned u16/u32, or signed i16/i32 field "
+            "(for example i16be:0) within DID data bytes"
         ),
     )
     parser.add_argument(
@@ -1786,6 +1835,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         _validate_inputs(
             args.wire,
             args.captures,
+            module=MODULES[args.module],
             allow_van_compute_staging=args.allow_van_compute_result,
         )
         input_paths = {
@@ -1800,6 +1850,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             did=args.did,
             reference_field=args.reference_field,
             config=config,
+            module=MODULES[args.module],
             allow_van_compute_staging=args.allow_van_compute_result,
         )
         _exclusive_write_json(

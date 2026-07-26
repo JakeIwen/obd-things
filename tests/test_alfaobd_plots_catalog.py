@@ -235,7 +235,10 @@ class PlanTests(unittest.TestCase):
             "Status: Connected. Device model not determined",
             plan.expected_connection_texts,
         )
-        self.assertIsNone(plan.expected_catalog_sha256)
+        self.assertEqual(
+            plan.expected_catalog_sha256,
+            "e1d5e74db311b13a6156cdaa30b0126a0789a502aaaffeaa36be33bca10ef3de",
+        )
 
     def test_plan_is_offline_and_creates_no_output(self):
         class ExplodingRunner:

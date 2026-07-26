@@ -3,15 +3,15 @@
   "campaign_id": "pcm-plots-scalars",
   "catalog_plan_path": "alfaobd_pcm_plots_catalog.json",
   "catalog_review": {
-    "inventory_run_id": null,
-    "catalog_report_path": null,
-    "catalog_report_sha256": null,
-    "catalog_state_sha256": null,
-    "catalog_plan_sha256": null,
-    "scalar_plan_sha256": null,
-    "reviewed_at_utc": null,
-    "reviewed_by": null,
-    "review_note": null
+    "inventory_run_id": "pcm-plots-catalog-20260726T224830Z",
+    "catalog_report_path": "../../../tmp/ecu_mapping/alfaobd_plots_catalog/pcm-plots-catalog-20260726T224830Z/catalog.json",
+    "catalog_report_sha256": "51021170c8d970c940e2f23abca54956ad7cc57adbe38b42030e7168ad247f86",
+    "catalog_state_sha256": "de7ce3e45168dca46e0e503cfffc9d2a4aab7e8418daa72c0ff80ee4f50bd460",
+    "catalog_plan_sha256": "8a0f5ab9f9c70ffc3eec4ee444f369c832b9cdc9d86132489253f466d39d3e1f",
+    "scalar_plan_sha256": "1b5131698f006ef0a80d39af8cf78667b753188eb17d41edcd89b17153947e00",
+    "reviewed_at_utc": "2026-07-26T23:09:50Z",
+    "reviewed_by": "Codex live review with vehicle owner present",
+    "review_note": "Accepted the complete 193-row forward/reverse live catalog after clean selector cancellation. The ordered label hash exactly matched the reconstructed APK prior. AlfaOBD's stopped Plots page displayed 11 owner-priority rows while the reopened selector reported seven checked rows; this is preserved as a UI-state discrepancy and no selector OK action was taken."
   },
   "targets": [
     {
