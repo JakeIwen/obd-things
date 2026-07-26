@@ -196,11 +196,36 @@ def _strings(
     return cleaned
 
 
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"non-finite JSON constant {value!r} is not permitted")
+
+
+def load_plan_bytes(
+    raw: bytes,
+    *,
+    source: str = "<catalog plan bytes>",
+) -> CatalogPlan:
+    try:
+        payload = json.loads(
+            raw.decode("utf-8"),
+            parse_constant=_reject_json_constant,
+        )
+    except (UnicodeError, ValueError) as exc:
+        raise CampaignError(
+            f"cannot read catalog plan {source}: {exc}"
+        ) from exc
+    return _parse_plan_payload(payload)
+
+
 def load_plan(path: Path) -> CatalogPlan:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        raw = path.read_bytes()
+    except OSError as exc:
         raise CampaignError(f"cannot read catalog plan {path}: {exc}") from exc
+    return load_plan_bytes(raw, source=str(path))
+
+
+def _parse_plan_payload(payload: object) -> CatalogPlan:
     if not isinstance(payload, dict):
         raise CampaignError("catalog plan root must be a JSON object")
     if payload.get("schema_version") != 1:
@@ -276,7 +301,7 @@ def load_plan(path: Path) -> CatalogPlan:
         swipe_duration_ms = int(payload.get("swipe_duration_ms", 500))
         settle_seconds = float(payload.get("settle_seconds", 0.75))
         min_free_bytes = int(payload.get("min_free_bytes", 512 * 1024**2))
-    except (KeyError, TypeError, ValueError) as exc:
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
         raise CampaignError("invalid numeric catalog-plan field") from exc
     if not 2 <= expected_catalog_count <= 4096:
         raise CampaignError("expected_catalog_count must be between 2 and 4096")

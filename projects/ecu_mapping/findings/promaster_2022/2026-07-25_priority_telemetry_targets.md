@@ -173,6 +173,31 @@ keys include the request service (`22:DDDD` or `21:LL`), so numerically similar
 identifiers cannot be merged or mislabeled as DIDs. This prepares the offline
 half of the Plots campaign; it does not supply any live PCM mapping by itself.
 
+The separate `tools/alfaobd_plots_scalar_campaign.py` and draft
+`projects/ecu_mapping/configs/alfaobd_pcm_plots_scalars.json` prepare only the
+offline safety gates for the eventual one-scalar runner. `plan` and `audit`
+read and validate local plans/review evidence without ADB, CAN, subprocess,
+service, mount, network, proxy, or output access; `status` only reads an
+existing checkpoint:
+
+```bash
+python3 tools/alfaobd_plots_scalar_campaign.py plan \
+  projects/ecu_mapping/configs/alfaobd_pcm_plots_scalars.json
+
+python3 tools/alfaobd_plots_scalar_campaign.py audit \
+  projects/ecu_mapping/configs/alfaobd_pcm_plots_scalars.json
+```
+
+Readiness requires the non-null live catalog hash, the exact reviewed catalog
+report and its SHA-256, the sibling clean-completion `state.json` and its
+SHA-256, the catalog-plan source SHA-256, the scalar-plan review SHA-256 and
+review provenance, plus the exact one-based order key, zero-based index, and
+live label for every scheduled scalar. Those fields are
+deliberately unpinned now. More importantly, `run` remains intentionally
+disabled even after all pins and confirmations pass: this scaffold performs no
+live selector mutation or scan and is not evidence that live scalar automation
+exists.
+
 The selected generic `TIGERSHARK_CUSW` Device-190 Plots catalog supplies these
 high-yield navigation candidates:
 
@@ -210,12 +235,17 @@ sensor.
    before selecting anything. The SQLite prior predicts 193 rows from
    `Vehicle speed, km/h` through `Transfer speed, rpm`; a count, boundary,
    required-label, traversal, or exact-string mismatch must fail closed rather
-   than being repaired by assumption. Review the first output and pin its
-   catalog hash in the plan before implementing or running scalar selection.
-3. Capture the high-priority scalar candidates above one at a time with
-   Debug Data, a growing `Gauges_Data.csv`, and a simultaneous listen-only full
-   C-CAN stream. Search the live catalog separately for a true engine-oil
-   temperature label; do not substitute `VVT Oil Temperature`.
+   than being repaired by assumption. This reviewed live catalog is the
+   current next live dependency. Review its complete `catalog.json` and
+   clean-completion `state.json`, then pin the catalog, report, state,
+   catalog-plan, scalar-plan, review-provenance, and exact target-triple
+   fields. Pinning clears only offline blockers; it does not
+   enable the intentionally disabled scalar `run` path.
+3. After a separately implemented and safety-tested live path exists, capture
+   the high-priority scalar candidates above one at a time with Debug Data, a
+   growing `Gauges_Data.csv`, and a simultaneous listen-only full C-CAN stream.
+   Search the live catalog separately for a true engine-oil temperature label;
+   do not substitute `VVT Oil Temperature`.
 4. Use the existing System-status singleton path separately for discrete
    `Dual Stage Oil Pump Desired State` and fan desired/relay groups recorded in
    the current Info artifact.

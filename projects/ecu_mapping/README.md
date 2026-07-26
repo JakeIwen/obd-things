@@ -372,9 +372,36 @@ python3 tools/alfaobd_plots_catalog.py inventory \
 Machine evidence goes under `tmp/ecu_mapping/alfaobd_plots_catalog/$RUN_ID/`. A count, boundary,
 required-label, traversal, UI-stability, or optional pinned-hash mismatch fails closed and preserves
 evidence; it does not repair live strings from the SQLite prior. This inventory tool does **not**
-yet select or scan a scalar. The next extension must require the reviewed catalog hash plus the
-one-based SQLite `display_order_key`, its explicit zero-based live-list index, and the exact live
-label before collecting Debug/Gauges/passive-CAN evidence. The required priority order is in
+select or scan a scalar.
+
+`tools/alfaobd_plots_scalar_campaign.py`, with its draft plan at
+`projects/ecu_mapping/configs/alfaobd_pcm_plots_scalars.json`, is currently an
+**offline-gates-only scaffold**, not live scalar automation. `plan` validates and expands the
+candidate schedule, `audit` checks the referenced catalog plan and any configured reviewed report,
+and `status` only reads an existing `state.json`; none of those modes constructs an ADB client or
+accesses CAN, services, mounts, network, proxy settings, or output. The current draft deliberately
+reports blockers because the live catalog and review fields are still null:
+
+```bash
+python3 tools/alfaobd_plots_scalar_campaign.py plan \
+  projects/ecu_mapping/configs/alfaobd_pcm_plots_scalars.json
+
+python3 tools/alfaobd_plots_scalar_campaign.py audit \
+  projects/ecu_mapping/configs/alfaobd_pcm_plots_scalars.json
+```
+
+The scalar gate requires a reviewed live catalog before it can even pass its offline readiness
+check: a non-null catalog hash, the exact reviewed `catalog.json` and its hash, the sibling
+completion `state.json` and its hash, the catalog-plan source hash, the scalar-plan review hash,
+review provenance, and an exact
+`(display_order_key, zero_based_index, label)` triple for every scheduled target. Even if all pins
+and CLI confirmations pass, `run` is intentionally disabled in this version and exits before ADB,
+CAN, service, mount, or output access. No live selector mutation, scan, or scalar capture path exists
+yet.
+
+The current next live dependency is still the catalog audit and inventory above. Review that
+inventory's complete `catalog.json` and clean-completion `state.json`, then populate the
+catalog/report/state/scalar-plan pins; that does not itself enable `run`. The required priority order is in
 [`2026-07-25_priority_telemetry_targets.md`](findings/promaster_2022/2026-07-25_priority_telemetry_targets.md).
 
 `alfaobd_singleton_join.py` is the strictly offline verifier for a completed singleton campaign.
@@ -746,10 +773,11 @@ corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one
    moving speed, rendered RPM, and non-P gear evidence. The logger owns integrated raw capture
    under the active lock, so do not pair it with the separate passive recorder on the same PCAN.
    Preserve the validated singleton Status workflow for its bounded labels. For the owner-priority
-   oil pressure, coolant, torque, and charging scalars, implement the separate catalog-first guarded
-   Plots walker described in the priority telemetry finding; do not pretend Status scrolling reaches
-   that surface. Also use passenger-door plus parking-brake discriminators to refine the passive and
-   BCM candidates.
+   oil pressure, coolant, torque, and charging scalars, complete and review the first live catalog
+   inventory described in the priority telemetry finding; do not pretend Status scrolling reaches
+   that surface. The separate scalar tool is only an offline pin-validation scaffold and its `run`
+   path is intentionally disabled, so no live Plots scalar automation has been established. Also use
+   passenger-door plus parking-brake discriminators to refine the passive and BCM candidates.
    Alfa's shifter `Drive` rendering in Park and TCM `Brake switch` watcher remain explicitly
    invalid.
 6. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps

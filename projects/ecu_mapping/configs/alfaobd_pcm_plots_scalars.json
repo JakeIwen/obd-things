@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "campaign_id": "pcm-plots-scalars",
+  "catalog_plan_path": "alfaobd_pcm_plots_catalog.json",
+  "catalog_review": {
+    "inventory_run_id": null,
+    "catalog_report_path": null,
+    "catalog_report_sha256": null,
+    "catalog_state_sha256": null,
+    "catalog_plan_sha256": null,
+    "scalar_plan_sha256": null,
+    "reviewed_at_utc": null,
+    "reviewed_by": null,
+    "review_note": null
+  },
+  "targets": [
+    {
+      "target_id": "vehicle_speed",
+      "display_order_key": 1,
+      "zero_based_index": 0,
+      "label": "Vehicle speed, km/h"
+    },
+    {
+      "target_id": "engine_speed",
+      "display_order_key": 7,
+      "zero_based_index": 6,
+      "label": "Engine speed, rpm"
+    },
+    {
+      "target_id": "current_engine_torque",
+      "display_order_key": 13,
+      "zero_based_index": 12,
+      "label": "Current engine torque, Nm"
+    },
+    {
+      "target_id": "coolant_temperature",
+      "display_order_key": 15,
+      "zero_based_index": 14,
+      "label": "Coolant temperature, °C"
+    },
+    {
+      "target_id": "radiator_fan_pwm",
+      "display_order_key": 16,
+      "zero_based_index": 15,
+      "label": "Desired PWM Radiator Fan, %"
+    },
+    {
+      "target_id": "engine_oil_pressure",
+      "display_order_key": 17,
+      "zero_based_index": 16,
+      "label": "Engine oil pressure, KPa"
+    },
+    {
+      "target_id": "oil_pressure_sensor",
+      "display_order_key": 18,
+      "zero_based_index": 17,
+      "label": "Oil pressure sensor, V"
+    },
+    {
+      "target_id": "vvt_oil_pressure",
+      "display_order_key": 19,
+      "zero_based_index": 18,
+      "label": "VVT Oil Pressure, KPa"
+    },
+    {
+      "target_id": "vvt_oil_temperature",
+      "display_order_key": 20,
+      "zero_based_index": 19,
+      "label": "VVT Oil Temperature, °C"
+    },
+    {
+      "target_id": "target_charging_voltage",
+      "display_order_key": 44,
+      "zero_based_index": 43,
+      "label": "Target Charging Voltage, V"
+    },
+    {
+      "target_id": "generator_duty_cycle",
+      "display_order_key": 45,
+      "zero_based_index": 44,
+      "label": "Generator Duty Cycle, %"
+    },
+    {
+      "target_id": "battery_voltage",
+      "display_order_key": 47,
+      "zero_based_index": 46,
+      "label": "Battery voltage, V"
+    },
+    {
+      "target_id": "transmission_oil_temperature",
+      "display_order_key": 188,
+      "zero_based_index": 187,
+      "label": "Transmission Oil Temperature, °C"
+    },
+    {
+      "target_id": "turbine_speed",
+      "display_order_key": 191,
+      "zero_based_index": 190,
+      "label": "Turbine speed, rpm"
+    },
+    {
+      "target_id": "output_speed",
+      "display_order_key": 192,
+      "zero_based_index": 191,
+      "label": "Output Speed, rpm"
+    }
+  ],
+  "schedule": [
+    "battery_voltage",
+    "engine_speed",
+    "engine_oil_pressure",
+    "oil_pressure_sensor",
+    "coolant_temperature",
+    "current_engine_torque",
+    "target_charging_voltage",
+    "generator_duty_cycle",
+    "transmission_oil_temperature",
+    "engine_speed",
+    "battery_voltage"
+  ],
+  "segment_seconds": 45,
+  "settle_seconds": 2,
+  "verify_seconds": 3,
+  "flush_timeout_seconds": 30,
+  "min_free_bytes": 1073741824,
+  "min_tablet_free_bytes": 536870912,
+  "artifacts": [
+    "AlfaOBD_Debug.bin",
+    "Gauges_Data.csv"
+  ],
+  "required_segment_growth": [
+    "AlfaOBD_Debug.bin",
+    "Gauges_Data.csv"
+  ],
+  "required_stop_stability": [
+    "Gauges_Data.csv"
+  ],
+  "stop_stability_observations": 3,
+  "recording_oracle_samples": 5,
+  "recording_oracle_interval_seconds": 0.22,
+  "max_initial_checked": 16,
+  "screenshot_each_segment": true
+}
