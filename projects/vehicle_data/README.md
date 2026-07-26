@@ -319,10 +319,11 @@ restricts clients.
 
 ## Current vanpi deployment
 
-Last verified 2026-07-25:
+Last verified 2026-07-26:
 
-- `van-telemetry.service` and `van-telemetry-web.service` are installed,
-  enabled at boot, and running.
+- `van-telemetry.service`, `van-telemetry-web.service`, and a separate
+  machine-local Tailscale web service are installed, enabled at boot, and
+  running.
 - The broker is available only through
   `/run/van-telemetry/api.sock`, owned by the unprivileged `pi` user/group.
 - The tracked web unit remains loopback-only. A machine-local systemd drop-in
@@ -333,6 +334,11 @@ Last verified 2026-07-25:
 - Trusted devices on the van LAN use `http://vanpi.lan:8765/`. The service is
   unauthenticated, so it must not be port-forwarded or exposed beyond a trusted
   network.
+- Trusted tailnet devices use a second cache-only listener bound to vanpi's
+  specific Tailscale address on port `8765`. It is a separate machine-local
+  unit so the LAN endpoint remains available and neither listener needs a
+  wildcard bind. Tailnet access remains subject to Tailscale policy; the
+  dashboard itself does not add authentication.
 - The live web service omits `--allow-acquisitions`. Dashboard GETs and stream
   updates are cache-only, and acquisition POSTs fail closed with HTTP 403.
 
@@ -340,11 +346,15 @@ Inspect the effective unit rather than assuming the tracked example matches the
 host:
 
 ```bash
-systemctl is-enabled van-telemetry.service van-telemetry-web.service
-systemctl is-active van-telemetry.service van-telemetry-web.service
+systemctl is-enabled van-telemetry.service van-telemetry-web.service \
+  van-telemetry-web-tailscale.service
+systemctl is-active van-telemetry.service van-telemetry-web.service \
+  van-telemetry-web-tailscale.service
 systemctl cat van-telemetry-web.service
+systemctl cat van-telemetry-web-tailscale.service
 ss -lntp | grep ':8765'
 curl --fail http://vanpi.lan:8765/v1/status
+curl --fail http://<tailscale-ip>:8765/v1/status
 ```
 
 If the selected LAN address changes, update the machine-local drop-in, run
