@@ -306,17 +306,44 @@ samples, but every section is dated 2022–2024 and belongs to old diesel, six-s
 or historical TPMS profiles. It has labels/rendered values but no wire DIDs and no 2026/current-van
 session. It is a parser fixture and old-vehicle vocabulary source, not current-van evidence.
 
+The saved 2026-07-22 Preferences hierarchy shows **Info Log Recording**, **Keep session data**,
+**Gauges data recording**, and **Debug data recording** all checked. Nevertheless, the
+8,826,902-byte `Gauges_Data.csv` retained its 2026-07-21 16:03 local mtime and did not grow during
+that live run because the campaign monitored the separate **Status** surface, not Plots. APK code
+binds `RecordScanData` to `AlfaOBDStart.L0`; when the Plots start control runs with that flag true,
+its handler clears the recording buffers, calls `L6()` to start the CSV writer thread, enables
+`bRecording`, and shows the recording notification. The stopped-Climate Plots hierarchy
+consistently shows `bRecording` disabled. The intended scalar runner therefore should not add an
+unnecessary record-button tap: start the verified Plots scan, require the expected recording
+visual state plus measured CSV growth after stopping, and require stable size after that stop. The
+manual `bRecording` toggle remains a separate state that must not be guessed.
+
+Targeted fallback decompilation of the APK's `i2` writer establishes the file behavior more
+precisely. This build appends UTF-8 sections to
+`/sdcard/Android/data/com.android.AlfaOBD/files/logs/Gauges_Data.csv`; each section identifies the
+connected profile and date, then writes `HH:mm:ss.SSS` rows with values formatted to three decimals
+or `NA`. The configured separator is comma, semicolon, or tab, and commas are removed from rendered
+gauge labels. The writer does not flush each sample or row: it explicitly flushes and closes only
+when recording stops, with no filesystem `fsync`. BufferedWriter may still emit full internal
+buffers while running, so observed file growth can be delayed and chunked. Segment verification
+must therefore treat a clean Plots stop followed by post-stop growth and stable size as the durable
+CSV boundary; absence of immediate live growth is not by itself a recording failure.
+
 Two recovered 2022 debug snapshots likewise identify only the prior 2015 diesel VIN. They recover
 partial raw provenance for the existing old-van map but add no current-van mappings. These
 provenance boundaries prevent old labels or scaling from leaking into the 2022 module namespaces.
 
 ## Next evidence-producing work
 
-1. Extend the guarded ADB supervisor with a fail-closed generic dialog walker and a no-tap catalog
-   mode. First inventory the complete PCM **Plots → Select gauges to scan** surface, verifying the
-   live count, order, exact rendered strings, overlap between bounded swipes, and a pinned catalog
-   hash. Do not treat the existing **System status → Select parameters to monitor** walker as the
-   same surface.
+1. The separate fail-closed Plots catalog supervisor is now implemented as
+   `tools/alfaobd_plots_catalog.py`; the discovery plan is
+   `projects/ecu_mapping/configs/alfaobd_pcm_plots_catalog.json`. It validates
+   the stopped Plots page, inventories exact live strings in both directions
+   with overlapping bounded swipes and stable parsed-dialog pairs, never taps a
+   row/OK/scan, and cancels with BACK. The first live PCM inventory is still
+   pending: verify the 193-row count/order and required labels, review the
+   output, then pin the exact catalog hash. Do not treat the existing **System
+   status → Select parameters to monitor** walker as the same surface.
 2. After that inventory matches the 193-row Device-190 prior, capture one Plots scalar at a time,
    beginning with keys 7, 13, 15–20, 44, 45, and 47. Record Debug Data plus a growing
    `Gauges_Data.csv` while PCAN passively records full C-CAN. Keys 188, 191, and 192 are useful later

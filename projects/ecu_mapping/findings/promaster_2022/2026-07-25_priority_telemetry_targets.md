@@ -155,6 +155,17 @@ operates **System status → Select parameters to monitor** and its profile Info
 log. Extending only the Status selector would not reach the desired scalar
 gauges.
 
+The saved 2026-07-22 preferences had CSV recording enabled, but that campaign
+used Status and therefore did not grow the Plots CSV. APK control flow confirms
+that starting a Plots scan with `RecordScanData` enabled automatically starts
+the CSV writer and enables the separate manual `bRecording` toggle. The scalar
+supervisor should avoid an unnecessary recording-button tap: it must verify
+the auto-recording visual state, prove per-segment CSV growth after each clean
+stop, and prove post-stop size stability. APK class `i2` appends UTF-8
+`Gauges_Data.csv` sections but does not flush per row; its explicit flush/close
+happens on stop and has no `fsync`, so live growth may lag or arrive in buffered
+chunks.
+
 The selected generic `TIGERSHARK_CUSW` Device-190 Plots catalog supplies these
 high-yield navigation candidates:
 
@@ -164,9 +175,9 @@ high-yield navigation candidates:
 | 13 | Current engine torque | Nm | candidate; not yet a trustworthy scale |
 | 15 | Coolant temperature | `|C` (UI typically renders °C) | candidate |
 | 16 | Desired PWM Radiator Fan | % | candidate |
-| 17 | Engine oil pressure | kPa | owner-priority candidate |
+| 17 | Engine oil pressure | `KPa` | owner-priority candidate |
 | 18 | Oil pressure sensor | V | useful cross-check candidate |
-| 19 | VVT Oil Pressure | kPa | distinct unresolved candidate |
+| 19 | VVT Oil Pressure | `KPa` | distinct unresolved candidate |
 | 20 | VVT Oil Temperature | `|C` | **not** established as physical engine-oil temperature |
 | 44 | Target Charging Voltage | V | electrical target candidate |
 | 45 | Generator Duty Cycle | % | electrical target candidate |
@@ -180,14 +191,20 @@ catalog has no proven physical EOT label: inventorying the full live Plots
 dialog must precede any claim that key 20 represents the OEM-confirmed EOT
 sensor.
 
-1. Add a generic guarded ADB dialog walker with a no-tap catalog mode. It must
-   traverse the Plots list with overlapping bounded swipes, exact-label
-   matching, full count/order/hash verification, stop-state checks, and
-   fail-closed ambiguity handling.
-2. Inventory the complete live PCM Plots list before selecting anything. The
-   SQLite prior predicts 193 rows; a count/order mismatch must fail to
-   `manual_reconcile` rather than being repaired by assumption. Pin the rendered
-   UI catalog rather than assuming the SQLite label formatting.
+1. The separate guarded catalog walker is now implemented as
+   `tools/alfaobd_plots_catalog.py`, with the tracked discovery plan at
+   `projects/ecu_mapping/configs/alfaobd_pcm_plots_catalog.json`. It never taps
+   a gauge row, OK, or scan; it inventories exact live strings forward and
+   backward with bounded overlapping swipes, requires two stable parsed states
+   per swipe, verifies the stopped scan icon before and after, and cancels with
+   BACK. Its offline and synthetic bidirectional traversal tests pass. This is
+   implementation readiness, not live PCM catalog evidence.
+2. Run the no-input audit and then inventory the complete live PCM Plots list
+   before selecting anything. The SQLite prior predicts 193 rows from
+   `Vehicle speed, km/h` through `Transfer speed, rpm`; a count, boundary,
+   required-label, traversal, or exact-string mismatch must fail closed rather
+   than being repaired by assumption. Review the first output and pin its
+   catalog hash in the plan before implementing or running scalar selection.
 3. Capture the high-priority scalar candidates above one at a time with
    Debug Data, a growing `Gauges_Data.csv`, and a simultaneous listen-only full
    C-CAN stream. Search the live catalog separately for a true engine-oil

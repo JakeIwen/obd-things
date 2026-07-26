@@ -28,6 +28,13 @@ CLUSTER_PLAN = (
     / "configs"
     / "alfaobd_cluster_singleton_shakedown.json"
 )
+PCM_PLOTS_CATALOG_PLAN = (
+    REPO
+    / "projects"
+    / "ecu_mapping"
+    / "configs"
+    / "alfaobd_pcm_plots_catalog.json"
+)
 
 
 class CampaignCliEntrypointTests(unittest.TestCase):
@@ -76,6 +83,22 @@ class CampaignCliEntrypointTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("OFFLINE PLAN ONLY", result.stdout)
         self.assertIn('"module_key": "cluster"', result.stdout)
+
+    def test_documented_plots_catalog_plan_runs_as_direct_script(self):
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            result = self._run(
+                [
+                    "tools/alfaobd_plots_catalog.py",
+                    "plan",
+                    str(PCM_PLOTS_CATALOG_PLAN.relative_to(REPO)),
+                ],
+                temporary,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("OFFLINE PLAN ONLY", result.stdout)
+        self.assertIn('"expected_catalog_count": 193', result.stdout)
 
     def test_documented_passive_capture_arguments_are_plan_only_without_execute(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -144,6 +167,34 @@ class CampaignCliEntrypointTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 2)
         self.assertIn("run is inert without --execute", result.stderr)
+        self.assertNotIn("adb", result.stderr.lower())
+
+    def test_documented_plots_inventory_arguments_are_inert_without_execute(self):
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            output = temporary / "must-not-exist"
+            result = self._run(
+                [
+                    "tools/alfaobd_plots_catalog.py",
+                    "inventory",
+                    str(PCM_PLOTS_CATALOG_PLAN.relative_to(REPO)),
+                    "--campaign-id",
+                    "pcm-plots-catalog-20260726-120000",
+                    "--out-root",
+                    str(output),
+                    "--confirm-read-only-navigation",
+                    "--confirm-parked",
+                    "--confirm-scan-stopped",
+                    "--conditions",
+                    "parked; PCM connected; Plots page; scan stopped",
+                ],
+                temporary,
+            )
+
+            self.assertFalse(output.exists())
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("inventory is inert without --execute", result.stderr)
         self.assertNotIn("adb", result.stderr.lower())
 
     def test_documented_recovery_arguments_plan_without_filesystem_access(self):

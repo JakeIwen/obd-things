@@ -57,7 +57,13 @@ the prior best-known date instead of being blindly backdated from a later close 
 
 To capture a fresh one on the tablet: enable **Debug Data recording** (raw) and ideally
 **Gauges data recording** (labeled CSV, commonly `Gauges_Data.csv` or `Gauges_Data.log`) in
-Preferences, drive the modules/live-data, then pull from
+Preferences, then run the **Plots** scan and verify actual file growth. AlfaOBD's Plots start
+handler automatically starts its CSV writer when the preference is enabled and also enables the
+separate manual recording toggle. The 2026-07-22 current-van campaign used **Status**, not Plots,
+so its checked recording preferences and unchanged `Gauges_Data.csv` are consistent rather than a
+recording failure. This APK appends buffered UTF-8 rows and explicitly flushes/closes the CSV on a
+clean Plots stop rather than after every row, so verify growth after stopping and then stable size;
+do not require immediate live file growth. Pull the resulting files from
 `/sdcard/Android/data/com.android.AlfaOBD/files/logs/`.
 
 ## Pipeline
@@ -308,12 +314,55 @@ python3 tools/passive_drive_capture.py \
   --recover-partials --execute --confirm-recovery
 ```
 
-This first supervisor intentionally supports one complete, visible parameter dialog at a time.
+The singleton supervisor intentionally supports one complete, visible parameter dialog at a time.
 It is sufficient for the eight-row cluster **System status** page and the initial singleton proof.
 The owner-priority PCM scalars are on a different surface, **Plots → Select gauges to scan**, whose
-Device-190 catalog contains 193 rows. The shakedown validated only the bounded Status surface;
-scrollable Plots inventory/selection and automatic vehicle/module navigation remain unsupported and
-require a separate guarded extension. The required catalog-first workflow and priority order are in
+Device-190 catalog contains 193 rows.
+
+`alfaobd_plots_catalog.py` is the separate catalog-first guard for that surface. It validates the
+exact Plots page, the Pentastar/Hemi PCM connection banner, and stopped red-triangle state. The
+generic `Device model not determined` banner is deliberately rejected because it was also observed
+on the incompatible Climate profile. The tool opens only the gauge selector, seeks both list
+boundaries, inventories it forward and backward with bounded overlapping swipes, requires two
+matching parsed dialog states after every swipe, hashes the exact rendered Unicode label order, and exits
+with Android BACK. It never taps a gauge row, the dialog's OK button, the scan toggle, a
+vehicle/module selector, or Active Diagnostics. The tracked discovery plan deliberately has no
+catalog hash yet: its first successful live result remains an unpinned candidate until reviewed and
+copied back into the plan.
+
+The plan-only check is inert:
+
+```bash
+python3 tools/alfaobd_plots_catalog.py plan \
+  projects/ecu_mapping/configs/alfaobd_pcm_plots_catalog.json
+```
+
+For the first live catalog pass, park the van, connect AlfaOBD to the PCM profile, open the Plots
+page, and leave the red play triangle visible. `audit` sends no input:
+
+```bash
+python3 tools/alfaobd_plots_catalog.py audit \
+  projects/ecu_mapping/configs/alfaobd_pcm_plots_catalog.json
+```
+
+Only after that audit succeeds, use a new exact run ID:
+
+```bash
+RUN_ID='pcm-plots-catalog-YYYYMMDD-HHMMSS'
+python3 tools/alfaobd_plots_catalog.py inventory \
+  projects/ecu_mapping/configs/alfaobd_pcm_plots_catalog.json \
+  --campaign-id "$RUN_ID" \
+  --execute --confirm-read-only-navigation --confirm-parked \
+  --confirm-scan-stopped \
+  --conditions "parked; PCM connected; Plots page; red play triangle visible"
+```
+
+Machine evidence goes under `tmp/ecu_mapping/alfaobd_plots_catalog/$RUN_ID/`. A count, boundary,
+required-label, traversal, UI-stability, or optional pinned-hash mismatch fails closed and preserves
+evidence; it does not repair live strings from the SQLite prior. This inventory tool does **not**
+yet select or scan a scalar. The next extension must require the reviewed catalog hash plus the
+one-based SQLite `display_order_key`, its explicit zero-based live-list index, and the exact live
+label before collecting Debug/Gauges/passive-CAN evidence. The required priority order is in
 [`2026-07-25_priority_telemetry_targets.md`](findings/promaster_2022/2026-07-25_priority_telemetry_targets.md).
 
 `alfaobd_singleton_join.py` is the strictly offline verifier for a completed singleton campaign.
