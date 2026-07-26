@@ -8,7 +8,9 @@ Decoded-log line grammar:
   <free text>              annotations: "Recording data for X", "Recording closed <date>", ...
 
 A UDS request's payload is the ASCII of that hex (e.g. "22F190" = ReadDataByIdentifier F190).
-Responses reassemble by concatenating indexed segments (or, single-frame, the bare hex).
+Response callbacks are buffered through the adapter prompt because AlfaOBD may split an
+indexed row at an arbitrary callback boundary. Indexed responses are validated and trimmed
+to the ELM length header; malformed/partial indexed data fails closed as an empty response.
 Everything streams so multi-hundred-MB logs stay cheap.
 """
 import re
@@ -17,6 +19,7 @@ _LINE = re.compile(r'^(\d{2}:\d{2}:\d{2}\.\d{3}) ([SR]): ([0-9A-Fa-f]*)$')
 _SEG  = re.compile(r'^([0-9A-Fa-f]):([0-9A-Fa-f]+)$')
 _DATE = re.compile(r'(\d{4}/\d{2}/\d{2})')
 _REC  = re.compile(r'Recording data for (.+)')
+MAX_RESPONSE_BUFFER_CHARS = 1 << 20
 
 
 def ascii_of(hexstr):
@@ -84,12 +87,95 @@ def recording_date_hints(path):
     return hints
 
 
-def _finish(seg, plain):
-    return ("".join(seg[k] for k in sorted(seg)) if seg else plain).upper()
+def _only_response_pending(parts, request):
+    """Whether every plain response is an exact pending NRC for this request."""
+    if not parts or not re.fullmatch(r"[0-9A-F]{2,}", request or ""):
+        return False
+    expected = f"7F{request[:2]}78"
+    return all(part == expected for part in parts)
+
+
+def _parse_response_block(block, request=None):
+    """Return one validated prompt-delimited ELM response as uppercase hex.
+
+    AlfaOBD's debug callback boundaries do not necessarily align with the ELM's
+    CR-delimited response rows. ``block`` must therefore be the concatenation of
+    every callback up to a prompt (or the best available partial block when a
+    request/eof flushes it).
+
+    Empty, textual, structurally inconsistent, and incomplete indexed responses
+    return ``""``. It is safer for downstream correlation to retain an exchange
+    with no usable response than to fabricate bytes from a partial ISO-TP row.
+    """
+    segments = []
+    plain = []
+    length_header = None
+    saw_segment = False
+
+    for raw_part in re.split(r"\r\n|\r|\n", block):
+        part = raw_part.strip().upper().replace(" ", "")
+        if not part or part == ">":
+            continue
+        segment = _SEG.fullmatch(part)
+        if segment:
+            if length_header is None or (
+                plain and not _only_response_pending(plain, request)
+            ):
+                return ""
+            index = int(segment.group(1), 16)
+            encoded = segment.group(2)
+            if len(encoded) % 2 or index != (len(segments) & 0x0F):
+                return ""
+            segments.append(encoded)
+            saw_segment = True
+            continue
+        if re.fullmatch(r"[0-9A-F]{3}", part):
+            if (
+                length_header is not None
+                or saw_segment
+                or (
+                    plain
+                    and not _only_response_pending(plain, request)
+                )
+            ):
+                return ""
+            length_header = int(part, 16)
+            if length_header <= 0:
+                return ""
+            continue
+        if re.fullmatch(r"[0-9A-F]{2,}", part) and len(part) % 2 == 0:
+            if length_header is not None or saw_segment:
+                return ""
+            plain.append(part)
+            continue
+        return ""
+
+    if segments:
+        if length_header is None or length_header < 8:
+            return ""
+        widths = [len(segment) // 2 for segment in segments]
+        if (
+            len(widths) < 2
+            or widths[0] != 6
+            or any(width != 7 for width in widths[1:-1])
+            or not 1 <= widths[-1] <= 7
+        ):
+            return ""
+        encoded = "".join(segments)
+        bytes_before_final = sum(widths[:-1])
+        total_bytes = len(encoded) // 2
+        if not bytes_before_final < length_header <= total_bytes:
+            return ""
+        return "".join(plain) + encoded[:length_header * 2]
+
+    if length_header is not None:
+        return ""
+    return "".join(plain)
 
 
 def _completed_exchange(pend, completion_reason):
     """Render one pending exchange, including timing/provenance for exact joins."""
+    response_overflow = pend["response_buffer_overflow"]
     return {
         "ts": pend["request_ts"],  # backwards-compatible request timestamp
         "request_ts": pend["request_ts"],
@@ -98,11 +184,19 @@ def _completed_exchange(pend, completion_reason):
         "response_end_line": pend["response_end_line"],
         "completion_reason": completion_reason,
         "prompt_seen": completion_reason == "prompt",
+        "response_buffer_overflow": response_overflow,
         "date": pend["date"],
         "addr": pend["addr"],
         "module": pend["module"],
         "req": pend["req"],
-        "resp": _finish(pend["seg"], pend["plain"]),
+        "resp": (
+            ""
+            if response_overflow
+            else _parse_response_block(
+                pend["response_buffer"],
+                pend["req"],
+            )
+        ),
     }
 
 
@@ -131,7 +225,8 @@ def iter_exchanges_detailed(path):
                 date = d.group(1)
             continue
         ts, sr, payhex = m.group(1), m.group(2), m.group(3)
-        pay = ascii_of(payhex).strip().upper().replace(" ", "")
+        decoded_callback = ascii_of(payhex)
+        pay = decoded_callback.strip().upper().replace(" ", "")
         if sr == "S":
             if pend:
                 yield _completed_exchange(pend, "next_request")
@@ -150,22 +245,27 @@ def iter_exchanges_detailed(path):
                 "addr": addr,
                 "module": module,
                 "req": pay,
-                "seg": {},
-                "plain": "",
+                "response_buffer": "",
+                "response_buffer_overflow": False,
             }
         elif sr == "R" and pend is not None:
             pend["response_end_ts"] = ts
             pend["response_end_line"] = line_number
-            for part in pay.split("\r") if "\r" in pay else [pay]:
-                part = part.strip()
-                if not part or part == ">":
-                    continue
-                sm = _SEG.match(part)
-                if sm:
-                    pend["seg"][int(sm.group(1), 16)] = sm.group(2)
-                elif re.fullmatch(r"[0-9A-F]{2,}", part):
-                    pend["plain"] += part
-            if ">" in pay:
+            # Keep the decoded callback verbatim: one indexed ELM row may end
+            # halfway through one R callback and continue at the start of the
+            # next. Normalizing each callback independently would corrupt it.
+            prompt_seen = ">" in decoded_callback
+            before_prompt = decoded_callback.split(">", 1)[0]
+            if not pend["response_buffer_overflow"]:
+                prospective_size = (
+                    len(pend["response_buffer"]) + len(before_prompt)
+                )
+                if prospective_size > MAX_RESPONSE_BUFFER_CHARS:
+                    pend["response_buffer"] = ""
+                    pend["response_buffer_overflow"] = True
+                else:
+                    pend["response_buffer"] += before_prompt
+            if prompt_seen:
                 yield _completed_exchange(pend, "prompt")
                 pend = None
     if pend:

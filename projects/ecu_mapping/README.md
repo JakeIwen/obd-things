@@ -91,17 +91,28 @@ blank markers whose sections inherit the most recent named profile, counts corru
 and keeps identically named metrics separated by selected-profile namespace. By default it writes
 `inventory.json`, `sections.csv`, and `metrics.csv` under
 `tmp/inventories/alfaobd_gauges/`; use `--out-dir` to choose another machine-output directory.
-Gauge labels and rendered values do **not** carry DID numbers, so a label-to-DID claim still
-requires a time-aligned Debug Data trace or a controlled one-variable capture.
+Gauge labels and rendered values do **not** carry diagnostic identifiers, so a label-to-DID or
+label-to-local-identifier claim still requires a time-aligned Debug Data trace or a controlled
+one-variable capture.
 
 `alfaobd_gauge_join.py` performs that time alignment for one bounded Gauge section at a time. It
-preserves every original sample row and column index, uses the response-completion timestamp from
-the decoded trace, splits repeated-DID polling loops, and explicitly scores preceding/current/
-following-cycle lag hypotheses. Only exact single-DID `22 XXXX -> 62 XXXX ...` echoes enter the
-byte-slice/endian/signed affine search; constants, `NA`, and fewer than three varying values remain
-unidentifiable. Reports and evidence JSONL default under `tmp/inventories/alfaobd_gauge_join/` and
-always say `candidate_only`. Pass exactly one decoded debug source per run—historic conflict files
-are overlapping cumulative snapshots, not independent samples—and label old-van work explicitly:
+preserves every original sample row, column index, and comma/semicolon/tab delimiter; uses the
+response-completion timestamp from the decoded trace; splits repeated-identifier polling loops; and
+explicitly scores preceding/current/following-cycle lag hypotheses. Exact `22 DDDD -> 62 DDDD`
+reads enter the DID namespace, while exact legacy `21 LL -> 61 LL` reads enter a distinct
+one-byte-local-identifier namespace. Keys such as `22:00A1` and `21:A1` cannot collide, and a wrong
+echo or other response prefix never becomes a payload candidate. Constants, `NA`, and fewer than
+three varying values remain unidentifiable. Reports and evidence JSONL default under
+`tmp/inventories/alfaobd_gauge_join/` and always say `candidate_only`. Pass exactly one decoded
+debug source per run—historic conflict files are overlapping cumulative snapshots, not independent
+samples—and label old-van work explicitly:
+
+The decoded-log parser buffers all `R:` callbacks through the adapter prompt because AlfaOBD can
+split one indexed ISO-TP row between callbacks. It validates index order and row widths, applies the
+ELM byte-count header, and fails closed on incomplete, malformed, or oversized response blocks.
+Only prompt-completed exact positive echoes supply bytes to the fitter. In schema-2 reports,
+`polling.cycle_boundary_key` is the authoritative service-qualified boundary; the legacy
+`polling.cycle_boundary` remains DID-only and is null for a `21` local-identifier boundary.
 
 ```bash
 python3 tools/alfaobd_gauge_join.py Gauges_Data.csv decoded.txt \
@@ -114,9 +125,10 @@ As an offline regression check, section 2 of the recovered historical diesel sna
 
 The joiner caps retained matching debug exchanges at 100,000 and candidate hypotheses per metric
 at 20,000 by default so an unexpectedly large cumulative source fails before consuming the Pi's
-memory. Narrow by section/profile/address or `--did` first; raise either limit only for a deliberate
-larger run. It also refuses to guess when prompt-completion timestamps do not identify one polling
-boundary; inspect the trace and supply `--boundary-did` explicitly in that case.
+memory. Narrow by section/profile/address, `--did`, or `--local-id` first; raise either limit only
+for a deliberate larger run. It also refuses to guess when prompt-completion timestamps do not
+identify one polling boundary; inspect the trace and supply `--boundary-did` or
+`--boundary-local-id` explicitly in that case.
 
 Even an exact historical fit is reference-only until the same ECU/DID/scaling is established on
 the current van; correlation by itself is not controlled ground truth.

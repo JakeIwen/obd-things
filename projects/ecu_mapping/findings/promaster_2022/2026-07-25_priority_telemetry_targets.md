@@ -166,6 +166,13 @@ stop, and prove post-stop size stability. APK class `i2` appends UTF-8
 happens on stop and has no `fsync`, so live growth may lag or arrive in buffered
 chunks.
 
+The offline `alfaobd_gauge_join.py` path now preserves this CSV's
+comma/semicolon/tab dialect and keeps exact `22 DDDD → 62 DDDD` DIDs separate
+from exact legacy `21 LL → 61 LL` local identifiers. Its canonical correlation
+keys include the request service (`22:DDDD` or `21:LL`), so numerically similar
+identifiers cannot be merged or mislabeled as DIDs. This prepares the offline
+half of the Plots campaign; it does not supply any live PCM mapping by itself.
+
 The selected generic `TIGERSHARK_CUSW` Device-190 Plots catalog supplies these
 high-yield navigation candidates:
 

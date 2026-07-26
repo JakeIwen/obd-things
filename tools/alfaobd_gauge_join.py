@@ -3,9 +3,10 @@
 
 This is offline correlation, not a DID oracle.  It preserves the selected gauge
 section and every sample row, accepts exactly one decoded debug source per run, and
-only treats ``22 XXXX -> 62 XXXX ...`` with an exact DID echo as usable data.  Fits
-remain candidates; historical/ambiguous results are never described as verified on
-the current vehicle.
+only treats exact positive-echo reads as usable data: ``22 DDDD -> 62 DDDD`` for a
+two-byte DID or ``21 LL -> 61 LL`` for a legacy one-byte local identifier.  The two
+namespaces remain explicit and are never merged.  Fits remain candidates;
+historical/ambiguous results are never described as verified on the current vehicle.
 """
 
 from __future__ import annotations
@@ -38,7 +39,18 @@ DEFAULT_MAX_HYPOTHESES_PER_METRIC = 20_000
 PROFILE_PREFIX = "Recording data for"
 DATE_PREFIX = "Date (YY/MM/DD):"
 TIME_RE = re.compile(r"^\d{2}:\d{2}:\d{2}(?:\.\d+)?$")
-REQUEST_RE = re.compile(r"^22([0-9A-F]{4})$")
+REQUEST_RE = re.compile(r"^(?:(22)([0-9A-F]{4})|(21)([0-9A-F]{2}))$")
+SERVICE_METADATA = {
+    "22": {
+        "positive_response_service": "62",
+        "identifier_kind": "did",
+    },
+    "21": {
+        "positive_response_service": "61",
+        "identifier_kind": "local_identifier",
+    },
+}
+CSV_DELIMITERS = (",", ";", "\t")
 
 
 def clock_ms(value: str) -> int:
@@ -70,9 +82,11 @@ def normalize_address(value: str | None) -> str:
     return cleaned
 
 
-def csv_fields(line: str) -> list[str]:
-    fields = next(csv.reader([line]))
-    if line.rstrip("\r\n").endswith(",") and fields and fields[-1] == "":
+def csv_fields(line: str, delimiter: str = ",") -> list[str]:
+    if delimiter not in CSV_DELIMITERS:
+        raise ValueError(f"unsupported Gauges_Data delimiter {delimiter!r}")
+    fields = next(csv.reader([line], delimiter=delimiter))
+    if line.rstrip("\r\n").endswith(delimiter) and fields and fields[-1] == "":
         fields.pop()
     return [field.strip() for field in fields]
 
@@ -98,6 +112,7 @@ class GaugeSection:
     start_line: int
     header_line: int | None = None
     end_line: int | None = None
+    delimiter: str | None = None
     columns: list[str] = field(default_factory=list)
     rows: list[GaugeRow] = field(default_factory=list)
     unparsed_lines: int = 0
@@ -142,16 +157,27 @@ def iter_gauge_sections(path: Path) -> Iterator[GaugeSection]:
                 continue
             if current is None or not stripped or set(stripped) == {"_"}:
                 continue
-            if current.header_line is None and stripped.startswith("Time,"):
-                fields = csv_fields(line)
-                if len(fields) >= 2 and fields[0] == "Time":
-                    current.header_line = line_number
-                    current.columns = fields
-                else:
-                    current.unparsed_lines += 1
-                continue
+            if current.header_line is None:
+                delimiter = next(
+                    (
+                        candidate
+                        for candidate in CSV_DELIMITERS
+                        if stripped.startswith(f"Time{candidate}")
+                    ),
+                    None,
+                )
+                if delimiter is not None:
+                    fields = csv_fields(line, delimiter)
+                    if len(fields) >= 2 and fields[0] == "Time":
+                        current.header_line = line_number
+                        current.delimiter = delimiter
+                        current.columns = fields
+                    else:
+                        current.unparsed_lines += 1
+                    continue
             if current.header_line is not None:
-                fields = csv_fields(line)
+                assert current.delimiter is not None
+                fields = csv_fields(line, current.delimiter)
                 if fields and TIME_RE.fullmatch(fields[0]):
                     current.rows.append(GaugeRow(line_number, fields[0], fields))
                     continue
@@ -163,7 +189,7 @@ def iter_gauge_sections(path: Path) -> Iterator[GaugeSection]:
 
 
 @dataclass
-class DidExchange:
+class DiagnosticExchange:
     request_ts: str
     response_end_ts: str | None
     request_line: int
@@ -175,9 +201,39 @@ class DidExchange:
     address: str
     request: str
     response: str
-    did: str
+    request_service: str
+    positive_response_service: str
+    identifier_kind: str
+    identifier: str
     payload: bytes | None
     pending_count: int
+
+    @property
+    def identifier_key(self) -> str:
+        return f"{self.request_service}:{self.identifier}"
+
+    @property
+    def did(self) -> str | None:
+        return self.identifier if self.identifier_kind == "did" else None
+
+    @property
+    def local_identifier(self) -> str | None:
+        return (
+            self.identifier
+            if self.identifier_kind == "local_identifier"
+            else None
+        )
+
+    def identifier_dict(self) -> dict[str, str | None]:
+        return {
+            "key": self.identifier_key,
+            "kind": self.identifier_kind,
+            "value": self.identifier,
+            "request_service": self.request_service,
+            "positive_response_service": self.positive_response_service,
+            "did": self.did,
+            "local_identifier": self.local_identifier,
+        }
 
     @property
     def request_ms(self) -> int:
@@ -188,13 +244,13 @@ class DidExchange:
         return clock_ms(self.response_end_ts or self.request_ts)
 
 
-def iter_did_exchanges(
+def iter_diagnostic_exchanges(
     path: Path,
     *,
     date: str,
     profile: str,
     address: str | None = None,
-) -> Iterator[DidExchange]:
+) -> Iterator[DiagnosticExchange]:
     expected_date = normalize_date(date)
     expected_profile = normalize_profile(profile)
     expected_address = normalize_address(address)
@@ -209,15 +265,33 @@ def iter_did_exchanges(
         actual_address = normalize_address(exchange["addr"])
         if expected_address and actual_address != expected_address:
             continue
-        did = match.group(1)
+        request_service = match.group(1) or match.group(3)
+        identifier = match.group(2) or match.group(4)
+        metadata = SERVICE_METADATA[request_service]
+        positive_response_service = str(
+            metadata["positive_response_service"]
+        )
+        identifier_kind = str(metadata["identifier_kind"])
         response = exchange["resp"].upper()
         # AlfaOBD can concatenate response-pending frames before the eventual answer.
-        # Accept only zero or more exact 7F 22 78 frames followed by one exact echoed
-        # positive response; reject every other prefix/trailer concatenation.
-        positive = re.fullmatch(rf"(?:7F2278)*62{did}([0-9A-F]+)", response)
+        # Accept only zero or more exact 7F <service> 78 frames followed by one
+        # exact positive response echo; reject every other prefix/trailer
+        # concatenation.
+        pending = f"7F{request_service}78"
+        positive = re.fullmatch(
+            rf"(?:{pending})*{positive_response_service}{identifier}([0-9A-F]+)",
+            response,
+        )
         payload_hex = positive.group(1) if positive else ""
-        exact_positive = len(payload_hex) >= 2 and len(payload_hex) % 2 == 0
-        yield DidExchange(
+        exact_positive = (
+            exchange["prompt_seen"]
+            and len(payload_hex) >= 2
+            and len(payload_hex) % 2 == 0
+        )
+        positive_length = (
+            len(positive_response_service) + len(identifier) + len(payload_hex)
+        )
+        yield DiagnosticExchange(
             request_ts=exchange["request_ts"],
             response_end_ts=exchange["response_end_ts"],
             request_line=exchange["request_line"],
@@ -229,10 +303,35 @@ def iter_did_exchanges(
             address=actual_address,
             request=exchange["req"],
             response=response,
-            did=did,
+            request_service=request_service,
+            positive_response_service=positive_response_service,
+            identifier_kind=identifier_kind,
+            identifier=identifier,
             payload=bytes.fromhex(payload_hex) if exact_positive else None,
-            pending_count=(len(response) - 6 - len(payload_hex)) // 6 if exact_positive else 0,
+            pending_count=(
+                (len(response) - positive_length) // len(pending)
+                if exact_positive
+                else 0
+            ),
         )
+
+
+def iter_did_exchanges(
+    path: Path,
+    *,
+    date: str,
+    profile: str,
+    address: str | None = None,
+) -> Iterator[DiagnosticExchange]:
+    """Yield only 22/62 DID exchanges through the historical API name."""
+    for exchange in iter_diagnostic_exchanges(
+        path,
+        date=date,
+        profile=profile,
+        address=address,
+    ):
+        if exchange.identifier_kind == "did":
+            yield exchange
 
 
 @dataclass
@@ -240,11 +339,12 @@ class PollCycle:
     id: int
     run_id: int
     run_index: int
-    exchanges: list[DidExchange]
+    exchanges: list[DiagnosticExchange]
 
     @property
     def anchor_ms(self) -> int:
-        # Gauge CSV rows are emitted at the prompt completing the repeated first DID.
+        # Gauge rows are emitted at the prompt completing the repeated
+        # first diagnostic identifier.
         return self.exchanges[0].response_end_ms
 
     @property
@@ -252,19 +352,49 @@ class PollCycle:
         return self.exchanges[0].response_end_ts or self.exchanges[0].request_ts
 
 
-def infer_boundary_did(
-    exchanges: Iterable[DidExchange],
+def _identifier_descriptor(
+    exchange: DiagnosticExchange,
+) -> dict[str, str | None]:
+    return exchange.identifier_dict()
+
+
+def _identifier_descriptor_from_key(
+    key: str,
+) -> dict[str, str | None]:
+    request_service, identifier = key.split(":", 1)
+    metadata = SERVICE_METADATA[request_service]
+    kind = str(metadata["identifier_kind"])
+    return {
+        "key": key,
+        "kind": kind,
+        "value": identifier,
+        "request_service": request_service,
+        "positive_response_service": str(
+            metadata["positive_response_service"]
+        ),
+        "did": identifier if kind == "did" else None,
+        "local_identifier": (
+            identifier if kind == "local_identifier" else None
+        ),
+    }
+
+
+def infer_boundary_identifier(
+    exchanges: Iterable[DiagnosticExchange],
     rows: list[GaugeRow],
     *,
     tolerance_ms: int = 50,
 ) -> dict[str, object]:
-    """Infer the loop's first DID from response completions nearest Gauge rows."""
+    """Infer the loop's first diagnostic identifier from Gauge-row timing."""
     row_times = sorted(row.time_ms for row in rows)
     scores: dict[str, list[int]] = {}
     totals: dict[str, int] = {}
+    descriptors: dict[str, dict[str, str | None]] = {}
     if row_times:
         for exchange in exchanges:
-            totals[exchange.did] = totals.get(exchange.did, 0) + 1
+            key = exchange.identifier_key
+            totals[key] = totals.get(key, 0) + 1
+            descriptors[key] = _identifier_descriptor(exchange)
             if not exchange.prompt_seen or exchange.response_end_ts is None:
                 continue
             position = bisect_left(row_times, exchange.response_end_ms)
@@ -277,58 +407,105 @@ def infer_boundary_did(
                 continue
             gap = min(abs(value - exchange.response_end_ms) for value in nearby)
             if gap <= tolerance_ms:
-                scores.setdefault(exchange.did, []).append(gap)
-    rows_by_did = []
-    for did in sorted(totals):
-        gaps = sorted(scores.get(did, []))
+                scores.setdefault(key, []).append(gap)
+    rows_by_identifier = []
+    for key in sorted(totals):
+        gaps = sorted(scores.get(key, []))
         median = None
         if gaps:
             middle = len(gaps) // 2
             median = gaps[middle] if len(gaps) % 2 else (gaps[middle - 1] + gaps[middle]) / 2
-        rows_by_did.append(
+        rows_by_identifier.append(
             {
-                "did": did,
+                **descriptors[key],
                 "near_gauge_rows": len(gaps),
-                "total_exchanges": totals[did],
+                "total_exchanges": totals[key],
                 "median_abs_gap_ms": median,
             }
         )
-    rows_by_did.sort(
+    rows_by_identifier.sort(
         key=lambda item: (
             -item["near_gauge_rows"],
             item["median_abs_gap_ms"] if item["median_abs_gap_ms"] is not None else math.inf,
-            item["did"],
+            item["key"],
         )
     )
-    chosen = rows_by_did[0]["did"] if rows_by_did and rows_by_did[0]["near_gauge_rows"] >= 3 else None
+    chosen = (
+        rows_by_identifier[0]["key"]
+        if rows_by_identifier
+        and rows_by_identifier[0]["near_gauge_rows"] >= 3
+        else None
+    )
     ambiguous = False
-    if chosen and len(rows_by_did) > 1:
-        first, second = rows_by_did[:2]
+    if chosen and len(rows_by_identifier) > 1:
+        first, second = rows_by_identifier[:2]
         ambiguous = (
             second["near_gauge_rows"] == first["near_gauge_rows"]
             and abs(second["median_abs_gap_ms"] - first["median_abs_gap_ms"]) <= 5
         )
+    resolved = None if ambiguous else chosen
+    descriptor = (
+        _identifier_descriptor_from_key(resolved)
+        if resolved is not None
+        else None
+    )
     return {
-        "did": None if ambiguous else chosen,
-        "best_did": chosen,
+        "identifier_key": resolved,
+        "best_identifier_key": chosen,
+        "identifier": descriptor,
+        "did": descriptor["did"] if descriptor else None,
+        "local_identifier": (
+            descriptor["local_identifier"] if descriptor else None
+        ),
+        "best_did": (
+            _identifier_descriptor_from_key(chosen)["did"]
+            if chosen is not None
+            else None
+        ),
+        "best_local_identifier": (
+            _identifier_descriptor_from_key(chosen)["local_identifier"]
+            if chosen is not None
+            else None
+        ),
         "ambiguous": ambiguous,
         "tolerance_ms": tolerance_ms,
-        "scores": rows_by_did,
+        "scores": rows_by_identifier,
     }
 
 
+def infer_boundary_did(
+    exchanges: Iterable[DiagnosticExchange],
+    rows: list[GaugeRow],
+    *,
+    tolerance_ms: int = 50,
+) -> dict[str, object]:
+    """Backward-compatible entry point for dual-namespace boundary inference."""
+    return infer_boundary_identifier(
+        exchanges,
+        rows,
+        tolerance_ms=tolerance_ms,
+    )
+
+
 def build_cycles(
-    exchanges: Iterable[DidExchange],
+    exchanges: Iterable[DiagnosticExchange],
     max_run_gap_ms: int = 5000,
     *,
+    boundary_identifier: str | None = None,
     boundary_did: str | None = None,
 ) -> list[PollCycle]:
+    if boundary_identifier is not None and boundary_did is not None:
+        raise ValueError(
+            "boundary_identifier and boundary_did are mutually exclusive"
+        )
+    if boundary_identifier is None and boundary_did is not None:
+        boundary_identifier = f"22:{boundary_did}"
     cycles: list[PollCycle] = []
-    current: list[DidExchange] = []
+    current: list[DiagnosticExchange] = []
     run_id = 0
     run_index = 0
-    last: DidExchange | None = None
-    learned_boundary = boundary_did
+    last: DiagnosticExchange | None = None
+    learned_boundary = boundary_identifier
     active = False
 
     def finish() -> None:
@@ -356,11 +533,11 @@ def build_cycles(
                 current = []
             run_id += 1
             run_index = 0
-            learned_boundary = boundary_did
+            learned_boundary = boundary_identifier
             active = False
 
         if not active and learned_boundary is not None:
-            if exchange.did == learned_boundary:
+            if exchange.identifier_key == learned_boundary:
                 current = [exchange]
                 active = True
             last = exchange
@@ -368,16 +545,21 @@ def build_cycles(
 
         if not active:
             # Fallback for sparse sections that cannot infer a timestamp boundary:
-            # learn the first repeated DID and discard any one-off startup prelude.
+            # learn the first repeated identifier and discard any one-off
+            # startup prelude.
             prior = next(
-                (index for index, item in enumerate(current) if item.did == exchange.did),
+                (
+                    index
+                    for index, item in enumerate(current)
+                    if item.identifier_key == exchange.identifier_key
+                ),
                 None,
             )
             if prior is None:
                 current.append(exchange)
                 last = exchange
                 continue
-            learned_boundary = exchange.did
+            learned_boundary = exchange.identifier_key
             current = current[prior:]
             active = True
             finish()
@@ -385,10 +567,11 @@ def build_cycles(
             last = exchange
             continue
 
-        # A stable polling loop begins again when its learned first DID repeats.
-        # Other duplicated DIDs remain in the cycle; the fitter refuses to choose
-        # between duplicate observations of the same DID.
-        if exchange.did == learned_boundary:
+        # A stable polling loop begins again when its learned first identifier
+        # repeats. Other duplicated identifiers remain in the cycle; the
+        # fitter refuses to choose between duplicate observations of the same
+        # service-qualified identifier.
+        if exchange.identifier_key == learned_boundary:
             finish()
             current = [exchange]
         else:
@@ -486,6 +669,7 @@ def fit_metric(
     alignments: list[Alignment],
     cycles: list[PollCycle],
     *,
+    allowed_identifiers: set[str] | None = None,
     allowed_dids: set[str] | None = None,
     min_samples: int = 6,
     lags: range = range(-2, 3),
@@ -493,6 +677,12 @@ def fit_metric(
     max_hypotheses: int = DEFAULT_MAX_HYPOTHESES_PER_METRIC,
     source_scope: str = "unknown",
 ) -> dict[str, object]:
+    if allowed_identifiers is not None and allowed_dids is not None:
+        raise ValueError(
+            "allowed_identifiers and allowed_dids are mutually exclusive"
+        )
+    if allowed_identifiers is None and allowed_dids is not None:
+        allowed_identifiers = {f"22:{did}" for did in allowed_dids}
     label = section.columns[column_index]
     values: dict[int, float] = {}
     for row_index, row in enumerate(section.rows):
@@ -533,21 +723,25 @@ def fit_metric(
         denominator = len(observations)
         if denominator < min_samples:
             continue
-        dids = sorted(
+        identifiers = sorted(
             {
-                exchange.did
+                exchange.identifier_key
                 for _, _, cycle in observations
                 for exchange in cycle.exchanges
                 if exchange.payload is not None
-                and (allowed_dids is None or exchange.did in allowed_dids)
+                and (
+                    allowed_identifiers is None
+                    or exchange.identifier_key in allowed_identifiers
+                )
             }
         )
-        for did in dids:
+        for identifier_key in identifiers:
             payload_rows: list[tuple[int, float, bytes]] = []
             for row_index, displayed, cycle in observations:
                 matches = [
                     exchange.payload for exchange in cycle.exchanges
-                    if exchange.did == did and exchange.payload is not None
+                    if exchange.identifier_key == identifier_key
+                    and exchange.payload is not None
                 ]
                 if len(matches) == 1:
                     payload_rows.append((row_index, displayed, matches[0]))
@@ -588,7 +782,7 @@ def fit_metric(
                         if hypotheses_evaluated > max_hypotheses:
                             raise ValueError(
                                 f"candidate hypotheses exceed {max_hypotheses} for metric "
-                                f"{label!r}; restrict --did or raise "
+                                f"{label!r}; restrict --did/--local-id or raise "
                                 "--max-hypotheses-per-metric deliberately"
                             )
                         points = group["points"]
@@ -601,7 +795,9 @@ def fit_metric(
                         quality = coverage / (1.0 + 10.0 * fitted["normalized_rmse"])
                         candidates.append(
                             {
-                                "did": did,
+                                **_identifier_descriptor_from_key(
+                                    identifier_key
+                                ),
                                 "slice_start": start,
                                 "slice_length": length,
                                 "cycle_lag": lag,
@@ -620,11 +816,14 @@ def fit_metric(
             item["normalized_rmse"],
             -item["samples"],
             item["slice_length"],
-            item["did"],
+            item["key"],
         )
     )
     if not candidates:
-        result["reason"] = "no exact-echo DID slice had enough varying aligned samples"
+        result["reason"] = (
+            "no exact-echo diagnostic-identifier slice had enough "
+            "varying aligned samples"
+        )
         return result
 
     top = candidates[0]
@@ -632,8 +831,17 @@ def fit_metric(
         candidate["quality_score"] >= top["quality_score"] - 0.01
         and candidate["normalized_rmse"] <= top["normalized_rmse"] + 0.01
         and (
-            candidate["did"], candidate["slice_start"], candidate["slice_length"], candidate["cycle_lag"]
-        ) != (top["did"], top["slice_start"], top["slice_length"], top["cycle_lag"])
+            candidate["key"],
+            candidate["slice_start"],
+            candidate["slice_length"],
+            candidate["cycle_lag"],
+        )
+        != (
+            top["key"],
+            top["slice_start"],
+            top["slice_length"],
+            top["cycle_lag"],
+        )
         for candidate in candidates[1:]
     )
     interpretation_ambiguity = len(top["interpretations"]) > 1
@@ -706,14 +914,31 @@ def atomic_jsonl(path: Path, rows: Iterable[dict[str, object]]) -> None:
 
 
 def parser() -> argparse.ArgumentParser:
-    result = argparse.ArgumentParser(description="Offline AlfaOBD gauge/debug DID correlation")
+    result = argparse.ArgumentParser(
+        description=(
+            "Offline AlfaOBD gauge/debug DID and local-identifier correlation"
+        )
+    )
     result.add_argument("gauges", type=Path)
     result.add_argument("debug", type=Path, help="one decoded AlfaOBD debug log (never pool snapshots)")
     result.add_argument("--section", type=int, required=True, help="1-based Gauges_Data section index")
     result.add_argument("--address", help="optional exact ATSH address, e.g. DA10F1")
-    result.add_argument("--boundary-did", help="override inferred polling-loop first DID")
+    boundary = result.add_mutually_exclusive_group()
+    boundary.add_argument(
+        "--boundary-did",
+        help="override inferred polling-loop first 22/62 DID",
+    )
+    boundary.add_argument(
+        "--boundary-local-id",
+        help="override inferred polling-loop first 21/61 local identifier",
+    )
     result.add_argument("--metric", action="append", help="exact metric label; repeatable")
     result.add_argument("--did", action="append", help="restrict candidate DID (four hex digits)")
+    result.add_argument(
+        "--local-id",
+        action="append",
+        help="restrict candidate 21/61 local identifier (two hex digits)",
+    )
     result.add_argument("--min-samples", type=int, default=6)
     result.add_argument(
         "--max-exchanges",
@@ -760,18 +985,48 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
-    allowed_dids = None
+    allowed_identifiers: set[str] | None = None
+    allowed_dids: set[str] = set()
     if args.did:
         allowed_dids = {value.upper().removeprefix("0X") for value in args.did}
         if any(re.fullmatch(r"[0-9A-F]{4}", value) is None for value in allowed_dids):
             print("error: --did values must be exactly four hexadecimal digits", file=sys.stderr)
             return 2
-    boundary_override = None
+    allowed_local_ids: set[str] = set()
+    if args.local_id:
+        allowed_local_ids = {
+            value.upper().removeprefix("0X") for value in args.local_id
+        }
+        if any(
+            re.fullmatch(r"[0-9A-F]{2}", value) is None
+            for value in allowed_local_ids
+        ):
+            print(
+                "error: --local-id values must be exactly two hexadecimal digits",
+                file=sys.stderr,
+            )
+            return 2
+    if allowed_dids or allowed_local_ids:
+        allowed_identifiers = {
+            *(f"22:{value}" for value in allowed_dids),
+            *(f"21:{value}" for value in allowed_local_ids),
+        }
+    boundary_override: str | None = None
     if args.boundary_did:
-        boundary_override = args.boundary_did.upper().removeprefix("0X")
-        if re.fullmatch(r"[0-9A-F]{4}", boundary_override) is None:
+        value = args.boundary_did.upper().removeprefix("0X")
+        if re.fullmatch(r"[0-9A-F]{4}", value) is None:
             print("error: --boundary-did must be exactly four hexadecimal digits", file=sys.stderr)
             return 2
+        boundary_override = f"22:{value}"
+    elif args.boundary_local_id:
+        value = args.boundary_local_id.upper().removeprefix("0X")
+        if re.fullmatch(r"[0-9A-F]{2}", value) is None:
+            print(
+                "error: --boundary-local-id must be exactly two hexadecimal digits",
+                file=sys.stderr,
+            )
+            return 2
+        boundary_override = f"21:{value}"
     try:
         section = next(
             (item for item in iter_gauge_sections(args.gauges) if item.index == args.section),
@@ -781,8 +1036,8 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError(f"gauge section {args.section} not found")
         if not section.rows:
             raise ValueError(f"gauge section {args.section} has no sample rows")
-        exchanges: list[DidExchange] = []
-        for exchange in iter_did_exchanges(
+        exchanges: list[DiagnosticExchange] = []
+        for exchange in iter_diagnostic_exchanges(
             args.debug,
             date=section.date,
             profile=section.profile,
@@ -796,26 +1051,68 @@ def main(argv: list[str] | None = None) -> int:
             exchanges.append(exchange)
         if not exchanges:
             raise ValueError(
-                "no matching single-DID 22 exchanges for the selected date/profile/address"
+                "no matching single-identifier 22/62 or 21/61 exchanges "
+                "for the selected date/profile/address"
             )
         addresses = sorted({exchange.address for exchange in exchanges})
         if not args.address and len(addresses) > 1:
             raise ValueError(f"multiple debug addresses matched ({', '.join(addresses)}); pass --address")
-        boundary_inference = infer_boundary_did(exchanges, section.rows)
-        if boundary_override is None and boundary_inference["did"] is None:
+        boundary_inference = infer_boundary_identifier(
+            exchanges,
+            section.rows,
+        )
+        if (
+            boundary_override is None
+            and boundary_inference["identifier_key"] is None
+        ):
             score_preview = ", ".join(
-                f"{item['did']}:{item['near_gauge_rows']} rows/"
+                f"{item['key']}:{item['near_gauge_rows']} rows/"
                 f"{item['median_abs_gap_ms']} ms"
                 for item in boundary_inference["scores"][:5]
             ) or "none"
             raise ValueError(
-                "could not infer one unambiguous polling-boundary DID from prompt-completion "
-                f"timestamps (top scores: {score_preview}); inspect the trace and rerun with "
-                "--boundary-did"
+                "could not infer one unambiguous polling-boundary diagnostic "
+                "identifier from prompt-completion timestamps "
+                f"(top scores: {score_preview}); inspect the trace and rerun "
+                "with --boundary-did or --boundary-local-id"
             )
-        selected_boundary = boundary_override or boundary_inference["did"]
-        cycles = build_cycles(exchanges, boundary_did=selected_boundary)
-        observed_boundaries = sorted({cycle.exchanges[0].did for cycle in cycles})
+        selected_boundary = (
+            boundary_override or boundary_inference["identifier_key"]
+        )
+        if (
+            boundary_override is not None
+            and not any(
+                exchange.identifier_key == boundary_override
+                for exchange in exchanges
+            )
+        ):
+            raise ValueError(
+                f"explicit polling boundary {boundary_override} does not "
+                "occur in the matching debug exchanges"
+            )
+        cycles = build_cycles(
+            exchanges,
+            boundary_identifier=selected_boundary,
+        )
+        if not cycles:
+            raise ValueError(
+                "polling-boundary selection produced no complete cycles"
+            )
+        observed_boundaries = sorted(
+            {
+                cycle.exchanges[0].identifier_key
+                for cycle in cycles
+            }
+        )
+        observed_boundary_descriptors = [
+            _identifier_descriptor_from_key(key)
+            for key in observed_boundaries
+        ]
+        selected_boundary_descriptor = (
+            _identifier_descriptor_from_key(selected_boundary)
+            if selected_boundary is not None
+            else None
+        )
         alignments = align_rows(
             section.rows,
             cycles,
@@ -833,7 +1130,7 @@ def main(argv: list[str] | None = None) -> int:
                 index,
                 alignments,
                 cycles,
-                allowed_dids=allowed_dids,
+                allowed_identifiers=allowed_identifiers,
                 min_samples=args.min_samples,
                 top_n=args.top,
                 max_hypotheses=args.max_hypotheses_per_metric,
@@ -864,12 +1161,13 @@ def main(argv: list[str] | None = None) -> int:
                 else (absolute_offsets[middle - 1] + absolute_offsets[middle]) / 2
             )
         report = {
-            "schema_version": 1,
+            "schema_version": 2,
             "method": "offline_gauge_debug_affine_candidates",
             "verification_status": "candidate_only",
             "interpretation_warning": (
-                "Fits are time-correlated candidates, not verified DID names/scalings. Historical-other-vehicle "
-                "inputs are reference-only and must never be promoted as current-van truth."
+                "Fits are time-correlated candidates, not verified diagnostic "
+                "identifier names/scalings. Historical-other-vehicle inputs are "
+                "reference-only and must never be promoted as current-van truth."
             ),
             "source_scope": args.source_scope,
             "gauges": {"path": str(args.gauges), "sha256": gauge_hash, "size_bytes": args.gauges.stat().st_size},
@@ -883,29 +1181,64 @@ def main(argv: list[str] | None = None) -> int:
                 "start_line": section.start_line,
                 "header_line": section.header_line,
                 "end_line": section.end_line,
+                "delimiter": section.delimiter,
                 "columns": section.columns,
                 "sample_rows": len(section.rows),
                 "unparsed_lines": section.unparsed_lines,
             },
-            "debug_filter": {"address": args.address, "matched_addresses": addresses},
+            "debug_filter": {
+                "address": args.address,
+                "matched_addresses": addresses,
+                "allowed_identifier_keys": (
+                    sorted(allowed_identifiers)
+                    if allowed_identifiers is not None
+                    else None
+                ),
+            },
             "input_limits": {
                 "max_matching_debug_exchanges": args.max_exchanges,
                 "max_hypotheses_per_metric": args.max_hypotheses_per_metric,
             },
             "polling": {
-                "did_exchanges": len(exchanges),
-                "cycles": len(cycles),
-                "cycle_boundary": (
-                    selected_boundary
-                    or (observed_boundaries[0] if len(observed_boundaries) == 1 else None)
+                "diagnostic_exchanges": len(exchanges),
+                "did_exchanges": sum(
+                    exchange.identifier_kind == "did"
+                    for exchange in exchanges
                 ),
-                "observed_cycle_boundary_dids": observed_boundaries,
+                "local_identifier_exchanges": sum(
+                    exchange.identifier_kind == "local_identifier"
+                    for exchange in exchanges
+                ),
+                "cycles": len(cycles),
+                # Schema-1 compatibility: this field was DID-only. Keep it
+                # populated for a 22 boundary and null for a 21 local ID;
+                # cycle_boundary_key is authoritative in schema 2.
+                "cycle_boundary": (
+                    selected_boundary_descriptor["did"]
+                    if selected_boundary_descriptor is not None
+                    else None
+                ),
+                "cycle_boundary_key": selected_boundary,
+                "cycle_boundary_identifier": selected_boundary_descriptor,
+                "observed_cycle_boundary_identifiers": (
+                    observed_boundary_descriptors
+                ),
+                "observed_cycle_boundary_dids": [
+                    item["did"]
+                    for item in observed_boundary_descriptors
+                    if item["did"] is not None
+                ],
+                "observed_cycle_boundary_local_identifiers": [
+                    item["local_identifier"]
+                    for item in observed_boundary_descriptors
+                    if item["local_identifier"] is not None
+                ],
                 "cycle_boundary_source": (
                     "user_override"
                     if boundary_override
                     else "gauge_response_timestamp_inference"
-                    if boundary_inference["did"]
-                    else "first_repeated_DID_fallback"
+                    if boundary_inference["identifier_key"]
+                    else "first_repeated_identifier_fallback"
                 ),
                 "cycle_boundary_inference": boundary_inference,
                 "assigned_exchanges": sum(len(cycle.exchanges) for cycle in cycles),
@@ -923,7 +1256,10 @@ def main(argv: list[str] | None = None) -> int:
                 "ambiguous_time_rows_used_in_fit": False,
             },
             "alignment": {
-                "anchor": "response_end_of_selected polling-boundary DID",
+                "anchor": (
+                    "response_end_of_selected polling-boundary "
+                    "diagnostic identifier"
+                ),
                 "matched_rows": sum(item.cycle_id is not None for item in alignments),
                 "unmatched_rows": sum(item.cycle_id is None for item in alignments),
                 "ambiguous_time_rows": sum(item.ambiguous_time for item in alignments),
@@ -963,7 +1299,7 @@ def main(argv: list[str] | None = None) -> int:
                     "anchor_ts": cycle.anchor_ts,
                     "exchanges": [
                         {
-                            "did": exchange.did,
+                            **exchange.identifier_dict(),
                             "request_ts": exchange.request_ts,
                             "response_end_ts": exchange.response_end_ts,
                             "request_line": exchange.request_line,
@@ -992,9 +1328,15 @@ def main(argv: list[str] | None = None) -> int:
     for metric in metrics:
         if metric["candidates"]:
             candidate = metric["candidates"][0]
+            identifier_label = (
+                f"DID {candidate['did']}"
+                if candidate["kind"] == "did"
+                else f"local identifier {candidate['local_identifier']}"
+            )
             print(
                 f"  [{metric['column_index']}] {metric['label']}: {metric['status']}; "
-                f"DID {candidate['did']} bytes {candidate['slice_start']}+{candidate['slice_length']} "
+                f"{identifier_label} bytes "
+                f"{candidate['slice_start']}+{candidate['slice_length']} "
                 f"lag {candidate['cycle_lag']:+d}; displayed={candidate['slope']:.9g}*raw"
                 f"{candidate['intercept']:+.9g}"
             )
