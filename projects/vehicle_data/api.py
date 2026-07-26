@@ -44,6 +44,8 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path == "/v1/status":
             return self._json(200, self.broker.status_response())
+        if path == "/v1/snapshot":
+            return self._json(200, self.broker.snapshot_response())
         if path == "/v1/metrics":
             return self._json(200, self.broker.list_metrics())
         prefix = "/v1/metrics/"

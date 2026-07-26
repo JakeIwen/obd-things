@@ -186,6 +186,18 @@ class TelemetryBroker:
         self._collector_thread: threading.Thread | None = None
         self._collector_stop = threading.Event()
         self._started_at = datetime.now(timezone.utc).isoformat()
+        self._vehicle_state_observed_monotonic: float | None = None
+        self._vehicle_state: dict[str, object] = {
+            "state": "unknown",
+            "running": None,
+            "confidence": "unknown",
+            "basis": "no_passive_observation",
+            "detail": (
+                "the broker has not observed enough passive bus evidence to "
+                "describe vehicle state"
+            ),
+            "observed_at": None,
+        }
         self._auto_retune_last_attempt_monotonic: float | None = None
         self._auto_retune: dict[str, object] = {
             "enabled": self.auto_retune_enabled,
@@ -207,6 +219,22 @@ class TelemetryBroker:
                 self.definitions[name].public_dict()
                 for name in sorted(self.definitions)
             ]
+        }
+
+    def snapshot_response(self) -> dict[str, object]:
+        """Return one cache-only dashboard snapshot.
+
+        Keeping status, the public metric catalog, and every cached metric in a
+        single response lets the web tier remain registry-driven as the
+        allowlist grows. This method never invokes an acquisition source.
+        """
+        return {
+            "status": self.status_response(),
+            "catalog": self.list_metrics()["metrics"],
+            "metrics": {
+                name: self.metric_response(name)
+                for name in sorted(self.definitions)
+            },
         }
 
     def _serialize(
@@ -294,6 +322,8 @@ class TelemetryBroker:
             }
             auto_retune = json.loads(json.dumps(self._auto_retune))
             last_retune = self._auto_retune_last_attempt_monotonic
+            vehicle_state = json.loads(json.dumps(self._vehicle_state))
+            vehicle_observed = self._vehicle_state_observed_monotonic
         cooldown_remaining = 0.0
         if last_retune is not None:
             cooldown_remaining = max(
@@ -303,6 +333,11 @@ class TelemetryBroker:
             )
         auto_retune["cooldown_remaining_seconds"] = round(
             cooldown_remaining, 1
+        )
+        vehicle_state["age_ms"] = (
+            round(max(0.0, self.monotonic() - vehicle_observed) * 1000)
+            if vehicle_observed is not None
+            else None
         )
         topology = interface.get("topology") or {}
         inhibits = interface.get("active_inhibits") or []
@@ -350,10 +385,84 @@ class TelemetryBroker:
             "active_acquisition_permitted": active_permitted,
             "collector": collector,
             "auto_retune": auto_retune,
+            "vehicle_state": vehicle_state,
             "inflight": inflight,
             "last_acquisition_errors": last_errors,
             "cached_metrics": cached,
         }
+
+    def _update_vehicle_state(self, result: AcquisitionResult) -> None:
+        """Record only state conclusions supported by passive acquisition.
+
+        Awake traffic does not distinguish an idling engine from ignition-on,
+        a fob wake, or a charger-powered module wake. In particular, battery
+        voltage is never used as an engine-running heuristic.
+        """
+        state = None
+        if result.available:
+            wake_assisted = result.acquisition == "wake_assisted"
+            state = {
+                "state": "awake",
+                "running": None,
+                "confidence": "observed",
+                "basis": (
+                    "broker_wake_activity"
+                    if wake_assisted
+                    else "passive_bus_activity"
+                ),
+                "detail": (
+                    f"{result.bus or 'vehicle bus'} traffic is present; "
+                    + (
+                        "the broker just performed the approved wake, so this "
+                        "activity is not evidence that the engine is running"
+                        if wake_assisted
+                        else (
+                            "running versus ignition-on versus a temporary "
+                            "wake is not yet distinguished"
+                        )
+                    )
+                ),
+            }
+        elif result.reason == "bus_asleep":
+            state = {
+                "state": "asleep",
+                "running": False,
+                "confidence": "inferred",
+                "basis": "passive_bus_silence",
+                "detail": (
+                    "no frames arrived at the approved bitrate; this is "
+                    "consistent with a sleeping vehicle, but an unplugged "
+                    "physical leg is not distinguishable from silence"
+                ),
+            }
+        elif result.bus == "can-ch":
+            state = {
+                "state": "awake",
+                "running": None,
+                "confidence": "observed",
+                "basis": "passive_can_ch_activity",
+                "detail": (
+                    "CAN-CH traffic is present; no verified running-state "
+                    "metric is available on this branch"
+                ),
+            }
+        elif result.bus == "wrong-rate":
+            state = {
+                "state": "awake",
+                "running": None,
+                "confidence": "inferred",
+                "basis": "wrong_rate_rx_activity",
+                "detail": (
+                    "RX errors show traffic at another bitrate; vehicle "
+                    "running state cannot be determined"
+                ),
+            }
+        if state is None:
+            return
+        state["observed_at"] = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            self._vehicle_state = state
+            self._vehicle_state_observed_monotonic = self.monotonic()
 
     def _limit_for(self, definition: MetricDefinition, mode: str) -> float:
         if mode == "wake_if_asleep":
@@ -432,6 +541,7 @@ class TelemetryBroker:
                 detail=f"acquirer failed closed: {exc}",
             )
         self._refresh_interface_status()
+        self._update_vehicle_state(result)
         with self._lock:
             if result.available:
                 self._cache[metric] = result

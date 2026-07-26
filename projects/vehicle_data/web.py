@@ -78,12 +78,17 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
                     "detail": str(exc),
                 },
             )
+        web_status = {
+            "active_acquisition_enabled": self.server.allow_acquisitions,
+            "bind": f"{self.server.server_address[0]}:"
+            f"{self.server.server_address[1]}",
+        }
         if path == "/v1/status":
-            response["web"] = {
-                "active_acquisition_enabled": self.server.allow_acquisitions,
-                "bind": f"{self.server.server_address[0]}:"
-                f"{self.server.server_address[1]}",
-            }
+            response["web"] = web_status
+        elif path == "/v1/snapshot":
+            response["web"] = web_status
+            if isinstance(response.get("status"), dict):
+                response["status"]["web"] = web_status
         return self._json(status, response)
 
     def _static(self, filename: str, content_type: str) -> None:
@@ -115,11 +120,21 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
             return self._static("index.html", "text/html; charset=utf-8")
         if path == "/app.js":
             return self._static("app.js", "text/javascript; charset=utf-8")
+        if path == "/profiles.js":
+            return self._static("profiles.js", "text/javascript; charset=utf-8")
         if path == "/style.css":
             return self._static("style.css", "text/css; charset=utf-8")
-        if path == "/v1/status":
+        if path in ("/v1/status", "/v1/snapshot"):
             return self._broker_request("GET", path)
-        if path in ("/v1/metrics", "/v1/metrics/battery.voltage"):
+        metric_prefix = "/v1/metrics/"
+        if (
+            path == "/v1/metrics"
+            or (
+                path.startswith(metric_prefix)
+                and path[len(metric_prefix):]
+                and "/" not in path[len(metric_prefix):]
+            )
+        ):
             return self._broker_request("GET", path)
         if path == "/v1/stream":
             return self._stream()
@@ -186,20 +201,17 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
         deadline = time.monotonic() + self.server.stream_max_seconds
         while time.monotonic() < deadline:
             try:
-                status_code, status = self.client.request("GET", "/v1/status")
-                metric_code, metric = self.client.request(
-                    "GET", "/v1/metrics/battery.voltage"
+                status_code, payload = self.client.request(
+                    "GET", "/v1/snapshot"
                 )
-                payload = {
-                    "status_code": status_code,
-                    "metric_code": metric_code,
-                    "status": status,
-                    "battery": metric,
-                    "web": {
-                        "active_acquisition_enabled":
-                        self.server.allow_acquisitions,
-                    },
+                web_status = {
+                    "active_acquisition_enabled":
+                    self.server.allow_acquisitions,
                 }
+                payload["status_code"] = status_code
+                payload["web"] = web_status
+                if isinstance(payload.get("status"), dict):
+                    payload["status"]["web"] = web_status
                 body = json.dumps(payload, separators=(",", ":"))
                 self.wfile.write(f"event: snapshot\ndata: {body}\n\n".encode())
                 self.wfile.flush()
