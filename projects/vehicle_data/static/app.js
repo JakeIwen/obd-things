@@ -30,6 +30,20 @@ function render(snapshot) {
     byId("detail").textContent = metric.detail || "No cached observation.";
   }
   const collector = status.collector || {};
+  const retune = status.auto_retune || {};
+  const retuneState = String(retune.state || "unknown").replaceAll("_", " ");
+  let retuneText = retune.enabled === false
+    ? "Disabled"
+    : `${retuneState}: ${retune.detail || "No status detail."}`;
+  if (
+    retune.last_attempt &&
+    retune.state === "monitoring" &&
+    retune.last_attempt.state === "switched"
+  ) {
+    retuneText += ` Last switch: ${retune.last_attempt.bus || "unknown bus"} at ` +
+      `${retune.last_attempt.to_bitrate || "unknown rate"} bit/s.`;
+  }
+  byId("auto-retune").textContent = retuneText;
   byId("service-state").textContent =
     `Broker ${status.service ? "online" : "unknown"} · collector ${collector.state || "unknown"}`;
 }

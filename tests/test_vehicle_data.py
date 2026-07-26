@@ -368,6 +368,24 @@ class FakeAcquirer:
         }
 
 
+class FakeAutoRetuner:
+    def __init__(self, result=None):
+        self.calls = []
+        self.result = result or {
+            "state": "switched",
+            "reason": "bus_identified",
+            "detail": "passively switched to b-can at 125000 bit/s",
+            "from_bitrate": 500000,
+            "to_bitrate": 125000,
+            "bus": "b-can",
+            "completed_at": "2026-07-26T00:00:00+00:00",
+        }
+
+    def attempt(self, expected_bitrate):
+        self.calls.append(expected_bitrate)
+        return dict(self.result)
+
+
 class BrokerTests(unittest.TestCase):
     def test_cache_get_never_calls_acquirer(self):
         acquirer = FakeAcquirer()
@@ -419,6 +437,171 @@ class BrokerTests(unittest.TestCase):
             status["current_owner"]["kind"],
             "participating_or_external_can_user",
         )
+
+    def test_auto_retune_requires_repeated_wrong_rate_then_reports_switch(self):
+        acquirer = FakeAcquirer()
+        retuner = FakeAutoRetuner()
+        broker = TelemetryBroker(
+            acquirer=acquirer,
+            monotonic=FakeClock(),
+            auto_retuner=retuner,
+            auto_retune_trigger=3,
+        )
+        broker._interface_status = {
+            **acquirer.status_snapshot(),
+            "bitrate": 500000,
+            "topology": {
+                "bus": "c-can",
+                "usable": True,
+                "reason": "",
+            },
+        }
+        wrong_rate = failure(
+            metric="battery.voltage",
+            unit="V",
+            reason="wrong_bus",
+            detail="passive bus identification returned wrong-rate",
+            bus="wrong-rate",
+            acquisition="passive",
+        )
+
+        broker._consider_auto_retune(wrong_rate)
+        broker._consider_auto_retune(wrong_rate)
+        self.assertEqual(retuner.calls, [])
+        broker._consider_auto_retune(wrong_rate)
+
+        status = broker.status_response()["auto_retune"]
+        self.assertEqual(retuner.calls, [500000])
+        self.assertEqual(status["state"], "switched")
+        self.assertEqual(status["wrong_rate_streak"], 0)
+        self.assertEqual(status["last_attempt"]["bus"], "b-can")
+
+    def test_auto_retune_reports_external_inhibit_without_calling_helper(self):
+        acquirer = FakeAcquirer()
+        retuner = FakeAutoRetuner()
+        broker = TelemetryBroker(
+            acquirer=acquirer,
+            monotonic=FakeClock(),
+            auto_retuner=retuner,
+            auto_retune_trigger=1,
+        )
+        broker._interface_status = {
+            **acquirer.status_snapshot(),
+            "bitrate": 500000,
+            "active_inhibits": ["alfaobd"],
+        }
+        wrong_rate = failure(
+            metric="battery.voltage",
+            unit="V",
+            reason="wrong_bus",
+            detail="passive bus identification returned wrong-rate",
+            bus="wrong-rate",
+        )
+
+        broker._consider_auto_retune(wrong_rate)
+
+        status = broker.status_response()["auto_retune"]
+        self.assertEqual(retuner.calls, [])
+        self.assertEqual(status["state"], "blocked")
+        self.assertIn("alfaobd", status["detail"])
+
+    def test_auto_retune_continues_streak_if_wrong_rate_degrades_controller(self):
+        acquirer = FakeAcquirer()
+        retuner = FakeAutoRetuner()
+        broker = TelemetryBroker(
+            acquirer=acquirer,
+            monotonic=FakeClock(),
+            auto_retuner=retuner,
+            auto_retune_trigger=3,
+        )
+        broker._interface_status = {
+            **acquirer.status_snapshot(),
+            "bitrate": 500000,
+            "controller_state": "ERROR-PASSIVE",
+        }
+        wrong_rate = failure(
+            metric="battery.voltage",
+            unit="V",
+            reason="wrong_bus",
+            detail="passive bus identification returned wrong-rate",
+            bus="wrong-rate",
+        )
+        degraded = failure(
+            metric="battery.voltage",
+            unit="V",
+            reason="source_unavailable",
+            detail="can0 controller is ERROR-PASSIVE; left unchanged",
+        )
+
+        broker._consider_auto_retune(wrong_rate)
+        broker._consider_auto_retune(degraded)
+        broker._consider_auto_retune(degraded)
+
+        self.assertEqual(retuner.calls, [500000])
+        self.assertEqual(
+            broker.status_response()["auto_retune"]["state"], "switched"
+        )
+
+    def test_auto_retune_cooldown_reports_why_retry_is_deferred(self):
+        clock = FakeClock()
+        acquirer = FakeAcquirer()
+        retuner = FakeAutoRetuner(
+            {
+                "state": "failed",
+                "reason": "alternate_not_identified",
+                "detail": "alternate passive probe returned unknown",
+                "from_bitrate": 500000,
+                "to_bitrate": 125000,
+                "bus": "unknown",
+                "completed_at": "2026-07-26T00:00:00+00:00",
+            }
+        )
+        broker = TelemetryBroker(
+            acquirer=acquirer,
+            monotonic=clock,
+            auto_retuner=retuner,
+            auto_retune_trigger=1,
+            auto_retune_cooldown_seconds=30,
+        )
+        broker._interface_status = {
+            **acquirer.status_snapshot(),
+            "bitrate": 500000,
+        }
+        wrong_rate = failure(
+            metric="battery.voltage",
+            unit="V",
+            reason="wrong_bus",
+            detail="passive bus identification returned wrong-rate",
+            bus="wrong-rate",
+        )
+
+        broker._consider_auto_retune(wrong_rate)
+        broker._consider_auto_retune(wrong_rate)
+
+        status = broker.status_response()["auto_retune"]
+        self.assertEqual(retuner.calls, [500000])
+        self.assertEqual(status["state"], "cooldown")
+        self.assertIn("retry in 30.0 seconds", status["detail"])
+        self.assertEqual(status["cooldown_remaining_seconds"], 30.0)
+
+    def test_auto_retune_reports_armed_interface_as_blocked(self):
+        broker = TelemetryBroker(
+            acquirer=FakeAcquirer(),
+            monotonic=FakeClock(),
+            auto_retuner=FakeAutoRetuner(),
+        )
+        broker._consider_auto_retune(
+            failure(
+                metric="battery.voltage",
+                unit="V",
+                reason="can_busy",
+                detail="can0 is armed; refusing to touch another CAN operation",
+            )
+        )
+
+        status = broker.status_response()["auto_retune"]
+        self.assertEqual(status["state"], "blocked")
+        self.assertIn("armed", status["detail"])
 
     def test_concurrent_identical_requests_are_coalesced(self):
         release = threading.Event()
@@ -614,6 +797,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertIn("default-src", response.getheader("Content-Security-Policy"))
         self.assertIn(b"Van telemetry", body)
+        self.assertIn(b"Auto bus switch", body)
         connection.close()
 
     def test_disconnected_client_does_not_escape_web_json_writer(self):

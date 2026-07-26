@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import subprocess
 import sys
 import threading
 import time
@@ -22,6 +23,94 @@ from projects.vehicle_data.sources import VoltageAcquirer
 
 
 DEFAULT_SOCKET = "/run/van-telemetry/api.sock"
+RETUNE_HELPER = REPO / "projects" / "vehicle_data" / "retune.py"
+
+
+def _retune_failure(reason: str, detail: str) -> dict[str, object]:
+    return {
+        "state": "failed",
+        "reason": reason,
+        "detail": detail,
+        "from_bitrate": None,
+        "to_bitrate": None,
+        "bus": None,
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+class PassiveAutoRetuner:
+    """Run the termination-safe passive retune helper as a child process."""
+
+    _STATES = frozenset(("switched", "blocked", "failed", "no_change"))
+
+    def __init__(
+        self,
+        *,
+        channel: str,
+        probe_seconds: float,
+        timeout_seconds: float = 15.0,
+    ):
+        self.channel = channel
+        self.probe_seconds = probe_seconds
+        self.timeout_seconds = timeout_seconds
+
+    def attempt(self, expected_bitrate: int) -> dict[str, object]:
+        command = [
+            sys.executable,
+            str(RETUNE_HELPER),
+            "--channel",
+            self.channel,
+            "--expected-bitrate",
+            str(expected_bitrate),
+            "--probe-seconds",
+            str(self.probe_seconds),
+        ]
+        try:
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except OSError as exc:
+            return _retune_failure(
+                "helper_start_failed", f"could not start retune helper: {exc}"
+            )
+        try:
+            stdout, stderr = process.communicate(timeout=self.timeout_seconds)
+        except subprocess.TimeoutExpired:
+            process.terminate()
+            try:
+                stdout, stderr = process.communicate(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout, stderr = process.communicate()
+            return _retune_failure(
+                "helper_timeout",
+                "retune helper exceeded its bounded runtime and was terminated",
+            )
+        if process.returncode != 0:
+            detail = (stderr or stdout).strip()[-500:]
+            return _retune_failure(
+                "helper_failed",
+                detail or f"retune helper exited {process.returncode}",
+            )
+        lines = [line for line in stdout.splitlines() if line.strip()]
+        try:
+            payload = json.loads(lines[-1]) if lines else None
+        except json.JSONDecodeError:
+            payload = None
+        if (
+            not isinstance(payload, dict)
+            or payload.get("state") not in self._STATES
+            or not isinstance(payload.get("reason"), str)
+            or not isinstance(payload.get("detail"), str)
+        ):
+            return _retune_failure(
+                "invalid_helper_response",
+                "retune helper did not return one valid result object",
+            )
+        return payload
 
 
 @dataclass
@@ -46,6 +135,10 @@ class TelemetryBroker:
         collector_interval_seconds: float = 5.0,
         wake_min_interval_seconds: float | None = None,
         acquisition_wait_seconds: float = 20.0,
+        auto_retuner=None,
+        auto_retune_enabled: bool = True,
+        auto_retune_trigger: int = 3,
+        auto_retune_cooldown_seconds: float = 30.0,
     ):
         self.acquirer = acquirer or VoltageAcquirer()
         self.definitions = definitions or METRICS
@@ -53,6 +146,17 @@ class TelemetryBroker:
         self.collector_interval_seconds = collector_interval_seconds
         self.wake_min_interval_seconds = wake_min_interval_seconds
         self.acquisition_wait_seconds = acquisition_wait_seconds
+        if auto_retune_trigger < 1:
+            raise ValueError("auto-retune trigger must be at least one")
+        if auto_retune_cooldown_seconds < 0:
+            raise ValueError("auto-retune cooldown cannot be negative")
+        self.auto_retune_enabled = auto_retune_enabled
+        self.auto_retune_trigger = auto_retune_trigger
+        self.auto_retune_cooldown_seconds = auto_retune_cooldown_seconds
+        self.auto_retuner = auto_retuner or PassiveAutoRetuner(
+            channel=getattr(self.acquirer, "channel", "can0"),
+            probe_seconds=getattr(self.acquirer, "probe_seconds", 0.75),
+        )
 
         self._lock = threading.RLock()
         # Prevent the passive collector from racing a client-triggered active
@@ -82,6 +186,20 @@ class TelemetryBroker:
         self._collector_thread: threading.Thread | None = None
         self._collector_stop = threading.Event()
         self._started_at = datetime.now(timezone.utc).isoformat()
+        self._auto_retune_last_attempt_monotonic: float | None = None
+        self._auto_retune: dict[str, object] = {
+            "enabled": self.auto_retune_enabled,
+            "state": "monitoring" if self.auto_retune_enabled else "disabled",
+            "detail": (
+                "waiting for repeated passive wrong-rate evidence"
+                if self.auto_retune_enabled
+                else "disabled by broker configuration"
+            ),
+            "wrong_rate_streak": 0,
+            "trigger_after": self.auto_retune_trigger,
+            "cooldown_seconds": self.auto_retune_cooldown_seconds,
+            "last_attempt": None,
+        }
 
     def list_metrics(self) -> dict[str, object]:
         return {
@@ -174,6 +292,18 @@ class TelemetryBroker:
                 "last_cycle_at": self._collector_last_cycle_at,
                 "interval_seconds": self.collector_interval_seconds,
             }
+            auto_retune = json.loads(json.dumps(self._auto_retune))
+            last_retune = self._auto_retune_last_attempt_monotonic
+        cooldown_remaining = 0.0
+        if last_retune is not None:
+            cooldown_remaining = max(
+                0.0,
+                self.auto_retune_cooldown_seconds
+                - (self.monotonic() - last_retune),
+            )
+        auto_retune["cooldown_remaining_seconds"] = round(
+            cooldown_remaining, 1
+        )
         topology = interface.get("topology") or {}
         inhibits = interface.get("active_inhibits") or []
         busy_error = next(
@@ -219,6 +349,7 @@ class TelemetryBroker:
             "current_owner": current_owner,
             "active_acquisition_permitted": active_permitted,
             "collector": collector,
+            "auto_retune": auto_retune,
             "inflight": inflight,
             "last_acquisition_errors": last_errors,
             "cached_metrics": cached,
@@ -326,11 +457,150 @@ class TelemetryBroker:
             self._collector_thread = thread
             thread.start()
 
+    def _set_auto_retune_state(
+        self,
+        state: str,
+        detail: str,
+        *,
+        streak: int | None = None,
+        last_attempt: dict[str, object] | None = None,
+    ) -> None:
+        with self._lock:
+            self._auto_retune["state"] = state
+            self._auto_retune["detail"] = detail
+            if streak is not None:
+                self._auto_retune["wrong_rate_streak"] = streak
+            if last_attempt is not None:
+                self._auto_retune["last_attempt"] = last_attempt
+
+    def _consider_auto_retune(self, result: AcquisitionResult) -> None:
+        if not self.auto_retune_enabled:
+            return
+        with self._lock:
+            streak = int(self._auto_retune["wrong_rate_streak"])
+            interface = json.loads(json.dumps(self._interface_status))
+
+        if result.available:
+            self._set_auto_retune_state(
+                "monitoring",
+                "current bitrate passively identifies an approved voltage bus",
+                streak=0,
+            )
+            return
+
+        wrong_rate = (
+            result.reason == "wrong_bus" and result.bus == "wrong-rate"
+        )
+        degraded_after_wrong_rate = (
+            streak > 0
+            and result.reason == "source_unavailable"
+            and (
+                "ERROR-WARNING" in result.detail
+                or "ERROR-PASSIVE" in result.detail
+            )
+        )
+        if not wrong_rate and not degraded_after_wrong_rate:
+            if result.reason in ("can_busy", "adapter_absent"):
+                self._set_auto_retune_state(
+                    "blocked", result.detail, streak=0
+                )
+            elif result.reason == "source_unavailable" and (
+                "down" in result.detail
+                or "controller" in result.detail
+            ):
+                self._set_auto_retune_state(
+                    "blocked", result.detail, streak=0
+                )
+            elif result.reason == "bus_asleep":
+                self._set_auto_retune_state(
+                    "waiting",
+                    "bus is silent; passive auto-retune will not guess a "
+                    "physical leg without wrong-rate evidence",
+                    streak=0,
+                )
+            else:
+                self._set_auto_retune_state(
+                    "monitoring",
+                    "no qualifying wrong-rate evidence; interface left unchanged",
+                    streak=0,
+                )
+            return
+
+        streak += 1
+        if streak < self.auto_retune_trigger:
+            evidence = (
+                "passive wrong-rate evidence"
+                if wrong_rate
+                else "wrong-rate followed by a degraded listen-only controller"
+            )
+            self._set_auto_retune_state(
+                "evidence_accumulating",
+                f"{evidence} {streak}/"
+                f"{self.auto_retune_trigger}; waiting before any interface change",
+                streak=streak,
+            )
+            return
+
+        inhibits = interface.get("active_inhibits") or []
+        if inhibits:
+            self._set_auto_retune_state(
+                "blocked",
+                "auto-retune inhibited by " + ",".join(map(str, inhibits)),
+                streak=streak,
+            )
+            return
+
+        now = self.monotonic()
+        with self._lock:
+            previous = self._auto_retune_last_attempt_monotonic
+        if (
+            previous is not None
+            and now - previous < self.auto_retune_cooldown_seconds
+        ):
+            remaining = self.auto_retune_cooldown_seconds - (now - previous)
+            self._set_auto_retune_state(
+                "cooldown",
+                f"previous retune attempt is cooling down; retry in "
+                f"{remaining:.1f} seconds",
+                streak=streak,
+            )
+            return
+
+        bitrate = interface.get("bitrate")
+        if bitrate not in (125000, 500000):
+            self._set_auto_retune_state(
+                "blocked",
+                f"cannot auto-retune from unsupported or unreadable bitrate "
+                f"{bitrate}",
+                streak=streak,
+            )
+            return
+
+        self._set_auto_retune_state(
+            "switching",
+            f"fresh helper recheck pending from {bitrate} bit/s",
+            streak=streak,
+        )
+        with self._lock:
+            self._auto_retune_last_attempt_monotonic = now
+        with self._source_lock:
+            attempt = self.auto_retuner.attempt(int(bitrate))
+        self._refresh_interface_status()
+        attempt_state = str(attempt.get("state", "failed"))
+        detail = str(attempt.get("detail", "auto-retune returned no detail"))
+        self._set_auto_retune_state(
+            attempt_state,
+            detail,
+            streak=0 if attempt_state in ("switched", "no_change") else streak,
+            last_attempt=attempt,
+        )
+
     def _collector_loop(self) -> None:
         with self._lock:
             self._collector_state = "running"
         while not self._collector_stop.is_set():
-            self.acquire("battery.voltage", "passive")
+            result = self.acquire("battery.voltage", "passive")
+            self._consider_auto_retune(result)
             with self._lock:
                 self._collector_cycles += 1
                 self._collector_last_cycle_at = datetime.now(
@@ -366,6 +636,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--probe-seconds", type=float, default=0.75)
     parser.add_argument("--read-timeout", type=float, default=2.0)
     parser.add_argument("--wake-min-interval", type=float, default=900.0)
+    parser.add_argument(
+        "--no-auto-retune",
+        action="store_true",
+        help="never retune between approved CAN bitrates after wrong-rate evidence",
+    )
+    parser.add_argument("--auto-retune-trigger", type=int, default=3)
+    parser.add_argument("--auto-retune-cooldown", type=float, default=30.0)
     parser.add_argument("--no-collector", action="store_true")
     return parser
 
@@ -374,7 +651,12 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     if args.collector_interval <= 0 or args.probe_seconds <= 0:
         raise SystemExit("collector/probe intervals must be positive")
-    if args.read_timeout <= 0 or args.wake_min_interval < 0:
+    if (
+        args.read_timeout <= 0
+        or args.wake_min_interval < 0
+        or args.auto_retune_trigger < 1
+        or args.auto_retune_cooldown < 0
+    ):
         raise SystemExit("read/wake intervals are invalid")
     try:
         socket_mode = int(args.socket_mode, 8)
@@ -394,6 +676,9 @@ def main(argv=None) -> int:
         acquirer=acquirer,
         collector_interval_seconds=args.collector_interval,
         wake_min_interval_seconds=args.wake_min_interval,
+        auto_retune_enabled=not args.no_auto_retune,
+        auto_retune_trigger=args.auto_retune_trigger,
+        auto_retune_cooldown_seconds=args.auto_retune_cooldown,
     )
     if not args.no_collector:
         broker.start_collector()

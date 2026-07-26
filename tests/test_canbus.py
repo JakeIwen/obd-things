@@ -20,6 +20,57 @@ def ip_details(stdout=PASSIVE_DETAILS, returncode=0):
 
 
 class PassiveRestoreTests(unittest.TestCase):
+    def test_noninteractive_ip_up_uses_sudo_n_for_both_link_changes(self):
+        completed = subprocess.CompletedProcess([], 0, "", "")
+        with (
+            mock.patch.object(
+                canbus.subprocess, "run", return_value=completed
+            ) as run,
+            mock.patch.object(canbus.time, "sleep"),
+        ):
+            self.assertTrue(
+                canbus.ip_up(
+                    "can0",
+                    125000,
+                    listen_only=True,
+                    restart_ms=0,
+                    noninteractive=True,
+                )
+            )
+
+        self.assertEqual(
+            run.call_args_list,
+            [
+                mock.call(
+                    ["ip", "link", "show", "can0"], capture_output=True
+                ),
+                mock.call(
+                    ["sudo", "-n", "ip", "link", "set", "can0", "down"],
+                    capture_output=True,
+                ),
+                mock.call(
+                    [
+                        "sudo",
+                        "-n",
+                        "ip",
+                        "link",
+                        "set",
+                        "can0",
+                        "up",
+                        "type",
+                        "can",
+                        "bitrate",
+                        "125000",
+                        "listen-only",
+                        "on",
+                        "restart-ms",
+                        "0",
+                    ],
+                    capture_output=True,
+                ),
+            ],
+        )
+
     def test_bring_up_passive_requires_command_success_and_matching_readback(self):
         with (
             mock.patch.object(canbus, "ip_up", return_value=True) as ip_up,

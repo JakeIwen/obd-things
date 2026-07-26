@@ -52,8 +52,39 @@ Passive reads:
 3. classify the bus from observed traffic;
 4. read only the allowlisted broadcast frame.
 
-The broker never brings up or reconfigures an interface for a passive read.
-CAN-CH/grey is detected and rejected as a battery source.
+An ordinary passive read never brings up or reconfigures an interface. The
+collector has one separate, guarded auto-retune path for a physical C-CAN ↔
+B-CAN leg change:
+
+1. the evidence streak must begin with an RX-error-backed `wrong-rate`
+   result; three consecutive qualifying observations are required, with a
+   resulting listen-only `ERROR-WARNING`/`ERROR-PASSIVE` state allowed to
+   continue—but never initiate—the streak;
+2. a separate helper takes the exclusive channel lock, requires a listen-only
+   controller that is either healthy or plausibly degraded by the preceding
+   wrong-rate sample, checks external-operation inhibits, and independently
+   rechecks the evidence;
+3. it invalidates the old topology record, configures only the other approved
+   bitrate with listen-only explicitly on and `restart-ms 0`, then accepts the
+   change only if known bus signatures identify C-CAN, B-CAN, or CAN-CH;
+4. an unrecognized alternate rate is restored to the starting passive
+   configuration. A controller degraded by wrong-rate sampling may recover to
+   `ERROR-ACTIVE` during that restoration. Silence alone is never enough to
+   switch or guess a physical leg.
+
+The helper uses noninteractive `sudo` for only the existing SocketCAN
+down/up commands. If that privilege is unavailable, it fails closed and
+reports the reason rather than leaving the failure invisible. Retune attempts
+have a 30-second cooldown. Participating observers and active tools exclude the
+helper through the shared/exclusive channel lock; an armed interface and
+AlfaOBD/external inhibit also block it. The helper explicitly refuses to run
+while `tpms-logger.service` or `tpms-drivesniff.service` is active because their
+interface expectations could otherwise fight the selected bitrate. Older
+processes that bypass both the shared lock and these known service gates cannot
+be detected reliably.
+
+CAN-CH/grey is identified and reported but rejected as a battery source.
+Auto-retuning never transmits a CAN frame.
 
 `wake_if_asleep` first performs the same passive path. Only a silent bus can
 proceed. It then takes the exclusive diagnostics lock and rechecks the interface
@@ -65,13 +96,20 @@ acquirer also compares the complete pre/post interface snapshots and reports
 
 Because a silent C-CAN branch cannot be passively distinguished from a silent
 CAN-CH branch at the same bitrate, every physical adapter or routing change
-must invalidate/update the topology record through
+must invalidate/update the topology record. The guarded auto-retune helper does
+that itself only after strong wrong-rate evidence; a silent or otherwise
+unrecognized cable change still requires
 `tools/can_operation_state.py`. A same-boot record is a necessary gate, not
 permission to ignore a cable change.
 
 Wake requests are coalesced, serialized by the channel lock, and limited to one
 attempt per metric every 15 minutes by default. The passive collector never
 requests wake.
+
+`GET /v1/status` includes an `auto_retune` object with its current state,
+wrong-rate evidence count, cooldown, explanatory detail, and the complete last
+attempt outcome. The dashboard renders the same state under **Auto bus
+switch**, including why a switch was blocked or failed.
 
 The Unix HTTP transport itself is serialized so active CAN cleanup remains on
 the process main thread, where the existing termination-signal guard is valid.

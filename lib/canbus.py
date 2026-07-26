@@ -94,16 +94,18 @@ def interface_state(channel=DEFAULT_CHANNEL):
     )
 
 
-def ip_up(channel, bitrate, listen_only, restart_ms=None):
+def ip_up(channel, bitrate, listen_only, restart_ms=None, *, noninteractive=False):
     """down then up `channel` as CAN @bitrate. listen-only is set EXPLICITLY both ways because the flag
     is STICKY on PCAN/SocketCAN -- omitting it leaves the previous mode, which silently breaks TX (frames
     go nowhere). restart_ms>0 lets the controller auto-recover from a bus-off (an unACKed wake frame on a
-    still-sleeping bus drives toward bus-off). Returns True on success."""
+    still-sleeping bus drives toward bus-off). ``noninteractive`` adds ``sudo -n`` for bounded service
+    helpers, which then fail immediately if pre-authorized privilege is unavailable. Returns True on success."""
     if subprocess.run(["ip", "link", "show", channel], capture_output=True).returncode != 0:
         return False
-    subprocess.run(["sudo", "ip", "link", "set", channel, "down"], capture_output=True)
-    cmd = ["sudo", "ip", "link", "set", channel, "up", "type", "can", "bitrate", str(bitrate),
-           "listen-only", "on" if listen_only else "off"]
+    sudo = ["sudo", "-n"] if noninteractive else ["sudo"]
+    subprocess.run(sudo + ["ip", "link", "set", channel, "down"], capture_output=True)
+    cmd = sudo + ["ip", "link", "set", channel, "up", "type", "can", "bitrate", str(bitrate),
+                  "listen-only", "on" if listen_only else "off"]
     if restart_ms is not None:
         cmd += ["restart-ms", str(restart_ms)]
     r = subprocess.run(cmd, capture_output=True)
@@ -172,15 +174,27 @@ def _passive_readback_matches(channel, bitrate):
     return state is not None and state.group(1) != "BUS-OFF"
 
 
-def bring_up_passive(channel, bitrate):
+def bring_up_passive(
+    channel,
+    bitrate,
+    *,
+    restart_ms=None,
+    noninteractive=False,
+):
     """Configure and verify ``channel`` as passive at ``bitrate``.
 
     Returns True only when the configuration command succeeds and a fresh readback confirms the
     interface is UP at the exact bitrate, has listen-only ON, and is not BUS-OFF.  Any command,
-    readback, or parsing failure returns False.
+    readback, or parsing failure returns False. Optional restart timing and noninteractive privilege
+    are used by bounded service helpers; existing interactive callers retain their prior behavior.
     """
     try:
-        if not ip_up(channel, bitrate, listen_only=True):
+        kwargs = {}
+        if restart_ms is not None:
+            kwargs["restart_ms"] = restart_ms
+        if noninteractive:
+            kwargs["noninteractive"] = True
+        if not ip_up(channel, bitrate, listen_only=True, **kwargs):
             return False
         return _passive_readback_matches(channel, bitrate)
     except Exception:
@@ -305,7 +319,7 @@ def restore_passive(channel=DEFAULT_CHANNEL, bitrate=BITRATE_CCAN):
     return bring_up_passive(channel, bitrate)
 
 
-def restore_interface_state(state):
+def restore_interface_state(state, *, noninteractive=False):
     """Restore and verify one previously captured UP CAN interface configuration.
 
     This is intentionally narrower than a general network configurator. It accepts
@@ -320,12 +334,13 @@ def restore_interface_state(state):
         or state.bitrate is None
     ):
         return False
-    if not ip_up(
-        state.channel,
-        state.bitrate,
-        listen_only=state.listen_only,
-        restart_ms=state.restart_ms if state.restart_ms is not None else 0,
-    ):
+    kwargs = {
+        "listen_only": state.listen_only,
+        "restart_ms": state.restart_ms if state.restart_ms is not None else 0,
+    }
+    if noninteractive:
+        kwargs["noninteractive"] = True
+    if not ip_up(state.channel, state.bitrate, **kwargs):
         return False
     return state.same_configuration(interface_state(state.channel))
 
