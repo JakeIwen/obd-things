@@ -103,6 +103,14 @@ choose exactly which panels appear in a **Custom** profile. The selection and
 custom panel list use browser `localStorage`; they are per-device preferences
 and never write broker configuration or touch CAN.
 
+Cards for future metric roles are hidden until the broker catalog actually
+registers them; an entirely unregistered four-tire group collapses to one
+`0/4 REGISTERED` summary instead of repeating placeholder warnings. Registry
+membership is a metric-schema and evidence boundary, not a request for human
+approval before each read. Candidate metrics may appear in Diagnostics, but
+they remain withheld from driver-qualified hero values until their identity
+and scaling meet the recorded evidence policy.
+
 Automatic mode currently makes only these evidence-backed choices, and every
 state used for a layout must carry a finite nonnegative age no older than three
 seconds:

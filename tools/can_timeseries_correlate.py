@@ -92,10 +92,31 @@ _COMPACT_FRAME = re.compile(
 _REFERENCE_FIELD_RE = re.compile(
     r"^(byte|u16be|u16le|u32be|u32le):([0-9]{1,4})$"
 )
+_VAN_COMPUTE_JOB_ID_RE = re.compile(r"\d{8}T\d{6}Z-[0-9a-f]{8}")
+_VAN_COMPUTE_WIRE_NAME_RE = re.compile(r"\d{3}-cluster_wire\.jsonl")
 
 
 class CorrelateError(RuntimeError):
     """Raised for malformed evidence or a violated offline-analysis gate."""
+
+
+def _van_compute_job_root() -> Path:
+    job_id = os.environ.get("VAN_COMPUTE_JOB_ID", "")
+    if not _VAN_COMPUTE_JOB_ID_RE.fullmatch(job_id):
+        raise CorrelateError(
+            "van-compute operation requires a valid VAN_COMPUTE_JOB_ID"
+        )
+    try:
+        source_root = REPO.resolve(strict=True)
+    except OSError as exc:
+        raise CorrelateError(
+            "van-compute source directory is unavailable"
+        ) from exc
+    if not source_root.is_dir() or source_root.name != "source":
+        raise CorrelateError(
+            "van-compute operation requires a real staged source directory"
+        )
+    return source_root.parent
 
 
 @dataclass(frozen=True)
@@ -1309,7 +1330,12 @@ def analyze_streams(
     return correlator
 
 
-def _validate_inputs(wire: Path, captures: Sequence[Path]) -> None:
+def _validate_inputs(
+    wire: Path,
+    captures: Sequence[Path],
+    *,
+    allow_van_compute_staging: bool = False,
+) -> None:
     if not captures:
         raise CorrelateError("at least one candump input is required")
     if len(captures) > MAX_CAPTURE_FILES:
@@ -1330,10 +1356,34 @@ def _validate_inputs(wire: Path, captures: Sequence[Path]) -> None:
         if canonical in resolved:
             raise CorrelateError(f"duplicate input path: {path}")
         resolved.add(canonical)
-    if wire.name != "cluster_wire.jsonl":
+    valid_wire_name = wire.name == "cluster_wire.jsonl"
+    if allow_van_compute_staging:
+        job_root = _van_compute_job_root()
+        input_parent = wire.parent
+        try:
+            input_root = input_parent.resolve(strict=True)
+        except OSError as exc:
+            raise CorrelateError(
+                "van-compute input directory is unavailable"
+            ) from exc
+        if (
+            input_parent.is_symlink()
+            or not input_root.is_dir()
+            or input_root.name != "inputs"
+            or input_root.parent != job_root
+            or any(path.resolve(strict=True).parent != input_root for path in paths)
+        ):
+            raise CorrelateError(
+                "van-compute inputs must be real files directly below the "
+                "staged sibling inputs directory"
+            )
+        valid_wire_name = valid_wire_name or bool(
+            _VAN_COMPUTE_WIRE_NAME_RE.fullmatch(wire.name)
+        )
+    if not valid_wire_name:
         raise CorrelateError(
             "reference input must have the finalized recorder basename "
-            "cluster_wire.jsonl"
+            "cluster_wire.jsonl (or its validated van-compute staged name)"
         )
     for capture in captures:
         if not (
@@ -1347,15 +1397,50 @@ def _validate_inputs(wire: Path, captures: Sequence[Path]) -> None:
             )
 
 
-def _validated_output_path(path: Path) -> Path:
-    root = TMP_ROOT.resolve(strict=False)
+def _validated_output_path(
+    path: Path, *, allow_van_compute_result: bool = False
+) -> Path:
+    roots = [TMP_ROOT.resolve(strict=False)]
+    if allow_van_compute_result:
+        job_root = _van_compute_job_root()
+        if path.name != "report.json":
+            raise CorrelateError(
+                "van-compute result output must be named report.json"
+            )
+        result_parent = path.parent
+        try:
+            result_root = result_parent.resolve(strict=True)
+        except OSError as exc:
+            raise CorrelateError(
+                "van-compute result directory is unavailable"
+            ) from exc
+        if (
+            result_parent.is_symlink()
+            or not result_root.is_dir()
+            or result_root.name != "result"
+            or result_root.parent != job_root
+        ):
+            raise CorrelateError(
+                "van-compute result output requires the staged sibling result "
+                "directory"
+            )
+        roots.append(result_root)
+
     resolved = path.resolve(strict=False)
-    try:
-        inside = os.path.commonpath((str(root), str(resolved))) == str(root)
-    except ValueError:
-        inside = False
-    if not inside or resolved == root:
-        raise CorrelateError(f"output must be an explicit file below {TMP_ROOT}")
+    inside_root: Path | None = None
+    for root in roots:
+        try:
+            inside = os.path.commonpath((str(root), str(resolved))) == str(root)
+        except ValueError:
+            inside = False
+        if inside and resolved != root:
+            inside_root = root
+            break
+    if inside_root is None:
+        permitted = str(TMP_ROOT)
+        if allow_van_compute_result:
+            permitted += " or the validated van-compute result directory"
+        raise CorrelateError(f"output must be an explicit file below {permitted}")
     if path.suffix.lower() != ".json":
         raise CorrelateError("output filename must end in .json")
     if path.exists() or path.is_symlink():
@@ -1363,13 +1448,20 @@ def _validated_output_path(path: Path) -> Path:
     return resolved
 
 
-def _exclusive_write_json(path: Path, payload: dict[str, object]) -> None:
+def _exclusive_write_json(
+    path: Path,
+    payload: dict[str, object],
+    *,
+    allow_van_compute_result: bool = False,
+) -> None:
     encoded = (
         json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
     ).encode("utf-8")
     path.parent.mkdir(parents=True, exist_ok=True)
     # Recheck after mkdir in case an existing parent component was a symlink.
-    checked = _validated_output_path(path)
+    checked = _validated_output_path(
+        path, allow_van_compute_result=allow_van_compute_result
+    )
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
@@ -1404,8 +1496,13 @@ def run_analysis(
     reference_field: str,
     config: AnalysisConfig,
     decompressor: Decompressor | None = None,
+    allow_van_compute_staging: bool = False,
 ) -> dict[str, object]:
-    _validate_inputs(wire, captures)
+    _validate_inputs(
+        wire,
+        captures,
+        allow_van_compute_staging=allow_van_compute_staging,
+    )
     decoder = ReferenceDecoder(reference_field)
     reference_stats = StreamStats(str(wire), "none")
     capture_stats = [
@@ -1646,6 +1743,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="new JSON report path below repository tmp/; never overwritten",
     )
     parser.add_argument(
+        "--allow-van-compute-result",
+        action="store_true",
+        help=(
+            "allow report.json in the validated van-compute job result "
+            "directory"
+        ),
+    )
+    parser.add_argument(
         "captures",
         nargs="+",
         type=Path,
@@ -1674,8 +1779,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             top_count=args.top,
         )
         config.validate()
-        output = _validated_output_path(args.output)
-        _validate_inputs(args.wire, args.captures)
+        output = _validated_output_path(
+            args.output,
+            allow_van_compute_result=args.allow_van_compute_result,
+        )
+        _validate_inputs(
+            args.wire,
+            args.captures,
+            allow_van_compute_staging=args.allow_van_compute_result,
+        )
         input_paths = {
             args.wire.resolve(strict=True),
             *(path.resolve(strict=True) for path in args.captures),
@@ -1688,8 +1800,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             did=args.did,
             reference_field=args.reference_field,
             config=config,
+            allow_van_compute_staging=args.allow_van_compute_result,
         )
-        _exclusive_write_json(output, report)
+        _exclusive_write_json(
+            output,
+            report,
+            allow_van_compute_result=args.allow_van_compute_result,
+        )
     except CorrelateError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

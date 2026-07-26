@@ -622,7 +622,7 @@ selected reference against its exact global raw-frame sequence/timestamp/ID/payl
 29-bit and standard OBD diagnostic IDs by default so the diagnostic response cannot become a
 trivial perfect match. It requires at least 50 percent reference coverage and four distinct
 candidate values by default, then ranks by `R² × coverage` before the remaining deterministic
-tie-breakers. For the completed idling shakedown:
+tie-breakers. The portable direct invocation for the completed idling shakedown is:
 
 ```bash
 python3 tools/can_timeseries_correlate.py \
@@ -637,6 +637,25 @@ python3 tools/can_timeseries_correlate.py \
   tmp/captures/ccan/cluster-drive/cluster-drive-shakedown-20260726T050955Z/chunk_000000_full.candump.zst \
   tmp/captures/ccan/cluster-drive/cluster-drive-shakedown-20260726T050955Z/chunk_000001_full.candump.zst
 ```
+
+On vanpi, submit that heavy saved-log analysis through the fixed repository
+task instead of running it on the Pi:
+
+```bash
+python3 /home/pi/van_compute/scripts/pi_compute.py run \
+  can-timeseries-correlate-two-chunks \
+  --source-root /home/pi/dev/obd-things \
+  --input /home/pi/dev/obd-things/tmp/captures/ccan/cluster-drive/cluster-drive-shakedown-20260726T050955Z/cluster_wire.jsonl \
+  --input /home/pi/dev/obd-things/tmp/captures/ccan/cluster-drive/cluster-drive-shakedown-20260726T050955Z/chunk_000000_full.candump.zst \
+  --input /home/pi/dev/obd-things/tmp/captures/ccan/cluster-drive/cluster-drive-shakedown-20260726T050955Z/chunk_000001_full.candump.zst \
+  --wait --stdout
+```
+
+The task accepts exactly those three input roles and fixes DID `1000`, field
+`u16be:0`, the matching thresholds, and its declared `report.json` output; it
+does not accept caller-supplied arguments. The first successful report found
+`0x0FC` bytes 0–1 as the full-coverage unit-slope raw candidate. See the
+[`2026-07-26 broadcast correlation finding`](findings/promaster_2022/2026-07-26_cluster_did1000_broadcast_correlation.md).
 
 This tool performs no CAN, ADB, service, or network access. Its ranked rows are deliberately marked
 `candidate_only`, `physical_identity_verified: false`, `scale_verified: false`, and
@@ -739,6 +758,13 @@ bounded follow-ups.
 The [`2026-07-19 passive drive analysis`](findings/promaster_2022/2026-07-19_ccan_drive_signal_analysis.md)
 corrects CAN ID `0x101` from the old odometer hypothesis to a packed instantaneous-speed field,
 corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one known-speed reference.
+The later
+[`cluster DID 1000 broadcast correlation`](findings/promaster_2022/2026-07-26_cluster_did1000_broadcast_correlation.md)
+exact-linked all 623 idling Engine-speed-associated DID samples to the raw
+capture and ranked `0x0FC` bytes 0–1 (`u16be`) first: 100 percent coverage,
+R² 0.9998896, unit-slope affine fit, and 6.42 raw-count RMSE. This is a strong
+passive raw engine-speed candidate, but the low-excitation idle trace does not
+verify the `/4` rpm scale or authorize public telemetry promotion.
 
 - **Radar (0x2A)** confirms the radar project's story: `31 01 0250` → `7F3131` (wrong RID),
   alignment-gauge DIDs (`083E/083F/0846/0830/0860`) → `7F2231` "not supported". DID `0850`

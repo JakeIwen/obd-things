@@ -1339,6 +1339,9 @@ class WebTests(unittest.TestCase):
         self.assertIn(b"Only fresh, driver-qualified values", body)
         self.assertIn(b"Automatic bus switch", body)
         self.assertIn(b"Customize this device", body)
+        self.assertIn(b"Loading metric catalog", body)
+        self.assertNotIn(b"Not yet allowlisted", body)
+        self.assertNotIn(b"ALLOWLISTED TELEMETRY", body)
         connection.close()
 
         status, profiles = self.request("GET", "/profiles.js")
@@ -1362,7 +1365,11 @@ class WebTests(unittest.TestCase):
         self.assertIn(b'"pageshow"', app)
         self.assertIn(b"ALFA SCALE means", app)
         self.assertIn(b"/4 REGISTERED", app)
-        self.assertIn(b"NOT ALLOWLISTED", app)
+        self.assertIn(b"card.hidden = !definition", app)
+        self.assertIn(b'byId("tire-grid").hidden = registered === 0', app)
+        self.assertNotIn(b"Not yet allowlisted", app)
+        self.assertNotIn(b"allowlisted", app.lower())
+        self.assertIn(b"registered", app)
 
     @unittest.skipUnless(
         shutil.which("node"), "node is required for browser JS test"
@@ -1425,6 +1432,7 @@ vm.runInThisContext(definitionsOnly + `
     ignitionFromVehicleState,
     invalidateDisplayedFreshness,
     observationState,
+    renderHeroMetric,
     renderTires,
     renderedMarkers,
     renderedSnapshot: () => lastSnapshot,
@@ -1582,6 +1590,60 @@ const invalidAgeStates = invalidAgeInputs.map((age) => ({
   }),
 }));
 
+const missingDrive = dashboard.renderHeroMetric("rpm", [], {});
+const missingDriveRender = {
+  registered: Boolean(missingDrive.definition),
+  hidden: element("drive-rpm-card").hidden,
+};
+const candidateDriveCatalog = [{
+  name: "engine.rpm",
+  unit: "rpm",
+  stale_after_seconds: 3,
+  sources: [{quality: "candidate"}],
+}];
+const candidateDriveMetrics = {
+  "engine.rpm": {
+    available: true,
+    stale: false,
+    value: 1234,
+    unit: "rpm",
+    quality: "candidate",
+    age_ms: 100,
+  },
+};
+const candidateDrive = dashboard.renderHeroMetric(
+  "rpm",
+  candidateDriveCatalog,
+  candidateDriveMetrics,
+);
+const candidateDriveRender = {
+  hidden: element("drive-rpm-card").hidden,
+  heroReady: candidateDrive.state.heroReady,
+  value: element("drive-rpm").textContent,
+  status: element("drive-rpm-status").textContent,
+};
+const verifiedDriveCatalog = [{
+  ...candidateDriveCatalog[0],
+  sources: [{quality: "verified"}],
+}];
+const verifiedDriveMetrics = {
+  "engine.rpm": {
+    ...candidateDriveMetrics["engine.rpm"],
+    quality: "verified",
+  },
+};
+const verifiedDrive = dashboard.renderHeroMetric(
+  "rpm",
+  verifiedDriveCatalog,
+  verifiedDriveMetrics,
+);
+const verifiedDriveRender = {
+  hidden: element("drive-rpm-card").hidden,
+  heroReady: verifiedDrive.state.heroReady,
+  value: element("drive-rpm").textContent,
+  status: element("drive-rpm-status").textContent,
+};
+
 dashboard.resetDelivery();
 fakeMonotonicMs = 29000;
 const freshForAging = snapshot("aging", 1, now, 1, "fresh");
@@ -1653,7 +1715,14 @@ dashboard.renderTires(
 );
 const registeredStale = element("tires-state").textContent;
 dashboard.renderTires([], {});
-const notAllowlisted = element("tires-state").textContent;
+const emptyTires = {
+  state: element("tires-state").textContent,
+  note: element("tires-note").textContent,
+  gridHidden: element("tire-grid").hidden,
+  cardsHidden: positions.every(
+    (position) => element(`tire-${position}-card`).hidden,
+  ),
+};
 process.stdout.write(JSON.stringify({
   acceptedHttp,
   acceptedStream,
@@ -1669,12 +1738,15 @@ process.stdout.write(JSON.stringify({
   missingAgeHttp,
   missingAgeState,
   invalidAgeStates,
+  missingDriveRender,
+  candidateDriveRender,
+  verifiedDriveRender,
   locallyAged,
   lifecycleInvalidated,
   renderedMarkers: dashboard.renderedMarkers,
   alfaTires,
   registeredStale,
-  notAllowlisted,
+  emptyTires,
 }));
 """
         completed = subprocess.run(
@@ -1726,6 +1798,18 @@ process.stdout.write(JSON.stringify({
                 for state in result["invalidAgeStates"]
             )
         )
+        self.assertFalse(result["missingDriveRender"]["registered"])
+        self.assertTrue(result["missingDriveRender"]["hidden"])
+        self.assertFalse(result["candidateDriveRender"]["hidden"])
+        self.assertFalse(result["candidateDriveRender"]["heroReady"])
+        self.assertEqual(result["candidateDriveRender"]["value"], "\u2014")
+        self.assertIn(
+            "diagnostics only", result["candidateDriveRender"]["status"]
+        )
+        self.assertFalse(result["verifiedDriveRender"]["hidden"])
+        self.assertTrue(result["verifiedDriveRender"]["heroReady"])
+        self.assertEqual(result["verifiedDriveRender"]["value"], "1,234")
+        self.assertIn("VERIFIED", result["verifiedDriveRender"]["status"])
         self.assertTrue(result["locallyAged"]["metric"]["stale"])
         self.assertEqual(result["locallyAged"]["vehicle"]["state"], "unknown")
         self.assertEqual(result["locallyAged"]["vehicle"]["confidence"], "stale")
@@ -1746,7 +1830,13 @@ process.stdout.write(JSON.stringify({
             result["alfaTires"]["note"],
         )
         self.assertEqual(result["registeredStale"], "0/4 LIVE · 4/4 REGISTERED")
-        self.assertEqual(result["notAllowlisted"], "NOT ALLOWLISTED")
+        self.assertEqual(result["emptyTires"]["state"], "0/4 REGISTERED")
+        self.assertIn(
+            "No wheel-position pressure metrics",
+            result["emptyTires"]["note"],
+        )
+        self.assertTrue(result["emptyTires"]["gridHidden"])
+        self.assertTrue(result["emptyTires"]["cardsHidden"])
 
     @unittest.skipUnless(
         shutil.which("node"), "node is required for browser JS test"

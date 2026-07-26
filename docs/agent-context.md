@@ -43,6 +43,17 @@ service, cron, network, and vehicle state before acting.
 - Parked C-CAN diagnostic TX can wake the BCM, briefly power switched accessories, and boot the dashcam.
   The user approved low-frequency parked TX without a separate prompt, but it is still an observer and
   battery effect. Avoid gratuitous traffic. See `docs/bus-map.md` for verified wake behavior.
+- Standing owner authorization: Codex may run already-reviewed, physically addressed, non-mutating
+  data reads without requesting separate conversational approval each time. This covers UDS `19`,
+  `1A`, `22`, result-only `31 03`, and controller-defined read-only AlfaOBD observations, provided no
+  session-changing or session-maintenance preamble is required. A metric registry or controller
+  action list is a mechanical schema/scope guard, not a request for per-reading human approval. This
+  standing authorization does not authorize functional
+  broadcast, `10`, `3E`, reset, SecurityAccess, writes/coding/PROXI, DTC clear/control,
+  CommunicationControl, IOControl, or routine start/stop (`31 01`/`31 02`). Current vehicle-state,
+  physical-pair, interface, scope, rate, locking, and cleanup gates remain mandatory; this standing
+  authorization is not evidence that the van is parked, the engine is off, or the intended bus is
+  connected.
 
 ## Private environment context
 

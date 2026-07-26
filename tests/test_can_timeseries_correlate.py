@@ -922,6 +922,135 @@ class CliTests(unittest.TestCase):
                 ):
                     correlate._validated_output_path(tmp_root / "report.txt")
 
+    def test_van_compute_result_root_requires_exact_sandbox_and_job_id(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_root = root / "job" / "source"
+            result_root = root / "job" / "result"
+            wrong_result_root = root / "job" / "artifacts"
+            other_result_root = root / "other-job" / "result"
+            tmp_root = source_root / "tmp"
+            source_root.mkdir(parents=True)
+            result_root.mkdir(parents=True)
+            wrong_result_root.mkdir()
+            other_result_root.mkdir(parents=True)
+            output = result_root / "report.json"
+            with (
+                mock.patch.object(correlate, "REPO", source_root),
+                mock.patch.object(correlate, "TMP_ROOT", tmp_root),
+            ):
+                with mock.patch.dict(
+                    correlate.os.environ,
+                    {"VAN_COMPUTE_JOB_ID": "20260726T120000Z-abcdef12"},
+                    clear=False,
+                ):
+                    self.assertEqual(
+                        correlate._validated_output_path(
+                            output, allow_van_compute_result=True
+                        ),
+                        output.resolve(),
+                    )
+                    with self.assertRaisesRegex(
+                        correlate.CorrelateError, "below"
+                    ):
+                        correlate._validated_output_path(output)
+                    with self.assertRaisesRegex(
+                        correlate.CorrelateError, "named report.json"
+                    ):
+                        correlate._validated_output_path(
+                            result_root / "other.json",
+                            allow_van_compute_result=True,
+                        )
+                    with self.assertRaisesRegex(
+                        correlate.CorrelateError,
+                        "staged sibling result",
+                    ):
+                        correlate._validated_output_path(
+                            wrong_result_root / "report.json",
+                            allow_van_compute_result=True,
+                        )
+                    with self.assertRaisesRegex(
+                        correlate.CorrelateError,
+                        "staged sibling result",
+                    ):
+                        correlate._validated_output_path(
+                            other_result_root / "report.json",
+                            allow_van_compute_result=True,
+                        )
+
+                with mock.patch.dict(
+                    correlate.os.environ,
+                    {"VAN_COMPUTE_JOB_ID": "not-a-job"},
+                    clear=False,
+                ):
+                    with self.assertRaisesRegex(
+                        correlate.CorrelateError, "valid VAN_COMPUTE_JOB_ID"
+                    ):
+                        correlate._validated_output_path(
+                            output, allow_van_compute_result=True
+                        )
+
+    def test_van_compute_staged_wire_name_requires_job_context(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_root = root / "job" / "source"
+            input_root = root / "job" / "inputs"
+            other_input_root = root / "other-job" / "inputs"
+            source_root.mkdir(parents=True)
+            input_root.mkdir()
+            other_input_root.mkdir(parents=True)
+            wire = input_root / "000-cluster_wire.jsonl"
+            capture = input_root / "001-chunk_000000_full.candump.zst"
+            other_capture = (
+                other_input_root / "001-chunk_000000_full.candump.zst"
+            )
+            wire.touch()
+            capture.touch()
+            other_capture.touch()
+            with (
+                mock.patch.object(correlate, "REPO", source_root),
+                mock.patch.dict(
+                    correlate.os.environ,
+                    {"VAN_COMPUTE_JOB_ID": "20260726T120000Z-abcdef12"},
+                    clear=False,
+                ),
+            ):
+                correlate._validate_inputs(
+                    wire,
+                    [capture],
+                    allow_van_compute_staging=True,
+                )
+                with self.assertRaisesRegex(
+                    correlate.CorrelateError, "recorder basename"
+                ):
+                    correlate._validate_inputs(wire, [capture])
+                with self.assertRaisesRegex(
+                    correlate.CorrelateError,
+                    "staged sibling inputs",
+                ):
+                    correlate._validate_inputs(
+                        wire,
+                        [other_capture],
+                        allow_van_compute_staging=True,
+                    )
+
+            with (
+                mock.patch.object(correlate, "REPO", source_root),
+                mock.patch.dict(
+                    correlate.os.environ,
+                    {"VAN_COMPUTE_JOB_ID": "not-a-job"},
+                    clear=False,
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    correlate.CorrelateError, "valid VAN_COMPUTE_JOB_ID"
+                ):
+                    correlate._validate_inputs(
+                        wire,
+                        [capture],
+                        allow_van_compute_staging=True,
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()

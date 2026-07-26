@@ -416,7 +416,7 @@ function setCardState(id, state) {
 }
 
 function metricStatus(definition, metric, state) {
-  if (!definition) return "Not yet allowlisted";
+  if (!definition) return "Metric is not registered";
   if (!state.available) {
     return humanize(metric?.reason || "no cached sample");
   }
@@ -529,6 +529,14 @@ function renderHeroMetric(role, catalog, metrics) {
   const state = observationState(definition, metric);
   const cardId = `drive-${role}-card`;
   const unitId = `drive-${role}-unit`;
+  const card = byId(cardId);
+  card.hidden = !definition;
+  if (!definition) {
+    text(`drive-${role}`, "—");
+    if (byId(unitId)) text(unitId, "", "");
+    setCardState(cardId, "unavailable");
+    return {definition, state};
+  }
   if (state.heroReady) {
     text(`drive-${role}`, formatMetricValue(definition.name, metric.value));
     if (byId(unitId)) text(unitId, metric.unit || definition.unit, "");
@@ -582,6 +590,8 @@ function renderDrive(status, catalog, metrics) {
   const gear = renderHeroMetric("gear", catalog, metrics);
 
   const ignitionDefinition = findDefinition(catalog, DRIVE_METRICS.ignition);
+  const ignitionCard = byId("drive-ignition-card");
+  ignitionCard.hidden = !ignitionDefinition;
   const ignitionMetric = ignitionDefinition
     ? metrics[ignitionDefinition.name]
     : null;
@@ -589,7 +599,7 @@ function renderDrive(status, catalog, metrics) {
   // Never let a stale registered ignition observation be replaced by an
   // apparently authoritative status fallback. A fallback is useful only
   // before the dedicated metric has produced its first sample.
-  const stateFallback = ignitionMetric?.available
+  const stateFallback = !ignitionDefinition || ignitionMetric?.available
     ? null
     : ignitionFromVehicleState(status);
   let ignitionReady = false;
@@ -620,15 +630,31 @@ function renderDrive(status, catalog, metrics) {
     );
   }
 
+  const registered = [
+    speed.definition,
+    rpm.definition,
+    gear.definition,
+    ignitionDefinition,
+  ].filter(Boolean).length;
   const ready = [speed.state.heroReady, rpm.state.heroReady, gear.state.heroReady, ignitionReady]
     .filter(Boolean).length;
-  text("drive-freshness", ready ? `${ready}/4 LIVE` : "NO LIVE DATA");
+  text(
+    "drive-freshness",
+    ready === 4
+      ? "4/4 LIVE"
+      : (
+        ready
+          ? `${ready} LIVE · ${registered}/4 REGISTERED`
+          : `${registered}/4 REGISTERED`
+      ),
+  );
   byId("drive-freshness").dataset.state = ready === 4 ? "verified" : "partial";
   text(
     "drive-note",
     ready === 4
       ? "All drive essentials are fresh and driver-qualified."
       : (
+        `${registered}/4 drive metrics are registered. ` +
         "Only fresh, driver-qualified values are promoted here. " +
         "Candidate and raw diagnostic DIDs are held out."
       ),
@@ -663,7 +689,7 @@ function renderBattery(metrics) {
         ? `Cached value retained · last attempt: ${metric.last_acquisition_error.detail}`
         : "Latest broker-cached observation.",
     );
-    text("source-detail", metric.detail, "Verified allowlisted source.");
+    text("source-detail", metric.detail, "Verified registered source.");
   } else {
     text("voltage", "—");
     text("quality", String(metric.reason || "unavailable").toUpperCase());
@@ -734,6 +760,19 @@ function renderTire(position, catalog, metrics) {
   const definition = findDefinition(catalog, TIRE_METRICS[position]);
   const metric = definition ? metrics[definition.name] : null;
   const state = observationState(definition, metric);
+  const cardId = `tire-${position}-card`;
+  const card = byId(cardId);
+  card.hidden = !definition;
+  if (!definition) {
+    text(`tire-${position}`, "—");
+    text(`tire-${position}-unit`, "", "");
+    setCardState(cardId, "unavailable");
+    return {
+      registered: false,
+      live: false,
+      quality: state.quality,
+    };
+  }
   if (state.heroReady) {
     text(`tire-${position}`, formatMetricValue(definition.name, metric.value));
     text(`tire-${position}-unit`, metric.unit || definition.unit, "");
@@ -758,6 +797,7 @@ function renderTires(catalog, metrics) {
   const states = Object.keys(TIRE_METRICS)
     .map((position) => renderTire(position, catalog, metrics));
   const registered = states.filter((state) => state.registered).length;
+  byId("tire-grid").hidden = registered === 0;
   const live = states.filter((state) => state.live);
   const ready = live.length;
   const liveQualities = new Set(live.map((state) => state.quality));
@@ -779,7 +819,7 @@ function renderTires(catalog, metrics) {
           : (
             registered
               ? `0/4 LIVE · ${registered}/4 REGISTERED`
-              : "NOT ALLOWLISTED"
+              : "0/4 REGISTERED"
           )
       ),
   );
@@ -802,7 +842,7 @@ function renderTires(catalog, metrics) {
                 `${registered}/4 wheel-position metrics are registered; ` +
                 "stale, unavailable, or candidate pressures are not shown as live."
               )
-              : "No wheel-position pressure metrics are allowlisted yet."
+              : "No wheel-position pressure metrics are registered."
           )
       ),
   );
@@ -930,7 +970,7 @@ function render(snapshot) {
     "service-state",
     `Broker ${status.service ? "online" : "unknown"} · collector ` +
       `${collector.state || "unknown"} · ${catalog.length} metric` +
-      `${catalog.length === 1 ? "" : "s"} allowlisted`,
+      `${catalog.length === 1 ? "" : "s"} registered`,
   );
   setProfile();
 }
