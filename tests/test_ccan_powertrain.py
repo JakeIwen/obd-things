@@ -40,13 +40,13 @@ class DecodeTests(unittest.TestCase):
     def test_fixed_decodes(self):
         oil = ccan_powertrain.decode_frame(0x41D, b"\x00\x00\x36")
         self.assertEqual(oil.metric, "engine.oil_pressure")
-        self.assertEqual(oil.value, 216.0)
-        self.assertEqual(oil.unit, "kPa")
+        self.assertAlmostEqual(oil.value, 31.328151349725194)
+        self.assertEqual(oil.unit, "psi")
 
         coolant = ccan_powertrain.decode_frame(0x2ED, b"\x7e")
         self.assertEqual(coolant.metric, "engine.coolant_temperature")
-        self.assertEqual(coolant.value, 86.0)
-        self.assertEqual(coolant.unit, "°C")
+        self.assertAlmostEqual(coolant.value, 186.8)
+        self.assertEqual(coolant.unit, "°F")
 
         ignition = ccan_powertrain.decode_frame(0x2EF, b"\xff\x21")
         self.assertIs(ignition.value, True)
@@ -91,8 +91,14 @@ class DecodeTests(unittest.TestCase):
         )
         by_metric = {item.metric: item for item in observations}
 
-        self.assertEqual(by_metric["engine.oil_pressure"].value, 212.0)
-        self.assertEqual(by_metric["engine.coolant_temperature"].value, 86.0)
+        self.assertAlmostEqual(
+            by_metric["engine.oil_pressure"].value,
+            30.748000398804357,
+        )
+        self.assertAlmostEqual(
+            by_metric["engine.coolant_temperature"].value,
+            186.8,
+        )
         self.assertIs(by_metric["vehicle.ignition_on"].value, True)
         self.assertEqual(fake.channel, ("can0",))
         self.assertTrue(fake.closed)

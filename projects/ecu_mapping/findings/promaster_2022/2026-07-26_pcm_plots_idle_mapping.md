@@ -21,7 +21,8 @@ These two fields are now allowlisted receive-only telemetry sources. They do
 not require AlfaOBD, a diagnostic session, or CAN transmission during a drive.
 Their dashboard quality is `observed_alfa_scale`: the identity and rendering
 are grounded in this current-vehicle Alfa/wire experiment, not in an ODX
-definition.
+definition. The canonical decode remains kPa/°C, while user-facing telemetry
+publishes the converted values in psi/°F.
 
 The current-engine-torque result is promising but is not promoted. PCM DID
 `06DA` is an exact signed big-endian value rendered as raw x 0.04 Nm. Passive
@@ -171,11 +172,13 @@ completed normally.
 ## Utility and next step
 
 Oil pressure and coolant temperature can now be displayed continuously from
-passive C-CAN while the vehicle is awake. Torque remains available as an exact
+passive C-CAN while the vehicle is awake. The telemetry presentation uses psi
+and °F. Torque remains available as an exact
 Alfa-associated PCM DID and has a strong passive lead, but the next loaded
 drive must establish the byte-wrap/mode rule. Engine RPM should be recorded in
 the same synchronized run so contemporaneous, qualified torque and RPM can
-eventually produce explicitly labeled ECU-estimated crankshaft power.
+eventually produce explicitly labeled ECU-estimated crankshaft power. Once
+qualified, torque telemetry will convert the canonical Nm decode to lb-ft.
 
 Engine-oil temperature was not among this active eleven-row Plots set and
 remains unmapped. The complete 193-row catalog makes it straightforward to

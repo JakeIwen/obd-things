@@ -148,6 +148,10 @@ chassis-dynamometer result. Torque and RPM must also be contemporaneous and
 fresh; combining stale or skewed samples can create false power spikes even
 when both individual scales are correct.
 
+The public dashboard follows the owner's US-unit preference: publish qualified
+torque in lb-ft (`lb_ft = Nm x 0.737562149`) and power in SAE horsepower.
+Keep the canonical ECU decode in Nm in findings and raw-evidence tools.
+
 ## Acquisition and verification order
 
 AlfaOBD has two separate selector surfaces. Scalar values are under

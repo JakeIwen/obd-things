@@ -33,6 +33,7 @@ FILTER_IDS = (
     COOLANT_TEMPERATURE_ID,
     IGNITION_ON_ID,
 )
+KPA_TO_PSI = 0.14503773773020923
 
 
 @dataclass(frozen=True)
@@ -48,22 +49,28 @@ class PassiveObservation:
 def decode_frame(can_id: int, data: bytes) -> PassiveObservation | None:
     """Decode one exact allowlisted C-CAN frame, or return ``None``."""
     if can_id == OIL_PRESSURE_ID and len(data) >= 3:
+        native_kpa = float(data[2] * 4)
         return PassiveObservation(
             metric="engine.oil_pressure",
-            value=float(data[2] * 4),
-            unit="kPa",
+            value=native_kpa * KPA_TO_PSI,
+            unit="psi",
             source="ccan.broadcast.0x41d",
             quality="observed_alfa_scale",
-            detail="0x41D byte 2 x 4 kPa",
+            detail=(
+                "0x41D byte 2 x 4 kPa, converted to psi for telemetry"
+            ),
         )
     if can_id == COOLANT_TEMPERATURE_ID and data:
+        native_celsius = float(data[0] - 40)
         return PassiveObservation(
             metric="engine.coolant_temperature",
-            value=float(data[0] - 40),
-            unit="°C",
+            value=native_celsius * 9.0 / 5.0 + 32.0,
+            unit="°F",
             source="ccan.broadcast.0x2ed",
             quality="observed_alfa_scale",
-            detail="0x2ED byte 0 - 40 °C",
+            detail=(
+                "0x2ED byte 0 - 40 °C, converted to °F for telemetry"
+            ),
         )
     if can_id == IGNITION_ON_ID:
         return PassiveObservation(

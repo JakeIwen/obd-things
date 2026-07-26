@@ -50,8 +50,8 @@ The initial drive-publisher vocabulary is intentionally narrow:
 | Metric | Source | Type/unit | Quality |
 |---|---|---|---|
 | `battery.voltage` | `cluster.did.1004` | number, `V` | `observed_alfa_scale` |
-| `engine.oil_pressure` | `ccan.broadcast.0x41d` | number, `kPa` | `observed_alfa_scale` |
-| `engine.coolant_temperature` | `ccan.broadcast.0x2ed` | number, `°C` | `observed_alfa_scale` |
+| `engine.oil_pressure` | `ccan.broadcast.0x41d` | number, `psi` | `observed_alfa_scale` |
+| `engine.coolant_temperature` | `ccan.broadcast.0x2ed` | number, `°F` | `observed_alfa_scale` |
 | `vehicle.ignition_on` | `ccan.broadcast.0x2ef` | boolean, `boolean` | `verified` |
 | `diagnostics.cluster.did.1000.raw` | `cluster.did.1000` | integer, `raw_u16_be` | `candidate` |
 | `diagnostics.cluster.did.1002.raw` | `cluster.did.1002` | integer, `raw_u8` | `candidate` |
@@ -85,14 +85,24 @@ receive-only sources:
 
 | Metric | Passive C-CAN source | Decode | Quality |
 |---|---|---|---|
-| `engine.oil_pressure` | `0x41D` byte 2 | raw x 4 kPa | `observed_alfa_scale` |
-| `engine.coolant_temperature` | `0x2ED` byte 0 | raw - 40 °C | `observed_alfa_scale` |
+| `engine.oil_pressure` | `0x41D` byte 2 | native raw x 4 kPa, published as psi | `observed_alfa_scale` |
+| `engine.coolant_temperature` | `0x2ED` byte 0 | native raw - 40 °C, published as °F | `observed_alfa_scale` |
 
 Both are in the public registry and the passive collector reads them only
 after its normal C-CAN interface and identity gates pass. They require no
 per-reading approval and send no CAN traffic. The exact current-vehicle
 correlation is recorded in the
 [`PCM Plots idle finding`](../ecu_mapping/findings/promaster_2022/2026-07-26_pcm_plots_idle_mapping.md).
+
+### Presentation units
+
+User-facing telemetry defaults to US customary units: pressure in psi,
+temperature in °F, road speed in mph, and torque in lb-ft. Native CAN/ECU
+decodes remain documented in their original kPa, °C, km/h, and Nm units so
+the evidence and conversions stay reproducible. When torque is promoted, its
+qualified native Nm value must be multiplied by `0.737562149` before
+publication as lb-ft. Raw diagnostic metrics remain raw and are never
+unit-converted.
 
 Engine-oil temperature, loaded torque, and derived power are not yet
 qualified. Their evidence, exact OEM pressure/thermostat context, alert-design

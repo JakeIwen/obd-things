@@ -178,6 +178,14 @@ class DidCliSafetyTests(unittest.TestCase):
             results = root / "results.jsonl"
             with (
                 mock.patch.object(did_sweep, "preflight", return_value=[]),
+                mock.patch.object(
+                    did_sweep.diagnostic_safety,
+                    "acquire_channel_lock",
+                    return_value=mock.sentinel.lock,
+                ),
+                mock.patch.object(
+                    did_sweep.diagnostic_safety, "release_channel_lock"
+                ) as release,
                 mock.patch.object(did_sweep, "output_paths", return_value=(str(summary), str(results))),
                 mock.patch.object(did_sweep.uds, "open_module_socket", return_value=sock),
                 mock.patch.object(did_sweep.uds, "drain"),
@@ -201,6 +209,7 @@ class DidCliSafetyTests(unittest.TestCase):
             self.assertEqual(payload["request_attempts"]["did_reads"], 1)
             self.assertEqual(payload["responses_received"]["did_reads"], 0)
             self.assertNotIn("did_reads", payload["transmit_counts"])
+            release.assert_called_once_with(mock.sentinel.lock)
 
     def test_failed_result_write_is_not_counted_as_written(self):
         real_open = open
@@ -222,6 +231,14 @@ class DidCliSafetyTests(unittest.TestCase):
 
             with (
                 mock.patch.object(did_sweep, "preflight", return_value=[]),
+                mock.patch.object(
+                    did_sweep.diagnostic_safety,
+                    "acquire_channel_lock",
+                    return_value=mock.sentinel.lock,
+                ),
+                mock.patch.object(
+                    did_sweep.diagnostic_safety, "release_channel_lock"
+                ) as release,
                 mock.patch.object(
                     did_sweep, "output_paths", return_value=(str(summary), str(results))
                 ),
@@ -250,6 +267,7 @@ class DidCliSafetyTests(unittest.TestCase):
         self.assertEqual(payload["request_attempts"]["did_reads"], 1)
         self.assertEqual(payload["results_written"], 0)
         self.assertIn("results write fixture", payload["fatal_error"])
+        release.assert_called_once_with(mock.sentinel.lock)
 
     def test_initial_summary_write_failure_still_restores_releases_and_publishes_failure(self):
         original_atomic_json = did_sweep.atomic_json
@@ -391,6 +409,14 @@ class DidCliSafetyTests(unittest.TestCase):
             with (
                 mock.patch.object(did_sweep, "preflight", return_value=[]),
                 mock.patch.object(
+                    did_sweep.diagnostic_safety,
+                    "acquire_channel_lock",
+                    return_value=mock.sentinel.lock,
+                ),
+                mock.patch.object(
+                    did_sweep.diagnostic_safety, "release_channel_lock"
+                ) as release,
+                mock.patch.object(
                     did_sweep, "output_paths", return_value=(str(summary), str(results))
                 ),
                 mock.patch.object(did_sweep.uds, "open_module_socket", return_value=sock),
@@ -422,6 +448,7 @@ class DidCliSafetyTests(unittest.TestCase):
         self.assertEqual(report["responses_received"]["tester_present"], 1)
         self.assertEqual(report["request_attempts"]["did_reads"], 0)
         self.assertIn("explicit session is uncertain", report["fatal_error"])
+        release.assert_called_once_with(mock.sentinel.lock)
 
 
 if __name__ == "__main__":

@@ -137,13 +137,13 @@ IGNITION_ON = MetricDefinition(
 
 ENGINE_OIL_PRESSURE = MetricDefinition(
     name="engine.oil_pressure",
-    unit="kPa",
+    unit="psi",
     value_type="number",
     stale_after_seconds=3.0,
     passive_min_interval_seconds=0.0,
     wake_min_interval_seconds=0.0,
     minimum=0.0,
-    maximum=1020.0,
+    maximum=150.0,
     sources=(
         SourceDefinition(
             name="ccan.broadcast.0x41d",
@@ -154,7 +154,8 @@ ENGINE_OIL_PRESSURE = MetricDefinition(
             provenance=(
                 "projects/ecu_mapping/findings/promaster_2022/"
                 "2026-07-26_pcm_plots_idle_mapping.md; "
-                "0x41D byte 2 mirrors PCM DID 022A raw, x 4 kPa"
+                "0x41D byte 2 mirrors PCM DID 022A raw, native x 4 kPa; "
+                "telemetry converts kPa to psi"
             ),
             side_effects="none; observation is receive-only",
             publisher_allowed=True,
@@ -165,13 +166,13 @@ ENGINE_OIL_PRESSURE = MetricDefinition(
 
 ENGINE_COOLANT_TEMPERATURE = MetricDefinition(
     name="engine.coolant_temperature",
-    unit="°C",
+    unit="°F",
     value_type="number",
     stale_after_seconds=3.0,
     passive_min_interval_seconds=0.0,
     wake_min_interval_seconds=0.0,
     minimum=-40.0,
-    maximum=215.0,
+    maximum=419.0,
     sources=(
         SourceDefinition(
             name="ccan.broadcast.0x2ed",
@@ -182,7 +183,8 @@ ENGINE_COOLANT_TEMPERATURE = MetricDefinition(
             provenance=(
                 "projects/ecu_mapping/findings/promaster_2022/"
                 "2026-07-26_pcm_plots_idle_mapping.md; "
-                "0x2ED byte 0 - 40 °C, exactly linked to PCM DID 011D"
+                "0x2ED byte 0 - 40 °C, exactly linked to PCM DID 011D; "
+                "telemetry converts °C to °F"
             ),
             side_effects="none; observation is receive-only",
             publisher_allowed=True,

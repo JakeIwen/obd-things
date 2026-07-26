@@ -167,10 +167,12 @@ class SourceTests(unittest.TestCase):
             METRICS["engine.oil_pressure"].sources[0].name,
             "ccan.broadcast.0x41d",
         )
+        self.assertEqual(METRICS["engine.oil_pressure"].unit, "psi")
         self.assertEqual(
             METRICS["engine.coolant_temperature"].sources[0].name,
             "ccan.broadcast.0x2ed",
         )
+        self.assertEqual(METRICS["engine.coolant_temperature"].unit, "°F")
 
     def test_passive_awake_read_takes_only_observer_lock(self):
         backend = FakeBackend()
@@ -1038,15 +1040,15 @@ class BrokerTests(unittest.TestCase):
                 return (
                     SimpleNamespace(
                         metric="engine.oil_pressure",
-                        value=208.0,
-                        unit="kPa",
+                        value=30.2,
+                        unit="psi",
                         source="ccan.broadcast.0x41d",
                         quality="observed_alfa_scale",
                     ),
                     SimpleNamespace(
                         metric="engine.coolant_temperature",
-                        value=86.0,
-                        unit="°C",
+                        value=186.8,
+                        unit="°F",
                         source="ccan.broadcast.0x2ed",
                         quality="observed_alfa_scale",
                     ),
@@ -1070,11 +1072,11 @@ class BrokerTests(unittest.TestCase):
 
         self.assertEqual(broker._collect_passive_powertrain(ccan), 2)
         self.assertEqual(
-            broker.metric_response("engine.oil_pressure")["value"], 208.0
+            broker.metric_response("engine.oil_pressure")["value"], 30.2
         )
         self.assertEqual(
             broker.metric_response("engine.coolant_temperature")["value"],
-            86.0,
+            186.8,
         )
 
 
