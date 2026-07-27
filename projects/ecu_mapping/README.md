@@ -523,6 +523,18 @@ parked support check can read exactly the thirteen reviewed ZF9HP candidates
 without traversing the large gaps between them. It remains dry-run by default,
 requires the normal parked/live gates for `--execute`, and sends no diagnostic
 session change unless one is separately specified and confirmed.
+After that read, decode its checkpointed JSONL without touching the vehicle:
+
+```bash
+python3 tools/zf9hp_results.py \
+  tmp/inventories/tcm/dids_<stamp>.results.jsonl
+```
+
+The default report is `tmp/ecu_mapping/zf9hp_support_decode.json`. It preserves
+AlfaOBD's native values and also supplies display values in °F, lb-ft, mph, and
+psi where applicable. A positive response establishes installed-TCM support;
+the report deliberately retains the separate physical-plausibility gate before
+any decoded signal is allowlisted for the dashboard.
 
 Catalog campaign `pcm-plots-catalog-20260726T224830Z` completed a matching
 forward/reverse 193-row traversal without manual reconciliation. The separate
