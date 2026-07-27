@@ -89,6 +89,53 @@ silently renamed as the physical EOT sensor confirmed by OEM documentation.
 Each scalar still requires an exact-label one-at-a-time Plots capture,
 simultaneous passive wire evidence, and direct-read/physical validation.
 
+## TCM Plots catalog preparation — 2026-07-27
+
+The installed TCM's live `F1A5=5285040D3D` is an exact catalog match for
+ZF9HP subtype Device 8962 (`Var.1`). Its common `ZF9HP` Plots parameter group
+is `Param_devices.Device_ID=194`, with 56 ordered
+`Devices_params_units` rows. The same Climate-selector cross-check used above
+supports these as UI navigation priors, not wire mappings.
+
+The existing current-vehicle UI capture supplies the exact connected-profile
+guard, including its unusual double space:
+`Connected to ZF 948TE 9 speed  Automatic Transmission`. The new guarded
+discovery plan is
+[`alfaobd_tcm_plots_catalog.json`](../../configs/alfaobd_tcm_plots_catalog.json).
+It expects 56 rows from `Vehicle speed, km/h` through
+`Gear disengagement 2, mbar`, but deliberately has no expected catalog hash
+until the live selector has been inventoried and reviewed.
+
+The high-value ordered candidates are:
+
+| UI order key | catalog candidate | unit |
+|---:|---|---|
+| 6 | Engine speed | rpm |
+| 7 | Torque Converter Slip Speed | rpm |
+| 8 | Turbine speed | rpm |
+| 9 | Gearbox output revs | rpm |
+| 10 | Vehicle Speed Calculated By Output Shaft Speed | km/h |
+| 15 | TCU chip temperature | °C |
+| 16 | Gearbox oil temperature | °C |
+| 17 | Actual Crankshaft Torque | Nm |
+| 18 | Crankshaft Torque, without TCU Torque Requests | Nm |
+| 19 | Target Crankshaft Torque | Nm |
+| 20 | Transmission Torque Intervention | Nm |
+| 21 | Maximum Engine Torque Requested By Transmission | Nm |
+| 22 | Slow Path Transmission Torque Intervention | Nm |
+
+This 56-row catalog does not expose a current-gear scalar. Current/target gear
+remain separate System-status candidates. As with the PCM catalog, order keys
+are not DIDs, and even an exact subtype match does not validate AlfaOBD's
+rendered scaling. The prior Info artifact contains impossible historical event
+snapshot values such as `62988 Nm`; the live selector campaign must use
+current varying values plus the exact Debug request/response cycle.
+
+The tablet's saved `ZF9HP.dat` cannot fill this gap. Its 16 opaque series have
+no timestamps or labels, and the 2026-07-22 copy was a mechanical repetition
+of its baseline. The tablet's cumulative labeled `Gauges_Data.csv` contains
+no ZF9HP section at all; its 254 sections are 2022–2024 old-vehicle data.
+
 ## 2022+ ProMaster profile/address candidates
 
 The table below summarizes model-code-88 choices. A 29-bit target means the `ECUUnits.ecuaddress`
@@ -335,20 +382,18 @@ provenance boundaries prevent old labels or scaling from leaking into the 2022 m
 
 ## Next evidence-producing work
 
-1. The separate fail-closed Plots catalog supervisor is now implemented as
-   `tools/alfaobd_plots_catalog.py`; the discovery plan is
-   `projects/ecu_mapping/configs/alfaobd_pcm_plots_catalog.json`. It validates
-   the stopped Plots page, inventories exact live strings in both directions
-   with overlapping bounded swipes and stable parsed-dialog pairs, never taps a
-   row/OK/scan, and cancels with BACK. The first live PCM inventory is still
-   pending: verify the 193-row count/order and required labels, review the
-   output, then pin the exact catalog hash. Do not treat the existing **System
-   status → Select parameters to monitor** walker as the same surface.
-2. After that inventory matches the 193-row Device-190 prior, capture one Plots scalar at a time,
-   beginning with keys 7, 13, 15–20, 44, 45, and 47. Record Debug Data plus a growing
-   `Gauges_Data.csv` while PCAN passively records full C-CAN. Keys 188, 191, and 192 are useful later
-   transmission candidates. Key 20 is literally `VVT Oil Temperature`, not a proven physical EOT
-   label.
+1. The PCM Plots catalog, idle campaign, and loaded drive are complete. They
+   resolved oil pressure, coolant temperature, engine RPM, diagnostic current
+   torque, and VVT oil temperature; do not repeat them merely to rediscover
+   those mappings. The PCM profile rejected its transmission-temperature and
+   turbine-speed requests, so those targets now belong to the TCM campaign.
+2. On the next connected-tablet session, run the guarded TCM Plots inventory
+   using `projects/ecu_mapping/configs/alfaobd_tcm_plots_catalog.json`.
+   Review its exact 56-row output and clean completion, then pin the live
+   catalog hash before selecting gauges. Begin with gearbox oil temperature,
+   turbine/output speed, converter slip, engine speed, and actual/target
+   crankshaft torque. Record Debug Data plus a growing `Gauges_Data.csv` while
+   PCAN passively records full C-CAN.
 3. Use the existing Status singleton path only for discrete groups such as dual-stage oil-pump and
    fan desired state. It writes profile Info evidence rather than the Plots Gauges CSV.
 4. The read-only `tools/alfaobd_catalog.py` export now preserves the model-code-88 ECU rows, exact

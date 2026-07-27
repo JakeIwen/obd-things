@@ -920,13 +920,19 @@ verify the `/4` rpm scale or authorize public telemetry promotion.
    under the active lock, so do not pair it with the separate passive recorder on the same PCAN.
    Preserve the validated singleton Status workflow for its bounded labels. The owner-priority PCM
    Plots catalog and simultaneous eleven-gauge idle mapping are complete: passive `0x41D` oil
-   pressure and `0x2ED` coolant are telemetry sources, while `0x100` torque needs loaded wrap/mode
-   evidence and engine-oil temperature remains unmapped. Do not repeat the idle campaign merely to
+   pressure and `0x2ED` coolant are telemetry sources. Loaded evidence now supports a packed
+   `0x100` torque-stage field, but its exact semantic stage remains unresolved and engine-oil
+   temperature remains unmapped. Do not repeat the idle campaign merely to
    rediscover those DIDs. The separate scalar tool remains an offline pin-validation scaffold and
    its `run` path is intentionally disabled; use it only after implementing and reviewing a genuine
    one-at-a-time need. Also use
    passenger-door plus parking-brake discriminators to refine the passive and BCM candidates.
    Alfa's shifter `Drive` rendering in Park and TCM `Brake switch` watcher remain explicitly
-   invalid.
+   invalid. The next transmission session is now bounded by the prepared
+   [`ZF9HP Plots catalog plan`](configs/alfaobd_tcm_plots_catalog.json):
+   inventory 56 rows first, then prioritize gearbox-oil temperature,
+   turbine/output speed, converter slip, and the torque-stage gauges. The
+   saved `ZF9HP.dat` is unlabeled/untimestamped and the historical Gauges CSV
+   has no ZF9HP section, so neither substitutes for that live inventory.
 6. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps
    (`../../docs/bus-map.md`, `../../lib/modules.py`, project DID maps) per the maintenance rule.

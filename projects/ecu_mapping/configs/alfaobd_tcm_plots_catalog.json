@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "campaign_id": "tcm-plots-catalog",
+  "module_key": "tcm",
+  "expected_app_version": "2.4.4.0",
+  "expected_screen": {
+    "width": 800,
+    "height": 1280,
+    "rotation": 0
+  },
+  "expected_connection_texts": [
+    "Connected to ZF 948TE 9 speed  Automatic Transmission",
+    "Status: Connected to ZF 948TE 9 speed  Automatic Transmission"
+  ],
+  "expected_catalog_count": 56,
+  "expected_first_label": "Vehicle speed, km/h",
+  "expected_last_label": "Gear disengagement 2, mbar",
+  "required_labels": [
+    "Engine speed, rpm",
+    "Torque Converter Slip Speed, rpm",
+    "Turbine speed, rpm",
+    "Gearbox output revs, rpm",
+    "Vehicle Speed Calculated By Output Shaft Speed, km/h",
+    "TCU chip temperature, °C",
+    "Gearbox oil temperature, °C",
+    "Actual Crankshaft Torque, Nm",
+    "Crankshaft Torque, without TCU Torque Requests, Nm",
+    "Target Crankshaft Torque, Nm",
+    "Transmission Torque Intervention, Nm",
+    "Maximum Engine Torque Requested By Transmission, Nm"
+  ],
+  "max_pages": 48,
+  "swipe_duration_ms": 500,
+  "settle_seconds": 0.75,
+  "min_free_bytes": 536870912,
+  "screenshot_each_page": false
+}

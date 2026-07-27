@@ -240,6 +240,26 @@ class PlanTests(unittest.TestCase):
             "e1d5e74db311b13a6156cdaa30b0126a0789a502aaaffeaa36be33bca10ef3de",
         )
 
+    def test_tracked_tcm_catalog_plan_is_valid_but_unpinned(self):
+        plan = plots.load_plan(
+            REPO
+            / "projects"
+            / "ecu_mapping"
+            / "configs"
+            / "alfaobd_tcm_plots_catalog.json"
+        )
+        self.assertEqual(plan.module_key, "tcm")
+        self.assertEqual(plan.expected_catalog_count, 56)
+        self.assertEqual(plan.expected_first_label, "Vehicle speed, km/h")
+        self.assertEqual(plan.expected_last_label, "Gear disengagement 2, mbar")
+        self.assertIn("Gearbox oil temperature, °C", plan.required_labels)
+        self.assertIn("Actual Crankshaft Torque, Nm", plan.required_labels)
+        self.assertIn(
+            "Connected to ZF 948TE 9 speed  Automatic Transmission",
+            plan.expected_connection_texts,
+        )
+        self.assertIsNone(plan.expected_catalog_sha256)
+
     def test_plan_is_offline_and_creates_no_output(self):
         class ExplodingRunner:
             def run(self, *args, **kwargs):

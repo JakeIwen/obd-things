@@ -38,8 +38,9 @@ not merely an oil-pressure switch. The PCM is already live-verified on C-CAN at
 `18DA10F1 -> 18DAF110`, including its fixed-DLC-8 padded legacy `10 92`
 session behavior. The TCM at `18DA18F1 -> 18DAF118` has an engine-torque and
 transmission-thermal candidate vocabulary in its selected Alfa profile. The
-next high-value campaign should therefore be a small, label-targeted PCM/TCM
-AlfaOBD correlation, not a broad blind DID sweep.
+next high-value campaign is now narrowed to the TCM: inventory its 56-row live
+Plots selector, then correlate a small owner-priority gauge set. It is not a
+broad blind DID sweep.
 
 ## Engine-oil pressure: exact OEM context
 
@@ -165,6 +166,46 @@ The public dashboard follows the owner's US-unit preference: publish qualified
 torque in lb-ft (`lb_ft = Nm x 0.737562149`) and power in SAE horsepower.
 Keep the canonical ECU decode in Nm in findings and raw-evidence tools.
 
+## Transmission temperature: exact OEM context
+
+The exact-vehicle 948TE/9HP48 service corpus confirms that this is a real sump
+measurement, not a generic estimated-temperature label. The Transmission Oil
+Temperature Sensor:
+
+- is located in the transmission sump;
+- is exposed to the factory scan tool as `Oil Temperature Sensor`;
+- is a two-wire negative-temperature-coefficient thermistor supplied by the
+  TCM; and
+- is integral to the transmission internal wire harness.
+
+The P0711 rationality monitor rejects a measured change greater than 10 °C in
+less than one second. That is a useful future telemetry plausibility gate:
+an isolated jump of that size should be marked suspect rather than rendered as
+real fluid heating. The source's parenthetical Fahrenheit value for that
+10 °C delta is internally inconsistent, so it is intentionally not reused.
+
+The OEM procedures provide operating windows but do **not** reveal the
+calibrated over-temperature threshold:
+
+- the transmission verification test warms the fluid to 43 °C / 110 °F;
+- the adaptation drive requires 50–110 °C / 122–230 °F; and
+- DTC P176D sets only when measured oil temperature exceeds an undisclosed
+  calibrated value for an undisclosed calibrated time.
+
+Therefore 122–230 °F is a service-procedure/adaptation window, not a blanket
+dashboard “safe range,” and 230 °F must not silently become a redline. Until an
+authoritative threshold is found, the dashboard should show the measured value
+and trend, identify the OEM adaptation window as context only, and separately
+surface a real P176D/warning-lamp state if available.
+
+OEM provenance:
+
+- `~/dev/ram_2022_GAS/vehicle/all_diagnostic_trouble_codes_(_dtc_)/testing_and_inspection/p_code_charts/p0713/p0713-00/transmission_control_module_(tcm)_(948te/9hp48)_-_transmission_fluid_temperature_sensor_"a"_circuit_high.html`;
+- `~/dev/ram_2022_GAS/vehicle/all_diagnostic_trouble_codes_(_dtc_)/testing_and_inspection/p_code_charts/p0711/p0711-00/transmission_control_module_(tcm)_(948te/9hp48)_-_transmission_fluid_temperature_sensor_"a"_circuit_range/performance.html`;
+- `~/dev/ram_2022_GAS/vehicle/all_diagnostic_trouble_codes_(_dtc_)/testing_and_inspection/verification_tests/transmission_verification_test_-_948te_9hp48.html`;
+- `~/dev/ram_2022_GAS/vehicle/powertrain_management/transmission_control_systems/relays_and_modules_-_transmission_and_drivetrain/relays_and_modules_-_a/t/control_module/testing_and_inspection/programming_and_relearning/948te/9hp48_tcm_adaptation.html`; and
+- `~/dev/ram_2022_GAS/vehicle/all_diagnostic_trouble_codes_(_dtc_)/testing_and_inspection/p_code_charts/p176d/p176d-00/transmission_control_module_(tcm)_(948te/9hp48)_-_transmission_fluid_temperature_too_high.html`.
+
 ## Acquisition and verification order
 
 AlfaOBD has two separate selector surfaces. Scalar values are under
@@ -280,12 +321,16 @@ sensor.
 4. Use the existing System-status singleton path separately for discrete
    `Dual Stage Oil Pump Desired State` and fan desired/relay groups recorded in
    the current Info artifact.
-5. Inventory the live TCM selector first, retaining the existing warning that
-   its chosen Alfa profile is a generic alias and has already produced an
-   impossible torque rendering. Then run a small one-at-a-time campaign for
-   actual/pre-intervention/target crankshaft torque, gearbox oil temperature,
-   turbine speed, torque-converter slip, current/target gear, and torque
-   intervention.
+5. Inventory the live TCM selector with
+   `projects/ecu_mapping/configs/alfaobd_tcm_plots_catalog.json`. The APK prior
+   predicts 56 rows, and the current-vehicle UI already pins the exact
+   connected profile text. High-value UI order keys are 6 engine speed, 7
+   converter slip, 8 turbine speed, 9 gearbox output speed, 15 TCU chip
+   temperature, 16 gearbox oil temperature, and 17–22 torque quantities.
+   Current/target gear are not in this Plots catalog and remain separate
+   System-status candidates. Retain the warning that a historical diagnostic
+   event snapshot from this profile rendered impossible torque values; exact
+   subtype selection alone does not validate scaling.
 6. Reproduce each resolved request using a bounded physical read to the
    verified ECU endpoint and required session behavior. Do not promote a
    label merely because AlfaOBD rendered it.
