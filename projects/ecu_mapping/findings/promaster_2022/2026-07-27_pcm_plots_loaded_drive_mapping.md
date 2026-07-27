@@ -109,7 +109,7 @@ also require the exact Alfa/raw relationship and independent field evidence.
 | `022A` oil pressure | `0x41D` byte 2; R² 0.9995118, 1,351/1,356 samples, 0.294 raw-count RMSE | loaded-drive confirmation of the existing receive-only oil-pressure source |
 | `011D` coolant | `0x2ED` byte 0; R² 0.9999295, 1,351/1,356 samples | loaded-drive confirmation of the existing receive-only coolant source |
 | `01D5` engine speed | `0x0FC` u16be bytes 0–1; `DID_raw = 0.250008 × unmasked_broadcast_raw - 0.052`, R² 0.9999794, 1,351 samples | independently qualifies `(0x0FC u16be & 0xFFFC) / 4 rpm` as a receive-only telemetry source |
-| `06DA` current torque | `0x1F4` u16be bytes 0–1 leads at R² 0.9831147 and 10.72 Nm display-domain RMSE; best `0x100` view has R² 0.9658160 and 15.25 Nm RMSE | strong torque-related fields, but neither supplies an exact physical decode; no torque/power telemetry promotion |
+| `06DA` current torque | byte-aligned search initially ranked `0x1F4` u16be bytes 0–1 at R² 0.9831147; packed-field follow-up below identifies that field as a related-platform ADAS torque request and finds a much more plausible physical torque quantity in `0x100` | torque-related fields are now better separated, but `0x100`'s exact torque stage remains unresolved; no torque/power telemetry promotion |
 | `03D6` vehicle speed | `0x101` speed region; R² 0.9999638, full coverage | strong identity confirmation; Alfa's absolute scale does not yet reconcile cleanly enough with the packed broadcast field for promotion |
 | `0413` throttle blade | `0x41B` u16be bytes 4–5; R² 0.9983770, 1,350 samples | strong loaded-drive throttle-related field; exact broadcast scale remains unresolved |
 | `019E` battery voltage | `0x41A` byte 0; R² 0.9055454, full coverage | loaded-drive corroboration of the already independently verified system-voltage source |
@@ -121,6 +121,49 @@ the passive broadcast encoding. A one-field affine fit is insufficient here;
 the related frames may contain normalized torque, an offset/multiplexed value,
 or another control-stage quantity. Derived power remains blocked rather than
 quietly combining unlike quantities.
+
+### Packed-field torque follow-up
+
+The original generic correlation deliberately tested only byte-aligned integer
+views. A follow-up examined Stellantis-style 13-bit Motorola torque fields,
+using the frame's low five bits of byte 0 followed by byte 1.
+
+`0x100` contains a strong physical-scale candidate:
+
+```text
+raw13 = ((byte0 & 0x1F) << 8) | byte1
+candidate_Nm = raw13 * 0.125 - 512
+```
+
+That decode spans -62.875 to 246.25 Nm over the full capture, nearly the same
+signed domain as DID `06DA` (-62.92 to 240.76 Nm). Searching -1,000 through
++500 ms found the best affine comparison at a -106 ms broadcast offset:
+
+```text
+DID_06DA_Nm = 1.002011 * candidate_Nm + 7.118
+R² = 0.982574
+affine RMSE = 10.890 Nm
+direct-formula RMSE = 13.137 Nm
+samples = 1,351
+```
+
+The near-unit slope strongly supports the packed field and `0.125 Nm/bit`
+scale. It does **not** establish semantic equivalence: the direct candidate
+sat about 7 Nm below the DID on average, its error changed across positive and
+negative torque regimes, and isolated steady-frame discrepancies reached
+roughly 80 Nm. Other `0x100` state bits explain part of the residual, consistent
+with a different torque stage or operating-mode quantity. Publishing it as
+`Current engine torque`, or deriving horsepower from it, would overstate what
+the evidence proves.
+
+The initially higher-ranked `0x1F4` result is now less ambiguous semantically.
+The current comma.ai
+[`_stellantis_common.dbc`](https://github.com/commaai/opendbc/blob/c3e6dca2e43d0620c7c31be1872823ed9d0c2c92/opendbc/dbc/generator/chrysler/_stellantis_common.dbc#L78-L80)
+defines decimal frame 500 (`0x1F4`) as `DAS_3` and its corresponding 13-bit
+field as `ENGINE_TORQUE_REQUEST`, `raw × 0.25 - 500 Nm`. This is
+related-platform rather than ProMaster ODX authority, but it explains why the
+field covaries strongly with current torque and also why it must not be
+promoted as a measured current-torque source.
 
 ## Artifact integrity
 
