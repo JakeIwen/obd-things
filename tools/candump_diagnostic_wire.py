@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sys
 from typing import Sequence
 
@@ -36,6 +37,7 @@ from tools.can_timeseries_correlate import (  # noqa: E402
 
 TMP_ROOT = (REPO / "tmp").resolve()
 MAX_EXCHANGES = 1_500_000
+_VAN_COMPUTE_JOB_ID_RE = re.compile(r"\d{8}T\d{6}Z-[0-9a-f]{8}")
 
 
 def _single_frame_payload(can_data: bytes) -> bytes | None:
@@ -80,17 +82,72 @@ def _wire_row(
     }
 
 
-def _checked_output(path: Path, *, module: Module) -> Path:
+def _van_compute_job_root() -> Path:
+    job_id = os.environ.get("VAN_COMPUTE_JOB_ID", "")
+    if not _VAN_COMPUTE_JOB_ID_RE.fullmatch(job_id):
+        raise CorrelateError(
+            "van-compute operation requires a valid VAN_COMPUTE_JOB_ID"
+        )
+    try:
+        source_root = REPO.resolve(strict=True)
+    except OSError as exc:
+        raise CorrelateError(
+            "van-compute source directory is unavailable"
+        ) from exc
+    if not source_root.is_dir() or source_root.name != "source":
+        raise CorrelateError(
+            "van-compute operation requires a real staged source directory"
+        )
+    return source_root.parent
+
+
+def _checked_output(
+    path: Path,
+    *,
+    module: Module,
+    allow_van_compute_result: bool = False,
+) -> Path:
     expected = f"{module.key}_wire.jsonl"
     if path.name != expected:
         raise CorrelateError(f"output filename must be exactly {expected}")
+
+    roots = [TMP_ROOT.resolve(strict=False)]
+    if allow_van_compute_result:
+        job_root = _van_compute_job_root()
+        result_parent = path.parent
+        try:
+            result_root = result_parent.resolve(strict=True)
+        except OSError as exc:
+            raise CorrelateError(
+                "van-compute result directory is unavailable"
+            ) from exc
+        if (
+            result_parent.is_symlink()
+            or not result_root.is_dir()
+            or result_root.name != "result"
+            or result_root.parent != job_root
+        ):
+            raise CorrelateError(
+                "van-compute result output requires the staged sibling result "
+                "directory"
+            )
+        roots.append(result_root)
+
     resolved = path.resolve(strict=False)
-    try:
-        inside = os.path.commonpath((str(TMP_ROOT), str(resolved))) == str(TMP_ROOT)
-    except ValueError:
-        inside = False
-    if not inside or resolved == TMP_ROOT:
-        raise CorrelateError("output must be an explicit file below repository tmp/")
+    inside_root = False
+    for root in roots:
+        try:
+            inside = os.path.commonpath((str(root), str(resolved))) == str(root)
+        except ValueError:
+            inside = False
+        if inside and resolved != root:
+            inside_root = True
+            break
+    if not inside_root:
+        permitted = str(TMP_ROOT)
+        if allow_van_compute_result:
+            permitted += " or the validated van-compute result directory"
+        raise CorrelateError(f"output must be an explicit file below {permitted}")
     if path.exists() or path.is_symlink():
         raise CorrelateError(f"refusing to overwrite existing output: {path}")
     summary = path.with_suffix(".summary.json")
@@ -118,6 +175,7 @@ def extract(
     module: Module,
     captures: Sequence[Path],
     output: Path,
+    allow_van_compute_result: bool = False,
 ) -> dict[str, object]:
     if not captures or len(captures) > MAX_CAPTURE_FILES:
         raise CorrelateError(
@@ -140,9 +198,17 @@ def extract(
         ):
             raise CorrelateError(f"unsupported candump input: {path}")
 
-    checked = _checked_output(output, module=module)
+    checked = _checked_output(
+        output,
+        module=module,
+        allow_van_compute_result=allow_van_compute_result,
+    )
     checked.parent.mkdir(parents=True, exist_ok=True)
-    checked = _checked_output(checked, module=module)
+    checked = _checked_output(
+        checked,
+        module=module,
+        allow_van_compute_result=allow_van_compute_result,
+    )
     stats = [
         StreamStats(
             str(path),
@@ -300,6 +366,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="exact tmp/.../<module>_wire.jsonl output; never overwritten",
     )
+    parser.add_argument(
+        "--allow-van-compute-result",
+        action="store_true",
+        help=(
+            "allow <module>_wire.jsonl in the validated van-compute job "
+            "result directory"
+        ),
+    )
     parser.add_argument("captures", nargs="+", type=Path)
     return parser
 
@@ -311,6 +385,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             module=MODULES[args.module],
             captures=args.captures,
             output=args.output,
+            allow_van_compute_result=args.allow_van_compute_result,
         )
     except CorrelateError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

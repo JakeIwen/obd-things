@@ -25,6 +25,42 @@
       "outputs": []
     },
     {
+      "name": "candump-diagnostic-wire-tests",
+      "description": "Run the dependency-light offline diagnostic-wire extractor regression tests.",
+      "profile": "repo-test",
+      "source_paths": [
+        "lib/modules.py",
+        "tools/can_timeseries_correlate.py",
+        "tools/candump_diagnostic_wire.py",
+        "tests/test_candump_diagnostic_wire.py"
+      ],
+      "minimum_inputs": 0,
+      "maximum_inputs": 0,
+      "argv": [
+        "-q",
+        "tests/test_candump_diagnostic_wire.py"
+      ],
+      "outputs": []
+    },
+    {
+      "name": "alfaobd-gauge-join-tests",
+      "description": "Run the dependency-light offline AlfaOBD gauge/debug join regression tests.",
+      "profile": "repo-test",
+      "source_paths": [
+        "tools/alfaobd_gauge_join.py",
+        "tools/alfaobd_gauges.py",
+        "projects/ecu_mapping/alfalog.py",
+        "tests/test_alfaobd_gauge_join.py"
+      ],
+      "minimum_inputs": 0,
+      "maximum_inputs": 0,
+      "argv": [
+        "-q",
+        "tests/test_alfaobd_gauge_join.py"
+      ],
+      "outputs": []
+    },
+    {
       "name": "can-timeseries-correlate-two-chunks",
       "description": "Correlate one cluster wire DID stream against exactly two chronological saved CAN chunks.",
       "profile": "can-log-batch",
@@ -101,6 +137,116 @@
       ],
       "outputs": [
         "report.json"
+      ]
+    },
+    {
+      "name": "can-timeseries-correlate-pcm-four-chunks",
+      "description": "Correlate one PCM wire DID stream against exactly four chronological saved C-CAN chunks.",
+      "profile": "can-log-batch",
+      "source_paths": [
+        "lib",
+        "tools/can_timeseries_correlate.py"
+      ],
+      "minimum_inputs": 5,
+      "maximum_inputs": 5,
+      "argv": [
+        "{source:tools/can_timeseries_correlate.py}",
+        "--module",
+        "pcm",
+        "--wire",
+        "{input:0}",
+        "{arguments}",
+        "--match",
+        "nearest",
+        "--radius-ms",
+        "100",
+        "--minimum-samples",
+        "20",
+        "--minimum-coverage",
+        "0.5",
+        "--minimum-distinct",
+        "4",
+        "--top",
+        "100",
+        "--allow-van-compute-result",
+        "--output",
+        "{result:report.json}",
+        "{input:1}",
+        "{input:2}",
+        "{input:3}",
+        "{input:4}"
+      ],
+      "outputs": [
+        "report.json"
+      ]
+    },
+    {
+      "name": "candump-diagnostic-wire-pcm-four-chunks",
+      "description": "Extract exact physical PCM 22/62 exchanges from four chronological saved C-CAN chunks.",
+      "profile": "can-log-batch",
+      "source_paths": [
+        "lib",
+        "tools/can_timeseries_correlate.py",
+        "tools/candump_diagnostic_wire.py"
+      ],
+      "minimum_inputs": 4,
+      "maximum_inputs": 4,
+      "argv": [
+        "{source:tools/candump_diagnostic_wire.py}",
+        "pcm",
+        "--allow-van-compute-result",
+        "--output",
+        "{result:pcm_wire.jsonl}",
+        "{input:0}",
+        "{input:1}",
+        "{input:2}",
+        "{input:3}"
+      ],
+      "outputs": [
+        "pcm_wire.jsonl",
+        "pcm_wire.summary.json"
+      ]
+    },
+    {
+      "name": "alfaobd-debug-decode",
+      "description": "Decode one saved AlfaOBD Debug.bin stream into plain timestamped text.",
+      "profile": "python-script",
+      "source_paths": [
+        "tools/alfaobd_decode.py"
+      ],
+      "minimum_inputs": 1,
+      "maximum_inputs": 1,
+      "argv": [
+        "{source:tools/alfaobd_decode.py}",
+        "{input:0}",
+        "{result:decoded.txt}"
+      ],
+      "outputs": [
+        "decoded.txt"
+      ]
+    },
+    {
+      "name": "alfaobd-gauge-join",
+      "description": "Time-align one AlfaOBD Gauges Data section with its decoded diagnostic trace.",
+      "profile": "can-log-batch",
+      "source_paths": [
+        "lib",
+        "tools/alfaobd_gauge_join.py",
+        "tools/alfaobd_gauges.py",
+        "projects/ecu_mapping/alfalog.py"
+      ],
+      "minimum_inputs": 2,
+      "maximum_inputs": 2,
+      "argv": [
+        "{source:tools/alfaobd_gauge_join.py}",
+        "{input:0}",
+        "{input:1}",
+        "{arguments}",
+        "--out-dir",
+        "{result:gauge-join}"
+      ],
+      "outputs": [
+        "gauge-join"
       ]
     },
     {

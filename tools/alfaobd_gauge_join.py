@@ -923,6 +923,14 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("debug", type=Path, help="one decoded AlfaOBD debug log (never pool snapshots)")
     result.add_argument("--section", type=int, required=True, help="1-based Gauges_Data section index")
     result.add_argument("--address", help="optional exact ATSH address, e.g. DA10F1")
+    result.add_argument(
+        "--debug-date",
+        help=(
+            "date assigned to the matching decoded-debug session (YYYY-MM-DD); "
+            "defaults to the Gauge section date. Use only when an unclosed "
+            "cumulative Debug recording demonstrably inherited an earlier date."
+        ),
+    )
     boundary = result.add_mutually_exclusive_group()
     boundary.add_argument(
         "--boundary-did",
@@ -1036,10 +1044,13 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError(f"gauge section {args.section} not found")
         if not section.rows:
             raise ValueError(f"gauge section {args.section} has no sample rows")
+        debug_date = normalize_date(args.debug_date or section.date)
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", debug_date) is None:
+            raise ValueError("--debug-date must resolve to YYYY-MM-DD")
         exchanges: list[DiagnosticExchange] = []
         for exchange in iter_diagnostic_exchanges(
             args.debug,
-            date=section.date,
+            date=debug_date,
             profile=section.profile,
             address=args.address,
         ):
@@ -1052,7 +1063,7 @@ def main(argv: list[str] | None = None) -> int:
         if not exchanges:
             raise ValueError(
                 "no matching single-identifier 22/62 or 21/61 exchanges "
-                "for the selected date/profile/address"
+                f"for debug date {debug_date}, selected profile, and address"
             )
         addresses = sorted({exchange.address for exchange in exchanges})
         if not args.address and len(addresses) > 1:
@@ -1188,6 +1199,8 @@ def main(argv: list[str] | None = None) -> int:
             },
             "debug_filter": {
                 "address": args.address,
+                "date": debug_date,
+                "date_overrides_gauge_section": debug_date != section.date,
                 "matched_addresses": addresses,
                 "allowed_identifier_keys": (
                     sorted(allowed_identifiers)

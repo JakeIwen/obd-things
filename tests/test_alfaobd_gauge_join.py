@@ -424,6 +424,43 @@ class JoinTests(unittest.TestCase):
         self.assertEqual(rows[0]["fields"], ["10:00:01.100", "-20.000", "7.000"])
         self.assertEqual(len(cycles), 7)
 
+    def test_cli_records_explicit_debug_date_override_for_unclosed_archive(self):
+        mismatched_debug = self.root / "debug_previous_date.txt"
+        mismatched_debug.write_text(
+            self.debug_path.read_text(encoding="latin-1").replace(
+                "Recording closed 2024/01/02",
+                "Recording closed 2024/01/01",
+            ),
+            encoding="latin-1",
+        )
+        output = self.root / "date-override-output"
+        status = joiner.main(
+            [
+                str(self.gauge_path),
+                str(mismatched_debug),
+                "--section",
+                "1",
+                "--address",
+                "DA10F1",
+                "--debug-date",
+                "2024-01-01",
+                "--metric",
+                "Scaled value",
+                "--out-dir",
+                str(output),
+            ]
+        )
+
+        self.assertEqual(status, 0)
+        report = json.loads(
+            (output / "report.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(report["section"]["date"], "2024-01-02")
+        self.assertEqual(report["debug_filter"]["date"], "2024-01-01")
+        self.assertTrue(
+            report["debug_filter"]["date_overrides_gauge_section"]
+        )
+
     def test_cli_bounds_matching_exchange_retention(self):
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):

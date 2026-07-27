@@ -1,4 +1,5 @@
 import json
+from unittest import mock
 from pathlib import Path
 import tempfile
 import unittest
@@ -13,7 +14,7 @@ REPO = Path(__file__).resolve().parents[1]
 
 class DiagnosticWireTests(unittest.TestCase):
     def test_extracts_only_paired_physical_reads_with_global_raw_sequence(self):
-        with tempfile.TemporaryDirectory(dir=REPO / "tmp") as directory:
+        with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             capture = root / "capture.candump"
             capture.write_text(
@@ -31,11 +32,12 @@ class DiagnosticWireTests(unittest.TestCase):
                 encoding="ascii",
             )
             output = root / "pcm_wire.jsonl"
-            summary = wire.extract(
-                module=MODULES["pcm"],
-                captures=[capture],
-                output=output,
-            )
+            with mock.patch.object(wire, "TMP_ROOT", root):
+                summary = wire.extract(
+                    module=MODULES["pcm"],
+                    captures=[capture],
+                    output=output,
+                )
 
             rows = [
                 json.loads(line)
@@ -67,7 +69,7 @@ class DiagnosticWireTests(unittest.TestCase):
             )
 
     def test_generic_reference_reader_pins_pcm_endpoint_and_direction(self):
-        with tempfile.TemporaryDirectory(dir=REPO / "tmp") as directory:
+        with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             capture = root / "capture.candump"
             capture.write_text(
@@ -76,11 +78,12 @@ class DiagnosticWireTests(unittest.TestCase):
                 encoding="ascii",
             )
             output = root / "pcm_wire.jsonl"
-            wire.extract(
-                module=MODULES["pcm"],
-                captures=[capture],
-                output=output,
-            )
+            with mock.patch.object(wire, "TMP_ROOT", root):
+                wire.extract(
+                    module=MODULES["pcm"],
+                    captures=[capture],
+                    output=output,
+                )
             stats = correlate.StreamStats(str(output), "none")
             samples = list(
                 correlate.iter_reference_samples(
@@ -96,29 +99,101 @@ class DiagnosticWireTests(unittest.TestCase):
             self.assertEqual(samples[0].expected_can_id, MODULES["pcm"].rxid)
 
     def test_rejects_partial_input_and_noncanonical_output_name(self):
-        with tempfile.TemporaryDirectory(dir=REPO / "tmp") as directory:
+        with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             partial = root / "capture.zst.partial"
             partial.write_bytes(b"")
-            with self.assertRaisesRegex(
-                correlate.CorrelateError, "partial evidence"
-            ):
-                wire.extract(
-                    module=MODULES["pcm"],
-                    captures=[partial],
-                    output=root / "pcm_wire.jsonl",
-                )
+            with mock.patch.object(wire, "TMP_ROOT", root):
+                with self.assertRaisesRegex(
+                    correlate.CorrelateError, "partial evidence"
+                ):
+                    wire.extract(
+                        module=MODULES["pcm"],
+                        captures=[partial],
+                        output=root / "pcm_wire.jsonl",
+                    )
 
-            capture = root / "capture.candump"
-            capture.write_text("", encoding="ascii")
-            with self.assertRaisesRegex(
-                correlate.CorrelateError, "exactly pcm_wire.jsonl"
+                capture = root / "capture.candump"
+                capture.write_text("", encoding="ascii")
+                with self.assertRaisesRegex(
+                    correlate.CorrelateError, "exactly pcm_wire.jsonl"
+                ):
+                    wire.extract(
+                        module=MODULES["pcm"],
+                        captures=[capture],
+                        output=root / "wrong.jsonl",
+                    )
+
+    def test_van_compute_result_root_requires_exact_sandbox_and_job_id(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_root = root / "job" / "source"
+            result_root = root / "job" / "result"
+            wrong_result_root = root / "job" / "artifacts"
+            other_result_root = root / "other-job" / "result"
+            tmp_root = source_root / "tmp"
+            source_root.mkdir(parents=True)
+            result_root.mkdir(parents=True)
+            wrong_result_root.mkdir()
+            other_result_root.mkdir(parents=True)
+            output = result_root / "pcm_wire.jsonl"
+            with (
+                mock.patch.object(wire, "REPO", source_root),
+                mock.patch.object(wire, "TMP_ROOT", tmp_root),
             ):
-                wire.extract(
-                    module=MODULES["pcm"],
-                    captures=[capture],
-                    output=root / "wrong.jsonl",
-                )
+                with mock.patch.dict(
+                    wire.os.environ,
+                    {"VAN_COMPUTE_JOB_ID": "20260727T120000Z-abcdef12"},
+                    clear=False,
+                ):
+                    self.assertEqual(
+                        wire._checked_output(
+                            output,
+                            module=MODULES["pcm"],
+                            allow_van_compute_result=True,
+                        ),
+                        output.resolve(),
+                    )
+                    with self.assertRaisesRegex(
+                        correlate.CorrelateError, "below"
+                    ):
+                        wire._checked_output(
+                            output,
+                            module=MODULES["pcm"],
+                        )
+                    with self.assertRaisesRegex(
+                        correlate.CorrelateError,
+                        "staged sibling result",
+                    ):
+                        wire._checked_output(
+                            wrong_result_root / "pcm_wire.jsonl",
+                            module=MODULES["pcm"],
+                            allow_van_compute_result=True,
+                        )
+                    with self.assertRaisesRegex(
+                        correlate.CorrelateError,
+                        "staged sibling result",
+                    ):
+                        wire._checked_output(
+                            other_result_root / "pcm_wire.jsonl",
+                            module=MODULES["pcm"],
+                            allow_van_compute_result=True,
+                        )
+
+                with mock.patch.dict(
+                    wire.os.environ,
+                    {"VAN_COMPUTE_JOB_ID": "not-a-job"},
+                    clear=False,
+                ):
+                    with self.assertRaisesRegex(
+                        correlate.CorrelateError,
+                        "valid VAN_COMPUTE_JOB_ID",
+                    ):
+                        wire._checked_output(
+                            output,
+                            module=MODULES["pcm"],
+                            allow_van_compute_result=True,
+                        )
 
 
 if __name__ == "__main__":
