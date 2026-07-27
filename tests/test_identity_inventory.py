@@ -107,6 +107,24 @@ class IdentityResponseTests(unittest.TestCase):
 
 
 class IdentityCliSafetyTests(unittest.TestCase):
+    def setUp(self):
+        # Live telemetry can legitimately hold the shared can0 observer lock.
+        # These unit tests mock preflight/CAN behavior, so isolate their control
+        # flow from that host state as well.
+        acquire = mock.patch.object(
+            identity_inventory.diagnostic_safety,
+            "acquire_channel_lock",
+            return_value=mock.sentinel.channel_lock,
+        )
+        release = mock.patch.object(
+            identity_inventory.diagnostic_safety,
+            "release_channel_lock",
+        )
+        acquire.start()
+        release.start()
+        self.addCleanup(release.stop)
+        self.addCleanup(acquire.stop)
+
     def test_dry_run_never_preflights_or_opens_socket(self):
         with (
             mock.patch.object(identity_inventory, "preflight") as preflight,

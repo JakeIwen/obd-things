@@ -298,6 +298,24 @@ class ResponseTests(unittest.TestCase):
 
 
 class CliSafetyTests(unittest.TestCase):
+    def setUp(self):
+        # Live telemetry can legitimately hold the shared can0 observer lock.
+        # These unit tests mock preflight/CAN behavior, so isolate their control
+        # flow from that host state as well.
+        acquire = mock.patch.object(
+            ecu_discover.diagnostic_safety,
+            "acquire_channel_lock",
+            return_value=mock.sentinel.channel_lock,
+        )
+        release = mock.patch.object(
+            ecu_discover.diagnostic_safety,
+            "release_channel_lock",
+        )
+        acquire.start()
+        release.start()
+        self.addCleanup(release.stop)
+        self.addCleanup(acquire.stop)
+
     def test_preflight_rejects_background_drive_capture(self):
         with (
             mock.patch.object(ecu_discover, "tpms_logger_active", return_value=False),
