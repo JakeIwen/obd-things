@@ -66,6 +66,16 @@ vendor-derived formulas, but the installed TCM still must positively answer
 the requests and produce physically plausible values before the dashboard
 allowlists transmission temperature or torque.
 
+Update 2026-07-27 (bounded true-EOT lead): the selected
+`TIGERSHARK_CUSW` PCM profile contains no true engine-sump oil-temperature
+row; its `069F` definition is specifically VVT oil temperature. AlfaOBD's
+related `SIEMENS_GPEC` PCM profile does pair its **Engine oil temperature**
+row with DID `3159`, and the matching decoder is `u8 - 40 °C`. The adjacent
+sensor-voltage cross-check is `315A`, decoded `u16be × 0.004888 V`. These are
+vendor-derived candidates from a different profile, not installed-vehicle
+support evidence. The next ignition-on check is therefore only the sparse
+`3159/315A` pair through the PCM's verified zero-padded `10 92` session.
+
 ## Engine-oil pressure: exact OEM context
 
 The OEM `OIL PRESSURE – UPGRADE ENGINE` table applies only when coolant is
@@ -337,11 +347,11 @@ sensor.
    catalog-plan, scalar-plan, review-provenance, and exact target-triple
    fields. Pinning clears only offline blockers; it does not
    enable the intentionally disabled scalar `run` path.
-3. After a separately implemented and safety-tested live path exists, capture
-   the high-priority scalar candidates above one at a time with Debug Data, a
-   growing `Gauges_Data.csv`, and a simultaneous listen-only full C-CAN stream.
-   Search the live catalog separately for a true engine-oil temperature label;
-   do not substitute `VVT Oil Temperature`.
+3. The live catalog search found no true engine-oil-temperature label in the
+   selected PCM profile. Do not substitute `VVT Oil Temperature`. Instead,
+   make the sparse direct `3159/315A` related-profile support check documented
+   above; a negative response ends that lead, while a positive response still
+   requires plausibility and cold/warm validation before promotion.
 4. Use the existing System-status singleton path separately for discrete
    `Dual Stage Oil Pump Desired State` and fan desired/relay groups recorded in
    the current Info artifact.

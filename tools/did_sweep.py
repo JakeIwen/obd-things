@@ -11,8 +11,10 @@ is supplied::
 
 No DiagnosticSessionControl request is sent by default. ``--session 03`` is an explicit state
 change and additionally requires ``--confirm-session-change``; session bytes with the response-
-suppression bit set are refused. A full 0000-FFFF inventory needs both ``--full-range`` and
-``--confirm-expanded-scan`` for live use.
+suppression bit set are refused. The sole exception is the installed PCM's independently verified
+legacy ``10 92 -> 50 92`` session. It is accepted only for module ``pcm``, uses fixed-DLC-8 zero
+padding, and relies on the bounded DID-read cadence rather than injecting an unverified ``3E 00``.
+A full 0000-FFFF inventory needs both ``--full-range`` and ``--confirm-expanded-scan`` for live use.
 
 All results are VIN-redacted and appended to JSONL as they arrive under
 ``tmp/inventories/<module>/``. A small atomic summary JSON records completion/restoration state;
@@ -45,6 +47,8 @@ MAX_BOUNDED_DIDS = 512
 SERVICE_SHAPE_ABORT_COUNT = 8
 TESTER_PRESENT_INTERVAL_S = 2.0
 MIN_EXPLICIT_SESSION_RATE_HZ = 1.0 / TESTER_PRESENT_INTERVAL_S
+LEGACY_PCM_SESSION = 0x92
+LEGACY_PCM_TX_PADDING = 0x00
 
 
 def parse_hex16(text):
@@ -62,11 +66,18 @@ def parse_session(text):
         value = int(text, 16)
     except ValueError:
         raise argparse.ArgumentTypeError(f"invalid hexadecimal session: {text!r}") from None
-    # Bit 7 is suppressPosRspMsgIndicationBit. It is incompatible with the exact positive-session
-    # echo required before this tool will begin scanning, so suppressed 80-FF values are refused.
-    if not 1 <= value <= 0x7F:
-        raise argparse.ArgumentTypeError("session must be a hexadecimal byte from 01 through 7F")
+    # Bit 7 normally means suppressPosRspMsgIndicationBit, which is incompatible with the exact
+    # positive-session echo required before scanning. The installed PCM is a verified exception:
+    # it treats 0x92 as a legacy session and returns an exact 50 92.
+    if value != LEGACY_PCM_SESSION and not 1 <= value <= 0x7F:
+        raise argparse.ArgumentTypeError(
+            "session must be 01 through 7F, or PCM-only legacy session 92"
+        )
     return value
+
+
+def is_legacy_pcm_session(module, session):
+    return module.key == "pcm" and session == LEGACY_PCM_SESSION
 
 
 def parser():
@@ -98,8 +109,9 @@ def parser():
         type=parse_session,
         metavar="HEX",
         help=(
-            f"explicit diagnostic session byte 01-7F; response suppression is refused and "
-            f"--rate must be >= {MIN_EXPLICIT_SESSION_RATE_HZ:g}"
+            f"explicit diagnostic session byte 01-7F, or PCM-only legacy 92; other response-"
+            f"suppressed values are refused and --rate must be >= "
+            f"{MIN_EXPLICIT_SESSION_RATE_HZ:g}"
         ),
     )
     p.add_argument(
@@ -344,8 +356,9 @@ def base_report(
     started_at,
 ):
     did_values = list(dids)
+    legacy_pcm_session = is_legacy_pcm_session(module, args.session)
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "tool": "tools/did_sweep.py",
         "interaction": "active non-mutating UDS ReadDataByIdentifier inventory",
         "status": "running",
@@ -377,7 +390,19 @@ def base_report(
         "timeout_s": args.timeout,
         "requested_session": f"{args.session:02X}" if args.session is not None else None,
         "diagnostic_session_policy": (
-            "explicit session change" if args.session is not None else "inherited/unknown; no 10 sent"
+            "PCM legacy 10 92 with exact 50 92 required"
+            if legacy_pcm_session
+            else "explicit session change"
+            if args.session is not None
+            else "inherited/unknown; no 10 sent"
+        ),
+        "tx_padding_hex": "00" if legacy_pcm_session else None,
+        "session_keepalive_policy": (
+            "continuous rate-bounded physical 22 reads; no unverified 3E sent"
+            if legacy_pcm_session
+            else f"validated 3E 00 every {TESTER_PRESENT_INTERVAL_S:g}s"
+            if args.session is not None
+            else "none"
         ),
         "summary_path": os.path.relpath(summary_path, REPO),
         "results_jsonl": os.path.relpath(results_path, REPO),
@@ -410,6 +435,7 @@ def base_report(
 def main(argv=None):
     args = parser().parse_args(argv)
     module = get(args.module)
+    legacy_pcm_session = is_legacy_pcm_session(module, args.session)
     try:
         dids, selection_mode = selected_dids(args)
     except ValueError as exc:
@@ -433,6 +459,12 @@ def main(argv=None):
         return 2
     if args.confirm_session_change and args.session is None:
         print("ERROR: --confirm-session-change requires --session", file=sys.stderr)
+        return 2
+    if args.session == LEGACY_PCM_SESSION and not legacy_pcm_session:
+        print(
+            "ERROR: legacy session 92 is accepted only for module pcm",
+            file=sys.stderr,
+        )
         return 2
     if args.session is not None and args.rate < MIN_EXPLICIT_SESSION_RATE_HZ:
         print(
@@ -458,7 +490,13 @@ def main(argv=None):
     )
     print(
         "session: "
-        + (f"explicit 10 {args.session:02X}" if args.session is not None else "inherited/unknown (no 10 or 3E)")
+        + (
+            "PCM legacy 10 92; fixed-DLC-8 zero padding; no 3E"
+            if legacy_pcm_session
+            else f"explicit 10 {args.session:02X}"
+            if args.session is not None
+            else "inherited/unknown (no 10 or 3E)"
+        )
     )
     if not args.execute:
         print("DRY RUN: no report opened, no CAN socket opened, and nothing transmitted.")
@@ -565,7 +603,14 @@ def main(argv=None):
         atomic_json(summary_path, report)
         os.makedirs(os.path.dirname(results_path), exist_ok=True)
         last_tester_present = time.monotonic()
-        sock = uds.open_module_socket(module, timeout=args.timeout)
+        if legacy_pcm_session:
+            sock = uds.open_module_socket(
+                module,
+                timeout=args.timeout,
+                tx_padding=LEGACY_PCM_TX_PADDING,
+            )
+        else:
+            sock = uds.open_module_socket(module, timeout=args.timeout)
         if args.session is not None:
             session_started = time.monotonic()
             response, status = send(
@@ -593,6 +638,7 @@ def main(argv=None):
             for did in dids:
                 if (
                     args.session is not None
+                    and not legacy_pcm_session
                     and time.monotonic() - last_tester_present >= TESTER_PRESENT_INTERVAL_S
                 ):
                     wait_for_rate()

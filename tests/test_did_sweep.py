@@ -52,8 +52,9 @@ class DidSelectionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             did_sweep.selected_dids(mixed)
 
-    def test_session_rejects_response_suppression_bit(self):
+    def test_session_accepts_verified_pcm_legacy_value_only_syntactically(self):
         self.assertEqual(did_sweep.parse_session("03"), 0x03)
+        self.assertEqual(did_sweep.parse_session("92"), 0x92)
         for value in ("00", "80", "FF"):
             with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
                 did_sweep.parse_session(value)
@@ -181,6 +182,97 @@ class DidCliSafetyTests(unittest.TestCase):
 
         self.assertEqual(result, 2)
         preflight.assert_not_called()
+
+    def test_legacy_session_92_is_rejected_for_non_pcm_before_preflight(self):
+        with (
+            mock.patch.object(did_sweep, "preflight") as preflight,
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            result = did_sweep.main(
+                [
+                    "radar_acc", "--did", "3159", "--session", "92",
+                    "--confirm-session-change", "--execute", "--confirm-parked",
+                    "--pair", "6/14", "--conditions", "parked",
+                ]
+            )
+
+        self.assertEqual(result, 2)
+        preflight.assert_not_called()
+
+    def test_pcm_legacy_session_uses_zero_padding_and_did_cadence_without_tester_present(self):
+        sock = mock.Mock()
+        requests = []
+
+        def respond(_sock, payload, **_kwargs):
+            payload = bytes(payload)
+            requests.append(payload)
+            if payload == bytes.fromhex("10 92"):
+                return bytes.fromhex("50 92"), "POSITIVE"
+            if payload == bytes.fromhex("22 31 59"):
+                return bytes.fromhex("62 31 59 64"), "POSITIVE"
+            if payload == bytes.fromhex("22 31 5A"):
+                return bytes.fromhex("7F 22 31"), "NEGATIVE"
+            raise AssertionError(f"unexpected payload {payload.hex()}")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            summary = root / "summary.json"
+            results = root / "results.jsonl"
+            with (
+                mock.patch.object(did_sweep, "preflight", return_value=[]),
+                mock.patch.object(
+                    did_sweep.diagnostic_safety,
+                    "acquire_channel_lock",
+                    return_value=mock.sentinel.lock,
+                ),
+                mock.patch.object(
+                    did_sweep.diagnostic_safety, "release_channel_lock"
+                ) as release,
+                mock.patch.object(
+                    did_sweep, "output_paths", return_value=(str(summary), str(results))
+                ),
+                mock.patch.object(
+                    did_sweep.uds, "open_module_socket", return_value=sock
+                ) as open_socket,
+                mock.patch.object(did_sweep.uds, "drain"),
+                mock.patch.object(did_sweep.uds, "request", side_effect=respond),
+                mock.patch.object(did_sweep.time, "sleep"),
+                mock.patch.object(did_sweep, "TESTER_PRESENT_INTERVAL_S", 0.0),
+                mock.patch.object(did_sweep.canbus, "restore_passive", return_value=True),
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                result = did_sweep.main(
+                    [
+                        "pcm", "--did", "3159", "--did", "315A", "--session", "92",
+                        "--confirm-session-change", "--execute", "--confirm-parked",
+                        "--pair", "6/14", "--conditions", "parked",
+                    ]
+                )
+
+            report = json.loads(summary.read_text())
+
+        self.assertEqual(result, 0)
+        open_socket.assert_called_once_with(
+            mock.ANY, timeout=0.75, tx_padding=0x00
+        )
+        self.assertEqual(
+            requests,
+            [
+                bytes.fromhex("10 92"),
+                bytes.fromhex("22 31 59"),
+                bytes.fromhex("22 31 5A"),
+            ],
+        )
+        self.assertNotIn(bytes.fromhex("3E 00"), requests)
+        self.assertEqual(report["session_response"]["category"], "positive_echo")
+        self.assertEqual(report["session_state"], "explicit_session_confirmed")
+        self.assertEqual(report["tx_padding_hex"], "00")
+        self.assertIn("no unverified 3E", report["session_keepalive_policy"])
+        self.assertEqual(report["request_attempts"]["tester_present"], 0)
+        self.assertEqual(report["request_attempts"]["did_reads"], 2)
+        release.assert_called_once_with(mock.sentinel.lock)
 
     def test_explicit_session_refuses_rate_below_keepalive_floor(self):
         with (

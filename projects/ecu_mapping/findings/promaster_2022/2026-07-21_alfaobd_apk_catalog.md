@@ -156,6 +156,40 @@ Those five exact, non-adjacent anchors establish that these two-byte entries
 are the ordered service-`22` data identifiers, rather than offsets, label IDs,
 or display keys.
 
+The selected `TIGERSHARK_CUSW` catalog has no physical engine-sump oil
+temperature row. Its row 20 is explicitly **VVT Oil Temperature**, so that
+signal must not be relabeled as general engine-oil temperature. A directed
+search of related PCM profiles did produce one bounded lead:
+
+| profile | catalog order | label | table DID | decoder |
+|---|---:|---|---:|---|
+| `SIEMENS_GPEC` (Device 239) | 23 | Engine oil temperature | `3159` | `u8 - 40 °C` |
+| `SIEMENS_GPEC` (Device 239) | 24 | Oil temperature sensor voltage | `315A` | `u16be × 0.004888 V` |
+
+DEX consumer tracing shows the `SIEMENS_GPEC` branch loading class `ba`, field
+`f4421z`, into the runtime request table and selecting
+`ADDescSIEMENS_GPEC`. Ordered alignment puts `3159/315A` at the two labels
+above. The profile's `n0.z1.e2()` response path independently handles
+`31 59` as the first unsigned payload byte minus 40 and `31 5A` as the first
+two payload bytes times 0.004888. This is exact vendor-derived evidence for a
+related profile, not proof the installed `TIGERSHARK_CUSW` PCM implements
+either DID. Test only this sparse pair through the installed PCM's verified
+padded legacy session before considering it further:
+
+```bash
+python3 tools/did_sweep.py pcm \
+  --did 3159 --did 315A \
+  --session 92 --confirm-session-change \
+  --pair 6/14 \
+  --conditions "parked; ignition ON; engine OFF; related-profile EOT support check"
+```
+
+That command is a dry run. Live use additionally requires
+`--execute --confirm-parked`. The tool restricts session `92` to module
+`pcm`, configures fixed-DLC-8 zero padding, requires the exact `50 92` echo,
+and uses the bounded `22` request cadence without sending an unverified
+TesterPresent request.
+
 An initial length-only match to class `ba`, field `A0`, was wrong. Although
 that field also has 56 two-byte entries, DEX consumer tracing proves
 `z2.k` loads it into runtime request table `AlfaOBDConnect.s8` in the branch
@@ -253,6 +287,12 @@ Static-source provenance:
   DEX resolves `Ln0/z1;->s2()V -> r2()V` and the formulas above; and
 - reconstructed database: SHA-256
   `073fd4c46c438d4591e590d9fc2556bc5da3c1aff2e8008c504a9ef1f0398be5`.
+
+The related-profile engine-oil-temperature lead additionally comes from
+simple-mode JADX renderings of `n0.z1` (SHA-256
+`2efb10493c1c08e3a7584e7e0074c68662d471c4d13598064680aa747d4e5c30`)
+and `com.AlfaOBD.AlfaOBD.z2` (SHA-256
+`7f65b88622768b1203ec3848dd3519dc1ef04a6c1b2b789d4b4493d9144525eb`).
 
 The proprietary source and database remain gitignored; only the derived
 candidate mapping and reproducible inventory tool are tracked.

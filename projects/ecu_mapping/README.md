@@ -939,7 +939,10 @@ verify the `/4` rpm scale or authorize public telemetry promotion.
   engine idling; the later AlfaOBD pass repeated `50 92` and positive live reads with ignition on
   and the engine off. Engine running is not required. Fixed-DLC-8 padding remains part of the
   known-good direct recipe; use the specialized legacy probe until default-session/DID behavior is
-  mapped.
+  mapped. `tools/did_sweep.py` now supports this exact legacy case with
+  `--session 92`: only the `pcm` registry key is accepted, the ISO-TP socket
+  uses zero padding, the exact `50 92` echo is mandatory, and the tool does
+  not inject an unverified `3E 00`.
 
 ## Next steps
 
@@ -984,7 +987,22 @@ verify the `/4` rpm scale or authorize public telemetry promotion.
    one-at-a-time need. Also use
    passenger-door plus parking-brake discriminators to refine the passive and BCM candidates.
    Alfa's shifter `Drive` rendering in Park and TCM `Brake switch` watcher remain explicitly
-   invalid. The next transmission session is now bounded by the prepared
+   invalid. The selected PCM Plots catalog contains no true engine-sump
+   oil-temperature row. A related Alfa profile supplies the bounded
+   `3159` (`u8 - 40 °C`) EOT candidate and adjacent `315A`
+   (`u16be × 0.004888 V`) sensor-voltage candidate. Check only those two with
+   the verified padded PCM session before accepting or rejecting the lead:
+
+   ```bash
+   python3 tools/did_sweep.py pcm \
+     --did 3159 --did 315A \
+     --session 92 --confirm-session-change \
+     --pair 6/14 \
+     --conditions "parked; ignition ON; engine OFF; related-profile EOT support check"
+   ```
+
+   This is a dry run unless `--execute --confirm-parked` is added. The next
+   transmission session is now bounded by the prepared
    [`ZF9HP Plots catalog plan`](configs/alfaobd_tcm_plots_catalog.json):
    inventory 56 rows first, then prioritize gearbox-oil temperature,
    turbine/output speed, converter slip, and the torque-stage gauges. The
