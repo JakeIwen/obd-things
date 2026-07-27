@@ -702,12 +702,22 @@ class AdbClient:
         result = self.runner.run(
             self._base() + ["shell", "dumpsys", "window", "windows"], timeout=15
         )
-        focus = next(
+        current_focus = next(
             (line for line in result.stdout.splitlines() if "mCurrentFocus" in line),
             "",
         )
-        if PACKAGE not in focus:
-            raise CampaignError(f"AlfaOBD is not foreground: {focus.strip()!r}")
+        focused_app = next(
+            (line for line in result.stdout.splitlines() if "mFocusedApp" in line),
+            "",
+        )
+        # Android 7 reports an app-owned AlertDialog's title, rather than its
+        # package, in mCurrentFocus.  mFocusedApp still names the owning
+        # activity, so require the package in either authoritative focus line.
+        if PACKAGE not in current_focus and PACKAGE not in focused_app:
+            detail = "; ".join(
+                line.strip() for line in (current_focus, focused_app) if line.strip()
+            )
+            raise CampaignError(f"AlfaOBD is not foreground: {detail!r}")
         return PACKAGE
 
     def dump_ui(self) -> str:
@@ -726,6 +736,41 @@ class AdbClient:
         x, y = node.bounds.center
         self.runner.run(
             self._base() + ["shell", "input", "tap", str(x), str(y)], timeout=10
+        )
+
+    def swipe(
+        self,
+        *,
+        start: tuple[int, int],
+        end: tuple[int, int],
+        duration_ms: int,
+    ) -> None:
+        """Send one bounded touchscreen swipe without exposing a generic shell."""
+        if not 100 <= duration_ms <= 2000:
+            raise CampaignError("ADB swipe duration must be between 100 and 2000 ms")
+        coordinates = (*start, *end)
+        if any(value < 0 for value in coordinates):
+            raise CampaignError("ADB swipe coordinates must be non-negative")
+        self.runner.run(
+            self._base()
+            + [
+                "shell",
+                "input",
+                "swipe",
+                str(start[0]),
+                str(start[1]),
+                str(end[0]),
+                str(end[1]),
+                str(duration_ms),
+            ],
+            timeout=10,
+        )
+
+    def back(self) -> None:
+        """Send Android BACK through the typed UI boundary."""
+        self.runner.run(
+            self._base() + ["shell", "input", "keyevent", "KEYCODE_BACK"],
+            timeout=10,
         )
 
     def screenshot(self) -> bytes:

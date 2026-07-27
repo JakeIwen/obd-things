@@ -6,16 +6,20 @@ import errno
 import http.client
 import http.server
 import json
+import math
 import os
 import pathlib
 import socket
 import socketserver
 import stat
+import time
 from typing import Any
 
 
 MAX_REQUEST_BYTES = 4096
 MAX_RESPONSE_BYTES = 1024 * 1024
+OBSERVATION_DEADLINE_HEADER = "X-Van-Telemetry-Deadline-Monotonic"
+MAX_OBSERVATION_QUEUE_SECONDS = 1.0
 
 
 class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
@@ -30,14 +34,14 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
 
     def _json(self, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
         try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
             self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
             return
 
     def do_GET(self):
@@ -63,8 +67,23 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?", 1)[0]
-        prefix = "/v1/acquisitions/"
-        if not path.startswith(prefix) or "/" in path[len(prefix):]:
+        acquisition_prefix = "/v1/acquisitions/"
+        observation_prefix = "/v1/observations/"
+        if (
+            path.startswith(acquisition_prefix)
+            and path[len(acquisition_prefix):]
+            and "/" not in path[len(acquisition_prefix):]
+        ):
+            request_kind = "acquisition"
+            metric = path[len(acquisition_prefix):]
+        elif (
+            path.startswith(observation_prefix)
+            and path[len(observation_prefix):]
+            and "/" not in path[len(observation_prefix):]
+        ):
+            request_kind = "observation"
+            metric = path[len(observation_prefix):]
+        else:
             return self._json(
                 404,
                 {"available": False, "reason": "not_found", "detail": path},
@@ -100,21 +119,83 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
                     "detail": "body must be one JSON object",
                 },
             )
-        if (
-            not isinstance(payload, dict)
-            or set(payload) != {"mode"}
-            or payload.get("mode") not in ("passive", "wake_if_asleep")
-        ):
-            return self._json(
-                400,
-                {
-                    "available": False,
-                    "reason": "invalid_request",
-                    "detail": "body must contain only mode=passive or wake_if_asleep",
-                },
-            )
-        metric = path[len(prefix):]
-        result = self.broker.acquire(metric, payload["mode"])
+        if request_kind == "acquisition":
+            if (
+                not isinstance(payload, dict)
+                or set(payload) != {"mode"}
+                or payload.get("mode") not in ("passive", "wake_if_asleep")
+            ):
+                return self._json(
+                    400,
+                    {
+                        "available": False,
+                        "reason": "invalid_request",
+                        "detail": (
+                            "body must contain only mode=passive or "
+                            "wake_if_asleep"
+                        ),
+                    },
+                )
+            result = self.broker.acquire(metric, payload["mode"])
+        else:
+            required = {"value", "unit", "source", "bus", "quality"}
+            if not isinstance(payload, dict) or set(payload) != required:
+                return self._json(
+                    400,
+                    {
+                        "available": False,
+                        "reason": "invalid_request",
+                        "detail": (
+                            "observation body must contain exactly value, "
+                            "unit, source, bus, and quality"
+                        ),
+                    },
+                )
+            raw_deadline = self.headers.get(OBSERVATION_DEADLINE_HEADER)
+            try:
+                deadline = float(raw_deadline) if raw_deadline is not None else math.nan
+            except ValueError:
+                deadline = math.nan
+            now = time.monotonic()
+            if not math.isfinite(deadline):
+                return self._json(
+                    400,
+                    {
+                        "available": False,
+                        "reason": "invalid_request",
+                        "detail": (
+                            f"{OBSERVATION_DEADLINE_HEADER} must contain one "
+                            "finite local monotonic deadline"
+                        ),
+                    },
+                )
+            if deadline < now:
+                return self._json(
+                    408,
+                    {
+                        "metric": metric,
+                        "available": False,
+                        "reason": "observation_expired",
+                        "detail": (
+                            "the local publication waited too long before the "
+                            "serialized broker could receive it"
+                        ),
+                    },
+                )
+            if deadline - now > MAX_OBSERVATION_QUEUE_SECONDS:
+                return self._json(
+                    400,
+                    {
+                        "metric": metric,
+                        "available": False,
+                        "reason": "invalid_request",
+                        "detail": (
+                            "observation deadline exceeds the broker's bounded "
+                            "local queue allowance"
+                        ),
+                    },
+                )
+            result = self.broker.publish_observation(metric, **payload)
         definition = self.broker.definitions.get(metric)
         stale_after = definition.stale_after_seconds if definition else 0
         response = result.as_dict(
@@ -124,6 +205,8 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
         status = {
             "unknown_metric": 404,
             "unsupported_mode": 400,
+            "invalid_observation": 400,
+            "source_not_publishable": 403,
             "rate_limited": 429,
             "can_busy": 409,
             "restoration_failed": 500,
@@ -202,15 +285,19 @@ class TelemetryClient:
         method: str,
         path: str,
         payload: dict[str, object] | None = None,
+        *,
+        headers: dict[str, str] | None = None,
     ) -> tuple[int, dict[str, Any]]:
         body = None
-        headers = {}
+        request_headers = dict(headers or {})
         if payload is not None:
             body = json.dumps(payload, separators=(",", ":")).encode()
-            headers["Content-Type"] = "application/json"
+            request_headers["Content-Type"] = "application/json"
         connection = UnixHTTPConnection(self.socket_path, timeout=self.timeout)
         try:
-            connection.request(method, path, body=body, headers=headers)
+            connection.request(
+                method, path, body=body, headers=request_headers
+            )
             response = connection.getresponse()
             raw = response.read(MAX_RESPONSE_BYTES + 1)
             if len(raw) > MAX_RESPONSE_BYTES:
@@ -221,3 +308,35 @@ class TelemetryClient:
             return response.status, decoded
         finally:
             connection.close()
+
+    def publish(
+        self,
+        metric: str,
+        *,
+        value: bool | int | float | str,
+        unit: str,
+        source: str,
+        bus: str,
+        quality: str,
+    ) -> tuple[int, dict[str, Any]]:
+        """Publish one allowlisted observation to the local broker."""
+        queue_seconds = min(
+            MAX_OBSERVATION_QUEUE_SECONDS,
+            max(0.05, float(self.timeout)),
+        )
+        return self.request(
+            "POST",
+            f"/v1/observations/{metric}",
+            {
+                "value": value,
+                "unit": unit,
+                "source": source,
+                "bus": bus,
+                "quality": quality,
+            },
+            headers={
+                OBSERVATION_DEADLINE_HEADER: (
+                    f"{time.monotonic() + queue_seconds:.9f}"
+                )
+            },
+        )

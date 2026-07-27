@@ -7,6 +7,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 
+ScalarValue = bool | int | float | str
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -16,7 +19,7 @@ class AcquisitionResult:
     metric: str
     available: bool
     unit: str
-    value: float | None = None
+    value: ScalarValue | None = None
     source: str | None = None
     bus: str | None = None
     acquisition: str | None = None
@@ -90,7 +93,7 @@ def success(
     *,
     metric: str,
     unit: str,
-    value: float,
+    value: ScalarValue,
     source: str,
     bus: str,
     acquisition: str,

@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "campaign_id": "pcm-plots-catalog",
+  "module_key": "pcm",
+  "expected_app_version": "2.4.4.0",
+  "expected_screen": {
+    "width": 800,
+    "height": 1280,
+    "rotation": 0
+  },
+  "expected_connection_texts": [
+    "Connected to Chrysler Pentastar/Hemi engine Model Year 2021",
+    "Status: Connected to Chrysler Pentastar/Hemi engine Model Year 2021"
+  ],
+  "expected_catalog_count": 193,
+  "expected_first_label": "Vehicle speed, km/h",
+  "expected_last_label": "Transfer speed, rpm",
+  "expected_catalog_sha256": "e1d5e74db311b13a6156cdaa30b0126a0789a502aaaffeaa36be33bca10ef3de",
+  "required_labels": [
+    "Engine speed, rpm",
+    "Current engine torque, Nm",
+    "Coolant temperature, °C",
+    "Desired PWM Radiator Fan, %",
+    "Engine oil pressure, KPa",
+    "Oil pressure sensor, V",
+    "VVT Oil Pressure, KPa",
+    "VVT Oil Temperature, °C",
+    "Target Charging Voltage, V",
+    "Generator Duty Cycle, %",
+    "Battery voltage, V",
+    "Transmission Oil Temperature, °C",
+    "Turbine speed, rpm",
+    "Output Speed, rpm"
+  ],
+  "max_pages": 96,
+  "swipe_duration_ms": 500,
+  "settle_seconds": 0.75,
+  "min_free_bytes": 536870912,
+  "screenshot_each_page": false
+}

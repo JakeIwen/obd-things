@@ -23,6 +23,95 @@
       </div>
     </header>
 
+    <section class="panel drive-panel" data-widget="drive" aria-labelledby="drive-heading">
+      <div class="section-heading drive-heading">
+        <div>
+          <p class="eyebrow">ON THE ROAD</p>
+          <h2 id="drive-heading">Drive essentials</h2>
+        </div>
+        <span id="drive-freshness" class="badge">NO LIVE DATA</span>
+      </div>
+      <div class="drive-hero-grid">
+        <article class="drive-tile drive-primary" id="drive-speed-card">
+          <p class="eyebrow">SPEED</p>
+          <p class="drive-value">
+            <span id="drive-speed">—</span><span id="drive-speed-unit" class="drive-unit"></span>
+          </p>
+          <p id="drive-speed-status" class="drive-status">Loading metric catalog…</p>
+        </article>
+        <article class="drive-tile" id="drive-rpm-card">
+          <p class="eyebrow">ENGINE</p>
+          <p class="drive-value">
+            <span id="drive-rpm">—</span><span id="drive-rpm-unit" class="drive-unit"></span>
+          </p>
+          <p id="drive-rpm-status" class="drive-status">Loading metric catalog…</p>
+        </article>
+        <article class="drive-tile" id="drive-gear-card">
+          <p class="eyebrow">GEAR</p>
+          <p class="drive-value"><span id="drive-gear">—</span></p>
+          <p id="drive-gear-status" class="drive-status">Loading metric catalog…</p>
+        </article>
+        <article class="drive-tile" id="drive-ignition-card">
+          <p class="eyebrow">IGNITION</p>
+          <p class="drive-value drive-state-value"><span id="drive-ignition">—</span></p>
+          <p id="drive-ignition-status" class="drive-status">Loading metric catalog…</p>
+        </article>
+      </div>
+      <p id="drive-note" class="muted panel-note">
+        Only fresh, driver-qualified values are promoted to these tiles.
+      </p>
+    </section>
+
+    <section class="panel engine-health-panel" data-widget="engine" aria-labelledby="engine-health-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">MECHANICAL</p>
+          <h2 id="engine-health-heading">Engine health</h2>
+        </div>
+        <span id="engine-health-state" class="badge">LOADING CATALOG</span>
+      </div>
+      <div class="engine-health-grid">
+        <article class="drive-tile health-tile" id="engine-oil-pressure-card">
+          <p class="eyebrow">OIL PRESSURE</p>
+          <p class="drive-value health-value">
+            <span id="engine-oil-pressure">—</span><span id="engine-oil-pressure-unit" class="drive-unit"></span>
+          </p>
+          <p id="engine-oil-pressure-status" class="drive-status">Loading metric catalog…</p>
+        </article>
+        <article class="drive-tile health-tile" id="engine-coolant-temperature-card">
+          <p class="eyebrow">COOLANT</p>
+          <p class="drive-value health-value">
+            <span id="engine-coolant-temperature">—</span><span id="engine-coolant-temperature-unit" class="drive-unit"></span>
+          </p>
+          <p id="engine-coolant-temperature-status" class="drive-status">Loading metric catalog…</p>
+        </article>
+        <article class="drive-tile health-tile" id="engine-oil-temperature-card">
+          <p class="eyebrow">ENGINE OIL</p>
+          <p class="drive-value health-value">
+            <span id="engine-oil-temperature">—</span><span id="engine-oil-temperature-unit" class="drive-unit"></span>
+          </p>
+          <p id="engine-oil-temperature-status" class="drive-status">Loading metric catalog…</p>
+        </article>
+        <article class="drive-tile health-tile" id="engine-torque-card">
+          <p class="eyebrow">CRANK TORQUE</p>
+          <p class="drive-value health-value">
+            <span id="engine-torque">—</span><span id="engine-torque-unit" class="drive-unit"></span>
+          </p>
+          <p id="engine-torque-status" class="drive-status">Loading metric catalog…</p>
+        </article>
+        <article class="drive-tile health-tile" id="engine-power-card">
+          <p class="eyebrow">CRANK POWER</p>
+          <p class="drive-value health-value">
+            <span id="engine-power">—</span><span id="engine-power-unit" class="drive-unit"></span>
+          </p>
+          <p id="engine-power-status" class="drive-status">Loading metric catalog…</p>
+        </article>
+      </div>
+      <p id="engine-health-note" class="muted panel-note">
+        Priority gauges remain visible while their exact C-CAN sources and scaling are mapped.
+      </p>
+    </section>
+
     <section class="panel state-panel" data-widget="vehicle" aria-labelledby="vehicle-heading">
       <div>
         <p class="eyebrow">VEHICLE STATE</p>
@@ -48,17 +137,52 @@
       <p id="battery-detail" class="muted panel-note">Awaiting a cached observation.</p>
     </section>
 
+    <section class="panel tires-panel" data-widget="tires" aria-labelledby="tires-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">TPMS</p>
+          <h2 id="tires-heading">Tire pressure</h2>
+        </div>
+        <span id="tires-state" class="badge">LOADING CATALOG</span>
+      </div>
+      <div id="tire-grid" class="tire-grid">
+        <article class="tire-card" id="tire-fl-card">
+          <p class="tire-position">Front left</p>
+          <p class="tire-value"><span id="tire-fl">—</span><span id="tire-fl-unit" class="tire-unit"></span></p>
+          <p id="tire-fl-status" class="tire-status">Loading metric catalog…</p>
+        </article>
+        <article class="tire-card" id="tire-fr-card">
+          <p class="tire-position">Front right</p>
+          <p class="tire-value"><span id="tire-fr">—</span><span id="tire-fr-unit" class="tire-unit"></span></p>
+          <p id="tire-fr-status" class="tire-status">Loading metric catalog…</p>
+        </article>
+        <article class="tire-card" id="tire-rl-card">
+          <p class="tire-position">Rear left</p>
+          <p class="tire-value"><span id="tire-rl">—</span><span id="tire-rl-unit" class="tire-unit"></span></p>
+          <p id="tire-rl-status" class="tire-status">Loading metric catalog…</p>
+        </article>
+        <article class="tire-card" id="tire-rr-card">
+          <p class="tire-position">Rear right</p>
+          <p class="tire-value"><span id="tire-rr">—</span><span id="tire-rr-unit" class="tire-unit"></span></p>
+          <p id="tire-rr-status" class="tire-status">Loading metric catalog…</p>
+        </article>
+      </div>
+      <p id="tires-note" class="muted panel-note">
+        The four verified wheel-position metrics will group here automatically.
+      </p>
+    </section>
+
     <section class="panel" data-widget="metrics" aria-labelledby="metrics-heading">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">ALLOWLIST</p>
-          <h2 id="metrics-heading">Additional metrics</h2>
+          <p class="eyebrow">REGISTERED TELEMETRY</p>
+          <h2 id="metrics-heading">Other telemetry</h2>
         </div>
         <span id="metric-count" class="count">0</span>
       </div>
       <div id="metric-grid" class="metric-grid"></div>
       <p id="metrics-empty" class="muted panel-note">
-        No additional allowlisted metrics are registered yet.
+        No additional driver-qualified metrics are registered yet.
       </p>
     </section>
 

@@ -12,6 +12,16 @@ The cross-project [`AlfaOBD evidence history`](../../docs/alfaobd-evidence-histo
 canonical chronology of confirmed mis-mappings, incompatible profiles, recording/catalog traps,
 project parser corrections, and the trust rules derived from them.
 
+The current owner-priority C-CAN roadmap—oil pressure, coolant/oil temperature,
+torque and derived power, OEM operating context, and the targeted PCM/TCM
+acquisition order—is recorded in
+[`2026-07-25_priority_telemetry_targets.md`](findings/promaster_2022/2026-07-25_priority_telemetry_targets.md).
+The subsequent
+[`2026-07-26 PCM Plots idle mapping`](findings/promaster_2022/2026-07-26_pcm_plots_idle_mapping.md)
+qualified passive oil-pressure and coolant-temperature dashboard sources and
+mapped the selected PCM gauge set. Engine-oil temperature, loaded torque, and
+derived power remain open.
+
 ## ⚠️ Provenance — two vans in the data (read before trusting anything)
 
 AlfaOBD debug files accumulate across every vehicle a tablet has touched. We have two dumps:
@@ -51,7 +61,13 @@ the prior best-known date instead of being blindly backdated from a later close 
 
 To capture a fresh one on the tablet: enable **Debug Data recording** (raw) and ideally
 **Gauges data recording** (labeled CSV, commonly `Gauges_Data.csv` or `Gauges_Data.log`) in
-Preferences, drive the modules/live-data, then pull from
+Preferences, then run the **Plots** scan and verify actual file growth. AlfaOBD's Plots start
+handler automatically starts its CSV writer when the preference is enabled and also enables the
+separate manual recording toggle. The 2026-07-22 current-van campaign used **Status**, not Plots,
+so its checked recording preferences and unchanged `Gauges_Data.csv` are consistent rather than a
+recording failure. This APK appends buffered UTF-8 rows and explicitly flushes/closes the CSV on a
+clean Plots stop rather than after every row, so verify growth after stopping and then stable size;
+do not require immediate live file growth. Pull the resulting files from
 `/sdcard/Android/data/com.android.AlfaOBD/files/logs/`.
 
 ## Pipeline
@@ -60,12 +76,16 @@ Preferences, drive the modules/live-data, then pull from
 tools/alfaobd_decode.py  <in.bin> [out.txt]      # generic: .bin -> decoded text (reusable)
 tools/alfaobd_gauges.py  <Gauges_Data.csv>       # offline section/profile/metric inventory -> tmp/
 tools/alfaobd_gauge_join.py <Gauges_Data.csv> <decoded.txt> --section N  # offline DID candidates
+tools/candump_diagnostic_wire.py <capture...> --module pcm   # exact 22/62 wire stream
+tools/can_timeseries_correlate.py <capture...> --module pcm  # DID-to-broadcast candidates
 tools/alfaobd_dat.py <post.dat> --baseline <pre.dat>  # detect cached/duplicated plot series
 tools/alfaobd_apk_db.py  <base.apk>              # reconstruct catalog DB + label resource -> tmp/
 tools/alfaobd_catalog.py <db> <labels> --device-id N  # read-only model/device export -> tmp/
 tools/alfaobd_bcm_decode.py                   # apply current-BCM field layouts to existing evidence
 tools/alfaobd_singleton_campaign.py plan <plan.json>  # guarded one-label Status monitor
 tools/passive_drive_capture.py --out-root <path>      # bounded C-CAN recorder; plan by default
+tools/alfaobd_singleton_join.py <campaign> --capture-set <json>  # offline evidence join
+tools/alfaobd_singleton_infer.py <join.json>          # offline candidate scale/enum inference
 projects/ecu_mapping/vin_scan.py        <decoded.txt> [vin]   # which van? (run FIRST)
 projects/ecu_mapping/extract_did_map.py <decoded.txt> <out>   # per-module DID/service map
 projects/ecu_mapping/alfalog.py                  # shared log parser + ELM reassembly
@@ -77,17 +97,28 @@ blank markers whose sections inherit the most recent named profile, counts corru
 and keeps identically named metrics separated by selected-profile namespace. By default it writes
 `inventory.json`, `sections.csv`, and `metrics.csv` under
 `tmp/inventories/alfaobd_gauges/`; use `--out-dir` to choose another machine-output directory.
-Gauge labels and rendered values do **not** carry DID numbers, so a label-to-DID claim still
-requires a time-aligned Debug Data trace or a controlled one-variable capture.
+Gauge labels and rendered values do **not** carry diagnostic identifiers, so a label-to-DID or
+label-to-local-identifier claim still requires a time-aligned Debug Data trace or a controlled
+one-variable capture.
 
 `alfaobd_gauge_join.py` performs that time alignment for one bounded Gauge section at a time. It
-preserves every original sample row and column index, uses the response-completion timestamp from
-the decoded trace, splits repeated-DID polling loops, and explicitly scores preceding/current/
-following-cycle lag hypotheses. Only exact single-DID `22 XXXX -> 62 XXXX ...` echoes enter the
-byte-slice/endian/signed affine search; constants, `NA`, and fewer than three varying values remain
-unidentifiable. Reports and evidence JSONL default under `tmp/inventories/alfaobd_gauge_join/` and
-always say `candidate_only`. Pass exactly one decoded debug source per run—historic conflict files
-are overlapping cumulative snapshots, not independent samples—and label old-van work explicitly:
+preserves every original sample row, column index, and comma/semicolon/tab delimiter; uses the
+response-completion timestamp from the decoded trace; splits repeated-identifier polling loops; and
+explicitly scores preceding/current/following-cycle lag hypotheses. Exact `22 DDDD -> 62 DDDD`
+reads enter the DID namespace, while exact legacy `21 LL -> 61 LL` reads enter a distinct
+one-byte-local-identifier namespace. Keys such as `22:00A1` and `21:A1` cannot collide, and a wrong
+echo or other response prefix never becomes a payload candidate. Constants, `NA`, and fewer than
+three varying values remain unidentifiable. Reports and evidence JSONL default under
+`tmp/inventories/alfaobd_gauge_join/` and always say `candidate_only`. Pass exactly one decoded
+debug source per run—historic conflict files are overlapping cumulative snapshots, not independent
+samples—and label old-van work explicitly:
+
+The decoded-log parser buffers all `R:` callbacks through the adapter prompt because AlfaOBD can
+split one indexed ISO-TP row between callbacks. It validates index order and row widths, applies the
+ELM byte-count header, and fails closed on incomplete, malformed, or oversized response blocks.
+Only prompt-completed exact positive echoes supply bytes to the fitter. In schema-2 reports,
+`polling.cycle_boundary_key` is the authoritative service-qualified boundary; the legacy
+`polling.cycle_boundary` remains DID-only and is null for a `21` local-identifier boundary.
 
 ```bash
 python3 tools/alfaobd_gauge_join.py Gauges_Data.csv decoded.txt \
@@ -100,9 +131,10 @@ As an offline regression check, section 2 of the recovered historical diesel sna
 
 The joiner caps retained matching debug exchanges at 100,000 and candidate hypotheses per metric
 at 20,000 by default so an unexpectedly large cumulative source fails before consuming the Pi's
-memory. Narrow by section/profile/address or `--did` first; raise either limit only for a deliberate
-larger run. It also refuses to guess when prompt-completion timestamps do not identify one polling
-boundary; inspect the trace and supply `--boundary-did` explicitly in that case.
+memory. Narrow by section/profile/address, `--did`, or `--local-id` first; raise either limit only
+for a deliberate larger run. It also refuses to guess when prompt-completion timestamps do not
+identify one polling boundary; inspect the trace and supply `--boundary-did` or
+`--boundary-local-id` explicitly in that case.
 
 Even an exact historical fit is reference-only until the same ECU/DID/scaling is established on
 the current van; correlation by itself is not controlled ground truth.
@@ -163,9 +195,12 @@ receive-buffer ceiling for the long recorder, and explicitly restore passive C-C
 The 2026-07-23 vanpi storage audit (`findmnt`, numeric ownership, and the kernel exFAT warning)
 found that EXFAT512 needed a clean fsck/remount and that its automatic exFAT mount lacked
 `uid=1000,gid=1000`; without those options it maps files to UID/GID 65534 and is not writable by
-`pi`. Repair it from the ordinary SSH host shell and add the ownership options to
-`/home/pi/scripts/mount_disks.sh` before using it for the shakedown or long drive. Recheck the
-exact mount after every reconnect; this is temporal host state, not a permanent disk fact.
+`pi`. The volume was repaired and remounted on 2026-07-25, and the persistent exFAT branch in
+`/home/pi/scripts/mount_disks.sh` now obtains `pi`'s numeric UID/GID and applies
+`fmask=0022,dmask=0022`. At the checkpoint, the host reported the filesystem read-write with
+58 GiB free, the capture tree belonged to `pi:pi`, and the disk-health watchdog's create/remove
+probe succeeded as `pi`. Recheck the exact mount, ownership, writability, and free space after every
+reconnect; these are temporal host facts, not permanent disk guarantees.
 
 ```bash
 sudo systemctl stop tpms-logger
@@ -203,6 +238,59 @@ python3 tools/alfaobd_singleton_campaign.py run \
   --confirm-monitor-stopped \
   --conditions "parked; ignition ON; engine OFF; cluster System-status page"
 ```
+
+For a hands-off ordinary-driving scaling run, use the dedicated plan instead of
+the short parked shakedown plan:
+
+```bash
+python3 tools/alfaobd_singleton_campaign.py plan \
+  projects/ecu_mapping/configs/alfaobd_cluster_scaling_drive.json
+```
+
+It schedules Battery Voltage (+30), Engine speed, Vehicle speed, Actual Gear,
+and Outside temperature, then repeats Engine speed, Vehicle speed, and Battery
+Voltage (+30). The already-qualified battery signal deliberately occupies both
+outer positions: this tablet's 8 KiB Info buffering can contaminate the first
+and truncate the last rendered run, while both high-value RPM and speed
+observations now remain interior. Each singleton has a 45-second requested
+dwell so the changing RPM/speed signals have useful range despite the tablet's
+slow UI observations. The eight-segment run is expected to take roughly 21–25
+minutes on the current tablet. Start it while parked, with the engine running
+and AlfaOBD already connected to `Instrument panel Continental` on the stopped
+System-status monitor page. After both supervisors have passed their
+parked-start preflights, ordinary driving requires no tablet interaction.
+
+Use one new timestamped `RUN_ID` in both panes. Start the passive recorder
+first and give it enough time to cover the complete Alfa run:
+
+```bash
+python3 tools/passive_drive_capture.py \
+  --out-root /mnt/EXFAT512/obd-things/tmp/captures/ccan/drive-correlation \
+  --require-mount /mnt/EXFAT512 \
+  --campaign "RUN_ID" \
+  --duration-seconds 1800 \
+  --soft-free-gib 30 --hard-free-gib 25 \
+  --execute --confirm-passive \
+  --conditions "ordinary driving; parked start; engine running; PCAN C-CAN 6/14 listen-only; OBDLink MX+ parallel"
+
+python3 tools/alfaobd_singleton_campaign.py run \
+  projects/ecu_mapping/configs/alfaobd_cluster_scaling_drive.json \
+  --campaign-id "RUN_ID" \
+  --out-root /mnt/EXFAT512/obd-things/tmp/ecu_mapping/alfaobd-drive \
+  --require-mount /mnt/EXFAT512 \
+  --execute --confirm-read-only-diagnostics --confirm-ordinary-driving \
+  --confirm-monitor-stopped \
+  --conditions "ordinary driving; parked start; engine running; cluster System-status page; no driver tablet interaction"
+```
+
+The drive should include normal acceleration, deceleration, a steady-speed
+interval, and a complete stop where convenient. `Actual Gear` is currently a
+PRND-selector candidate, not a proven automatic-ratio signal, so ordinary
+transmission shifts may leave it at `D`; treat any new selector state as
+opportunistic evidence and collect controlled parked/foot-brake PRND changes
+separately if needed. No special maneuver is worth distracting the driver. The
+supervisor changes only the whitelisted System-status monitor selection; it
+cannot enter Active Diagnostics or send AlfaOBD actuation commands.
 
 The supervisor requires at least one configured activity witness to grow during the early
 post-start liveness check and requires **both** Debug and profile-Info growth by the end of every
@@ -244,10 +332,87 @@ python3 tools/passive_drive_capture.py \
   --recover-partials --execute --confirm-recovery
 ```
 
-This first supervisor intentionally supports one complete, visible parameter dialog at a time.
-It is sufficient for the eight-row cluster page and the initial singleton proof. The shakedown
-validated that bounded surface; scrollable hundreds-item profiles and automatic vehicle/module
-navigation remain unsupported and require a separate guarded extension.
+The singleton supervisor intentionally supports one complete, visible parameter dialog at a time.
+It is sufficient for the eight-row cluster **System status** page and the initial singleton proof.
+The owner-priority PCM scalars are on a different surface, **Plots → Select gauges to scan**, whose
+Device-190 catalog contains 193 rows.
+
+`alfaobd_plots_catalog.py` is the separate catalog-first guard for that surface. It validates the
+exact Plots page, the Pentastar/Hemi PCM connection banner, and stopped red-triangle state. The
+generic `Device model not determined` banner is deliberately rejected because it was also observed
+on the incompatible Climate profile. The tool opens only the gauge selector, seeks both list
+boundaries, inventories it forward and backward with bounded overlapping swipes, requires two
+matching parsed dialog states after every swipe, hashes the exact rendered Unicode label order, and exits
+with Android BACK. It never taps a gauge row, the dialog's OK button, the scan toggle, a
+vehicle/module selector, or Active Diagnostics. The first successful live
+result was reviewed and its hash is now pinned in the tracked discovery plan.
+
+The plan-only check is inert:
+
+```bash
+python3 tools/alfaobd_plots_catalog.py plan \
+  projects/ecu_mapping/configs/alfaobd_pcm_plots_catalog.json
+```
+
+For the first live catalog pass, park the van, connect AlfaOBD to the PCM profile, open the Plots
+page, and leave the red play triangle visible. `audit` sends no input:
+
+```bash
+python3 tools/alfaobd_plots_catalog.py audit \
+  projects/ecu_mapping/configs/alfaobd_pcm_plots_catalog.json
+```
+
+Only after that audit succeeds, use a new exact run ID:
+
+```bash
+RUN_ID='pcm-plots-catalog-YYYYMMDD-HHMMSS'
+python3 tools/alfaobd_plots_catalog.py inventory \
+  projects/ecu_mapping/configs/alfaobd_pcm_plots_catalog.json \
+  --campaign-id "$RUN_ID" \
+  --execute --confirm-read-only-navigation --confirm-parked \
+  --confirm-scan-stopped \
+  --conditions "parked; PCM connected; Plots page; red play triangle visible"
+```
+
+Machine evidence goes under `tmp/ecu_mapping/alfaobd_plots_catalog/$RUN_ID/`. A count, boundary,
+required-label, traversal, UI-stability, or optional pinned-hash mismatch fails closed and preserves
+evidence; it does not repair live strings from the SQLite prior. This inventory tool does **not**
+select or scan a scalar.
+
+`tools/alfaobd_plots_scalar_campaign.py`, with its draft plan at
+`projects/ecu_mapping/configs/alfaobd_pcm_plots_scalars.json`, is currently an
+**offline-gates-only scaffold**, not live scalar automation. `plan` validates and expands the
+candidate schedule, `audit` checks the referenced catalog plan and any configured reviewed report,
+and `status` only reads an existing `state.json`; none of those modes constructs an ADB client or
+accesses CAN, services, mounts, network, proxy settings, or output. The live
+catalog and review fields are now pinned:
+
+```bash
+python3 tools/alfaobd_plots_scalar_campaign.py plan \
+  projects/ecu_mapping/configs/alfaobd_pcm_plots_scalars.json
+
+python3 tools/alfaobd_plots_scalar_campaign.py audit \
+  projects/ecu_mapping/configs/alfaobd_pcm_plots_scalars.json
+```
+
+The scalar gate requires a reviewed live catalog before it can even pass its offline readiness
+check: a non-null catalog hash, the exact reviewed `catalog.json` and its hash, the sibling
+completion `state.json` and its hash, the catalog-plan source hash, the scalar-plan review hash,
+review provenance, and an exact
+`(display_order_key, zero_based_index, label)` triple for every scheduled target. Even if all pins
+and CLI confirmations pass, `run` is intentionally disabled in this version and exits before ADB,
+CAN, service, mount, or output access. No live selector mutation, scan, or scalar capture path exists
+yet.
+
+Catalog campaign `pcm-plots-catalog-20260726T224830Z` completed a matching
+forward/reverse 193-row traversal without manual reconciliation. The separate
+simultaneous eleven-gauge idle recording then preserved the owner's existing
+Plots list and produced the mappings in
+[`2026-07-26_pcm_plots_idle_mapping.md`](findings/promaster_2022/2026-07-26_pcm_plots_idle_mapping.md).
+That efficient multi-gauge result supersedes the need to run the scalar
+supervisor for those eleven rows. Keep the disabled one-at-a-time scaffold for
+future ambiguity resolution and for gauges that cannot be separated by fixed
+polling order.
 
 `alfaobd_singleton_join.py` is the strictly offline verifier for a completed singleton campaign.
 It validates campaign state and artifact hashes, requires successful zero-drop passive-recorder
@@ -270,7 +435,49 @@ python3 tools/alfaobd_singleton_join.py \
   --output /mnt/EXFAT512/obd-things/tmp/sweeps/cluster-shakedown-20260724-005100-singleton-join.json
 ```
 
-The output remains `candidate_only`: exact scheduled Info label-run order plus independent
+For a new ordinary-driving run covered by one complete passive recorder, join
+the two directories using the exact shared run ID:
+
+```bash
+RUN_ID='your-exact-run-id'
+python3 tools/alfaobd_singleton_join.py \
+  "/mnt/EXFAT512/obd-things/tmp/ecu_mapping/alfaobd-drive/${RUN_ID}" \
+  "/mnt/EXFAT512/obd-things/tmp/captures/ccan/drive-correlation/${RUN_ID}" \
+  --output "/mnt/EXFAT512/obd-things/tmp/sweeps/${RUN_ID}-singleton-join.json"
+```
+
+The positional order is Alfa campaign directory first, passive-capture
+directory second. Use `--capture-set` only when multiple hash-pinned recorder
+runs jointly provide continuous coverage.
+
+`alfaobd_singleton_infer.py` is the next strictly offline step for a schema-2
+join report. It searches the preserved raw-response and rendered-value
+distributions for bounded affine candidates, uses exact interior Debug order
+only as lag corroboration, consolidates repeated numeric anchors, and can
+recover only the observed portion of an enum. It opens no ADB, CAN, network,
+service, or subprocess resource:
+
+```bash
+python3 tools/alfaobd_singleton_infer.py \
+  "/mnt/EXFAT512/obd-things/tmp/sweeps/${RUN_ID}-singleton-join.json" \
+  --output "/mnt/EXFAT512/obd-things/tmp/sweeps/${RUN_ID}-singleton-inference.json" \
+  --kind 'Actual Gear=enum'
+```
+
+The inference report refuses to overwrite an existing result and validates the
+inference-critical schema, addressing, label/DID echoes, distributions, counts,
+and Debug/wire corroboration from the hash-verified join step. Contradictory
+anchors and insufficient variation remain unidentifiable. Observationally
+equivalent signed/unsigned or endian interpretations remain enumerated on a
+selected candidate rather than being silently collapsed. Every selected
+formula or enum row is explicitly `candidate_only`, with physical verification
+and telemetry promotion disabled. The explicit gear override is required
+because Alfa may render a mixed categorical set such as `P`, `1`, `2`, and
+`D`; numeric-looking gear labels are not a physical scalar. The absent Android
+timestamps mean even a very clean affine fit establishes AlfaOBD's observed
+rendering candidate, not independent physical truth.
+
+The join output remains `candidate_only`: exact scheduled Info label-run order plus independent
 Debug/wire payload corroboration establishes a strong label-to-DID association but cannot by itself
 prove a non-observed scale or enum. The completed schema-2 report resolved all seven scheduled
 segments, passed both repeated-anchor checks, and has SHA-256
@@ -319,6 +526,17 @@ and writes a small kernel-timestamped wire stream for the exact cluster endpoint
 requires its request/positive/NRC counts to agree with the append-only high-level attempt records.
 AlfaOBD and every other diagnostic client must remain closed for the whole run.
 
+The same guarded logger also feeds the local telemetry cache by default. It
+publishes cluster battery voltage, fresh verified `0x2EF` ignition presence,
+and the four unresolved DIDs as explicitly raw/candidate metrics through the
+Unix-only broker observation endpoint. A fixed latest-value queue and
+250-millisecond socket timeout keep the dashboard outside the CAN timing and
+evidence path: a stopped, outdated, or unavailable broker cannot delay a
+request, grow memory without bound, or fail the capture. Publication counts,
+superseded values, errors, and any unfinished publisher thread are recorded in
+the final `summary.json`. Use `--no-telemetry-publish` only when deliberately
+testing without the dashboard.
+
 First inspect the inert plan:
 
 ```bash
@@ -349,6 +567,18 @@ python3 projects/ecu_mapping/cluster_drive_log.py \
   --confirm-no-other-diagnostics --pair 6/14 \
   --conditions "started parked, engine running; parked idling rotation shakedown; AlfaOBD closed; PCAN on C-CAN 6/14"
 ```
+
+The first real-hardware shakedown completed on 2026-07-25 as
+`cluster-drive-shakedown-20260726T050955Z`; see the
+[`idling logger finding`](findings/promaster_2022/2026-07-25_cluster_idle_logger_shakedown.md).
+It produced 3,114/3,114 exact positives, two valid raw chunks containing
+1,960,920 frames, zero drops, exact wire/high-level counts, and verified
+passive restoration/lock release. Cluster `1000` varied from `2936..6136` and
+settled near `3000` while speed stayed zero and gear stayed `00`, which is
+strong engine-speed behavior and is consistent with—but does not yet prove—a
+`raw / 4` RPM rendering. This emergency shakedown used local ext4 `tmp/` while
+`EXFAT512` was being repaired, so a long run still requires the external
+mount's independent read-write/fsync/free-space preflight.
 
 Use `--duration-seconds 72000` and a new campaign name for a 20-hour ignition leg only after that
 shakedown passes. The process is noninteractive once started; do not interact with it while driving.
@@ -395,6 +625,57 @@ This campaign can establish nonzero raw ranges, ordering, lag, gear transitions,
 relationships, and broadcast candidates. It does not by itself prove absolute RPM/speed,
 temperature, or every gear enum. Radar/GPS/tachometer, a stable temperature reference, or another
 controlled ground truth is still required before promoting those scalings.
+
+`tools/can_timeseries_correlate.py` performs the first offline broadcast-candidate search against
+one exact-positive cluster DID. It streams saved plain or zstd candump chunks, verifies every
+selected reference against its exact global raw-frame sequence/timestamp/ID/payload, and excludes
+29-bit and standard OBD diagnostic IDs by default so the diagnostic response cannot become a
+trivial perfect match. It requires at least 50 percent reference coverage and four distinct
+candidate values by default, then ranks by `R² × coverage` before the remaining deterministic
+tie-breakers. The portable direct invocation for the completed idling shakedown is:
+
+```bash
+python3 tools/can_timeseries_correlate.py \
+  --wire tmp/captures/ccan/cluster-drive/cluster-drive-shakedown-20260726T050955Z/cluster_wire.jsonl \
+  --did 1000 \
+  --reference-field u16be:0 \
+  --match nearest \
+  --radius-ms 100 \
+  --minimum-samples 20 \
+  --top 100 \
+  --output tmp/sweeps/cluster-drive-shakedown-20260726T050955Z-did1000-broadcast.json \
+  tmp/captures/ccan/cluster-drive/cluster-drive-shakedown-20260726T050955Z/chunk_000000_full.candump.zst \
+  tmp/captures/ccan/cluster-drive/cluster-drive-shakedown-20260726T050955Z/chunk_000001_full.candump.zst
+```
+
+On vanpi, submit that heavy saved-log analysis through the fixed repository
+task instead of running it on the Pi:
+
+```bash
+python3 /home/pi/van_compute/scripts/pi_compute.py run \
+  can-timeseries-correlate-two-chunks \
+  --source-root /home/pi/dev/obd-things \
+  --input /home/pi/dev/obd-things/tmp/captures/ccan/cluster-drive/cluster-drive-shakedown-20260726T050955Z/cluster_wire.jsonl \
+  --input /home/pi/dev/obd-things/tmp/captures/ccan/cluster-drive/cluster-drive-shakedown-20260726T050955Z/chunk_000000_full.candump.zst \
+  --input /home/pi/dev/obd-things/tmp/captures/ccan/cluster-drive/cluster-drive-shakedown-20260726T050955Z/chunk_000001_full.candump.zst \
+  --wait --stdout
+```
+
+The task accepts exactly those three input roles and fixes DID `1000`, field
+`u16be:0`, the matching thresholds, and its declared `report.json` output; it
+does not accept caller-supplied arguments. The first successful report found
+`0x0FC` bytes 0–1 as the full-coverage unit-slope raw candidate. See the
+[`2026-07-26 broadcast correlation finding`](findings/promaster_2022/2026-07-26_cluster_did1000_broadcast_correlation.md).
+
+This tool performs no CAN, ADB, service, or network access. Its ranked rows are deliberately marked
+`candidate_only`, `physical_identity_verified: false`, `scale_verified: false`, and
+`telemetry_promotion_allowed: false`. A high correlation means only that a saved broadcast field
+tracked the selected raw DID during that experiment; it does not establish identity, units,
+physical scaling, safety thresholds, or causality. The low-excitation idling trace is a lead
+generator, not promotion evidence; confirm candidates with independent driving variation and
+ground truth. The report exact-links raw frames but deliberately states that it does not itself
+validate the chunk manifest, socket-drop accounting, or final campaign summary; retain and review
+the completed `summary.json` alongside it.
 
 `reassemble_commands.py <decoded.txt> <out.txt> [atsh]` — rebuilds multi-frame COMMANDS.
 AlfaOBD sends long requests as MANUAL ISO-TP frames: First Frame `1L LL <6 data>` + a trailing
@@ -487,6 +768,13 @@ bounded follow-ups.
 The [`2026-07-19 passive drive analysis`](findings/promaster_2022/2026-07-19_ccan_drive_signal_analysis.md)
 corrects CAN ID `0x101` from the old odometer hypothesis to a packed instantaneous-speed field,
 corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one known-speed reference.
+The later
+[`cluster DID 1000 broadcast correlation`](findings/promaster_2022/2026-07-26_cluster_did1000_broadcast_correlation.md)
+exact-linked all 623 idling Engine-speed-associated DID samples to the raw
+capture and ranked `0x0FC` bytes 0–1 (`u16be`) first: 100 percent coverage,
+R² 0.9998896, unit-slope affine fit, and 6.42 raw-count RMSE. This is a strong
+passive raw engine-speed candidate, but the low-excitation idle trace does not
+verify the `/4` rpm scale or authorize public telemetry promotion.
 
 - **Radar (0x2A)** confirms the radar project's story: `31 01 0250` → `7F3131` (wrong RID),
   alignment-gauge DIDs (`083E/083F/0846/0830/0860`) → `7F2231` "not supported". DID `0850`
@@ -539,17 +827,26 @@ corroborated by `0x0EE`; the exact `/16`-versus-`/32` km/h scale still needs one
    right-knob counterclockwise and the unresolved OEM-versus-installed knob-press discrepancy. The
    selected Climate profile failed live variant verification, so its gauge labels/scales are invalid
    here. Climate result-only RID `0201` remains an offline identification lead only; do not start/stop it.
-5. **C-CAN cluster singleton and session proofs completed:** do not repeat the six-profile broad pass,
-   parked five-signal shakedown, or default/session-03 comparison without a new question. The
+5. **C-CAN cluster singleton, session, and logger shakedown proofs completed:** do not repeat the
+   six-profile broad pass, parked five-signal shakedown, or default/session-03 comparison without
+   a new question. The
    buffered-envelope join discriminates the five cluster DIDs and repeats both anchors without a wire
    mismatch. Direct PCAN reads then produced identical results after exact `10 01` and `10 03` echoes,
    proving default compatibility without requiring extended session. The bounded standalone viewer
    may leave the inherited session unchanged and fail closed rather than sending `10`/`3E`; do not
    label that inherited state as positively identified default. The fixed-profile
-   `cluster_drive_log.py` is now prepared for nonzero RPM/speed evidence and ordinary gear
-   transitions; run its 12-minute parked/idling rotation shakedown before the long campaign. It
-   owns integrated raw capture under the active lock, so do not pair it with the separate passive
-   recorder on the same PCAN. Expand only the validated singleton Status workflow. Also use
+   `cluster_drive_log.py` completed its 12-minute parked/idling rotation shakedown with exact
+   request/wire accounting, zero drops, and passive restoration. Its nonzero `1000` range is
+   consistent with `raw / 4` RPM but remains unverified; use the guarded Alfa scaling drive for
+   moving speed, rendered RPM, and non-P gear evidence. The logger owns integrated raw capture
+   under the active lock, so do not pair it with the separate passive recorder on the same PCAN.
+   Preserve the validated singleton Status workflow for its bounded labels. The owner-priority PCM
+   Plots catalog and simultaneous eleven-gauge idle mapping are complete: passive `0x41D` oil
+   pressure and `0x2ED` coolant are telemetry sources, while `0x100` torque needs loaded wrap/mode
+   evidence and engine-oil temperature remains unmapped. Do not repeat the idle campaign merely to
+   rediscover those DIDs. The separate scalar tool remains an offline pin-validation scaffold and
+   its `run` path is intentionally disabled; use it only after implementing and reviewing a genuine
+   one-at-a-time need. Also use
    passenger-door plus parking-brake discriminators to refine the passive and BCM candidates.
    Alfa's shifter `Drive` rendering in Park and TCM `Brake switch` watcher remain explicitly
    invalid.

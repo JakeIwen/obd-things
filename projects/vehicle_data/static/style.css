@@ -10,6 +10,7 @@
   --accent: #7ee0b4;
   --accent-soft: #b9f3d9;
   --warm: #f4c87f;
+  --danger: #f08f82;
 }
 
 * { box-sizing: border-box; }
@@ -40,7 +41,7 @@ body::before {
 main {
   position: relative;
   z-index: 1;
-  width: min(76rem, calc(100% - 2rem));
+  width: min(82rem, calc(100% - 2rem));
   margin: 0 auto;
   padding: 2.5rem 0 5rem;
   display: grid;
@@ -111,6 +112,112 @@ select {
   backdrop-filter: blur(12px);
 }
 
+.drive-panel {
+  grid-column: 1 / -1;
+  padding: 1.15rem;
+  border-color: #3d6757;
+  background:
+    linear-gradient(130deg, rgba(21, 51, 42, .97), rgba(10, 26, 21, .91));
+}
+
+.engine-health-panel {
+  grid-column: 1 / -1;
+}
+
+.engine-health-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: .75rem;
+}
+
+.health-value {
+  font-size: clamp(2rem, 4.2vw, 3.8rem);
+}
+
+.drive-heading h2 { margin-bottom: .7rem; }
+
+.drive-hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.75fr) repeat(3, minmax(0, 1fr));
+  gap: .75rem;
+}
+
+.drive-tile {
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid #315447;
+  border-radius: .65rem;
+  background: rgba(5, 16, 13, .55);
+}
+
+.drive-value {
+  min-height: 1em;
+  margin: .15rem 0 .5rem;
+  color: var(--accent-soft);
+  font: 500 clamp(2.25rem, 5.2vw, 4.6rem)/.9 Georgia, "Times New Roman", serif;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.045em;
+  white-space: nowrap;
+}
+
+.drive-primary .drive-value {
+  font-size: clamp(3.5rem, 8vw, 7rem);
+}
+
+.drive-state-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: clamp(2rem, 4vw, 3.7rem);
+  letter-spacing: .02em;
+}
+
+.drive-unit {
+  margin-left: .28rem;
+  color: var(--accent);
+  font: 700 clamp(.8rem, 1.6vw, 1.2rem)/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: .05em;
+}
+
+.drive-status, .tire-status {
+  min-height: 1.25em;
+  margin: 0;
+  color: var(--muted);
+  font: 700 .68rem/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.drive-tile[data-state="stale"],
+.tire-card[data-state="stale"],
+.metric-card[data-state="stale"],
+.battery-panel[data-state="stale"] {
+  border-color: #8a7045;
+  background: rgba(51, 38, 20, .72);
+}
+
+.drive-tile[data-state="unqualified"],
+.tire-card[data-state="unqualified"],
+.metric-card[data-state="candidate"] {
+  border-color: #76564d;
+}
+
+.drive-tile[data-state="unavailable"] .drive-value,
+.tire-card[data-state="unavailable"] .tire-value {
+  color: #70837b;
+}
+
+.badge[data-state="verified"],
+.drive-tile[data-state="verified"],
+.drive-tile[data-state="observed_alfa_scale"],
+.tire-card[data-state="verified"],
+.tire-card[data-state="observed_alfa_scale"] {
+  border-color: #57957b;
+}
+
+.badge[data-state="partial"] {
+  color: var(--warm);
+  border-color: #796542;
+}
+
 .state-panel {
   grid-column: span 5;
   display: grid;
@@ -130,6 +237,57 @@ select {
   display: grid;
   grid-template-columns: 1fr auto;
   align-items: start;
+}
+
+.tires-panel {
+  grid-column: span 5;
+}
+
+.tire-grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .7rem 1.2rem;
+}
+
+.tire-grid::before {
+  content: "";
+  position: absolute;
+  inset: .75rem calc(50% - .12rem);
+  width: .24rem;
+  border-radius: 999px;
+  background: #29483c;
+  opacity: .55;
+}
+
+.tire-card {
+  position: relative;
+  min-width: 0;
+  padding: .82rem;
+  border: 1px solid #315447;
+  border-radius: .55rem;
+  background: rgba(5, 16, 13, .48);
+}
+
+.tire-position {
+  margin-bottom: .35rem;
+  color: var(--accent);
+  font: 700 .68rem/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+
+.tire-value {
+  margin-bottom: .35rem;
+  color: var(--accent-soft);
+  font: 500 clamp(1.8rem, 4vw, 2.8rem)/1 Georgia, "Times New Roman", serif;
+  font-variant-numeric: tabular-nums;
+}
+
+.tire-unit {
+  margin-left: .2rem;
+  color: var(--accent);
+  font: 700 .75rem/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 .reading {
@@ -197,14 +355,35 @@ dd {
 }
 
 .metric-card, .catalog-item {
+  position: relative;
   padding: 1rem;
   border: 1px solid #29473c;
   border-radius: .55rem;
   background: rgba(7, 17, 14, .45);
 }
 
+.metric-quality {
+  position: absolute;
+  top: .72rem;
+  right: .72rem;
+  max-width: 48%;
+  color: var(--muted);
+  font: 700 .58rem/1.15 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: .07em;
+  text-align: right;
+}
+
 .metric-card p:last-child, .catalog-item p:last-child { margin-bottom: 0; }
-.metric-value { margin-bottom: .5rem; font-size: 1.5rem; color: var(--accent-soft); }
+.metric-value {
+  margin: .85rem 0 .5rem;
+  font-size: 1.5rem;
+  color: var(--accent-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+body:not([data-profile="diagnostics"]) .metric-card.diagnostic-only {
+  display: none;
+}
 
 .status-line {
   margin-bottom: .45rem;
@@ -255,8 +434,32 @@ button:disabled { cursor: not-allowed; opacity: .35; }
 .widget-options input { accent-color: var(--accent); }
 
 body[data-profile="driving"] .battery-panel {
+  grid-column: span 7;
   border-color: #456c5c;
   background: linear-gradient(135deg, rgba(25, 53, 44, .96), rgba(13, 28, 23, .88));
+}
+
+body[data-profile="driving"] main {
+  width: min(90rem, calc(100% - 1rem));
+  padding-top: 1rem;
+  gap: .75rem;
+}
+
+body[data-profile="driving"] .masthead {
+  padding-top: .25rem;
+  padding-bottom: .85rem;
+}
+
+body[data-profile="driving"] h1 {
+  font-size: clamp(2.35rem, 5vw, 4.4rem);
+}
+
+body[data-profile="driving"] .panel {
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .12);
+}
+
+body[data-profile="driving"] [data-widget="metrics"] {
+  grid-column: 1 / -1;
 }
 
 body[data-profile="parked"] .battery-panel {
@@ -268,17 +471,32 @@ body[data-profile="parked"] .battery-panel {
   main { padding-top: 1.25rem; }
   .masthead { align-items: stretch; flex-direction: column; gap: 1rem; }
   .profile-picker { width: 100%; }
-  .panel, .state-panel, .battery-panel { grid-column: 1 / -1; }
+  .panel, .state-panel, .battery-panel, .tires-panel { grid-column: 1 / -1; }
+  .drive-hero-grid, .engine-health-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .drive-primary .drive-value { font-size: clamp(3.2rem, 14vw, 5.6rem); }
 }
 
 @media (max-width: 34rem) {
-  main { width: min(100% - 1rem, 76rem); gap: .65rem; }
+  main { width: min(100% - 1rem, 82rem); gap: .65rem; }
   .panel { padding: 1rem; }
   .state-panel { grid-template-columns: 1fr; }
   .detail-grid, .compact-grid, .metric-grid { grid-template-columns: 1fr; }
   .battery-panel { grid-template-columns: 1fr; gap: 1rem; }
   .badge { justify-self: start; }
   .widget-options { grid-template-columns: 1fr; }
+  .drive-panel { padding: .75rem; }
+  .drive-tile { padding: .75rem; }
+  .drive-value { font-size: clamp(1.8rem, 13vw, 3rem); }
+  .drive-primary .drive-value { font-size: clamp(2.8rem, 18vw, 4.5rem); }
+  .drive-status { font-size: .6rem; }
+}
+
+@media (min-width: 48.001rem) and (max-width: 68rem) {
+  .engine-health-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

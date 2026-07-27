@@ -252,6 +252,49 @@ class PlanTests(unittest.TestCase):
             ("MARELLI_DASH_EP_Info.log",),
         )
 
+    def test_tracked_cluster_scaling_drive_plan_is_valid(self):
+        plan = campaign.load_plan(
+            REPO
+            / "projects"
+            / "ecu_mapping"
+            / "configs"
+            / "alfaobd_cluster_scaling_drive.json"
+        )
+        self.assertEqual(plan.module_key, "cluster")
+        self.assertEqual(
+            plan.gauges,
+            (
+                "Battery Voltage (+30)",
+                "Engine speed",
+                "Vehicle speed",
+                "Actual Gear",
+                "Outside temperature",
+            ),
+        )
+        self.assertEqual(
+            plan.schedule,
+            (
+                "Battery Voltage (+30)",
+                "Engine speed",
+                "Vehicle speed",
+                "Actual Gear",
+                "Outside temperature",
+                "Engine speed",
+                "Vehicle speed",
+                "Battery Voltage (+30)",
+            ),
+        )
+        self.assertEqual(plan.schedule[1:3], plan.schedule[5:7])
+        self.assertEqual(plan.segment_seconds, 45)
+        self.assertEqual(
+            set(plan.required_segment_growth),
+            {"AlfaOBD_Debug.bin", "MARELLI_DASH_EP_Info.log"},
+        )
+        self.assertEqual(
+            plan.required_stop_stability,
+            ("MARELLI_DASH_EP_Info.log",),
+        )
+
     def test_unknown_gauge_and_unsafe_artifact_are_rejected(self):
         payload = plan_payload()
         payload["gauges"] = ["Unknown"]
@@ -469,6 +512,40 @@ def _label(text):
 
 
 class ProvenanceTests(unittest.TestCase):
+    def test_foreground_package_accepts_app_owned_android_7_dialog(self):
+        class Result:
+            returncode = 0
+            stdout = (
+                "  mCurrentFocus=Window{48ff0d0d0 u0 Select gauges to scan}\n"
+                "  mFocusedApp=AppWindowToken{token=Token{activity "
+                "com.AlfaOBD.AlfaOBD/.AlfaOBDConnect}}\n"
+            )
+            stderr = ""
+
+        class Runner:
+            def run(self, _command, **_kwargs):
+                return Result()
+
+        adb = campaign.AdbClient(Runner(), "fixture")
+        self.assertEqual(adb.foreground_package(), campaign.PACKAGE)
+
+    def test_foreground_package_rejects_foreign_dialog_and_app(self):
+        class Result:
+            returncode = 0
+            stdout = (
+                "  mCurrentFocus=Window{abc u0 Foreign dialog}\n"
+                "  mFocusedApp=AppWindowToken{com.android.settings/.Settings}\n"
+            )
+            stderr = ""
+
+        class Runner:
+            def run(self, _command, **_kwargs):
+                return Result()
+
+        adb = campaign.AdbClient(Runner(), "fixture")
+        with self.assertRaisesRegex(campaign.CampaignError, "not foreground"):
+            adb.foreground_package()
+
     def test_dump_ui_uses_one_compressed_adb_round_trip(self):
         class Result:
             returncode = 0

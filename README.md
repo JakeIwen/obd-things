@@ -50,6 +50,7 @@ tools/                     GENERIC, module-agnostic CLI tools (take a module key
   routine_scan.py            dry-run-first, checkpointed result-only RoutineControl inventory (31 03)
   ccan_inventory_campaign.sh one-command parked baseline, DID-page, or session-compare campaigns
   signal_correlate.py        DID byte-slice <-> signal correlator (lstsq), capture + analyze
+  can_timeseries_correlate.py offline cluster-DID <-> passive broadcast candidate correlator
 projects/                  per-target investigations and durable findings
   vehicle_configuration/    BCM/PROXI configuration campaigns and recovery handoffs
   vehicle_data/             allowlisted cached telemetry broker, CLI, and gated dashboard

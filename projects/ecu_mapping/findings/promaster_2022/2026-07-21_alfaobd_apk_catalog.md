@@ -32,6 +32,63 @@ is model code `88`: the 26 `ECUList` rows whose comma-delimited `Dodge_RAM` fiel
 match the module choices displayed for that model. Treat that linkage as strong local application
 evidence, not an OEM definition.
 
+## PCM Plots catalog follow-up — 2026-07-25
+
+AlfaOBD exposes two distinct parameter selectors. The existing guarded
+singleton supervisor operates the **System status** dialog, `Select parameters
+to monitor`; the saved PCM first page contains status-group names such as
+`Crank Status`. The owner-priority scalar gauges are instead candidates in the
+**Plots** dialog, `Select gauges to scan`. Merely teaching the current Status
+selector to scroll would therefore target the wrong surface.
+
+The reconstructed database supplies an exact ordered candidate catalog for
+the selected `TIGERSHARK_CUSW` profile:
+
+```sql
+SELECT d.ID AS display_order_key, d.Param_ID, p.Param_Name_EN,
+       d.Unit_ID, u.Unit_EN
+FROM Devices_params_units AS d
+JOIN Param_names AS p ON p.Param_ID=d.Param_ID
+LEFT JOIN Units AS u ON u.Unit_ID=d.Unit_ID
+WHERE d.Device_ID=190
+ORDER BY d.ID;
+```
+
+`Param_devices.Device_ID=190` identifies `TIGERSHARK_CUSW`.
+`Devices_params_units.ID` is the per-device display-order key, **not a DID or
+parameter ID**; `Param_ID` is the reusable semantic-label join. Device 190 has
+193 unique rows. A cross-check against the saved eight-row Climate Plots
+selector reproduced that UI's exact catalog order, supporting `ORDER BY d.ID`
+as the navigation order. Runtime formatting still changes catalog text such as
+`|C` to `°C`, so live automation must inventory and pin the actual UI strings
+rather than synthesizing a tap from the database alone.
+
+High-priority Device-190 rows are:
+
+| display-order key | catalog candidate | catalog unit |
+|---:|---|---|
+| 7 | Engine speed | rpm |
+| 13 | Current engine torque | Nm |
+| 15 | Coolant temperature | `|C` (UI typically renders °C) |
+| 16 | Desired PWM Radiator Fan | % |
+| 17 | Engine oil pressure | kPa |
+| 18 | Oil pressure sensor | V |
+| 19 | VVT Oil Pressure | kPa |
+| 20 | VVT Oil Temperature | `|C` |
+| 44 | Target Charging Voltage | V |
+| 45 | Generator Duty Cycle | % |
+| 47 | Battery voltage | V |
+| 188 | Transmission Oil Temperature | `|C` |
+| 191 | Turbine speed | rpm |
+| 192 | Output Speed | rpm |
+
+These rows are high-yield navigation targets, not mappings. This table does
+not bind a label to a wire DID or prove that the generic profile's rendering
+matches the installed PCM. In particular, `VVT Oil Temperature` must not be
+silently renamed as the physical EOT sensor confirmed by OEM documentation.
+Each scalar still requires an exact-label one-at-a-time Plots capture,
+simultaneous passive wire evidence, and direct-read/physical validation.
+
 ## 2022+ ProMaster profile/address candidates
 
 The table below summarizes model-code-88 choices. A 29-bit target means the `ECUUnits.ecuaddress`
@@ -249,24 +306,63 @@ samples, but every section is dated 2022–2024 and belongs to old diesel, six-s
 or historical TPMS profiles. It has labels/rendered values but no wire DIDs and no 2026/current-van
 session. It is a parser fixture and old-vehicle vocabulary source, not current-van evidence.
 
+The saved 2026-07-22 Preferences hierarchy shows **Info Log Recording**, **Keep session data**,
+**Gauges data recording**, and **Debug data recording** all checked. Nevertheless, the
+8,826,902-byte `Gauges_Data.csv` retained its 2026-07-21 16:03 local mtime and did not grow during
+that live run because the campaign monitored the separate **Status** surface, not Plots. APK code
+binds `RecordScanData` to `AlfaOBDStart.L0`; when the Plots start control runs with that flag true,
+its handler clears the recording buffers, calls `L6()` to start the CSV writer thread, enables
+`bRecording`, and shows the recording notification. The stopped-Climate Plots hierarchy
+consistently shows `bRecording` disabled. The intended scalar runner therefore should not add an
+unnecessary record-button tap: start the verified Plots scan, require the expected recording
+visual state plus measured CSV growth after stopping, and require stable size after that stop. The
+manual `bRecording` toggle remains a separate state that must not be guessed.
+
+Targeted fallback decompilation of the APK's `i2` writer establishes the file behavior more
+precisely. This build appends UTF-8 sections to
+`/sdcard/Android/data/com.android.AlfaOBD/files/logs/Gauges_Data.csv`; each section identifies the
+connected profile and date, then writes `HH:mm:ss.SSS` rows with values formatted to three decimals
+or `NA`. The configured separator is comma, semicolon, or tab, and commas are removed from rendered
+gauge labels. The writer does not flush each sample or row: it explicitly flushes and closes only
+when recording stops, with no filesystem `fsync`. BufferedWriter may still emit full internal
+buffers while running, so observed file growth can be delayed and chunked. Segment verification
+must therefore treat a clean Plots stop followed by post-stop growth and stable size as the durable
+CSV boundary; absence of immediate live growth is not by itself a recording failure.
+
 Two recovered 2022 debug snapshots likewise identify only the prior 2015 diesel VIN. They recover
 partial raw provenance for the existing old-van map but add no current-van mappings. These
 provenance boundaries prevent old labels or scaling from leaking into the 2022 module namespaces.
 
 ## Next evidence-producing work
 
-1. The read-only `tools/alfaobd_catalog.py` export now preserves the model-code-88 ECU rows, exact
+1. The separate fail-closed Plots catalog supervisor is now implemented as
+   `tools/alfaobd_plots_catalog.py`; the discovery plan is
+   `projects/ecu_mapping/configs/alfaobd_pcm_plots_catalog.json`. It validates
+   the stopped Plots page, inventories exact live strings in both directions
+   with overlapping bounded swipes and stable parsed-dialog pairs, never taps a
+   row/OK/scan, and cancels with BACK. The first live PCM inventory is still
+   pending: verify the 193-row count/order and required labels, review the
+   output, then pin the exact catalog hash. Do not treat the existing **System
+   status → Select parameters to monitor** walker as the same surface.
+2. After that inventory matches the 193-row Device-190 prior, capture one Plots scalar at a time,
+   beginning with keys 7, 13, 15–20, 44, 45, and 47. Record Debug Data plus a growing
+   `Gauges_Data.csv` while PCAN passively records full C-CAN. Keys 188, 191, and 192 are useful later
+   transmission candidates. Key 20 is literally `VVT Oil Temperature`, not a proven physical EOT
+   label.
+3. Use the existing Status singleton path only for discrete groups such as dual-stage oil-pump and
+   fan desired state. It writes profile Info evidence rather than the Plots Gauges CSV.
+4. The read-only `tools/alfaobd_catalog.py` export now preserves the model-code-88 ECU rows, exact
    subtype isocodes, BCM definitions, raw placeholders, and source hashes in JSON. Reverse the
    application's extra string-table indirection before treating any placeholder expansion as a label.
-2. The structural decode is complete. Spot-check names/units/scaling against controlled vehicle
+5. The structural decode is complete. Spot-check names/units/scaling against controlled vehicle
    state before promoting fields; do not repeat the already complete 75-request set without a new
    question.
-3. The guarded adapter-6 B-CAN survey and broad AlfaOBD status observation are complete. Four
+6. The guarded adapter-6 B-CAN survey and broad AlfaOBD status observation are complete. Four
    endpoints are verified; four optional profiles timed out again. Do not repeat them without a new
    state/session or installed-equipment question. The selected Climate profile failed live subtype
    verification and its gauge interpretations are invalid for this ECU.
-4. With ignition on and PCAN listen-only, run one front-door lock/unlock output action at a time in
+7. With ignition on and PCAN listen-only, run one front-door lock/unlock output action at a time in
    AlfaOBD while recording Debug Data. Do not enter Tools/PROXI or car-configuration menus.
-5. For ICS, Uconnect, and EMCM2, use one controlled button/knob/value change against the status-DID
+8. For ICS, Uconnect, and EMCM2, use one controlled button/knob/value change against the status-DID
    groups already bounded in the linked live observation; another broad gauge/status pass is not
    needed.

@@ -57,6 +57,7 @@ import socket
 import struct
 import subprocess
 import sys
+import threading
 import time
 from typing import Callable, Sequence
 
@@ -130,6 +131,11 @@ IGNITION_CAN_ID = 0x2EF
 IGNITION_START_TIMEOUT_S = 15.0
 IGNITION_LOSS_TIMEOUT_S = 10.0
 MAX_CONSECUTIVE_DID_FAILURES = 3
+DEFAULT_TELEMETRY_SOCKET = "/run/van-telemetry/api.sock"
+TELEMETRY_TIMEOUT_S = 0.25
+TELEMETRY_MAX_PENDING = 8
+TELEMETRY_CLOSE_TIMEOUT_S = 2.0
+TELEMETRY_IGNITION_INTERVAL_S = 1.0
 CAMPAIGN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
 BLOCKED_SERVICES = ("tpms-drivesniff",)
 BLOCKED_PROCESS_BASENAMES = frozenset(
@@ -163,6 +169,222 @@ class DriveLogError(RuntimeError):
 
 class CampaignLimitReached(RuntimeError):
     """The duration boundary was reached before another request could be sent."""
+
+
+TELEMETRY_RAW_DIDS = {
+    0x1000: ("diagnostics.cluster.did.1000.raw", "raw_u16_be"),
+    0x1002: ("diagnostics.cluster.did.1002.raw", "raw_u8"),
+    0x0107: ("diagnostics.cluster.did.0107.raw", "raw_u8"),
+    0x1005: ("diagnostics.cluster.did.1005.raw", "raw_u8"),
+}
+TELEMETRY_METRICS = frozenset(
+    {
+        "battery.voltage",
+        "vehicle.ignition_on",
+        *(name for name, _unit in TELEMETRY_RAW_DIDS.values()),
+    }
+)
+
+
+def telemetry_observation_for_did(
+    did: int, data: bytes
+) -> tuple[str, dict[str, object]] | None:
+    """Return one allowlisted dashboard observation for an exact positive DID."""
+    expected_length = EXPECTED_DATA_LENGTHS.get(did)
+    if expected_length is None or len(data) != expected_length:
+        raise ValueError(
+            f"DID {did:04X} telemetry payload length {len(data)} != {expected_length}"
+        )
+    raw = int.from_bytes(data, "big")
+    if did == 0x1004:
+        return (
+            "battery.voltage",
+            {
+                "value": raw / 10.0,
+                "unit": "V",
+                "source": "cluster.did.1004",
+                "bus": "c-can",
+                "quality": "observed_alfa_scale",
+            },
+        )
+    definition = TELEMETRY_RAW_DIDS.get(did)
+    if definition is None:
+        return None
+    metric, unit = definition
+    return (
+        metric,
+        {
+            "value": raw,
+            "unit": unit,
+            "source": f"cluster.did.{did:04x}",
+            "bus": "c-can",
+            "quality": "candidate",
+        },
+    )
+
+
+def ignition_telemetry_observation() -> tuple[str, dict[str, object]]:
+    """Describe fresh presence of the verified ignition-on broadcast frame."""
+    return (
+        "vehicle.ignition_on",
+        {
+            "value": True,
+            "unit": "boolean",
+            "source": "ccan.broadcast.0x2ef",
+            "bus": "c-can",
+            "quality": "verified",
+        },
+    )
+
+
+class BestEffortTelemetryPublisher:
+    """Bounded latest-value publisher that can never stall the CAN owner.
+
+    The fixed metric allowlist caps memory independently of broker health.
+    Publication happens on one daemon thread with a short Unix-socket timeout;
+    failures are counted in evidence but never change diagnostic pacing or
+    campaign success.
+    """
+
+    def __init__(
+        self,
+        socket_path: str,
+        *,
+        enabled: bool = True,
+        timeout: float = TELEMETRY_TIMEOUT_S,
+        max_pending: int = TELEMETRY_MAX_PENDING,
+        client_factory=None,
+    ) -> None:
+        if max_pending < 1:
+            raise ValueError("telemetry max_pending must be positive")
+        self.socket_path = socket_path
+        self.enabled = enabled
+        self.timeout = timeout
+        self.max_pending = min(max_pending, len(TELEMETRY_METRICS))
+        self.client_factory = client_factory or self._default_client_factory
+        self._condition = threading.Condition()
+        self._pending: dict[str, dict[str, object]] = {}
+        self._thread: threading.Thread | None = None
+        self._closing = False
+        self._submitted = 0
+        self._superseded = 0
+        self._overflow_dropped = 0
+        self._attempts = 0
+        self._published = 0
+        self._rejected = 0
+        self._errors = 0
+        self._last_error: str | None = None
+
+    @staticmethod
+    def _default_client_factory(socket_path: str, timeout: float):
+        from projects.vehicle_data.api import TelemetryClient
+
+        return TelemetryClient(socket_path, timeout=timeout)
+
+    def start(self) -> None:
+        if not self.enabled:
+            return
+        with self._condition:
+            if self._thread is not None:
+                return
+            try:
+                self._thread = threading.Thread(
+                    target=self._run,
+                    name="cluster-telemetry-publisher",
+                    daemon=True,
+                )
+                self._thread.start()
+            except Exception as exc:
+                self._thread = None
+                self._errors += 1
+                self._last_error = f"{type(exc).__name__}: {exc}"
+
+    def submit(self, metric: str, payload: dict[str, object]) -> None:
+        if not self.enabled:
+            return
+        if metric not in TELEMETRY_METRICS:
+            raise ValueError(f"refusing non-allowlisted telemetry metric {metric!r}")
+        with self._condition:
+            if self._closing:
+                self._overflow_dropped += 1
+                return
+            self._submitted += 1
+            if metric in self._pending:
+                self._superseded += 1
+            elif len(self._pending) >= self.max_pending:
+                oldest = next(iter(self._pending))
+                del self._pending[oldest]
+                self._overflow_dropped += 1
+            self._pending[metric] = dict(payload)
+            self._condition.notify()
+
+    def _run(self) -> None:
+        try:
+            client = self.client_factory(self.socket_path, self.timeout)
+        except Exception as exc:
+            with self._condition:
+                self._errors += 1
+                self._last_error = f"{type(exc).__name__}: {exc}"
+                self._pending.clear()
+            return
+        while True:
+            with self._condition:
+                while not self._pending and not self._closing:
+                    self._condition.wait()
+                if not self._pending:
+                    return
+                metric = next(iter(self._pending))
+                payload = self._pending.pop(metric)
+            try:
+                status, response = client.publish(metric, **payload)
+                with self._condition:
+                    self._attempts += 1
+                    if 200 <= status < 300:
+                        self._published += 1
+                        self._last_error = None
+                    else:
+                        self._rejected += 1
+                        self._last_error = (
+                            f"HTTP {status}: "
+                            f"{response.get('reason', 'publication_rejected')}"
+                        )
+            except Exception as exc:
+                with self._condition:
+                    self._attempts += 1
+                    self._errors += 1
+                    self._last_error = f"{type(exc).__name__}: {exc}"
+
+    def snapshot(self) -> dict[str, object]:
+        with self._condition:
+            return {
+                "enabled": self.enabled,
+                "socket": self.socket_path,
+                "timeout_seconds": self.timeout,
+                "max_pending": self.max_pending,
+                "submitted": self._submitted,
+                "superseded": self._superseded,
+                "overflow_dropped": self._overflow_dropped,
+                "attempts": self._attempts,
+                "published": self._published,
+                "rejected": self._rejected,
+                "errors": self._errors,
+                "pending": len(self._pending),
+                "thread_alive": bool(
+                    self._thread is not None and self._thread.is_alive()
+                ),
+                "last_error": self._last_error,
+            }
+
+    def close(
+        self, timeout: float = TELEMETRY_CLOSE_TIMEOUT_S
+    ) -> dict[str, object]:
+        with self._condition:
+            self._closing = True
+            self._condition.notify_all()
+            thread = self._thread
+        if thread is not None:
+            thread.join(timeout)
+        return self.snapshot()
 
 
 class EvidenceMountGuard:
@@ -1415,6 +1637,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--confirm-no-other-diagnostics", action="store_true")
     parser.add_argument("--pair")
     parser.add_argument("--conditions")
+    parser.add_argument(
+        "--telemetry-socket",
+        default=DEFAULT_TELEMETRY_SOCKET,
+        help=(
+            "local telemetry-broker Unix socket for bounded best-effort dashboard "
+            "publication"
+        ),
+    )
+    parser.add_argument(
+        "--no-telemetry-publish",
+        action="store_true",
+        help="disable best-effort publication without changing captured evidence",
+    )
     return parser
 
 
@@ -1427,6 +1662,11 @@ def validate_args(args: argparse.Namespace) -> tuple[int, int]:
         raise DriveLogError(
             "--campaign must contain only letters, digits, dot, underscore, or dash"
         )
+    if (
+        not args.no_telemetry_publish
+        and not Path(args.telemetry_socket).is_absolute()
+    ):
+        raise DriveLogError("--telemetry-socket must be an absolute Unix-socket path")
     if not 1 <= args.duration_seconds <= MAX_DURATION_SECONDS:
         raise DriveLogError(
             f"--duration-seconds must be between 1 and {MAX_DURATION_SECONDS}"
@@ -1498,6 +1738,15 @@ def plan(args: argparse.Namespace, soft: int, hard: int) -> dict[str, object]:
         "required_mount": str(args.require_mount) if args.require_mount else None,
         "soft_free_bytes": soft,
         "hard_free_bytes": hard,
+        "telemetry_publication": {
+            "enabled": not args.no_telemetry_publish,
+            "socket": args.telemetry_socket,
+            "policy": (
+                "bounded best-effort latest-value publication; broker failure "
+                "never stalls or fails CAN evidence capture"
+            ),
+            "metrics": sorted(TELEMETRY_METRICS),
+        },
         "stop_policy": (
             f"duration, signal, disk floor, error, or {IGNITION_LOSS_TIMEOUT_S:g}s "
             f"without verified 0x{IGNITION_CAN_ID:03X}"
@@ -1591,6 +1840,13 @@ def _running_summary(
         "raw_capture": None,
         "samples_sha256": None,
         "restored_passive": False,
+        "telemetry_publication": {
+            "enabled": not args.no_telemetry_publish,
+            "socket": args.telemetry_socket,
+            "submitted": 0,
+            "published": 0,
+            "errors": 0,
+        },
     }
 
 
@@ -1733,6 +1989,10 @@ def execute(args: argparse.Namespace, soft: int, hard: int) -> int:
     raw_root = args.raw_root
     required_mount = args.require_mount
     assert required_mount is not None and raw_root is not None
+    telemetry = BestEffortTelemetryPublisher(
+        args.telemetry_socket,
+        enabled=not args.no_telemetry_publish,
+    )
 
     mount_device, baseline, free = preflight_live(
         out_root,
@@ -1783,6 +2043,9 @@ def execute(args: argparse.Namespace, soft: int, hard: int) -> int:
     current_did: int | None = None
     lock_released = False
     samples_hash: str | None = None
+    telemetry_report = telemetry.snapshot()
+    last_ignition_publish_s: float | None = None
+    last_published_ignition_seen_s: float | None = None
     started_utc = utc_now()
 
     def record_fatal(exc: BaseException | str) -> None:
@@ -1835,6 +2098,7 @@ def execute(args: argparse.Namespace, soft: int, hard: int) -> int:
 
             mount_guard.check()
             samples_handle = samples_path.open("x", encoding="utf-8")
+            telemetry.start()
             raw_capture.start()
             raw_started = True
             watcher = IgnitionWatcher()
@@ -1842,6 +2106,10 @@ def execute(args: argparse.Namespace, soft: int, hard: int) -> int:
             watcher.wait_for_first()
             raw_capture.wait_for_first_frame()
             report["ignition_seen"] = True
+            ignition_metric, ignition_payload = ignition_telemetry_observation()
+            telemetry.submit(ignition_metric, ignition_payload)
+            last_ignition_publish_s = time.monotonic()
+            last_published_ignition_seen_s = watcher.last_seen_monotonic
             sock = uds.open_module_socket(MODULE, timeout=REQUEST_TIMEOUT_S)
 
             started = time.monotonic()
@@ -1864,6 +2132,25 @@ def execute(args: argparse.Namespace, soft: int, hard: int) -> int:
                 if watcher.ignition_lost():
                     stop_reason = "ignition_frame_absent"
                     break
+                now = time.monotonic()
+                if (
+                    watcher.last_seen_monotonic is not None
+                    and watcher.last_seen_monotonic
+                    != last_published_ignition_seen_s
+                    and (
+                        last_ignition_publish_s is None
+                        or now - last_ignition_publish_s
+                        >= TELEMETRY_IGNITION_INTERVAL_S
+                    )
+                ):
+                    ignition_metric, ignition_payload = (
+                        ignition_telemetry_observation()
+                    )
+                    telemetry.submit(ignition_metric, ignition_payload)
+                    last_ignition_publish_s = now
+                    last_published_ignition_seen_s = (
+                        watcher.last_seen_monotonic
+                    )
 
                 cycle_sequence = sample_cycles
                 cycle_started_us = time.time_ns() // 1000
@@ -1918,6 +2205,17 @@ def execute(args: argparse.Namespace, soft: int, hard: int) -> int:
                     if category == "positive":
                         positive_counts[did] += 1
                         cycle_positives.append(f"{did:04X}")
+                        data_hex = result["data_hex"]
+                        if not isinstance(data_hex, str):
+                            raise DriveLogError(
+                                f"DID {did:04X} positive response lost its data"
+                            )
+                        observation = telemetry_observation_for_did(
+                            did, bytes.fromhex(data_hex)
+                        )
+                        if observation is not None:
+                            metric, payload = observation
+                            telemetry.submit(metric, payload)
                     enforce_did_health(
                         did,
                         category,
@@ -1990,6 +2288,7 @@ def execute(args: argparse.Namespace, soft: int, hard: int) -> int:
                                 for did in CLUSTER_DIDS
                             },
                             "startup_profile_validated": startup_profile_validated,
+                            "telemetry_publication": telemetry.snapshot(),
                         }
                     )
                     guarded_atomic_write_json(
@@ -2066,6 +2365,7 @@ def execute(args: argparse.Namespace, soft: int, hard: int) -> int:
                 record_fatal(
                     f"diagnostic lock release failed: {type(exc).__name__}: {exc}"
                 )
+            telemetry_report = telemetry.close()
 
             if termination.received_signal is not None:
                 interrupted = True
@@ -2175,6 +2475,7 @@ def execute(args: argparse.Namespace, soft: int, hard: int) -> int:
                         "fatal_errors": fatal_errors,
                         "raw_capture": raw_result,
                         "wire_cross_validation": wire_validation,
+                        "telemetry_publication": telemetry_report,
                         "samples_sha256": samples_hash,
                         "final_active_interface": (
                             dataclasses.asdict(final_interface)
