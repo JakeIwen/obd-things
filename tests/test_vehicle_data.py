@@ -918,6 +918,9 @@ class WebTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(b"localStorage", profiles)
         self.assertIn(b"automaticProfile", profiles)
+        self.assertIn(b'selected: "overview"', profiles)
+        self.assertIn(b"van-telemetry.dashboard.v2", profiles)
+        self.assertIn(b"LEGACY_STORAGE_KEY", profiles)
 
     def test_disconnected_client_does_not_escape_web_json_writer(self):
         handler = object.__new__(TelemetryWebHandler)

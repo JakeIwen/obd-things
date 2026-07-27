@@ -1,7 +1,8 @@
 "use strict";
 
 (() => {
-  const STORAGE_KEY = "van-telemetry.dashboard.v1";
+  const STORAGE_KEY = "van-telemetry.dashboard.v2";
+  const LEGACY_STORAGE_KEY = "van-telemetry.dashboard.v1";
   const widgets = Object.freeze([
     {id: "vehicle", label: "Vehicle state"},
     {id: "battery", label: "Battery"},
@@ -38,7 +39,7 @@
   });
 
   const defaultSettings = () => ({
-    selected: "auto",
+    selected: "overview",
     customWidgets: widgets.map((widget) => widget.id),
   });
 
@@ -61,7 +62,25 @@
 
   function loadSettings() {
     try {
-      return normalizeSettings(JSON.parse(window.localStorage.getItem(STORAGE_KEY)));
+      const stored = window.localStorage.getItem(STORAGE_KEY);
+      if (stored !== null) {
+        return normalizeSettings(JSON.parse(stored));
+      }
+
+      const legacy = window.localStorage.getItem(LEGACY_STORAGE_KEY);
+      if (legacy !== null) {
+        const migrated = normalizeSettings(JSON.parse(legacy));
+        // Automatic was the old default, so an existing "auto" value does
+        // not prove the user deliberately chose a continuously changing
+        // layout. Move that inherited selection to the stable new default
+        // while preserving explicit manual and Custom selections.
+        if (migrated.selected === "auto") {
+          migrated.selected = "overview";
+        }
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
+        return migrated;
+      }
+      return defaultSettings();
     } catch (_error) {
       return defaultSettings();
     }

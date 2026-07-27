@@ -52,10 +52,13 @@ becomes available to the generic metric and catalog panels without adding
 another web proxy route or SSE request.
 
 Built-in dashboard profiles are **Overview**, **Parked**, **Driving**, and
-**Diagnostics**. The user can select one manually, choose **Automatic**, or
-choose exactly which panels appear in a **Custom** profile. The selection and
-custom panel list use browser `localStorage`; they are per-device preferences
-and never write broker configuration or touch CAN.
+**Diagnostics**. **Overview is the stable default.** The user can select one
+manually, opt into **Automatic**, or choose exactly which panels appear in a
+**Custom** profile. The selection and custom panel list use browser
+`localStorage`; they are per-device preferences and never write broker
+configuration or touch CAN. Browsers carrying the former default Automatic
+selection are migrated to Overview; explicit manual and Custom selections are
+preserved.
 
 Automatic mode currently makes only these evidence-backed choices:
 
