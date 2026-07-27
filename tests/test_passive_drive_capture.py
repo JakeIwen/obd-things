@@ -169,7 +169,9 @@ class PassiveDriveCaptureTests(unittest.TestCase):
         parser = capture.build_parser()
         args = parser.parse_args(["--out-root", "/tmp/plan"])
         selected = capture.resolved_priority_ids(args)
-        self.assertIn(0x101, selected)
+        for can_id in (0x0FC, 0x100, 0x101, 0x2ED, 0x412, 0x41B, 0x41D):
+            with self.subTest(can_id=f"0x{can_id:X}"):
+                self.assertIn(can_id, selected)
         self.assertIn(0x18DA60F1, selected)
         self.assertIn(0x18DAF160, selected)
 

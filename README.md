@@ -398,7 +398,9 @@ with native and American display units:
 This mode sends one physical `10 92`, requires its exact `50 92` echo, and
 then sends only 15 enumerated physical `22` reads. It sends no functional
 broadcast, TesterPresent, routine, IO-control, write, DTC-clear, or security
-request. Do not run it while driving.
+request. Do not run it while driving. The wrapper preserves the telemetry
+broker's initial state: if active, it pauses the broker during exclusive
+interface/diagnostic ownership and restarts it during cleanup.
 
 Participating active diagnostic tools take a nonblocking exclusive per-channel advisory lock under
 `tmp/locks/`, so two of them cannot transmit through the same SocketCAN channel concurrently.

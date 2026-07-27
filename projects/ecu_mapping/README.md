@@ -185,8 +185,11 @@ campaign:
   enters Active Diagnostics, changes Android settings, or touches network/proxy configuration.
 - `passive_drive_capture.py` records one persistent `candump` stream into ten-minute zstd chunks.
   Its built-in `ccan-correlation` priority stream includes the verified speed/brake/door/voltage
-  anchors and all registered C-CAN diagnostic request/response IDs. It never configures or
-  transmits on CAN and stops if `can0` ceases to be UP, 500 kbit/s, listen-only, and ERROR-ACTIVE.
+  anchors, the qualified `0x0FC` RPM, `0x2ED` coolant, and `0x41D` oil-pressure
+  sources, the leading `0x100` torque, `0x412` temperature, and `0x41B`
+  throttle candidates, and all registered C-CAN diagnostic request/response
+  IDs. It never configures or transmits on CAN and stops if `can0` ceases to
+  be UP, 500 kbit/s, listen-only, and ERROR-ACTIVE.
 
 Both hold shared observer locks, so they may run together while every participating Pi-side
 transmitter or interface reconfiguration remains excluded. They also refuse to compete with

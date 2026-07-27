@@ -262,6 +262,10 @@ TPMS_WAS_ACTIVE=0
 if systemctl is-active --quiet tpms-logger; then
   TPMS_WAS_ACTIVE=1
 fi
+TELEMETRY_WAS_ACTIVE=0
+if systemctl is-active --quiet van-telemetry; then
+  TELEMETRY_WAS_ACTIVE=1
+fi
 
 CAN_TOUCHED=0
 cleanup() {
@@ -282,12 +286,22 @@ cleanup() {
   else
     echo "tpms-logger was initially inactive and remains inactive."
   fi
+  if [ "$TELEMETRY_WAS_ACTIVE" -eq 1 ]; then
+    sudo -n systemctl start van-telemetry \
+      || echo "WARNING: van-telemetry was initially active but could not be restarted" >&2
+  else
+    echo "van-telemetry was initially inactive and remains inactive."
+  fi
   exit "$status"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 
 sudo -n systemctl stop tpms-logger
+if [ "$TELEMETRY_WAS_ACTIVE" -eq 1 ]; then
+  echo "Temporarily pausing the passive telemetry broker during exclusive diagnostic reads..."
+  sudo -n systemctl stop van-telemetry
+fi
 CAN_TOUCHED=1
 ./bringup.sh
 
