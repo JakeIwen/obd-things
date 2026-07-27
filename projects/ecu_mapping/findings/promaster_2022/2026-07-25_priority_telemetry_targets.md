@@ -43,16 +43,17 @@ Plots selector, then correlate a small owner-priority gauge set. It is not a
 broad blind DID sweep.
 
 Update 2026-07-27 (static APK request-table recovery): five independently
-verified PCM anchors proved that AlfaOBD's ordered literal two-byte tables
-align with the database's ordered Plots catalogs. The unique 56-entry ZF9HP
-table identifies `D012` for engine speed, `D014` for converter slip/turbine
-speed, `D016` for output-speed and related values, and `D018` for water/TCU/oil
-temperatures plus the first five torque quantities. `D019` carries the sixth
-torque quantity and four solenoid currents. These are high-confidence
-vendor-derived DID candidates, not yet live-verified TCM decodes. This reduces
-the next vehicle pass to support checks and field/scaling correlation inside
-five known responses; it does not justify publishing transmission temperature
-or torque yet.
+verified PCM anchors proved that AlfaOBD's ordered literal two-byte tables can
+align with the database's ordered Plots catalogs, but table length alone is
+not sufficient. DEX consumer tracing rejected a coincidental 56-row HVAC table
+and located the actual ZF9HP runtime table. It identifies `F40C` for engine
+speed, `0500` for converter slip, `2102` for turbine speed, `2103` for output
+speed, `F405/0301/04FE` for water/TCU/gearbox-oil temperatures, and
+`1018/101A/101B/101D/101F/1020` for the six torque quantities. These are
+high-confidence vendor-derived DID candidates, not yet live-verified TCM
+decodes. This reduces the next vehicle pass to bounded support and scale
+checks for individual known requests; it does not justify publishing
+transmission temperature or torque yet.
 
 ## Engine-oil pressure: exact OEM context
 
@@ -363,12 +364,27 @@ sensor.
    `can-timeseries-correlate-tcm-four-chunks` provide the same bounded
    extraction/correlation path already used for the PCM.
    The static request-table recovery changes the efficient order within this
-   step: first physically read `D012`, `D014`, `D016`, `D018`, and `D019` to
-   establish support and response lengths; then record the grouped priority
-   gauges together while preserving exact Debug cycles and passive C-CAN.
-   Reserve singleton repeats only for fields that remain ambiguous within a
-   shared response. Evidence and provenance are in
+   step: first physically read `F40C`, `0500`, `2102`, `2103`, `F405`, `0301`,
+   `04FE`, and `1018/101A/101B/101D/101F/1020` to establish support and
+   response lengths; then record the grouped priority gauges together while
+   preserving exact Debug cycles and passive C-CAN. Each priority row now has
+   a separate candidate DID, so singleton repeats are needed only where scale
+   or signedness remains ambiguous. Evidence and provenance are in
    [`2026-07-21_alfaobd_apk_catalog.md`](2026-07-21_alfaobd_apk_catalog.md#static-request-table-recovery--2026-07-27).
+   The guarded sparse plan is:
+
+   ```bash
+   python3 tools/did_sweep.py tcm \
+     --did F40C --did 0500 --did 2102 --did 2103 \
+     --did F405 --did 0301 --did 04FE \
+     --did 1018 --did 101A --did 101B --did 101D --did 101F --did 1020 \
+     --pair 6/14 \
+     --conditions "parked; ignition ON; engine OFF; ZF9HP priority support check"
+   ```
+
+   This is a dry run unless `--execute --confirm-parked` is added. It sends
+   thirteen physical service-`22` reads, no functional broadcast, session
+   change, keepalive, routine, IO control, write, or clear request.
 6. Reproduce each resolved request using a bounded physical read to the
    verified ECU endpoint and required session behavior. Do not promote a
    label merely because AlfaOBD rendered it.

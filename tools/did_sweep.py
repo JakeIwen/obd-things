@@ -5,6 +5,7 @@ The legacy positional form is preserved, but every invocation is a dry-run unles
 is supplied::
 
     python3 tools/did_sweep.py radar_acc 0800 08FF
+    python3 tools/did_sweep.py tcm --did F40C --did 04FE --did 1018
     python3 tools/did_sweep.py radar_acc 0800 08FF --execute --confirm-parked \
         --pair 6/14 --conditions "parked, ignition ON, engine OFF"
 
@@ -73,6 +74,13 @@ def parser():
     p.add_argument("module", nargs="?", default="radar_acc", help="verified key from lib/modules.py")
     p.add_argument("start", nargs="?", type=parse_hex16, help="first DID, hexadecimal")
     p.add_argument("end", nargs="?", type=parse_hex16, help="last DID, hexadecimal")
+    p.add_argument(
+        "--did",
+        action="append",
+        type=parse_hex16,
+        metavar="HEX",
+        help="read one explicit DID; repeat for a sparse bounded candidate set",
+    )
     p.add_argument("--full-range", action="store_true", help="explicitly select 0000-FFFF")
     p.add_argument(
         "--confirm-expanded-scan",
@@ -103,6 +111,8 @@ def parser():
 
 
 def selected_range(args):
+    if args.did:
+        raise ValueError("--did cannot be combined with positional START/END or --full-range")
     if args.full_range and (args.start is not None or args.end is not None):
         raise ValueError("--full-range cannot be combined with positional START/END")
     if args.full_range or args.start is None:
@@ -114,6 +124,17 @@ def selected_range(args):
     if start > end:
         raise ValueError("START must be <= END")
     return start, end
+
+
+def selected_dids(args):
+    if args.did:
+        if args.full_range or args.start is not None or args.end is not None:
+            raise ValueError("--did cannot be combined with positional START/END or --full-range")
+        if len(set(args.did)) != len(args.did):
+            raise ValueError("--did values must be unique")
+        return list(args.did), "explicit_list"
+    start, end = selected_range(args)
+    return range(start, end + 1), "range"
 
 
 def classify_did_response(did, response):
@@ -313,9 +334,18 @@ def write_legacy_text(path, module, start, end, jsonl_path):
     os.replace(temporary, path)
 
 
-def base_report(module, args, start, end, summary_path, results_path, started_at):
+def base_report(
+    module,
+    args,
+    dids,
+    selection_mode,
+    summary_path,
+    results_path,
+    started_at,
+):
+    did_values = list(dids)
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "tool": "tools/did_sweep.py",
         "interaction": "active non-mutating UDS ReadDataByIdentifier inventory",
         "status": "running",
@@ -334,9 +364,15 @@ def base_report(module, args, start, end, summary_path, results_path, started_at
         "physical_pair": args.pair,
         "conditions": args.conditions,
         "parked_asserted": args.confirm_parked,
-        "did_start": f"{start:04X}",
-        "did_end": f"{end:04X}",
-        "planned_dids": end - start + 1,
+        "selection_mode": selection_mode,
+        "did_start": f"{min(did_values):04X}",
+        "did_end": f"{max(did_values):04X}",
+        "planned_dids": len(did_values),
+        "planned_did_list": (
+            [f"{did:04X}" for did in did_values]
+            if selection_mode == "explicit_list"
+            else None
+        ),
         "max_request_rate_hz": args.rate,
         "timeout_s": args.timeout,
         "requested_session": f"{args.session:02X}" if args.session is not None else None,
@@ -375,11 +411,13 @@ def main(argv=None):
     args = parser().parse_args(argv)
     module = get(args.module)
     try:
-        start, end = selected_range(args)
+        dids, selection_mode = selected_dids(args)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
-    count = end - start + 1
+    count = len(dids)
+    start = min(dids)
+    end = max(dids)
 
     if not math.isfinite(args.rate) or not MIN_REQUEST_RATE <= args.rate <= MAX_REQUEST_RATE:
         print(
@@ -405,7 +443,15 @@ def main(argv=None):
         return 2
 
     estimated = count / args.rate
-    print(f"ACTIVE DID INVENTORY PLAN: {module.key} {start:04X}-{end:04X} ({count} physical 22 reads)")
+    selection_text = (
+        ",".join(f"{did:04X}" for did in dids)
+        if selection_mode == "explicit_list"
+        else f"{start:04X}-{end:04X}"
+    )
+    print(
+        f"ACTIVE DID INVENTORY PLAN: {module.key} {selection_text} "
+        f"({count} physical 22 reads)"
+    )
     print(
         f"{module.addressing_mode} {module.bitrate} bit/s TX={module.txid:X} RX={module.rxid:X}; "
         f"max_rate={args.rate:g}/s; minimum request cadence={estimated / 60:.1f} min"
@@ -424,7 +470,7 @@ def main(argv=None):
             file=sys.stderr,
         )
         return 2
-    if args.start is None and not args.full_range:
+    if selection_mode == "range" and args.start is None and not args.full_range:
         print("ERROR: live full range requires explicit --full-range", file=sys.stderr)
         return 2
     if count > MAX_BOUNDED_DIDS and not args.confirm_expanded_scan:
@@ -507,7 +553,15 @@ def main(argv=None):
         # still close, restore passive, publish what evidence is available, and release the lock.
         summary_path, results_path = output_paths(module)
         started_at = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
-        report = base_report(module, args, start, end, summary_path, results_path, started_at)
+        report = base_report(
+            module,
+            args,
+            dids,
+            selection_mode,
+            summary_path,
+            results_path,
+            started_at,
+        )
         atomic_json(summary_path, report)
         os.makedirs(os.path.dirname(results_path), exist_ok=True)
         last_tester_present = time.monotonic()
@@ -536,7 +590,7 @@ def main(argv=None):
             last_tester_present = time.monotonic()
 
         with open(results_path, "a", buffering=1, encoding="utf-8") as results_file:
-            for did in range(start, end + 1):
+            for did in dids:
                 if (
                     args.session is not None
                     and time.monotonic() - last_tester_present >= TESTER_PRESENT_INTERVAL_S
@@ -618,7 +672,7 @@ def main(argv=None):
                     and not fatal_errors
                     and restored_passive
                 )
-                if complete:
+                if complete and selection_mode == "range":
                     try:
                         legacy = legacy_path(module, start, end)
                         write_legacy_text(legacy, module, start, end, results_path)

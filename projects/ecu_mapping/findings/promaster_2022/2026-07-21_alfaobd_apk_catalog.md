@@ -156,40 +156,65 @@ Those five exact, non-adjacent anchors establish that these two-byte entries
 are the ordered service-`22` data identifiers, rather than offsets, label IDs,
 or display keys.
 
-The transmission request-table class `ba` contains exactly one 56-entry
-two-byte table, field `A0`, matching the unique 56-row ZF9HP catalog. Ordered
-alignment yields these owner-priority candidates:
+An initial length-only match to class `ba`, field `A0`, was wrong. Although
+that field also has 56 two-byte entries, DEX consumer tracing proves
+`z2.k` loads it into runtime request table `AlfaOBDConnect.s8` in the branch
+labeled `ADDescHVAC_UDS` / `HVAC_UDS_8377`. Its apparent alignment with the
+56-row ZF9HP catalog was coincidental. The provisional `D012`, `D014`, `D016`,
+`D018`, and `D019` transmission candidates derived from it are retracted and
+must not be sent as a TCM support set on that basis.
 
-| catalog order | label(s) sharing the request | candidate DID |
+The same consumer trace locates the real ZF9HP branch. The exact `ZF9HP`
+string comparison jumps to code-unit offset 21857 in `z2.k`, where class
+`aa`, field `A`, is loaded directly into runtime request table
+`AlfaOBDConnect.s8`; the same block assigns the literal descriptor
+`ADDescZF9HP`. Field `aa.A` is used only by its class initializer and this
+runtime branch. It contains exactly 56 two-byte entries, and ordered alignment
+with Device 194 yields:
+
+| catalog order | label | candidate DID |
 |---:|---|---:|
-| 6 | Engine speed | `D012` |
-| 7–8 | Torque-converter slip; turbine speed | `D014` |
-| 9–13 | output speed, calculated vehicle speed, valve supply, accelerator, throttle | `D016` |
-| 14–21 | water/TCU/oil temperatures and the first five torque quantities | `D018` |
-| 22–26 | slow-path torque intervention and shift-solenoid B–E currents | `D019` |
+| 6 | Engine speed | `F40C` |
+| 7 | Torque Converter Slip Speed | `0500` |
+| 8 | Turbine speed | `2102` |
+| 9 | Gearbox output revs | `2103` |
+| 10 | Vehicle Speed Calculated By Output Shaft Speed | `2106` |
+| 14 | Water temperature | `F405` |
+| 15 | TCU chip temperature | `0301` |
+| 16 | Gearbox oil temperature | `04FE` |
+| 17 | Actual Crankshaft Torque | `1018` |
+| 18 | Crankshaft Torque, without TCU Torque Requests | `101A` |
+| 19 | Target Crankshaft Torque | `101B` |
+| 20 | Transmission Torque Intervention | `101D` |
+| 21 | Maximum Engine Torque Requested By Transmission | `101F` |
+| 22 | Slow Path Transmission Torque Intervention | `1020` |
 
-For the top-priority telemetry, this makes `D018` the focused transmission-oil
-temperature and torque-container candidate. The remainder of the table groups
-the lower-priority rows under `D01A`, `D01D`, `D01E`, `D01F`, `D020`, `D023`,
-`D024`, `D025`, `D028`, `D031`, and `D032`.
+Orders 1–5 are `F40D`, `2B1B`, `2B1C`, `2B1D`, and `2B1E`; orders 11–13 are
+`212F`, `051D`, and `F449`; orders 23–32 are `1024`, `1025`, `1026`, `1027`,
+`1028`, `1029`, `102C`, `1037`, `1038`, and `1039`; orders 33–50 are `211F`
+through `212E`, then `213B` and `213C`; orders 51–56 use `213D` three times
+followed by `213E` three times.
 
 This is strong vendor-derived request evidence, but not yet live vehicle
-ground truth. It does not reveal the byte/bit fields or scaling within a
-multi-value response. A parked physical read of the small
-`D012/D014/D016/D018/D019` set must first prove support on this TCM; AlfaOBD
-gauge values plus exact request/response cycles must then establish field
-layout and scale. The live 56-row selector inventory remains required for safe
-automated gauge selection, but a one-gauge-at-a-time campaign is no longer
-needed merely to discover which DID each priority label uses.
+ground truth. It establishes one candidate DID per priority scalar instead of
+the previously inferred shared response containers, but it does not establish
+response length, byte order, signedness, offset, or scale. A parked physical
+read of the priority set must first prove support on this TCM; AlfaOBD values
+plus exact request/response cycles must then establish scaling. The live
+56-row selector inventory remains required for safe automated gauge selection,
+but a one-gauge-at-a-time campaign is no longer needed merely to discover
+which DID each priority label uses.
 
 Static-source provenance:
 
 - `aa.java`: SHA-256
   `7d4ea16e66225c83c2edfe6a9f334cf5f7fb22c12140aeb8c5e5b6194a9de880`;
-  table `f4353w0`, line 181 in this JADX rendering;
-- `ba.java`: SHA-256
-  `dc85720fba906e5109778394ae291f2c7cb56647edde1cd41c22c824a0b49298`;
-  table `A0`, line 191 in this JADX rendering; and
+  PCM table `f4353w0` at line 181 and real ZF9HP table `A` at line 87 in this
+  JADX rendering;
+- APK `classes.dex`: SHA-256
+  `f37fd0a217d46f85d12523f508b8340ca844ffb2ffda7d79183fd6152c437f0a`;
+  `tools/dex_field_usage.py` resolves the `ZF9HP` branch and proves
+  `aa.A -> AlfaOBDConnect.s8`; and
 - reconstructed database: SHA-256
   `073fd4c46c438d4591e590d9fc2556bc5da3c1aff2e8008c504a9ef1f0398be5`.
 

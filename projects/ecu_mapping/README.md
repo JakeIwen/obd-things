@@ -500,15 +500,25 @@ outer campaign supervisor: UI/channel locks, same-boot operation inhibit, mount 
 passive-capture binding, artifact pulls/hashes, and atomic checkpoints. The CLI must stay disabled
 until that layer exists and the TCM catalog below is inventoried, reviewed, and pinned.
 
-Offline static analysis has recovered the ZF9HP request grouping without
-relaxing that live-UI gate. The owner-supplied APK's unique 56-entry
-transmission table aligns the priority rows with candidate DIDs `D012`,
-`D014`, `D016`, `D018`, and `D019`; five independently live-verified PCM table
-anchors validate the ordered-table method. See
+Offline static analysis has recovered the ZF9HP request table without
+relaxing that live-UI gate. DEX consumer tracing first rejected a coincidental
+56-entry HVAC table, then proved that the `ZF9HP` branch loads `aa.A` into
+AlfaOBD's runtime request table. It aligns the priority rows with candidate
+DIDs `F40C`, `0500`, `2102`, `2103`, `F405`, `0301`, `04FE`, and
+`1018/101A/101B/101D/101F/1020`; five independently live-verified PCM table
+anchors validate the ordered-table method, while the branch trace prevents
+length-only misidentification. See
 [`2026-07-21_alfaobd_apk_catalog.md`](findings/promaster_2022/2026-07-21_alfaobd_apk_catalog.md#static-request-table-recovery--2026-07-27).
-The next live pass should first do physical support reads of that five-DID set,
-then use the live catalog to select the grouped gauges. Field offsets and
-scales remain unresolved, so these candidates are not dashboard-ready.
+The next live pass should first do physical support reads of that priority
+set, then use the live catalog to select the grouped gauges. Response lengths,
+signedness, offsets, and scales remain unresolved, so these candidates are not
+dashboard-ready.
+
+`tools/did_sweep.py` now accepts repeatable `--did` options, so the next
+parked support check can read exactly the thirteen reviewed ZF9HP candidates
+without traversing the large gaps between them. It remains dry-run by default,
+requires the normal parked/live gates for `--execute`, and sends no diagnostic
+session change unless one is separately specified and confirmed.
 
 Catalog campaign `pcm-plots-catalog-20260726T224830Z` completed a matching
 forward/reverse 193-row traversal without manual reconciliation. The separate

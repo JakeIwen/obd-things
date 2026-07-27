@@ -29,6 +29,29 @@ class DidSelectionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             did_sweep.selected_range(conflicting)
 
+    def test_sparse_did_selection_preserves_reviewed_order(self):
+        args = did_sweep.parser().parse_args(
+            ["tcm", "--did", "F40C", "--did", "04FE", "--did", "1018"]
+        )
+
+        dids, mode = did_sweep.selected_dids(args)
+
+        self.assertEqual(dids, [0xF40C, 0x04FE, 0x1018])
+        self.assertEqual(mode, "explicit_list")
+
+    def test_sparse_did_selection_rejects_duplicates_and_range_mix(self):
+        duplicate = did_sweep.parser().parse_args(
+            ["tcm", "--did", "04FE", "--did", "04FE"]
+        )
+        mixed = did_sweep.parser().parse_args(
+            ["tcm", "0400", "04FF", "--did", "04FE"]
+        )
+
+        with self.assertRaises(ValueError):
+            did_sweep.selected_dids(duplicate)
+        with self.assertRaises(ValueError):
+            did_sweep.selected_dids(mixed)
+
     def test_session_rejects_response_suppression_bit(self):
         self.assertEqual(did_sweep.parse_session("03"), 0x03)
         for value in ("00", "80", "FF"):
@@ -94,6 +117,24 @@ class DidCliSafetyTests(unittest.TestCase):
             result = did_sweep.main(["radar_acc", "0800", "08FF"])
 
         self.assertEqual(result, 0)
+        preflight.assert_not_called()
+        open_socket.assert_not_called()
+        write_report.assert_not_called()
+
+    def test_sparse_dry_run_never_preflights_opens_can_or_writes(self):
+        output = io.StringIO()
+        with (
+            mock.patch.object(did_sweep, "preflight") as preflight,
+            mock.patch.object(did_sweep.uds, "open_module_socket") as open_socket,
+            mock.patch.object(did_sweep, "atomic_json") as write_report,
+            contextlib.redirect_stdout(output),
+        ):
+            result = did_sweep.main(
+                ["tcm", "--did", "F40C", "--did", "04FE", "--did", "1018"]
+            )
+
+        self.assertEqual(result, 0)
+        self.assertIn("F40C,04FE,1018 (3 physical 22 reads)", output.getvalue())
         preflight.assert_not_called()
         open_socket.assert_not_called()
         write_report.assert_not_called()

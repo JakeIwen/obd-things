@@ -514,6 +514,67 @@
       "outputs": [
         "arrays.json"
       ]
+    },
+    {
+      "name": "dex-field-usage",
+      "description": "Find field usages or inventory one method's field references in an owner-supplied APK or DEX.",
+      "profile": "python-script",
+      "source_paths": [
+        "tools/dex_field_usage.py"
+      ],
+      "minimum_inputs": 1,
+      "maximum_inputs": 1,
+      "argv": [
+        "{source:tools/dex_field_usage.py}",
+        "{input:0}",
+        "{arguments}",
+        "--output",
+        "{result:field-usage.json}"
+      ],
+      "outputs": [
+        "field-usage.json"
+      ]
+    },
+    {
+      "name": "dex-field-usage-tests",
+      "description": "Run the dependency-light DEX field-usage analyzer regression tests.",
+      "profile": "repo-test",
+      "source_paths": [
+        "tools/__init__.py",
+        "tools/dex_field_usage.py",
+        "tests/test_dex_field_usage.py"
+      ],
+      "minimum_inputs": 0,
+      "maximum_inputs": 0,
+      "argv": [
+        "-q",
+        "tests/test_dex_field_usage.py"
+      ],
+      "outputs": []
+    },
+    {
+      "name": "did-sweep-tests",
+      "description": "Run the dependency-light guarded DID inventory regression tests.",
+      "profile": "repo-test",
+      "source_paths": [
+        "lib/__init__.py",
+        "lib/canbus.py",
+        "lib/diagnostic_safety.py",
+        "lib/modules.py",
+        "lib/uds.py",
+        "tools/__init__.py",
+        "tools/did_sweep.py",
+        "tools/ecu_discover.py",
+        "tools/identity_inventory.py",
+        "tests/test_did_sweep.py"
+      ],
+      "minimum_inputs": 0,
+      "maximum_inputs": 0,
+      "argv": [
+        "-q",
+        "tests/test_did_sweep.py"
+      ],
+      "outputs": []
     }
   ]
 }
