@@ -137,6 +137,7 @@ class DialogPage:
     checked: tuple[bool, ...]
     list_bounds: Bounds
     ok: UiNode
+    rows: tuple[UiNode, ...]
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -560,6 +561,7 @@ def parse_dialog_page(
         checked=tuple(node.checked for node in rows),
         list_bounds=list_node.bounds,
         ok=ok,
+        rows=tuple(rows),
     )
 
 

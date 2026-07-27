@@ -335,8 +335,15 @@ sensor.
    `projects/ecu_mapping/configs/alfaobd_tcm_plots_scalars.json`, with gearbox
    oil temperature repeated as the outer anchor. It deliberately retains null
    catalog/review hashes until the live selector inventory is complete, and
-   the scalar runner remains offline-only. Once a simultaneous drive capture
-   exists, van-compute tasks
+   the scalar runner CLI remains offline-only. Its unreachable internal
+   selection primitive now fail-closes on a catalog-hash mismatch, stale
+   coordinates, a non-contiguous live page, or any collateral check-state
+   change; it proves the committed Plots page contains only the intended target
+   and that scanning is still stopped. The accompanying post-stop artifact
+   validator requires Debug/CSV growth and a stable buffered CSV tail. The
+   cleanup-owning start/dwell/stop/pull supervisor is still intentionally absent,
+   so this implementation progress does not authorize or enable a live run.
+   Once a simultaneous drive capture exists, van-compute tasks
    `candump-diagnostic-wire-tcm-four-chunks` and
    `can-timeseries-correlate-tcm-four-chunks` provide the same bounded
    extraction/correlation path already used for the PCM.

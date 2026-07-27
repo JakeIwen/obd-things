@@ -4,6 +4,7 @@ import argparse
 import contextlib
 from copy import deepcopy
 import hashlib
+from html import escape
 import io
 import json
 from pathlib import Path
@@ -306,6 +307,464 @@ def _all_option_strings(parser: argparse.ArgumentParser) -> set[str]:
             if isinstance(action, argparse._SubParsersAction):
                 pending.extend(action.choices.values())
     return options
+
+
+def _ui_node(
+    *,
+    text: str = "",
+    resource_id: str = "",
+    class_name: str = "android.widget.TextView",
+    package: str = catalog.PACKAGE,
+    checkable: bool = False,
+    checked: bool = False,
+    clickable: bool = False,
+    enabled: bool = True,
+    selected: bool = False,
+    bounds: str = "[0,0][10,10]",
+) -> str:
+    values = {
+        "text": text,
+        "resource-id": resource_id,
+        "class": class_name,
+        "package": package,
+        "content-desc": "",
+        "checkable": str(checkable).lower(),
+        "checked": str(checked).lower(),
+        "clickable": str(clickable).lower(),
+        "enabled": str(enabled).lower(),
+        "focusable": "false",
+        "focused": "false",
+        "scrollable": "false",
+        "long-clickable": "false",
+        "password": "false",
+        "selected": str(selected).lower(),
+        "bounds": bounds,
+    }
+    attrs = " ".join(
+        f'{key}="{escape(str(value), quote=True)}"'
+        for key, value in values.items()
+    )
+    return f"<node {attrs}/>"
+
+
+def _dialog_xml(
+    labels: tuple[str, ...],
+    *,
+    checked: set[str],
+) -> str:
+    nodes = [
+        _ui_node(
+            class_name="android.widget.FrameLayout",
+            bounds="[0,0][800,1280]",
+        ),
+        _ui_node(
+            text=catalog.DIALOG_TITLE,
+            resource_id=f"{catalog.SAFE_ID_PREFIX}dialog_title",
+            bounds="[126,350][674,395]",
+        ),
+        _ui_node(
+            resource_id=catalog.DIALOG_LIST_ID,
+            class_name="android.widget.ListView",
+            bounds="[100,400][700,800]",
+        ),
+    ]
+    for index, label in enumerate(labels):
+        top = 410 + index * 80
+        nodes.append(
+            _ui_node(
+                text=label,
+                resource_id=catalog.DIALOG_ROW_ID,
+                class_name="android.widget.CheckedTextView",
+                checkable=True,
+                checked=label in checked,
+                clickable=True,
+                bounds=f"[110,{top}][690,{top + 70}]",
+            )
+        )
+    nodes.extend(
+        (
+            _ui_node(
+                resource_id="android:id/buttonPanel",
+                class_name="android.widget.LinearLayout",
+                package="android",
+                bounds="[100,800][700,880]",
+            ),
+            _ui_node(
+                text="OK",
+                resource_id=catalog.DIALOG_OK_ID,
+                class_name="android.widget.Button",
+                package="android",
+                clickable=True,
+                bounds="[598,810][662,865]",
+            ),
+        )
+    )
+    return (
+        '<?xml version="1.0"?><hierarchy rotation="0">'
+        + "".join(nodes)
+        + "</hierarchy>"
+    )
+
+
+class _SelectorAdb:
+    def __init__(
+        self,
+        *,
+        pages: tuple[tuple[str, ...], ...],
+        checked: tuple[str, ...],
+        collateral_toggle: str | None = None,
+    ):
+        self.pages = pages
+        self.checked = set(checked)
+        self.collateral_toggle = collateral_toggle
+        self.page_index = 0
+        self.committed = False
+        self.taps: list[tuple[str, str]] = []
+        self.swipes: list[tuple[tuple[int, int], tuple[int, int]]] = []
+
+    def foreground_package(self) -> str:
+        return catalog.PACKAGE
+
+    def dump_ui(self) -> str:
+        if self.committed:
+            return "<synthetic-plots-page/>"
+        return _dialog_xml(
+            self.pages[self.page_index],
+            checked=self.checked,
+        )
+
+    def tap(self, node: object) -> None:
+        resource_id = getattr(node, "resource_id")
+        text = getattr(node, "text")
+        self.taps.append((resource_id, text))
+        if resource_id == catalog.DIALOG_ROW_ID:
+            if text in self.checked:
+                self.checked.remove(text)
+            else:
+                self.checked.add(text)
+            if self.collateral_toggle is not None:
+                if self.collateral_toggle in self.checked:
+                    self.checked.remove(self.collateral_toggle)
+                else:
+                    self.checked.add(self.collateral_toggle)
+        elif resource_id == catalog.DIALOG_OK_ID:
+            self.committed = True
+        else:
+            raise AssertionError(f"unexpected synthetic tap {resource_id!r}")
+
+    def swipe(
+        self,
+        *,
+        start: tuple[int, int],
+        end: tuple[int, int],
+        duration_ms: int,
+    ) -> None:
+        self.swipes.append((start, end))
+        if start[1] > end[1]:
+            self.page_index = min(
+                len(self.pages) - 1,
+                self.page_index + 1,
+            )
+        else:
+            self.page_index = max(0, self.page_index - 1)
+
+    def screenshot(self) -> bytes:
+        return b"synthetic-screenshot"
+
+
+class ScalarSelectionPrimitiveTests(unittest.TestCase):
+    def _inventory(
+        self,
+        checked: tuple[str, ...],
+    ) -> catalog.CatalogInventory:
+        labels = _PinnedFixture.labels
+        return catalog.CatalogInventory(
+            labels=labels,
+            checked_by_label={
+                label: label in checked for label in labels
+            },
+            pages=(),
+            catalog_sha256=catalog.catalog_sha256(labels),
+        )
+
+    def _select(
+        self,
+        *,
+        plan: scalar.ScalarPlan,
+        inventory: catalog.CatalogInventory,
+        adb: _SelectorAdb,
+        writer: catalog.EventWriter,
+    ) -> tuple[str, tuple[object, ...]]:
+        synthetic_button = mock.Mock(
+            resource_id=f"{catalog.SAFE_ID_PREFIX}bStartscan"
+        )
+        synthetic_nodes = (synthetic_button,)
+        with (
+            mock.patch.object(
+                scalar,
+                "_wait_for_plots_page",
+                return_value=("<synthetic-plots-page/>", synthetic_nodes),
+            ),
+            mock.patch.object(
+                scalar,
+                "validate_plots_page",
+                return_value=list(synthetic_nodes),
+            ),
+            mock.patch.object(
+                scalar,
+                "_one_by_id",
+                return_value=synthetic_button,
+            ),
+            mock.patch.object(
+                scalar,
+                "monitor_visual_state",
+                return_value="stopped",
+            ),
+            mock.patch.object(
+                scalar,
+                "plot_labels",
+                return_value=("D",),
+            ),
+        ):
+            return scalar.select_single_scalar_in_open_dialog(
+                plan=plan,
+                inventory=inventory,
+                target=plan.target_by_id["delta"],
+                adb=adb,
+                writer=writer,
+                sleep=lambda _seconds: None,
+            )
+
+    def test_unchecks_prior_rows_selects_exact_target_and_commits_stopped(self):
+        with _fixture() as fixture, tempfile.TemporaryDirectory() as directory:
+            plan = fixture.load()
+            inventory = self._inventory(("A", "C"))
+            adb = _SelectorAdb(
+                pages=(("A", "B", "C"), ("B", "C", "D")),
+                checked=("A", "C"),
+            )
+            writer = catalog.EventWriter(Path(directory))
+            _, nodes = self._select(
+                plan=plan,
+                inventory=inventory,
+                adb=adb,
+                writer=writer,
+            )
+            events = [
+                json.loads(line)
+                for line in writer.events_path.read_text(
+                    encoding="utf-8"
+                ).splitlines()
+            ]
+
+        self.assertEqual(adb.checked, {"D"})
+        self.assertTrue(adb.committed)
+        self.assertEqual(
+            [text for resource_id, text in adb.taps if resource_id == catalog.DIALOG_ROW_ID],
+            ["A", "C", "D"],
+        )
+        self.assertEqual(adb.taps[-1][0], catalog.DIALOG_OK_ID)
+        self.assertTrue(adb.swipes)
+        self.assertEqual(len(nodes), 1)
+        committed = [
+            event
+            for event in events
+            if event["event"] == "scalar_singleton_selection_committed"
+        ]
+        self.assertEqual(len(committed), 1)
+        self.assertFalse(committed[0]["scan_started"])
+        self.assertFalse(committed[0]["recording_control_tapped"])
+
+    def test_collateral_check_state_change_fails_before_ok(self):
+        with _fixture() as fixture, tempfile.TemporaryDirectory() as directory:
+            plan = fixture.load()
+            inventory = self._inventory(("A",))
+            adb = _SelectorAdb(
+                pages=(("A", "B", "C"), ("B", "C", "D")),
+                checked=("A",),
+                collateral_toggle="B",
+            )
+            writer = catalog.EventWriter(Path(directory))
+            with self.assertRaisesRegex(
+                scalar.CampaignError,
+                "unexpected check state",
+            ):
+                self._select(
+                    plan=plan,
+                    inventory=inventory,
+                    adb=adb,
+                    writer=writer,
+                )
+
+        self.assertFalse(adb.committed)
+        self.assertFalse(
+            any(resource_id == catalog.DIALOG_OK_ID for resource_id, _ in adb.taps)
+        )
+
+    def test_catalog_hash_mismatch_fails_without_input(self):
+        with _fixture() as fixture, tempfile.TemporaryDirectory() as directory:
+            plan = fixture.load()
+            good = self._inventory(())
+            inventory = catalog.CatalogInventory(
+                labels=good.labels,
+                checked_by_label=good.checked_by_label,
+                pages=good.pages,
+                catalog_sha256="0" * 64,
+            )
+            adb = _SelectorAdb(
+                pages=(("A", "B", "C"), ("B", "C", "D")),
+                checked=(),
+            )
+            writer = catalog.EventWriter(Path(directory))
+            with self.assertRaisesRegex(
+                scalar.CampaignError,
+                "does not match the pinned catalog hash",
+            ):
+                self._select(
+                    plan=plan,
+                    inventory=inventory,
+                    adb=adb,
+                    writer=writer,
+                )
+
+        self.assertEqual(adb.taps, [])
+        self.assertEqual(adb.swipes, [])
+
+
+class PostStopArtifactValidationTests(unittest.TestCase):
+    def test_requires_growth_and_three_identical_csv_sizes(self):
+        with _fixture() as fixture:
+            plan = fixture.load()
+            final = scalar.validate_post_stop_artifact_observations(
+                plan,
+                before={
+                    scalar.DEBUG_ARTIFACT: 100,
+                    scalar.CSV_ARTIFACT: 200,
+                },
+                observations=[
+                    {
+                        scalar.DEBUG_ARTIFACT: 140,
+                        scalar.CSV_ARTIFACT: 240,
+                    },
+                    {
+                        scalar.DEBUG_ARTIFACT: 145,
+                        scalar.CSV_ARTIFACT: 260,
+                    },
+                    {
+                        scalar.DEBUG_ARTIFACT: 145,
+                        scalar.CSV_ARTIFACT: 260,
+                    },
+                    {
+                        scalar.DEBUG_ARTIFACT: 150,
+                        scalar.CSV_ARTIFACT: 260,
+                    },
+                ],
+            )
+
+        self.assertEqual(final[scalar.DEBUG_ARTIFACT], 150)
+        self.assertEqual(final[scalar.CSV_ARTIFACT], 260)
+
+    def test_rejects_unstable_csv_even_when_it_grew(self):
+        with _fixture() as fixture:
+            plan = fixture.load()
+            with self.assertRaisesRegex(
+                scalar.CampaignError,
+                "is not stable",
+            ):
+                scalar.validate_post_stop_artifact_observations(
+                    plan,
+                    before={
+                        scalar.DEBUG_ARTIFACT: 100,
+                        scalar.CSV_ARTIFACT: 200,
+                    },
+                    observations=[
+                        {
+                            scalar.DEBUG_ARTIFACT: 140,
+                            scalar.CSV_ARTIFACT: 240,
+                        },
+                        {
+                            scalar.DEBUG_ARTIFACT: 145,
+                            scalar.CSV_ARTIFACT: 250,
+                        },
+                        {
+                            scalar.DEBUG_ARTIFACT: 150,
+                            scalar.CSV_ARTIFACT: 260,
+                        },
+                    ],
+                )
+
+    def test_rejects_shrink_disappearance_and_non_growth(self):
+        cases = (
+            (
+                "shrink",
+                [
+                    {
+                        scalar.DEBUG_ARTIFACT: 140,
+                        scalar.CSV_ARTIFACT: 240,
+                    },
+                    {
+                        scalar.DEBUG_ARTIFACT: 139,
+                        scalar.CSV_ARTIFACT: 240,
+                    },
+                    {
+                        scalar.DEBUG_ARTIFACT: 139,
+                        scalar.CSV_ARTIFACT: 240,
+                    },
+                ],
+                "shrank",
+            ),
+            (
+                "disappear",
+                [
+                    {
+                        scalar.DEBUG_ARTIFACT: 140,
+                        scalar.CSV_ARTIFACT: 240,
+                    },
+                    {
+                        scalar.DEBUG_ARTIFACT: 140,
+                        scalar.CSV_ARTIFACT: None,
+                    },
+                    {
+                        scalar.DEBUG_ARTIFACT: 140,
+                        scalar.CSV_ARTIFACT: None,
+                    },
+                ],
+                "disappeared",
+            ),
+            (
+                "no growth",
+                [
+                    {
+                        scalar.DEBUG_ARTIFACT: 100,
+                        scalar.CSV_ARTIFACT: 200,
+                    },
+                    {
+                        scalar.DEBUG_ARTIFACT: 100,
+                        scalar.CSV_ARTIFACT: 200,
+                    },
+                    {
+                        scalar.DEBUG_ARTIFACT: 100,
+                        scalar.CSV_ARTIFACT: 200,
+                    },
+                ],
+                "did not grow",
+            ),
+        )
+        for name, observations, expected in cases:
+            with self.subTest(name=name), _fixture() as fixture:
+                plan = fixture.load()
+                with self.assertRaisesRegex(
+                    scalar.CampaignError,
+                    expected,
+                ):
+                    scalar.validate_post_stop_artifact_observations(
+                        plan,
+                        before={
+                            scalar.DEBUG_ARTIFACT: 100,
+                            scalar.CSV_ARTIFACT: 200,
+                        },
+                        observations=observations,
+                    )
 
 
 class TrackedPlanTests(unittest.TestCase):

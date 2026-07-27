@@ -18,12 +18,14 @@ output access unless all of the following were pinned before invocation:
 * exact ``(display_order_key, zero_based_index, label)`` triples for every
   scheduled target.
 
-Live execution is intentionally disabled in this implementation.  Any future
-live path must inventory and cancel the complete selector again before it is
-allowed to tap a row, OK, or scan; select exactly one scalar per segment; never
-tap AlfaOBD's recording or bookmark controls; and accept the buffered
-``Gauges_Data.csv`` only after a clean stop produces growth followed by at
-least three stable size observations.
+Live execution is intentionally disabled in this implementation.  The
+unreachable, synthetic-tested selector primitive can consume a fresh matching
+inventory, commit exactly one scalar, and prove the scan remains stopped.  The
+pure artifact validator proves non-shrinking Debug/CSV growth and a stable
+post-stop CSV tail.  A future enabled path must wrap those primitives in
+cleanup ownership, inventory the complete selector again before any row, OK,
+or scan tap, never tap AlfaOBD's recording or bookmark controls, and reconcile
+every potentially ambiguous input without guessing or retrying.
 """
 
 from __future__ import annotations
@@ -38,6 +40,8 @@ import os
 from pathlib import Path
 import re
 import sys
+import time
+from typing import Callable
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -45,13 +49,27 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from tools.alfaobd_plots_catalog import (  # noqa: E402
+    AdbClient,
     CatalogPlan,
+    CatalogInventory,
+    DialogPage,
+    EventWriter,
+    _dialog_signature,
+    _observe_stable_dialog,
+    _swipe_dialog,
+    _wait_for_plots_page,
     catalog_sha256,
     load_plan_bytes as load_catalog_plan_bytes,
+    monitor_visual_state,
+    parse_dialog_page,
+    plot_labels,
+    validate_plots_page,
 )
 from tools.alfaobd_singleton_campaign import (  # noqa: E402
     CAMPAIGN_ID_RE,
     CampaignError,
+    SAFE_ID_PREFIX,
+    _one_by_id,
 )
 
 
@@ -1090,6 +1108,395 @@ def require_execution_ready(plan: ScalarPlan) -> None:
         )
 
 
+def _catalog_page_start(
+    inventory: CatalogInventory,
+    page: DialogPage,
+) -> int:
+    """Return a page's exact catalog offset or fail on a non-contiguous view."""
+    try:
+        start = inventory.labels.index(page.labels[0])
+    except ValueError as exc:
+        raise CampaignError(
+            f"visible Plots row is absent from pinned catalog: {page.labels[0]!r}"
+        ) from exc
+    expected = inventory.labels[start : start + len(page.labels)]
+    if expected != page.labels:
+        raise CampaignError(
+            "visible Plots rows are not one exact contiguous pinned-catalog slice"
+        )
+    return start
+
+
+def _toggle_exact_dialog_row(
+    *,
+    plan: CatalogPlan,
+    adb: AdbClient,
+    writer: EventWriter,
+    page: DialogPage,
+    label: str,
+    expected_checked: bool,
+    operation: str,
+    sleep: Callable[[float], None] = time.sleep,
+    before_input: Callable[[], None] | None = None,
+) -> DialogPage:
+    """Flip one exact visible row and prove no other row or geometry changed."""
+    if label not in page.labels:
+        raise CampaignError(f"target row is not visible: {label!r}")
+    index = page.labels.index(label)
+    if page.checked[index] == expected_checked:
+        return page
+    if before_input is not None:
+        before_input()
+    adb.foreground_package()
+    immediate_xml = adb.dump_ui()
+    immediate = parse_dialog_page(immediate_xml, plan=plan)
+    if _dialog_signature(immediate) != _dialog_signature(page):
+        raise CampaignError(
+            "Plots selector changed before row input; refusing stale coordinates"
+        )
+    row = immediate.rows[index]
+    writer.event(
+        "scalar_row_tap_intent",
+        operation=operation,
+        label=label,
+        prior_checked=row.checked,
+        expected_checked=expected_checked,
+        bounds=[
+            row.bounds.left,
+            row.bounds.top,
+            row.bounds.right,
+            row.bounds.bottom,
+        ],
+        retry_permitted=False,
+    )
+    try:
+        adb.tap(row)
+    except BaseException as exc:
+        writer.event(
+            "scalar_row_tap_ambiguous",
+            operation=operation,
+            label=label,
+            error=type(exc).__name__,
+            detail=str(exc),
+            retry_attempted=False,
+        )
+        raise
+    writer.event(
+        "scalar_row_tap_returned",
+        operation=operation,
+        label=label,
+    )
+    sleep(plan.settle_seconds)
+    _, changed, transitioned = _observe_stable_dialog(
+        plan,
+        adb,
+        writer,
+        operation=f"{operation}:verify",
+        pre_input_signature=_dialog_signature(immediate),
+        sleep=sleep,
+    )
+    if not transitioned:
+        raise CampaignError(
+            f"Plots row tap produced no verified state change for {label!r}"
+        )
+    if (
+        changed.labels != immediate.labels
+        or changed.list_bounds != immediate.list_bounds
+    ):
+        raise CampaignError(
+            f"Plots row tap changed list content/geometry for {label!r}"
+        )
+    expected_states = list(immediate.checked)
+    expected_states[index] = expected_checked
+    if changed.checked != tuple(expected_states):
+        raise CampaignError(
+            f"Plots row tap changed an unexpected check state for {label!r}"
+        )
+    writer.event(
+        "scalar_row_toggle_verified",
+        operation=operation,
+        label=label,
+        checked=expected_checked,
+    )
+    return changed
+
+
+def select_single_scalar_in_open_dialog(
+    *,
+    plan: ScalarPlan,
+    inventory: CatalogInventory,
+    target: ScalarTarget,
+    adb: AdbClient,
+    writer: EventWriter,
+    sleep: Callable[[float], None] = time.sleep,
+    before_input: Callable[[], None] | None = None,
+) -> tuple[str, tuple[object, ...]]:
+    """Commit exactly one pinned scalar from an already-inventoried selector.
+
+    ``inventory_open_dialog`` leaves the selector at its verified top boundary.
+    This primitive consumes that state, removes any catalog-reviewed prior
+    selections, selects the one exact target triple, commits with the sole OK
+    control, and proves that the stopped Plots page renders only that target.
+    It never starts a scan or touches either recording control.
+
+    The future live supervisor must retain cleanup ownership around this call:
+    before OK, BACK can cancel pending toggles; after an ambiguous OK return,
+    only an exact Plots-page/selector reconciliation may decide what happened.
+    """
+    catalog_plan = plan.catalog_plan
+    expected_hash = catalog_plan.expected_catalog_sha256
+    if expected_hash is None or inventory.catalog_sha256 != expected_hash:
+        raise CampaignError(
+            "live selector inventory does not match the pinned catalog hash"
+        )
+    if len(inventory.labels) != catalog_plan.expected_catalog_count:
+        raise CampaignError(
+            "live selector inventory count does not match the pinned plan"
+        )
+    if not 0 <= target.zero_based_index < len(inventory.labels):
+        raise CampaignError(
+            "target index is outside the live catalog: "
+            f"{target.target_id}"
+        )
+    if (
+        target.display_order_key != target.zero_based_index + 1
+        or inventory.labels[target.zero_based_index] != target.label
+    ):
+        raise CampaignError(
+            f"target triple does not match live inventory: {target.target_id}"
+        )
+    selected = dict(inventory.checked_by_label)
+    if set(selected) != set(inventory.labels):
+        raise CampaignError(
+            "live selector check-state map does not cover the complete catalog"
+        )
+    if any(type(value) is not bool for value in selected.values()):
+        raise CampaignError("live selector check-state map is not boolean")
+
+    _, page, _ = _observe_stable_dialog(
+        catalog_plan,
+        adb,
+        writer,
+        operation=f"scalar:{target.target_id}:initial",
+        sleep=sleep,
+    )
+    if _catalog_page_start(inventory, page) != 0:
+        raise CampaignError(
+            "scalar selection requires the inventoried selector at its top boundary"
+        )
+
+    toggled_labels: set[str] = set()
+    for page_index in range(catalog_plan.max_pages):
+        start = _catalog_page_start(inventory, page)
+        for visible_index, label in enumerate(page.labels):
+            catalog_index = start + visible_index
+            if page.checked[visible_index] != selected[label]:
+                raise CampaignError(
+                    f"live check state drifted after inventory for {label!r}"
+                )
+            should_be_checked = catalog_index == target.zero_based_index
+            if page.checked[visible_index] != should_be_checked:
+                page = _toggle_exact_dialog_row(
+                    plan=catalog_plan,
+                    adb=adb,
+                    writer=writer,
+                    page=page,
+                    label=label,
+                    expected_checked=should_be_checked,
+                    operation=(
+                        f"scalar:{target.target_id}:page:{page_index}:"
+                        f"{'check' if should_be_checked else 'uncheck'}"
+                    ),
+                    sleep=sleep,
+                    before_input=before_input,
+                )
+                selected[label] = should_be_checked
+                toggled_labels.add(label)
+
+        checked = tuple(
+            label for label in inventory.labels if selected[label]
+        )
+        if checked == (target.label,):
+            break
+        next_xml, next_page, transitioned = _swipe_dialog(
+            catalog_plan,
+            adb,
+            writer,
+            page,
+            phase="scalar_seek",
+            page_index=page_index,
+            toward="later",
+            sleep=sleep,
+            before_input=before_input,
+        )
+        if not transitioned:
+            raise CampaignError(
+                "reached the Plots selector bottom before singleton state was proven"
+            )
+        page = next_page
+    else:
+        raise CampaignError(
+            "could not establish the singleton Plots selection within max_pages"
+        )
+
+    if before_input is not None:
+        before_input()
+    adb.foreground_package()
+    immediate_xml = adb.dump_ui()
+    immediate = parse_dialog_page(immediate_xml, plan=catalog_plan)
+    if _dialog_signature(immediate) != _dialog_signature(page):
+        raise CampaignError(
+            "Plots selector changed before OK input; refusing stale coordinates"
+        )
+    writer.event(
+        "scalar_dialog_ok_tap_intent",
+        target_id=target.target_id,
+        label=target.label,
+        checked_labels=[target.label],
+        toggled_labels=sorted(toggled_labels),
+        retry_permitted=False,
+    )
+    try:
+        adb.tap(immediate.ok)
+    except BaseException as exc:
+        writer.event(
+            "scalar_dialog_ok_tap_ambiguous",
+            target_id=target.target_id,
+            error=type(exc).__name__,
+            detail=str(exc),
+            retry_attempted=False,
+        )
+        raise
+    writer.event(
+        "scalar_dialog_ok_tap_returned",
+        target_id=target.target_id,
+    )
+    xml_text, nodes = _wait_for_plots_page(
+        catalog_plan,
+        adb,
+        sleep=sleep,
+    )
+    nodes = validate_plots_page(
+        xml_text,
+        plan=catalog_plan,
+        expected_labels=(target.label,),
+    )
+    button = _one_by_id(nodes, f"{SAFE_ID_PREFIX}bStartscan")
+    screenshot = adb.screenshot()
+    scan_state = monitor_visual_state(
+        screenshot,
+        button,
+        expected_width=catalog_plan.expected_width,
+        expected_height=catalog_plan.expected_height,
+    )
+    if scan_state != "stopped":
+        raise CampaignError(
+            f"Plots scan state changed while selecting {target.label!r}: {scan_state}"
+        )
+    if plot_labels(nodes) != (target.label,):
+        raise CampaignError(
+            f"Plots page did not prove singleton label {target.label!r}"
+        )
+    writer.event(
+        "scalar_singleton_selection_committed",
+        target_id=target.target_id,
+        label=target.label,
+        scan_state=scan_state,
+        scan_started=False,
+        recording_control_tapped=False,
+    )
+    return xml_text, tuple(nodes)
+
+
+def validate_post_stop_artifact_observations(
+    plan: ScalarPlan,
+    *,
+    before: dict[str, int | None],
+    observations: list[dict[str, int | None]],
+) -> dict[str, int]:
+    """Prove growth and a quiet, non-shrinking post-stop artifact tail.
+
+    AlfaOBD buffers ``Gauges_Data.csv`` and closes it only after a clean scan
+    stop.  A single larger size is therefore insufficient: every required
+    activity witness must grow relative to the pre-start offset, no configured
+    artifact may shrink/disappear, and each stop-stability artifact must have
+    the same present size in the final configured number of observations.
+    """
+    expected = set(plan.artifacts)
+    if set(before) != expected:
+        raise CampaignError(
+            "pre-segment artifact snapshot does not exactly match the plan"
+        )
+    if len(observations) < plan.stop_stability_observations:
+        raise CampaignError(
+            "insufficient post-stop artifact observations for stability"
+        )
+
+    def validated(
+        snapshot: dict[str, int | None],
+        *,
+        description: str,
+    ) -> dict[str, int | None]:
+        if set(snapshot) != expected:
+            raise CampaignError(
+                f"{description} artifact snapshot does not exactly match the plan"
+            )
+        for name, size in snapshot.items():
+            if size is not None and (
+                type(size) is not int or size < 0
+            ):
+                raise CampaignError(
+                    f"{description} artifact size is invalid for {name}"
+                )
+        return snapshot
+
+    previous = validated(before, description="pre-segment")
+    for index, raw in enumerate(observations):
+        current = validated(
+            raw,
+            description=f"post-stop observation {index}",
+        )
+        for name in plan.artifacts:
+            old = previous[name]
+            new = current[name]
+            if old is not None and new is None:
+                raise CampaignError(
+                    f"artifact {name} disappeared after scan stop"
+                )
+            if old is not None and new is not None and new < old:
+                raise CampaignError(
+                    f"artifact {name} shrank after scan stop ({old} -> {new})"
+                )
+        previous = current
+
+    final = observations[-1]
+    for name in plan.required_segment_growth:
+        old = before[name]
+        new = final[name]
+        if old is None or new is None:
+            raise CampaignError(
+                f"required artifact {name} was absent before/after the segment"
+            )
+        if new <= old:
+            raise CampaignError(
+                f"required artifact {name} did not grow ({old} -> {new})"
+            )
+
+    stable_tail = observations[-plan.stop_stability_observations :]
+    for name in plan.required_stop_stability:
+        sizes = [snapshot[name] for snapshot in stable_tail]
+        if sizes[0] is None or len(set(sizes)) != 1:
+            raise CampaignError(
+                f"required post-stop artifact {name} is not stable across "
+                f"{plan.stop_stability_observations} observations: {sizes}"
+            )
+    return {
+        name: size
+        for name, size in final.items()
+        if size is not None
+    }
+
+
 def offline_audit(plan: ScalarPlan) -> dict[str, object]:
     """Return a complete no-subprocess/no-output readiness audit."""
     blockers = execution_blockers(plan)
@@ -1118,8 +1525,8 @@ def offline_audit(plan: ScalarPlan) -> dict[str, object]:
         "pinning_blockers": blockers,
         "live_blocker": (
             "live selector mutation/scan execution is intentionally disabled "
-            "until it has a dedicated synthetic safety test suite and a "
-            "reviewed live catalog"
+            "until the cleanup-owning start/dwell/stop/pull supervisor is "
+            "implemented and the live catalog is reviewed"
         ),
         "deferred_live_requirements": [
             (
@@ -1131,12 +1538,13 @@ def offline_audit(plan: ScalarPlan) -> dict[str, object]:
                 "inhibit"
             ),
             (
-                "re-inventory and hash-match the full live catalog before "
+                "wire the tested selector primitive into a supervisor that "
+                "re-inventories and hash-matches the full live catalog before "
                 "any row, OK, or scan tap"
             ),
             (
-                "require at least three identical post-stop CSV sizes across "
-                "the configured quiet interval"
+                "wire the tested post-stop artifact validator into a bounded "
+                "start/dwell/stop/pull supervisor"
             ),
         ],
         "scalar_plan": {

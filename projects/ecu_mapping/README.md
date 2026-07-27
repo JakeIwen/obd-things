@@ -457,7 +457,7 @@ select or scan a scalar.
 
 `tools/alfaobd_plots_scalar_campaign.py`, with draft/review plans at
 `projects/ecu_mapping/configs/alfaobd_{pcm,tcm}_plots_scalars.json`, is currently an
-**offline-gates-only scaffold**, not live scalar automation. `plan` validates and expands the
+**offline-gated scaffold**, not enabled live scalar automation. `plan` validates and expands the
 candidate schedule, `audit` checks the referenced catalog plan and any configured reviewed report,
 and `status` only reads an existing `state.json`; none of those modes constructs an ADB client or
 accesses CAN, services, mounts, network, proxy settings, or output. The live
@@ -481,8 +481,19 @@ completion `state.json` and its hash, the catalog-plan source hash, the scalar-p
 review provenance, and an exact
 `(display_order_key, zero_based_index, label)` triple for every scheduled target. Even if all pins
 and CLI confirmations pass, `run` is intentionally disabled in this version and exits before ADB,
-CAN, service, mount, or output access. No live selector mutation, scan, or scalar capture path exists
-yet.
+CAN, service, mount, or output access.
+
+The internal selector mutation primitive is now implemented and covered by synthetic safety tests,
+but is not reachable from that CLI. It consumes only a fresh complete `CatalogInventory` whose
+ordered-label hash matches the pinned catalog, verifies every visible page as an exact contiguous
+catalog slice, removes prior checked rows, selects one exact target triple, rejects stale
+coordinates or collateral check-state changes, commits through the sole verified `OK` control, and
+proves that the returned Plots page contains only the target while the scan remains stopped. A
+separate pure post-stop validator requires every configured artifact to remain present and
+non-shrinking, requires Debug/CSV growth from their pre-start offsets, and requires the final
+configured number of CSV-size observations to be identical. The remaining implementation work is
+the cleanup-owning start/dwell/stop/pull supervisor around these tested primitives; it must stay
+disabled until the TCM catalog below is inventoried, reviewed, and pinned.
 
 Catalog campaign `pcm-plots-catalog-20260726T224830Z` completed a matching
 forward/reverse 193-row traversal without manual reconciliation. The separate
