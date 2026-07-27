@@ -42,6 +42,18 @@ next high-value campaign is now narrowed to the TCM: inventory its 56-row live
 Plots selector, then correlate a small owner-priority gauge set. It is not a
 broad blind DID sweep.
 
+Update 2026-07-27 (static APK request-table recovery): five independently
+verified PCM anchors proved that AlfaOBD's ordered literal two-byte tables
+align with the database's ordered Plots catalogs. The unique 56-entry ZF9HP
+table identifies `D012` for engine speed, `D014` for converter slip/turbine
+speed, `D016` for output-speed and related values, and `D018` for water/TCU/oil
+temperatures plus the first five torque quantities. `D019` carries the sixth
+torque quantity and four solenoid currents. These are high-confidence
+vendor-derived DID candidates, not yet live-verified TCM decodes. This reduces
+the next vehicle pass to support checks and field/scaling correlation inside
+five known responses; it does not justify publishing transmission temperature
+or torque yet.
+
 ## Engine-oil pressure: exact OEM context
 
 The OEM `OIL PRESSURE – UPGRADE ENGINE` table applies only when coolant is
@@ -350,6 +362,13 @@ sensor.
    `candump-diagnostic-wire-tcm-four-chunks` and
    `can-timeseries-correlate-tcm-four-chunks` provide the same bounded
    extraction/correlation path already used for the PCM.
+   The static request-table recovery changes the efficient order within this
+   step: first physically read `D012`, `D014`, `D016`, `D018`, and `D019` to
+   establish support and response lengths; then record the grouped priority
+   gauges together while preserving exact Debug cycles and passive C-CAN.
+   Reserve singleton repeats only for fields that remain ambiguous within a
+   shared response. Evidence and provenance are in
+   [`2026-07-21_alfaobd_apk_catalog.md`](2026-07-21_alfaobd_apk_catalog.md#static-request-table-recovery--2026-07-27).
 6. Reproduce each resolved request using a bounded physical read to the
    verified ECU endpoint and required session behavior. Do not promote a
    label merely because AlfaOBD rendered it.

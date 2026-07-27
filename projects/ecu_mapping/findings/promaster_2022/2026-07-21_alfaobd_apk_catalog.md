@@ -136,6 +136,66 @@ no timestamps or labels, and the 2026-07-22 copy was a mechanical repetition
 of its baseline. The tablet's cumulative labeled `Gauges_Data.csv` contains
 no ZF9HP section at all; its 254 sections are 2022–2024 old-vehicle data.
 
+### Static request-table recovery — 2026-07-27
+
+The database stops at presentation metadata, but the owner-supplied APK's
+decompiled Java contains separate literal request-identifier tables. A
+provenance-bearing inventory with `tools/alfaobd_java_arrays.py` found one
+193-entry two-byte table in class `aa`, field `f4353w0`. It aligns exactly with
+the 193 ordered `TIGERSHARK_CUSW` rows:
+
+| catalog order | label | table identifier | independently verified live DID |
+|---:|---|---:|---:|
+| 7 | Engine speed | `01D5` | `01D5` |
+| 13 | Current engine torque | `06DA` | `06DA` |
+| 15 | Coolant temperature | `011D` | `011D` |
+| 17 | Engine oil pressure | `022A` | `022A` |
+| 20 | VVT Oil Temperature | `069F` | `069F` |
+
+Those five exact, non-adjacent anchors establish that these two-byte entries
+are the ordered service-`22` data identifiers, rather than offsets, label IDs,
+or display keys.
+
+The transmission request-table class `ba` contains exactly one 56-entry
+two-byte table, field `A0`, matching the unique 56-row ZF9HP catalog. Ordered
+alignment yields these owner-priority candidates:
+
+| catalog order | label(s) sharing the request | candidate DID |
+|---:|---|---:|
+| 6 | Engine speed | `D012` |
+| 7–8 | Torque-converter slip; turbine speed | `D014` |
+| 9–13 | output speed, calculated vehicle speed, valve supply, accelerator, throttle | `D016` |
+| 14–21 | water/TCU/oil temperatures and the first five torque quantities | `D018` |
+| 22–26 | slow-path torque intervention and shift-solenoid B–E currents | `D019` |
+
+For the top-priority telemetry, this makes `D018` the focused transmission-oil
+temperature and torque-container candidate. The remainder of the table groups
+the lower-priority rows under `D01A`, `D01D`, `D01E`, `D01F`, `D020`, `D023`,
+`D024`, `D025`, `D028`, `D031`, and `D032`.
+
+This is strong vendor-derived request evidence, but not yet live vehicle
+ground truth. It does not reveal the byte/bit fields or scaling within a
+multi-value response. A parked physical read of the small
+`D012/D014/D016/D018/D019` set must first prove support on this TCM; AlfaOBD
+gauge values plus exact request/response cycles must then establish field
+layout and scale. The live 56-row selector inventory remains required for safe
+automated gauge selection, but a one-gauge-at-a-time campaign is no longer
+needed merely to discover which DID each priority label uses.
+
+Static-source provenance:
+
+- `aa.java`: SHA-256
+  `7d4ea16e66225c83c2edfe6a9f334cf5f7fb22c12140aeb8c5e5b6194a9de880`;
+  table `f4353w0`, line 181 in this JADX rendering;
+- `ba.java`: SHA-256
+  `dc85720fba906e5109778394ae291f2c7cb56647edde1cd41c22c824a0b49298`;
+  table `A0`, line 191 in this JADX rendering; and
+- reconstructed database: SHA-256
+  `073fd4c46c438d4591e590d9fc2556bc5da3c1aff2e8008c504a9ef1f0398be5`.
+
+The proprietary source and database remain gitignored; only the derived
+candidate mapping and reproducible inventory tool are tracked.
+
 ## 2022+ ProMaster profile/address candidates
 
 The table below summarizes model-code-88 choices. A 29-bit target means the `ECUUnits.ecuaddress`

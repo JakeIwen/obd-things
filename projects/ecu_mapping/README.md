@@ -500,6 +500,16 @@ outer campaign supervisor: UI/channel locks, same-boot operation inhibit, mount 
 passive-capture binding, artifact pulls/hashes, and atomic checkpoints. The CLI must stay disabled
 until that layer exists and the TCM catalog below is inventoried, reviewed, and pinned.
 
+Offline static analysis has recovered the ZF9HP request grouping without
+relaxing that live-UI gate. The owner-supplied APK's unique 56-entry
+transmission table aligns the priority rows with candidate DIDs `D012`,
+`D014`, `D016`, `D018`, and `D019`; five independently live-verified PCM table
+anchors validate the ordered-table method. See
+[`2026-07-21_alfaobd_apk_catalog.md`](findings/promaster_2022/2026-07-21_alfaobd_apk_catalog.md#static-request-table-recovery--2026-07-27).
+The next live pass should first do physical support reads of that five-DID set,
+then use the live catalog to select the grouped gauges. Field offsets and
+scales remain unresolved, so these candidates are not dashboard-ready.
+
 Catalog campaign `pcm-plots-catalog-20260726T224830Z` completed a matching
 forward/reverse 193-row traversal without manual reconciliation. The separate
 simultaneous eleven-gauge idle recording then preserved the owner's existing

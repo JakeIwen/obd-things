@@ -494,6 +494,26 @@
       "outputs": [
         "jadx"
       ]
+    },
+    {
+      "name": "alfaobd-java-array-inventory",
+      "description": "Inventory literal byte arrays in one owner-supplied JADX Java source file.",
+      "profile": "python-script",
+      "source_paths": [
+        "tools/alfaobd_java_arrays.py"
+      ],
+      "minimum_inputs": 1,
+      "maximum_inputs": 1,
+      "argv": [
+        "{source:tools/alfaobd_java_arrays.py}",
+        "{input:0}",
+        "{arguments}",
+        "--output",
+        "{result:arrays.json}"
+      ],
+      "outputs": [
+        "arrays.json"
+      ]
     }
   ]
 }
