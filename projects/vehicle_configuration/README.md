@@ -16,6 +16,12 @@ low-beam investigation.
   AlfaOBD repeatedly reported `Failure connecting to module` for DASM even
   though direct DASM status loaded, ACC remained functional, no ACC fault was
   reported, and the odometer did not flash.
+- The recovered raw trace now proves that AlfaOBD never addressed the installed
+  DASM at `0x2A` during those alignment passes. It repeatedly sent `10 03` to
+  nonresponding `0x26`, which its own model-88 catalog assigns to optional
+  PAM2/Parking Assist, then rendered that result as a DASM failure. Treat this
+  as a very-high-confidence AlfaOBD participant-address/label defect, not a
+  radar failure.
 - The original 250-byte backup was subsequently loaded through AlfaOBD's
   `Write custom configuration` editor, decoded by `Verify Custom Proxy`, and
   written as the recovery record. The alignment had to be retried about five
@@ -34,6 +40,8 @@ The sanitized baseline and provenance are in
 [`findings/2026-07-25_proxi_baseline.md`](findings/2026-07-25_proxi_baseline.md).
 The owner-observed write/alignment and recovery outcome is in
 [`findings/2026-07-25_led_option_recovery.md`](findings/2026-07-25_led_option_recovery.md).
+The recovered tablet-log analysis and standalone-alignment feasibility are in
+[`findings/2026-07-26_alfaobd_proxi_dasm_misroute.md`](findings/2026-07-26_alfaobd_proxi_dasm_misroute.md).
 Raw configuration bytes, full module logs, tablet evidence, and campaign
 manifests remain ignored under `tmp/`.
 

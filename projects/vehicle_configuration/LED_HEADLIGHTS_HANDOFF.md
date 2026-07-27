@@ -1,6 +1,6 @@
 # LED low beams / IPC lamp-out handoff
 
-Last reviewed: 2026-07-25 after the supervised change/recovery campaign
+Last reviewed: 2026-07-26 after the tablet-log recovery and raw-trace analysis
 
 ## Decision state
 
@@ -12,11 +12,15 @@ After repeated PROXI alignment attempts, BCM DTC `B10AA-00` did not return
 after an engine start.
 
 AlfaOBD reported `Failure connecting to module` for DASM during every
-alignment attempt. That result did not correlate with an observable DASM/ACC
-failure: the module's status loaded directly, ACC remained functional, no ACC
-fault appeared, and the odometer did not flash. It currently has to be treated
-as an AlfaOBD alignment-path/profile problem or unresolved reporting anomaly,
-not proof that the physical DASM is unavailable.
+alignment attempt. The recovered raw trace proves that AlfaOBD did not address
+the installed DASM at `0x2A` in those alignment recordings. It repeatedly
+addressed nonresponding `0x26`, which AlfaOBD's own exact-model catalog assigns
+to optional PAM2/Parking Assist, then labeled the result DASM. Direct `0x2A`
+status and identity succeeded minutes later, ACC remained functional, no ACC
+fault appeared, and the odometer did not flash. This is now a
+very-high-confidence AlfaOBD participant-address/label defect, not evidence
+that the physical DASM is unavailable. See
+[`findings/2026-07-26_alfaobd_proxi_dasm_misroute.md`](findings/2026-07-26_alfaobd_proxi_dasm_misroute.md).
 
 The operational state is recovered, but a fresh post-recovery DID `0x2023`
 readback and BCM status snapshot have not been archived. Do not perform

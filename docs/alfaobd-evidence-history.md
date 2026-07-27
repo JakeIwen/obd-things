@@ -227,6 +227,31 @@ distinction, not evidence that monitoring stopped.
 
 Source: [cluster singleton correlation](../projects/ecu_mapping/findings/promaster_2022/2026-07-24_cluster_singleton_correlation.md).
 
+### 2026-07-25 through 2026-07-26 — false DASM failure during PROXI alignment
+
+**Confirmed participant-address/label defect.** Five complete AlfaOBD PROXI
+result blocks rendered `Driver Assist System Module (DASM)... Failure
+connecting to the module`. The raw Body-computer recordings never addressed
+the installed DASM at `0x2A`. Instead, AlfaOBD made 84 unanswered `10 03`
+attempts to `0x26`, which the same APK's exact-model catalog assigns to
+optional PAM2/Parking Assist. Direct `0x2A` connection minutes later returned
+positive session, identity, DTC, and tester-present responses, while the BCM
+continued to report DASM present, active, and `Response OK`.
+
+Treat the rendered failure as a very-high-confidence AlfaOBD
+participant-address/label binding bug, not a radar fault. It remains ambiguous
+whether the implementation intended a DASM step and used PAM2's address or
+correctly tested PAM2 and rendered the wrong label. Do not infer that the
+generic 250-byte `2E 2023` payload should be sent to `0x2A`; the capture never
+demonstrated the radar's configuration-write contract.
+
+The same raw trace positively acknowledged full `2E 2023` configuration writes
+at 15 other installed endpoints across C-CAN, B-CAN, and CAN-CH, making an
+offline standalone-alignment model feasible while leaving any live replay
+behind the normal configuration-write safety gates.
+
+Source: [PROXI DASM misroute analysis](../projects/vehicle_configuration/findings/2026-07-26_alfaobd_proxi_dasm_misroute.md).
+
 ## Current trust model
 
 | AlfaOBD surface | What it can establish | What it cannot establish alone |

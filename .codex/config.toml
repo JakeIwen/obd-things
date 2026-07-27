@@ -8,6 +8,9 @@ startup_timeout_sec = 30
 tool_timeout_sec = 120
 default_tools_approval_mode = "auto"
 
+[mcp_servers.ddgs.tools.search_text]
+approval_mode = "approve"
+
 [mcp_servers.playwright]
 command = "npx"
 args = [
