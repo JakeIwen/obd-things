@@ -15,6 +15,8 @@
 #   ./tools/ccan_inventory_campaign.sh --session-probes
 # Follow-up: padded PCM retry plus one BCM session-03 page:
 #   ./tools/ccan_inventory_campaign.sh --session-followup
+# Owner-priority PCM EOT and ZF9HP support checks:
+#   ./tools/ccan_inventory_campaign.sh --priority-telemetry
 #
 # Live use adds the same gates to either mode:
 #   ./tools/ccan_inventory_campaign.sh --execute --confirm-parked \
@@ -39,6 +41,11 @@ CAPTURE_PATH=""
 MODULES=(tcm shifter bcm_ccan cluster telematics rf_hub radar_acc)
 F1_PAGE_MODULES=(tcm shifter bcm_ccan cluster telematics)
 BCM_PAGES=(0100 2000 2900 4000)
+PCM_PRIORITY_DIDS=(3159 315A)
+TCM_PRIORITY_DIDS=(
+  F40C 0500 2102 2103 F405 0301 04FE
+  1018 101A 101B 101D 101F 1020
+)
 # Exact current-van AlfaOBD positives from the DA40F1 section of
 # projects/ecu_mapping/findings/promaster_2022/module_did_map.txt. F1A5 is omitted because the
 # complete F100-F1FF page is scanned separately. These are per-BCM candidates, never global DIDs.
@@ -64,6 +71,7 @@ while [ "$#" -gt 0 ]; do
     --session-probes) MODE="session-probes"; shift ;;
     --bcm-extended-page) MODE="bcm-extended-page"; shift ;;
     --session-followup) MODE="session-followup"; shift ;;
+    --priority-telemetry) MODE="priority-telemetry"; shift ;;
     --confirm-session-change) SESSION_CONFIRMED=1; shift ;;
     --conditions)
       if [ "$#" -lt 2 ] || [ -z "$2" ]; then
@@ -133,6 +141,25 @@ dry_run_bcm_extended_page() {
   python3 tools/did_sweep.py bcm_ccan 4000 40FF --session 03
 }
 
+dry_run_priority_telemetry() {
+  echo "DRY RUN: no sudo, interface change, CAN socket, or transmission will occur."
+  echo "Priority telemetry: two related-profile PCM EOT candidates, then 13 ZF9HP DIDs."
+  pcm_did_args=()
+  for did in "${PCM_PRIORITY_DIDS[@]}"; do
+    pcm_did_args+=(--did "$did")
+  done
+  python3 tools/did_sweep.py pcm "${pcm_did_args[@]}" \
+    --session 92 --confirm-session-change \
+    --pair 6/14 --conditions "parked; ignition ON; engine OFF; priority telemetry support check"
+
+  tcm_did_args=()
+  for did in "${TCM_PRIORITY_DIDS[@]}"; do
+    tcm_did_args+=(--did "$did")
+  done
+  python3 tools/did_sweep.py tcm "${tcm_did_args[@]}" \
+    --pair 6/14 --conditions "parked; ignition ON; engine OFF; priority telemetry support check"
+}
+
 if [ "$EXECUTE" -eq 0 ]; then
   case "$MODE" in
     candidate-dids) dry_run_candidate_dids ;;
@@ -142,6 +169,7 @@ if [ "$EXECUTE" -eq 0 ]; then
     session-probes) dry_run_pcm_probe; dry_run_bcm_session_compare ;;
     bcm-extended-page) dry_run_bcm_extended_page ;;
     session-followup) dry_run_pcm_probe; dry_run_bcm_extended_page ;;
+    priority-telemetry) dry_run_priority_telemetry ;;
     baseline) dry_run_baseline ;;
   esac
   exit 0
@@ -152,7 +180,7 @@ if [ "$PARKED" -ne 1 ] || [ -z "$CONDITIONS" ]; then
   exit 2
 fi
 case "$MODE" in
-  bcm-session-compare|pcm-probe|session-probes|bcm-extended-page|session-followup)
+  bcm-session-compare|pcm-probe|session-probes|bcm-extended-page|session-followup|priority-telemetry)
     if [ "$SESSION_CONFIRMED" -ne 1 ]; then
       echo "ERROR: $MODE live use requires --confirm-session-change" >&2
       exit 2
@@ -198,6 +226,10 @@ case "$MODE" in
     echo "This campaign combines the fixed-DLC padded PCM 10 92 -> 1A 87 retry with one"
     echo "BCM session-03 4000-40FF ReadDataByIdentifier page."
     ;;
+  priority-telemetry)
+    echo "This campaign sends a padded physical PCM 10 92 and, only after exact 50 92,"
+    echo "reads DIDs 3159/315A. It then reads 13 exact vendor-derived ZF9HP DIDs."
+    ;;
 esac
 if [ "$MODE" = "bcm-session-compare" ]; then
   echo "It may send validated physical 3E 00 keepalive while session 03 is active. It sends no"
@@ -205,6 +237,9 @@ if [ "$MODE" = "bcm-session-compare" ]; then
 elif [ "$MODE" = "pcm-probe" ]; then
   echo "It sends no functional broadcast, TesterPresent, routine, IO control, write, DTC clear,"
   echo "security request, or any request beyond the exact AlfaOBD-observed two-message sequence."
+elif [ "$MODE" = "priority-telemetry" ]; then
+  echo "It sends no functional broadcast, TesterPresent, routine, IO control, write, DTC clear,"
+  echo "or security request; only the stated session change and 15 physical DID reads are sent."
 elif [ "$MODE" = "session-probes" ]; then
   echo "It may send validated physical 3E 00 keepalive during the brief BCM session. It sends"
   echo "no functional broadcast, routine start/stop, IO control, write, DTC clear, or security request."
@@ -301,6 +336,32 @@ run_padded_pcm_probe() {
   echo "Filtered PCM raw capture: $CAPTURE_PATH"
 }
 
+priority_did_args=()
+for did in "${PCM_PRIORITY_DIDS[@]}"; do
+  priority_did_args+=(--did "$did")
+done
+
+tcm_priority_did_args=()
+for did in "${TCM_PRIORITY_DIDS[@]}"; do
+  tcm_priority_did_args+=(--did "$did")
+done
+
+start_priority_capture() {
+  mkdir -p tmp/captures/ccan/events
+  CAPTURE_PATH="tmp/captures/ccan/events/priority_telemetry_$(date +%Y%m%d_%H%M%S_%z).candump"
+  candump -L \
+    'can0,18DA10F1:DFFFFFFF,18DAF110:DFFFFFFF,18DA18F1:DFFFFFFF,18DAF118:DFFFFFFF' \
+    >"$CAPTURE_PATH" &
+  CAPTURE_PID=$!
+  sleep 0.1
+  if ! kill -0 "$CAPTURE_PID" 2>/dev/null; then
+    echo "ERROR: filtered priority-telemetry candump capture did not start" >&2
+    wait "$CAPTURE_PID" 2>/dev/null || true
+    CAPTURE_PID=""
+    return 1
+  fi
+}
+
 if [ "$MODE" = "candidate-dids" ]; then
   echo "Step 1/2: F100-F1FF identity/OEM page on five not-yet-mature modules."
   for module in "${F1_PAGE_MODULES[@]}"; do
@@ -386,6 +447,46 @@ if [ "$MODE" = "session-followup" ]; then
   python3 tools/did_sweep.py bcm_ccan 4000 40FF --session 03 \
     --confirm-session-change "${common[@]}"
   echo "Session follow-up complete. Reports are under tmp/discovery and tmp/inventories/bcm_ccan."
+  exit 0
+fi
+
+if [ "$MODE" = "priority-telemetry" ]; then
+  echo "Step 1/3: related-profile PCM engine-oil-temperature support pair."
+  start_priority_capture
+  arm_ccan
+  python3 tools/did_sweep.py pcm "${priority_did_args[@]}" \
+    --session 92 --confirm-session-change "${common[@]}"
+
+  echo "Step 2/3: exact vendor-derived ZF9HP temperature, speed, slip, and torque support set."
+  arm_ccan
+  python3 tools/did_sweep.py tcm "${tcm_priority_did_args[@]}" "${common[@]}"
+  stop_pcm_capture
+
+  echo "Step 3/3: offline ZF9HP decode with native and American display units."
+  TCM_SUMMARY=$(
+    find tmp/inventories/tcm -maxdepth 1 -type f -name 'dids_*.summary.json' \
+      -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-
+  )
+  if [ -z "$TCM_SUMMARY" ]; then
+    echo "ERROR: completed TCM summary could not be located" >&2
+    exit 1
+  fi
+  TCM_RESULTS=$(
+    python3 - "$TCM_SUMMARY" <<'PY'
+import json
+import pathlib
+import sys
+
+repo = pathlib.Path.cwd()
+summary = json.loads(pathlib.Path(sys.argv[1]).read_text())
+result = pathlib.Path(summary["results_jsonl"])
+print(result if result.is_absolute() else repo / result)
+PY
+  )
+  python3 tools/zf9hp_results.py "$TCM_RESULTS"
+  echo "Filtered PCM/TCM raw capture: $CAPTURE_PATH"
+  echo "Priority telemetry support campaign complete. Reports are under tmp/inventories"
+  echo "and tmp/ecu_mapping/zf9hp_support_decode.json."
   exit 0
 fi
 

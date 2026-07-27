@@ -153,6 +153,7 @@ python3 tools/ecu_discover.py --profile promaster88-bcan # plan 4 verified + 4 u
 ./tools/ccan_inventory_campaign.sh --session-probes # plan both bounded session checks together
 ./tools/ccan_inventory_campaign.sh --bcm-extended-page # plan session-03 BCM 4000-40FF
 ./tools/ccan_inventory_campaign.sh --session-followup # plan padded PCM retry + BCM extended page
+./tools/ccan_inventory_campaign.sh --priority-telemetry # plan PCM EOT + ZF9HP support reads
 ```
 
 Generic diagnostic tools take a **module key** from `lib/modules.py`; inspect that registry for
@@ -379,6 +380,25 @@ raw capture filtered to the PCM request/response IDs:
 Both halves completed successfully on 2026-07-21. The BCM session-03 page exposed only the already
 known session-gated `40A3` and `40A6` beyond the three default-visible positives. These modes remain
 available for reproducibility, but should not be repeated without a new experimental reason.
+
+The owner-priority telemetry mode is the next distinct experiment. It first
+checks only the related-profile PCM engine-oil-temperature pair `3159/315A`
+through the verified zero-padded legacy session, then reads the 13 exact
+vendor-derived ZF9HP temperature, speed, slip, and torque DIDs. It saves a
+filtered raw PCM/TCM capture and automatically writes an offline ZF9HP decode
+with native and American display units:
+
+```bash
+./tools/ccan_inventory_campaign.sh --priority-telemetry
+./tools/ccan_inventory_campaign.sh --priority-telemetry --execute \
+  --confirm-parked --confirm-session-change \
+  --conditions "ignition ON, engine OFF, PCAN on pigtail C-CAN DB9"
+```
+
+This mode sends one physical `10 92`, requires its exact `50 92` echo, and
+then sends only 15 enumerated physical `22` reads. It sends no functional
+broadcast, TesterPresent, routine, IO-control, write, DTC-clear, or security
+request. Do not run it while driving.
 
 Participating active diagnostic tools take a nonblocking exclusive per-channel advisory lock under
 `tmp/locks/`, so two of them cannot transmit through the same SocketCAN channel concurrently.
