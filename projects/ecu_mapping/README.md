@@ -26,6 +26,12 @@ scales, while proving that this PCM profile's transmission-temperature and turbi
 unsupported. Passive torque, true sump-oil temperature, transmission temperature, and derived
 power remain open.
 
+The full AlfaOBD `TIGERSHARK_CUSW` PCM Plots request alignment is now an
+executable, ECU-scoped 193-row/190-DID catalog in
+[`pcm_tigershark.py`](pcm_tigershark.py). Its names and request identifiers are
+vendor-derived navigation evidence; only the independently observed anchors
+and separately documented decodes are current-vehicle facts.
+
 ## ⚠️ Provenance — two vans in the data (read before trusting anything)
 
 AlfaOBD debug files accumulate across every vehicle a tablet has touched. We have two dumps:

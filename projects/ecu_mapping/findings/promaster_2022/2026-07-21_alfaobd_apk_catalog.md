@@ -154,7 +154,12 @@ the 193 ordered `TIGERSHARK_CUSW` rows:
 
 Those five exact, non-adjacent anchors establish that these two-byte entries
 are the ordered service-`22` data identifiers, rather than offsets, label IDs,
-or display keys.
+or display keys. The complete 193-row alignment is preserved as the
+ECU-scoped executable catalog
+[`projects/ecu_mapping/pcm_tigershark.py`](../../pcm_tigershark.py). It
+contains 190 unique DIDs because `FE11` supplies two presentation rows and
+`FE62` supplies three. It intentionally preserves every vendor label/unit but
+performs no decode and makes no installed-vehicle support claim.
 
 The selected `TIGERSHARK_CUSW` catalog has no physical engine-sump oil
 temperature row. Its row 20 is explicitly **VVT Oil Temperature**, so that
