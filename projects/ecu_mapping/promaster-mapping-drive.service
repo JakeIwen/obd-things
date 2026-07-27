@@ -1,0 +1,16 @@
+[Unit]
+Description=One-shot ignition-triggered passive C-CAN mapping drive
+After=local-fs.target
+RequiresMountsFor=/mnt/EXFAT512
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/dev/obd-things
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 tools/ignition_triggered_passive_capture.py --execute --confirm-passive --confirm-one-drive --conditions "ordinary PCM telemetry mapping drive; PCAN on C-CAN pins 6/14 in listen-only; OBDLink MX+ parallel; AlfaOBD optional"
+TimeoutStopSec=180
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

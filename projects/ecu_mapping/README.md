@@ -320,6 +320,74 @@ finalization, or pre-duration hard-floor stop makes the command fail and the fin
 stream, but the manifest then says `full_stream_complete: false`. Raw output remains under the
 external disk's `obd-things/tmp/` tree and is never committed in place.
 
+### One-shot ignition-triggered PCM mapping drive
+
+`tools/ignition_triggered_passive_capture.py` removes the SSH/Codex-session
+dependency from one ordinary drive. Its default is an inert plan. When explicitly
+armed, it listens only for the verified C-CAN ignition-presence frame `0x2EF`;
+it does not reserve the channel or transmit while the van is off. The first fresh
+`0x2EF` starts `passive_drive_capture.py` on EXFAT512. After `0x2EF` has first
+been seen, 20 seconds of absence cleanly ends the run, finalizes and verifies all
+zstd chunks, and records `reason: tracked_id_absent` with `success: true`.
+External termination, CAN-interface drift, new SocketCAN drops, storage failure,
+or the hard disk floor still produce a failed campaign.
+
+The tracked `promaster-mapping-drive.service` is deliberately one-shot and is
+installed/started for a selected drive, not permanently enabled. It survives an
+SSH or Codex disconnect but not a Pi reboot. It also does not configure `can0`,
+mount storage, stop a conflicting service, or control AlfaOBD; all live
+preconditions must already be true when it is armed and are rechecked before the
+capture starts:
+
+```bash
+sudo cp projects/ecu_mapping/promaster-mapping-drive.service \
+  /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl start promaster-mapping-drive.service
+
+systemctl status promaster-mapping-drive.service
+cat tmp/ecu_mapping/ignition-drive-arm/state.json
+```
+
+The automatic passive recording remains valuable if AlfaOBD is absent, but it
+cannot by itself attach labels to unresolved signals. For the intended PCM
+correlation run, AlfaOBD must be connected through the OBDLink MX+, on the
+current-vehicle Pentastar/Hemi **Plots** page, with the chosen gauges scanning
+and Gauges Data recording enabled. Keep the Android tablet connected to the Pi
+by USB: Bluetooth carries AlfaOBD's vehicle traffic, while USB gives ADB control,
+keeps the tablet powered/awake, permits fail-closed page/state checks, and lets
+the Pi pull Debug and `Gauges_Data.csv` artifacts after a clean stop. A scan
+already running in AlfaOBD may continue without USB, but the Pi then cannot
+supervise, stop, or retrieve it reliably; that is not the prepared campaign.
+
+AlfaOBD cold-start navigation is not attached to the ignition trigger. Before
+driving, while safely parked, connect the tablet by USB, connect AlfaOBD to the
+PCM, select the reviewed gauge set, and start Plots recording. A future guarded
+automation may start/stop a verified already-staged Plots page, but it must not
+guess through profile selection, Bluetooth connection dialogs, or stale UI
+state. PCM and TCM profiles also require separate AlfaOBD sessions.
+
+For the first loaded PCM run, use at most these twelve gauges so the trace
+excites the high-value unresolved mappings without diluting the polling rate:
+
+1. Vehicle speed
+2. Engine speed
+3. Current engine torque
+4. Coolant temperature
+5. Engine oil pressure
+6. VVT Oil Temperature
+7. Transmission Oil Temperature
+8. Turbine speed
+9. Output Speed
+10. Throttle Blade Position
+11. Generator Duty Cycle
+12. Battery voltage
+
+This replaces the idle campaign's low-value or already-redundant Fuel Level,
+Throttle Position Sensor Percent, Target Charging Voltage, Voltage Sense, and
+VVT Oil Pressure rows. The separate TCM profile remains the follow-up for
+independent transmission-temperature verification.
+
 An interrupted run retains `.zst.partial` evidence. Recovery is offline, plan-only by default,
 restricted to one exact existing campaign, and never deletes a partial that fails zstd
 verification:

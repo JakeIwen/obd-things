@@ -763,6 +763,64 @@ class PassiveDriveCaptureTests(unittest.TestCase):
             self.assertEqual(checkpoint["status"], "error")
             self.assertFalse(checkpoint["success"])
 
+    def test_tracked_id_absence_cleanly_completes_before_duration(self):
+        tracked_frame = b"(1784704278.100000) can0 2EF#0102030405060708\n"
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            process = FakeProcess(exit_on_signal=True, descriptor=98)
+            clock = [0.0]
+            selector = FakeSelector(
+                process.stdout.fileno(),
+                [True, False, False],
+                on_select=lambda _timeout: clock.__setitem__(0, clock[0] + 1),
+            )
+            first_read = [True]
+
+            def fake_read(_descriptor, _size):
+                if first_read[0]:
+                    first_read[0] = False
+                    return tracked_frame
+                raise BlockingIOError
+
+            baseline = interface_state_with_counters(0, 0)
+            recorder = capture.Recorder(
+                run_dir,
+                frozenset({0x2EF}),
+                rotation_seconds=600,
+                duration_seconds=100,
+                policy=capture.DiskPolicy(300, 200),
+                stop_after_id=0x2EF,
+                stop_after_id_absence_seconds=2,
+                popen=lambda *_args, **_kwargs: process,
+                disk_free=lambda _path: 1000,
+                safety_check=lambda: baseline,
+                mount_check=lambda: None,
+            )
+            RecordingChunk.writes = []
+            with mock.patch.object(capture, "Chunk", RecordingChunk), mock.patch.object(
+                capture.selectors, "DefaultSelector", return_value=selector
+            ), mock.patch.object(capture.os, "set_blocking"), mock.patch.object(
+                capture.os, "read", side_effect=fake_read
+            ), mock.patch.object(
+                capture.signal, "signal", return_value=capture.signal.SIG_DFL
+            ), mock.patch.object(
+                capture.time, "monotonic", side_effect=lambda: clock[0]
+            ):
+                self.assertEqual(recorder.run(), 0)
+
+            records = [
+                json.loads(line)
+                for line in (run_dir / "manifest.jsonl").read_text().splitlines()
+            ]
+            capture_end = next(row for row in records if row["type"] == "capture_end")
+            checkpoint = json.loads((run_dir / "checkpoint.json").read_text())
+            self.assertEqual(capture_end["reason"], "tracked_id_absent")
+            self.assertTrue(capture_end["success"])
+            self.assertFalse(capture_end["duration_complete"])
+            self.assertEqual(capture_end["tracked_id"], "0x2EF")
+            self.assertEqual(capture_end["tracked_id_absence_seconds"], 2)
+            self.assertEqual(checkpoint["status"], "complete")
+
     def test_priority_only_degradation_marks_full_stream_incomplete(self):
         with tempfile.TemporaryDirectory() as temporary:
             run_dir = Path(temporary)

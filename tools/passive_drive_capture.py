@@ -23,6 +23,7 @@ import errno
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -49,6 +50,7 @@ RECEIVE_BUFFER = 4_194_304
 RMEM_MAX_PATH = Path("/proc/sys/net/core/rmem_max")
 DEFAULT_ROTATION_SECONDS = 600
 DEFAULT_DURATION_SECONDS = 22 * 60 * 60
+DEFAULT_STOP_ID_ABSENCE_SECONDS = 20.0
 MAX_PENDING_FINALIZATION_SECONDS = 120
 DEFAULT_SOFT_FREE_BYTES = 30 * 1024**3
 DEFAULT_HARD_FREE_BYTES = 25 * 1024**3
@@ -721,6 +723,8 @@ class Recorder:
         rotation_seconds: int,
         duration_seconds: int,
         policy: DiskPolicy,
+        stop_after_id: int | None = None,
+        stop_after_id_absence_seconds: float | None = None,
         *,
         popen: Callable[..., subprocess.Popen] = subprocess.Popen,
         runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
@@ -735,6 +739,8 @@ class Recorder:
         self.rotation_seconds = rotation_seconds
         self.duration_seconds = duration_seconds
         self.policy = policy
+        self.stop_after_id = stop_after_id
+        self.stop_after_id_absence_seconds = stop_after_id_absence_seconds
         self.popen = popen
         self.runner = runner
         self.disk_free = disk_free
@@ -879,6 +885,8 @@ class Recorder:
         storage_available = True
         stop_signal: int | None = None
         stop_requested_at: float | None = None
+        tracked_id_first_seen: float | None = None
+        tracked_id_last_seen: float | None = None
 
         def request_stop(signum, _frame) -> None:
             nonlocal stop_requested_at, stop_signal
@@ -916,10 +924,16 @@ class Recorder:
                     raise CaptureError("one or more zstd chunks failed validation")
 
         def write_line(line: bytes) -> CaptureError | None:
-            nonlocal detected_drops
+            nonlocal detected_drops, tracked_id_first_seen, tracked_id_last_seen
             if chunk is None:
                 raise CaptureError("received candump data without an active chunk")
             chunk.write(line, self.priority_ids)
+            _, can_id = parse_candump_line(line)
+            if self.stop_after_id is not None and can_id == self.stop_after_id:
+                observed = time.monotonic()
+                if tracked_id_first_seen is None:
+                    tracked_id_first_seen = observed
+                tracked_id_last_seen = observed
             dropped = parse_drop_line(line)
             if dropped is not None:
                 frames, total = dropped
@@ -1047,6 +1061,15 @@ class Recorder:
                         )
                         break
                 if now - started >= self.duration_seconds:
+                    break
+                if (
+                    self.stop_after_id is not None
+                    and self.stop_after_id_absence_seconds is not None
+                    and tracked_id_last_seen is not None
+                    and now - tracked_id_last_seen
+                    >= self.stop_after_id_absence_seconds
+                ):
+                    reason = "tracked_id_absent"
                     break
                 if now - chunk.started_monotonic >= self.rotation_seconds:
                     harvest_chunks(wait=False)
@@ -1205,6 +1228,26 @@ class Recorder:
             "reason": reason,
             "success": fatal is None,
             "duration_complete": reason == "duration_complete",
+            "tracked_id": (
+                f"0x{self.stop_after_id:X}"
+                if self.stop_after_id is not None
+                else None
+            ),
+            "tracked_id_first_seen_elapsed_seconds": (
+                tracked_id_first_seen - started
+                if tracked_id_first_seen is not None
+                else None
+            ),
+            "tracked_id_last_seen_elapsed_seconds": (
+                tracked_id_last_seen - started
+                if tracked_id_last_seen is not None
+                else None
+            ),
+            "tracked_id_absence_seconds": (
+                self.stop_after_id_absence_seconds
+                if reason == "tracked_id_absent"
+                else None
+            ),
             "signal_number": stop_signal if reason == "signal" else None,
             "signal_elapsed_seconds": (
                 stop_requested_at - started
@@ -1284,6 +1327,20 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_DURATION_SECONDS,
     )
     parser.add_argument(
+        "--stop-after-id",
+        type=parse_can_id,
+        help=(
+            "cleanly finish after this CAN ID has been observed and then remains "
+            "absent for --stop-after-id-absence-seconds"
+        ),
+    )
+    parser.add_argument(
+        "--stop-after-id-absence-seconds",
+        type=float,
+        default=DEFAULT_STOP_ID_ABSENCE_SECONDS,
+        help="absence grace period used with --stop-after-id (default: 20 seconds)",
+    )
+    parser.add_argument(
         "--soft-free-gib",
         type=float,
         default=DEFAULT_SOFT_FREE_BYTES / 1024**3,
@@ -1307,6 +1364,13 @@ def validate_args(args: argparse.Namespace) -> DiskPolicy:
         raise CaptureError("--duration-seconds must be positive")
     if args.duration_seconds > 48 * 60 * 60:
         raise CaptureError("--duration-seconds cannot exceed 48 hours")
+    if (
+        not math.isfinite(args.stop_after_id_absence_seconds)
+        or not 1 <= args.stop_after_id_absence_seconds <= 3600
+    ):
+        raise CaptureError(
+            "--stop-after-id-absence-seconds must be between 1 and 3600"
+        )
     policy = DiskPolicy(
         soft_free_bytes=int(args.soft_free_gib * 1024**3),
         hard_free_bytes=int(args.hard_free_gib * 1024**3),
@@ -1383,6 +1447,16 @@ def plan(args: argparse.Namespace, policy: DiskPolicy) -> dict:
         "required_mount": str(args.require_mount) if args.require_mount else None,
         "rotation_seconds": args.rotation_seconds,
         "duration_seconds": args.duration_seconds,
+        "stop_after_id": (
+            f"0x{args.stop_after_id:X}"
+            if args.stop_after_id is not None
+            else None
+        ),
+        "stop_after_id_absence_seconds": (
+            args.stop_after_id_absence_seconds
+            if args.stop_after_id is not None
+            else None
+        ),
         "priority_profile": args.priority_profile,
         "priority_ids": [f"0x{value:X}" for value in sorted(priority_ids)],
         "soft_free_bytes": policy.soft_free_bytes,
@@ -1433,6 +1507,16 @@ def execute(args: argparse.Namespace, policy: DiskPolicy) -> int:
             "free_bytes_at_preflight": free,
             "rotation_seconds": args.rotation_seconds,
             "duration_seconds": args.duration_seconds,
+            "stop_after_id": (
+                f"0x{args.stop_after_id:X}"
+                if args.stop_after_id is not None
+                else None
+            ),
+            "stop_after_id_absence_seconds": (
+                args.stop_after_id_absence_seconds
+                if args.stop_after_id is not None
+                else None
+            ),
             "priority_profile": args.priority_profile,
             "priority_ids": [f"0x{value:X}" for value in sorted(priority_ids)],
             "soft_free_bytes": policy.soft_free_bytes,
@@ -1447,6 +1531,12 @@ def execute(args: argparse.Namespace, policy: DiskPolicy) -> int:
             args.rotation_seconds,
             args.duration_seconds,
             policy,
+            stop_after_id=args.stop_after_id,
+            stop_after_id_absence_seconds=(
+                args.stop_after_id_absence_seconds
+                if args.stop_after_id is not None
+                else None
+            ),
             mount_check=lambda: require_writable_mount(
                 capture_root,
                 args.require_mount,
