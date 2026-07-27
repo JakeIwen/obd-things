@@ -34,10 +34,12 @@ FRAME_TYPE_FLAGS = CAN_EFF_FLAG | CAN_RTR_FLAG | CAN_ERR_FLAG
 FILTER_MASK = SFF_MASK | FRAME_TYPE_FLAGS
 OIL_PRESSURE_ID = 0x41D
 COOLANT_TEMPERATURE_ID = 0x2ED
+ENGINE_SPEED_ID = 0x0FC
 IGNITION_ON_ID = 0x2EF
 FILTER_IDS = (
     OIL_PRESSURE_ID,
     COOLANT_TEMPERATURE_ID,
+    ENGINE_SPEED_ID,
     IGNITION_ON_ID,
 )
 KPA_TO_PSI = 0.14503773773020923
@@ -78,6 +80,18 @@ def decode_frame(can_id: int, data: bytes) -> PassiveObservation | None:
             detail=(
                 "0x2ED byte 0 - 40 °C, converted to °F for telemetry"
             ),
+        )
+    if can_id == ENGINE_SPEED_ID and len(data) >= 2:
+        native_rpm = float(
+            (int.from_bytes(data[:2], "big") & 0xFFFC) / 4.0
+        )
+        return PassiveObservation(
+            metric="engine.rpm",
+            value=native_rpm,
+            unit="rpm",
+            source="ccan.broadcast.0x0fc",
+            quality="observed_alfa_scale",
+            detail="0x0FC bytes 0-1 big-endian, low 2 bits masked, / 4 rpm",
         )
     if can_id == IGNITION_ON_ID:
         return PassiveObservation(
@@ -148,6 +162,7 @@ def read_snapshot(
             if all(metric in samples for metric in (
                 "engine.oil_pressure",
                 "engine.coolant_temperature",
+                "engine.rpm",
                 "vehicle.ignition_on",
             )):
                 break

@@ -19,8 +19,12 @@ acquisition order—is recorded in
 The subsequent
 [`2026-07-26 PCM Plots idle mapping`](findings/promaster_2022/2026-07-26_pcm_plots_idle_mapping.md)
 qualified passive oil-pressure and coolant-temperature dashboard sources and
-mapped the selected PCM gauge set. Engine-oil temperature, loaded torque, and
-derived power remain open.
+mapped the selected PCM gauge set. The
+[`2026-07-27 loaded-drive mapping`](findings/promaster_2022/2026-07-27_pcm_plots_loaded_drive_mapping.md)
+then established exact diagnostic engine RPM, signed loaded torque, and VVT-oil-temperature
+scales, while proving that this PCM profile's transmission-temperature and turbine-speed rows are
+unsupported. Passive torque, true sump-oil temperature, transmission temperature, and derived
+power remain open.
 
 ## ⚠️ Provenance — two vans in the data (read before trusting anything)
 
@@ -111,7 +115,11 @@ echo or other response prefix never becomes a payload candidate. Constants, `NA`
 three varying values remain unidentifiable. Reports and evidence JSONL default under
 `tmp/inventories/alfaobd_gauge_join/` and always say `candidate_only`. Pass exactly one decoded
 debug source per run—historic conflict files are overlapping cumulative snapshots, not independent
-samples—and label old-van work explicitly:
+samples—and label old-van work explicitly. If an unclosed cumulative Debug recording inherited the
+preceding session's date, `--debug-date YYYY-MM-DD` may deliberately select that raw date while the
+Gauge section keeps its own date. The report records both dates and
+`date_overrides_gauge_section: true`; use this only after the bounded clock times, polling order,
+and exact raw exchanges prove the association:
 
 The decoded-log parser buffers all `R:` callbacks through the adapter prompt because AlfaOBD can
 split one indexed ISO-TP row between callbacks. It validates index order and row widths, applies the
@@ -477,10 +485,12 @@ forward/reverse 193-row traversal without manual reconciliation. The separate
 simultaneous eleven-gauge idle recording then preserved the owner's existing
 Plots list and produced the mappings in
 [`2026-07-26_pcm_plots_idle_mapping.md`](findings/promaster_2022/2026-07-26_pcm_plots_idle_mapping.md).
-That efficient multi-gauge result supersedes the need to run the scalar
-supervisor for those eleven rows. Keep the disabled one-at-a-time scaffold for
-future ambiguity resolution and for gauges that cannot be separated by fixed
-polling order.
+The follow-on loaded-drive recording produced
+[`2026-07-27_pcm_plots_loaded_drive_mapping.md`](findings/promaster_2022/2026-07-27_pcm_plots_loaded_drive_mapping.md)
+and crossed both the positive-load and negative-overrun torque regions. These efficient
+multi-gauge results supersede the need to run the scalar supervisor for the rows they resolved.
+Keep the disabled one-at-a-time scaffold for future ambiguity resolution and for gauges that
+cannot be separated by fixed polling order.
 
 `alfaobd_singleton_join.py` is the strictly offline verifier for a completed singleton campaign.
 It validates campaign state and artifact hashes, requires successful zero-drop passive-recorder

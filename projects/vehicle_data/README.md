@@ -52,6 +52,7 @@ The initial drive-publisher vocabulary is intentionally narrow:
 | `battery.voltage` | `cluster.did.1004` | number, `V` | `observed_alfa_scale` |
 | `engine.oil_pressure` | `ccan.broadcast.0x41d` | number, `psi` | `observed_alfa_scale` |
 | `engine.coolant_temperature` | `ccan.broadcast.0x2ed` | number, `°F` | `observed_alfa_scale` |
+| `engine.rpm` | `ccan.broadcast.0x0fc` | number, `rpm` | `observed_alfa_scale` |
 | `vehicle.ignition_on` | `ccan.broadcast.0x2ef` | boolean, `boolean` | `verified` |
 | `diagnostics.cluster.did.1000.raw` | `cluster.did.1000` | integer, `raw_u16_be` | `candidate` |
 | `diagnostics.cluster.did.1002.raw` | `cluster.did.1002` | integer, `raw_u8` | `candidate` |
@@ -63,8 +64,10 @@ frame may publish only `true`. A publisher-supplied `false` is rejected
 because silence is not a decoded negative value; the observation instead
 expires to stale/unknown when the frame disappears.
 
-The raw rows preserve evidence without presenting unverified RPM, speed, gear,
-or temperature conversions as facts. They are diagnostics metrics, not a
+The raw rows preserve the original cluster evidence without presenting
+unverified speed, gear, or temperature conversions as facts. The separately
+qualified passive `engine.rpm` metric supersedes the need to interpret raw
+cluster `1000` in the dashboard. These remain diagnostics metrics, not a
 general-purpose DID publication namespace.
 
 ## Owner-priority telemetry roadmap
@@ -82,18 +85,26 @@ cannot use one static good/bad threshold. Power must be labeled as
 ECU-estimated crankshaft power, not wheel horsepower.
 
 The 2026-07-26 simultaneous PCM Plots/wire campaign qualified the first two
-receive-only sources:
+receive-only sources, and the 2026-07-27 loaded drive qualified passive engine
+speed:
 
 | Metric | Passive C-CAN source | Decode | Quality |
 |---|---|---|---|
 | `engine.oil_pressure` | `0x41D` byte 2 | native raw x 4 kPa, published as psi | `observed_alfa_scale` |
 | `engine.coolant_temperature` | `0x2ED` byte 0 | native raw - 40 °C, published as °F | `observed_alfa_scale` |
+| `engine.rpm` | `0x0FC` bytes 0–1 u16be | low 2 bits masked, raw / 4 rpm | `observed_alfa_scale` |
 
-Both are in the public registry and the passive collector reads them only
+All three are in the public registry and the passive collector reads them only
 after its normal C-CAN interface and identity gates pass. They require no
 per-reading approval and send no CAN traffic. The exact current-vehicle
 correlation is recorded in the
-[`PCM Plots idle finding`](../ecu_mapping/findings/promaster_2022/2026-07-26_pcm_plots_idle_mapping.md).
+[`PCM Plots idle finding`](../ecu_mapping/findings/promaster_2022/2026-07-26_pcm_plots_idle_mapping.md)
+and
+[`loaded-drive finding`](../ecu_mapping/findings/promaster_2022/2026-07-27_pcm_plots_loaded_drive_mapping.md).
+
+The collector defaults to a one-second pause between passive cycles. The three
+engine metrics and ignition witness expire after three seconds, so a healthy
+collector does not deliberately create stale gaps between updates.
 
 ### Presentation units
 
@@ -105,18 +116,21 @@ qualified native Nm value must be multiplied by `0.737562149` before
 publication as lb-ft. Raw diagnostic metrics remain raw and are never
 unit-converted.
 
-Engine-oil temperature, transmission-oil temperature, loaded torque, and
-derived power are not yet qualified. Their evidence, exact OEM
+Engine-oil temperature, transmission-oil temperature, passive loaded torque,
+and derived power are not yet qualified. Diagnostic loaded torque and RPM are
+now mapped, and passive RPM is available; the unresolved item is the passive
+torque encoding needed for a receive-only power calculation. Their evidence, exact OEM
 pressure/thermostat context, alert-design constraints, PCM/TCM acquisition
 sequence, and later mechanical and electrical targets are maintained in the
 [`priority telemetry finding`](../ecu_mapping/findings/promaster_2022/2026-07-25_priority_telemetry_targets.md).
 The dashboard keeps inert roadmap cards visible for oil pressure, coolant
 temperature, engine-oil temperature, crankshaft torque, and crankshaft power.
-The oil-pressure and coolant cards now receive values after fresh observations;
+The oil-pressure and coolant cards and the Driving RPM tile now receive values
+after fresh observations;
 the other roadmap labels do not create metrics or imply that a source is
 available. Context-aware oil-pressure bands, engine-running/startup gates, and
 fresh time-aligned torque/RPM power derivation still require specialized
-evaluation and presentation logic.
+evaluation and presentation logic. Passive RPM sends no diagnostic traffic.
 
 ## Dashboard profiles and vehicle state
 

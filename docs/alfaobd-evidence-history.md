@@ -252,6 +252,44 @@ behind the normal configuration-write safety gates.
 
 Source: [PROXI DASM misroute analysis](../projects/vehicle_configuration/findings/2026-07-26_alfaobd_proxi_dasm_misroute.md).
 
+### 2026-07-27 — PCM Plots drive: unsupported legacy rows and an unclosed-log date trap
+
+**Confirmed profile-definition defects.** During a current-vehicle loaded-drive recording with
+the installed PCM identified at `18DA10F1 -> 18DAF110`, the selected
+`Chrysler Pentastar/Hemi engine Model Year 2021` Plots profile rendered columns named
+`Transmission Oil Temperature` and `Turbine speed`. The raw Debug cycle shows that these rows sent
+legacy requests `21 18` and `21 62`; the PCM returned `7F 21 31`
+(`requestOutOfRange`) to both in every observed drive cycle. Both Gauge columns were consequently
+blank for all 1,323 rows. These labels are not usable PCM measurements on this van. Transmission
+temperature and turbine speed must be sought from the installed ZF 948TE TCM rather than inferred
+from the blank PCM display.
+
+**Artifact/recording limitation — selected rows need not be persisted.** The Plots selector showed
+12 selected gauges before the drive, including Output Speed, but the completed
+`Gauges_Data.csv` section contained only 11 data columns and no Output Speed column. A selected
+checkmark therefore does not prove that AlfaOBD will poll or persist that row. Verify the final CSV
+header and raw request loop rather than reconstructing the active set from the selector.
+
+**Artifact/recording limitation — an unclosed Debug archive can retain the preceding date.**
+The Gauge section was explicitly dated 2026-07-27, but the cumulative Debug recording was not
+cleanly closed and its drive exchanges inherited the preceding full recording date,
+2026-07-26. Clock times and exact polling order still aligned all 1,323 Gauge rows with a 1 ms
+median absolute boundary offset, but only after an explicit 2026-07-26 Debug-date override. The
+join report records both dates and `date_overrides_gauge_section: true`. Never silently force the
+Debug date to the Gauge date: retain the mismatch in provenance, use an explicit override only
+after bounded raw-order/timing verification, and prefer a clean Plots stop plus Debug close when
+possible.
+
+**What worked.** The same synchronized Gauge/Debug method exactly or near-exactly associated nine
+changing rendered values with their raw PCM reads, including oil pressure, coolant temperature,
+engine speed, loaded positive and negative engine torque, VVT oil temperature, throttle blade,
+generator duty, vehicle speed, and battery voltage. This confirms that multi-gauge Plots recording
+is a high-yield mapping method when every label is checked against the raw diagnostic trace and an
+independent listen-only CAN capture; it does not relax the current-vehicle and scaling validation
+rules.
+
+Source: [PCM Plots loaded-drive mapping](../projects/ecu_mapping/findings/promaster_2022/2026-07-27_pcm_plots_loaded_drive_mapping.md).
+
 ## Current trust model
 
 | AlfaOBD surface | What it can establish | What it cannot establish alone |
@@ -283,7 +321,9 @@ Source: [PROXI DASM misroute analysis](../projects/vehicle_configuration/finding
 7. Baseline every AlfaOBD output artifact before a campaign. Track Debug, Gauges, and profile Info
    files independently; confirm which grew, but treat sampled file sizes as flush/liveness witnesses
    rather than record timestamps. Verify that `.dat` content is newly appended rather than
-   unchanged, truncated, or mechanically repeated.
+   unchanged, truncated, or mechanically repeated. Prefer a clean Plots stop and Debug close; if
+   an unclosed archive inherits an earlier date, retain both source dates and require an explicit,
+   provenance-recorded override after independently verifying the bounded trace.
 8. Treat a timeout as conditional evidence. Recheck power, routing, bitrate, session, addressing, and
    framing before calling a module absent or a profile incompatible.
 

@@ -22,7 +22,7 @@ from projects.vehicle_data.api import (
     TelemetryClient,
     UnixHTTPServer,
 )
-from projects.vehicle_data.broker import TelemetryBroker
+from projects.vehicle_data.broker import TelemetryBroker, build_parser
 from projects.vehicle_data.metrics import METRICS
 from projects.vehicle_data.models import failure, success
 from projects.vehicle_data.sources import DecodedVoltage, VoltageAcquirer
@@ -125,6 +125,23 @@ class FakeBackend:
 
 
 class SourceTests(unittest.TestCase):
+    def test_collector_default_keeps_engine_metrics_fresh(self):
+        args = build_parser().parse_args(["serve"])
+
+        self.assertEqual(args.collector_interval, 1.0)
+        self.assertTrue(
+            all(
+                METRICS[name].stale_after_seconds
+                > args.collector_interval
+                for name in (
+                    "engine.coolant_temperature",
+                    "engine.oil_pressure",
+                    "engine.rpm",
+                    "vehicle.ignition_on",
+                )
+            )
+        )
+
     def test_registry_is_metric_allowlist_with_provenance(self):
         self.assertEqual(
             set(METRICS),
@@ -132,6 +149,7 @@ class SourceTests(unittest.TestCase):
                 "battery.voltage",
                 "engine.coolant_temperature",
                 "engine.oil_pressure",
+                "engine.rpm",
                 "vehicle.ignition_on",
                 "diagnostics.cluster.did.0107.raw",
                 "diagnostics.cluster.did.1000.raw",
@@ -173,6 +191,11 @@ class SourceTests(unittest.TestCase):
             "ccan.broadcast.0x2ed",
         )
         self.assertEqual(METRICS["engine.coolant_temperature"].unit, "°F")
+        self.assertEqual(
+            METRICS["engine.rpm"].sources[0].name,
+            "ccan.broadcast.0x0fc",
+        )
+        self.assertEqual(METRICS["engine.rpm"].unit, "rpm")
 
     def test_passive_awake_read_takes_only_observer_lock(self):
         backend = FakeBackend()
@@ -1052,6 +1075,13 @@ class BrokerTests(unittest.TestCase):
                         source="ccan.broadcast.0x2ed",
                         quality="observed_alfa_scale",
                     ),
+                    SimpleNamespace(
+                        metric="engine.rpm",
+                        value=750.0,
+                        unit="rpm",
+                        source="ccan.broadcast.0x0fc",
+                        quality="observed_alfa_scale",
+                    ),
                 )
 
         broker = TelemetryBroker(
@@ -1070,13 +1100,16 @@ class BrokerTests(unittest.TestCase):
             observed_monotonic=100.0,
         )
 
-        self.assertEqual(broker._collect_passive_powertrain(ccan), 2)
+        self.assertEqual(broker._collect_passive_powertrain(ccan), 3)
         self.assertEqual(
             broker.metric_response("engine.oil_pressure")["value"], 30.2
         )
         self.assertEqual(
             broker.metric_response("engine.coolant_temperature")["value"],
             186.8,
+        )
+        self.assertEqual(
+            broker.metric_response("engine.rpm")["value"], 750.0
         )
 
 

@@ -103,6 +103,24 @@ class RoutineResponseTests(unittest.TestCase):
 
 
 class RoutineCliSafetyTests(unittest.TestCase):
+    def setUp(self):
+        # Live telemetry legitimately holds the repository's shared can0 observer
+        # lock. These are unit tests of routine-scan control flow, so isolate them
+        # from that machine state just as the CAN socket and preflight are mocked.
+        acquire = mock.patch.object(
+            routine_scan.diagnostic_safety,
+            "acquire_channel_lock",
+            return_value=mock.sentinel.channel_lock,
+        )
+        release = mock.patch.object(
+            routine_scan.diagnostic_safety,
+            "release_channel_lock",
+        )
+        acquire.start()
+        release.start()
+        self.addCleanup(release.stop)
+        self.addCleanup(acquire.stop)
+
     def test_dry_run_does_not_preflight_or_touch_can(self):
         with (
             mock.patch.object(routine_scan, "preflight") as preflight,

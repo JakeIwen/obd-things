@@ -48,6 +48,11 @@ class DecodeTests(unittest.TestCase):
         self.assertAlmostEqual(coolant.value, 186.8)
         self.assertEqual(coolant.unit, "°F")
 
+        rpm = ccan_powertrain.decode_frame(0x0FC, b"\x2f\xa3")
+        self.assertEqual(rpm.metric, "engine.rpm")
+        self.assertEqual(rpm.value, 3048.0)
+        self.assertEqual(rpm.unit, "rpm")
+
         ignition = ccan_powertrain.decode_frame(0x2EF, b"\xff\x21")
         self.assertIs(ignition.value, True)
         self.assertIsNone(ccan_powertrain.decode_frame(0x123, b"\x00"))
@@ -55,6 +60,7 @@ class DecodeTests(unittest.TestCase):
     def test_short_payloads_are_rejected(self):
         self.assertIsNone(ccan_powertrain.decode_frame(0x41D, b"\x00\x00"))
         self.assertIsNone(ccan_powertrain.decode_frame(0x2ED, b""))
+        self.assertIsNone(ccan_powertrain.decode_frame(0x0FC, b"\x00"))
 
     def test_snapshot_rejects_extended_frame_with_same_low_identifier(self):
         fake = FakeSocket(
@@ -80,6 +86,7 @@ class DecodeTests(unittest.TestCase):
                 frame(0x41D, b"\x00\x00\x36"),
                 frame(0x41D, b"\x00\x00\x35"),
                 frame(0x2ED, b"\x7e"),
+                frame(0x0FC, b"\x0b\xb8"),
                 frame(0x2EF, b"\xff\x21"),
             ]
         )
@@ -99,6 +106,7 @@ class DecodeTests(unittest.TestCase):
             by_metric["engine.coolant_temperature"].value,
             186.8,
         )
+        self.assertEqual(by_metric["engine.rpm"].value, 750.0)
         self.assertIs(by_metric["vehicle.ignition_on"].value, True)
         self.assertEqual(fake.channel, ("can0",))
         self.assertTrue(fake.closed)

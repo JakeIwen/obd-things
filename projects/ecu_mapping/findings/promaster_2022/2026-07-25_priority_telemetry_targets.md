@@ -21,6 +21,17 @@ transmission-oil temperature, loaded torque, and power remain unresolved; the
 torque campaign produced a strong idle-range `0x100` lead whose wrap/mode needs
 driving excitation.
 
+Update 2026-07-27: the
+[loaded-drive PCM campaign](2026-07-27_pcm_plots_loaded_drive_mapping.md)
+established exact diagnostic engine speed (`01D5`, raw rpm), signed loaded
+torque (`06DA`, i16be × 0.04 Nm), and VVT oil temperature (`069F`, raw - 64 °C).
+It independently qualified passive `0x0FC` bytes 0–1, low two bits masked,
+`/4 rpm` for the dashboard.
+The VVT temperature is not a substitute for sump-oil temperature, and the
+selected PCM profile's transmission-temperature/turbine-speed legacy requests
+were rejected by the PCM. Passive torque, true engine-oil temperature,
+transmission temperature, and derived power remain unresolved.
+
 The acquisition path is nevertheless strong. The exact-vehicle OEM corpus
 confirms real oil-pressure and oil-temperature sensors monitored by the PCM,
 not merely an oil-pressure switch. The PCM is already live-verified on C-CAN at

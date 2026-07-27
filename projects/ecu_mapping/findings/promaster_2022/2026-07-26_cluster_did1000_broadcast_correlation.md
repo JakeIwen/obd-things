@@ -1,5 +1,14 @@
 # Cluster DID `1000` to C-CAN broadcast correlation — 2026-07-26
 
+> **Resolved 2026-07-27:** the
+> [loaded PCM Plots drive](2026-07-27_pcm_plots_loaded_drive_mapping.md)
+> independently linked PCM DID `01D5` raw rpm to `0x0FC` bytes 0–1 with
+> `DID_raw = 0.250008 × broadcast_raw - 0.052`, R² 0.9999794 across
+> 1,351 loaded-drive samples. This qualifies `0x0FC / 4 rpm` for receive-only
+> telemetry and also supplies the physical scale for the cluster `1000` raw
+> mirror. The unverified wording below describes this finding's original
+> 2026-07-26 evidence boundary.
+
 ## Outcome
 
 Offline time-series correlation found a near-byte-for-byte passive C-CAN

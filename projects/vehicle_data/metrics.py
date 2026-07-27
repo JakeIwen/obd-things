@@ -192,6 +192,34 @@ ENGINE_COOLANT_TEMPERATURE = MetricDefinition(
     ),
 )
 
+ENGINE_RPM = MetricDefinition(
+    name="engine.rpm",
+    unit="rpm",
+    value_type="number",
+    stale_after_seconds=3.0,
+    passive_min_interval_seconds=0.0,
+    wake_min_interval_seconds=0.0,
+    minimum=0.0,
+    maximum=9000.0,
+    sources=(
+        SourceDefinition(
+            name="ccan.broadcast.0x0fc",
+            bus="c-can",
+            bitrate=500000,
+            acquisition_class="passive_broadcast",
+            quality="observed_alfa_scale",
+            provenance=(
+                "projects/ecu_mapping/findings/promaster_2022/"
+                "2026-07-27_pcm_plots_loaded_drive_mapping.md; "
+                "0x0FC bytes 0-1 u16be with low 2 bits masked, / 4, "
+                "exactly tracks PCM DID 01D5 raw rpm across a loaded drive"
+            ),
+            side_effects="none; observation is receive-only",
+            publisher_allowed=True,
+        ),
+    ),
+)
+
 
 def _raw_cluster_metric(did: str, unit: str, maximum: int) -> MetricDefinition:
     return MetricDefinition(
@@ -238,6 +266,7 @@ METRICS = {
         IGNITION_ON,
         ENGINE_OIL_PRESSURE,
         ENGINE_COOLANT_TEMPERATURE,
+        ENGINE_RPM,
         CLUSTER_DID_1000_RAW,
         CLUSTER_DID_1002_RAW,
         CLUSTER_DID_0107_RAW,

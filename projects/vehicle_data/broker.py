@@ -138,7 +138,7 @@ class TelemetryBroker:
         acquirer=None,
         definitions: dict[str, MetricDefinition] | None = None,
         monotonic=time.monotonic,
-        collector_interval_seconds: float = 5.0,
+        collector_interval_seconds: float = 1.0,
         wake_min_interval_seconds: float | None = None,
         acquisition_wait_seconds: float = 20.0,
         auto_retuner=None,
@@ -1037,7 +1037,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--socket", default=DEFAULT_SOCKET)
     parser.add_argument("--socket-mode", default="0660")
     parser.add_argument("--channel", default="can0")
-    parser.add_argument("--collector-interval", type=float, default=5.0)
+    parser.add_argument("--collector-interval", type=float, default=1.0)
     parser.add_argument("--probe-seconds", type=float, default=0.75)
     parser.add_argument("--read-timeout", type=float, default=2.0)
     parser.add_argument("--wake-min-interval", type=float, default=900.0)
