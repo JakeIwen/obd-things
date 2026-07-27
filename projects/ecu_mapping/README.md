@@ -491,9 +491,14 @@ coordinates or collateral check-state changes, commits through the sole verified
 proves that the returned Plots page contains only the target while the scan remains stopped. A
 separate pure post-stop validator requires every configured artifact to remain present and
 non-shrinking, requires Debug/CSV growth from their pre-start offsets, and requires the final
-configured number of CSV-size observations to be identical. The remaining implementation work is
-the cleanup-owning start/dwell/stop/pull supervisor around these tested primitives; it must stay
-disabled until the TCM catalog below is inventoried, reviewed, and pinned.
+configured number of CSV-size observations to be identical. The internal scan-segment primitive
+now also verifies the selected/stopped Plots page, starts the scan, requires a live Debug/CSV
+activity witness, performs the bounded dwell, stops cleanly, applies the buffered-artifact gate,
+and reconciles an ambiguous start or stop return without retrying the input. Its synthetic tests
+prove both ambiguous-return paths leave scanning stopped. The remaining implementation work is the
+outer campaign supervisor: UI/channel locks, same-boot operation inhibit, mount identity,
+passive-capture binding, artifact pulls/hashes, and atomic checkpoints. The CLI must stay disabled
+until that layer exists and the TCM catalog below is inventoried, reviewed, and pinned.
 
 Catalog campaign `pcm-plots-catalog-20260726T224830Z` completed a matching
 forward/reverse 193-row traversal without manual reconciliation. The separate

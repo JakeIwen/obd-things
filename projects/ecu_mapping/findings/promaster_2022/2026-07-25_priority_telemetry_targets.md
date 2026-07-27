@@ -341,8 +341,11 @@ sensor.
    change; it proves the committed Plots page contains only the intended target
    and that scanning is still stopped. The accompanying post-stop artifact
    validator requires Debug/CSV growth and a stable buffered CSV tail. The
-   cleanup-owning start/dwell/stop/pull supervisor is still intentionally absent,
-   so this implementation progress does not authorize or enable a live run.
+   unreachable scan-segment primitive now adds a running activity oracle,
+   bounded dwell, clean stop, and fail-closed cleanup after ambiguous start or
+   stop returns. The campaign-wide lock/inhibit/mount/pull/checkpoint supervisor
+   is still intentionally absent, so this implementation progress does not
+   authorize or enable a live run.
    Once a simultaneous drive capture exists, van-compute tasks
    `candump-diagnostic-wire-tcm-four-chunks` and
    `can-timeseries-correlate-tcm-four-chunks` provide the same bounded

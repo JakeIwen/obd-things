@@ -22,10 +22,13 @@ Live execution is intentionally disabled in this implementation.  The
 unreachable, synthetic-tested selector primitive can consume a fresh matching
 inventory, commit exactly one scalar, and prove the scan remains stopped.  The
 pure artifact validator proves non-shrinking Debug/CSV growth and a stable
-post-stop CSV tail.  A future enabled path must wrap those primitives in
-cleanup ownership, inventory the complete selector again before any row, OK,
-or scan tap, never tap AlfaOBD's recording or bookmark controls, and reconcile
-every potentially ambiguous input without guessing or retrying.
+post-stop CSV tail.  The unreachable scan-segment primitive adds a running-log
+activity oracle, bounded dwell, clean stop, and ambiguous-input cleanup.  A
+future enabled path must wrap those primitives in campaign-wide lock/inhibit,
+mount, artifact-pull, and checkpoint ownership; inventory the complete
+selector again before any row, OK, or scan tap; never tap AlfaOBD's recording
+or bookmark controls; and reconcile every potentially ambiguous input without
+guessing or retrying.
 """
 
 from __future__ import annotations
@@ -88,6 +91,8 @@ CATALOG_REVIEW_CLASSIFICATIONS = {
     "live_ui_catalog_pinned_match",
 }
 SCALAR_REVIEW_HASH_DOMAIN = b"alfaobd-plots-scalar-plan-review-v1\0"
+SCAN_STATE_TIMEOUT_SECONDS = 15.0
+SCAN_STATE_POLL_SECONDS = 0.5
 
 
 def _reject_json_constant(value: str) -> None:
@@ -220,6 +225,26 @@ class ScalarPlan:
             ),
             "max_initial_checked": self.max_initial_checked,
             "screenshot_each_segment": self.screenshot_each_segment,
+        }
+
+
+@dataclass(frozen=True)
+class ScalarSegmentResult:
+    target_id: str
+    label: str
+    before: dict[str, int | None]
+    activity_observations: tuple[dict[str, int | None], ...]
+    post_stop_observations: tuple[dict[str, int | None], ...]
+    final: dict[str, int]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "target_id": self.target_id,
+            "label": self.label,
+            "before": self.before,
+            "activity_observations": list(self.activity_observations),
+            "post_stop_observations": list(self.post_stop_observations),
+            "final": self.final,
         }
 
 
@@ -1497,6 +1522,428 @@ def validate_post_stop_artifact_observations(
     }
 
 
+def _artifact_sizes(
+    plan: ScalarPlan,
+    adb: AdbClient,
+) -> dict[str, int | None]:
+    return {
+        name: adb.artifact_stat(name).size
+        for name in plan.artifacts
+    }
+
+
+def _validate_artifacts_not_regressed(
+    plan: ScalarPlan,
+    *,
+    previous: dict[str, int | None],
+    current: dict[str, int | None],
+    phase: str,
+) -> None:
+    expected = set(plan.artifacts)
+    if set(previous) != expected or set(current) != expected:
+        raise CampaignError(
+            f"{phase} artifact snapshot does not exactly match the plan"
+        )
+    for name in plan.artifacts:
+        old = previous[name]
+        new = current[name]
+        for size in (old, new):
+            if size is not None and (
+                type(size) is not int or size < 0
+            ):
+                raise CampaignError(
+                    f"{phase} artifact size is invalid for {name}"
+                )
+        if old is not None and new is None:
+            raise CampaignError(
+                f"artifact {name} disappeared during {phase}"
+            )
+        if old is not None and new is not None and new < old:
+            raise CampaignError(
+                f"artifact {name} shrank during {phase} ({old} -> {new})"
+            )
+
+
+def _current_scalar_plots_state(
+    *,
+    plan: ScalarPlan,
+    target: ScalarTarget,
+    adb: AdbClient,
+) -> tuple[str, list[object], str]:
+    adb.foreground_package()
+    xml_text = adb.dump_ui()
+    nodes = validate_plots_page(
+        xml_text,
+        plan=plan.catalog_plan,
+        expected_labels=(target.label,),
+    )
+    button = _one_by_id(nodes, f"{SAFE_ID_PREFIX}bStartscan")
+    screenshot = adb.screenshot()
+    state = monitor_visual_state(
+        screenshot,
+        button,
+        expected_width=plan.catalog_plan.expected_width,
+        expected_height=plan.catalog_plan.expected_height,
+    )
+    if state not in {"stopped", "running"}:
+        raise CampaignError(
+            f"ambiguous Plots scan icon while observing {target.label!r}: {state}"
+        )
+    return xml_text, list(nodes), state
+
+
+def _wait_for_scalar_plots_state(
+    *,
+    plan: ScalarPlan,
+    target: ScalarTarget,
+    adb: AdbClient,
+    writer: EventWriter,
+    expected_state: str,
+    operation: str,
+    sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> tuple[str, list[object]]:
+    deadline = monotonic() + SCAN_STATE_TIMEOUT_SECONDS
+    last_state = "unobserved"
+    observation = 0
+    while monotonic() <= deadline:
+        xml_text, nodes, state = _current_scalar_plots_state(
+            plan=plan,
+            target=target,
+            adb=adb,
+        )
+        last_state = state
+        writer.event(
+            "scalar_scan_state_observed",
+            operation=operation,
+            observation=observation,
+            target_id=target.target_id,
+            label=target.label,
+            scan_state=state,
+        )
+        if state == expected_state:
+            return xml_text, nodes
+        observation += 1
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            break
+        sleep(min(SCAN_STATE_POLL_SECONDS, remaining))
+    raise CampaignError(
+        f"{operation} did not reach scan state {expected_state!r}; "
+        f"last state was {last_state!r}"
+    )
+
+
+def _tap_scalar_scan_toggle(
+    *,
+    plan: ScalarPlan,
+    target: ScalarTarget,
+    adb: AdbClient,
+    writer: EventWriter,
+    expected_before: str,
+    purpose: str,
+    before_input: Callable[[], None] | None = None,
+) -> None:
+    if before_input is not None:
+        before_input()
+    _, nodes, state = _current_scalar_plots_state(
+        plan=plan,
+        target=target,
+        adb=adb,
+    )
+    if state != expected_before:
+        raise CampaignError(
+            f"{purpose} preflight expected {expected_before!r}, got {state!r}"
+        )
+    button = _one_by_id(nodes, f"{SAFE_ID_PREFIX}bStartscan")
+    writer.event(
+        "scalar_scan_toggle_tap_intent",
+        purpose=purpose,
+        target_id=target.target_id,
+        label=target.label,
+        expected_before=expected_before,
+        retry_permitted=False,
+        recording_control_tapped=False,
+    )
+    try:
+        adb.tap(button)
+    except BaseException as exc:
+        writer.event(
+            "scalar_scan_toggle_tap_ambiguous",
+            purpose=purpose,
+            target_id=target.target_id,
+            error=type(exc).__name__,
+            detail=str(exc),
+            retry_attempted=False,
+        )
+        raise
+    writer.event(
+        "scalar_scan_toggle_tap_returned",
+        purpose=purpose,
+        target_id=target.target_id,
+    )
+
+
+def _ensure_scalar_scan_stopped(
+    *,
+    plan: ScalarPlan,
+    target: ScalarTarget,
+    adb: AdbClient,
+    writer: EventWriter,
+    sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+    before_input: Callable[[], None] | None = None,
+) -> None:
+    _, _, state = _current_scalar_plots_state(
+        plan=plan,
+        target=target,
+        adb=adb,
+    )
+    if state == "stopped":
+        writer.event(
+            "scalar_scan_cleanup_verified",
+            target_id=target.target_id,
+            cleanup_tap_sent=False,
+        )
+        return
+    _tap_scalar_scan_toggle(
+        plan=plan,
+        target=target,
+        adb=adb,
+        writer=writer,
+        expected_before="running",
+        purpose="cleanup_stop_scalar_scan",
+        before_input=before_input,
+    )
+    _wait_for_scalar_plots_state(
+        plan=plan,
+        target=target,
+        adb=adb,
+        writer=writer,
+        expected_state="stopped",
+        operation="cleanup_stop_scalar_scan",
+        sleep=sleep,
+        monotonic=monotonic,
+    )
+    writer.event(
+        "scalar_scan_cleanup_verified",
+        target_id=target.target_id,
+        cleanup_tap_sent=True,
+    )
+
+
+def run_scalar_scan_segment(
+    *,
+    plan: ScalarPlan,
+    target: ScalarTarget,
+    adb: AdbClient,
+    writer: EventWriter,
+    sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+    before_input: Callable[[], None] | None = None,
+) -> ScalarSegmentResult:
+    """Run one already-selected scalar scan and always reconcile it stopped.
+
+    This primitive is intentionally unreachable from the CLI.  Its caller must
+    already own the UI/channel/inhibit cleanup scope and must have committed the
+    exact singleton through :func:`select_single_scalar_in_open_dialog`.
+    """
+    _, _, initial_state = _current_scalar_plots_state(
+        plan=plan,
+        target=target,
+        adb=adb,
+    )
+    if initial_state != "stopped":
+        raise CampaignError(
+            f"scalar segment requires a stopped scan, got {initial_state!r}"
+        )
+    before = _artifact_sizes(plan, adb)
+    missing = [
+        name
+        for name in plan.required_segment_growth
+        if before[name] is None
+    ]
+    if missing:
+        raise CampaignError(
+            "required growth artifacts must exist before scan start: "
+            + ", ".join(missing)
+        )
+
+    writer.event(
+        "scalar_segment_started",
+        target_id=target.target_id,
+        label=target.label,
+        before=before,
+        requested_dwell_seconds=plan.segment_seconds,
+    )
+    scan_may_be_running = False
+    failure: BaseException | None = None
+    result: ScalarSegmentResult | None = None
+    try:
+        scan_may_be_running = True
+        _tap_scalar_scan_toggle(
+            plan=plan,
+            target=target,
+            adb=adb,
+            writer=writer,
+            expected_before="stopped",
+            purpose="start_scalar_scan",
+            before_input=before_input,
+        )
+        _wait_for_scalar_plots_state(
+            plan=plan,
+            target=target,
+            adb=adb,
+            writer=writer,
+            expected_state="running",
+            operation="start_scalar_scan",
+            sleep=sleep,
+            monotonic=monotonic,
+        )
+
+        activity: list[dict[str, int | None]] = []
+        previous = before
+        for sample in range(plan.recording_oracle_samples):
+            sleep(plan.recording_oracle_interval_seconds)
+            current = _artifact_sizes(plan, adb)
+            _validate_artifacts_not_regressed(
+                plan,
+                previous=previous,
+                current=current,
+                phase="running activity oracle",
+            )
+            activity.append(current)
+            previous = current
+            writer.event(
+                "scalar_recording_activity_observed",
+                target_id=target.target_id,
+                sample=sample,
+                sizes=current,
+            )
+        if not any(
+            before[name] is not None
+            and snapshot[name] is not None
+            and snapshot[name] > before[name]
+            for snapshot in activity
+            for name in plan.required_segment_growth
+        ):
+            raise CampaignError(
+                "no required Debug/CSV activity witness grew while the "
+                "scalar scan was running"
+            )
+
+        sleep(plan.segment_seconds)
+        _tap_scalar_scan_toggle(
+            plan=plan,
+            target=target,
+            adb=adb,
+            writer=writer,
+            expected_before="running",
+            purpose="stop_scalar_scan",
+            before_input=before_input,
+        )
+        _wait_for_scalar_plots_state(
+            plan=plan,
+            target=target,
+            adb=adb,
+            writer=writer,
+            expected_state="stopped",
+            operation="stop_scalar_scan",
+            sleep=sleep,
+            monotonic=monotonic,
+        )
+        scan_may_be_running = False
+
+        post_stop: list[dict[str, int | None]] = []
+        deadline = monotonic() + plan.flush_timeout_seconds
+        last_error = "no observations"
+        previous = activity[-1]
+        while monotonic() <= deadline:
+            current = _artifact_sizes(plan, adb)
+            _validate_artifacts_not_regressed(
+                plan,
+                previous=previous,
+                current=current,
+                phase="post-stop flush",
+            )
+            post_stop.append(current)
+            previous = current
+            writer.event(
+                "scalar_post_stop_artifact_observed",
+                target_id=target.target_id,
+                observation=len(post_stop) - 1,
+                sizes=current,
+            )
+            try:
+                final = validate_post_stop_artifact_observations(
+                    plan,
+                    before=before,
+                    observations=post_stop,
+                )
+            except CampaignError as exc:
+                last_error = str(exc)
+            else:
+                result = ScalarSegmentResult(
+                    target_id=target.target_id,
+                    label=target.label,
+                    before=before,
+                    activity_observations=tuple(activity),
+                    post_stop_observations=tuple(post_stop),
+                    final=final,
+                )
+                writer.event(
+                    "scalar_segment_complete",
+                    **result.as_dict(),
+                )
+                break
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                break
+            sleep(min(plan.verify_seconds, remaining))
+        if result is None:
+            raise CampaignError(
+                "post-stop artifacts did not reach the required stable "
+                f"state: {last_error}"
+            )
+    except BaseException as exc:
+        failure = exc
+        writer.event(
+            "scalar_segment_error",
+            target_id=target.target_id,
+            error=type(exc).__name__,
+            detail=str(exc),
+            scan_may_be_running=scan_may_be_running,
+        )
+    finally:
+        if scan_may_be_running:
+            try:
+                _ensure_scalar_scan_stopped(
+                    plan=plan,
+                    target=target,
+                    adb=adb,
+                    writer=writer,
+                    sleep=sleep,
+                    monotonic=monotonic,
+                    before_input=before_input,
+                )
+            except BaseException as cleanup_exc:
+                writer.event(
+                    "scalar_scan_cleanup_ambiguous",
+                    target_id=target.target_id,
+                    error=type(cleanup_exc).__name__,
+                    detail=str(cleanup_exc),
+                )
+                raise CampaignError(
+                    "scalar segment failed and scan cleanup could not be "
+                    f"proven: {cleanup_exc}"
+                ) from failure
+    if failure is not None:
+        raise failure
+    if result is None:
+        raise CampaignError("scalar segment completed without a result")
+    return result
+
+
 def offline_audit(plan: ScalarPlan) -> dict[str, object]:
     """Return a complete no-subprocess/no-output readiness audit."""
     blockers = execution_blockers(plan)
@@ -1525,8 +1972,8 @@ def offline_audit(plan: ScalarPlan) -> dict[str, object]:
         "pinning_blockers": blockers,
         "live_blocker": (
             "live selector mutation/scan execution is intentionally disabled "
-            "until the cleanup-owning start/dwell/stop/pull supervisor is "
-            "implemented and the live catalog is reviewed"
+            "until the campaign-wide lock/inhibit/mount/pull/checkpoint "
+            "supervisor is implemented and the live catalog is reviewed"
         ),
         "deferred_live_requirements": [
             (
@@ -1538,13 +1985,14 @@ def offline_audit(plan: ScalarPlan) -> dict[str, object]:
                 "inhibit"
             ),
             (
-                "wire the tested selector primitive into a supervisor that "
+                "wire the tested selector and scan-segment primitives into a "
+                "campaign-wide supervisor that "
                 "re-inventories and hash-matches the full live catalog before "
                 "any row, OK, or scan tap"
             ),
             (
-                "wire the tested post-stop artifact validator into a bounded "
-                "start/dwell/stop/pull supervisor"
+                "bind the passive-capture campaign, writable mount, artifact "
+                "pull hashes, checkpoints, lock, and operation inhibit"
             ),
         ],
         "scalar_plan": {

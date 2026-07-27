@@ -767,6 +767,205 @@ class PostStopArtifactValidationTests(unittest.TestCase):
                     )
 
 
+class _SyntheticClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class _ScanAdb:
+    def __init__(
+        self,
+        *,
+        no_growth: bool = False,
+        ambiguous_tap_number: int | None = None,
+    ):
+        self.no_growth = no_growth
+        self.ambiguous_tap_number = ambiguous_tap_number
+        self.running = False
+        self.ever_started = False
+        self.tap_count = 0
+        self.debug_size = 100
+        self.csv_size = 200
+
+    def foreground_package(self) -> str:
+        return catalog.PACKAGE
+
+    def dump_ui(self) -> str:
+        return "<synthetic-plots-page/>"
+
+    def screenshot(self) -> bytes:
+        return b"synthetic-scan-state"
+
+    def tap(self, node: object) -> None:
+        self.tap_count += 1
+        if getattr(node, "resource_id") != (
+            f"{catalog.SAFE_ID_PREFIX}bStartscan"
+        ):
+            raise AssertionError("only the scan toggle may be tapped")
+        self.running = not self.running
+        self.ever_started = True
+        if self.tap_count == self.ambiguous_tap_number:
+            raise RuntimeError("synthetic ambiguous ADB tap return")
+
+    def artifact_stat(self, filename: str) -> object:
+        if not self.no_growth:
+            if self.running and filename == scalar.DEBUG_ARTIFACT:
+                self.debug_size += 5
+            if (
+                not self.running
+                and self.ever_started
+                and filename == scalar.CSV_ARTIFACT
+            ):
+                self.csv_size = 260
+        sizes = {
+            scalar.DEBUG_ARTIFACT: self.debug_size,
+            scalar.CSV_ARTIFACT: self.csv_size,
+        }
+        return mock.Mock(size=sizes[filename])
+
+
+class ScalarScanSegmentTests(unittest.TestCase):
+    def _run(
+        self,
+        *,
+        plan: scalar.ScalarPlan,
+        adb: _ScanAdb,
+        writer: catalog.EventWriter,
+        clock: _SyntheticClock,
+    ) -> scalar.ScalarSegmentResult:
+        button = mock.Mock(
+            resource_id=f"{catalog.SAFE_ID_PREFIX}bStartscan"
+        )
+        nodes = [button]
+        with (
+            mock.patch.object(
+                scalar,
+                "validate_plots_page",
+                return_value=nodes,
+            ),
+            mock.patch.object(
+                scalar,
+                "_one_by_id",
+                return_value=button,
+            ),
+            mock.patch.object(
+                scalar,
+                "monitor_visual_state",
+                side_effect=lambda *_args, **_kwargs: (
+                    "running" if adb.running else "stopped"
+                ),
+            ),
+        ):
+            return scalar.run_scalar_scan_segment(
+                plan=plan,
+                target=plan.target_by_id["delta"],
+                adb=adb,
+                writer=writer,
+                sleep=clock.sleep,
+                monotonic=clock.monotonic,
+            )
+
+    def test_normal_segment_starts_stops_and_proves_stable_csv(self):
+        with _fixture() as fixture, tempfile.TemporaryDirectory() as directory:
+            plan = fixture.load()
+            adb = _ScanAdb()
+            writer = catalog.EventWriter(Path(directory))
+            clock = _SyntheticClock()
+            result = self._run(
+                plan=plan,
+                adb=adb,
+                writer=writer,
+                clock=clock,
+            )
+            events = [
+                json.loads(line)
+                for line in writer.events_path.read_text(
+                    encoding="utf-8"
+                ).splitlines()
+            ]
+
+        self.assertEqual(adb.tap_count, 2)
+        self.assertFalse(adb.running)
+        self.assertEqual(result.target_id, "delta")
+        self.assertGreater(
+            result.final[scalar.DEBUG_ARTIFACT],
+            result.before[scalar.DEBUG_ARTIFACT],
+        )
+        self.assertEqual(result.final[scalar.CSV_ARTIFACT], 260)
+        self.assertTrue(
+            any(
+                event["event"] == "scalar_segment_complete"
+                for event in events
+            )
+        )
+
+    def test_missing_running_activity_witness_stops_before_failing(self):
+        with _fixture() as fixture, tempfile.TemporaryDirectory() as directory:
+            plan = fixture.load()
+            adb = _ScanAdb(no_growth=True)
+            writer = catalog.EventWriter(Path(directory))
+            clock = _SyntheticClock()
+            with self.assertRaisesRegex(
+                scalar.CampaignError,
+                "no required Debug/CSV activity witness grew",
+            ):
+                self._run(
+                    plan=plan,
+                    adb=adb,
+                    writer=writer,
+                    clock=clock,
+                )
+
+        self.assertEqual(adb.tap_count, 2)
+        self.assertFalse(adb.running)
+
+    def test_ambiguous_start_return_reconciles_running_scan_stopped(self):
+        with _fixture() as fixture, tempfile.TemporaryDirectory() as directory:
+            plan = fixture.load()
+            adb = _ScanAdb(ambiguous_tap_number=1)
+            writer = catalog.EventWriter(Path(directory))
+            clock = _SyntheticClock()
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "synthetic ambiguous ADB tap return",
+            ):
+                self._run(
+                    plan=plan,
+                    adb=adb,
+                    writer=writer,
+                    clock=clock,
+                )
+
+        self.assertEqual(adb.tap_count, 2)
+        self.assertFalse(adb.running)
+
+    def test_ambiguous_stop_return_observes_already_stopped_without_retry(self):
+        with _fixture() as fixture, tempfile.TemporaryDirectory() as directory:
+            plan = fixture.load()
+            adb = _ScanAdb(ambiguous_tap_number=2)
+            writer = catalog.EventWriter(Path(directory))
+            clock = _SyntheticClock()
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "synthetic ambiguous ADB tap return",
+            ):
+                self._run(
+                    plan=plan,
+                    adb=adb,
+                    writer=writer,
+                    clock=clock,
+                )
+
+        self.assertEqual(adb.tap_count, 2)
+        self.assertFalse(adb.running)
+
+
 class TrackedPlanTests(unittest.TestCase):
     def test_tracked_plan_has_exact_target_triples_and_reviewed_catalog_pins(self):
         payload = json.loads(TRACKED_SCALAR_PLAN.read_text(encoding="utf-8"))
