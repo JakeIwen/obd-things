@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a guarded, one-scalar-at-a-time AlfaOBD PCM Plots campaign.
+"""Prepare a guarded, one-scalar-at-a-time AlfaOBD Plots campaign.
 
 This tool is deliberately separate from :mod:`alfaobd_plots_catalog`.  The
 catalog walker permanently remains non-mutating; this runner is the narrowly
@@ -1003,8 +1003,8 @@ def execution_blockers(plan: ScalarPlan) -> list[str]:
     blockers: list[str] = []
     catalog = plan.catalog_plan
     review = plan.review
-    if catalog.module_key != "pcm":
-        blockers.append("catalog module_key must remain exactly 'pcm'")
+    if catalog.module_key not in {"pcm", "tcm"}:
+        blockers.append("catalog module_key must be one of 'pcm' or 'tcm'")
     if catalog.expected_catalog_sha256 is None:
         blockers.append(
             "catalog expected_catalog_sha256 is null; inventory/review/pin it"

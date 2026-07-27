@@ -331,6 +331,15 @@ sensor.
    System-status candidates. Retain the warning that a historical diagnostic
    event snapshot from this profile rendered impossible torque values; exact
    subtype selection alone does not validate scaling.
+   The exact 14-target follow-up scope is tracked in
+   `projects/ecu_mapping/configs/alfaobd_tcm_plots_scalars.json`, with gearbox
+   oil temperature repeated as the outer anchor. It deliberately retains null
+   catalog/review hashes until the live selector inventory is complete, and
+   the scalar runner remains offline-only. Once a simultaneous drive capture
+   exists, van-compute tasks
+   `candump-diagnostic-wire-tcm-four-chunks` and
+   `can-timeseries-correlate-tcm-four-chunks` provide the same bounded
+   extraction/correlation path already used for the PCM.
 6. Reproduce each resolved request using a bounded physical read to the
    verified ECU endpoint and required session behavior. Do not promote a
    label merely because AlfaOBD rendered it.

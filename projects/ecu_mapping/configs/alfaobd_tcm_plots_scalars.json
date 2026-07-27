@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "campaign_id": "tcm-plots-scalars",
+  "catalog_plan_path": "alfaobd_tcm_plots_catalog.json",
+  "catalog_review": {
+    "inventory_run_id": null,
+    "catalog_report_path": null,
+    "catalog_report_sha256": null,
+    "catalog_state_sha256": null,
+    "catalog_plan_sha256": null,
+    "scalar_plan_sha256": null,
+    "reviewed_at_utc": null,
+    "reviewed_by": null,
+    "review_note": null
+  },
+  "targets": [
+    {
+      "target_id": "vehicle_speed",
+      "display_order_key": 1,
+      "zero_based_index": 0,
+      "label": "Vehicle speed, km/h"
+    },
+    {
+      "target_id": "engine_speed",
+      "display_order_key": 6,
+      "zero_based_index": 5,
+      "label": "Engine speed, rpm"
+    },
+    {
+      "target_id": "converter_slip_speed",
+      "display_order_key": 7,
+      "zero_based_index": 6,
+      "label": "Torque Converter Slip Speed, rpm"
+    },
+    {
+      "target_id": "turbine_speed",
+      "display_order_key": 8,
+      "zero_based_index": 7,
+      "label": "Turbine speed, rpm"
+    },
+    {
+      "target_id": "gearbox_output_speed",
+      "display_order_key": 9,
+      "zero_based_index": 8,
+      "label": "Gearbox output revs, rpm"
+    },
+    {
+      "target_id": "output_calculated_vehicle_speed",
+      "display_order_key": 10,
+      "zero_based_index": 9,
+      "label": "Vehicle Speed Calculated By Output Shaft Speed, km/h"
+    },
+    {
+      "target_id": "tcu_chip_temperature",
+      "display_order_key": 15,
+      "zero_based_index": 14,
+      "label": "TCU chip temperature, °C"
+    },
+    {
+      "target_id": "gearbox_oil_temperature",
+      "display_order_key": 16,
+      "zero_based_index": 15,
+      "label": "Gearbox oil temperature, °C"
+    },
+    {
+      "target_id": "actual_crankshaft_torque",
+      "display_order_key": 17,
+      "zero_based_index": 16,
+      "label": "Actual Crankshaft Torque, Nm"
+    },
+    {
+      "target_id": "crankshaft_torque_without_tcu_requests",
+      "display_order_key": 18,
+      "zero_based_index": 17,
+      "label": "Crankshaft Torque, without TCU Torque Requests, Nm"
+    },
+    {
+      "target_id": "target_crankshaft_torque",
+      "display_order_key": 19,
+      "zero_based_index": 18,
+      "label": "Target Crankshaft Torque, Nm"
+    },
+    {
+      "target_id": "transmission_torque_intervention",
+      "display_order_key": 20,
+      "zero_based_index": 19,
+      "label": "Transmission Torque Intervention, Nm"
+    },
+    {
+      "target_id": "maximum_engine_torque_request",
+      "display_order_key": 21,
+      "zero_based_index": 20,
+      "label": "Maximum Engine Torque Requested By Transmission, Nm"
+    },
+    {
+      "target_id": "slow_path_torque_intervention",
+      "display_order_key": 22,
+      "zero_based_index": 21,
+      "label": "Slow Path Transmission Torque Intervention, Nm"
+    }
+  ],
+  "schedule": [
+    "gearbox_oil_temperature",
+    "engine_speed",
+    "converter_slip_speed",
+    "turbine_speed",
+    "gearbox_output_speed",
+    "actual_crankshaft_torque",
+    "crankshaft_torque_without_tcu_requests",
+    "target_crankshaft_torque",
+    "transmission_torque_intervention",
+    "maximum_engine_torque_request",
+    "slow_path_torque_intervention",
+    "output_calculated_vehicle_speed",
+    "tcu_chip_temperature",
+    "gearbox_oil_temperature"
+  ],
+  "segment_seconds": 45,
+  "settle_seconds": 2,
+  "verify_seconds": 3,
+  "flush_timeout_seconds": 30,
+  "min_free_bytes": 1073741824,
+  "min_tablet_free_bytes": 536870912,
+  "artifacts": [
+    "AlfaOBD_Debug.bin",
+    "Gauges_Data.csv"
+  ],
+  "required_segment_growth": [
+    "AlfaOBD_Debug.bin",
+    "Gauges_Data.csv"
+  ],
+  "required_stop_stability": [
+    "Gauges_Data.csv"
+  ],
+  "stop_stability_observations": 3,
+  "recording_oracle_samples": 5,
+  "recording_oracle_interval_seconds": 0.22,
+  "max_initial_checked": 16,
+  "screenshot_each_segment": true
+}

@@ -61,6 +61,33 @@
       "outputs": []
     },
     {
+      "name": "alfaobd-plots-scalar-tests",
+      "description": "Run the offline AlfaOBD Plots catalog and scalar-plan regression tests.",
+      "profile": "repo-test",
+      "source_paths": [
+        "lib",
+        "tools/alfaobd_plots_catalog.py",
+        "tools/alfaobd_plots_scalar_campaign.py",
+        "tools/alfaobd_singleton_campaign.py",
+        "projects/ecu_mapping/configs/alfaobd_pcm_plots_catalog.json",
+        "projects/ecu_mapping/configs/alfaobd_pcm_plots_scalars.json",
+        "projects/ecu_mapping/configs/alfaobd_tcm_plots_catalog.json",
+        "projects/ecu_mapping/configs/alfaobd_tcm_plots_scalars.json",
+        "tests/test_alfaobd_plots_catalog.py",
+        "tests/test_alfaobd_plots_catalog_safety.py",
+        "tests/test_alfaobd_plots_scalar_campaign.py"
+      ],
+      "minimum_inputs": 0,
+      "maximum_inputs": 0,
+      "argv": [
+        "-q",
+        "tests/test_alfaobd_plots_catalog.py",
+        "tests/test_alfaobd_plots_catalog_safety.py",
+        "tests/test_alfaobd_plots_scalar_campaign.py"
+      ],
+      "outputs": []
+    },
+    {
       "name": "can-timeseries-correlate-two-chunks",
       "description": "Correlate one cluster wire DID stream against exactly two chronological saved CAN chunks.",
       "profile": "can-log-batch",
@@ -205,6 +232,74 @@
       "outputs": [
         "pcm_wire.jsonl",
         "pcm_wire.summary.json"
+      ]
+    },
+    {
+      "name": "can-timeseries-correlate-tcm-four-chunks",
+      "description": "Correlate one TCM wire DID stream against exactly four chronological saved C-CAN chunks.",
+      "profile": "can-log-batch",
+      "source_paths": [
+        "lib",
+        "tools/can_timeseries_correlate.py"
+      ],
+      "minimum_inputs": 5,
+      "maximum_inputs": 5,
+      "argv": [
+        "{source:tools/can_timeseries_correlate.py}",
+        "--module",
+        "tcm",
+        "--wire",
+        "{input:0}",
+        "{arguments}",
+        "--match",
+        "nearest",
+        "--radius-ms",
+        "100",
+        "--minimum-samples",
+        "20",
+        "--minimum-coverage",
+        "0.5",
+        "--minimum-distinct",
+        "4",
+        "--top",
+        "100",
+        "--allow-van-compute-result",
+        "--output",
+        "{result:report.json}",
+        "{input:1}",
+        "{input:2}",
+        "{input:3}",
+        "{input:4}"
+      ],
+      "outputs": [
+        "report.json"
+      ]
+    },
+    {
+      "name": "candump-diagnostic-wire-tcm-four-chunks",
+      "description": "Extract exact physical TCM 22/62 exchanges from four chronological saved C-CAN chunks.",
+      "profile": "can-log-batch",
+      "source_paths": [
+        "lib",
+        "tools/can_timeseries_correlate.py",
+        "tools/candump_diagnostic_wire.py"
+      ],
+      "minimum_inputs": 4,
+      "maximum_inputs": 4,
+      "argv": [
+        "{source:tools/candump_diagnostic_wire.py}",
+        "tcm",
+        "--allow-van-compute-result",
+        "--output",
+        "{result:tcm_wire.jsonl}",
+        "{input:0}",
+        "{input:1}",
+        "{input:2}",
+        "{input:3}"
+      ],
+      "outputs": [
+        "tcm_wire.jsonl",
+        "tcm_wire.summary.json"
       ]
     },
     {

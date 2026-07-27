@@ -23,6 +23,13 @@ TRACKED_SCALAR_PLAN = (
     / "configs"
     / "alfaobd_pcm_plots_scalars.json"
 )
+TRACKED_TCM_SCALAR_PLAN = (
+    REPO
+    / "projects"
+    / "ecu_mapping"
+    / "configs"
+    / "alfaobd_tcm_plots_scalars.json"
+)
 TRACKED_CATALOG_REPORT = (
     REPO
     / "tmp"
@@ -396,6 +403,101 @@ class TrackedPlanTests(unittest.TestCase):
                     "Output Speed, rpm",
                 ),
             ],
+        )
+
+    def test_tracked_tcm_plan_is_exact_and_deliberately_unpinned(self):
+        plan = scalar.load_plan(TRACKED_TCM_SCALAR_PLAN)
+        self.assertEqual(plan.catalog_plan.module_key, "tcm")
+        self.assertEqual(
+            [
+                (
+                    target.target_id,
+                    target.display_order_key,
+                    target.zero_based_index,
+                    target.label,
+                )
+                for target in plan.targets
+            ],
+            [
+                ("vehicle_speed", 1, 0, "Vehicle speed, km/h"),
+                ("engine_speed", 6, 5, "Engine speed, rpm"),
+                (
+                    "converter_slip_speed",
+                    7,
+                    6,
+                    "Torque Converter Slip Speed, rpm",
+                ),
+                ("turbine_speed", 8, 7, "Turbine speed, rpm"),
+                (
+                    "gearbox_output_speed",
+                    9,
+                    8,
+                    "Gearbox output revs, rpm",
+                ),
+                (
+                    "output_calculated_vehicle_speed",
+                    10,
+                    9,
+                    "Vehicle Speed Calculated By Output Shaft Speed, km/h",
+                ),
+                (
+                    "tcu_chip_temperature",
+                    15,
+                    14,
+                    "TCU chip temperature, °C",
+                ),
+                (
+                    "gearbox_oil_temperature",
+                    16,
+                    15,
+                    "Gearbox oil temperature, °C",
+                ),
+                (
+                    "actual_crankshaft_torque",
+                    17,
+                    16,
+                    "Actual Crankshaft Torque, Nm",
+                ),
+                (
+                    "crankshaft_torque_without_tcu_requests",
+                    18,
+                    17,
+                    "Crankshaft Torque, without TCU Torque Requests, Nm",
+                ),
+                (
+                    "target_crankshaft_torque",
+                    19,
+                    18,
+                    "Target Crankshaft Torque, Nm",
+                ),
+                (
+                    "transmission_torque_intervention",
+                    20,
+                    19,
+                    "Transmission Torque Intervention, Nm",
+                ),
+                (
+                    "maximum_engine_torque_request",
+                    21,
+                    20,
+                    "Maximum Engine Torque Requested By Transmission, Nm",
+                ),
+                (
+                    "slow_path_torque_intervention",
+                    22,
+                    21,
+                    "Slow Path Transmission Torque Intervention, Nm",
+                ),
+            ],
+        )
+        blockers = scalar.execution_blockers(plan)
+        self.assertIn(
+            "catalog expected_catalog_sha256 is null",
+            " ".join(blockers),
+        )
+        self.assertNotIn(
+            "catalog module_key must be",
+            " ".join(blockers),
         )
 
     @unittest.skipUnless(

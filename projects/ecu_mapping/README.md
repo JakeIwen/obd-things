@@ -455,13 +455,14 @@ required-label, traversal, UI-stability, or optional pinned-hash mismatch fails 
 evidence; it does not repair live strings from the SQLite prior. This inventory tool does **not**
 select or scan a scalar.
 
-`tools/alfaobd_plots_scalar_campaign.py`, with its draft plan at
-`projects/ecu_mapping/configs/alfaobd_pcm_plots_scalars.json`, is currently an
+`tools/alfaobd_plots_scalar_campaign.py`, with draft/review plans at
+`projects/ecu_mapping/configs/alfaobd_{pcm,tcm}_plots_scalars.json`, is currently an
 **offline-gates-only scaffold**, not live scalar automation. `plan` validates and expands the
 candidate schedule, `audit` checks the referenced catalog plan and any configured reviewed report,
 and `status` only reads an existing `state.json`; none of those modes constructs an ADB client or
 accesses CAN, services, mounts, network, proxy settings, or output. The live
-catalog and review fields are now pinned:
+PCM catalog and review fields are pinned. The TCM plan deliberately remains
+unpinned until the live 56-row selector inventory completes:
 
 ```bash
 python3 tools/alfaobd_plots_scalar_campaign.py plan \
@@ -469,6 +470,9 @@ python3 tools/alfaobd_plots_scalar_campaign.py plan \
 
 python3 tools/alfaobd_plots_scalar_campaign.py audit \
   projects/ecu_mapping/configs/alfaobd_pcm_plots_scalars.json
+
+python3 tools/alfaobd_plots_scalar_campaign.py plan \
+  projects/ecu_mapping/configs/alfaobd_tcm_plots_scalars.json
 ```
 
 The scalar gate requires a reviewed live catalog before it can even pass its offline readiness
@@ -932,7 +936,14 @@ verify the `/4` rpm scale or authorize public telemetry promotion.
    [`ZF9HP Plots catalog plan`](configs/alfaobd_tcm_plots_catalog.json):
    inventory 56 rows first, then prioritize gearbox-oil temperature,
    turbine/output speed, converter slip, and the torque-stage gauges. The
-   saved `ZF9HP.dat` is unlabeled/untimestamped and the historical Gauges CSV
-   has no ZF9HP section, so neither substitutes for that live inventory.
+   exact target triples and a 14-segment temperature-anchored schedule are
+   already materialized in
+   [`alfaobd_tcm_plots_scalars.json`](configs/alfaobd_tcm_plots_scalars.json);
+   it is an offline review artifact until the catalog is live-pinned and a
+   separate live runner is implemented. Four-chunk TCM wire extraction and
+   passive-correlation jobs are also registered with van-compute so the first
+   capture can be analyzed without loading the Pi. The saved `ZF9HP.dat` is
+   unlabeled/untimestamped and the historical Gauges CSV has no ZF9HP section,
+   so neither substitutes for that live inventory.
 6. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps
    (`../../docs/bus-map.md`, `../../lib/modules.py`, project DID maps) per the maintenance rule.
