@@ -290,6 +290,26 @@ rules.
 
 Source: [PCM Plots loaded-drive mapping](../projects/ecu_mapping/findings/promaster_2022/2026-07-27_pcm_plots_loaded_drive_mapping.md).
 
+### 2026-07-27 — ZF9HP static request and decoder recovery
+
+**What worked.** Ordered-table consumer tracing first rejected a coincidental
+56-row HVAC table, then tied the real `ZF9HP` branch to `aa.A`, the
+`ADDescZF9HP` runtime descriptor, and the 56-row Device 194 parameter catalog.
+Tracing the same runtime table into the Plots consumer recovered the exact
+profile-specific `n0.z1.r2()` response arithmetic. This yields distinct DIDs,
+payload widths, byte order, signedness, offsets, and scales for all 56 outputs.
+The owner-priority results include gearbox-oil DID `04FE` as `u8 - 40 °C` and
+actual-crankshaft-torque DID `1018` as `u16be - 500 Nm`.
+
+**Applicability boundary.** This is stronger than a database label alone
+because request, label/unit order, runtime branch, and response code agree
+inside the same APK. It is still vendor-derived static evidence: it does not
+prove that the installed TCM supports a row or that the rendered definition is
+correct for its exact software. Require a positive physical read and
+controlled physical plausibility before dashboard publication.
+
+Source: [AlfaOBD APK catalog and ZF9HP decoder recovery](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_alfaobd_apk_catalog.md#static-zf9hp-decoder-recovery--2026-07-27).
+
 ## Current trust model
 
 | AlfaOBD surface | What it can establish | What it cannot establish alone |
@@ -301,7 +321,7 @@ Source: [PCM Plots loaded-drive mapping](../projects/ecu_mapping/findings/promas
 | Status `Monitor parameters` / `*_Info.log` | Repeated labeled values and field groups when the Info file grows; logical label-run order in a bounded campaign envelope | Per-cycle timestamps, DID numbers, or logical record boundaries at sampled file sizes |
 | Gauges Data CSV | Rendered labels and sample times when it actually grows | DID numbers; a label-to-DID join without synchronized Debug Data |
 | `Data/*.dat` | Opaque cache-series change detection | Freshness, timestamps, DID identity, or label identity |
-| APK model/catalog rows | High-yield address, profile, field-layout, and routine candidates | Installed equipment or verified human labels/scales |
+| APK model/catalog/decoder code | High-yield address, profile, field-layout, routine, and exact vendor-arithmetic candidates | Installed equipment, live DID support, or physical correctness for this ECU/software |
 | Diagnostic menu | That an action is offered in a profile | Which raw `2F`/`31`/`2E` payload implements it |
 | `NO DATA` / timeout | That the exact attempt got no response | ECU absence or a bad profile without controlled state/session/routing checks |
 

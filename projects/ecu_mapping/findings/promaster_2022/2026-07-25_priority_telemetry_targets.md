@@ -55,6 +55,17 @@ decodes. This reduces the next vehicle pass to bounded support and scale
 checks for individual known requests; it does not justify publishing
 transmission temperature or torque yet.
 
+Update 2026-07-27 (static ZF9HP decoder recovery): the profile-specific
+AlfaOBD response routine is now recovered as well. It defines `F405`, `0301`,
+and `04FE` as one-byte `raw - 40 °C`; `F40C`, `2102`, and `2103` as
+big-endian `raw × 0.25 rpm`; `0500` as signed big-endian rpm; five priority
+torque DIDs as `u16be - 500 Nm`; and `101D` as
+`u16be × 0.25 - 500 Nm`. The complete 56-output executable catalog is
+[`projects/ecu_mapping/zf9hp.py`](../../zf9hp.py). These are exact
+vendor-derived formulas, but the installed TCM still must positively answer
+the requests and produce physically plausible values before the dashboard
+allowlists transmission temperature or torque.
+
 ## Engine-oil pressure: exact OEM context
 
 The OEM `OIL PRESSURE – UPGRADE ENGINE` table applies only when coolant is
@@ -368,8 +379,9 @@ sensor.
    `04FE`, and `1018/101A/101B/101D/101F/1020` to establish support and
    response lengths; then record the grouped priority gauges together while
    preserving exact Debug cycles and passive C-CAN. Each priority row now has
-   a separate candidate DID, so singleton repeats are needed only where scale
-   or signedness remains ambiguous. Evidence and provenance are in
+   a separate candidate DID and a recovered vendor formula, so singleton
+   repeats are needed only where support, response shape, or physical
+   plausibility remains ambiguous. Evidence and provenance are in
    [`2026-07-21_alfaobd_apk_catalog.md`](2026-07-21_alfaobd_apk_catalog.md#static-request-table-recovery--2026-07-27).
    The guarded sparse plan is:
 

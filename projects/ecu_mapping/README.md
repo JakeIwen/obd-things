@@ -509,10 +509,14 @@ DIDs `F40C`, `0500`, `2102`, `2103`, `F405`, `0301`, `04FE`, and
 anchors validate the ordered-table method, while the branch trace prevents
 length-only misidentification. See
 [`2026-07-21_alfaobd_apk_catalog.md`](findings/promaster_2022/2026-07-21_alfaobd_apk_catalog.md#static-request-table-recovery--2026-07-27).
-The next live pass should first do physical support reads of that priority
-set, then use the live catalog to select the grouped gauges. Response lengths,
-signedness, offsets, and scales remain unresolved, so these candidates are not
-dashboard-ready.
+The profile-specific `n0.z1.r2()` decoder is now recovered too:
+`F405/0301/04FE` use `u8 - 40 °C`, the speed and torque rows have exact
+big-endian signedness/scales, and
+[`zf9hp.py`](zf9hp.py) preserves the complete 56-output native-unit catalog.
+The next live pass should first do physical support reads of the priority set,
+then use the live catalog to select the grouped gauges. Installed-vehicle
+support and physical plausibility remain unresolved, so these definitions are
+not dashboard-ready.
 
 `tools/did_sweep.py` now accepts repeatable `--did` options, so the next
 parked support check can read exactly the thirteen reviewed ZF9HP candidates

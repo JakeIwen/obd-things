@@ -197,13 +197,48 @@ followed by `213E` three times.
 
 This is strong vendor-derived request evidence, but not yet live vehicle
 ground truth. It establishes one candidate DID per priority scalar instead of
-the previously inferred shared response containers, but it does not establish
-response length, byte order, signedness, offset, or scale. A parked physical
-read of the priority set must first prove support on this TCM; AlfaOBD values
-plus exact request/response cycles must then establish scaling. The live
-56-row selector inventory remains required for safe automated gauge selection,
-but a one-gauge-at-a-time campaign is no longer needed merely to discover
-which DID each priority label uses.
+the previously inferred shared response containers. A parked physical read of
+the priority set must first prove support on this TCM. The live 56-row selector
+inventory remains required for safe automated gauge selection, but a
+one-gauge-at-a-time campaign is no longer needed merely to discover which DID
+each priority label uses.
+
+### Static ZF9HP decoder recovery — 2026-07-27
+
+DEX field-consumer tracing identified `n0.z1` as the Plots response consumer.
+Its `s2()` dispatcher selects `r2()` when the runtime description is
+`ZF9HP`. That method independently switches on the echoed two-byte DID, reads
+the first data byte as an unsigned `b` value or the first two data bytes as a
+big-endian `a` value, and applies the following priority formulas:
+
+| DID | AlfaOBD label | payload | native formula |
+|---:|---|---|---|
+| `F40C` | Engine speed | `u16be` | `raw × 0.25 rpm` |
+| `0500` | Torque Converter Slip Speed | `i16be` | `raw rpm` |
+| `2102` | Turbine speed | `u16be` | `raw × 0.25 rpm` |
+| `2103` | Gearbox output revs | `u16be` | `raw × 0.25 rpm` |
+| `F405` | Water temperature | `u8` | `raw - 40 °C` |
+| `0301` | TCU chip temperature | `u8` | `raw - 40 °C` |
+| `04FE` | Gearbox oil temperature | `u8` | `raw - 40 °C` |
+| `1018` | Actual Crankshaft Torque | `u16be` | `raw - 500 Nm` |
+| `101A` | Crankshaft Torque, without TCU Torque Requests | `u16be` | `raw - 500 Nm` |
+| `101B` | Target Crankshaft Torque | `u16be` | `raw - 500 Nm` |
+| `101D` | Transmission Torque Intervention | `u16be` | `raw × 0.25 - 500 Nm` |
+| `101F` | Maximum Engine Torque Requested By Transmission | `u16be` | `raw - 500 Nm` |
+| `1020` | Slow Path Transmission Torque Intervention | `u16be` | `raw - 500 Nm` |
+
+The same method recovers formulas for all 56 ordered Plots outputs, including
+the repeated three-field `213D` and `213E` responses. The executable,
+ECU-scoped catalog is
+[`projects/ecu_mapping/zf9hp.py`](../../zf9hp.py). It preserves the native
+AlfaOBD units; any dashboard conversion to °F or lb-ft belongs downstream.
+
+This materially narrows the next live pass: it now needs to prove support,
+response width, stability, and physical plausibility rather than rediscover
+the APK's arithmetic. These remain vendor-derived definitions until the
+installed TCM positively answers each DID and controlled vehicle state agrees.
+In particular, the decoder is not a reason to publish a missing, negative, or
+implausible value as telemetry.
 
 Static-source provenance:
 
@@ -214,7 +249,8 @@ Static-source provenance:
 - APK `classes.dex`: SHA-256
   `f37fd0a217d46f85d12523f508b8340ca844ffb2ffda7d79183fd6152c437f0a`;
   `tools/dex_field_usage.py` resolves the `ZF9HP` branch and proves
-  `aa.A -> AlfaOBDConnect.s8`; and
+  `aa.A -> AlfaOBDConnect.s8`; Debian baksmali 2.5.2 disassembly of that same
+  DEX resolves `Ln0/z1;->s2()V -> r2()V` and the formulas above; and
 - reconstructed database: SHA-256
   `073fd4c46c438d4591e590d9fc2556bc5da3c1aff2e8008c504a9ef1f0398be5`.
 
