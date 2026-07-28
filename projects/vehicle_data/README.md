@@ -58,6 +58,10 @@ The initial drive-publisher vocabulary is intentionally narrow:
 | `transmission.turbine_speed` | `ccan.broadcast.0x1f7` | number, `rpm` | `observed_alfa_scale` |
 | `vehicle.ignition_on` | `ccan.broadcast.0x2ef` | boolean, `boolean` | `verified` |
 | `vehicle.speed` | `ccan.broadcast.0x101` | number, `mph` | `observed_alfa_scale` |
+| `tire.pressure.fl` | `rf_hub.did.31d0` | number, `psi` | `verified` |
+| `tire.pressure.fr` | `rf_hub.did.31d1` | number, `psi` | `verified` |
+| `tire.pressure.rr` | `rf_hub.did.31d2` | number, `psi` | `verified` |
+| `tire.pressure.rl` | `rf_hub.did.31d3` | number, `psi` | `verified` |
 | `diagnostics.cluster.did.1000.raw` | `cluster.did.1000` | integer, `raw_u16_be` | `candidate` |
 | `diagnostics.cluster.did.1002.raw` | `cluster.did.1002` | integer, `raw_u8` | `candidate` |
 | `diagnostics.cluster.did.0107.raw` | `cluster.did.0107` | integer, `raw_u8` | `candidate` |
@@ -67,6 +71,16 @@ The initial drive-publisher vocabulary is intentionally narrow:
 frame may publish only `true`. A publisher-supplied `false` is rejected
 because silence is not a decoded negative value; the observation instead
 expires to stale/unknown when the frame disappears.
+
+The four TPMS metrics use the wheel map and `raw x 0.1 kPa` pressure scale
+verified by the TPMS project's 2026-07-07 deflate/reinflate test. RF Hub slots
+1–4 remain FL, FR, RR, RL; in particular, slots 3/4 must not be swapped. The
+TPMS logger converts valid values to psi and publishes them over the local Unix
+API. Raw `FFFF` means invalid/no sensor data and is never published; an earlier
+cached value instead expires after the 30-second freshness window. These are
+active physical UDS reads, not passive broadcast metrics. See
+[`projects/tpms/README.md`](../tpms/README.md) for sensor IDs, evidence, and the
+service/recorder contention boundary.
 
 The raw rows preserve the original cluster evidence without presenting
 unverified speed, gear, or temperature conversions as facts. The separately
@@ -395,11 +409,15 @@ restricts clients.
 
 ## Current vanpi deployment
 
-Last verified 2026-07-26:
+Last verified 2026-07-27:
 
 - `van-telemetry.service`, `van-telemetry-web.service`, and a separate
   machine-local Tailscale web service are installed, enabled at boot, and
   running.
+- The live broker registry exposes all four verified TPMS wheel metrics. With
+  the transmitting `tpms-logger.service` intentionally stopped for the current
+  listen-only drive-recording campaign, all four correctly remain unavailable
+  and the dashboard reports `0/4 LIVE · 4/4 MAPPED`.
 - The broker is available only through
   `/run/van-telemetry/api.sock`, owned by the unprivileged `pi` user/group.
 - The tracked web unit remains loopback-only. A machine-local systemd drop-in

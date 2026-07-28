@@ -122,11 +122,15 @@ campaign status and
   **The gate MUST stay 0x2EF, not frame count: our own polling holds FCA network management
   awake** (verified: with a frame-count gate the bus never slept; polling stopped → asleep in
   60 s). A dropout in the CSV names its slot → physical wheel via the table above; a DTC
-  status flip timestamps fault onset. The logger drains stale ISO-TP frames before every request
+  status flip timestamps fault onset. Each valid pressure is also published to the local telemetry
+  broker as `tire.pressure.fl/fr/rr/rl` with verified quality and a 30-second freshness window.
+  Publication is best-effort: broker absence or rejection is journaled but never stops CSV logging.
+  The logger drains stale ISO-TP frames before every request
   and accepts pressure/DTC data only when the positive response echoes the requested DID or `19`
   subfunction. Known DTCs retain both the raw ECU value and label in new rows, for example
-  `550331(C1503-31)=8F`. Known current pressure sentinel: raw `FFFF` is invalid/no data (the
-  present decoder displays it as 950.5 psi), not a real pressure or a failed UDS reply.
+  `550331(C1503-31)=8F`. Raw pressure `FFFF` is invalid/no data, not a real pressure or a failed
+  UDS reply; the logger now writes an empty pressure cell and withholds telemetry instead of
+  rendering the former impossible 950.5 psi.
   The normal pure-RX idle watch does not reserve `can0`. If the interface needs reconfiguration,
   the idle loop briefly takes the cooperative `tmp/locks/` channel lock, rechecks under the lock,
   and defers without changing the interface when another transmitter owns it. Each active polling
@@ -149,6 +153,11 @@ campaign status and
 - **Before any manual bus work**: `sudo systemctl stop tpms-logger` (restart after).
   Gotcha: `pkill -f`/`pgrep -f` with a pattern that appears in your own command line kills
   your own shell — use `pkill -x candump` or exact PIDs.
+- **Current integration state (verified 2026-07-27):** `tpms-logger.service` is intentionally
+  stopped while the listen-only C-CAN drive recorder owns the campaign. The telemetry registry
+  still exposes all four verified pressure mappings, so the honest dashboard state is
+  `0/4 LIVE · 4/4 MAPPED`. Reactivating this transmitting logger is a campaign choice; do not run
+  it concurrently with the passive recorder on the one PCAN channel.
 
 ## Campaign status (2026-07-19) — dropout repeatedly captured
 

@@ -157,6 +157,10 @@ class SourceTests(unittest.TestCase):
                 "engine.target_crankshaft_torque",
                 "transmission.output_speed",
                 "transmission.turbine_speed",
+                "tire.pressure.fl",
+                "tire.pressure.fr",
+                "tire.pressure.rl",
+                "tire.pressure.rr",
                 "vehicle.ignition_on",
                 "vehicle.speed",
                 "diagnostics.cluster.did.0107.raw",
@@ -179,6 +183,36 @@ class SourceTests(unittest.TestCase):
                 source.provenance
                 for definition in METRICS.values()
                 for source in definition.sources
+            )
+        )
+        tire_sources = {
+            name: METRICS[name].sources[0]
+            for name in (
+                "tire.pressure.fl",
+                "tire.pressure.fr",
+                "tire.pressure.rr",
+                "tire.pressure.rl",
+            )
+        }
+        self.assertEqual(
+            [source.name for source in tire_sources.values()],
+            [
+                "rf_hub.did.31d0",
+                "rf_hub.did.31d1",
+                "rf_hub.did.31d2",
+                "rf_hub.did.31d3",
+            ],
+        )
+        self.assertTrue(
+            all(
+                source.quality == "verified" and source.publisher_allowed
+                for source in tire_sources.values()
+            )
+        )
+        self.assertTrue(
+            all(
+                METRICS[name].stale_after_seconds == 30.0
+                for name in tire_sources
             )
         )
         self.assertEqual(
@@ -614,6 +648,27 @@ class BrokerTests(unittest.TestCase):
         )
         self.assertEqual(
             broker.status_response()["vehicle_state"]["state"], "unknown"
+        )
+
+    def test_publisher_accepts_verified_tpms_pressure_source(self):
+        clock = FakeClock()
+        broker = TelemetryBroker(acquirer=FakeAcquirer(), monotonic=clock)
+
+        result = broker.publish_observation(
+            "tire.pressure.rr",
+            value=81.2,
+            unit="psi",
+            source="rf_hub.did.31d2",
+            bus="c-can",
+            quality="verified",
+        )
+        payload = broker.metric_response("tire.pressure.rr")
+
+        self.assertTrue(result.available)
+        self.assertEqual(payload["value"], 81.2)
+        self.assertEqual(payload["source"], "rf_hub.did.31d2")
+        self.assertEqual(
+            payload["acquisition"], "physical_read_data_by_identifier"
         )
 
     def test_publisher_success_does_not_erase_acquisition_failure(self):

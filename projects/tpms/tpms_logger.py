@@ -10,7 +10,8 @@ Polls every CYCLE_S seconds over UDS (module 'rf_hub', C-CAN via the SGW-bypass 
   * 19 02 0D   DTC status: C1503-31 tracks the physical-RL dropout; C1512-88 and
                 B1040-64 remain useful history. CSV keys retain each raw 3-byte DTC.
 
-Appends CSV to tmp/tpms/tpms_drive_log.csv; prints changes to stdout. Read-only UDS
+Appends CSV to tmp/tpms/tpms_drive_log.csv, publishes valid pressure observations to
+the allowlisted local telemetry broker, and prints changes to stdout. Read-only UDS
 (22 / 19), no writes. Survives socket drops (uds.recover_socket) and ignition state
 changes (the RFH answers on battery). Ctrl-C to stop.
 
@@ -48,16 +49,27 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, REPO)
 from lib import diagnostic_safety, uds
 from lib.modules import get
+from projects.vehicle_data.api import TelemetryClient
 
 CYCLE_S = 10
 IGNITION_WINDOW_S = 2.0
 AUTO_POLL_BUDGET_S = 8.0
 AUTO_RECOVERY_MAX_WAIT_S = 8.0
+DEFAULT_TELEMETRY_SOCKET = "/run/van-telemetry/api.sock"
+TELEMETRY_TIMEOUT_S = 0.25
 CSV_PATH = os.path.join(REPO, "tmp", "tpms", "tpms_drive_log.csv")
-# Current physical wheel names for slots 1-4, verified by the 2026-07-07 deflate test.
-WHEELS = ("FL", "FR", "RR", "RL")
-PRESS_DIDS = (0x31D0, 0x31D1, 0x31D2, 0x31D3)
+# Current physical wheel names and pressure DIDs for RFH slots 1-4, verified by the
+# 2026-07-07 deflate/reinflate test. Slots 3/4 are deliberately RR/RL.
+PRESSURE_SLOTS = (
+    ("FL", 0x31D0, "tire.pressure.fl"),
+    ("FR", 0x31D1, "tire.pressure.fr"),
+    ("RR", 0x31D2, "tire.pressure.rr"),
+    ("RL", 0x31D3, "tire.pressure.rl"),
+)
+WHEELS = tuple(wheel for wheel, _did, _metric in PRESSURE_SLOTS)
+PRESS_DIDS = tuple(did for _wheel, did, _metric in PRESSURE_SLOTS)
 LASTRX_DIDS = (0x301E, 0x301F, 0x3020, 0x3021)
+INVALID_PRESSURE_RAW = b"\xFF\xFF"
 DTC_NAMES = {b"\x90\x40\x64": "B1040-64", b"\x55\x12\x88": "C1512-88",
              b"\x55\x03\x31": "C1503-31"}
 
@@ -214,8 +226,47 @@ def read_dtcs(s, deadline=None):
 
 
 def psi(raw):
-    # Pressure DIDs are exactly one u16. Reject truncation or appended/stale data defensively.
-    return round(int.from_bytes(raw, "big") * 0.1 * 0.145038, 1) if raw and len(raw) == 2 else None
+    """Decode one verified RF Hub pressure, excluding its no-data sentinel."""
+    # Pressure DIDs are exactly one u16. Reject truncation, appended/stale data,
+    # and FFFF (invalid/no sensor data) before applying the verified scale.
+    if not raw or len(raw) != 2 or raw == INVALID_PRESSURE_RAW:
+        return None
+    return round(int.from_bytes(raw, "big") * 0.1 * 0.145038, 1)
+
+
+def publish_pressure_telemetry(client, press_results):
+    """Best-effort publish valid pressure reads without affecting CSV logging.
+
+    Missing reads and FFFF do not replace a prior cached value; the broker's
+    30-second freshness window lets that observation expire naturally.
+    """
+    if len(press_results) != len(PRESSURE_SLOTS):
+        raise ValueError("pressure result count does not match verified RF Hub slots")
+    errors = []
+    for (_wheel, did, metric), result in zip(PRESSURE_SLOTS, press_results):
+        pressure = psi(result.value) if result.ok else None
+        if pressure is None:
+            continue
+        try:
+            status, response = client.publish(
+                metric,
+                value=pressure,
+                unit="psi",
+                source=f"rf_hub.did.{did:04x}",
+                bus="c-can",
+                quality="verified",
+            )
+        except Exception as exc:
+            errors.append(f"{metric}: {type(exc).__name__}: {exc}")
+            continue
+        if not 200 <= status < 300:
+            reason = (
+                response.get("reason", "publication_rejected")
+                if isinstance(response, dict)
+                else "publication_rejected"
+            )
+            errors.append(f"{metric}: HTTP {status}: {reason}")
+    return tuple(errors)
 
 
 def _quality_markers(press_results, lastrx_results, dtc_result):
@@ -360,6 +411,11 @@ def log_session(auto=False):
                     w.writerow(["time"] + [f"psi_{x}" for x in WHEELS]
                                + [f"lastrx_{x}" for x in WHEELS] + ["dtcs"])
                 prev = None
+                previous_telemetry_errors = None
+                telemetry = TelemetryClient(
+                    DEFAULT_TELEMETRY_SOCKET,
+                    timeout=TELEMETRY_TIMEOUT_S,
+                )
                 print(f"logging to {CSV_PATH} every {CYCLE_S}s", flush=True)
                 while True:
                     if auto and not ignition_on(m.channel, IGNITION_WINDOW_S):
@@ -422,6 +478,19 @@ def log_session(auto=False):
                            + [_dtc_csv_cell(press_results, lastrx_results, dtc_result)])
                     w.writerow([now] + row)
                     f.flush()
+                    telemetry_errors = publish_pressure_telemetry(
+                        telemetry, press_results
+                    )
+                    if telemetry_errors != previous_telemetry_errors:
+                        if telemetry_errors:
+                            print(
+                                "! telemetry publication: "
+                                + "; ".join(telemetry_errors),
+                                flush=True,
+                            )
+                        elif previous_telemetry_errors:
+                            print("telemetry publication recovered", flush=True)
+                        previous_telemetry_errors = telemetry_errors
                     if row != prev:
                         issues = _quality_markers(press_results, lastrx_results, dtc_result)
                         tag = f"  << READ ISSUES: {','.join(issues)}" if issues else ""

@@ -154,6 +154,53 @@ class TpmsResponseIntegrityTests(unittest.TestCase):
         self.assertEqual(result.detail, "LEN3_EXPECTED2")
         self.assertIsNone(tpms_logger.psi(bytes.fromhex("01 02 03")))
 
+    def test_pressure_decoder_rejects_ffff_no_data_sentinel(self):
+        self.assertIsNone(tpms_logger.psi(bytes.fromhex("FF FF")))
+        self.assertEqual(tpms_logger.psi(bytes.fromhex("0F A0")), 58.0)
+
+    def test_telemetry_publishes_verified_slot_order_and_skips_ffff(self):
+        class FakeClient:
+            def __init__(self):
+                self.calls = []
+
+            def publish(self, metric, **payload):
+                self.calls.append((metric, payload))
+                return 202, {"accepted": True}
+
+        client = FakeClient()
+        pressure_results = [
+            tpms_logger.ReadEvidence(bytes.fromhex(raw), tpms_logger.READ_OK)
+            for raw in ("0F A0", "0F B0", "10 00", "FF FF")
+        ]
+
+        errors = tpms_logger.publish_pressure_telemetry(
+            client, pressure_results
+        )
+
+        self.assertEqual(errors, ())
+        self.assertEqual(
+            [metric for metric, _payload in client.calls],
+            [
+                "tire.pressure.fl",
+                "tire.pressure.fr",
+                "tire.pressure.rr",
+            ],
+        )
+        self.assertEqual(
+            [payload["source"] for _metric, payload in client.calls],
+            [
+                "rf_hub.did.31d0",
+                "rf_hub.did.31d1",
+                "rf_hub.did.31d2",
+            ],
+        )
+        self.assertTrue(
+            all(
+                payload["quality"] == "verified"
+                for _metric, payload in client.calls
+            )
+        )
+
     def test_valid_zero_dtc_response_is_distinct_from_timeout(self):
         with (
             mock.patch.object(tpms_logger.uds, "drain"),

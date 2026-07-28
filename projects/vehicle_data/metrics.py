@@ -317,6 +317,46 @@ TRANSMISSION_TURBINE_SPEED = _transmission_speed_metric(
 )
 
 
+def _tire_pressure_metric(position: str, did: str) -> MetricDefinition:
+    return MetricDefinition(
+        name=f"tire.pressure.{position}",
+        unit="psi",
+        value_type="number",
+        stale_after_seconds=30.0,
+        passive_min_interval_seconds=0.0,
+        wake_min_interval_seconds=0.0,
+        minimum=0.0,
+        maximum=150.0,
+        sources=(
+            SourceDefinition(
+                name=f"rf_hub.did.{did}",
+                bus="c-can",
+                bitrate=500000,
+                acquisition_class="physical_read_data_by_identifier",
+                quality="verified",
+                provenance=(
+                    "projects/tpms/README.md verified 2026-07-07 "
+                    "deflate/reinflate wheel map and pressure scale; "
+                    f"RF Hub DID {did.upper()} raw u16 x 0.1 kPa, converted "
+                    "to psi; FFFF is invalid/no sensor data"
+                ),
+                side_effects=(
+                    "physical UDS 22 read; RF Hub polling can hold C-CAN "
+                    "network management awake"
+                ),
+                publisher_allowed=True,
+            ),
+        ),
+    )
+
+
+TIRE_PRESSURE_FL = _tire_pressure_metric("fl", "31d0")
+TIRE_PRESSURE_FR = _tire_pressure_metric("fr", "31d1")
+# The verified RF Hub slot order is RR then RL for slots 3 and 4.
+TIRE_PRESSURE_RR = _tire_pressure_metric("rr", "31d2")
+TIRE_PRESSURE_RL = _tire_pressure_metric("rl", "31d3")
+
+
 def _raw_cluster_metric(did: str, unit: str, maximum: int) -> MetricDefinition:
     return MetricDefinition(
         name=f"diagnostics.cluster.did.{did}.raw",
@@ -367,6 +407,10 @@ METRICS = {
         TARGET_CRANKSHAFT_TORQUE,
         TRANSMISSION_OUTPUT_SPEED,
         TRANSMISSION_TURBINE_SPEED,
+        TIRE_PRESSURE_FL,
+        TIRE_PRESSURE_FR,
+        TIRE_PRESSURE_RR,
+        TIRE_PRESSURE_RL,
         CLUSTER_DID_1000_RAW,
         CLUSTER_DID_1002_RAW,
         CLUSTER_DID_0107_RAW,
