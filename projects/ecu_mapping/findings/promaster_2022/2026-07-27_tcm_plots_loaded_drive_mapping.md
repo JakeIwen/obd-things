@@ -23,9 +23,14 @@ decode rather than a registered telemetry source. Target torque is a commanded
 TCM quantity, not measured engine output, and must not be labeled as actual
 torque or used to claim measured horsepower.
 
-`0x417` bytes 2–3 remains the leading gearbox-oil-temperature broadcast
-candidate. Its limited 35–43 °C excitation is not enough for telemetry
-promotion.
+This development leg originally made `0x417` bytes 2–3 the leading
+gearbox-oil-temperature candidate. Subsequent independent whole-drive evidence
+has superseded that interpretation: two blind legs failed to reproduce the oil
+association or scaling, and the second also failed to reproduce the first
+blind leg's stronger chip-temperature covariance. `0x417` is not a
+temperature telemetry source. The development observations below are retained
+as provenance for that rejection; the current conclusion is in the
+[`2026-07-28 packed-field benchmark`](2026-07-28_signal_field_engine_benchmark.md).
 
 ## Conditions and safety
 
@@ -208,5 +213,6 @@ from TCU chip temperature and confirms the offset.
   non-unit slope and large offset. The related DBC uses a different CAN ID and
   does not override exact-vehicle evidence; `0x0FC` torque remains unresolved.
 - `0301` TCU chip temperature and `04FE` gearbox oil temperature rose
-  together; only the bounded `0x417` oil-temperature candidate above is
-  retained.
+  together; this leg therefore retained a bounded `0x417` oil-temperature
+  candidate at the time. Independent blind evidence later rejected it, as
+  noted above.

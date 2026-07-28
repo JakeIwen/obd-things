@@ -460,8 +460,8 @@
         "maximum_staleness_ms": 100
       },
       "expectation": {
-        "kind": "pending",
-        "reason": "Second blind thermal leg; requires exact wire extraction and approved five-chunk compute tasks."
+        "kind": "proxy_challenge",
+        "reason": "Second blind result rejects the provisional 0x417 oil association; retained as non-asserting evidence because no pass/fail threshold was frozen before analysis."
       }
     },
     {
@@ -484,8 +484,8 @@
         "maximum_staleness_ms": 100
       },
       "expectation": {
-        "kind": "pending",
-        "reason": "Paired comparator for the second blind thermal leg."
+        "kind": "proxy_challenge",
+        "reason": "Second blind comparator also fails to reproduce a stable 0x417 chip-temperature association; retained as non-asserting evidence because no pass/fail threshold was frozen before analysis."
       }
     },
     {

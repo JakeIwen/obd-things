@@ -802,14 +802,28 @@ reference as identity. Exact extraction found no usable TCM exchanges in the
 continuation leg, but recovered 24,166 exchanges from the 72-minute blind leg
 and 17,870 from the 45-minute blind leg. The first blind comparison rejects
 the former `0x417` gearbox-oil identity and instead retains only a
-candidate-only chip-temperature association. The second leg's completed oil
-half independently repeats the rejection; its chip comparator remains queued
-for compute.
+candidate-only chip-temperature association. The second leg independently
+rejects both interpretations: its oil fit falls to R² 0.44824, while the chip
+comparator reaches only R² 0.55372 at rank 27 with materially different affine
+scaling. `0x417` remains an unresolved thermal/state field, not a temperature
+telemetry source.
+
+The same 72-minute blind leg independently recovered all three established TCM
+controls: vehicle speed `0x101 u12be@0`, turbine speed `0x1F7 u16be@39`, and
+target crankshaft torque `0x100 u11be@31` each passed the tracked rank,
+coverage, and R² gates. The provenance-bound aggregate now passes seven
+known-field cases across development, validation, and blind splits. This
+confirms that the temperature rejection is not an analyzer failure.
 
 The older torque motivation is superseded: `0x100` bytes 3–4 is TCM target
 crankshaft torque from DID `101B`, and `0x0F0` is maximum engine torque
 requested by the transmission from `101F`. Actual torque `1018`, converter
-slip `0500`, and a passive gearbox-oil temperature remain unresolved.
+slip `0500`, and a passive gearbox-oil temperature remain unresolved. The
+frozen regime analysis now covers all five operating states on 2,014 blind
+`1018` samples and rejects `0x100`, `0x1F4`, and `0x0FC` as a universal
+actual-torque identity. The paired `101A` torque-without-TCU-requests pass
+also rejects `0x100` as that stage. Measured horsepower remains intentionally
+unavailable.
 
 `tools/can_timeseries_correlate.py` performs the offline broadcast-candidate
 search against one exact-positive module DID. It streams saved plain or zstd
@@ -1148,10 +1162,11 @@ verify the `/4` rpm scale or authorize public telemetry promotion.
    torque. It also resolved `0x101` to `/16 km/h` and `0x0EE` to `/128 km/h`.
    Two independent blind drives have now rejected `0x417` bytes2–3 as
    gearbox-oil temperature: its prior scale did not transfer, its fit to
-   `04FE` collapsed, and the first blind leg tracked `0301` materially better.
-   Retain `0x417` only as an unresolved thermal/state carrier with a
-   candidate-only TCU-chip association. Do not repeat the idle campaign merely
-   to rediscover those DIDs. The separate scalar tool remains an offline pin-validation scaffold and
+   `04FE` collapsed, and the first blind leg's stronger `0301` covariance did
+   not reproduce on the second. Retain `0x417` only as an unresolved
+   thermal/state field with no verified temperature identity. Do not repeat
+   the idle campaign merely to rediscover those DIDs. The separate scalar tool
+   remains an offline pin-validation scaffold and
    its `run` path is intentionally disabled; use it only after implementing and reviewing a genuine
    one-at-a-time need. Also use
    passenger-door plus parking-brake discriminators to refine the passive and BCM candidates.

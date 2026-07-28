@@ -58,7 +58,8 @@ rejects combinations that could exceed the runtime state cap.
 
 ## Known-field benchmark results
 
-All four completed known-field cases passed their tracked gates:
+All four development known-field cases and all three available blind
+known-field cases passed their tracked gates:
 
 | reference | expected passive field | rank | coverage | R² | result |
 |---|---|---:|---:|---:|---|
@@ -66,11 +67,14 @@ All four completed known-field cases passed their tracked gates:
 | TCM `F40D` vehicle speed | `0x101`, DLC 8, `u12be@0` | 5 | 1.000 | 0.9993328750 | pass |
 | TCM `2102` turbine speed | `0x1F7`, DLC 8, `u16be@39` | 5 | 1.000 | 0.9999805746 | pass |
 | TCM `101B` target crankshaft torque | `0x100`, DLC 8, `u11be@31` | 2 | 1.000 | 0.9995522578 | pass |
+| blind-72 TCM `F40D` vehicle speed | `0x101`, DLC 8, `u12be@0` | 3 | 1.000 | 0.9999292408 | pass |
+| blind-72 TCM `2102` turbine speed | `0x1F7`, DLC 8, `u16be@39` | 4 | 1.000 | 0.9999670457 | pass |
+| blind-72 TCM `101B` target crankshaft torque | `0x100`, DLC 8, `u11be@31` | 2 | 0.998510 | 0.9995062643 | pass |
 
-The provenance-bound evaluator re-read all four reports with their matching
-successful compute manifests and passed all four. Its gitignored aggregate is
-`tmp/ecu_mapping/signal_field_benchmark_known_evaluation.json`, SHA-256
-`80b3ed3142cded137eb9fbe2e94713d0dbd59ca5c80958d174b116fb0787cb84`.
+The provenance-bound evaluator re-read all seven reports with their matching
+successful compute manifests and passed all seven. Its gitignored aggregate is
+`tmp/ecu_mapping/signal_field_benchmark_known_evaluation_7case.json`, SHA-256
+`24e90703e33456246385befc69177f6920bf75701cf189f1d46d033dd369ab7c`.
 The aggregate remains `benchmark_complete: false` because unresolved and
 holdout cases are deliberately still present.
 
@@ -128,7 +132,7 @@ the former `raw / 64 - 2 °C` physical decode across legs. Therefore:
 
 - the `0x417` gearbox-oil identity and scale are rejected by current
   independent evidence;
-- `0x417` remains only a TCU-chip-correlated thermal/state candidate;
+- `0x417` remains only an unresolved thermal/state field;
 - no transmission-temperature telemetry field is promoted;
 - the next search should look beyond `0x417` for a true `04FE` carrier.
 
@@ -137,8 +141,21 @@ The second blind leg independently contains 17,870 complete TCM exchanges
 the rejection: the exact bytes2–3 view ranked 32 with R² 0.44824, a negative
 affine slope, and full coverage across DID raw 109–118. Its overall maximum
 again came from unrelated `0x1F7` covariance (R² 0.86800). The paired `0301`
-comparator remains the replication test and was not folded into either oil
-result.
+comparator also fails to reproduce the first blind association: `u16be@23`
+ranked 27 with R² 0.55372 and full coverage across DID raw 93–106. Its affine
+model, `DID_raw = 0.00596332 × candidate_raw + 84.3614` with 2.585 raw-count
+RMSE, differs materially from the first blind leg's slope and intercept. The
+overall maximum was only R² 0.64944 on unrelated `0x0EE` byte 5. Thus the
+provisional chip-temperature association is rejected alongside the oil
+identity; this field is not a defensible temperature telemetry source.
+
+Both second-blind thermal cases are now `proxy_challenge`, not `pending`.
+That classification records completed non-asserting evidence; it does not
+retroactively invent a pass/fail threshold after seeing the result. The
+benchmark evaluator deliberately counts only evaluable positive, negative, or
+carrier expectations, so these thermal conclusions remain in the
+provenance-backed comparison above rather than appearing as artificial
+benchmark passes.
 
 Intersecting the reported top 100 candidates across the development leg and
 both blind oil reports leaves only overlapping `0x1F7` shaft-speed families.
@@ -191,6 +208,83 @@ Phase-3 evidence is the continuation and blind driving legs, followed by the
 same regime view of `101A`, `101B`, and `101F` if their exact wire samples are
 present.
 
+### Independent 72-minute blind regime leg
+
+The frozen classifier was applied unchanged to 2,014 exact TCM `1018` samples.
+Unlike the development leg, every intended driving regime had enough samples:
+
+| regime | samples |
+|---|---:|
+| idle | 290 |
+| positive pull | 206 |
+| steady cruise | 235 |
+| lift transition | 418 |
+| negative overrun | 157 |
+| other | 705 |
+| missing classifier input | 2 |
+| insufficient history | 1 |
+
+The global ranking again reflects covariance, not identity: `0x0FC` led at R²
+0.98420, request-related `0x1F4` followed at R² 0.98411, and the plausible
+`0x100` packed torque field reached R² 0.95574.
+
+If `0x100` were the same actual crankshaft torque as `1018`, their documented
+physical scales would imply a stable raw relationship close to
+`DID_raw = 0.125 × candidate_raw - 12`. Instead, the exact packed field changed
+substantially by regime:
+
+| regime | R² | slope | intercept | raw RMSE |
+|---|---:|---:|---:|---:|
+| idle | 0.94530 | 0.12190 | 10.03 | 3.96 |
+| positive pull | 0.90391 | 0.11362 | 55.67 | 14.66 |
+| steady cruise | 0.98806 | 0.12419 | -0.87 | 8.55 |
+| lift transition | 0.88992 | 0.12220 | 10.73 | 23.60 |
+| negative overrun | 0.63031 | 0.21954 | -387.18 | 13.53 |
+
+The strong cruise slice is therefore a mode-specific near-match, not a
+universal identity. The leading field family itself also changes: `0x0FC`
+leads idle/lift, a different `0x100` byte view leads positive pull, the expected
+`0x100` packed field leads cruise, and another `0x100` view leads overrun. This
+independent counterexample rejects all three shortlisted families as a safe
+actual-torque telemetry source. Actual measured torque and derived horsepower
+remain unavailable.
+
+The evidence-led `101A` comparator then tested the specific alternative that
+`0x100` might be Alfa's “Crankshaft Torque, without TCU Torque Requests.”
+Across 2,014 exact samples, the packed field reached global R² 0.96251 but
+again failed the stable physical relationship: idle
+`0.12830 / -16.72`, pull `0.11361 / +56.16`, cruise
+`0.12477 / -4.74`, lift `0.12610 / -4.90`, and overrun
+`0.19772 / -301.55` for slope/intercept, with overrun R² only 0.58459.
+`0x1F4` ranked higher globally (R² 0.98514), but its independently sourced
+request semantics and incompatible physical slope prevent relabeling it as
+`101A`. Thus `0x100` is neither TCM `1018` actual torque nor `101A` torque
+without TCU requests. The already-established `101B` target torque and `101F`
+maximum request live in different passive fields, so repeating their known
+identities as regime searches would not resolve `0x100`.
+
+## Concrete utility gained
+
+Applying the implementation to existing evidence produced no speculative new
+dashboard metric. It produced four concrete project gains instead:
+
+1. Three established TCM mappings—vehicle speed, turbine speed, and target
+   torque—now pass independent blind whole-leg recovery, and all seven current
+   provenance-bound known-field cases pass.
+2. `0x417` is removed from consideration as both gearbox-oil temperature and
+   the provisional chip-temperature alternative, preventing a wrong
+   transmission-temperature gauge.
+3. `0x100` is now explicitly ruled out as both `1018` actual torque and `101A`
+   torque without TCU requests across every operating regime, preventing
+   misleading torque/horsepower telemetry.
+4. Every accepted benchmark result is byte-bound to its compute manifest and
+   exact input hashes; older reports lacking the new staleness/provenance
+   fields are excluded until rerun rather than silently grandfathered.
+
+The immediate utility is therefore higher confidence in three existing
+transmission signals and two avoided false mappings. True gearbox-oil
+temperature and measured engine torque remain the next discovery targets.
+
 ## Compute execution note
 
 An initial burst of six concurrent remote jobs caused four correlations to
@@ -221,11 +315,21 @@ independent capacity for these searches. Placement should enforce a
 per-physical-host concurrency limit rather than relying on callers to avoid
 back-to-back submissions.
 
+After the compute-service lease/heartbeat update, four serial blind jobs
+(turbine, target torque, actual-torque regimes, and the `101A` comparator)
+completed remotely on their first attempts in roughly seven minutes each, all
+beyond the former five-minute failure boundary. No lease expiry or retry
+occurred. This verifies the updated service path for the current workload
+while retaining serial submission as the conservative physical-host memory
+policy.
+
 The current full suite reports 701 passed, 3 skipped, and 181 subtests passed.
 Its only two failures are the pre-existing dashboard/broker vehicle-state
 freshness expectations, unrelated to these changes. The four directly affected
 signal-field/benchmark/correlator suites pass 70 tests, 7 subtests, with 3
-optional cantools tests skipped.
+optional cantools tests skipped. A final compute-service spot check against the
+current tree passed 61 selected tests and 7 subtests, with 3 optional cantools
+tests skipped.
 
 ## Result artifact integrity
 
@@ -247,3 +351,9 @@ SHA-256 values needed to locate and verify this analysis are:
 | blind-72 TCU-chip comparator | `20260728T095033Z-dc5e6751` | `5b85dcad83908e56cf3ebdcc223722cf2780cd94ace1fdfb5400abfcecccab1e` |
 | blind-45 exact TCM wire extraction | `20260728T095920Z-cc006418` | wire `bbccf2407c416d84a80016461f1f0c9412d0cbae0af0fdba91c78f82b1081890` |
 | blind-45 gearbox-oil challenge | `20260728T101953Z-3b2127f1` | `e1f85928124640f134dc9b16794e5d74172da225be353545db4f75e8ec67939f` |
+| blind-45 TCU-chip comparator | `20260728T103322Z-56eda131` | `93e52a7391cf62ad2fb576d1bf273fef9d2b8d1862532a36e4d935d557790360` |
+| blind-72 vehicle-speed known field | `20260728T103639Z-5d558ba1` | `3658963188088f05d0d10cdb1f8d89c8fe9db7b5c517e4ee4d4fbc5aafd3e8a8` |
+| blind-72 turbine-speed known field | `20260728T183723Z-c8ab6a1a` | `6b20ea9a9c092f3200bbd96cb99cff347cc728844e0bf8bea03e84e9e0589d7b` |
+| blind-72 target-torque known field | `20260728T184509Z-f04d4426` | `0f9ed1871feb6c3470d8e8842d66c63b10ae0065b18b49ac4ff6ca78b14d7e82` |
+| blind-72 actual-torque regime slice | `20260728T185251Z-2bfd58d2` | `8a0e27e793f009c3c777aaa5e4a0edea3cabd18f68998f7c45629f24a4e506ac` |
+| blind-72 torque-without-requests comparator | `20260728T190125Z-9224ce5b` | `cca57b8c5b291b3d2f137d9a8e3297c5f35070e4ba8b5ce6741341ca0d33b835` |
