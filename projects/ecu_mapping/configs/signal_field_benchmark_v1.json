@@ -174,6 +174,16 @@
       "path_hint": "tmp/captures/ccan/drive-correlation/pcm-plots-drive-20260728T050250Z/chunk_000004_full.candump.zst",
       "kind": "candump_zstd",
       "sha256": "f5b5fccee7d55ba98090079460ea11dbcafc0311c381bd8a6b7c9a8132834f8c"
+    },
+    "tcm_blind72_wire": {
+      "path_hint": "tmp/compute/done/20260728T093549Z-6d42dac8/result/tcm_wire.jsonl",
+      "kind": "wire_jsonl",
+      "sha256": "8c6013236851962ae972d66012fc10fac5ed51d47021d9d6d9721f2121cbe7be"
+    },
+    "tcm_blind45_wire": {
+      "path_hint": "tmp/compute/done/20260728T095920Z-cc006418/result/tcm_wire.jsonl",
+      "kind": "wire_jsonl",
+      "sha256": "bbccf2407c416d84a80016461f1f0c9412d0cbae0af0fdba91c78f82b1081890"
     }
   },
   "datasets": {
@@ -205,11 +215,11 @@
       "bus": "c-can",
       "split": "validation",
       "independent_drive_leg": true,
-      "compute_status": "blocked_pending_exact_wire_and_approved_five_chunk_tasks",
-      "compute_task": null
+      "compute_status": "unusable_no_exact_tcm_wire_exchanges",
+      "compute_task": "can-timeseries-correlate-tcm"
     },
     "tcm_blind_72min": {
-      "wire": null,
+      "wire": "tcm_blind72_wire",
       "captures": [
         "tcm_blind72_chunk0",
         "tcm_blind72_chunk1",
@@ -224,11 +234,11 @@
       "bus": "c-can",
       "split": "blind_test",
       "independent_drive_leg": true,
-      "compute_status": "blocked_pending_exact_wire_and_approved_eight_chunk_tasks",
-      "compute_task": null
+      "compute_status": "ready",
+      "compute_task": "can-timeseries-correlate-tcm"
     },
     "tcm_blind_45min": {
-      "wire": null,
+      "wire": "tcm_blind45_wire",
       "captures": [
         "tcm_blind45_chunk0",
         "tcm_blind45_chunk1",
@@ -240,8 +250,8 @@
       "bus": "c-can",
       "split": "blind_test",
       "independent_drive_leg": true,
-      "compute_status": "blocked_pending_exact_wire_and_approved_five_chunk_tasks",
-      "compute_task": null
+      "compute_status": "ready",
+      "compute_task": "can-timeseries-correlate-tcm"
     },
     "cluster_idle": {
       "wire": "cluster_idle_wire",
@@ -355,7 +365,7 @@
       },
       "expectation": {
         "kind": "pending",
-        "reason": "Requires exact TCM wire extraction and an approved five-chunk compute task."
+        "reason": "Exact extraction found no physical TCM request/response exchanges in this drive leg."
       }
     },
     {
@@ -379,7 +389,7 @@
       },
       "expectation": {
         "kind": "pending",
-        "reason": "Paired comparator requires exact wire extraction and an approved five-chunk compute task."
+        "reason": "Exact extraction found no physical TCM request/response exchanges in this drive leg."
       }
     },
     {
@@ -402,8 +412,8 @@
         "maximum_staleness_ms": 100
       },
       "expectation": {
-        "kind": "pending",
-        "reason": "Highest-priority blind thermal leg; requires exact wire extraction and approved eight-chunk compute tasks."
+        "kind": "proxy_challenge",
+        "reason": "Independent result rejects the development-leg 0x417 gearbox-oil hypothesis; retained as a non-asserting result because its threshold was not frozen before this blind run."
       }
     },
     {
@@ -426,8 +436,8 @@
         "maximum_staleness_ms": 100
       },
       "expectation": {
-        "kind": "pending",
-        "reason": "Paired comparator for the highest-priority blind thermal leg."
+        "kind": "proxy_challenge",
+        "reason": "Independent comparator tracks 0301 materially better than 04FE, but does not yet establish stable physical scaling or semantic identity."
       }
     },
     {
@@ -834,6 +844,120 @@
       "expectation": {
         "kind": "no_defensible_match",
         "maximum_r_squared": 0.5
+      }
+    },
+    {
+      "id": "tcm_blind72_vehicle_speed",
+      "hypothesis": "vehicle_speed_101",
+      "dataset": "tcm_blind_72min",
+      "reference": {
+        "did": "F40D",
+        "field": "byte:0"
+      },
+      "search": {
+        "bit_search_ids": [
+          "sff:101:8"
+        ],
+        "lengths": [
+          12
+        ],
+        "byte_order": "big",
+        "signedness": "unsigned",
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "verified_positive",
+        "stream": {
+          "channel": "can0",
+          "can_id": "101",
+          "id_bits": 11,
+          "dlc": 8
+        },
+        "field": {
+          "dbc_start_bit": 0,
+          "length_bits": 12,
+          "byte_order": "big",
+          "signed": false
+        },
+        "maximum_rank": 20,
+        "minimum_coverage": 0.9,
+        "minimum_r_squared": 0.998
+      }
+    },
+    {
+      "id": "tcm_blind72_turbine_speed",
+      "hypothesis": "turbine_speed_1f7",
+      "dataset": "tcm_blind_72min",
+      "reference": {
+        "did": "2102",
+        "field": "u16be:0"
+      },
+      "search": {
+        "bit_search_ids": [
+          "sff:1F7:8"
+        ],
+        "lengths": [
+          16
+        ],
+        "byte_order": "big",
+        "signedness": "unsigned",
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "verified_positive",
+        "stream": {
+          "channel": "can0",
+          "can_id": "1F7",
+          "id_bits": 11,
+          "dlc": 8
+        },
+        "field": {
+          "dbc_start_bit": 39,
+          "length_bits": 16,
+          "byte_order": "big",
+          "signed": false
+        },
+        "maximum_rank": 20,
+        "minimum_coverage": 0.9,
+        "minimum_r_squared": 0.999
+      }
+    },
+    {
+      "id": "tcm_blind72_target_torque",
+      "hypothesis": "tcm_target_crankshaft_torque_100",
+      "dataset": "tcm_blind_72min",
+      "reference": {
+        "did": "101B",
+        "field": "u16be:0"
+      },
+      "search": {
+        "bit_search_ids": [
+          "sff:100:8"
+        ],
+        "lengths": [
+          11
+        ],
+        "byte_order": "big",
+        "signedness": "unsigned",
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "verified_positive",
+        "stream": {
+          "channel": "can0",
+          "can_id": "100",
+          "id_bits": 11,
+          "dlc": 8
+        },
+        "field": {
+          "dbc_start_bit": 31,
+          "length_bits": 11,
+          "byte_order": "big",
+          "signed": false
+        },
+        "maximum_rank": 20,
+        "minimum_coverage": 0.9,
+        "minimum_r_squared": 0.999
       }
     },
     {

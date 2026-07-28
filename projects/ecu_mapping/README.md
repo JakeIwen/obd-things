@@ -798,8 +798,13 @@ The tracked whole-leg benchmark starts with the original TCM development leg,
 the continuation validation leg, and the newer 72- and 45-minute blind legs.
 It pairs `04FE` gearbox oil and `0301` TCU-chip temperature against `0x417`
 bytes 2–3 on every leg rather than treating warm-up covariance with either
-reference as identity. The latter three legs still require exact wire
-extraction on compute before evaluation.
+reference as identity. Exact extraction found no usable TCM exchanges in the
+continuation leg, but recovered 24,166 exchanges from the 72-minute blind leg
+and 17,870 from the 45-minute blind leg. The first blind comparison rejects
+the former `0x417` gearbox-oil identity and instead retains only a
+candidate-only chip-temperature association. The second leg's completed oil
+half independently repeats the rejection; its chip comparator remains queued
+for compute.
 
 The older torque motivation is superseded: `0x100` bytes 3–4 is TCM target
 crankshaft torque from DID `101B`, and `0x0F0` is maximum engine torque
@@ -947,14 +952,14 @@ empty-set pass; a null maximum alongside reported candidates is invalid. The
 tool writes only candidate-only aggregate results below `tmp/` and never runs
 the heavy correlation itself.
 
-The manifest currently contains 21 positive, negative, carrier-only, proxy,
+The manifest currently contains 24 positive, negative, carrier-only, proxy,
 and pending cases, including paired `04FE`/`0301` temperature challenges and
-the coarse `1018` Phase-3 gate. Existing compute tasks cover the
-argument-enabled PCM/TCM two-/four-chunk legs. The cluster two-chunk task fixes
-its original coarse DID-1000 search and cannot express the packed RPM
-benchmark. The continuation and newer blind legs need approved
-five-/eight-chunk wire-extraction and correlation tasks before they can run.
-Do not change `.van-compute.json` for that expansion without owner approval.
+the coarse `1018` Phase-3 gate. Existing fixed tasks still cover the original
+PCM/TCM two-/four-chunk legs. Owner-approved bounded variadic tasks now accept
+one exact wire stream plus 1–16 chronological capture chunks, which covers the
+new blind legs without a task per capture count. The cluster two-chunk task
+still fixes its original coarse DID-1000 search and cannot express the packed
+RPM benchmark.
 
 This tool performs no CAN, ADB, service, or network access. Its ranked rows are deliberately marked
 `candidate_only`, `physical_identity_verified: false`, `scale_verified: false`, and
@@ -1141,10 +1146,12 @@ verify the `/4` rpm scale or authorize public telemetry promotion.
    completed the 12-gauge label/DID join and promoted passive vehicle speed,
    turbine speed, output-shaft speed, and explicitly labeled TCM target crank
    torque. It also resolved `0x101` to `/16 km/h` and `0x0EE` to `/128 km/h`.
-   `0x417` bytes2–3 is the leading gearbox-oil-temperature candidate, but its
-   35–43 °C range cannot yet discriminate the oil and TCU thermal traces well
-   enough for telemetry. Do not repeat the idle campaign merely to
-   rediscover those DIDs. The separate scalar tool remains an offline pin-validation scaffold and
+   Two independent blind drives have now rejected `0x417` bytes2–3 as
+   gearbox-oil temperature: its prior scale did not transfer, its fit to
+   `04FE` collapsed, and the first blind leg tracked `0301` materially better.
+   Retain `0x417` only as an unresolved thermal/state carrier with a
+   candidate-only TCU-chip association. Do not repeat the idle campaign merely
+   to rediscover those DIDs. The separate scalar tool remains an offline pin-validation scaffold and
    its `run` path is intentionally disabled; use it only after implementing and reviewing a genuine
    one-at-a-time need. Also use
    passenger-door plus parking-brake discriminators to refine the passive and BCM candidates.
@@ -1166,10 +1173,12 @@ verify the `/4` rpm scale or authorize public telemetry promotion.
    This is a dry run unless `--execute --confirm-parked` is added. The ZF9HP
    catalog inventory and first loaded scalar campaign are complete; do not
    rerun the broad 56-row inventory. At the next fully parked opportunity,
-   restart the same owner-priority 12-gauge Plots scan and retain a much wider
-   cold-to-warm range for `04FE` gearbox-oil temperature versus `0301` TCU
-   chip temperature. Converter slip and actual measured crank torque remain
-   unresolved passive targets. The saved `ZF9HP.dat` remains
+   keep the same owner-priority 12-gauge Plots set active so any new C-CAN
+   captures retain exact `04FE` and `0301` references. Search for a different
+   passive carrier for true gearbox-oil temperature; do not revive the old
+   `0x417` scale without contradictory independent evidence. Converter slip
+   and actual measured crank torque remain unresolved passive targets. The
+   saved `ZF9HP.dat` remains
    unlabeled/untimestamped and is not a substitute for the fresh joined trace.
 6. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps
    (`../../docs/bus-map.md`, `../../lib/modules.py`, project DID maps) per the maintenance rule.

@@ -67,16 +67,27 @@ All four completed known-field cases passed their tracked gates:
 | TCM `2102` turbine speed | `0x1F7`, DLC 8, `u16be@39` | 5 | 1.000 | 0.9999805746 | pass |
 | TCM `101B` target crankshaft torque | `0x100`, DLC 8, `u11be@31` | 2 | 1.000 | 0.9995522578 | pass |
 
+The provenance-bound evaluator re-read all four reports with their matching
+successful compute manifests and passed all four. Its gitignored aggregate is
+`tmp/ecu_mapping/signal_field_benchmark_known_evaluation.json`, SHA-256
+`80b3ed3142cded137eb9fbe2e94713d0dbd59ca5c80958d174b116fb0787cb84`.
+The aggregate remains `benchmark_complete: false` because unresolved and
+holdout cases are deliberately still present.
+
 The vehicle-speed result also illustrates why rank alone is not geometry
 proof: shifted 12-bit views ranked slightly higher during this limited range,
 while the established `u12be@0` field retained the expected approximately
 `1/16` raw slope. The exact target-torque geometry had an approximately
 unit-scale slope (`1.010612`) to the TCM DID raw value.
 
-The benchmark is intentionally incomplete. The cluster two-chunk task fixes
-its older coarse DID-1000 invocation and cannot express the packed RPM case.
-The validation continuation and 72-/45-minute blind legs also lack extracted
-exact TCM wire artifacts and approved five-/eight-chunk compute tasks.
+The benchmark remains intentionally incomplete. The cluster two-chunk task
+fixes its older coarse DID-1000 invocation and cannot express the packed RPM
+case. Owner-approved bounded variadic compute tasks now cover one exact wire
+stream plus 1–16 chronological capture chunks. Exact extraction found no TCM
+requests/responses in the nominal continuation leg, so that leg is unusable
+for TCM validation rather than silently treated as an empty holdout. The
+72- and 45-minute blind legs contain valid exact TCM wire streams; the first
+has completed its paired thermal comparison and the second is pending compute.
 
 ## Transmission-temperature challenge
 
@@ -94,6 +105,49 @@ formula. Both temperatures warm together. The correct conclusion is not that
 `0x417` is chip temperature; it is that the development evidence cannot
 identify `0x417` as gearbox oil. The tracked benchmark now pairs `04FE` and
 `0301` on every planned leg, and `0x417` remains unpromoted.
+
+### Independent 72-minute blind leg
+
+Exact wire extraction recovered 24,166 complete positive TCM responses
+(48,332 request/response rows), including 2,013 samples each for `04FE` and
+`0301`. No Alfa CSV interpolation or sample-held timing was used.
+
+The independent result resolves the development ambiguity in one direction:
+
+| diagnostic reference | raw range | `0x417` bytes2–3 result | R² |
+|---|---:|---|---:|
+| `04FE` gearbox oil | 112–122 | established `u16be@23` view absent from the reported top 100; best eligible `0x417` 16-bit family only | 0.63891 |
+| `0301` TCU chip | 97–118 | `u16be@23`, rank 6, 0.99901 coverage | 0.89384 |
+
+The oil report's overall maximum eligible R² was 0.88619 on unrelated
+`0x1F7` bytes3–4, a warm-up/time covariance that is not an oil-temperature
+identity. For the chip comparison, the bytes2–3 affine model was
+`DID_raw = 0.0141676 × candidate_raw + 68.6539` with 2.071 raw-count RMSE.
+That is materially stronger than the oil association, but it does not preserve
+the former `raw / 64 - 2 °C` physical decode across legs. Therefore:
+
+- the `0x417` gearbox-oil identity and scale are rejected by current
+  independent evidence;
+- `0x417` remains only a TCU-chip-correlated thermal/state candidate;
+- no transmission-temperature telemetry field is promoted;
+- the next search should look beyond `0x417` for a true `04FE` carrier.
+
+The second blind leg independently contains 17,870 complete TCM exchanges
+(1,489–1,490 samples per selected DID). Its completed `04FE` half strengthens
+the rejection: the exact bytes2–3 view ranked 32 with R² 0.44824, a negative
+affine slope, and full coverage across DID raw 109–118. Its overall maximum
+again came from unrelated `0x1F7` covariance (R² 0.86800). The paired `0301`
+comparator remains the replication test and was not folded into either oil
+result.
+
+Intersecting the reported top 100 candidates across the development leg and
+both blind oil reports leaves only overlapping `0x1F7` shaft-speed families.
+Although their R² stayed roughly 0.83–0.89, their affine intercept shifted by
+about 88 DID raw counts between development and blind data. No other exact
+stream/field survived all three lists. Thus the already-completed coarse
+search contains no defensible replacement gearbox-oil carrier; future
+refinement needs a new evidence-led shortlist rather than a wider search around
+`0x417`.
 
 ## Actual-torque Phase-3 gate and regime result
 
@@ -151,9 +205,27 @@ Full saved-log work remained on `pi_compute`; none was moved to vanpi. Until
 the service update is verified, one concurrent `can-log-batch` job per
 physical host is the conservative scheduling limit.
 
-The repository test job reported 695 passed and 4 skipped. Its only two
-failures were the pre-existing dashboard/broker vehicle-state freshness
-expectations, unrelated to these changes.
+A later local-fallback failure was independently reduced to the broker's child
+process limit: the same bubblewrap command failed at `RLIMIT_NPROC=256` and
+succeeded at 512, while the systemd unit's `TasksMax=128` remained in force.
+A narrow systemd drop-in now starts the broker with `--max-processes 512`.
+This fixes namespace creation without raising the service's actual task-count
+ceiling. Job `20260728T101953Z-3b2127f1` then completed the formerly failing
+five-chunk workload locally in 558 seconds.
+
+Two later jobs were simultaneously claimed by `m4mac.05` and `.06`. Both slot
+heartbeats disappeared before either uploaded a result, and the broker safely
+returned both manifests to the queue at attempt 1. This is useful recovery
+behavior, but it also reconfirms that several logical slots on one Mac are not
+independent capacity for these searches. Placement should enforce a
+per-physical-host concurrency limit rather than relying on callers to avoid
+back-to-back submissions.
+
+The current full suite reports 701 passed, 3 skipped, and 181 subtests passed.
+Its only two failures are the pre-existing dashboard/broker vehicle-state
+freshness expectations, unrelated to these changes. The four directly affected
+signal-field/benchmark/correlator suites pass 70 tests, 7 subtests, with 3
+optional cantools tests skipped.
 
 ## Result artifact integrity
 
@@ -170,3 +242,8 @@ SHA-256 values needed to locate and verify this analysis are:
 | target-torque known field | `20260728T075414Z-ef5f0b76` | `3ae4f55e4159d884fca51bfcc41e6744a750474dd262f1bd616211cd411ba241` |
 | actual-torque regime slice | `20260728T075737Z-316a6aa2` | `2470429d563ed166d1b01677b9f542725c277cc03c788d8a21c813af893df6a8` |
 | turbine-speed known field | `20260728T080135Z-80e5198b` | `0f4416d26cf1404168c962e17a944ad37ae02fd0ce14065b6ba139113075ac03` |
+| blind-72 exact TCM wire extraction | `20260728T093549Z-6d42dac8` | wire `8c6013236851962ae972d66012fc10fac5ed51d47021d9d6d9721f2121cbe7be` |
+| blind-72 gearbox-oil challenge | `20260728T094130Z-e90f3aa1` | `6d6440558b6572f91c9cd2657facc673b60c93c6ceca1c73484ffc3f6f37a9c2` |
+| blind-72 TCU-chip comparator | `20260728T095033Z-dc5e6751` | `5b85dcad83908e56cf3ebdcc223722cf2780cd94ace1fdfb5400abfcecccab1e` |
+| blind-45 exact TCM wire extraction | `20260728T095920Z-cc006418` | wire `bbccf2407c416d84a80016461f1f0c9412d0cbae0af0fdba91c78f82b1081890` |
+| blind-45 gearbox-oil challenge | `20260728T101953Z-3b2127f1` | `e1f85928124640f134dc9b16794e5d74172da225be353545db4f75e8ec67939f` |
