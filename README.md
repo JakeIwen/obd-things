@@ -34,6 +34,7 @@ docs/                      cross-project vehicle reference
 lib/                       GENERIC, module-agnostic plumbing
   uds.py                     ISO-TP socket, UDS request, NRC table, byte decoders, USB-drop recovery
   modules.py                 module registry — SOURCE OF TRUTH for addressing; ADD A MODULE HERE
+  signal_fields.py           dependency-free DBC/cantools Intel/Motorola raw bit geometry
   diagnostic_safety.py       per-SocketCAN-channel lock for guarded active diagnostic tools
   can_operation_state.py     same-boot physical-topology + external-campaign wake inhibits
 live_data/                 GENERIC top-style live-view library (not a standalone CLI)
@@ -51,6 +52,7 @@ tools/                     GENERIC, module-agnostic CLI tools (take a module key
   ccan_inventory_campaign.sh one-command parked baseline, DID-page, or session-compare campaigns
   signal_correlate.py        DID byte-slice <-> signal correlator (lstsq), capture + analyze
   can_timeseries_correlate.py offline cluster-DID <-> passive broadcast candidate correlator
+  can_signal_benchmark.py    whole-drive report benchmark; never runs heavy searches on vanpi
 projects/                  per-target investigations and durable findings
   vehicle_configuration/    BCM/PROXI configuration campaigns and recovery handoffs
   vehicle_data/             allowlisted cached telemetry broker, CLI, and gated dashboard

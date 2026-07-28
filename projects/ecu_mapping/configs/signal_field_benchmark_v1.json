@@ -1,0 +1,869 @@
+{
+  "schema_version": 1,
+  "classification": "offline_candidate_benchmark",
+  "bit_numbering": "dbc_cantools_sawtooth",
+  "relation_convention": "reference_raw = scale * candidate_raw + offset",
+  "sample_split_policy": "whole_independent_drive_legs_only",
+  "artifacts": {
+    "cluster_idle_wire": {
+      "path_hint": "tmp/captures/ccan/cluster-drive/cluster-drive-shakedown-20260726T050955Z/cluster_wire.jsonl",
+      "kind": "wire_jsonl",
+      "sha256": "e61c02ffabc7e84da58587f79e25746eb0dd6033127f645322f8979ceb2ab29b"
+    },
+    "cluster_idle_chunk0": {
+      "path_hint": "tmp/captures/ccan/cluster-drive/cluster-drive-shakedown-20260726T050955Z/chunk_000000_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "d9e854660f3a6d27bdc2eda49ddd3834c5ebc964ec35fe03503693f3ceb90bed"
+    },
+    "cluster_idle_chunk1": {
+      "path_hint": "tmp/captures/ccan/cluster-drive/cluster-drive-shakedown-20260726T050955Z/chunk_000001_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "9663f6f5bfaf1055bfe54f77692a30a0dbfdbcaed2f0e9e1d709b8ba2e7f1c08"
+    },
+    "pcm_idle_wire": {
+      "path_hint": "tmp/sweeps/pcm-plots-idle-20260726T230230Z/pcm_wire.jsonl",
+      "kind": "wire_jsonl",
+      "sha256": "b378b73a770e17e710480ba3f05267fc76f7abe7b01c8dcb22f11aa22fcf44b7"
+    },
+    "pcm_idle_chunk0": {
+      "path_hint": "tmp/compute-inputs/pcm-plots-idle-20260726T230230Z/chunk_000000_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "0a0478f7a9d41ce3eb0dbf285a9a1bfd7df3a8c3347cf304646736d94ed46132"
+    },
+    "pcm_idle_chunk1": {
+      "path_hint": "tmp/compute-inputs/pcm-plots-idle-20260726T230230Z/chunk_000001_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "3e886cd244492c9d410a21e2d7c4598621d934e732721e04aee62c16dd166fe5"
+    },
+    "pcm_loaded_wire": {
+      "path_hint": "tmp/ecu_mapping/pcm-plots-drive-20260727T161307Z/wire/pcm_wire.jsonl",
+      "kind": "wire_jsonl",
+      "sha256": "2db3edbec3e1e1c8bfa89c0e2ac8381a262452a04f364959d8c4886d32b13d3a"
+    },
+    "pcm_loaded_chunk0": {
+      "path_hint": "tmp/ecu_mapping/pcm-plots-drive-20260727T161307Z/input/captures/chunk_000000_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "5757d6b424faca04bdee9c9dc7ac06112a3c77c9ab645e0d11b0b3953f67346f"
+    },
+    "pcm_loaded_chunk1": {
+      "path_hint": "tmp/ecu_mapping/pcm-plots-drive-20260727T161307Z/input/captures/chunk_000001_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "fcb87c7a5747df255cb6cb5c232d4bf5a19ea57de0963a8fa402e9f4fcc706ca"
+    },
+    "pcm_loaded_chunk2": {
+      "path_hint": "tmp/ecu_mapping/pcm-plots-drive-20260727T161307Z/input/captures/chunk_000002_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "d2e1a2a8ff53ecd59be762028c2ddfc651acc4ceed5c187850ffd5730d41b494"
+    },
+    "pcm_loaded_chunk3": {
+      "path_hint": "tmp/ecu_mapping/pcm-plots-drive-20260727T161307Z/input/captures/chunk_000003_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "10a1e98cfb5503e5dcc24dd59130258aac14248e72ae07976bea8ef406a1b26a"
+    },
+    "tcm_development_wire": {
+      "path_hint": "tmp/ecu_mapping/tcm-drive-analysis/tcm_wire.jsonl",
+      "kind": "wire_jsonl",
+      "sha256": "5dad6ee78aadd3dde6aae9e440ad58130d7a89111e0990b716c97e128b340b39"
+    },
+    "tcm_development_chunk0": {
+      "path_hint": "tmp/ecu_mapping/compute-inputs/pcm-plots-drive-20260728T002525Z/chunk_000000_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "27a67424f480020803c810e0a0ae1c2dc05b73da347165d8b7943df719060612"
+    },
+    "tcm_development_chunk1": {
+      "path_hint": "tmp/ecu_mapping/compute-inputs/pcm-plots-drive-20260728T002525Z/chunk_000001_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "aaa7e6a4a21bf958ba954ae6302148b99a5e09b9ec29766bc993d5e77f7c53ac"
+    },
+    "tcm_development_chunk2": {
+      "path_hint": "tmp/ecu_mapping/compute-inputs/pcm-plots-drive-20260728T002525Z/chunk_000002_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "07f90272468415fa250a2d77bf9e4283a6ef0d6540f645956c4eec825027bc8f"
+    },
+    "tcm_development_chunk3": {
+      "path_hint": "tmp/ecu_mapping/compute-inputs/pcm-plots-drive-20260728T002525Z/chunk_000003_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "9725d08fbbc9690c09e76160952a1452bfbffe2eaf0e8144abcbedc81005feaa"
+    },
+    "tcm_validation_chunk0": {
+      "path_hint": "tmp/captures/ccan/drive-correlation/pcm-plots-drive-20260728T020124Z/chunk_000000_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "9b5e6a4f0c9d200b34787e4075061724f6e2e3902e3f3b9bc47733fb56e3255c"
+    },
+    "tcm_validation_chunk1": {
+      "path_hint": "tmp/captures/ccan/drive-correlation/pcm-plots-drive-20260728T020124Z/chunk_000001_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "96312e4eb21ea2901bfad98705fffec82250c2a338c36c4b6a0d0e3eb6f219d0"
+    },
+    "tcm_validation_chunk2": {
+      "path_hint": "tmp/captures/ccan/drive-correlation/pcm-plots-drive-20260728T020124Z/chunk_000002_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "6647d84f69acb30957f6029bee266be748314fed3858956707077bd3c728c690"
+    },
+    "tcm_validation_chunk3": {
+      "path_hint": "tmp/captures/ccan/drive-correlation/pcm-plots-drive-20260728T020124Z/chunk_000003_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "22c4deab529b20ea74363ea1b7f07835fadacbee2e3ba7923623e1bdd6d76c44"
+    },
+    "tcm_validation_chunk4": {
+      "path_hint": "tmp/captures/ccan/drive-correlation/pcm-plots-drive-20260728T020124Z/chunk_000004_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "75264953409c4cfd3fc030d363fc94792ac8a79bf083096fd650d6b492958e62"
+    },
+    "tcm_blind72_chunk0": {
+      "path_hint": "tmp/captures/ccan/drive-correlation/pcm-plots-drive-20260728T031957Z/chunk_000000_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "115a6287b5195487316a01bf9a7d4b322fe7b0dd63fe0cb5c63f5661af6a7504"
+    },
+    "tcm_blind72_chunk1": {
+      "path_hint": "tmp/captures/ccan/drive-correlation/pcm-plots-drive-20260728T031957Z/chunk_000001_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "40cf7fa530d9e2a4e9979a2d0d2d4829efbaedef94de46f0f799b9a2329c0a3c"
+    },
+    "tcm_blind72_chunk2": {
+      "path_hint": "tmp/captures/ccan/drive-correlation/pcm-plots-drive-20260728T031957Z/chunk_000002_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "eb15031bcc3c29f492fd7845a29134b7ea94ae0ab01ee292b31f3ea2f9e56ff4"
+    },
+    "tcm_blind72_chunk3": {
+      "path_hint": "tmp/captures/ccan/drive-correlation/pcm-plots-drive-20260728T031957Z/chunk_000003_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "5b705abef32ab98a7a0be2611e6ec432cf158753c4befa76b918bc939171042b"
+    },
+    "tcm_blind72_chunk4": {
+      "path_hint": "tmp/captures/ccan/drive-correlation/pcm-plots-drive-20260728T031957Z/chunk_000004_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "4c11fea15da5c84d3484f335af967e891070b0ef4800d41fdfa8910ef018ddd1"
+    },
+    "tcm_blind72_chunk5": {
+      "path_hint": "tmp/captures/ccan/drive-correlation/pcm-plots-drive-20260728T031957Z/chunk_000005_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "d77ab1520dea50e01ebc91a950b9f623794491e61b00706ff64a7aa2fc868c82"
+    },
+    "tcm_blind72_chunk6": {
+      "path_hint": "tmp/captures/ccan/drive-correlation/pcm-plots-drive-20260728T031957Z/chunk_000006_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "741bdeacbab11913c6ef60ea7aeee39f8bada72680ed7263eb93b5a93ed94daf"
+    },
+    "tcm_blind72_chunk7": {
+      "path_hint": "tmp/captures/ccan/drive-correlation/pcm-plots-drive-20260728T031957Z/chunk_000007_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "096e6f55507b908635b82254442504c8aafa61299155940cc3a5be7cffb91d01"
+    },
+    "tcm_blind45_chunk0": {
+      "path_hint": "tmp/captures/ccan/drive-correlation/pcm-plots-drive-20260728T050250Z/chunk_000000_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "a40dee16488e1f2ff6a675e3a2f543d04c983a23df2c7f2e6e6a0105a7f827db"
+    },
+    "tcm_blind45_chunk1": {
+      "path_hint": "tmp/captures/ccan/drive-correlation/pcm-plots-drive-20260728T050250Z/chunk_000001_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "90be88bbfaad07cd645a4a8f8af2d45752fc1ee6ef02f0a8b9ed600de554c00f"
+    },
+    "tcm_blind45_chunk2": {
+      "path_hint": "tmp/captures/ccan/drive-correlation/pcm-plots-drive-20260728T050250Z/chunk_000002_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "614c5ef285a2dd6df9158da5cbf30fe7e770aa4633532ac9cb5d1066441d86f9"
+    },
+    "tcm_blind45_chunk3": {
+      "path_hint": "tmp/captures/ccan/drive-correlation/pcm-plots-drive-20260728T050250Z/chunk_000003_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "3e33382e5dfde81816e79ab872b248b48698d16b0b8494d4ac112c664526504c"
+    },
+    "tcm_blind45_chunk4": {
+      "path_hint": "tmp/captures/ccan/drive-correlation/pcm-plots-drive-20260728T050250Z/chunk_000004_full.candump.zst",
+      "kind": "candump_zstd",
+      "sha256": "f5b5fccee7d55ba98090079460ea11dbcafc0311c381bd8a6b7c9a8132834f8c"
+    }
+  },
+  "datasets": {
+    "tcm_development": {
+      "wire": "tcm_development_wire",
+      "captures": [
+        "tcm_development_chunk0",
+        "tcm_development_chunk1",
+        "tcm_development_chunk2",
+        "tcm_development_chunk3"
+      ],
+      "module": "tcm",
+      "bus": "c-can",
+      "split": "development",
+      "independent_drive_leg": true,
+      "compute_status": "ready_with_existing_fixed_task",
+      "compute_task": "can-timeseries-correlate-tcm-four-chunks"
+    },
+    "tcm_validation": {
+      "wire": null,
+      "captures": [
+        "tcm_validation_chunk0",
+        "tcm_validation_chunk1",
+        "tcm_validation_chunk2",
+        "tcm_validation_chunk3",
+        "tcm_validation_chunk4"
+      ],
+      "module": "tcm",
+      "bus": "c-can",
+      "split": "validation",
+      "independent_drive_leg": true,
+      "compute_status": "blocked_pending_exact_wire_and_approved_five_chunk_tasks",
+      "compute_task": null
+    },
+    "tcm_blind_72min": {
+      "wire": null,
+      "captures": [
+        "tcm_blind72_chunk0",
+        "tcm_blind72_chunk1",
+        "tcm_blind72_chunk2",
+        "tcm_blind72_chunk3",
+        "tcm_blind72_chunk4",
+        "tcm_blind72_chunk5",
+        "tcm_blind72_chunk6",
+        "tcm_blind72_chunk7"
+      ],
+      "module": "tcm",
+      "bus": "c-can",
+      "split": "blind_test",
+      "independent_drive_leg": true,
+      "compute_status": "blocked_pending_exact_wire_and_approved_eight_chunk_tasks",
+      "compute_task": null
+    },
+    "tcm_blind_45min": {
+      "wire": null,
+      "captures": [
+        "tcm_blind45_chunk0",
+        "tcm_blind45_chunk1",
+        "tcm_blind45_chunk2",
+        "tcm_blind45_chunk3",
+        "tcm_blind45_chunk4"
+      ],
+      "module": "tcm",
+      "bus": "c-can",
+      "split": "blind_test",
+      "independent_drive_leg": true,
+      "compute_status": "blocked_pending_exact_wire_and_approved_five_chunk_tasks",
+      "compute_task": null
+    },
+    "cluster_idle": {
+      "wire": "cluster_idle_wire",
+      "captures": [
+        "cluster_idle_chunk0",
+        "cluster_idle_chunk1"
+      ],
+      "module": "cluster",
+      "bus": "c-can",
+      "split": "development",
+      "independent_drive_leg": true,
+      "compute_status": "blocked_existing_task_fixes_coarse_did1000_search",
+      "compute_task": null
+    },
+    "pcm_idle": {
+      "wire": "pcm_idle_wire",
+      "captures": [
+        "pcm_idle_chunk0",
+        "pcm_idle_chunk1"
+      ],
+      "module": "pcm",
+      "bus": "c-can",
+      "split": "development",
+      "independent_drive_leg": true,
+      "compute_status": "ready_with_existing_fixed_task",
+      "compute_task": "can-timeseries-correlate-pcm-two-chunks"
+    },
+    "pcm_loaded": {
+      "wire": "pcm_loaded_wire",
+      "captures": [
+        "pcm_loaded_chunk0",
+        "pcm_loaded_chunk1",
+        "pcm_loaded_chunk2",
+        "pcm_loaded_chunk3"
+      ],
+      "module": "pcm",
+      "bus": "c-can",
+      "split": "validation",
+      "independent_drive_leg": true,
+      "compute_status": "ready_with_existing_fixed_task",
+      "compute_task": "can-timeseries-correlate-pcm-four-chunks"
+    }
+  },
+  "cases": [
+    {
+      "id": "tcm_temp_development_04fe",
+      "hypothesis": "gearbox_oil_temperature_417",
+      "dataset": "tcm_development",
+      "reference": {
+        "did": "04FE",
+        "field": "byte:0"
+      },
+      "search": {
+        "bit_search_ids": [
+          "sff:417:8"
+        ],
+        "lengths": [
+          16
+        ],
+        "byte_order": "big",
+        "signedness": "unsigned",
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "proxy_challenge",
+        "reason": "Earlier narrow thermal range could not distinguish 04FE oil from 0301 chip temperature."
+      }
+    },
+    {
+      "id": "tcm_temp_development_0301",
+      "hypothesis": "tcu_chip_temperature_417_comparator",
+      "dataset": "tcm_development",
+      "reference": {
+        "did": "0301",
+        "field": "byte:0"
+      },
+      "search": {
+        "bit_search_ids": [
+          "sff:417:8"
+        ],
+        "lengths": [
+          16
+        ],
+        "byte_order": "big",
+        "signedness": "unsigned",
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "proxy_challenge",
+        "reason": "Paired comparator for 04FE; warm-up covariance alone must not select either semantic identity."
+      }
+    },
+    {
+      "id": "tcm_temp_validation_04fe",
+      "hypothesis": "gearbox_oil_temperature_417",
+      "dataset": "tcm_validation",
+      "reference": {
+        "did": "04FE",
+        "field": "byte:0"
+      },
+      "search": {
+        "bit_search_ids": [
+          "sff:417:8"
+        ],
+        "lengths": [
+          16
+        ],
+        "byte_order": "big",
+        "signedness": "unsigned",
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "pending",
+        "reason": "Requires exact TCM wire extraction and an approved five-chunk compute task."
+      }
+    },
+    {
+      "id": "tcm_temp_validation_0301",
+      "hypothesis": "tcu_chip_temperature_417_comparator",
+      "dataset": "tcm_validation",
+      "reference": {
+        "did": "0301",
+        "field": "byte:0"
+      },
+      "search": {
+        "bit_search_ids": [
+          "sff:417:8"
+        ],
+        "lengths": [
+          16
+        ],
+        "byte_order": "big",
+        "signedness": "unsigned",
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "pending",
+        "reason": "Paired comparator requires exact wire extraction and an approved five-chunk compute task."
+      }
+    },
+    {
+      "id": "tcm_temp_blind72_04fe",
+      "hypothesis": "gearbox_oil_temperature_417",
+      "dataset": "tcm_blind_72min",
+      "reference": {
+        "did": "04FE",
+        "field": "byte:0"
+      },
+      "search": {
+        "bit_search_ids": [
+          "sff:417:8"
+        ],
+        "lengths": [
+          16
+        ],
+        "byte_order": "big",
+        "signedness": "unsigned",
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "pending",
+        "reason": "Highest-priority blind thermal leg; requires exact wire extraction and approved eight-chunk compute tasks."
+      }
+    },
+    {
+      "id": "tcm_temp_blind72_0301",
+      "hypothesis": "tcu_chip_temperature_417_comparator",
+      "dataset": "tcm_blind_72min",
+      "reference": {
+        "did": "0301",
+        "field": "byte:0"
+      },
+      "search": {
+        "bit_search_ids": [
+          "sff:417:8"
+        ],
+        "lengths": [
+          16
+        ],
+        "byte_order": "big",
+        "signedness": "unsigned",
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "pending",
+        "reason": "Paired comparator for the highest-priority blind thermal leg."
+      }
+    },
+    {
+      "id": "tcm_temp_blind45_04fe",
+      "hypothesis": "gearbox_oil_temperature_417",
+      "dataset": "tcm_blind_45min",
+      "reference": {
+        "did": "04FE",
+        "field": "byte:0"
+      },
+      "search": {
+        "bit_search_ids": [
+          "sff:417:8"
+        ],
+        "lengths": [
+          16
+        ],
+        "byte_order": "big",
+        "signedness": "unsigned",
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "pending",
+        "reason": "Second blind thermal leg; requires exact wire extraction and approved five-chunk compute tasks."
+      }
+    },
+    {
+      "id": "tcm_temp_blind45_0301",
+      "hypothesis": "tcu_chip_temperature_417_comparator",
+      "dataset": "tcm_blind_45min",
+      "reference": {
+        "did": "0301",
+        "field": "byte:0"
+      },
+      "search": {
+        "bit_search_ids": [
+          "sff:417:8"
+        ],
+        "lengths": [
+          16
+        ],
+        "byte_order": "big",
+        "signedness": "unsigned",
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "pending",
+        "reason": "Paired comparator for the second blind thermal leg."
+      }
+    },
+    {
+      "id": "cluster_idle_rpm_carrier",
+      "hypothesis": "engine_speed_0fc",
+      "dataset": "cluster_idle",
+      "reference": {
+        "did": "1000",
+        "field": "u16be:0"
+      },
+      "search": {
+        "bit_search_ids": [
+          "sff:0FC:8"
+        ],
+        "lengths": [
+          14
+        ],
+        "byte_order": "big",
+        "signedness": "unsigned",
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "carrier_only",
+        "stream": {
+          "channel": "can0",
+          "can_id": "0FC",
+          "id_bits": 11,
+          "dlc": 8
+        },
+        "field": {
+          "dbc_start_bit": 7,
+          "length_bits": 14,
+          "byte_order": "big",
+          "signed": false
+        },
+        "maximum_rank": 10,
+        "minimum_coverage": 0.99,
+        "minimum_r_squared": 0.99
+      }
+    },
+    {
+      "id": "pcm_idle_oil",
+      "hypothesis": "engine_oil_pressure_41d",
+      "dataset": "pcm_idle",
+      "reference": {
+        "did": "022A",
+        "field": "byte:0"
+      },
+      "search": {
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "verified_positive",
+        "stream": {
+          "channel": "can0",
+          "can_id": "41D",
+          "id_bits": 11,
+          "dlc": 8
+        },
+        "field": {
+          "dbc_start_bit": 16,
+          "length_bits": 8,
+          "byte_order": "little",
+          "signed": false
+        },
+        "maximum_rank": 10,
+        "minimum_coverage": 0.95,
+        "minimum_r_squared": 0.998
+      }
+    },
+    {
+      "id": "pcm_idle_coolant",
+      "hypothesis": "coolant_temperature_2ed",
+      "dataset": "pcm_idle",
+      "reference": {
+        "did": "011D",
+        "field": "byte:0"
+      },
+      "search": {
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "verified_positive",
+        "stream": {
+          "channel": "can0",
+          "can_id": "2ED",
+          "id_bits": 11,
+          "dlc": 8
+        },
+        "field": {
+          "dbc_start_bit": 0,
+          "length_bits": 8,
+          "byte_order": "little",
+          "signed": false
+        },
+        "maximum_rank": 10,
+        "minimum_coverage": 0.95,
+        "minimum_r_squared": 0.998
+      }
+    },
+    {
+      "id": "pcm_loaded_oil",
+      "hypothesis": "engine_oil_pressure_41d",
+      "dataset": "pcm_loaded",
+      "reference": {
+        "did": "022A",
+        "field": "byte:0"
+      },
+      "search": {
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "verified_positive",
+        "stream": {
+          "channel": "can0",
+          "can_id": "41D",
+          "id_bits": 11,
+          "dlc": 8
+        },
+        "field": {
+          "dbc_start_bit": 16,
+          "length_bits": 8,
+          "byte_order": "little",
+          "signed": false
+        },
+        "maximum_rank": 10,
+        "minimum_coverage": 0.95,
+        "minimum_r_squared": 0.998
+      }
+    },
+    {
+      "id": "pcm_loaded_coolant",
+      "hypothesis": "coolant_temperature_2ed",
+      "dataset": "pcm_loaded",
+      "reference": {
+        "did": "011D",
+        "field": "byte:0"
+      },
+      "search": {
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "verified_positive",
+        "stream": {
+          "channel": "can0",
+          "can_id": "2ED",
+          "id_bits": 11,
+          "dlc": 8
+        },
+        "field": {
+          "dbc_start_bit": 0,
+          "length_bits": 8,
+          "byte_order": "little",
+          "signed": false
+        },
+        "maximum_rank": 10,
+        "minimum_coverage": 0.95,
+        "minimum_r_squared": 0.998
+      }
+    },
+    {
+      "id": "pcm_loaded_rpm",
+      "hypothesis": "engine_speed_0fc",
+      "dataset": "pcm_loaded",
+      "reference": {
+        "did": "01D5",
+        "field": "u16be:0"
+      },
+      "search": {
+        "bit_search_ids": [
+          "sff:0FC:8"
+        ],
+        "lengths": [
+          14
+        ],
+        "byte_order": "big",
+        "signedness": "unsigned",
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "verified_positive",
+        "stream": {
+          "channel": "can0",
+          "can_id": "0FC",
+          "id_bits": 11,
+          "dlc": 8
+        },
+        "field": {
+          "dbc_start_bit": 7,
+          "length_bits": 14,
+          "byte_order": "big",
+          "signed": false
+        },
+        "maximum_rank": 10,
+        "minimum_coverage": 0.95,
+        "minimum_r_squared": 0.999
+      }
+    },
+    {
+      "id": "pcm_loaded_generator_negative",
+      "hypothesis": "generator_duty_unresolved",
+      "dataset": "pcm_loaded",
+      "reference": {
+        "did": "01A1",
+        "field": "u16be:0"
+      },
+      "search": {
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "no_defensible_match",
+        "maximum_r_squared": 0.8
+      }
+    },
+    {
+      "id": "pcm_loaded_vvt_oil_negative",
+      "hypothesis": "vvt_oil_temperature_unresolved",
+      "dataset": "pcm_loaded",
+      "reference": {
+        "did": "069F",
+        "field": "byte:0"
+      },
+      "search": {
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "no_defensible_match",
+        "maximum_r_squared": 0.9
+      }
+    },
+    {
+      "id": "tcm_development_vehicle_speed",
+      "hypothesis": "vehicle_speed_101",
+      "dataset": "tcm_development",
+      "reference": {
+        "did": "F40D",
+        "field": "byte:0"
+      },
+      "search": {
+        "bit_search_ids": [
+          "sff:101:8"
+        ],
+        "lengths": [
+          12
+        ],
+        "byte_order": "big",
+        "signedness": "unsigned",
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "verified_positive",
+        "stream": {
+          "channel": "can0",
+          "can_id": "101",
+          "id_bits": 11,
+          "dlc": 8
+        },
+        "field": {
+          "dbc_start_bit": 0,
+          "length_bits": 12,
+          "byte_order": "big",
+          "signed": false
+        },
+        "maximum_rank": 20,
+        "minimum_coverage": 0.9,
+        "minimum_r_squared": 0.998
+      }
+    },
+    {
+      "id": "tcm_development_turbine_speed",
+      "hypothesis": "turbine_speed_1f7",
+      "dataset": "tcm_development",
+      "reference": {
+        "did": "2102",
+        "field": "u16be:0"
+      },
+      "search": {
+        "bit_search_ids": [
+          "sff:1F7:8"
+        ],
+        "lengths": [
+          16
+        ],
+        "byte_order": "big",
+        "signedness": "unsigned",
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "verified_positive",
+        "stream": {
+          "channel": "can0",
+          "can_id": "1F7",
+          "id_bits": 11,
+          "dlc": 8
+        },
+        "field": {
+          "dbc_start_bit": 39,
+          "length_bits": 16,
+          "byte_order": "big",
+          "signed": false
+        },
+        "maximum_rank": 20,
+        "minimum_coverage": 0.9,
+        "minimum_r_squared": 0.999
+      }
+    },
+    {
+      "id": "tcm_development_target_torque",
+      "hypothesis": "tcm_target_crankshaft_torque_100",
+      "dataset": "tcm_development",
+      "reference": {
+        "did": "101B",
+        "field": "u16be:0"
+      },
+      "search": {
+        "bit_search_ids": [
+          "sff:100:8"
+        ],
+        "lengths": [
+          11
+        ],
+        "byte_order": "big",
+        "signedness": "unsigned",
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "verified_positive",
+        "stream": {
+          "channel": "can0",
+          "can_id": "100",
+          "id_bits": 11,
+          "dlc": 8
+        },
+        "field": {
+          "dbc_start_bit": 31,
+          "length_bits": 11,
+          "byte_order": "big",
+          "signed": false
+        },
+        "maximum_rank": 20,
+        "minimum_coverage": 0.9,
+        "minimum_r_squared": 0.999
+      }
+    },
+    {
+      "id": "tcm_development_converter_slip_negative",
+      "hypothesis": "converter_slip_unresolved",
+      "dataset": "tcm_development",
+      "reference": {
+        "did": "0500",
+        "field": "i16be:0"
+      },
+      "search": {
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "no_defensible_match",
+        "maximum_r_squared": 0.5
+      }
+    },
+    {
+      "id": "tcm_development_actual_torque",
+      "hypothesis": "actual_crankshaft_torque_unresolved",
+      "dataset": "tcm_development",
+      "reference": {
+        "did": "1018",
+        "field": "u16be:0"
+      },
+      "search": {
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "proxy_challenge",
+        "reason": "The coarse affine search is the Phase-3 gate; add regime analysis only if no semantically defensible passive identity is recovered."
+      }
+    }
+  ],
+  "privacy": {
+    "serialize_input_payloads": false,
+    "exclude_reference_dids": [
+      "F190"
+    ],
+    "tracked_outputs_may_contain": [
+      "hashes",
+      "aggregate_counts",
+      "module_keys",
+      "dids",
+      "ranked_field_descriptions"
+    ]
+  }
+}

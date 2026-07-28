@@ -9,15 +9,18 @@ rows classified as
 samples.  Saved candump text (plain or ``.zst``) supplies candidate broadcast
 fields.
 
-Every classic-CAN payload contributes byte fields, overlapping unsigned 16-bit
-big- and little-endian fields, the Stellantis low-five-bits-plus-next-byte
-13-bit field, the Stellantis low-bit-plus-next-word 17-bit field, and aligned
-unsigned 32-bit fields in both byte orders. A
-streaming chronological merge matches those fields to each reference sample
-either by the nearest frame or by a mean/min/max statistic in a symmetric time
-window. Online covariance keeps memory independent of capture duration;
-explicit caps bound the remaining time-window, identifier, match-state, field,
-reference, frame, and decompressed-byte state.
+By default, every classic-CAN payload contributes the established 39-field
+DLC-8 coarse profile: bytes, overlapping unsigned 16-bit words, two
+Stellantis packed fields, and aligned unsigned 32-bit words.  An explicit
+``--bit-search-id`` replaces that profile for no more than two shortlisted
+identifiers with bounded 1..32-bit DBC/cantools Intel and Motorola geometries.
+
+A streaming chronological merge matches those fields to each exact
+diagnostic-wire reference either by the nearest frame or by a mean/min/max
+statistic in a symmetric time window. Candidate identity includes channel,
+SFF/EFF namespace, CAN ID, and DLC. Online covariance keeps memory independent
+of capture duration; explicit caps bound the remaining time-window,
+identifier, match-state, field, reference, frame, and decompressed-byte state.
 
 This module never opens CAN, imports ADB, inspects services, or accesses the
 network.  Its only subprocess boundary is :class:`CliZstdDecompressor`, whose
@@ -36,6 +39,7 @@ from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
+from functools import lru_cache
 import hashlib
 import json
 import math
@@ -50,7 +54,14 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from lib.modules import MODULES, Module
+from lib.modules import MODULES, NORMAL_11BITS, Module
+from lib.signal_fields import (
+    BYTE_ORDERS,
+    MAX_SIGNAL_BITS,
+    SignalField,
+    SignalFieldError,
+    iter_signal_fields,
+)
 
 
 TMP_ROOT = REPO / "tmp"
@@ -71,6 +82,10 @@ MAX_HISTORY_FRAMES = 250_000
 MAX_ACTIVE_MATCH_STATES = 100_000
 MAX_ACTIVE_WINDOW_FIELDS = 100_000
 MAX_CANDIDATE_FIELDS = 30_000
+MAX_BIT_SEARCH_IDENTIFIERS = 2
+MAX_BIT_SEARCH_FIELDS_PER_IDENTIFIER = 6_000
+MAX_REGIME_CANDIDATE_STREAMS = 4
+MAX_REGIME_REGRESSIONS = 50_000
 MAX_RADIUS_MS = 10_000
 MAX_TOP_COUNT = 1_000
 # One selected DID is sampled at roughly 1 Hz by cluster_drive_log.py, so this
@@ -97,6 +112,13 @@ _COMPACT_FRAME = re.compile(
 )
 _REFERENCE_FIELD_RE = re.compile(
     r"^(byte|[ui]16be|[ui]16le|[ui]32be|[ui]32le):([0-9]{1,4})$"
+)
+_BIT_REFERENCE_FIELD_RE = re.compile(
+    r"^bits:(little|big):([0-9]{1,3}):([0-9]{1,2}):"
+    r"(unsigned|signed)$"
+)
+_BIT_SEARCH_ID_RE = re.compile(
+    r"^(sff|eff):([0-9A-Fa-f]{1,8}):([1-8])$"
 )
 _VAN_COMPUTE_JOB_ID_RE = re.compile(r"\d{8}T\d{6}Z-[0-9a-f]{8}")
 _VAN_COMPUTE_WIRE_NAME_RE = re.compile(
@@ -133,6 +155,8 @@ class ReferenceSample:
     value: float
     raw_line_sequence: int | None = None
     expected_can_id: int | None = None
+    expected_id_bits: int | None = None
+    expected_channel: str | None = None
     expected_can_data: bytes | None = None
 
     @property
@@ -140,6 +164,8 @@ class ReferenceSample:
         values = (
             self.raw_line_sequence,
             self.expected_can_id,
+            self.expected_id_bits,
+            self.expected_channel,
             self.expected_can_data,
         )
         if all(value is None for value in values):
@@ -156,15 +182,46 @@ class CanFrame:
     id_bits: int
     payload: bytes
     raw_line_sequence: int | None = None
+    channel: str = DEFAULT_MODULE.channel
+
+    @property
+    def dlc(self) -> int:
+        return len(self.payload)
 
 
 @dataclass(frozen=True, order=True)
 class FieldSpec:
     kind: str
     offset: int
+    geometry: SignalField | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.offset, int)
+            or isinstance(self.offset, bool)
+            or self.offset < 0
+        ):
+            raise CorrelateError("field offset must be a non-negative integer")
+        if self.kind == "bitfield":
+            if self.geometry is None:
+                raise CorrelateError("bitfield specification requires geometry")
+            if self.offset != self.geometry.first_payload_byte:
+                raise CorrelateError(
+                    "bitfield offset must equal its first payload byte"
+                )
+        elif self.geometry is not None:
+            raise CorrelateError(
+                "legacy field specification cannot carry bit geometry"
+            )
+
+    @classmethod
+    def from_signal_field(cls, geometry: SignalField) -> "FieldSpec":
+        return cls("bitfield", geometry.first_payload_byte, geometry)
 
     @property
     def width_bytes(self) -> int:
+        if self.geometry is not None:
+            return self.geometry.span_bytes
         if self.kind == "byte":
             return 1
         if self.kind == "u13be-low5":
@@ -179,6 +236,8 @@ class FieldSpec:
 
     @property
     def byte_order(self) -> str | None:
+        if self.geometry is not None:
+            return self.geometry.byte_order
         if self.kind in ("u13be-low5", "u17be-low1"):
             return "big"
         if self.kind in ("u16be", "i16be"):
@@ -193,27 +252,261 @@ class FieldSpec:
 
     @property
     def signed(self) -> bool:
+        if self.geometry is not None:
+            return self.geometry.signed
         return self.kind.startswith("i")
 
     @property
     def label(self) -> str:
+        if self.geometry is not None:
+            return self.geometry.label
         return f"{self.kind}:{self.offset}"
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "kind": self.kind,
             "offset": self.offset,
             "width_bytes": self.width_bytes,
             "byte_order": self.byte_order,
             "signed": self.signed,
         }
+        if self.geometry is not None:
+            result.update(
+                {
+                    "dbc_start_bit": self.geometry.dbc_start_bit,
+                    "length_bits": self.geometry.length_bits,
+                    "label": self.geometry.label,
+                    "bit_numbering": "dbc_cantools_sawtooth",
+                }
+            )
+        return result
+
+    def sort_key(self) -> tuple[object, ...]:
+        if self.geometry is None:
+            return (0, self.kind, self.offset)
+        return (
+            1,
+            self.kind,
+            self.offset,
+            self.geometry.dbc_start_bit,
+            self.geometry.length_bits,
+            self.geometry.byte_order,
+            self.geometry.signed,
+        )
 
 
 @dataclass(frozen=True, order=True)
 class CandidateKey:
+    channel: str
     can_id: int
     id_bits: int
+    dlc: int
     field: FieldSpec
+
+
+@dataclass(frozen=True)
+class StreamFieldSelector:
+    """One exact passive stream plus one raw field."""
+
+    can_id: int
+    id_bits: int
+    dlc: int
+    field: FieldSpec
+    channel: str = DEFAULT_MODULE.channel
+
+    def __post_init__(self) -> None:
+        if self.id_bits not in (11, 29):
+            raise CorrelateError("selector id_bits must be 11 or 29")
+        maximum = 0x7FF if self.id_bits == 11 else 0x1FFFFFFF
+        if (
+            type(self.can_id) is not int
+            or not 0 <= self.can_id <= maximum
+        ):
+            raise CorrelateError("selector CAN ID is out of range")
+        if type(self.dlc) is not int or not 1 <= self.dlc <= 8:
+            raise CorrelateError("selector DLC must be between 1 and 8")
+        if not isinstance(self.field, FieldSpec):
+            raise CorrelateError("selector field must be a FieldSpec")
+        if (
+            _legacy_signal_field(self.field).required_payload_bytes
+            > self.dlc
+        ):
+            raise CorrelateError(
+                f"selector field {self.field.label} exceeds DLC {self.dlc}"
+            )
+        if not isinstance(self.channel, str) or not self.channel:
+            raise CorrelateError("selector channel must be nonempty")
+
+    @property
+    def stream_key(self) -> tuple[str, int, int, int]:
+        return (self.channel, self.can_id, self.id_bits, self.dlc)
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "channel": self.channel,
+            "can_id_hex": (
+                f"{self.can_id:08X}"
+                if self.id_bits == 29
+                else f"{self.can_id:03X}"
+            ),
+            "id_bits": self.id_bits,
+            "dlc": self.dlc,
+            "field": self.field.as_dict(),
+        }
+
+
+REGIME_NAMES = (
+    "idle",
+    "positive_pull",
+    "steady_cruise",
+    "lift_transition",
+    "negative_overrun",
+)
+
+
+@dataclass(frozen=True)
+class RegimeAnalysisConfig:
+    """Explicit, scale-aware rules for opt-in torque-regime slicing."""
+
+    speed: StreamFieldSelector
+    rpm: StreamFieldSelector
+    throttle: StreamFieldSelector
+    candidate_streams: frozenset[tuple[int, int, int]]
+    stopped_speed_max: float
+    moving_speed_min: float
+    idle_rpm_min: float
+    pull_speed_rate_min: float
+    pull_throttle_min: float
+    steady_speed_rate_max: float
+    steady_throttle_rate_max: float
+    lift_throttle_rate_max: float
+    overrun_speed_rate_max: float
+    overrun_throttle_max: float
+    minimum_samples: int = 5
+
+    def validate(self) -> None:
+        if (
+            not isinstance(self.candidate_streams, frozenset)
+            or not 1
+            <= len(self.candidate_streams)
+            <= MAX_REGIME_CANDIDATE_STREAMS
+        ):
+            raise CorrelateError(
+                "regime candidate streams must be a frozenset containing "
+                f"1..{MAX_REGIME_CANDIDATE_STREAMS} exact streams"
+            )
+        for item in self.candidate_streams:
+            if (
+                not isinstance(item, tuple)
+                or len(item) != 3
+                or type(item[0]) is not int
+                or item[1] not in (11, 29)
+                or type(item[2]) is not int
+                or not 1 <= item[2] <= 8
+            ):
+                raise CorrelateError(
+                    "regime candidate streams must be "
+                    "(CAN ID, 11|29, DLC) tuples"
+                )
+            maximum = 0x7FF if item[1] == 11 else 0x1FFFFFFF
+            if not 0 <= item[0] <= maximum:
+                raise CorrelateError(
+                    "regime candidate CAN ID is out of range"
+                )
+        numeric = {
+            "stopped_speed_max": self.stopped_speed_max,
+            "moving_speed_min": self.moving_speed_min,
+            "idle_rpm_min": self.idle_rpm_min,
+            "pull_speed_rate_min": self.pull_speed_rate_min,
+            "pull_throttle_min": self.pull_throttle_min,
+            "steady_speed_rate_max": self.steady_speed_rate_max,
+            "steady_throttle_rate_max": self.steady_throttle_rate_max,
+            "lift_throttle_rate_max": self.lift_throttle_rate_max,
+            "overrun_speed_rate_max": self.overrun_speed_rate_max,
+            "overrun_throttle_max": self.overrun_throttle_max,
+        }
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            for value in numeric.values()
+        ):
+            raise CorrelateError("regime thresholds must be finite")
+        if self.stopped_speed_max >= self.moving_speed_min:
+            raise CorrelateError(
+                "regime stopped speed must be below moving speed"
+            )
+        if self.idle_rpm_min < 0.0:
+            raise CorrelateError("regime idle RPM minimum must be non-negative")
+        if self.pull_speed_rate_min <= 0.0:
+            raise CorrelateError(
+                "regime pull speed-rate minimum must be positive"
+            )
+        if (
+            self.steady_speed_rate_max < 0.0
+            or self.steady_throttle_rate_max < 0.0
+        ):
+            raise CorrelateError(
+                "regime steady-rate maxima must be non-negative"
+            )
+        if self.lift_throttle_rate_max >= 0.0:
+            raise CorrelateError(
+                "regime lift throttle-rate maximum must be negative"
+            )
+        if self.overrun_speed_rate_max > 0.0:
+            raise CorrelateError(
+                "regime overrun speed-rate maximum must be non-positive"
+            )
+        if (
+            type(self.minimum_samples) is not int
+            or self.minimum_samples < 2
+        ):
+            raise CorrelateError(
+                "regime minimum samples must be an integer of at least 2"
+            )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "inputs": {
+                "speed": self.speed.as_dict(),
+                "rpm": self.rpm.as_dict(),
+                "throttle": self.throttle.as_dict(),
+            },
+            "candidate_streams": [
+                (
+                    f"eff:{can_id:08X}:{dlc}"
+                    if id_bits == 29
+                    else f"sff:{can_id:03X}:{dlc}"
+                )
+                for can_id, id_bits, dlc in sorted(
+                    self.candidate_streams,
+                    key=lambda item: (item[1], item[0], item[2]),
+                )
+            ],
+            "thresholds_raw_units": {
+                "stopped_speed_max": self.stopped_speed_max,
+                "moving_speed_min": self.moving_speed_min,
+                "idle_rpm_min": self.idle_rpm_min,
+                "pull_speed_rate_min_per_second": (
+                    self.pull_speed_rate_min
+                ),
+                "pull_throttle_min": self.pull_throttle_min,
+                "steady_speed_rate_max_per_second": (
+                    self.steady_speed_rate_max
+                ),
+                "steady_throttle_rate_max_per_second": (
+                    self.steady_throttle_rate_max
+                ),
+                "lift_throttle_rate_max_per_second": (
+                    self.lift_throttle_rate_max
+                ),
+                "overrun_speed_rate_max_per_second": (
+                    self.overrun_speed_rate_max
+                ),
+                "overrun_throttle_max": self.overrun_throttle_max,
+            },
+            "minimum_samples_per_regime": self.minimum_samples,
+        }
 
 
 @dataclass
@@ -391,6 +684,7 @@ def parse_candump_frame(
         can_id=can_id,
         id_bits=id_bits,
         payload=payload,
+        channel=interface,
     )
 
 
@@ -405,16 +699,108 @@ def _parse_reference_field(value: str) -> FieldSpec | None:
     if value == "auto":
         return None
     match = _REFERENCE_FIELD_RE.fullmatch(value)
+    if match is not None:
+        return FieldSpec(match.group(1), int(match.group(2), 10))
+    bit_match = _BIT_REFERENCE_FIELD_RE.fullmatch(value)
+    if bit_match is not None:
+        try:
+            geometry = SignalField(
+                int(bit_match.group(2), 10),
+                int(bit_match.group(3), 10),
+                bit_match.group(1),
+                bit_match.group(4) == "signed",
+            )
+        except SignalFieldError as exc:
+            raise CorrelateError(f"invalid reference bit field: {exc}") from exc
+        return FieldSpec.from_signal_field(geometry)
+    raise CorrelateError(
+        "reference field must be auto, byte:N, u16be:N, u16le:N, "
+        "u32be:N, u32le:N, i16be:N, i16le:N, i32be:N, i32le:N, "
+        "or bits:<little|big>:<DBC-start>:<length>:<unsigned|signed>"
+    )
+
+
+def _parse_bit_search_id(value: str) -> tuple[int, int, int]:
+    match = _BIT_SEARCH_ID_RE.fullmatch(value)
     if match is None:
-        raise CorrelateError(
-            "reference field must be auto, byte:N, u16be:N, u16le:N, "
-            "u32be:N, u32le:N, i16be:N, i16le:N, i32be:N, or i32le:N"
+        raise argparse.ArgumentTypeError(
+            "bit-search stream must be sff:HHH:DLC or eff:HHHHHHHH:DLC"
         )
-    return FieldSpec(match.group(1), int(match.group(2), 10))
+    can_id = int(match.group(2), 16)
+    id_bits = 11 if match.group(1) == "sff" else 29
+    maximum = 0x7FF if id_bits == 11 else 0x1FFFFFFF
+    if can_id > maximum:
+        raise argparse.ArgumentTypeError(
+            f"{match.group(1)} identifier exceeds 0x{maximum:X}"
+        )
+    return can_id, id_bits, int(match.group(3), 10)
+
+
+def _parse_stream_field_selector(value: str) -> StreamFieldSelector:
+    stream_text, separator, field_text = value.partition("=")
+    if not separator or not field_text:
+        raise argparse.ArgumentTypeError(
+            "stream field must be "
+            "sff:HHH:DLC=FIELD or eff:HHHHHHHH:DLC=FIELD"
+        )
+    try:
+        can_id, id_bits, dlc = _parse_bit_search_id(stream_text)
+        field = _parse_reference_field(field_text)
+    except (argparse.ArgumentTypeError, CorrelateError) as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+    if field is None:
+        raise argparse.ArgumentTypeError(
+            "stream field cannot use automatic decoding"
+        )
+    try:
+        if _legacy_signal_field(field).required_payload_bytes > dlc:
+            raise argparse.ArgumentTypeError(
+                f"field {field.label} exceeds the selected DLC {dlc}"
+            )
+    except (CorrelateError, SignalFieldError) as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+    return StreamFieldSelector(can_id, id_bits, dlc, field)
+
+
+def _parse_signal_length(value: str) -> int:
+    try:
+        length = int(value, 10)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "signal length must be a decimal integer"
+        ) from exc
+    if not 1 <= length <= MAX_SIGNAL_BITS:
+        raise argparse.ArgumentTypeError(
+            f"signal length must be between 1 and {MAX_SIGNAL_BITS}"
+        )
+    return length
 
 
 def _reject_json_constant(value: str) -> object:
     raise ValueError(f"non-finite JSON constant {value!r} is not accepted")
+
+
+@lru_cache(maxsize=None)
+def _legacy_signal_field(spec: FieldSpec) -> SignalField:
+    if spec.geometry is not None:
+        return spec.geometry
+    if spec.kind == "byte":
+        return SignalField(spec.offset * 8, 8, "little")
+    if spec.kind == "u13be-low5":
+        return SignalField(spec.offset * 8 + 4, 13, "big")
+    if spec.kind == "u17be-low1":
+        return SignalField(spec.offset * 8, 17, "big")
+    match = re.fullmatch(r"([ui])(16|32)(be|le)", spec.kind)
+    if match is None:
+        raise CorrelateError(f"unsupported field kind {spec.kind!r}")
+    byte_order = "big" if match.group(3) == "be" else "little"
+    start_bit = spec.offset * 8 + (7 if byte_order == "big" else 0)
+    return SignalField(
+        start_bit,
+        int(match.group(2), 10),
+        byte_order,
+        signed=match.group(1) == "i",
+    )
 
 
 def _decode_field(payload: bytes, spec: FieldSpec) -> int:
@@ -423,35 +809,10 @@ def _decode_field(payload: bytes, spec: FieldSpec) -> int:
         raise CorrelateError(
             f"field {spec.label} exceeds a {len(payload)}-byte payload"
         )
-    if spec.kind == "byte":
-        return payload[spec.offset]
-    if spec.kind == "u13be-low5":
-        return (
-            ((payload[spec.offset] & 0x1F) << 8)
-            | payload[spec.offset + 1]
-        )
-    if spec.kind == "u17be-low1":
-        return (
-            ((payload[spec.offset] & 0x01) << 16)
-            | int.from_bytes(payload[spec.offset + 1 : end], "big")
-        )
-    if spec.kind in ("u16be", "i16be"):
-        return int.from_bytes(
-            payload[spec.offset:end], "big", signed=spec.signed
-        )
-    if spec.kind in ("u16le", "i16le"):
-        return int.from_bytes(
-            payload[spec.offset:end], "little", signed=spec.signed
-        )
-    if spec.kind in ("u32be", "i32be"):
-        return int.from_bytes(
-            payload[spec.offset:end], "big", signed=spec.signed
-        )
-    if spec.kind in ("u32le", "i32le"):
-        return int.from_bytes(
-            payload[spec.offset:end], "little", signed=spec.signed
-        )
-    raise CorrelateError(f"unsupported field kind {spec.kind!r}")
+    try:
+        return _legacy_signal_field(spec).extract(payload)
+    except SignalFieldError as exc:
+        raise CorrelateError(str(exc)) from exc
 
 
 class ReferenceDecoder:
@@ -608,6 +969,9 @@ def iter_reference_samples(
                     f"{path}:{line_number}: selected row has invalid can_id"
                 )
             expected_can_id = int(can_id_text, 16)
+            expected_id_bits = (
+                11 if module.addressing_mode == NORMAL_11BITS else 29
+            )
             if expected_can_id > 0x1FFFFFFF:
                 raise CorrelateError(
                     f"{path}:{line_number}: selected row can_id exceeds 29 bits"
@@ -657,6 +1021,8 @@ def iter_reference_samples(
                 value,
                 raw_line_sequence=raw_sequence,
                 expected_can_id=expected_can_id,
+                expected_id_bits=expected_id_bits,
+                expected_channel=module.channel,
                 expected_can_data=expected_can_data,
             )
 
@@ -727,6 +1093,7 @@ def iter_candump_frames(
                         frame.id_bits,
                         frame.payload,
                         raw_line_sequence=raw_line_sequence,
+                        channel=frame.channel,
                     )
                     raw_line_sequence += 1
         except CorrelateError:
@@ -735,35 +1102,62 @@ def iter_candump_frames(
             raise CorrelateError(f"cannot read candump stream {path}: {exc}") from exc
 
 
+@lru_cache(maxsize=8)
+def _legacy_payload_specs(payload_length: int) -> tuple[FieldSpec, ...]:
+    specs: list[FieldSpec] = []
+    specs.extend(FieldSpec("byte", offset) for offset in range(payload_length))
+    for offset in range(max(0, payload_length - 1)):
+        # Preserve the historical order exactly for report compatibility.
+        specs.append(FieldSpec("u13be-low5", offset))
+        specs.append(FieldSpec("u16be", offset))
+        specs.append(FieldSpec("u16le", offset))
+    specs.extend(
+        FieldSpec("u17be-low1", offset)
+        for offset in range(max(0, payload_length - 2))
+    )
+    # Keep 32-bit candidates word-aligned in the default coarse pass.
+    for offset in range(0, max(0, payload_length - 3), 4):
+        specs.append(FieldSpec("u32be", offset))
+        specs.append(FieldSpec("u32le", offset))
+    return tuple(specs)
+
+
+@lru_cache(maxsize=256)
+def _bit_search_specs(
+    payload_length: int,
+    minimum_bits: int,
+    maximum_bits: int,
+    lengths: tuple[int, ...],
+    byte_orders: tuple[str, ...],
+    signedness: tuple[bool, ...],
+) -> tuple[FieldSpec, ...]:
+    try:
+        geometries = tuple(
+            iter_signal_fields(
+                payload_length,
+                minimum_bits=minimum_bits,
+                maximum_bits=maximum_bits,
+                lengths=lengths or None,
+                byte_orders=byte_orders,
+                signedness=signedness,
+            )
+        )
+    except SignalFieldError as exc:
+        raise CorrelateError(f"invalid bit-search geometry: {exc}") from exc
+    if len(geometries) > MAX_BIT_SEARCH_FIELDS_PER_IDENTIFIER:
+        raise CorrelateError(
+            "bit-search field count exceeds the "
+            f"{MAX_BIT_SEARCH_FIELDS_PER_IDENTIFIER}-field per-identifier cap; "
+            "select fewer lengths or byte orders"
+        )
+    return tuple(FieldSpec.from_signal_field(item) for item in geometries)
+
+
 def iter_payload_fields(payload: bytes) -> Iterator[tuple[FieldSpec, int]]:
-    for offset, value in enumerate(payload):
-        yield FieldSpec("byte", offset), value
-    for offset in range(max(0, len(payload) - 1)):
-        pair = payload[offset : offset + 2]
-        # Stellantis powertrain frames commonly pack a 13-bit Motorola field
-        # as the low five bits of the first byte followed by the second byte.
-        # Keep the raw integer here; the affine fit determines physical scale
-        # and offset against the selected diagnostic reference.
-        yield FieldSpec("u13be-low5", offset), (
-            ((pair[0] & 0x1F) << 8) | pair[1]
-        )
-        yield FieldSpec("u16be", offset), int.from_bytes(pair, "big")
-        yield FieldSpec("u16le", offset), int.from_bytes(pair, "little")
-    for offset in range(max(0, len(payload) - 2)):
-        triplet = payload[offset : offset + 3]
-        # Another common Stellantis Motorola layout uses the low bit of one
-        # byte as bit 16, followed by the next two bytes. Transmission output
-        # speed on this van crosses that boundary during highway driving.
-        yield FieldSpec("u17be-low1", offset), (
-            ((triplet[0] & 0x01) << 16)
-            | int.from_bytes(triplet[1:], "big")
-        )
-    # Keep 32-bit candidates word-aligned to avoid five overlapping
-    # interpretations of every eight-byte classic-CAN payload.
-    for offset in range(0, max(0, len(payload) - 3), 4):
-        word = payload[offset : offset + 4]
-        yield FieldSpec("u32be", offset), int.from_bytes(word, "big")
-        yield FieldSpec("u32le", offset), int.from_bytes(word, "little")
+    """Yield the backward-compatible coarse candidate profile."""
+
+    for spec in _legacy_payload_specs(len(payload)):
+        yield spec, _decode_field(payload, spec)
 
 
 def is_diagnostic_id(can_id: int, id_bits: int) -> bool:
@@ -983,10 +1377,14 @@ class WindowMatch:
     reference_timestamp_us: int
     fields: dict[FieldSpec, WindowField] = field(default_factory=dict)
 
-    def add(self, frame: CanFrame) -> int:
+    def add(
+        self,
+        frame: CanFrame,
+        decoded_fields: Iterable[tuple[FieldSpec, int]],
+    ) -> int:
         created = 0
         delta = abs(frame.timestamp_us - self.reference_timestamp_us)
-        for field_spec, value in iter_payload_fields(frame.payload):
+        for field_spec, value in decoded_fields:
             accumulator = self.fields.get(field_spec)
             if accumulator is None:
                 accumulator = WindowField()
@@ -1002,7 +1400,9 @@ MatchState = NearestMatch | WindowMatch
 @dataclass
 class ActiveReference:
     sample: ReferenceSample
-    matches: dict[tuple[int, int], MatchState] = field(default_factory=dict)
+    matches: dict[tuple[str, int, int, int], MatchState] = field(
+        default_factory=dict
+    )
 
 
 @dataclass
@@ -1015,12 +1415,24 @@ class AnalysisConfig:
     minimum_coverage_ratio: float = 0.5
     minimum_distinct_values: int = 4
     top_count: int = 100
+    bit_search_ids: frozenset[tuple[int, int, int]] = field(
+        default_factory=frozenset
+    )
+    bit_search_minimum_bits: int = 1
+    bit_search_maximum_bits: int = MAX_SIGNAL_BITS
+    bit_search_lengths: tuple[int, ...] = ()
+    bit_search_byte_orders: tuple[str, ...] = ("little", "big")
+    bit_search_signedness: tuple[bool, ...] = (False, True)
+    regime_analysis: RegimeAnalysisConfig | None = None
 
     @property
     def window_statistic(self) -> str | None:
         if self.match_mode.startswith("window-"):
             return self.match_mode.split("-", 1)[1]
         return None
+
+    def uses_bit_search(self, can_id: int, id_bits: int, dlc: int) -> bool:
+        return (can_id, id_bits, dlc) in self.bit_search_ids
 
     def validate(self) -> None:
         if self.match_mode not in {
@@ -1054,6 +1466,155 @@ class AnalysisConfig:
             raise CorrelateError(
                 f"top count exceeds the {MAX_TOP_COUNT}-candidate safety cap"
             )
+        if not isinstance(self.bit_search_ids, frozenset):
+            raise CorrelateError("bit-search IDs must be a frozenset")
+        if len(self.bit_search_ids) > MAX_BIT_SEARCH_IDENTIFIERS:
+            raise CorrelateError(
+                "bit-search identifier count exceeds the "
+                f"{MAX_BIT_SEARCH_IDENTIFIERS}-identifier safety cap"
+            )
+        for item in self.bit_search_ids:
+            if (
+                not isinstance(item, tuple)
+                or len(item) != 3
+                or type(item[0]) is not int
+                or item[1] not in (11, 29)
+                or type(item[2]) is not int
+                or not 1 <= item[2] <= 8
+            ):
+                raise CorrelateError(
+                    "bit-search streams must be (CAN ID, 11|29, DLC) tuples"
+                )
+            maximum = 0x7FF if item[1] == 11 else 0x1FFFFFFF
+            if not 0 <= item[0] <= maximum:
+                raise CorrelateError("bit-search CAN ID is out of range")
+        if (
+            type(self.bit_search_minimum_bits) is not int
+            or type(self.bit_search_maximum_bits) is not int
+            or not 1
+            <= self.bit_search_minimum_bits
+            <= self.bit_search_maximum_bits
+            <= MAX_SIGNAL_BITS
+        ):
+            raise CorrelateError(
+                "bit-search bounds must satisfy 1 <= minimum <= maximum <= "
+                f"{MAX_SIGNAL_BITS}"
+            )
+        if not isinstance(self.bit_search_lengths, tuple) or any(
+            type(length) is not int
+            or not self.bit_search_minimum_bits
+            <= length
+            <= self.bit_search_maximum_bits
+            for length in self.bit_search_lengths
+        ):
+            raise CorrelateError(
+                "bit-search lengths must be integers within the configured bounds"
+            )
+        if len(set(self.bit_search_lengths)) != len(self.bit_search_lengths):
+            raise CorrelateError("bit-search lengths must not contain duplicates")
+        if (
+            not isinstance(self.bit_search_byte_orders, tuple)
+            or not self.bit_search_byte_orders
+            or len(set(self.bit_search_byte_orders))
+            != len(self.bit_search_byte_orders)
+            or any(
+                order not in BYTE_ORDERS
+                for order in self.bit_search_byte_orders
+            )
+        ):
+            raise CorrelateError(
+                "bit-search byte orders must contain unique little and/or big"
+            )
+        if (
+            not isinstance(self.bit_search_signedness, tuple)
+            or not self.bit_search_signedness
+            or len(set(self.bit_search_signedness))
+            != len(self.bit_search_signedness)
+            or any(type(value) is not bool for value in self.bit_search_signedness)
+        ):
+            raise CorrelateError(
+                "bit-search signedness must contain unique bool values"
+            )
+        total_bit_search_fields = 0
+        for _, _, dlc in self.bit_search_ids:
+            total_bit_search_fields += len(
+                _bit_search_specs(
+                    dlc,
+                    self.bit_search_minimum_bits,
+                    self.bit_search_maximum_bits,
+                    self.bit_search_lengths,
+                    self.bit_search_byte_orders,
+                    self.bit_search_signedness,
+                )
+            )
+        if total_bit_search_fields > MAX_CANDIDATE_FIELDS:
+            raise CorrelateError(
+                "configured bit-search streams exceed the global "
+                f"{MAX_CANDIDATE_FIELDS}-field candidate cap"
+            )
+        if self.regime_analysis is not None:
+            if self.match_mode != "nearest":
+                raise CorrelateError(
+                    "regime analysis currently requires nearest matching"
+                )
+            self.regime_analysis.validate()
+            projected_regime_fields = 0
+            for can_id, id_bits, dlc in (
+                self.regime_analysis.candidate_streams
+            ):
+                if self.uses_bit_search(can_id, id_bits, dlc):
+                    projected_regime_fields += len(
+                        _bit_search_specs(
+                            dlc,
+                            self.bit_search_minimum_bits,
+                            self.bit_search_maximum_bits,
+                            self.bit_search_lengths,
+                            self.bit_search_byte_orders,
+                            self.bit_search_signedness,
+                        )
+                    )
+                else:
+                    projected_regime_fields += len(
+                        _legacy_payload_specs(dlc)
+                    )
+            projected_regressions = (
+                projected_regime_fields * len(REGIME_NAMES)
+            )
+            if projected_regressions > MAX_REGIME_REGRESSIONS:
+                raise CorrelateError(
+                    "configured regime candidate fields can create "
+                    f"{projected_regressions} regressions across "
+                    f"{len(REGIME_NAMES)} regimes, exceeding the "
+                    f"{MAX_REGIME_REGRESSIONS}-regression safety cap; "
+                    "select fewer streams, lengths, byte orders, or "
+                    "signedness variants"
+                )
+            regime_streams = set(self.regime_analysis.candidate_streams)
+            regime_streams.update(
+                (selector.can_id, selector.id_bits, selector.dlc)
+                for selector in (
+                    self.regime_analysis.speed,
+                    self.regime_analysis.rpm,
+                    self.regime_analysis.throttle,
+                )
+            )
+            if any(
+                id_bits == 29 and not self.include_extended
+                for _, id_bits, _ in regime_streams
+            ):
+                raise CorrelateError(
+                    "extended regime streams require "
+                    "--include-extended"
+                )
+            if any(
+                is_diagnostic_id(can_id, id_bits)
+                and not self.include_diagnostic_ids
+                for can_id, id_bits, _ in regime_streams
+            ):
+                raise CorrelateError(
+                    "diagnostic regime streams require "
+                    "--include-diagnostic-ids"
+                )
 
 
 class StreamingCorrelator:
@@ -1061,11 +1622,17 @@ class StreamingCorrelator:
         config.validate()
         self.config = config
         self.active: deque[ActiveReference] = deque()
-        self.histories: dict[tuple[int, int], deque[CanFrame]] = {}
+        self.histories: dict[
+            tuple[str, int, int, int], deque[CanFrame]
+        ] = {}
         self.regressions: dict[CandidateKey, OnlineRegression] = {}
         self.reference_count = 0
         self.reference_first_us: int | None = None
         self.reference_last_us: int | None = None
+        self.reference_interval_count = 0
+        self.reference_interval_total_us = 0
+        self.reference_interval_minimum_us: int | None = None
+        self.reference_interval_maximum_us = 0
         self.total_capture_frames = 0
         self.eligible_capture_frames = 0
         self.excluded_extended_frames = 0
@@ -1077,6 +1644,36 @@ class StreamingCorrelator:
         self.pending_wire_links: dict[int, ReferenceSample] = {}
         self.linked_reference_count = 0
         self.verified_reference_links = 0
+        self.eligible_candidate_maximum_r_squared: float | None = None
+        self.regime_regressions: dict[
+            tuple[str, CandidateKey], OnlineRegression
+        ] = {}
+        self.regime_classification_counts = {
+            **{name: 0 for name in REGIME_NAMES},
+            "other": 0,
+            "missing_classifier_input": 0,
+            "insufficient_history": 0,
+        }
+        self._previous_regime_features: (
+            tuple[int, float, float, float] | None
+        ) = None
+
+    def _iter_payload_fields(
+        self, can_id: int, id_bits: int, payload: bytes
+    ) -> Iterator[tuple[FieldSpec, int]]:
+        if not self.config.uses_bit_search(can_id, id_bits, len(payload)):
+            yield from iter_payload_fields(payload)
+            return
+        specs = _bit_search_specs(
+            len(payload),
+            self.config.bit_search_minimum_bits,
+            self.config.bit_search_maximum_bits,
+            self.config.bit_search_lengths,
+            self.config.bit_search_byte_orders,
+            self.config.bit_search_signedness,
+        )
+        for spec in specs:
+            yield spec, _decode_field(payload, spec)
 
     def _eligible(self, frame: CanFrame) -> bool:
         if frame.id_bits == 29 and not self.config.include_extended:
@@ -1112,7 +1709,7 @@ class StreamingCorrelator:
     def _new_match(
         self, active: ActiveReference, frame: CanFrame
     ) -> MatchState:
-        key = (frame.can_id, frame.id_bits)
+        key = (frame.channel, frame.can_id, frame.id_bits, frame.dlc)
         match = active.matches.get(key)
         if match is None:
             if self.config.match_mode == "nearest":
@@ -1139,7 +1736,12 @@ class StreamingCorrelator:
             return
         match = self._new_match(active, frame)
         if isinstance(match, WindowMatch):
-            self.active_window_fields += match.add(frame)
+            self.active_window_fields += match.add(
+                frame,
+                self._iter_payload_fields(
+                    frame.can_id, frame.id_bits, frame.payload
+                ),
+            )
             if self.active_window_fields > MAX_ACTIVE_WINDOW_FIELDS:
                 raise CorrelateError(
                     "active window-field accumulator safety cap exceeded"
@@ -1170,10 +1772,14 @@ class StreamingCorrelator:
                     )
                 reference = self.pending_wire_links.pop(expected_sequence)
                 assert reference.expected_can_id is not None
+                assert reference.expected_id_bits is not None
+                assert reference.expected_channel is not None
                 assert reference.expected_can_data is not None
                 if (
                     frame.timestamp_us != reference.timestamp_us
                     or frame.can_id != reference.expected_can_id
+                    or frame.id_bits != reference.expected_id_bits
+                    or frame.channel != reference.expected_channel
                     or frame.payload != reference.expected_can_data
                 ):
                     raise CorrelateError(
@@ -1188,7 +1794,7 @@ class StreamingCorrelator:
         if not self._eligible(frame):
             return
         self.eligible_capture_frames += 1
-        key = (frame.can_id, frame.id_bits)
+        key = (frame.channel, frame.can_id, frame.id_bits, frame.dlc)
         history = self.histories.get(key)
         if history is None:
             if len(self.histories) >= MAX_CANDIDATE_IDS:
@@ -1227,6 +1833,19 @@ class StreamingCorrelator:
         self.reference_count += 1
         if self.reference_first_us is None:
             self.reference_first_us = sample.timestamp_us
+        if self.reference_last_us is not None:
+            interval = sample.timestamp_us - self.reference_last_us
+            self.reference_interval_count += 1
+            self.reference_interval_total_us += interval
+            if self.reference_interval_minimum_us is None:
+                self.reference_interval_minimum_us = interval
+            else:
+                self.reference_interval_minimum_us = min(
+                    self.reference_interval_minimum_us, interval
+                )
+            self.reference_interval_maximum_us = max(
+                self.reference_interval_maximum_us, interval
+            )
         self.reference_last_us = sample.timestamp_us
         active = ActiveReference(sample)
         for history in self.histories.values():
@@ -1246,17 +1865,143 @@ class StreamingCorrelator:
             self.regressions[key] = regression
         return regression
 
+    def _regime_for_reference(self, active: ActiveReference) -> str | None:
+        regime = self.config.regime_analysis
+        if regime is None:
+            return None
+
+        values = []
+        for selector in (regime.speed, regime.rpm, regime.throttle):
+            match = active.matches.get(selector.stream_key)
+            if not isinstance(match, NearestMatch):
+                self.regime_classification_counts[
+                    "missing_classifier_input"
+                ] += 1
+                return None
+            try:
+                values.append(float(_decode_field(match.payload, selector.field)))
+            except CorrelateError:
+                self.regime_classification_counts[
+                    "missing_classifier_input"
+                ] += 1
+                return None
+
+        speed, rpm, throttle = values
+        current = (
+            active.sample.timestamp_us,
+            speed,
+            rpm,
+            throttle,
+        )
+        previous = self._previous_regime_features
+        self._previous_regime_features = current
+
+        if speed <= regime.stopped_speed_max and rpm >= regime.idle_rpm_min:
+            label = "idle"
+        elif previous is None:
+            self.regime_classification_counts["insufficient_history"] += 1
+            return None
+        else:
+            elapsed_seconds = (
+                active.sample.timestamp_us - previous[0]
+            ) / 1_000_000.0
+            if elapsed_seconds <= 0.0:
+                raise CorrelateError(
+                    "regime classifier reference time did not advance"
+                )
+            speed_rate = (speed - previous[1]) / elapsed_seconds
+            throttle_rate = (throttle - previous[3]) / elapsed_seconds
+            moving = speed >= regime.moving_speed_min
+            drivetrain_active = moving and rpm >= regime.idle_rpm_min
+            if (
+                drivetrain_active
+                and throttle_rate <= regime.lift_throttle_rate_max
+            ):
+                label = "lift_transition"
+            elif (
+                drivetrain_active
+                and speed_rate >= regime.pull_speed_rate_min
+                and throttle >= regime.pull_throttle_min
+            ):
+                label = "positive_pull"
+            elif (
+                drivetrain_active
+                and throttle <= regime.overrun_throttle_max
+                and speed_rate <= regime.overrun_speed_rate_max
+            ):
+                label = "negative_overrun"
+            elif (
+                drivetrain_active
+                and abs(speed_rate) <= regime.steady_speed_rate_max
+                and abs(throttle_rate)
+                <= regime.steady_throttle_rate_max
+            ):
+                label = "steady_cruise"
+            else:
+                label = "other"
+        self.regime_classification_counts[label] += 1
+        return label
+
+    def _add_regime_observation(
+        self,
+        regime_name: str | None,
+        key: CandidateKey,
+        value: float,
+        reference_value: float,
+        *,
+        reference_timestamp_us: int,
+        contributing_frames: int,
+        contributing_abs_delta_us: int,
+        maximum_abs_delta_us: int,
+    ) -> None:
+        regime = self.config.regime_analysis
+        if regime is None or regime_name not in REGIME_NAMES:
+            return
+        if (key.can_id, key.id_bits, key.dlc) not in regime.candidate_streams:
+            return
+        regime_key = (regime_name, key)
+        regression = self.regime_regressions.get(regime_key)
+        if regression is None:
+            if len(self.regime_regressions) >= MAX_REGIME_REGRESSIONS:
+                raise CorrelateError(
+                    "regime regression safety cap exceeded"
+                )
+            regression = OnlineRegression()
+            self.regime_regressions[regime_key] = regression
+        regression.add(
+            value,
+            reference_value,
+            reference_timestamp_us=reference_timestamp_us,
+            contributing_frames=contributing_frames,
+            contributing_abs_delta_us=contributing_abs_delta_us,
+            maximum_abs_delta_us=maximum_abs_delta_us,
+        )
+
     def _finalize_reference(self, active: ActiveReference) -> None:
+        regime_name = self._regime_for_reference(active)
         self.active_match_states -= len(active.matches)
-        for (can_id, id_bits), match in active.matches.items():
+        for (channel, can_id, id_bits, dlc), match in active.matches.items():
             if isinstance(match, NearestMatch):
                 delta = abs(
                     match.timestamp_us - active.sample.timestamp_us
                 )
-                for field_spec, value in iter_payload_fields(match.payload):
-                    self._regression(
-                        CandidateKey(can_id, id_bits, field_spec)
-                    ).add(
+                for field_spec, value in self._iter_payload_fields(
+                    can_id, id_bits, match.payload
+                ):
+                    key = CandidateKey(
+                        channel, can_id, id_bits, dlc, field_spec
+                    )
+                    self._regression(key).add(
+                        float(value),
+                        active.sample.value,
+                        reference_timestamp_us=active.sample.timestamp_us,
+                        contributing_frames=1,
+                        contributing_abs_delta_us=delta,
+                        maximum_abs_delta_us=delta,
+                    )
+                    self._add_regime_observation(
+                        regime_name,
+                        key,
                         float(value),
                         active.sample.value,
                         reference_timestamp_us=active.sample.timestamp_us,
@@ -1269,10 +2014,22 @@ class StreamingCorrelator:
                 statistic = self.config.window_statistic
                 assert statistic is not None
                 for field_spec, accumulator in match.fields.items():
-                    self._regression(
-                        CandidateKey(can_id, id_bits, field_spec)
-                    ).add(
-                        accumulator.value(statistic),
+                    key = CandidateKey(
+                        channel, can_id, id_bits, dlc, field_spec
+                    )
+                    value = accumulator.value(statistic)
+                    self._regression(key).add(
+                        value,
+                        active.sample.value,
+                        reference_timestamp_us=active.sample.timestamp_us,
+                        contributing_frames=accumulator.count,
+                        contributing_abs_delta_us=accumulator.abs_delta_us,
+                        maximum_abs_delta_us=accumulator.maximum_abs_delta_us,
+                    )
+                    self._add_regime_observation(
+                        regime_name,
+                        key,
+                        value,
                         active.sample.value,
                         reference_timestamp_us=active.sample.timestamp_us,
                         contributing_frames=accumulator.count,
@@ -1293,8 +2050,62 @@ class StreamingCorrelator:
         if self.active_window_fields != 0:
             raise CorrelateError("internal window-field accounting mismatch")
 
+    @staticmethod
+    def _candidate_row(
+        key: CandidateKey, result: dict[str, object]
+    ) -> dict[str, object]:
+        return {
+            "classification": "candidate_only",
+            "candidate_only": True,
+            "physical_identity_verified": False,
+            "scale_verified": False,
+            "telemetry_promotion_allowed": False,
+            "channel": key.channel,
+            "can_id": key.can_id,
+            "can_id_hex": (
+                f"{key.can_id:08X}"
+                if key.id_bits == 29
+                else f"{key.can_id:03X}"
+            ),
+            "id_bits": key.id_bits,
+            "dlc": key.dlc,
+            "field": key.field.as_dict(),
+            **result,
+        }
+
+    @staticmethod
+    def _sort_candidate_rows(rows: list[dict[str, object]]) -> None:
+        rows.sort(
+            key=lambda row: (
+                -float(row["fit_coverage_score"]),
+                -float(row["correlation"]["r_squared"]),
+                -float(row["coverage_ratio"]),
+                -int(row["sample_count"]),
+                str(row["channel"]),
+                int(row["can_id"]),
+                int(row["id_bits"]),
+                int(row["dlc"]),
+                (
+                    0,
+                    str(row["field"]["kind"]),
+                    int(row["field"]["offset"]),
+                )
+                if "dbc_start_bit" not in row["field"]
+                else (
+                    1,
+                    str(row["field"]["kind"]),
+                    int(row["field"]["offset"]),
+                    int(row["field"]["dbc_start_bit"]),
+                    int(row["field"]["length_bits"]),
+                    str(row["field"]["byte_order"]),
+                    bool(row["field"]["signed"]),
+                ),
+            )
+        )
+
     def candidate_rows(self) -> tuple[list[dict[str, object]], dict[str, int]]:
         rows: list[dict[str, object]] = []
+        self.eligible_candidate_maximum_r_squared = None
         rejection_counts = {
             "below_minimum_samples": 0,
             "below_minimum_coverage": 0,
@@ -1324,34 +2135,16 @@ class StreamingCorrelator:
             if result is None:
                 rejection_counts["constant_candidate_or_reference"] += 1
                 continue
-            row = {
-                "classification": "candidate_only",
-                "candidate_only": True,
-                "physical_identity_verified": False,
-                "scale_verified": False,
-                "telemetry_promotion_allowed": False,
-                "can_id": key.can_id,
-                "can_id_hex": (
-                    f"{key.can_id:08X}"
-                    if key.id_bits == 29
-                    else f"{key.can_id:03X}"
-                ),
-                "id_bits": key.id_bits,
-                "field": key.field.as_dict(),
-                **result,
-            }
-            rows.append(row)
-        rows.sort(
-            key=lambda row: (
-                -float(row["fit_coverage_score"]),
-                -float(row["correlation"]["r_squared"]),
-                -float(row["coverage_ratio"]),
-                -int(row["sample_count"]),
-                int(row["can_id"]),
-                str(row["field"]["kind"]),
-                int(row["field"]["offset"]),
-            )
-        )
+            r_squared = float(result["correlation"]["r_squared"])
+            if self.eligible_candidate_maximum_r_squared is None:
+                self.eligible_candidate_maximum_r_squared = r_squared
+            else:
+                self.eligible_candidate_maximum_r_squared = max(
+                    self.eligible_candidate_maximum_r_squared,
+                    r_squared,
+                )
+            rows.append(self._candidate_row(key, result))
+        self._sort_candidate_rows(rows)
         rejection_counts["eligible_but_omitted_by_top"] = max(
             0, len(rows) - self.config.top_count
         )
@@ -1359,6 +2152,65 @@ class StreamingCorrelator:
         for rank, row in enumerate(rows, 1):
             row["rank"] = rank
         return rows, rejection_counts
+
+    def regime_rows(self) -> dict[str, dict[str, object]] | None:
+        regime = self.config.regime_analysis
+        if regime is None:
+            return None
+        results: dict[str, dict[str, object]] = {}
+        for regime_name in REGIME_NAMES:
+            reference_count = self.regime_classification_counts[regime_name]
+            rows: list[dict[str, object]] = []
+            rejected = {
+                "below_minimum_samples": 0,
+                "below_two_distinct_values": 0,
+                "constant_candidate_or_reference": 0,
+            }
+            for (candidate_regime, key), regression in (
+                self.regime_regressions.items()
+            ):
+                if candidate_regime != regime_name:
+                    continue
+                if regression.count < regime.minimum_samples:
+                    rejected["below_minimum_samples"] += 1
+                    continue
+                if (
+                    len(regression.distinct_x_values) < 2
+                    or len(regression.distinct_y_values) < 2
+                ):
+                    rejected["below_two_distinct_values"] += 1
+                    continue
+                result = regression.result(
+                    reference_count=reference_count,
+                    match_mode=self.config.match_mode,
+                )
+                if result is None:
+                    rejected["constant_candidate_or_reference"] += 1
+                    continue
+                rows.append(self._candidate_row(key, result))
+            self._sort_candidate_rows(rows)
+            eligible_maximum = (
+                None
+                if not rows
+                else max(
+                    float(row["correlation"]["r_squared"])
+                    for row in rows
+                )
+            )
+            rejected["eligible_but_omitted_by_top"] = max(
+                0, len(rows) - self.config.top_count
+            )
+            rows = rows[: self.config.top_count]
+            for rank, row in enumerate(rows, 1):
+                row["rank"] = rank
+            results[regime_name] = {
+                "classified_reference_count": reference_count,
+                "reported_candidate_count": len(rows),
+                "eligible_candidate_maximum_r_squared": eligible_maximum,
+                "rejected_field_counts": rejected,
+                "candidates": rows,
+            }
+        return results
 
 
 def analyze_streams(
@@ -1606,6 +2458,7 @@ def run_analysis(
             "candump frame sequence"
         )
     candidate_rows, rejected = correlator.candidate_rows()
+    regime_rows = correlator.regime_rows()
     assert decoder.resolved is not None
     return {
         "schema_version": SCHEMA_VERSION,
@@ -1627,6 +2480,11 @@ def run_analysis(
             "match_mode": config.match_mode,
             "window_statistic": config.window_statistic,
             "radius_ms": config.radius_us / 1000.0,
+            "maximum_candidate_staleness_ms": config.radius_us / 1000.0,
+            "staleness_definition": (
+                "absolute candidate-frame delta from the exact "
+                "PCAN-observed diagnostic response timestamp"
+            ),
             "minimum_samples": config.minimum_samples,
             "minimum_coverage_ratio": config.minimum_coverage_ratio,
             "minimum_distinct_values": config.minimum_distinct_values,
@@ -1643,6 +2501,42 @@ def run_analysis(
                     "0x18DBxxxx",
                 ],
             },
+            "candidate_field_profile": {
+                "default": (
+                    "legacy_coarse_bytes_words_and_stellantis_packed_fields"
+                ),
+                "default_dlc8_field_count": len(_legacy_payload_specs(8)),
+                "targeted_bit_search_streams": [
+                    (
+                        f"eff:{can_id:08X}:{dlc}"
+                        if id_bits == 29
+                        else f"sff:{can_id:03X}:{dlc}"
+                    )
+                    for can_id, id_bits, dlc in sorted(
+                        config.bit_search_ids,
+                        key=lambda item: (item[1], item[0], item[2]),
+                    )
+                ],
+                "targeted_ids_replace_default_profile": True,
+                "bit_numbering": "DBC/cantools sawtooth",
+                "minimum_bits": config.bit_search_minimum_bits,
+                "maximum_bits": config.bit_search_maximum_bits,
+                "selected_lengths": list(config.bit_search_lengths),
+                "selected_lengths_empty_means_full_configured_range": True,
+                "byte_orders": list(config.bit_search_byte_orders),
+                "signedness": [
+                    "signed" if signed else "unsigned"
+                    for signed in config.bit_search_signedness
+                ],
+                "equivalent_value_geometries_deduplicated": True,
+            },
+            "candidate_stream_identity": [
+                "channel",
+                "SFF/EFF namespace",
+                "CAN ID",
+                "DLC",
+                "capture source path and decompressed SHA-256",
+            ],
             "hard_memory_state_caps": {
                 "active_references": MAX_ACTIVE_REFERENCES,
                 "pending_wire_links": MAX_PENDING_WIRE_LINKS,
@@ -1651,6 +2545,10 @@ def run_analysis(
                 "active_match_states": MAX_ACTIVE_MATCH_STATES,
                 "active_window_fields": MAX_ACTIVE_WINDOW_FIELDS,
                 "candidate_fields": MAX_CANDIDATE_FIELDS,
+                "bit_search_streams": MAX_BIT_SEARCH_IDENTIFIERS,
+                "bit_search_fields_per_identifier": (
+                    MAX_BIT_SEARCH_FIELDS_PER_IDENTIFIER
+                ),
                 "reported_candidates": MAX_TOP_COUNT,
                 "total_reference_samples": MAX_REFERENCE_SAMPLES,
                 "wire_stream_lines": MAX_WIRE_STREAM_LINES,
@@ -1683,6 +2581,8 @@ def run_analysis(
                 "verification_fields": [
                     "raw_line_sequence",
                     "timestamp_epoch_us",
+                    "channel",
+                    "SFF/EFF namespace",
                     "can_id",
                     "can_data_hex",
                 ],
@@ -1690,6 +2590,30 @@ def run_analysis(
             "timestamp_coverage": {
                 "first_epoch_us": correlator.reference_first_us,
                 "last_epoch_us": correlator.reference_last_us,
+            },
+            "observed_polling_cadence": {
+                "interval_count": correlator.reference_interval_count,
+                "minimum_interval_ms": (
+                    None
+                    if correlator.reference_interval_minimum_us is None
+                    else correlator.reference_interval_minimum_us / 1000.0
+                ),
+                "mean_interval_ms": (
+                    None
+                    if correlator.reference_interval_count == 0
+                    else correlator.reference_interval_total_us
+                    / correlator.reference_interval_count
+                    / 1000.0
+                ),
+                "maximum_interval_ms": (
+                    None
+                    if correlator.reference_interval_count == 0
+                    else correlator.reference_interval_maximum_us / 1000.0
+                ),
+                "reference_timestamp_source": (
+                    "exact PCAN-observed diagnostic wire response"
+                ),
+                "csv_sample_holding_used": False,
             },
             "source": reference_stats.as_dict(),
         },
@@ -1714,11 +2638,20 @@ def run_analysis(
             "excluded_extended_frames": correlator.excluded_extended_frames,
             "excluded_diagnostic_frames": correlator.excluded_diagnostic_frames,
             "empty_payload_frames": correlator.empty_payload_frames,
-            "candidate_identifier_count": len(correlator.histories),
+            "candidate_identifier_count": len(
+                {
+                    (channel, can_id, id_bits)
+                    for channel, can_id, id_bits, _ in correlator.histories
+                }
+            ),
+            "candidate_stream_count": len(correlator.histories),
             "candidate_field_state_count": len(correlator.regressions),
         },
         "ranking": {
             "reported_candidate_count": len(candidate_rows),
+            "eligible_candidate_maximum_r_squared": (
+                correlator.eligible_candidate_maximum_r_squared
+            ),
             "unreported_or_rejected_field_counts": rejected,
             "order": [
                 "r_squared multiplied by coverage_ratio descending",
@@ -1729,6 +2662,39 @@ def run_analysis(
             ],
             "candidates": candidate_rows,
         },
+        **(
+            {}
+            if config.regime_analysis is None
+            else {
+                "regime_analysis": {
+                    "classification": "candidate_only",
+                    "candidate_only": True,
+                    "physical_identity_verified": False,
+                    "scale_verified": False,
+                    "telemetry_promotion_allowed": False,
+                    "purpose": (
+                        "compare shortlisted torque-related passive fields "
+                        "across explicit operating regimes"
+                    ),
+                    "semantic_identity_warning": (
+                        "regime-dependent covariance can reject a proposed "
+                        "identity but cannot prove actual torque semantics"
+                    ),
+                    "reference_timestamp_source": (
+                        "exact PCAN-observed diagnostic wire response"
+                    ),
+                    "classifier_delta_basis": (
+                        "rate between consecutive exact reference timestamps; "
+                        "no CSV sample holding"
+                    ),
+                    "config": config.regime_analysis.as_dict(),
+                    "classification_counts": (
+                        correlator.regime_classification_counts
+                    ),
+                    "rankings": regime_rows,
+                }
+            }
+        ),
     }
 
 
@@ -1764,8 +2730,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--reference-field",
         default="auto",
         help=(
-            "auto, byte:N, unsigned u16/u32, or signed i16/i32 field "
-            "(for example i16be:0) within DID data bytes"
+            "auto, byte:N, unsigned u16/u32, signed i16/i32, or "
+            "bits:<little|big>:<DBC-start>:<length>:<unsigned|signed> "
+            "within DID data bytes"
         ),
     )
     parser.add_argument(
@@ -1820,6 +2787,103 @@ def build_parser() -> argparse.ArgumentParser:
         help="include conservatively classified diagnostic identifiers",
     )
     parser.add_argument(
+        "--bit-search-id",
+        action="append",
+        type=_parse_bit_search_id,
+        default=[],
+        metavar="{sff:HEX:DLC,eff:HEX:DLC}",
+        help=(
+            "replace the coarse candidate profile with exhaustive DBC bit "
+            "geometry for this exact CAN ID namespace and DLC; repeat at most "
+            f"{MAX_BIT_SEARCH_IDENTIFIERS} times"
+        ),
+    )
+    parser.add_argument(
+        "--bit-search-min-bits",
+        type=_parse_signal_length,
+        default=1,
+        help="minimum targeted field length (default 1)",
+    )
+    parser.add_argument(
+        "--bit-search-max-bits",
+        type=_parse_signal_length,
+        default=MAX_SIGNAL_BITS,
+        help=f"maximum targeted field length (default {MAX_SIGNAL_BITS})",
+    )
+    parser.add_argument(
+        "--bit-search-length",
+        action="append",
+        type=_parse_signal_length,
+        default=[],
+        metavar="BITS",
+        help=(
+            "search only this targeted bit length; repeat for additional "
+            "lengths (otherwise use the configured min..max range)"
+        ),
+    )
+    parser.add_argument(
+        "--bit-search-byte-order",
+        choices=("little", "big", "both"),
+        default="both",
+        help="targeted DBC byte-order profile (default both)",
+    )
+    parser.add_argument(
+        "--bit-search-signedness",
+        choices=("unsigned", "signed", "both"),
+        default="both",
+        help="targeted raw signedness profile (default both)",
+    )
+    parser.add_argument(
+        "--regime-analysis",
+        action="store_true",
+        help=(
+            "opt in to explicit idle/pull/cruise/lift/overrun slices for "
+            "shortlisted passive torque candidates"
+        ),
+    )
+    parser.add_argument(
+        "--regime-speed-field",
+        type=_parse_stream_field_selector,
+        metavar="STREAM=FIELD",
+    )
+    parser.add_argument(
+        "--regime-rpm-field",
+        type=_parse_stream_field_selector,
+        metavar="STREAM=FIELD",
+    )
+    parser.add_argument(
+        "--regime-throttle-field",
+        type=_parse_stream_field_selector,
+        metavar="STREAM=FIELD",
+    )
+    parser.add_argument(
+        "--regime-candidate-id",
+        action="append",
+        type=_parse_bit_search_id,
+        default=[],
+        metavar="{sff:HEX:DLC,eff:HEX:DLC}",
+        help=(
+            "exact passive stream to rank inside each regime; repeat up to "
+            f"{MAX_REGIME_CANDIDATE_STREAMS} times"
+        ),
+    )
+    parser.add_argument("--regime-stopped-speed-max", type=float)
+    parser.add_argument("--regime-moving-speed-min", type=float)
+    parser.add_argument("--regime-idle-rpm-min", type=float)
+    parser.add_argument("--regime-pull-speed-rate-min", type=float)
+    parser.add_argument("--regime-pull-throttle-min", type=float)
+    parser.add_argument("--regime-steady-speed-rate-max", type=float)
+    parser.add_argument("--regime-steady-throttle-rate-max", type=float)
+    parser.add_argument("--regime-lift-throttle-rate-max", type=float)
+    parser.add_argument("--regime-overrun-speed-rate-max", type=float)
+    parser.add_argument("--regime-overrun-throttle-max", type=float)
+    parser.add_argument(
+        "--regime-minimum-samples",
+        type=int,
+        default=5,
+        help="minimum samples needed to fit one candidate within a regime",
+    )
+    parser.add_argument(
         "--output",
         required=True,
         type=Path,
@@ -1851,6 +2915,105 @@ def main(argv: Sequence[str] | None = None) -> int:
         radius_us_decimal = Decimal(str(args.radius_ms)) * Decimal(1000)
         if radius_us_decimal != radius_us_decimal.to_integral_value():
             raise CorrelateError("radius must resolve to whole microseconds")
+        bit_search_byte_orders = (
+            ("little", "big")
+            if args.bit_search_byte_order == "both"
+            else (args.bit_search_byte_order,)
+        )
+        bit_search_signedness = {
+            "unsigned": (False,),
+            "signed": (True,),
+            "both": (False, True),
+        }[args.bit_search_signedness]
+        if len(set(args.bit_search_id)) != len(args.bit_search_id):
+            raise CorrelateError("bit-search IDs must not contain duplicates")
+        regime_option_values = (
+            args.regime_speed_field,
+            args.regime_rpm_field,
+            args.regime_throttle_field,
+            *args.regime_candidate_id,
+            args.regime_stopped_speed_max,
+            args.regime_moving_speed_min,
+            args.regime_idle_rpm_min,
+            args.regime_pull_speed_rate_min,
+            args.regime_pull_throttle_min,
+            args.regime_steady_speed_rate_max,
+            args.regime_steady_throttle_rate_max,
+            args.regime_lift_throttle_rate_max,
+            args.regime_overrun_speed_rate_max,
+            args.regime_overrun_throttle_max,
+        )
+        if not args.regime_analysis and any(
+            value is not None for value in regime_option_values
+        ):
+            raise CorrelateError(
+                "regime options require explicit --regime-analysis"
+            )
+        regime_analysis = None
+        if args.regime_analysis:
+            required_regime_values = (
+                args.regime_speed_field,
+                args.regime_rpm_field,
+                args.regime_throttle_field,
+                args.regime_stopped_speed_max,
+                args.regime_moving_speed_min,
+                args.regime_idle_rpm_min,
+                args.regime_pull_speed_rate_min,
+                args.regime_pull_throttle_min,
+                args.regime_steady_speed_rate_max,
+                args.regime_steady_throttle_rate_max,
+                args.regime_lift_throttle_rate_max,
+                args.regime_overrun_speed_rate_max,
+                args.regime_overrun_throttle_max,
+            )
+            if any(value is None for value in required_regime_values):
+                raise CorrelateError(
+                    "regime analysis requires all classifier fields and "
+                    "thresholds"
+                )
+            if not args.regime_candidate_id:
+                raise CorrelateError(
+                    "regime analysis requires at least one candidate stream"
+                )
+            if (
+                len(set(args.regime_candidate_id))
+                != len(args.regime_candidate_id)
+            ):
+                raise CorrelateError(
+                    "regime candidate streams must not contain duplicates"
+                )
+            module = MODULES[args.module]
+
+            def module_selector(
+                selector: StreamFieldSelector,
+            ) -> StreamFieldSelector:
+                return StreamFieldSelector(
+                    selector.can_id,
+                    selector.id_bits,
+                    selector.dlc,
+                    selector.field,
+                    channel=module.channel,
+                )
+
+            regime_analysis = RegimeAnalysisConfig(
+                speed=module_selector(args.regime_speed_field),
+                rpm=module_selector(args.regime_rpm_field),
+                throttle=module_selector(args.regime_throttle_field),
+                candidate_streams=frozenset(args.regime_candidate_id),
+                stopped_speed_max=args.regime_stopped_speed_max,
+                moving_speed_min=args.regime_moving_speed_min,
+                idle_rpm_min=args.regime_idle_rpm_min,
+                pull_speed_rate_min=args.regime_pull_speed_rate_min,
+                pull_throttle_min=args.regime_pull_throttle_min,
+                steady_speed_rate_max=args.regime_steady_speed_rate_max,
+                steady_throttle_rate_max=(
+                    args.regime_steady_throttle_rate_max
+                ),
+                lift_throttle_rate_max=args.regime_lift_throttle_rate_max,
+                overrun_speed_rate_max=args.regime_overrun_speed_rate_max,
+                overrun_throttle_max=args.regime_overrun_throttle_max,
+                minimum_samples=args.regime_minimum_samples,
+            )
         config = AnalysisConfig(
             match_mode=args.match,
             radius_us=int(radius_us_decimal),
@@ -1860,6 +3023,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             minimum_coverage_ratio=args.minimum_coverage,
             minimum_distinct_values=args.minimum_distinct,
             top_count=args.top,
+            bit_search_ids=frozenset(args.bit_search_id),
+            bit_search_minimum_bits=args.bit_search_min_bits,
+            bit_search_maximum_bits=args.bit_search_max_bits,
+            bit_search_lengths=tuple(args.bit_search_length),
+            bit_search_byte_orders=bit_search_byte_orders,
+            bit_search_signedness=bit_search_signedness,
+            regime_analysis=regime_analysis,
         )
         config.validate()
         output = _validated_output_path(

@@ -77,7 +77,20 @@ For each independently verified module:
 
 Change one physical variable at a time and capture a baseline, the controlled change, and a repeat. Use an external ground-truth instrument or known labeled source for absolute units; correlation alone proves association or relative scaling, not identity or absolute scale. Record timing, state, units, uncertainty, byte order, signedness, offset, multiplier, and counterexamples.
 
-Prefer existing `tools/signal_correlate.py` for DID relationships and `tools/can_field_finder.py` for passive broadcast fields. Use AlfaOBD or wiTECH observation only for unresolved labels or explicitly authorized operations, and separate observed tool behavior from independently reproduced behavior.
+Use AlfaOBD or wiTECH observation only for unresolved labels or explicitly authorized operations, and separate observed tool behavior from independently reproduced behavior.
+
+For DID-to-passive mapping, use this staged offline workflow:
+
+1. Establish the ECU-scoped label and physical scale, then extract exact PCAN-observed diagnostic request/response timestamps. Do not sample-hold buffered CSV values as the primary timebase.
+2. Run `tools/can_timeseries_correlate.py` with its backward-compatible coarse profile. Keep channel, SFF/EFF namespace, CAN ID, DLC, source hashes, and maximum match staleness in the evidence.
+3. Shortlist at most two identifiers, then use `--bit-search-id` with selected lengths and byte orders for arbitrary DBC/cantools Intel or Motorola geometry. Do not exhaustively expand the whole bus.
+4. Evaluate the same field on complete independent drive legs using `tools/can_signal_benchmark.py`. Never randomly split adjacent samples from one drive into train and holdout sets.
+5. When semantically different torque stages remain highly correlated, use the correlator's opt-in `--regime-analysis` on no more than four exact shortlisted streams. Make the speed/RPM/throttle fields and raw-unit classifier thresholds explicit, derive them on the development leg, and freeze them before holdout use.
+6. Treat affine fit, benchmark recovery, and regime slices as `candidate_only`. Require counterexamples, physical plausibility, and independent scaling evidence before promotion.
+
+Use `tools/signal_correlate.py` for offline DID-to-DID relationships. Keep `tools/can_field_finder.py` as a bounded exploratory aid, not as the provenance or promotion authority. Submit full saved-log searches through an existing named `pi_compute` task; do not run them on vanpi. Obtain owner approval before adding or changing a `.van-compute.json` task.
+
+This workflow accelerates field layout, scaling, and DID-to-broadcast correlation. It does not discover which DID addresses exist; use ECU-scoped catalogs, wire mining, and bounded DID scanners for that separate task.
 
 ## Promote verified knowledge
 

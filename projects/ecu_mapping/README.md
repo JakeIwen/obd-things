@@ -769,15 +769,57 @@ relationships, and broadcast candidates. It does not by itself prove absolute RP
 temperature, or every gear enum. Radar/GPS/tachometer, a stable temperature reference, or another
 controlled ground truth is still required before promoting those scalings.
 
-`tools/can_timeseries_correlate.py` performs the first offline broadcast-candidate search against
-one exact-positive cluster DID. It streams saved plain or zstd candump chunks, verifies every
-selected reference against its exact global raw-frame sequence/timestamp/ID/payload, and excludes
-29-bit and standard OBD diagnostic IDs by default so the diagnostic response cannot become a
-trivial perfect match. Candidate views include bytes, overlapping 16-bit
-integers, aligned 32-bit integers, and the Stellantis packed
-`((byte0 & 0x1F) << 8) | byte1` 13-bit form used by torque signals, plus the
-`((byte0 & 1) << 16) | u16be(byte1, byte2)` 17-bit form used by transmission
-output speed. It requires
+### Current packed-field mapping doctrine
+
+The first three phases are current doctrine, with the first two implemented as
+the default operational path:
+
+1. **Establish evidence and timing.** Research the exact ECU/tool context, bind
+   the label and physical scale to its ECU-scoped DID, and use the
+   PCAN-observed diagnostic response timestamp as the reference. Alfa CSV is
+   label/scale evidence, not a sample-held timebase.
+2. **Discover coarsely, then refine narrowly.** Run the stable coarse field
+   profile over the bus, shortlist no more than two exact stream identities,
+   then enumerate arbitrary DBC/cantools bit geometry only on those IDs.
+   Validate a recovered field on complete independent drive legs; never split
+   adjacent samples from one leg into train and holdout sets.
+3. **Resolve semantic ambiguity by regime.** For unresolved actual torque,
+   compare DID `1018` with `101A/101B/101F`, RPM, converter slip, shaft speeds,
+   throttle, and the relevant passive fields across idle, pull, cruise, lift,
+   and negative overrun. A high one-field fit is not semantic identity.
+
+Reference/OCR infrastructure and automated DBC/template export are explicitly
+out of scope. Do not add Spearman, sentinel inference, calibration machinery,
+or time-series null tests until a named whole-leg benchmark failure shows that
+the simpler field search and affine score are insufficient.
+
+Transmission-temperature discrimination is the first Phase-2 application.
+The tracked whole-leg benchmark starts with the original TCM development leg,
+the continuation validation leg, and the newer 72- and 45-minute blind legs.
+It pairs `04FE` gearbox oil and `0301` TCU-chip temperature against `0x417`
+bytes 2–3 on every leg rather than treating warm-up covariance with either
+reference as identity. The latter three legs still require exact wire
+extraction on compute before evaluation.
+
+The older torque motivation is superseded: `0x100` bytes 3–4 is TCM target
+crankshaft torque from DID `101B`, and `0x0F0` is maximum engine torque
+requested by the transmission from `101F`. Actual torque `1018`, converter
+slip `0500`, and a passive gearbox-oil temperature remain unresolved.
+
+`tools/can_timeseries_correlate.py` performs the offline broadcast-candidate
+search against one exact-positive module DID. It streams saved plain or zstd
+candump chunks, verifies every selected reference against its exact global
+raw-frame sequence/timestamp/ID/payload, and excludes 29-bit and standard OBD
+diagnostic IDs by default so the diagnostic response cannot become a trivial
+perfect match. A candidate stream is keyed by channel, SFF/EFF namespace, CAN
+ID, and DLC; reports retain source path/hash provenance and make the symmetric
+match radius an explicit maximum-staleness gate.
+
+The default candidate views remain bytes, overlapping 16-bit integers, aligned
+32-bit integers, and the two established Stellantis packed 13-/17-bit forms.
+For an explicitly shortlisted `sff:` or `eff:` ID, `--bit-search-id` replaces
+that coarse profile with bounded 1–32-bit Intel/Motorola DBC geometry. No more
+than two IDs and 6,000 fields per ID are accepted. It requires
 at least 50 percent reference coverage and four distinct candidate values by
 default, then ranks by `R² × coverage` before the remaining deterministic
 tie-breakers. The portable direct invocation for the completed idling
@@ -815,6 +857,104 @@ The task accepts exactly those three input roles and fixes DID `1000`, field
 does not accept caller-supplied arguments. The first successful report found
 `0x0FC` bytes 0–1 as the full-coverage unit-slope raw candidate. See the
 [`2026-07-26 broadcast correlation finding`](findings/promaster_2022/2026-07-26_cluster_did1000_broadcast_correlation.md).
+
+For an already shortlisted packed field, specify exact namespace and geometry
+instead of expanding every frame. This example is illustrative and should
+still be submitted through the matching named compute task for a full log:
+
+```bash
+python3 tools/can_timeseries_correlate.py \
+  --module tcm \
+  --wire tmp/ecu_mapping/tcm-drive-analysis/tcm_wire.jsonl \
+  --did 101B --reference-field u16be:0 \
+  --bit-search-id sff:100:8 \
+  --bit-search-length 11 \
+  --bit-search-byte-order big \
+  --bit-search-signedness unsigned \
+  --radius-ms 100 --minimum-samples 20 --top 100 \
+  --output tmp/sweeps/tcm-101b-bit-refinement.json \
+  tmp/ecu_mapping/compute-inputs/pcm-plots-drive-20260728T002525Z/chunk_000000_full.candump.zst \
+  tmp/ecu_mapping/compute-inputs/pcm-plots-drive-20260728T002525Z/chunk_000001_full.candump.zst \
+  tmp/ecu_mapping/compute-inputs/pcm-plots-drive-20260728T002525Z/chunk_000002_full.candump.zst \
+  tmp/ecu_mapping/compute-inputs/pcm-plots-drive-20260728T002525Z/chunk_000003_full.candump.zst
+```
+
+Do not run that full search on vanpi. Use the existing
+`can-timeseries-correlate-tcm-four-chunks` compute task and pass the DID,
+reference, and bit-search options through its arguments.
+
+Phase 3 is an opt-in slice of the same correlator, not a second discovery
+engine. `--regime-analysis` classifies each exact DID response as idle,
+positive pull, steady cruise, lift transition, negative overrun, or
+unclassified by three explicitly supplied passive fields. Speed and throttle
+changes are rates between consecutive exact diagnostic timestamps; the tool
+does not sample-hold Alfa CSV values. It runs per-regime regressions only for
+at most four exact shortlisted streams and retains all candidate-only gates.
+Configuration validation projects the field count across all five regimes and
+rejects a selection that could exceed the 50,000-regression state cap before
+any capture is opened.
+
+Thresholds are raw-field units and must be selected on the development leg,
+recorded, then frozen before validation/blind legs. This development example
+uses the established `0x101` and `0x0FC` geometries plus the loaded-drive
+`0x41B` throttle lead; its numeric thresholds remain experimental classifier
+choices, not vehicle calibrations:
+
+```bash
+--regime-analysis \
+--regime-speed-field sff:101:8=bits:big:0:12:unsigned \
+--regime-rpm-field sff:0FC:8=bits:big:7:14:unsigned \
+--regime-throttle-field sff:41B:8=u16be:4 \
+--regime-candidate-id sff:0FC:8 \
+--regime-candidate-id sff:1F4:8 \
+--regime-candidate-id sff:100:8 \
+--regime-stopped-speed-max 0 \
+--regime-moving-speed-min 80 \
+--regime-idle-rpm-min 500 \
+--regime-pull-speed-rate-min 8 \
+--regime-pull-throttle-min 200 \
+--regime-steady-speed-rate-max 4 \
+--regime-steady-throttle-rate-max 20 \
+--regime-lift-throttle-rate-max -50 \
+--regime-overrun-speed-rate-max 0 \
+--regime-overrun-throttle-max 100 \
+--regime-minimum-samples 5
+```
+
+The classifier applies idle first, then lift, positive pull, negative
+overrun, and steady cruise. The report preserves classification counts,
+thresholds, exact stream geometry, and a separate ranking for each named
+regime. A regime-dependent fit may rule out semantic equivalence; it still
+cannot prove that a passive field is actual crankshaft torque. The first
+implementation and development-leg results are recorded in the
+[`2026-07-28 packed-field benchmark finding`](findings/promaster_2022/2026-07-28_signal_field_engine_benchmark.md).
+
+`tools/can_signal_benchmark.py` validates the tracked whole-leg benchmark
+manifest without opening raw logs:
+
+```bash
+python3 tools/can_signal_benchmark.py plan \
+  projects/ecu_mapping/configs/signal_field_benchmark_v1.json
+```
+
+It evaluates reports produced by named compute tasks, requires the supplied
+report bytes to match the compute manifest's `report.json` SHA-256, and checks
+exact wire linkage plus channel/SFF-EFF/ID/DLC/provenance/staleness fields.
+Split independence is enforced by artifact ID, normalized path hint, and
+pinned digest so aliases cannot leak one capture into development and
+holdout. A negative control with no eligible candidates is an explicit
+empty-set pass; a null maximum alongside reported candidates is invalid. The
+tool writes only candidate-only aggregate results below `tmp/` and never runs
+the heavy correlation itself.
+
+The manifest currently contains 21 positive, negative, carrier-only, proxy,
+and pending cases, including paired `04FE`/`0301` temperature challenges and
+the coarse `1018` Phase-3 gate. Existing compute tasks cover the
+argument-enabled PCM/TCM two-/four-chunk legs. The cluster two-chunk task fixes
+its original coarse DID-1000 search and cannot express the packed RPM
+benchmark. The continuation and newer blind legs need approved
+five-/eight-chunk wire-extraction and correlation tasks before they can run.
+Do not change `.van-compute.json` for that expansion without owner approval.
 
 This tool performs no CAN, ADB, service, or network access. Its ranked rows are deliberately marked
 `candidate_only`, `physical_identity_verified: false`, `scale_verified: false`, and
