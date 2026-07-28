@@ -313,6 +313,94 @@ class NearestCorrelationTests(unittest.TestCase):
         self.assertIn(0x18DA1234, {row["can_id"] for row in rows})
         self.assertIn(0x456, {row["can_id"] for row in rows})
 
+    def test_packed_thirteen_bit_candidate_recovers_affine_scale(self):
+        references = []
+        frames = []
+        for index, raw_value in enumerate((4000, 4200, 4400, 4600, 4800), 1):
+            timestamp = index * 1_000_000
+            references.append(
+                correlate.ReferenceSample(timestamp, raw_value * 0.125)
+            )
+            frames.append(
+                correlate.CanFrame(
+                    timestamp,
+                    0x100,
+                    11,
+                    bytes(
+                        (
+                            0xA0 | ((raw_value >> 8) & 0x1F),
+                            raw_value & 0xFF,
+                        )
+                    ),
+                )
+            )
+
+        analyzer = correlate.analyze_streams(
+            references,
+            frames,
+            config=correlate.AnalysisConfig(
+                minimum_samples=3,
+                minimum_distinct_values=3,
+            ),
+        )
+        rows, _ = analyzer.candidate_rows()
+        row = candidate(
+            {"ranking": {"candidates": rows}},
+            0x100,
+            "u13be-low5",
+            0,
+        )
+
+        self.assertAlmostEqual(row["affine_model"]["scale"], 0.125)
+        self.assertAlmostEqual(row["affine_model"]["intercept"], 0.0)
+        self.assertAlmostEqual(row["correlation"]["r_squared"], 1.0)
+
+    def test_packed_seventeen_bit_candidate_recovers_affine_scale(self):
+        references = []
+        frames = []
+        for index, raw_value in enumerate(
+            (60_000, 70_000, 80_000, 90_000, 100_000),
+            1,
+        ):
+            timestamp = index * 1_000_000
+            references.append(
+                correlate.ReferenceSample(timestamp, raw_value / 32.0)
+            )
+            frames.append(
+                correlate.CanFrame(
+                    timestamp,
+                    0x1F7,
+                    11,
+                    bytes(
+                        (
+                            0xA0 | ((raw_value >> 16) & 0x01),
+                            (raw_value >> 8) & 0xFF,
+                            raw_value & 0xFF,
+                        )
+                    ),
+                )
+            )
+
+        analyzer = correlate.analyze_streams(
+            references,
+            frames,
+            config=correlate.AnalysisConfig(
+                minimum_samples=3,
+                minimum_distinct_values=3,
+            ),
+        )
+        rows, _ = analyzer.candidate_rows()
+        row = candidate(
+            {"ranking": {"candidates": rows}},
+            0x1F7,
+            "u17be-low1",
+            0,
+        )
+
+        self.assertAlmostEqual(row["affine_model"]["scale"], 1.0 / 32.0)
+        self.assertAlmostEqual(row["affine_model"]["intercept"], 0.0)
+        self.assertAlmostEqual(row["correlation"]["r_squared"], 1.0)
+
 
 class WindowCorrelationTests(unittest.TestCase):
     def test_window_mean_uses_frames_on_both_sides(self):
@@ -360,6 +448,14 @@ class WindowCorrelationTests(unittest.TestCase):
         )
 
         self.assertEqual(fields[correlate.FieldSpec("byte", 2)], 3)
+        self.assertEqual(
+            fields[correlate.FieldSpec("u13be-low5", 0)],
+            0x0102,
+        )
+        self.assertEqual(
+            fields[correlate.FieldSpec("u17be-low1", 0)],
+            0x010203,
+        )
         self.assertEqual(fields[correlate.FieldSpec("u16be", 0)], 0x0102)
         self.assertEqual(fields[correlate.FieldSpec("u16le", 0)], 0x0201)
         self.assertEqual(fields[correlate.FieldSpec("u16be", 1)], 0x0203)
@@ -373,6 +469,24 @@ class WindowCorrelationTests(unittest.TestCase):
             fields[correlate.FieldSpec("u32be", 4)], 0x05060708
         )
         self.assertNotIn(correlate.FieldSpec("u32be", 1), fields)
+
+    def test_stellantis_packed_thirteen_bit_field_masks_upper_bits(self):
+        payload = bytes.fromhex("e1 23")
+        spec = correlate.FieldSpec("u13be-low5", 0)
+
+        self.assertEqual(spec.width_bytes, 2)
+        self.assertEqual(spec.byte_order, "big")
+        self.assertFalse(spec.signed)
+        self.assertEqual(correlate._decode_field(payload, spec), 0x0123)
+
+    def test_stellantis_packed_seventeen_bit_field_masks_upper_bits(self):
+        payload = bytes.fromhex("fd 6f a1")
+        spec = correlate.FieldSpec("u17be-low1", 0)
+
+        self.assertEqual(spec.width_bytes, 3)
+        self.assertEqual(spec.byte_order, "big")
+        self.assertFalse(spec.signed)
+        self.assertEqual(correlate._decode_field(payload, spec), 0x16FA1)
 
 
 class EvidenceValidationTests(unittest.TestCase):

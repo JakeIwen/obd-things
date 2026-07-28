@@ -10,10 +10,12 @@ samples.  Saved candump text (plain or ``.zst``) supplies candidate broadcast
 fields.
 
 Every classic-CAN payload contributes byte fields, overlapping unsigned 16-bit
-big- and little-endian fields, and aligned unsigned 32-bit fields in both byte
-orders.  A streaming chronological merge matches those fields to each reference
-sample either by the nearest frame or by a mean/min/max statistic in a symmetric
-time window.  Online covariance keeps memory independent of capture duration;
+big- and little-endian fields, the Stellantis low-five-bits-plus-next-byte
+13-bit field, the Stellantis low-bit-plus-next-word 17-bit field, and aligned
+unsigned 32-bit fields in both byte orders. A
+streaming chronological merge matches those fields to each reference sample
+either by the nearest frame or by a mean/min/max statistic in a symmetric time
+window. Online covariance keeps memory independent of capture duration;
 explicit caps bound the remaining time-window, identifier, match-state, field,
 reference, frame, and decompressed-byte state.
 
@@ -165,6 +167,10 @@ class FieldSpec:
     def width_bytes(self) -> int:
         if self.kind == "byte":
             return 1
+        if self.kind == "u13be-low5":
+            return 2
+        if self.kind == "u17be-low1":
+            return 3
         if self.kind.startswith(("u16", "i16")):
             return 2
         if self.kind.startswith(("u32", "i32")):
@@ -173,6 +179,8 @@ class FieldSpec:
 
     @property
     def byte_order(self) -> str | None:
+        if self.kind in ("u13be-low5", "u17be-low1"):
+            return "big"
         if self.kind in ("u16be", "i16be"):
             return "big"
         if self.kind in ("u16le", "i16le"):
@@ -417,6 +425,16 @@ def _decode_field(payload: bytes, spec: FieldSpec) -> int:
         )
     if spec.kind == "byte":
         return payload[spec.offset]
+    if spec.kind == "u13be-low5":
+        return (
+            ((payload[spec.offset] & 0x1F) << 8)
+            | payload[spec.offset + 1]
+        )
+    if spec.kind == "u17be-low1":
+        return (
+            ((payload[spec.offset] & 0x01) << 16)
+            | int.from_bytes(payload[spec.offset + 1 : end], "big")
+        )
     if spec.kind in ("u16be", "i16be"):
         return int.from_bytes(
             payload[spec.offset:end], "big", signed=spec.signed
@@ -722,8 +740,24 @@ def iter_payload_fields(payload: bytes) -> Iterator[tuple[FieldSpec, int]]:
         yield FieldSpec("byte", offset), value
     for offset in range(max(0, len(payload) - 1)):
         pair = payload[offset : offset + 2]
+        # Stellantis powertrain frames commonly pack a 13-bit Motorola field
+        # as the low five bits of the first byte followed by the second byte.
+        # Keep the raw integer here; the affine fit determines physical scale
+        # and offset against the selected diagnostic reference.
+        yield FieldSpec("u13be-low5", offset), (
+            ((pair[0] & 0x1F) << 8) | pair[1]
+        )
         yield FieldSpec("u16be", offset), int.from_bytes(pair, "big")
         yield FieldSpec("u16le", offset), int.from_bytes(pair, "little")
+    for offset in range(max(0, len(payload) - 2)):
+        triplet = payload[offset : offset + 3]
+        # Another common Stellantis Motorola layout uses the low bit of one
+        # byte as bit 16, followed by the next two bytes. Transmission output
+        # speed on this van crosses that boundary during highway driving.
+        yield FieldSpec("u17be-low1", offset), (
+            ((triplet[0] & 0x01) << 16)
+            | int.from_bytes(triplet[1:], "big")
+        )
     # Keep 32-bit candidates word-aligned to avoid five overlapping
     # interpretations of every eight-byte classic-CAN payload.
     for offset in range(0, max(0, len(payload) - 3), 4):

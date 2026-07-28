@@ -20,7 +20,7 @@ let ageCursorMonotonicMs = null;
 const retiredInstances = new Set();
 
 const DRIVER_QUALITIES = new Set(["verified", "observed_alfa_scale"]);
-const MAX_STATE_FALLBACK_AGE_MS = 3000;
+const MAX_STATE_FALLBACK_AGE_MS = 5000;
 const MAX_STREAM_DELIVERY_AGE_MS = 10000;
 const MAX_HTTP_ROUND_TRIP_MS = 2000;
 const STREAM_STALL_RESYNC_MS = 3000;
@@ -717,9 +717,57 @@ function renderEngineMetric(role, catalog, metrics) {
   return {definition, state};
 }
 
+function renderOilPressureReference(metrics) {
+  const oil = metrics["engine.oil_pressure"];
+  const rpm = metrics["engine.rpm"];
+  const coolant = metrics["engine.coolant_temperature"];
+  const freshNumber = (metric) => (
+    metric?.available &&
+    !metric.stale &&
+    typeof metric.value === "number" &&
+    Number.isFinite(metric.value)
+  );
+  const general = (
+    "OEM warm reference: ~650 rpm 15–34 psi · " +
+    "1,000–3,000 rpm 28–35 psi · >3,500 rpm 65–80 psi."
+  );
+  if (![oil, rpm, coolant].every(freshNumber)) {
+    text("engine-oil-pressure-reference", general);
+    return;
+  }
+  const engineRpm = Number(rpm.value);
+  const coolantF = Number(coolant.value);
+  if (coolantF < 192.2 || coolantF > 212.0) {
+    text(
+      "engine-oil-pressure-reference",
+      `OEM pressure bands apply only at 192–212°F coolant; ` +
+      `current coolant is ${coolantF.toFixed(0)}°F.`,
+    );
+    return;
+  }
+  let band;
+  if (engineRpm >= 550 && engineRpm <= 850) {
+    band = (
+      "nearest warm curb-idle reference (~650 rpm): 15–34 psi " +
+      "(550–850 rpm is a UI context window, not an OEM test band)"
+    );
+  } else if (engineRpm >= 1000 && engineRpm <= 3000) {
+    band = "warm 1,000–3,000 rpm: 28–35 psi";
+  } else if (engineRpm > 3500) {
+    band = "warm above 3,500 rpm: 65–80 psi";
+  } else {
+    band = "no OEM band is published for this transition RPM";
+  }
+  text(
+    "engine-oil-pressure-reference",
+    `OEM context · ${band}. Advisory context only; no alert is inferred.`,
+  );
+}
+
 function renderEngineHealth(catalog, metrics) {
   const states = Object.keys(ENGINE_HEALTH_METRICS)
     .map((role) => renderEngineMetric(role, catalog, metrics));
+  renderOilPressureReference(metrics);
   const mapped = states.filter((state) => state.definition).length;
   const ready = states.filter((state) => state.state.heroReady).length;
   text(

@@ -53,7 +53,11 @@ The initial drive-publisher vocabulary is intentionally narrow:
 | `engine.oil_pressure` | `ccan.broadcast.0x41d` | number, `psi` | `observed_alfa_scale` |
 | `engine.coolant_temperature` | `ccan.broadcast.0x2ed` | number, `°F` | `observed_alfa_scale` |
 | `engine.rpm` | `ccan.broadcast.0x0fc` | number, `rpm` | `observed_alfa_scale` |
+| `engine.target_crankshaft_torque` | `ccan.broadcast.0x100` | number, `lb-ft` | `observed_alfa_scale` |
+| `transmission.output_speed` | `ccan.broadcast.0x1f7` | number, `rpm` | `observed_alfa_scale` |
+| `transmission.turbine_speed` | `ccan.broadcast.0x1f7` | number, `rpm` | `observed_alfa_scale` |
 | `vehicle.ignition_on` | `ccan.broadcast.0x2ef` | boolean, `boolean` | `verified` |
+| `vehicle.speed` | `ccan.broadcast.0x101` | number, `mph` | `observed_alfa_scale` |
 | `diagnostics.cluster.did.1000.raw` | `cluster.did.1000` | integer, `raw_u16_be` | `candidate` |
 | `diagnostics.cluster.did.1002.raw` | `cluster.did.1002` | integer, `raw_u8` | `candidate` |
 | `diagnostics.cluster.did.0107.raw` | `cluster.did.0107` | integer, `raw_u8` | `candidate` |
@@ -85,26 +89,34 @@ cannot use one static good/bad threshold. Power must be labeled as
 ECU-estimated crankshaft power, not wheel horsepower.
 
 The 2026-07-26 simultaneous PCM Plots/wire campaign qualified the first two
-receive-only sources, and the 2026-07-27 loaded drive qualified passive engine
-speed:
+receive-only sources. The 2026-07-27 PCM loaded drive qualified passive engine
+speed, and the later TCM loaded drive qualified road speed, both transmission
+shaft speeds, and explicitly labeled TCM target crankshaft torque:
 
 | Metric | Passive C-CAN source | Decode | Quality |
 |---|---|---|---|
 | `engine.oil_pressure` | `0x41D` byte 2 | native raw x 4 kPa, published as psi | `observed_alfa_scale` |
 | `engine.coolant_temperature` | `0x2ED` byte 0 | native raw - 40 °C, published as °F | `observed_alfa_scale` |
 | `engine.rpm` | `0x0FC` bytes 0–1 u16be | low 2 bits masked, raw / 4 rpm | `observed_alfa_scale` |
+| `vehicle.speed` | `0x101` packed 12-bit field | raw / 16 km/h, published as mph | `observed_alfa_scale` |
+| `transmission.output_speed` | `0x1F7` byte0 bit0 then bytes 1–2 | packed 17-bit raw / 32 rpm | `observed_alfa_scale` |
+| `transmission.turbine_speed` | `0x1F7` bytes 4–5 u16be | raw / 2 rpm | `observed_alfa_scale` |
+| `engine.target_crankshaft_torque` | `0x100` bytes 3–4 upper 11 bits | raw - 500 Nm, published as lb-ft | `observed_alfa_scale` |
 
-All three are in the public registry and the passive collector reads them only
+All are in the public registry and the passive collector reads them only
 after its normal C-CAN interface and identity gates pass. They require no
 per-reading approval and send no CAN traffic. The exact current-vehicle
 correlation is recorded in the
 [`PCM Plots idle finding`](../ecu_mapping/findings/promaster_2022/2026-07-26_pcm_plots_idle_mapping.md)
 and
-[`loaded-drive finding`](../ecu_mapping/findings/promaster_2022/2026-07-27_pcm_plots_loaded_drive_mapping.md).
+[`PCM loaded-drive finding`](../ecu_mapping/findings/promaster_2022/2026-07-27_pcm_plots_loaded_drive_mapping.md),
+plus the
+[`TCM loaded-drive finding`](../ecu_mapping/findings/promaster_2022/2026-07-27_tcm_plots_loaded_drive_mapping.md).
 
-The collector defaults to a one-second pause between passive cycles. The three
-engine metrics and ignition witness expire after three seconds, so a healthy
-collector does not deliberately create stale gaps between updates.
+The collector defaults to a one-second pause between passive cycles. The
+powertrain scalars and ignition presence witness expire after five seconds,
+which covers the bounded bus-classification plus snapshot cycle without
+dashboard flicker while still failing stale promptly after traffic stops.
 
 ### Presentation units
 
@@ -116,10 +128,13 @@ qualified native Nm value must be multiplied by `0.737562149` before
 publication as lb-ft. Raw diagnostic metrics remain raw and are never
 unit-converted.
 
-Engine-oil temperature, transmission-oil temperature, passive loaded torque,
-and derived power are not yet qualified. Diagnostic loaded torque and RPM are
-now mapped, and passive RPM is available; the unresolved item is the passive
-torque encoding needed for a receive-only power calculation. Their evidence, exact OEM
+Engine-oil temperature, transmission-oil temperature, passive **actual**
+loaded torque, and derived power are not yet qualified. The available
+`engine.target_crankshaft_torque` metric is a TCM command target and is
+deliberately excluded from the dashboard's actual-torque and power roles.
+Diagnostic actual torque and RPM are mapped, and passive RPM is available;
+the unresolved item is the passive actual-torque encoding needed for a
+receive-only power calculation. Their evidence, exact OEM
 pressure/thermostat context, alert-design constraints, PCM/TCM acquisition
 sequence, and later mechanical and electrical targets are maintained in the
 [`priority telemetry finding`](../ecu_mapping/findings/promaster_2022/2026-07-25_priority_telemetry_targets.md).
@@ -131,6 +146,17 @@ the other roadmap labels do not create metrics or imply that a source is
 available. Context-aware oil-pressure bands, engine-running/startup gates, and
 fresh time-aligned torque/RPM power derivation still require specialized
 evaluation and presentation logic. Passive RPM sends no diagnostic traffic.
+
+The oil-pressure card does provide **advisory OEM context**, not an alert. When
+fresh coolant and RPM are available it selects a published warm-engine
+reference: 15–34 psi at approximately 650 rpm, 28–35 psi from 1,000–3,000 rpm,
+or 65–80 psi above 3,500 rpm, and only at 192–212 °F coolant. Because the OEM
+idle row names a point rather than a range, the UI uses 550–850 rpm only as a
+clearly labeled nearest-reference context window; it is not presented as an
+OEM test band. The card explicitly reports that the 3,000–3,500 rpm transition
+has no published band. It does not color or classify the live pressure as
+safe/unsafe and does not implement the approximately-12-psi critical rule,
+because that rule still needs a verified running/startup-grace evaluator.
 
 ## Dashboard profiles and vehicle state
 
@@ -188,6 +214,12 @@ Passive reads:
    125 or 500 kbit/s;
 3. classify the bus from observed traffic;
 4. read only the allowlisted broadcast frame.
+
+The C-CAN powertrain socket's kernel filters constrain standard identifiers
+and reject extended/RTR forms, but deliberately leave `CAN_ERR_FLAG` out of
+the normal-frame mask. Linux gives that bit special receive-filter semantics:
+including it suppresses ordinary data frames. Received frames are still
+explicitly rejected in userspace if any extended, RTR, or error flag is set.
 
 An ordinary passive read never brings up or reconfigures an interface. The
 collector has one separate, guarded auto-retune path for a physical C-CAN ↔

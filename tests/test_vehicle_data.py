@@ -137,7 +137,11 @@ class SourceTests(unittest.TestCase):
                     "engine.coolant_temperature",
                     "engine.oil_pressure",
                     "engine.rpm",
+                    "engine.target_crankshaft_torque",
+                    "transmission.output_speed",
+                    "transmission.turbine_speed",
                     "vehicle.ignition_on",
+                    "vehicle.speed",
                 )
             )
         )
@@ -150,7 +154,11 @@ class SourceTests(unittest.TestCase):
                 "engine.coolant_temperature",
                 "engine.oil_pressure",
                 "engine.rpm",
+                "engine.target_crankshaft_torque",
+                "transmission.output_speed",
+                "transmission.turbine_speed",
                 "vehicle.ignition_on",
+                "vehicle.speed",
                 "diagnostics.cluster.did.0107.raw",
                 "diagnostics.cluster.did.1000.raw",
                 "diagnostics.cluster.did.1002.raw",
@@ -196,6 +204,12 @@ class SourceTests(unittest.TestCase):
             "ccan.broadcast.0x0fc",
         )
         self.assertEqual(METRICS["engine.rpm"].unit, "rpm")
+        self.assertEqual(METRICS["vehicle.speed"].unit, "mph")
+        self.assertEqual(
+            METRICS["engine.target_crankshaft_torque"].unit, "lb-ft"
+        )
+        self.assertEqual(METRICS["transmission.output_speed"].unit, "rpm")
+        self.assertEqual(METRICS["transmission.turbine_speed"].unit, "rpm")
 
     def test_passive_awake_read_takes_only_observer_lock(self):
         backend = FakeBackend()
@@ -1082,6 +1096,34 @@ class BrokerTests(unittest.TestCase):
                         source="ccan.broadcast.0x0fc",
                         quality="observed_alfa_scale",
                     ),
+                    SimpleNamespace(
+                        metric="engine.target_crankshaft_torque",
+                        value=75.0,
+                        unit="lb-ft",
+                        source="ccan.broadcast.0x100",
+                        quality="observed_alfa_scale",
+                    ),
+                    SimpleNamespace(
+                        metric="transmission.output_speed",
+                        value=1200.0,
+                        unit="rpm",
+                        source="ccan.broadcast.0x1f7",
+                        quality="observed_alfa_scale",
+                    ),
+                    SimpleNamespace(
+                        metric="transmission.turbine_speed",
+                        value=900.0,
+                        unit="rpm",
+                        source="ccan.broadcast.0x1f7",
+                        quality="observed_alfa_scale",
+                    ),
+                    SimpleNamespace(
+                        metric="vehicle.speed",
+                        value=55.0,
+                        unit="mph",
+                        source="ccan.broadcast.0x101",
+                        quality="observed_alfa_scale",
+                    ),
                 )
 
         broker = TelemetryBroker(
@@ -1100,7 +1142,7 @@ class BrokerTests(unittest.TestCase):
             observed_monotonic=100.0,
         )
 
-        self.assertEqual(broker._collect_passive_powertrain(ccan), 3)
+        self.assertEqual(broker._collect_passive_powertrain(ccan), 7)
         self.assertEqual(
             broker.metric_response("engine.oil_pressure")["value"], 30.2
         )
@@ -1110,6 +1152,23 @@ class BrokerTests(unittest.TestCase):
         )
         self.assertEqual(
             broker.metric_response("engine.rpm")["value"], 750.0
+        )
+        self.assertEqual(
+            broker.metric_response("engine.target_crankshaft_torque")[
+                "value"
+            ],
+            75.0,
+        )
+        self.assertEqual(
+            broker.metric_response("transmission.output_speed")["value"],
+            1200.0,
+        )
+        self.assertEqual(
+            broker.metric_response("transmission.turbine_speed")["value"],
+            900.0,
+        )
+        self.assertEqual(
+            broker.metric_response("vehicle.speed")["value"], 55.0
         )
 
 
@@ -1427,6 +1486,7 @@ class WebTests(unittest.TestCase):
         self.assertIn(b"Drive essentials", body)
         self.assertIn(b"Engine health", body)
         self.assertIn(b"OIL PRESSURE", body)
+        self.assertIn(b"engine-oil-pressure-reference", body)
         self.assertIn(b"COOLANT", body)
         self.assertIn(b"CRANK TORQUE", body)
         self.assertIn(b"Tire pressure", body)
@@ -1463,6 +1523,8 @@ class WebTests(unittest.TestCase):
         self.assertIn(b'"pageshow"', app)
         self.assertIn(b"ALFA SCALE means", app)
         self.assertIn(b"ENGINE_HEALTH_METRICS", app)
+        self.assertIn(b"renderOilPressureReference", app)
+        self.assertIn("65–80 psi".encode(), app)
         self.assertIn(b"Mapping pending", app)
         self.assertIn(b"/4 MAPPED", app)
         self.assertNotIn(b"card.hidden = !definition", app)
@@ -1535,6 +1597,7 @@ vm.runInThisContext(definitionsOnly + `
     observationState,
     renderEngineHealth,
     renderHeroMetric,
+    renderOilPressureReference,
     renderTires,
     renderedMarkers,
     renderedSnapshot: () => lastSnapshot,
@@ -1765,7 +1828,7 @@ dashboard.acceptSnapshot(
     clientReceiptMonotonicMs: fakeMonotonicMs,
   },
 );
-fakeMonotonicMs = 33001;
+fakeMonotonicMs = 35001;
 dashboard.advanceDisplayedAges();
 const locallyAged = {
   metric: dashboard.renderedSnapshot().metrics["vehicle.ignition_on"],
@@ -1774,7 +1837,7 @@ const locallyAged = {
 };
 
 dashboard.resetDelivery();
-fakeMonotonicMs = 34000;
+fakeMonotonicMs = 36000;
 const lifecycleSnapshot = snapshot("lifecycle", 1, now, 1, "lifecycle");
 dashboard.acceptSnapshot(
   lifecycleSnapshot,
@@ -1880,6 +1943,51 @@ const liveCoolant = {
   unit: element("engine-coolant-temperature-unit").textContent,
   status: element("engine-coolant-temperature-status").textContent,
 };
+const freshMetric = (value) => ({
+  available: true,
+  stale: false,
+  value,
+});
+function oilReference(metrics) {
+  dashboard.renderOilPressureReference(metrics);
+  return element("engine-oil-pressure-reference").textContent;
+}
+const oilReferences = {
+  missing: oilReference({}),
+  stale: oilReference({
+    "engine.oil_pressure": {
+      ...freshMetric(30),
+      stale: true,
+    },
+    "engine.rpm": freshMetric(650),
+    "engine.coolant_temperature": freshMetric(200),
+  }),
+  cold: oilReference({
+    "engine.oil_pressure": freshMetric(30),
+    "engine.rpm": freshMetric(650),
+    "engine.coolant_temperature": freshMetric(180),
+  }),
+  idle: oilReference({
+    "engine.oil_pressure": freshMetric(30),
+    "engine.rpm": freshMetric(700),
+    "engine.coolant_temperature": freshMetric(200),
+  }),
+  midrange: oilReference({
+    "engine.oil_pressure": freshMetric(30),
+    "engine.rpm": freshMetric(2000),
+    "engine.coolant_temperature": freshMetric(200),
+  }),
+  transition: oilReference({
+    "engine.oil_pressure": freshMetric(30),
+    "engine.rpm": freshMetric(3200),
+    "engine.coolant_temperature": freshMetric(200),
+  }),
+  high: oilReference({
+    "engine.oil_pressure": freshMetric(70),
+    "engine.rpm": freshMetric(4000),
+    "engine.coolant_temperature": freshMetric(200),
+  }),
+};
 process.stdout.write(JSON.stringify({
   acceptedHttp,
   acceptedStream,
@@ -1908,6 +2016,7 @@ process.stdout.write(JSON.stringify({
   emptyTires,
   emptyEngine,
   liveCoolant,
+  oilReferences,
 }));
 """
         completed = subprocess.run(
@@ -2011,6 +2120,28 @@ process.stdout.write(JSON.stringify({
         self.assertEqual(result["liveCoolant"]["value"], "194")
         self.assertEqual(result["liveCoolant"]["unit"], "\u00b0F")
         self.assertIn("VERIFIED", result["liveCoolant"]["status"])
+        self.assertIn(
+            "OEM warm reference", result["oilReferences"]["missing"]
+        )
+        self.assertIn(
+            "OEM warm reference", result["oilReferences"]["stale"]
+        )
+        self.assertIn(
+            "apply only at 192\u2013212\u00b0F",
+            result["oilReferences"]["cold"],
+        )
+        self.assertIn("15\u201334 psi", result["oilReferences"]["idle"])
+        self.assertIn(
+            "UI context window", result["oilReferences"]["idle"]
+        )
+        self.assertIn(
+            "28\u201335 psi", result["oilReferences"]["midrange"]
+        )
+        self.assertIn(
+            "no OEM band is published",
+            result["oilReferences"]["transition"],
+        )
+        self.assertIn("65\u201380 psi", result["oilReferences"]["high"])
 
     @unittest.skipUnless(
         shutil.which("node"), "node is required for browser JS test"

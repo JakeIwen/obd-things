@@ -53,6 +53,41 @@ class DecodeTests(unittest.TestCase):
         self.assertEqual(rpm.value, 3048.0)
         self.assertEqual(rpm.unit, "rpm")
 
+        target = ccan_powertrain.decode_frame(
+            0x100, bytes.fromhex("4F B9 F4 3E E0 00 0F CF")
+        )
+        self.assertEqual(target.metric, "engine.target_crankshaft_torque")
+        self.assertAlmostEqual(target.value, 3.0 * ccan_powertrain.NM_TO_LB_FT)
+        self.assertEqual(target.unit, "lb-ft")
+
+        speed = ccan_powertrain.decode_frame(
+            0x101, bytes.fromhex("00 60 00 00 00 00 00 00")
+        )
+        self.assertEqual(speed.metric, "vehicle.speed")
+        self.assertAlmostEqual(
+            speed.value, 48.0 * ccan_powertrain.KMH_TO_MPH
+        )
+        self.assertEqual(speed.unit, "mph")
+
+        shaft_speeds = ccan_powertrain.decode_frame_observations(
+            0x1F7, bytes.fromhex("00 2D 10 00 05 B6 00 00")
+        )
+        self.assertEqual(
+            [item.metric for item in shaft_speeds],
+            ["transmission.output_speed", "transmission.turbine_speed"],
+        )
+        self.assertEqual(shaft_speeds[0].value, 360.5)
+        self.assertEqual(shaft_speeds[1].value, 731.0)
+
+        wrapped_output = ccan_powertrain.decode_frame_observations(
+            0x1F7, bytes.fromhex("01 6F A1 38 12 90 03 D0")
+        )
+        self.assertAlmostEqual(
+            wrapped_output[0].value,
+            ((1 << 16) | 0x6FA1) / 32.0,
+        )
+        self.assertEqual(wrapped_output[1].value, 2376.0)
+
         ignition = ccan_powertrain.decode_frame(0x2EF, b"\xff\x21")
         self.assertIs(ignition.value, True)
         self.assertIsNone(ccan_powertrain.decode_frame(0x123, b"\x00"))
@@ -61,6 +96,9 @@ class DecodeTests(unittest.TestCase):
         self.assertIsNone(ccan_powertrain.decode_frame(0x41D, b"\x00\x00"))
         self.assertIsNone(ccan_powertrain.decode_frame(0x2ED, b""))
         self.assertIsNone(ccan_powertrain.decode_frame(0x0FC, b"\x00"))
+        self.assertIsNone(ccan_powertrain.decode_frame(0x100, b"\x00" * 4))
+        self.assertIsNone(ccan_powertrain.decode_frame(0x101, b"\x00" * 2))
+        self.assertIsNone(ccan_powertrain.decode_frame(0x1F7, b"\x00" * 5))
 
     def test_snapshot_rejects_extended_frame_with_same_low_identifier(self):
         fake = FakeSocket(
@@ -79,6 +117,29 @@ class DecodeTests(unittest.TestCase):
         )
         self.assertEqual(observations, ())
 
+    def test_kernel_filters_do_not_use_can_error_flag(self):
+        fake = FakeSocket([])
+        ticks = count(start=0.0, step=0.1)
+        ccan_powertrain.read_snapshot(
+            timeout=0.5,
+            socket_factory=lambda *_args: fake,
+            monotonic=lambda: next(ticks),
+        )
+
+        entries = [
+            struct.unpack("=II", fake.filters[offset : offset + 8])
+            for offset in range(0, len(fake.filters), 8)
+        ]
+        self.assertEqual(
+            [can_id for can_id, _mask in entries],
+            list(ccan_powertrain.FILTER_IDS),
+        )
+        for _can_id, mask in entries:
+            self.assertEqual(mask & ccan_powertrain.SFF_MASK, 0x7FF)
+            self.assertTrue(mask & ccan_powertrain.CAN_EFF_FLAG)
+            self.assertTrue(mask & ccan_powertrain.CAN_RTR_FLAG)
+            self.assertFalse(mask & ccan_powertrain.CAN_ERR_FLAG)
+
     def test_snapshot_uses_median_and_closes_socket(self):
         fake = FakeSocket(
             [
@@ -87,6 +148,9 @@ class DecodeTests(unittest.TestCase):
                 frame(0x41D, b"\x00\x00\x35"),
                 frame(0x2ED, b"\x7e"),
                 frame(0x0FC, b"\x0b\xb8"),
+                frame(0x100, bytes.fromhex("4F B9 F4 3E E0 00 0F CF")),
+                frame(0x101, bytes.fromhex("00 60 00 00 00 00 00 00")),
+                frame(0x1F7, bytes.fromhex("00 2D 10 00 05 B6 00 00")),
                 frame(0x2EF, b"\xff\x21"),
             ]
         )
@@ -107,6 +171,16 @@ class DecodeTests(unittest.TestCase):
             186.8,
         )
         self.assertEqual(by_metric["engine.rpm"].value, 750.0)
+        self.assertAlmostEqual(
+            by_metric["engine.target_crankshaft_torque"].value,
+            3.0 * ccan_powertrain.NM_TO_LB_FT,
+        )
+        self.assertAlmostEqual(
+            by_metric["vehicle.speed"].value,
+            48.0 * ccan_powertrain.KMH_TO_MPH,
+        )
+        self.assertEqual(by_metric["transmission.output_speed"].value, 360.5)
+        self.assertEqual(by_metric["transmission.turbine_speed"].value, 731.0)
         self.assertIs(by_metric["vehicle.ignition_on"].value, True)
         self.assertEqual(fake.channel, ("can0",))
         self.assertTrue(fake.closed)

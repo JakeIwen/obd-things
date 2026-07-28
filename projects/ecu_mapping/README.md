@@ -773,9 +773,15 @@ controlled ground truth is still required before promoting those scalings.
 one exact-positive cluster DID. It streams saved plain or zstd candump chunks, verifies every
 selected reference against its exact global raw-frame sequence/timestamp/ID/payload, and excludes
 29-bit and standard OBD diagnostic IDs by default so the diagnostic response cannot become a
-trivial perfect match. It requires at least 50 percent reference coverage and four distinct
-candidate values by default, then ranks by `R² × coverage` before the remaining deterministic
-tie-breakers. The portable direct invocation for the completed idling shakedown is:
+trivial perfect match. Candidate views include bytes, overlapping 16-bit
+integers, aligned 32-bit integers, and the Stellantis packed
+`((byte0 & 0x1F) << 8) | byte1` 13-bit form used by torque signals, plus the
+`((byte0 & 1) << 16) | u16be(byte1, byte2)` 17-bit form used by transmission
+output speed. It requires
+at least 50 percent reference coverage and four distinct candidate values by
+default, then ranks by `R² × coverage` before the remaining deterministic
+tie-breakers. The portable direct invocation for the completed idling
+shakedown is:
 
 ```bash
 python3 tools/can_timeseries_correlate.py \
@@ -989,8 +995,15 @@ verify the `/4` rpm scale or authorize public telemetry promotion.
    Preserve the validated singleton Status workflow for its bounded labels. The owner-priority PCM
    Plots catalog and simultaneous eleven-gauge idle mapping are complete: passive `0x41D` oil
    pressure and `0x2ED` coolant are telemetry sources. Loaded evidence now supports a packed
-   `0x100` torque-stage field, but its exact semantic stage remains unresolved and engine-oil
-   temperature remains unmapped. Do not repeat the idle campaign merely to
+   `0x100` bytes0–1 torque-stage field, but its exact semantic stage remains unresolved and
+   engine-oil temperature remains unmapped. The separate
+   [`ZF 948TE loaded-drive mapping`](findings/promaster_2022/2026-07-27_tcm_plots_loaded_drive_mapping.md)
+   completed the 12-gauge label/DID join and promoted passive vehicle speed,
+   turbine speed, output-shaft speed, and explicitly labeled TCM target crank
+   torque. It also resolved `0x101` to `/16 km/h` and `0x0EE` to `/128 km/h`.
+   `0x417` bytes2–3 is the leading gearbox-oil-temperature candidate, but its
+   35–43 °C range cannot yet discriminate the oil and TCU thermal traces well
+   enough for telemetry. Do not repeat the idle campaign merely to
    rediscover those DIDs. The separate scalar tool remains an offline pin-validation scaffold and
    its `run` path is intentionally disabled; use it only after implementing and reviewing a genuine
    one-at-a-time need. Also use
@@ -1010,19 +1023,13 @@ verify the `/4` rpm scale or authorize public telemetry promotion.
      --conditions "parked; ignition ON; engine OFF; related-profile EOT support check"
    ```
 
-   This is a dry run unless `--execute --confirm-parked` is added. The next
-   transmission session is now bounded by the prepared
-   [`ZF9HP Plots catalog plan`](configs/alfaobd_tcm_plots_catalog.json):
-   inventory 56 rows first, then prioritize gearbox-oil temperature,
-   turbine/output speed, converter slip, and the torque-stage gauges. The
-   exact target triples and a 14-segment temperature-anchored schedule are
-   already materialized in
-   [`alfaobd_tcm_plots_scalars.json`](configs/alfaobd_tcm_plots_scalars.json);
-   it is an offline review artifact until the catalog is live-pinned and a
-   separate live runner is implemented. Four-chunk TCM wire extraction and
-   passive-correlation jobs are also registered with van-compute so the first
-   capture can be analyzed without loading the Pi. The saved `ZF9HP.dat` is
-   unlabeled/untimestamped and the historical Gauges CSV has no ZF9HP section,
-   so neither substitutes for that live inventory.
+   This is a dry run unless `--execute --confirm-parked` is added. The ZF9HP
+   catalog inventory and first loaded scalar campaign are complete; do not
+   rerun the broad 56-row inventory. At the next fully parked opportunity,
+   restart the same owner-priority 12-gauge Plots scan and retain a much wider
+   cold-to-warm range for `04FE` gearbox-oil temperature versus `0301` TCU
+   chip temperature. Converter slip and actual measured crank torque remain
+   unresolved passive targets. The saved `ZF9HP.dat` remains
+   unlabeled/untimestamped and is not a substitute for the fresh joined trace.
 6. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps
    (`../../docs/bus-map.md`, `../../lib/modules.py`, project DID maps) per the maintenance rule.

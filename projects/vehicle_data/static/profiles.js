@@ -3,7 +3,7 @@
 (() => {
   const STORAGE_KEY = "van-telemetry.dashboard.v2";
   const LEGACY_STORAGE_KEY = "van-telemetry.dashboard.v1";
-  const MAX_AUTOMATIC_STATE_AGE_MS = 3000;
+  const MAX_AUTOMATIC_STATE_AGE_MS = 5000;
   const widgets = Object.freeze([
     {id: "drive", label: "Drive essentials"},
     {id: "engine", label: "Engine health"},

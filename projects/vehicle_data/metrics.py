@@ -111,7 +111,7 @@ IGNITION_ON = MetricDefinition(
     name="vehicle.ignition_on",
     unit="boolean",
     value_type="boolean",
-    stale_after_seconds=3.0,
+    stale_after_seconds=5.0,
     passive_min_interval_seconds=0.0,
     wake_min_interval_seconds=0.0,
     sources=(
@@ -139,7 +139,7 @@ ENGINE_OIL_PRESSURE = MetricDefinition(
     name="engine.oil_pressure",
     unit="psi",
     value_type="number",
-    stale_after_seconds=3.0,
+    stale_after_seconds=5.0,
     passive_min_interval_seconds=0.0,
     wake_min_interval_seconds=0.0,
     minimum=0.0,
@@ -168,7 +168,7 @@ ENGINE_COOLANT_TEMPERATURE = MetricDefinition(
     name="engine.coolant_temperature",
     unit="°F",
     value_type="number",
-    stale_after_seconds=3.0,
+    stale_after_seconds=5.0,
     passive_min_interval_seconds=0.0,
     wake_min_interval_seconds=0.0,
     minimum=-40.0,
@@ -196,7 +196,7 @@ ENGINE_RPM = MetricDefinition(
     name="engine.rpm",
     unit="rpm",
     value_type="number",
-    stale_after_seconds=3.0,
+    stale_after_seconds=5.0,
     passive_min_interval_seconds=0.0,
     wake_min_interval_seconds=0.0,
     minimum=0.0,
@@ -218,6 +218,102 @@ ENGINE_RPM = MetricDefinition(
             publisher_allowed=True,
         ),
     ),
+)
+
+VEHICLE_SPEED = MetricDefinition(
+    name="vehicle.speed",
+    unit="mph",
+    value_type="number",
+    stale_after_seconds=5.0,
+    passive_min_interval_seconds=0.0,
+    wake_min_interval_seconds=0.0,
+    minimum=0.0,
+    maximum=160.0,
+    sources=(
+        SourceDefinition(
+            name="ccan.broadcast.0x101",
+            bus="c-can",
+            bitrate=500000,
+            acquisition_class="passive_broadcast",
+            quality="observed_alfa_scale",
+            provenance=(
+                "projects/ecu_mapping/findings/promaster_2022/"
+                "2026-07-27_tcm_plots_loaded_drive_mapping.md; "
+                "packed 0x101 speed / 16 km/h exactly linked to TCM DID "
+                "F40D over a loaded drive; telemetry converts km/h to mph"
+            ),
+            side_effects="none; observation is receive-only",
+            publisher_allowed=True,
+        ),
+    ),
+)
+
+TARGET_CRANKSHAFT_TORQUE = MetricDefinition(
+    name="engine.target_crankshaft_torque",
+    unit="lb-ft",
+    value_type="number",
+    stale_after_seconds=5.0,
+    passive_min_interval_seconds=0.0,
+    wake_min_interval_seconds=0.0,
+    minimum=-400.0,
+    maximum=1200.0,
+    sources=(
+        SourceDefinition(
+            name="ccan.broadcast.0x100",
+            bus="c-can",
+            bitrate=500000,
+            acquisition_class="passive_broadcast",
+            quality="observed_alfa_scale",
+            provenance=(
+                "projects/ecu_mapping/findings/promaster_2022/"
+                "2026-07-27_tcm_plots_loaded_drive_mapping.md; "
+                "0x100 bytes 3-4 >> 5 minus 500 Nm exactly linked to TCM "
+                "DID 101B target crankshaft torque; converted to lb-ft"
+            ),
+            side_effects="none; observation is receive-only",
+            publisher_allowed=True,
+        ),
+    ),
+)
+
+
+def _transmission_speed_metric(name: str, field: str) -> MetricDefinition:
+    return MetricDefinition(
+        name=name,
+        unit="rpm",
+        value_type="number",
+        stale_after_seconds=5.0,
+        passive_min_interval_seconds=0.0,
+        wake_min_interval_seconds=0.0,
+        minimum=0.0,
+        maximum=20000.0,
+        sources=(
+            SourceDefinition(
+                name="ccan.broadcast.0x1f7",
+                bus="c-can",
+                bitrate=500000,
+                acquisition_class="passive_broadcast",
+                quality="observed_alfa_scale",
+                provenance=(
+                    "projects/ecu_mapping/findings/promaster_2022/"
+                    "2026-07-27_tcm_plots_loaded_drive_mapping.md; "
+                    f"0x1F7 {field} exactly linked to its labeled TCM DID "
+                    "over a loaded drive"
+                ),
+                side_effects="none; observation is receive-only",
+                publisher_allowed=True,
+            ),
+        ),
+    )
+
+
+TRANSMISSION_OUTPUT_SPEED = _transmission_speed_metric(
+    "transmission.output_speed",
+    "packed 17-bit field (byte0 bit0, then bytes 1-2) / 32 rpm",
+)
+TRANSMISSION_TURBINE_SPEED = _transmission_speed_metric(
+    "transmission.turbine_speed",
+    "bytes 4-5 / 2 rpm",
 )
 
 
@@ -267,6 +363,10 @@ METRICS = {
         ENGINE_OIL_PRESSURE,
         ENGINE_COOLANT_TEMPERATURE,
         ENGINE_RPM,
+        VEHICLE_SPEED,
+        TARGET_CRANKSHAFT_TORQUE,
+        TRANSMISSION_OUTPUT_SPEED,
+        TRANSMISSION_TURBINE_SPEED,
         CLUSTER_DID_1000_RAW,
         CLUSTER_DID_1002_RAW,
         CLUSTER_DID_0107_RAW,

@@ -31,18 +31,30 @@ CAN_EFF_FLAG = 0x80000000
 CAN_RTR_FLAG = 0x40000000
 CAN_ERR_FLAG = 0x20000000
 FRAME_TYPE_FLAGS = CAN_EFF_FLAG | CAN_RTR_FLAG | CAN_ERR_FLAG
-FILTER_MASK = SFF_MASK | FRAME_TYPE_FLAGS
+# CAN_ERR_FLAG has special receive-filter semantics in Linux SocketCAN.  Adding
+# it to a normal data-frame filter mask prevents ordinary frames from matching.
+# EFF/RTR still constrain the kernel filter, and decode_frame's caller rejects
+# every frame carrying any FRAME_TYPE_FLAGS before decoding.
+FILTER_MASK = SFF_MASK | CAN_EFF_FLAG | CAN_RTR_FLAG
 OIL_PRESSURE_ID = 0x41D
 COOLANT_TEMPERATURE_ID = 0x2ED
 ENGINE_SPEED_ID = 0x0FC
+TARGET_CRANK_TORQUE_ID = 0x100
+VEHICLE_SPEED_ID = 0x101
+TRANSMISSION_SHAFT_SPEED_ID = 0x1F7
 IGNITION_ON_ID = 0x2EF
 FILTER_IDS = (
     OIL_PRESSURE_ID,
     COOLANT_TEMPERATURE_ID,
     ENGINE_SPEED_ID,
+    TARGET_CRANK_TORQUE_ID,
+    VEHICLE_SPEED_ID,
+    TRANSMISSION_SHAFT_SPEED_ID,
     IGNITION_ON_ID,
 )
 KPA_TO_PSI = 0.14503773773020923
+KMH_TO_MPH = 0.621371192237334
+NM_TO_LB_FT = 0.7375621492772656
 
 
 @dataclass(frozen=True)
@@ -55,54 +67,136 @@ class PassiveObservation:
     detail: str
 
 
-def decode_frame(can_id: int, data: bytes) -> PassiveObservation | None:
-    """Decode one exact allowlisted C-CAN frame, or return ``None``."""
+def decode_frame_observations(
+    can_id: int, data: bytes
+) -> tuple[PassiveObservation, ...]:
+    """Decode every allowlisted observation in one C-CAN frame."""
     if can_id == OIL_PRESSURE_ID and len(data) >= 3:
         native_kpa = float(data[2] * 4)
-        return PassiveObservation(
-            metric="engine.oil_pressure",
-            value=native_kpa * KPA_TO_PSI,
-            unit="psi",
-            source="ccan.broadcast.0x41d",
-            quality="observed_alfa_scale",
-            detail=(
-                "0x41D byte 2 x 4 kPa, converted to psi for telemetry"
+        return (
+            PassiveObservation(
+                metric="engine.oil_pressure",
+                value=native_kpa * KPA_TO_PSI,
+                unit="psi",
+                source="ccan.broadcast.0x41d",
+                quality="observed_alfa_scale",
+                detail=(
+                    "0x41D byte 2 x 4 kPa, converted to psi for telemetry"
+                ),
             ),
         )
     if can_id == COOLANT_TEMPERATURE_ID and data:
         native_celsius = float(data[0] - 40)
-        return PassiveObservation(
-            metric="engine.coolant_temperature",
-            value=native_celsius * 9.0 / 5.0 + 32.0,
-            unit="°F",
-            source="ccan.broadcast.0x2ed",
-            quality="observed_alfa_scale",
-            detail=(
-                "0x2ED byte 0 - 40 °C, converted to °F for telemetry"
+        return (
+            PassiveObservation(
+                metric="engine.coolant_temperature",
+                value=native_celsius * 9.0 / 5.0 + 32.0,
+                unit="°F",
+                source="ccan.broadcast.0x2ed",
+                quality="observed_alfa_scale",
+                detail=(
+                    "0x2ED byte 0 - 40 °C, converted to °F for telemetry"
+                ),
             ),
         )
     if can_id == ENGINE_SPEED_ID and len(data) >= 2:
         native_rpm = float(
             (int.from_bytes(data[:2], "big") & 0xFFFC) / 4.0
         )
-        return PassiveObservation(
-            metric="engine.rpm",
-            value=native_rpm,
-            unit="rpm",
-            source="ccan.broadcast.0x0fc",
-            quality="observed_alfa_scale",
-            detail="0x0FC bytes 0-1 big-endian, low 2 bits masked, / 4 rpm",
+        return (
+            PassiveObservation(
+                metric="engine.rpm",
+                value=native_rpm,
+                unit="rpm",
+                source="ccan.broadcast.0x0fc",
+                quality="observed_alfa_scale",
+                detail=(
+                    "0x0FC bytes 0-1 big-endian, low 2 bits masked, / 4 rpm"
+                ),
+            ),
+        )
+    if can_id == TARGET_CRANK_TORQUE_ID and len(data) >= 5:
+        native_nm = float((int.from_bytes(data[3:5], "big") >> 5) - 500)
+        return (
+            PassiveObservation(
+                metric="engine.target_crankshaft_torque",
+                value=native_nm * NM_TO_LB_FT,
+                unit="lb-ft",
+                source="ccan.broadcast.0x100",
+                quality="observed_alfa_scale",
+                detail=(
+                    "0x100 bytes 3-4 big-endian >> 5, then -500 Nm; "
+                    "TCM target, not measured output; converted to lb-ft"
+                ),
+            ),
+        )
+    if can_id == VEHICLE_SPEED_ID and len(data) >= 3:
+        native_kmh = float(
+            (
+                ((data[0] & 0x01) << 11)
+                | (data[1] << 3)
+                | (data[2] >> 5)
+            )
+            / 16.0
+        )
+        return (
+            PassiveObservation(
+                metric="vehicle.speed",
+                value=native_kmh * KMH_TO_MPH,
+                unit="mph",
+                source="ccan.broadcast.0x101",
+                quality="observed_alfa_scale",
+                detail=(
+                    "0x101 packed 12-bit speed / 16 km/h, converted to mph"
+                ),
+            ),
+        )
+    if can_id == TRANSMISSION_SHAFT_SPEED_ID and len(data) >= 6:
+        output_raw = (
+            ((data[0] & 0x01) << 16)
+            | int.from_bytes(data[1:3], "big")
+        )
+        output_rpm = float(output_raw / 32.0)
+        turbine_rpm = float(int.from_bytes(data[4:6], "big") / 2.0)
+        return (
+            PassiveObservation(
+                metric="transmission.output_speed",
+                value=output_rpm,
+                unit="rpm",
+                source="ccan.broadcast.0x1f7",
+                quality="observed_alfa_scale",
+                detail=(
+                    "0x1F7 packed 17-bit output speed "
+                    "(byte0 bit0, then bytes 1-2) / 32 rpm"
+                ),
+            ),
+            PassiveObservation(
+                metric="transmission.turbine_speed",
+                value=turbine_rpm,
+                unit="rpm",
+                source="ccan.broadcast.0x1f7",
+                quality="observed_alfa_scale",
+                detail="0x1F7 bytes 4-5 big-endian / 2 rpm",
+            ),
         )
     if can_id == IGNITION_ON_ID:
-        return PassiveObservation(
-            metric="vehicle.ignition_on",
-            value=True,
-            unit="boolean",
-            source="ccan.broadcast.0x2ef",
-            quality="verified",
-            detail="0x2EF ignition-on presence gate observed",
+        return (
+            PassiveObservation(
+                metric="vehicle.ignition_on",
+                value=True,
+                unit="boolean",
+                source="ccan.broadcast.0x2ef",
+                quality="verified",
+                detail="0x2EF ignition-on presence gate observed",
+            ),
         )
-    return None
+    return ()
+
+
+def decode_frame(can_id: int, data: bytes) -> PassiveObservation | None:
+    """Decode the first allowlisted observation, retained for callers/tests."""
+    observations = decode_frame_observations(can_id, data)
+    return observations[0] if observations else None
 
 
 def _median_observation(
@@ -153,16 +247,19 @@ def read_snapshot(
             can_id, dlc, raw_data = struct.unpack("=IB3x8s", frame)
             if can_id & FRAME_TYPE_FLAGS:
                 continue
-            observation = decode_frame(
+            observations = decode_frame_observations(
                 can_id & SFF_MASK, raw_data[: min(dlc, 8)]
             )
-            if observation is None:
-                continue
-            samples.setdefault(observation.metric, []).append(observation)
+            for observation in observations:
+                samples.setdefault(observation.metric, []).append(observation)
             if all(metric in samples for metric in (
                 "engine.oil_pressure",
                 "engine.coolant_temperature",
                 "engine.rpm",
+                "engine.target_crankshaft_torque",
+                "vehicle.speed",
+                "transmission.output_speed",
+                "transmission.turbine_speed",
                 "vehicle.ignition_on",
             )):
                 break
