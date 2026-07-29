@@ -955,6 +955,45 @@ class EvidenceValidationTests(unittest.TestCase):
                     )
                 )
 
+    def test_tcm_profile_direction_is_bound_to_module_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "tcm_wire.jsonl"
+            row = wire_row(
+                1_000_000,
+                0x04FE,
+                [0x76],
+                can_id=correlate.MODULES["tcm"].rxid,
+            )
+            row["direction"] = "tcm_to_tester"
+            row["module"] = "tcm"
+            path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            samples = list(
+                correlate.iter_reference_samples(
+                    path,
+                    did=0x04FE,
+                    decoder=correlate.ReferenceDecoder("byte:0"),
+                    stats=correlate.StreamStats(str(path), "none"),
+                    module=correlate.MODULES["tcm"],
+                )
+            )
+            self.assertEqual([sample.value for sample in samples], [0x76])
+
+            row["module"] = "pcm"
+            path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                correlate.CorrelateError, "invalid module"
+            ):
+                list(
+                    correlate.iter_reference_samples(
+                        path,
+                        did=0x04FE,
+                        decoder=correlate.ReferenceDecoder("byte:0"),
+                        stats=correlate.StreamStats(str(path), "none"),
+                        module=correlate.MODULES["tcm"],
+                    )
+                )
+
     def test_selected_wire_row_is_pinned_to_registered_cluster_endpoint(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "cluster_wire.jsonl"

@@ -931,6 +931,16 @@ def iter_reference_samples(
             valid_directions = {"ecu_to_tester"}
             if module.key == "cluster":
                 valid_directions.add("cluster_to_tester")
+            profile_direction = f"{module.key}_to_tester"
+            if (
+                profile_direction not in valid_directions
+                and row.get("direction") == profile_direction
+            ):
+                if row.get("module") != module.key:
+                    raise CorrelateError(
+                        f"{path}:{line_number}: selected row has invalid module"
+                    )
+                valid_directions.add(profile_direction)
             if row.get("direction") not in valid_directions:
                 raise CorrelateError(
                     f"{path}:{line_number}: selected row has invalid direction"
