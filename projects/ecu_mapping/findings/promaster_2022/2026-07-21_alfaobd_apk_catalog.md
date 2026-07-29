@@ -252,6 +252,35 @@ python3 tools/did_sweep.py pcm \
 
 This is a dry run unless `--execute --confirm-parked` is also supplied.
 
+The sparse support check completed on 2026-07-29 with ignition on and engine
+off. Session entry again succeeded exactly (`10 92 -> 50 92`), but all three
+reads returned NRC `12`:
+
+| DID | exact response | installed-PCM result |
+|---:|---|---|
+| `B010` | `7F 22 12` | unsupported |
+| `B011` | `7F 22 12` | unsupported |
+| `B012` | `7F 22 12` | unsupported |
+
+Unlike the earlier `3159/315A` check, an independent full-bus candump retained
+all eight padded diagnostic frames: the session request/response and each
+request/negative-response pair. The evidence hashes are:
+
+- summary JSON:
+  `6933a2a10847d58ebe67a8691952eec1c705ff8779ce3a7c5155f15250e45159`;
+- result JSONL:
+  `3059ed3c774d27cf3e0f07e2a4074c25de00a17e8b5f274daad9e347bacb7043`;
+- 8,591-frame raw candump:
+  `f877190e79e53cad478964c76c54ab5af919c47881049818d55b3cc3e89a8c2f`.
+
+The summary reports `status: complete`, a validated `50 92` echo, three
+confirmed responses, no fatal error, and passive restoration. This closes the
+entire cross-profile `3159/315A/B010/B011/B012` family for the installed PCM.
+Do not repeat or broaden around those addresses. The next true-EOT lead must
+come from the installed calibration's own namespace (for example exact ODX,
+an observed current-profile request, or a separately supported standardized
+measurement), not another adjacency guess from a different Alfa profile.
+
 An initial length-only match to class `ba`, field `A0`, was wrong. Although
 that field also has 56 two-byte entries, DEX consumer tracing proves
 `z2.k` loads it into runtime request table `AlfaOBDConnect.s8` in the branch

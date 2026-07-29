@@ -33,13 +33,13 @@ leg, not another whole-bus search. A reviewed `--profile tcm-thermal` mode in
 [`cluster_drive_log.py`](cluster_drive_log.py) now records that exact `04FE/0301` challenge at
 two total requests per second with integrated loss-accounted raw evidence.
 
-The earlier related-profile PCM engine-oil pair `3159/315A` is now closed:
-the installed PCM entered session `92` but returned NRC `12` for both. Static
-DEX/catalog mining subsequently identified a stronger `SOHC_V6` candidate
-cluster—`B010` calculated transmission oil, `B011` measured oil thermistor,
-and `B012` calculated oil. These remain unsupported related-profile leads;
-the next PCM action is a sparse parked support check of those three DIDs, not
-another broad sweep and not a repeat of `3159/315A`.
+The related-profile PCM thermal families are now closed. The installed PCM
+entered session `92` but returned NRC `12` for `3159`, `315A`, `B010`,
+`B011`, and `B012`; the latter trio also has independent padded on-wire
+evidence. Preserve their recovered vendor labels as research provenance, but
+do not repeat or broaden around them. True engine-oil temperature remains
+open and now requires an installed-calibration or separately standardized
+source, not another cross-profile adjacency guess.
 
 The full AlfaOBD `TIGERSHARK_CUSW` PCM Plots request alignment is now an
 executable, ECU-scoped 193-row/190-DID catalog in

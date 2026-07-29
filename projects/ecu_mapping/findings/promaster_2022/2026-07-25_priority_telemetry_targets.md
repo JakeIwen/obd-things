@@ -87,6 +87,15 @@ candidates only; the next engine-oil step is one sparse parked support check
 of `B010/B011/B012`, with `B011` the physical-sensor priority. Do not repeat
 `3159/315A`.
 
+Update 2026-07-29 (SOHC_V6 support result): the installed PCM confirmed
+session `92` but returned NRC `12` for `B010`, `B011`, and `B012`. A
+simultaneous full-bus capture independently retained every padded request and
+response, so the negative is stronger than the earlier high-level-only
+`3159/315A` evidence. All five cross-profile thermal DIDs are now rejected for
+this ECU. True engine-oil temperature remains open; further work must locate
+an installed-calibration or separately standardized source rather than
+expanding around these unsupported related-profile addresses.
+
 ## Engine-oil pressure: exact OEM context
 
 The OEM `OIL PRESSURE – UPGRADE ENGINE` table applies only when coolant is

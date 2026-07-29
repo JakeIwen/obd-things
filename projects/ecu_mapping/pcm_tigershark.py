@@ -280,3 +280,11 @@ SOHC_V6_THERMAL_CANDIDATES = MappingProxyType(
         ),
     }
 )
+
+# Exact installed-PCM support checks in confirmed legacy session 92 returned
+# NRC 12 for every related-profile thermal lead. Keep the vendor mappings
+# above as research provenance, while making the negative vehicle fact
+# executable for callers that shortlist future probes.
+INSTALLED_PCM_REJECTED_RELATED_THERMAL_DIDS = frozenset(
+    {0x3159, 0x315A, 0xB010, 0xB011, 0xB012}
+)

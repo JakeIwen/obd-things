@@ -49,6 +49,10 @@ class PcmTigersharkCatalogTests(unittest.TestCase):
                 "((s16be * 0.015625) - 32) / 1.8",
             ),
         )
+        self.assertEqual(
+            pcm_tigershark.INSTALLED_PCM_REJECTED_RELATED_THERMAL_DIDS,
+            frozenset({0x3159, 0x315A, 0xB010, 0xB011, 0xB012}),
+        )
 
 
 if __name__ == "__main__":
