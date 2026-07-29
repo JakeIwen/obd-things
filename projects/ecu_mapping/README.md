@@ -541,17 +541,20 @@ The profile-specific `n0.z1.r2()` decoder is now recovered too:
 `F405/0301/04FE` use `u8 - 40 °C`, the speed and torque rows have exact
 big-endian signedness/scales, and
 [`zf9hp.py`](zf9hp.py) preserves the complete 56-output native-unit catalog.
-The next live pass should first do physical support reads of the priority set,
-then use the live catalog to select the grouped gauges. Installed-vehicle
-support and physical plausibility remain unresolved, so these definitions are
-not dashboard-ready.
+Physical support reads and grouped live-catalog captures of the priority set
+are complete. The resulting exact DID associations and independent-drive
+carrier tests are recorded in the dated PCM/TCM findings; do not repeat the
+support inventory merely to rediscover them. Passive transmission-oil
+temperature remains candidate-only and needs the separately documented
+cold-start challenge before dashboard promotion.
 
-`tools/did_sweep.py` now accepts repeatable `--did` options, so the next
-parked support check can read exactly the thirteen reviewed ZF9HP candidates
-without traversing the large gaps between them. It remains dry-run by default,
-requires the normal parked/live gates for `--execute`, and sends no diagnostic
-session change unless one is separately specified and confirmed.
-After that read, decode its checkpointed JSONL without touching the vehicle:
+`tools/did_sweep.py` accepts repeatable `--did` options, which was used to
+read exactly the thirteen reviewed ZF9HP candidates without traversing the
+large gaps between them. It remains available for reproducibility, is dry-run
+by default, requires the normal parked/live gates for `--execute`, and sends
+no diagnostic session change unless one is separately specified and
+confirmed. A saved checkpointed JSONL can be decoded without touching the
+vehicle:
 
 ```bash
 python3 tools/zf9hp_results.py \
@@ -1191,10 +1194,11 @@ verify the `/4` rpm scale or authorize public telemetry promotion.
    passenger-door plus parking-brake discriminators to refine the passive and BCM candidates.
    Alfa's shifter `Drive` rendering in Park and TCM `Brake switch` watcher remain explicitly
    invalid. The selected PCM Plots catalog contains no true engine-sump
-   oil-temperature row. A related Alfa profile supplies the bounded
-   `3159` (`u8 - 40 °C`) EOT candidate and adjacent `315A`
-   (`u16be × 0.004888 V`) sensor-voltage candidate. Check only those two with
-   the verified padded PCM session before accepting or rejecting the lead:
+   oil-temperature row. Related Alfa profiles supplied `3159` (`u8 - 40 °C`)
+   with adjacent sensor-voltage DID `315A`, plus the
+   `B010/B011/B012` calculated/measured thermal family. The installed PCM
+   entered the verified padded session `92` but returned NRC `12` for all five.
+   The historical two-DID reproduction command is:
 
    ```bash
    python3 tools/did_sweep.py pcm \
@@ -1204,14 +1208,17 @@ verify the `/4` rpm scale or authorize public telemetry promotion.
      --conditions "parked; ignition ON; engine OFF; related-profile EOT support check"
    ```
 
-   This is a dry run unless `--execute --confirm-parked` is added. The ZF9HP
-   catalog inventory and first loaded scalar campaign are complete; do not
-   rerun the broad 56-row inventory. At the next fully parked opportunity,
-   keep the same owner-priority 12-gauge Plots set active so any new C-CAN
-   captures retain exact `04FE` and `0301` references. Search for a different
-   passive carrier for true gearbox-oil temperature; do not revive the old
-   `0x417` scale without contradictory independent evidence. Converter slip
-   and actual measured crank torque remain unresolved passive targets. The
+   This is a dry run unless `--execute --confirm-parked` is added. Do not run it
+   again without a new experimental reason, and do not expand around the
+   rejected addresses. The ZF9HP catalog inventory and loaded scalar campaigns
+   are complete; do not rerun the broad 56-row inventory. The next preplanned
+   cold-start drive uses the reviewed direct `tcm-thermal` logger with AlfaOBD
+   closed; it polls exact `04FE` and `0301` at two total requests per second
+   while retaining the full passive C-CAN stream. Its purpose is to challenge
+   the provisional `0x1F7` byte-3 carrier over at least 30 °C, not to search
+   the whole bus again. Do not revive the old `0x417` scale without
+   contradictory independent evidence. Converter slip and actual measured
+   crank torque remain unresolved passive targets. The
    saved `ZF9HP.dat` remains
    unlabeled/untimestamped and is not a substitute for the fresh joined trace.
 6. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps

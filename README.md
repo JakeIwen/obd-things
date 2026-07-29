@@ -155,7 +155,7 @@ python3 tools/ecu_discover.py --profile promaster88-bcan # plan 4 verified + 4 u
 ./tools/ccan_inventory_campaign.sh --session-probes # plan both bounded session checks together
 ./tools/ccan_inventory_campaign.sh --bcm-extended-page # plan session-03 BCM 4000-40FF
 ./tools/ccan_inventory_campaign.sh --session-followup # plan padded PCM retry + BCM extended page
-./tools/ccan_inventory_campaign.sh --priority-telemetry # plan PCM EOT + ZF9HP support reads
+./tools/ccan_inventory_campaign.sh --priority-telemetry # reproduce completed PCM/TCM support reads
 ```
 
 Generic diagnostic tools take a **module key** from `lib/modules.py`; inspect that registry for
@@ -383,8 +383,8 @@ Both halves completed successfully on 2026-07-21. The BCM session-03 page expose
 known session-gated `40A3` and `40A6` beyond the three default-visible positives. These modes remain
 available for reproducibility, but should not be repeated without a new experimental reason.
 
-The owner-priority telemetry mode is the next distinct experiment. It first
-checks only the related-profile PCM engine-oil-temperature pair `3159/315A`
+The owner-priority telemetry mode is retained only to reproduce the completed
+PCM/TCM support inventory. It checks the related-profile PCM pair `3159/315A`
 through the verified zero-padded legacy session, then reads the 13 exact
 vendor-derived ZF9HP temperature, speed, slip, and torque DIDs. It saves a
 filtered raw PCM/TCM capture and automatically writes an offline ZF9HP decode
@@ -403,6 +403,13 @@ broadcast, TesterPresent, routine, IO-control, write, DTC-clear, or security
 request. Do not run it while driving. The wrapper preserves the telemetry
 broker's initial state: if active, it pauses the broker during exclusive
 interface/diagnostic ownership and restarts it during cleanup.
+
+Do not repeat it without a new experimental reason. The installed PCM returned
+NRC `12` for `3159/315A`; a later independently captured sparse check also
+returned NRC `12` for the related-profile `B010/B011/B012` thermal family.
+The ZF9HP support inventory and labeled AlfaOBD drive captures are complete.
+The current transmission-oil task is a new cold-start challenge of the
+provisional passive `0x1F7` byte-3 carrier, not another DID support inventory.
 
 Participating active diagnostic tools take a nonblocking exclusive per-channel advisory lock under
 `tmp/locks/`, so two of them cannot transmit through the same SocketCAN channel concurrently.
