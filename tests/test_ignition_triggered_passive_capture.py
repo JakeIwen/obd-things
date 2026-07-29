@@ -20,6 +20,19 @@ SPEC.loader.exec_module(arm)
 
 
 class IgnitionTriggeredPassiveCaptureTests(unittest.TestCase):
+    def test_service_receive_buffer_matches_recorder(self):
+        unit = (
+            REPO
+            / "projects"
+            / "ecu_mapping"
+            / "promaster-mapping-drive.service"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "ExecStartPre=+/usr/sbin/sysctl -w net.core.rmem_max="
+            f"{arm.passive.RECEIVE_BUFFER}",
+            unit,
+        )
+
     def test_default_plan_is_inert(self):
         with tempfile.TemporaryDirectory() as temporary:
             state_path = Path(temporary) / "must-not-exist" / "state.json"

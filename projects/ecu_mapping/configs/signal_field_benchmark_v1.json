@@ -489,6 +489,82 @@
       }
     },
     {
+      "id": "tcm_oil_blind72_1f7_byte3",
+      "hypothesis": "gearbox_oil_temperature_1f7_byte3",
+      "dataset": "tcm_blind_72min",
+      "reference": {
+        "did": "04FE",
+        "field": "byte:0"
+      },
+      "search": {
+        "bit_search_ids": [
+          "sff:1F7:8"
+        ],
+        "lengths": [
+          8
+        ],
+        "byte_order": "both",
+        "signedness": "both",
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "carrier_only",
+        "stream": {
+          "channel": "can0",
+          "can_id": "1F7",
+          "id_bits": 11,
+          "dlc": 8
+        },
+        "field": {
+          "dbc_start_bit": 24,
+          "length_bits": 8,
+          "byte_order": "little",
+          "signed": true
+        },
+        "maximum_rank": 20,
+        "minimum_coverage": 0.99,
+        "minimum_r_squared": 0.98
+      }
+    },
+    {
+      "id": "tcm_oil_blind45_1f7_byte3",
+      "hypothesis": "gearbox_oil_temperature_1f7_byte3",
+      "dataset": "tcm_blind_45min",
+      "reference": {
+        "did": "04FE",
+        "field": "byte:0"
+      },
+      "search": {
+        "bit_search_ids": [
+          "sff:1F7:8"
+        ],
+        "lengths": [
+          8
+        ],
+        "byte_order": "both",
+        "signedness": "both",
+        "maximum_staleness_ms": 100
+      },
+      "expectation": {
+        "kind": "carrier_only",
+        "stream": {
+          "channel": "can0",
+          "can_id": "1F7",
+          "id_bits": 11,
+          "dlc": 8
+        },
+        "field": {
+          "dbc_start_bit": 24,
+          "length_bits": 8,
+          "byte_order": "little",
+          "signed": true
+        },
+        "maximum_rank": 20,
+        "minimum_coverage": 0.99,
+        "minimum_r_squared": 0.95
+      }
+    },
+    {
       "id": "cluster_idle_rpm_carrier",
       "hypothesis": "engine_speed_0fc",
       "dataset": "cluster_idle",

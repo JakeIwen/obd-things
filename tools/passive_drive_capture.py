@@ -46,7 +46,10 @@ from lib.modules import MODULES
 
 CHANNEL = "can0"
 BITRATE = 500_000
-RECEIVE_BUFFER = 4_194_304
+# Keep enough kernel-side backlog for transient EXFAT/zstd stalls.  A 4 MiB
+# reserve overflowed once during an otherwise healthy 46-minute C-CAN drive;
+# the loss gate worked, but that leg could not be treated as complete evidence.
+RECEIVE_BUFFER = 16_777_216
 RMEM_MAX_PATH = Path("/proc/sys/net/core/rmem_max")
 DEFAULT_ROTATION_SECONDS = 600
 DEFAULT_DURATION_SECONDS = 22 * 60 * 60

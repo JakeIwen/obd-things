@@ -221,7 +221,7 @@ reconnect; these are temporal host facts, not permanent disk guarantees.
 
 ```bash
 sudo systemctl stop tpms-logger
-sudo sysctl -w net.core.rmem_max=4194304
+sudo sysctl -w net.core.rmem_max=16777216
 ./bringup.sh
 ```
 
@@ -354,7 +354,11 @@ installed/started for a selected drive, not permanently enabled. It survives an
 SSH or Codex disconnect but not a Pi reboot. It also does not configure `can0`,
 mount storage, stop a conflicting service, or control AlfaOBD; all live
 preconditions must already be true when it is armed and are rechecked before the
-capture starts:
+capture starts. Its privileged `ExecStartPre` raises only
+`net.core.rmem_max` to the recorder's guarded 16 MiB socket reserve. This
+quadruples the former reserve after one 46-minute capture reported 3,728
+socket drops during a transient consumer/storage stall; drop detection and
+the zero-drop evidence gate remain unchanged:
 
 ```bash
 sudo cp projects/ecu_mapping/promaster-mapping-drive.service \
@@ -697,7 +701,7 @@ EXFAT operation crosses one ten-minute rotation boundary. Confirm that `tpms-log
 on C-CAN pins 6/14. Then:
 
 ```bash
-sudo sysctl -w net.core.rmem_max=4194304
+sudo sysctl -w net.core.rmem_max=16777216
 ./bringup.sh --tx
 
 python3 projects/ecu_mapping/cluster_drive_log.py \
