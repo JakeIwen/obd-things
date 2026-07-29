@@ -355,6 +355,35 @@ class StreamFieldSelector:
         }
 
 
+@dataclass(frozen=True)
+class FixedFormulaConfig:
+    """One predeclared candidate-to-reference raw affine formula."""
+
+    candidate: StreamFieldSelector
+    scale: float
+    intercept: float
+
+    def validate(self) -> None:
+        if not isinstance(self.candidate, StreamFieldSelector):
+            raise CorrelateError(
+                "fixed formula candidate must be a stream field selector"
+            )
+        if not math.isfinite(self.scale) or not math.isfinite(self.intercept):
+            raise CorrelateError(
+                "fixed formula scale and intercept must be finite"
+            )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "candidate": self.candidate.as_dict(),
+            "equation": (
+                "predicted_reference_raw = scale * candidate_raw + intercept"
+            ),
+            "scale": self.scale,
+            "intercept": self.intercept,
+        }
+
+
 REGIME_NAMES = (
     "idle",
     "positive_pull",
@@ -1336,6 +1365,76 @@ class OnlineRegression:
 
 
 @dataclass
+class FixedFormulaResiduals:
+    """Bounded exact residuals for one predeclared affine hypothesis."""
+
+    count: int = 0
+    sum_error: float = 0.0
+    sum_squared_error: float = 0.0
+    sum_absolute_error: float = 0.0
+    minimum_error: float = math.inf
+    maximum_error: float = -math.inf
+    absolute_errors: list[float] = field(default_factory=list, repr=False)
+
+    def add(
+        self,
+        candidate_raw: float,
+        reference_raw: float,
+        *,
+        scale: float,
+        intercept: float,
+    ) -> None:
+        if self.count >= MAX_REFERENCE_SAMPLES:
+            raise CorrelateError(
+                "fixed formula residual-count safety cap exceeded"
+            )
+        predicted = scale * candidate_raw + intercept
+        error = reference_raw - predicted
+        if not math.isfinite(error):
+            raise CorrelateError("non-finite fixed formula residual")
+        absolute_error = abs(error)
+        self.count += 1
+        self.sum_error += error
+        self.sum_squared_error += error * error
+        self.sum_absolute_error += absolute_error
+        self.minimum_error = min(self.minimum_error, error)
+        self.maximum_error = max(self.maximum_error, error)
+        self.absolute_errors.append(absolute_error)
+
+    def result(
+        self,
+        *,
+        reference_count: int,
+        config: FixedFormulaConfig,
+    ) -> dict[str, object]:
+        if self.count == 0:
+            raise CorrelateError(
+                "fixed formula candidate had no matched observations"
+            )
+        ordered = sorted(self.absolute_errors)
+        nearest_rank_index = max(0, math.ceil(0.95 * self.count) - 1)
+        mean_error = self.sum_error / self.count
+        return {
+            "sample_count": self.count,
+            "coverage_ratio": self.count / reference_count,
+            "error_orientation": (
+                "reference_raw - predicted_reference_raw"
+            ),
+            "signed_mean_error": mean_error,
+            "absolute_mean_bias": abs(mean_error),
+            "mean_absolute_error": self.sum_absolute_error / self.count,
+            "rmse": math.sqrt(self.sum_squared_error / self.count),
+            "p95_absolute_error": ordered[nearest_rank_index],
+            "p95_method": (
+                "conservative nearest-rank: sorted ceil(0.95 * n)"
+            ),
+            "minimum_signed_error": self.minimum_error,
+            "maximum_signed_error": self.maximum_error,
+            "formula": config.as_dict(),
+        }
+
+
+@dataclass
 class NearestMatch:
     reference_timestamp_us: int
     timestamp_us: int
@@ -1433,6 +1532,7 @@ class AnalysisConfig:
     bit_search_lengths: tuple[int, ...] = ()
     bit_search_byte_orders: tuple[str, ...] = ("little", "big")
     bit_search_signedness: tuple[bool, ...] = (False, True)
+    fixed_formula: FixedFormulaConfig | None = None
     regime_analysis: RegimeAnalysisConfig | None = None
 
     @property
@@ -1562,6 +1662,40 @@ class AnalysisConfig:
                 "configured bit-search streams exceed the global "
                 f"{MAX_CANDIDATE_FIELDS}-field candidate cap"
             )
+        if self.fixed_formula is not None:
+            self.fixed_formula.validate()
+            selector = self.fixed_formula.candidate
+            if selector.id_bits == 29 and not self.include_extended:
+                raise CorrelateError(
+                    "extended fixed formula stream requires "
+                    "--include-extended"
+                )
+            if (
+                is_diagnostic_id(selector.can_id, selector.id_bits)
+                and not self.include_diagnostic_ids
+            ):
+                raise CorrelateError(
+                    "diagnostic fixed formula stream requires "
+                    "--include-diagnostic-ids"
+                )
+            if self.uses_bit_search(
+                selector.can_id, selector.id_bits, selector.dlc
+            ):
+                eligible_specs = _bit_search_specs(
+                    selector.dlc,
+                    self.bit_search_minimum_bits,
+                    self.bit_search_maximum_bits,
+                    self.bit_search_lengths,
+                    self.bit_search_byte_orders,
+                    self.bit_search_signedness,
+                )
+            else:
+                eligible_specs = _legacy_payload_specs(selector.dlc)
+            if selector.field not in eligible_specs:
+                raise CorrelateError(
+                    "fixed formula field is not present in the configured "
+                    "candidate field profile"
+                )
         if self.regime_analysis is not None:
             if self.match_mode != "nearest":
                 raise CorrelateError(
@@ -1655,6 +1789,11 @@ class StreamingCorrelator:
         self.linked_reference_count = 0
         self.verified_reference_links = 0
         self.eligible_candidate_maximum_r_squared: float | None = None
+        self.fixed_formula_residuals = (
+            None
+            if config.fixed_formula is None
+            else FixedFormulaResiduals()
+        )
         self.regime_regressions: dict[
             tuple[str, CandidateKey], OnlineRegression
         ] = {}
@@ -1987,6 +2126,33 @@ class StreamingCorrelator:
             maximum_abs_delta_us=maximum_abs_delta_us,
         )
 
+    def _add_fixed_formula_observation(
+        self,
+        key: CandidateKey,
+        candidate_raw: float,
+        reference_raw: float,
+    ) -> None:
+        fixed = self.config.fixed_formula
+        residuals = self.fixed_formula_residuals
+        if fixed is None or residuals is None:
+            return
+        selector = fixed.candidate
+        expected = CandidateKey(
+            selector.channel,
+            selector.can_id,
+            selector.id_bits,
+            selector.dlc,
+            selector.field,
+        )
+        if key != expected:
+            return
+        residuals.add(
+            candidate_raw,
+            reference_raw,
+            scale=fixed.scale,
+            intercept=fixed.intercept,
+        )
+
     def _finalize_reference(self, active: ActiveReference) -> None:
         regime_name = self._regime_for_reference(active)
         self.active_match_states -= len(active.matches)
@@ -2008,6 +2174,11 @@ class StreamingCorrelator:
                         contributing_frames=1,
                         contributing_abs_delta_us=delta,
                         maximum_abs_delta_us=delta,
+                    )
+                    self._add_fixed_formula_observation(
+                        key,
+                        float(value),
+                        active.sample.value,
                     )
                     self._add_regime_observation(
                         regime_name,
@@ -2035,6 +2206,11 @@ class StreamingCorrelator:
                         contributing_frames=accumulator.count,
                         contributing_abs_delta_us=accumulator.abs_delta_us,
                         maximum_abs_delta_us=accumulator.maximum_abs_delta_us,
+                    )
+                    self._add_fixed_formula_observation(
+                        key,
+                        value,
+                        active.sample.value,
                     )
                     self._add_regime_observation(
                         regime_name,
@@ -2469,6 +2645,16 @@ def run_analysis(
         )
     candidate_rows, rejected = correlator.candidate_rows()
     regime_rows = correlator.regime_rows()
+    fixed_formula_result = None
+    if config.fixed_formula is not None:
+        if correlator.fixed_formula_residuals is None:
+            raise CorrelateError(
+                "fixed formula residual state was not initialized"
+            )
+        fixed_formula_result = correlator.fixed_formula_residuals.result(
+            reference_count=correlator.reference_count,
+            config=config.fixed_formula,
+        )
     assert decoder.resolved is not None
     return {
         "schema_version": SCHEMA_VERSION,
@@ -2561,6 +2747,7 @@ def run_analysis(
                 ),
                 "reported_candidates": MAX_TOP_COUNT,
                 "total_reference_samples": MAX_REFERENCE_SAMPLES,
+                "fixed_formula_residuals": MAX_REFERENCE_SAMPLES,
                 "wire_stream_lines": MAX_WIRE_STREAM_LINES,
                 "wire_stream_bytes": MAX_WIRE_STREAM_BYTES,
                 "capture_files": MAX_CAPTURE_FILES,
@@ -2672,6 +2859,40 @@ def run_analysis(
             ],
             "candidates": candidate_rows,
         },
+        **(
+            {}
+            if fixed_formula_result is None
+            else {
+                "fixed_formula_evaluation": {
+                    "classification": "candidate_only",
+                    "candidate_only": True,
+                    "physical_identity_verified": False,
+                    "scale_verified": False,
+                    "telemetry_promotion_allowed": False,
+                    "purpose": (
+                        "score one predeclared affine formula without "
+                        "refitting it to this capture"
+                    ),
+                    "semantic_identity_warning": (
+                        "low residual error can reject a poor formula but "
+                        "cannot by itself prove physical signal identity"
+                    ),
+                    "reference_timestamp_source": (
+                        "exact PCAN-observed diagnostic wire response"
+                    ),
+                    "candidate_timestamp_source": (
+                        "nearest eligible passive CAN frame within the "
+                        "configured radius"
+                        if config.match_mode == "nearest"
+                        else (
+                            f"{config.window_statistic} of eligible passive "
+                            "CAN frames in the configured symmetric window"
+                        )
+                    ),
+                    "result": fixed_formula_result,
+                }
+            }
+        ),
         **(
             {}
             if config.regime_analysis is None
@@ -2844,6 +3065,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="targeted raw signedness profile (default both)",
     )
     parser.add_argument(
+        "--fixed-formula-field",
+        type=_parse_stream_field_selector,
+        metavar="STREAM=FIELD",
+        help=(
+            "evaluate this exact candidate field against the reference "
+            "using a predeclared affine formula"
+        ),
+    )
+    parser.add_argument(
+        "--fixed-formula-scale",
+        type=float,
+        help=(
+            "predeclared multiplier in predicted_reference_raw = "
+            "scale * candidate_raw + intercept"
+        ),
+    )
+    parser.add_argument(
+        "--fixed-formula-intercept",
+        type=float,
+        help=(
+            "predeclared intercept in predicted_reference_raw = "
+            "scale * candidate_raw + intercept"
+        ),
+    )
+    parser.add_argument(
         "--regime-analysis",
         action="store_true",
         help=(
@@ -2937,6 +3183,37 @@ def main(argv: Sequence[str] | None = None) -> int:
         }[args.bit_search_signedness]
         if len(set(args.bit_search_id)) != len(args.bit_search_id):
             raise CorrelateError("bit-search IDs must not contain duplicates")
+        module = MODULES[args.module]
+
+        def module_selector(
+            selector: StreamFieldSelector,
+        ) -> StreamFieldSelector:
+            return StreamFieldSelector(
+                selector.can_id,
+                selector.id_bits,
+                selector.dlc,
+                selector.field,
+                channel=module.channel,
+            )
+
+        fixed_formula_values = (
+            args.fixed_formula_field,
+            args.fixed_formula_scale,
+            args.fixed_formula_intercept,
+        )
+        if any(value is not None for value in fixed_formula_values) and any(
+            value is None for value in fixed_formula_values
+        ):
+            raise CorrelateError(
+                "fixed formula evaluation requires field, scale, and intercept"
+            )
+        fixed_formula = None
+        if args.fixed_formula_field is not None:
+            fixed_formula = FixedFormulaConfig(
+                candidate=module_selector(args.fixed_formula_field),
+                scale=args.fixed_formula_scale,
+                intercept=args.fixed_formula_intercept,
+            )
         regime_option_values = (
             args.regime_speed_field,
             args.regime_rpm_field,
@@ -2992,19 +3269,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise CorrelateError(
                     "regime candidate streams must not contain duplicates"
                 )
-            module = MODULES[args.module]
-
-            def module_selector(
-                selector: StreamFieldSelector,
-            ) -> StreamFieldSelector:
-                return StreamFieldSelector(
-                    selector.can_id,
-                    selector.id_bits,
-                    selector.dlc,
-                    selector.field,
-                    channel=module.channel,
-                )
-
             regime_analysis = RegimeAnalysisConfig(
                 speed=module_selector(args.regime_speed_field),
                 rpm=module_selector(args.regime_rpm_field),
@@ -3039,6 +3303,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             bit_search_lengths=tuple(args.bit_search_length),
             bit_search_byte_orders=bit_search_byte_orders,
             bit_search_signedness=bit_search_signedness,
+            fixed_formula=fixed_formula,
             regime_analysis=regime_analysis,
         )
         config.validate()

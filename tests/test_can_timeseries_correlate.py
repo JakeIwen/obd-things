@@ -693,6 +693,67 @@ class WindowCorrelationTests(unittest.TestCase):
             all(spec.geometry is None for spec, _ in coarse_other_dlc)
         )
 
+    def test_fixed_formula_scores_predeclared_affine_without_refitting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = EvidenceFixture(directory)
+            candidate_values = (1, 2, 3, 4, 5)
+            reference_values = (3, 5, 8, 9, 11)
+            samples = [
+                (index * 1_000_000, 0x1000, [reference])
+                for index, reference in enumerate(reference_values, 1)
+            ]
+            candidate_frames = [
+                (
+                    index * 1_000_000,
+                    0x123,
+                    [candidate_value],
+                    False,
+                )
+                for index, candidate_value in enumerate(candidate_values, 1)
+            ]
+            rows, lines = linked_evidence(samples, candidate_frames)
+            fixture.write_wire(rows)
+            fixture.write_capture(lines)
+            field = correlate.FieldSpec.from_signal_field(
+                correlate.SignalField(0, 8, "little", signed=False)
+            )
+
+            report = correlate.run_analysis(
+                wire=fixture.wire,
+                captures=[fixture.capture],
+                did=0x1000,
+                reference_field="auto",
+                config=correlate.AnalysisConfig(
+                    radius_us=50_000,
+                    minimum_samples=3,
+                    bit_search_ids=frozenset(((0x123, 11, 1),)),
+                    bit_search_lengths=(8,),
+                    bit_search_byte_orders=("little",),
+                    bit_search_signedness=(False,),
+                    fixed_formula=correlate.FixedFormulaConfig(
+                        candidate=correlate.StreamFieldSelector(
+                            0x123, 11, 1, field
+                        ),
+                        scale=2.0,
+                        intercept=1.0,
+                    ),
+                ),
+            )
+
+        evaluation = report["fixed_formula_evaluation"]
+        result = evaluation["result"]
+        self.assertTrue(evaluation["candidate_only"])
+        self.assertFalse(evaluation["telemetry_promotion_allowed"])
+        self.assertEqual(result["sample_count"], 5)
+        self.assertEqual(result["coverage_ratio"], 1.0)
+        self.assertAlmostEqual(result["signed_mean_error"], 0.2)
+        self.assertAlmostEqual(result["absolute_mean_bias"], 0.2)
+        self.assertAlmostEqual(result["mean_absolute_error"], 0.2)
+        self.assertAlmostEqual(result["rmse"], 5**-0.5)
+        self.assertEqual(result["p95_absolute_error"], 1.0)
+        self.assertEqual(result["minimum_signed_error"], 0.0)
+        self.assertEqual(result["maximum_signed_error"], 1.0)
+
 
 class EvidenceValidationTests(unittest.TestCase):
     def test_exact_wire_link_preserves_sff_eff_namespace(self):
@@ -757,6 +818,33 @@ class EvidenceValidationTests(unittest.TestCase):
             correlate._parse_stream_field_selector(
                 "sff:101:2=u32be:0"
             )
+
+    def test_fixed_formula_field_must_exist_in_candidate_profile(self):
+        selected = correlate.StreamFieldSelector(
+            0x123,
+            11,
+            1,
+            correlate.FieldSpec.from_signal_field(
+                correlate.SignalField(0, 8, "little", signed=True)
+            ),
+        )
+        config = correlate.AnalysisConfig(
+            bit_search_ids=frozenset(((0x123, 11, 1),)),
+            bit_search_lengths=(8,),
+            bit_search_byte_orders=("little",),
+            bit_search_signedness=(False,),
+            fixed_formula=correlate.FixedFormulaConfig(
+                candidate=selected,
+                scale=1.0,
+                intercept=0.0,
+            ),
+        )
+
+        with self.assertRaisesRegex(
+            correlate.CorrelateError,
+            "not present in the configured candidate field profile",
+        ):
+            config.validate()
 
     def test_regime_config_rejects_projected_state_above_cap(self):
         def selector(can_id):
@@ -1526,6 +1614,28 @@ class EvidenceValidationTests(unittest.TestCase):
 
 
 class CliTests(unittest.TestCase):
+    def test_cli_requires_complete_fixed_formula_tuple(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            result = correlate.main(
+                [
+                    "--wire",
+                    "missing-wire.jsonl",
+                    "--did",
+                    "1000",
+                    "--fixed-formula-field",
+                    "sff:123:1=bits:little:0:8:unsigned",
+                    "--output",
+                    "tmp/missing-report.json",
+                    "missing-capture.candump",
+                ]
+            )
+
+        self.assertEqual(result, 2)
+        self.assertIn(
+            "requires field, scale, and intercept", stderr.getvalue()
+        )
+
     def test_cli_plain_input_never_spawns_and_writes_exclusive_tmp_report(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

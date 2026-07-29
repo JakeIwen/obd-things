@@ -709,6 +709,41 @@ class ClusterDriveHealthTests(unittest.TestCase):
                 consecutive_failures=failures,
             )
 
+    def test_timeout_threshold_accepts_only_corroborated_ignition_shutdown(self):
+        failures = {did: 0 for did in drive.CLUSTER_DIDS}
+        for _ in range(drive.MAX_CONSECUTIVE_DID_FAILURES - 1):
+            self.assertTrue(
+                drive.enforce_did_health(
+                    0x1002,
+                    "timeout",
+                    startup_profile_validated=True,
+                    consecutive_failures=failures,
+                )
+            )
+        self.assertFalse(
+            drive.enforce_did_health(
+                0x1002,
+                "timeout",
+                startup_profile_validated=True,
+                consecutive_failures=failures,
+                ignition_absence_seconds=(
+                    drive.DID_TIMEOUT_IGNITION_ABSENCE_S
+                ),
+            )
+        )
+
+        failures[0x1002] = drive.MAX_CONSECUTIVE_DID_FAILURES - 1
+        with self.assertRaisesRegex(drive.DriveLogError, "3 consecutive"):
+            drive.enforce_did_health(
+                0x1002,
+                "timeout",
+                startup_profile_validated=True,
+                consecutive_failures=failures,
+                ignition_absence_seconds=(
+                    drive.DID_TIMEOUT_IGNITION_ABSENCE_S - 0.001
+                ),
+            )
+
 
 class ClusterDriveRawEvidenceTests(unittest.TestCase):
     def _raw(self, root: Path) -> drive.RawCapture:
@@ -1019,6 +1054,18 @@ class ClusterDriveIgnitionTests(unittest.TestCase):
         sock.bind.assert_called_once_with(("can0",))
         sock.send.assert_not_called()
         self.assertEqual(watcher.last_seen_monotonic, 10.0)
+
+    def test_observer_reports_age_of_latest_verified_frame(self):
+        sock = mock.Mock()
+        sock.recv.side_effect = BlockingIOError()
+        watcher = drive.IgnitionWatcher()
+        watcher.sock = sock
+        watcher.last_seen_monotonic = 7.5
+
+        with mock.patch.object(drive.time, "monotonic", return_value=10.0):
+            self.assertEqual(watcher.ignition_absence_seconds(), 2.5)
+            self.assertFalse(watcher.ignition_lost(timeout=3.0))
+            self.assertTrue(watcher.ignition_lost(timeout=2.0))
 
 
 class _FakeClock:

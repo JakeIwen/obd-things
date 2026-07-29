@@ -29,7 +29,10 @@ power remain open. A later
 found the strongest transmission-oil carrier candidate so far. The candidate
 failed its precommitted narrow-range blind R²/scaling gates; a later
 zero-drop cold-start leg then passed the frozen broad-range carrier and
-affine gates across 33–85 °C, but failed the separate requirement to beat
+affine gates across 33–85 °C. The predeclared
+`°C = 0.375 × signed_i8 + 57` formula also passed directly with 0.863 °C
+RMSE, 0.135 °C absolute mean bias, and 1.0 °C p95 absolute error over 2,027
+exact samples. The leg nevertheless failed the separate requirement to beat
 TCU-chip-temperature R² by at least 0.10. It remains not telemetry-allowlisted,
 and neither another whole-bus search nor an identical warm-up trajectory is
 the next experiment. A reviewed `--profile tcm-thermal` mode in
@@ -684,8 +687,12 @@ the cluster's inherited S3 timer.
 The logger must be launched while parked, preferably after the engine is running. Before opening
 ISO-TP it requires the verified ignition-presence frame `0x2EF`, persists a first raw CAN frame,
 and obtains one exact positive response of the reviewed length from every DID. It then tracks
-failures separately per DID and stops after three consecutive failures of any one signal. Loss of
-`0x2EF` for ten seconds ends the campaign, so each ignition leg is a separate run.
+failures separately per DID and ordinarily fails after three consecutive
+failures of any one signal. Three timeouts corroborated by at least two
+seconds without `0x2EF` are instead classified as a clean ignition-shutdown
+stop; a fresh `0x2EF` keeps the original fail-closed behavior. Independent
+loss of `0x2EF` for ten seconds also ends the campaign, so each ignition leg
+is a separate run.
 
 Raw capture is integrated because an active diagnostic owner and
 `passive_drive_capture.py` cannot share one PCAN: the former requires armed CAN plus the exclusive
@@ -867,8 +874,12 @@ that coarse profile with bounded 1–32-bit Intel/Motorola DBC geometry. No more
 than two IDs and 6,000 fields per ID are accepted. It requires
 at least 50 percent reference coverage and four distinct candidate values by
 default, then ranks by `R² × coverage` before the remaining deterministic
-tie-breakers. The portable direct invocation for the completed idling
-shakedown is:
+tie-breakers. A predeclared candidate can additionally be scored without
+refitting by supplying `--fixed-formula-field`, `--fixed-formula-scale`, and
+`--fixed-formula-intercept`; its report includes exact coverage, signed bias,
+MAE, RMSE, and conservative nearest-rank p95 absolute error while remaining
+explicitly candidate-only. The portable direct invocation for the completed
+idling shakedown is:
 
 ```bash
 python3 tools/can_timeseries_correlate.py \

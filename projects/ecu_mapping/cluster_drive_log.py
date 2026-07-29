@@ -134,6 +134,7 @@ MAX_PENDING_FINALIZATION_SECONDS = 120.0
 IGNITION_CAN_ID = 0x2EF
 IGNITION_START_TIMEOUT_S = 15.0
 IGNITION_LOSS_TIMEOUT_S = 10.0
+DID_TIMEOUT_IGNITION_ABSENCE_S = 2.0
 MAX_CONSECUTIVE_DID_FAILURES = 3
 DEFAULT_TELEMETRY_SOCKET = "/run/van-telemetry/api.sock"
 TELEMETRY_TIMEOUT_S = 0.25
@@ -876,11 +877,15 @@ class IgnitionWatcher:
         )
 
     def ignition_lost(self, timeout: float = IGNITION_LOSS_TIMEOUT_S) -> bool:
+        absence = self.ignition_absence_seconds()
+        return absence is not None and absence >= timeout
+
+    def ignition_absence_seconds(self) -> float | None:
+        """Return age of the newest verified ignition-presence frame."""
         self.poll()
-        return (
-            self.last_seen_monotonic is not None
-            and time.monotonic() - self.last_seen_monotonic >= timeout
-        )
+        if self.last_seen_monotonic is None:
+            return None
+        return max(0.0, time.monotonic() - self.last_seen_monotonic)
 
     def close(self) -> None:
         if self.sock is not None:
@@ -2090,11 +2095,12 @@ def enforce_did_health(
     *,
     startup_profile_validated: bool,
     consecutive_failures: dict[int, int],
-) -> None:
-    """Update one DID's health and fail closed at the reviewed thresholds."""
+    ignition_absence_seconds: float | None = None,
+) -> bool:
+    """Return false only for timeout plus corroborating ignition-frame loss."""
     if category == "positive":
         consecutive_failures[did] = 0
-        return
+        return True
     consecutive_failures[did] += 1
     if category in {"unexpected", "invalid_length", "transport_exception"}:
         raise DriveLogError(
@@ -2105,10 +2111,18 @@ def enforce_did_health(
             f"startup profile was not all-positive: DID {did:04X} returned {category}"
         )
     if consecutive_failures[did] >= MAX_CONSECUTIVE_DID_FAILURES:
+        if (
+            category == "timeout"
+            and ignition_absence_seconds is not None
+            and ignition_absence_seconds
+            >= DID_TIMEOUT_IGNITION_ABSENCE_S
+        ):
+            return False
         raise DriveLogError(
             f"DID {did:04X} failed "
             f"{MAX_CONSECUTIVE_DID_FAILURES} consecutive attempts"
         )
+    return True
 
 
 def execute(args: argparse.Namespace, soft: int, hard: int) -> int:
@@ -2349,13 +2363,28 @@ def execute(args: argparse.Namespace, soft: int, hard: int) -> int:
                         if observation is not None:
                             metric, payload = observation
                             telemetry.submit(metric, payload)
-                    enforce_did_health(
+                    ignition_frame_absence_s = None
+                    if (
+                        category == "timeout"
+                        and consecutive_failures[did] + 1
+                        >= MAX_CONSECUTIVE_DID_FAILURES
+                    ):
+                        ignition_frame_absence_s = (
+                            watcher.ignition_absence_seconds()
+                        )
+                    did_healthy = enforce_did_health(
                         did,
                         category,
                         startup_profile_validated=startup_profile_validated,
                         consecutive_failures=consecutive_failures,
+                        ignition_absence_seconds=ignition_frame_absence_s,
                     )
                     current_did = None
+                    if not did_healthy:
+                        stop_reason = (
+                            "diagnostic_timeout_after_ignition_frame_absent"
+                        )
+                        break
 
                 if cycle_results == len(CLUSTER_DIDS):
                     _append_jsonl(

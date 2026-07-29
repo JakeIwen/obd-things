@@ -50,6 +50,14 @@ gearbox oil temperature °C ≈ 0.375 × signed_i8(0x1F7 byte 3) + 57
 That formula is not yet promoted. A high fit during one thermal trajectory can
 still be warm-up covariance.
 
+Retrospective direct scoring of this development leg, compute job
+`20260729T235136Z-ec7fdbb4`, gives full 2,338-sample coverage, signed bias
+`-0.15697 °C`, MAE `0.66595 °C`, RMSE `0.82388 °C`, and `1.0 °C` p95 absolute
+error. Because the simple formula was derived from this leg, those direct
+development metrics describe it but are not independent validation. The
+result-report SHA-256 is
+`8651d42d9eeb4eef0c6b213d3b73a82f8debf74b0a66fb9c0b9ed168d570ec65`.
+
 ## Frozen independent-leg gates
 
 Before retrieving either independent-leg result, the benchmark manifest added
@@ -105,6 +113,22 @@ quantization and small thermal lag. That explains why their sub-one-count RMSE
 and intercepts look much better than their R², but it does not turn a
 predeclared failure into a pass.
 
+After the fixed-formula evaluator was implemented, the already-declared
+`predicted_04FE_raw = 0.375 × signed_i8 + 97` formula was applied directly to
+both blind legs. These are exact-error measurements on independent captures,
+but they were computed retrospectively and do not rewrite the original
+predeclared R² outcomes:
+
+| leg | compute job | exact samples | coverage | signed bias | MAE | RMSE | p95 absolute error |
+|---|---|---:|---:|---:|---:|---:|---:|
+| independent 72-minute | `20260729T234814Z-5b44e0a9` | 2,013 | 1.000 | -0.15996 °C | 0.69449 °C | 0.83930 °C | 1.0 °C |
+| independent 45-minute | `20260729T234813Z-9eb881fe` | 1,489 | 1.000 | -0.07052 °C | 0.76897 °C | 0.88302 °C | 1.0 °C |
+
+The direct fixed scale is therefore much more stable than the narrow-range
+refitted slopes suggested. This strengthens the scaling evidence, while
+leaving physical identity subject to the separate thermal-discrimination
+gate.
+
 The chip-temperature controls support the oil-specific interpretation without
 rescuing the carrier gate:
 
@@ -129,7 +153,11 @@ The result-report SHA-256 values are:
 - 45-minute oil:
   `1047e42d825d8e9489a0bbcc4cfcb34e08d102bdf37ce8fa8e3d3ae3fdf273fe`;
 - 45-minute chip:
-  `bf15c5a765646d72fcc3b83917ee83e9996262f6a537774329a19547cfe158f2`.
+  `bf15c5a765646d72fcc3b83917ee83e9996262f6a537774329a19547cfe158f2`;
+- 72-minute fixed-formula oil:
+  `8eb424ed363726f5dcccce54e93d373de1fa231cbc57b57c560cf25a27eb2ef5`;
+- 45-minute fixed-formula oil:
+  `6d97d28b863b450955914d80531029fadf94f2ea9bb8282e9b40e4e138a0a06d`.
 
 The provenance-bound two-case evaluator reports
 `passed: false`, `telemetry_promotion_allowed: false`, and no missing case for
@@ -143,17 +171,12 @@ so far, and the old `0x417` candidate remains rejected. It is not allowlisted,
 must not drive a temperature warning, and must not be presented as verified
 telemetry.
 
-The next decisive run is one independent cold-start drive that covers at
-least 30 °C of `04FE` change while retaining exact TCM polling and a zero-drop
-passive stream. Its acceptance criteria must be frozen before inspection and
-should test both:
-
-1. broad-range carrier recovery (where R² is meaningful); and
-2. direct error against the provisional fixed formula
-   `°C = 0.375 × signed_i8 + 57`.
-
-No additional broad whole-bus search is justified before that controlled
-challenge.
+The requested independent cold-start challenge is complete below. It strongly
+validated the predeclared carrier geometry and fixed scale, but the frozen
+oil-versus-chip discriminator failed. No additional broad whole-bus search or
+identical cold-start trajectory is justified. The next useful evidence must
+make gearbox oil and TCU-chip temperature follow materially different thermal
+trajectories, or supply exact installed-calibration/ODX semantics.
 
 ## Frozen broad-range challenge gates
 
@@ -234,6 +257,24 @@ The exact signed-byte oil report, compute job
 | affine intercept | 95..99 raw | 97.10152 | pass |
 | affine RMSE | at most 1.5 raw | 0.85056 | pass |
 
+The tool then scored the predeclared physical formula directly, without
+refitting it to this capture. Compute job
+`20260729T233958Z-7c42c188` exact-linked every reference to the global raw
+stream and evaluated
+`predicted_04FE_raw = 0.375 × signed_i8 + 97`:
+
+| fixed-formula criterion | required | observed | result |
+|---|---:|---:|---|
+| coverage | at least 0.99 | 1.000 (2,027/2,027) | pass |
+| RMSE | at most 1.5 °C | 0.86253 °C | pass |
+| absolute mean bias | at most 1.0 °C | 0.13518 °C | pass |
+| p95 absolute error | at most 2.5 °C | 1.0 °C | pass |
+
+The mean signed error orientation is
+`04FE reference - predicted reference = +0.13518 °C`; mean absolute error is
+`0.71929 °C`, and the observed signed errors span `-1..+2 °C`. This is a
+direct fixed-scale result rather than a post-hoc affine-fit statistic.
+
 The paired chip control, compute job `20260729T232002Z-c937bcb4`, found the
 same exact byte at full coverage and rank 6 with R² `0.98339398`, slope
 `0.31418336`, intercept `90.16842`, and RMSE `1.78735` raw counts. Its scale
@@ -262,4 +303,14 @@ Evidence hashes:
 - oil result report:
   `4ffdd73eb5710fd90ff1b0ca0a9496e6913b1bf095c7d9b66cb14bae61e3a385`;
 - chip-control result report:
-  `fbd585cf903612e7b4f8a9d131aa924f8a9c1062a92cae1438d4c1a403b65d15`.
+  `fbd585cf903612e7b4f8a9d131aa924f8a9c1062a92cae1438d4c1a403b65d15`;
+- fixed-formula result report:
+  `d764efed18518d13e2dcec6e2eb011d1a2aebb1a1ab0a9ff04e510d403ff45ae`.
+
+The logger's shutdown classifier was subsequently hardened around the terminal
+pattern observed here. It still fails after three consecutive timeouts when
+fresh `0x2EF` ignition-presence traffic continues. When the third timeout is
+instead corroborated by at least two seconds without `0x2EF`, it now stops
+cleanly as `diagnostic_timeout_after_ignition_frame_absent`; the independent
+ten-second ignition-loss gate remains in place. This changes future terminal
+classification only, not the retained evidence or the frozen result above.
