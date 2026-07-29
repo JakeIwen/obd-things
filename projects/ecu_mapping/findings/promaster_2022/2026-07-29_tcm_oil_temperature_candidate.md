@@ -201,3 +201,65 @@ chunk. That leg is not complete zero-drop evidence. The loss gate behaved
 correctly, and the guarded recorder reserve was subsequently raised from
 4 MiB to 16 MiB to better absorb transient EXFAT/compression stalls; zero-drop
 acceptance remains mandatory.
+
+## Broad-range cold-start result
+
+Campaign `tcm-thermal-coldstart-20260729T222745Z` supplied the frozen
+broad-range challenge. It ran for about 37 minutes 57 seconds before vehicle
+end-of-leg conditions produced five terminal diagnostic timeouts. The logger
+labeled the end as a DID-health failure because its three-timeout threshold
+expired before the ten-second ignition-loss timer; this is consistent with,
+but does not by itself prove, ignition shutdown during that short interval.
+The terminal classification does not weaken the retained evidence:
+
+- `04FE` and `0301` each have 2,027 exact positive responses;
+- `04FE` covered raw `73..125`, or **33..85 °C**, a 52 °C span;
+- all 4 raw chunks finalized complete;
+- the raw capture retained 6,179,375 frames with zero detected socket drops;
+- request/response count cross-validation reported no mismatch, no negative
+  response, no unexplained TCM-endpoint frame, and no pending response; and
+- the adapter was restored passive and the channel lock was released.
+
+The exact signed-byte oil report, compute job
+`20260729T232002Z-b1324a4a`, returned:
+
+| frozen criterion | required | observed | result |
+|---|---:|---:|---|
+| `04FE` span | at least 30 °C | 52 °C | pass |
+| exact samples | at least 1,000 | 2,027 | pass |
+| coverage | at least 0.99 | 1.000 | pass |
+| rank | at most 10 | 6 | pass |
+| R² | at least 0.98 | 0.99734126 | pass |
+| affine slope | 0.35..0.40 | 0.37607873 | pass |
+| affine intercept | 95..99 raw | 97.10152 | pass |
+| affine RMSE | at most 1.5 raw | 0.85056 | pass |
+
+The paired chip control, compute job `20260729T232002Z-c937bcb4`, found the
+same exact byte at full coverage and rank 6 with R² `0.98339398`, slope
+`0.31418336`, intercept `90.16842`, and RMSE `1.78735` raw counts. Its scale
+and residual are materially less oil-like, but the frozen discriminator
+required oil R² to exceed chip R² by at least `0.10`; the observed margin was
+only `0.01394728`. That criterion **failed** and is not weakened after
+inspection.
+
+The provisional oil carrier therefore remains `candidate_only`. The
+broad-range drive strongly reproduces its oil scale but does not independently
+separate two temperatures that followed nearly the same warm-up trajectory.
+Do not repeat an identical cold-start drive. The next useful evidence needs a
+condition that makes gearbox oil and TCU-chip temperature diverge, or exact
+installed-calibration/ODX semantics for this transmitted field.
+
+Evidence hashes:
+
+- finalized campaign summary:
+  `02c06683072cb7f750ef506dcbcbee415999d3262a6efbd87777cedbc5c046d4`;
+- high-level sample JSONL:
+  `cf62aa2952ab23fef2afb561bab65fb867429584bbe5200d9c0097a1d243a69a`;
+- raw manifest:
+  `9eee3601f37e5e6c749aaebbb56e09676ee5526ce62c90df3063c87a3a385efc`;
+- exact TCM wire JSONL:
+  `ca6b2c3d8d8d0e7030ced9afeb6d2f3c0bfe72dcfe751e6a23158cd607c072f9`;
+- oil result report:
+  `4ffdd73eb5710fd90ff1b0ca0a9496e6913b1bf095c7d9b66cb14bae61e3a385`;
+- chip-control result report:
+  `fbd585cf903612e7b4f8a9d131aa924f8a9c1062a92cae1438d4c1a403b65d15`.

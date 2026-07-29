@@ -408,8 +408,11 @@ Do not repeat it without a new experimental reason. The installed PCM returned
 NRC `12` for `3159/315A`; a later independently captured sparse check also
 returned NRC `12` for the related-profile `B010/B011/B012` thermal family.
 The ZF9HP support inventory and labeled AlfaOBD drive captures are complete.
-The current transmission-oil task is a new cold-start challenge of the
-provisional passive `0x1F7` byte-3 carrier, not another DID support inventory.
+The cold-start challenge of provisional passive `0x1F7` byte 3 is complete.
+It reproduced the oil relationship across a 52 °C reference span and passed
+the frozen carrier/affine gates, but failed the separate chip-temperature
+R²-margin gate. It therefore remains candidate-only; another DID support
+inventory or an identical warm-up drive is not the next experiment.
 
 Participating active diagnostic tools take a nonblocking exclusive per-channel advisory lock under
 `tmp/locks/`, so two of them cannot transmit through the same SocketCAN channel concurrently.

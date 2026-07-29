@@ -26,10 +26,13 @@ scales, while proving that this PCM profile's transmission-temperature and turbi
 unsupported. Passive torque, true sump-oil temperature, transmission temperature, and derived
 power remain open. A later
 [`signed 0x1F7 byte-3 investigation`](findings/promaster_2022/2026-07-29_tcm_oil_temperature_candidate.md)
-found the strongest transmission-oil carrier candidate so far and rejected chip temperature as
-its label, but the candidate failed its precommitted narrow-range blind R²/scaling gates. It is
-not telemetry-allowlisted; the next decisive evidence is one broad-range independent cold-start
-leg, not another whole-bus search. A reviewed `--profile tcm-thermal` mode in
+found the strongest transmission-oil carrier candidate so far. The candidate
+failed its precommitted narrow-range blind R²/scaling gates; a later
+zero-drop cold-start leg then passed the frozen broad-range carrier and
+affine gates across 33–85 °C, but failed the separate requirement to beat
+TCU-chip-temperature R² by at least 0.10. It remains not telemetry-allowlisted,
+and neither another whole-bus search nor an identical warm-up trajectory is
+the next experiment. A reviewed `--profile tcm-thermal` mode in
 [`cluster_drive_log.py`](cluster_drive_log.py) now records that exact `04FE/0301` challenge at
 two total requests per second with integrated loss-accounted raw evidence.
 
@@ -545,8 +548,9 @@ Physical support reads and grouped live-catalog captures of the priority set
 are complete. The resulting exact DID associations and independent-drive
 carrier tests are recorded in the dated PCM/TCM findings; do not repeat the
 support inventory merely to rediscover them. Passive transmission-oil
-temperature remains candidate-only and needs the separately documented
-cold-start challenge before dashboard promotion.
+temperature remains candidate-only after the separately documented cold-start
+challenge passed its carrier/affine gates but failed its chip-temperature
+discrimination margin.
 
 `tools/did_sweep.py` accepts repeatable `--did` options, which was used to
 read exactly the thirteen reviewed ZF9HP candidates without traversing the
@@ -1211,14 +1215,14 @@ verify the `/4` rpm scale or authorize public telemetry promotion.
    This is a dry run unless `--execute --confirm-parked` is added. Do not run it
    again without a new experimental reason, and do not expand around the
    rejected addresses. The ZF9HP catalog inventory and loaded scalar campaigns
-   are complete; do not rerun the broad 56-row inventory. The next preplanned
-   cold-start drive uses the reviewed direct `tcm-thermal` logger with AlfaOBD
-   closed; it polls exact `04FE` and `0301` at two total requests per second
-   while retaining the full passive C-CAN stream. Its purpose is to challenge
-   the provisional `0x1F7` byte-3 carrier over at least 30 °C, not to search
-   the whole bus again. Do not revive the old `0x417` scale without
-   contradictory independent evidence. Converter slip and actual measured
-   crank torque remain unresolved passive targets. The
+   are complete; do not rerun the broad 56-row inventory. The reviewed direct
+   `tcm-thermal` logger completed a 52 °C cold-start challenge with AlfaOBD
+   closed, exact `04FE/0301` polling, and a complete zero-drop C-CAN stream.
+   `0x1F7` byte 3 passed the frozen carrier/affine gates but not the required
+   0.10 R² advantage over chip temperature, so it remains candidate-only.
+   Do not repeat the same warm-up trajectory or revive the old `0x417` scale
+   without a new discriminator. Converter slip and actual measured crank
+   torque remain unresolved passive targets. The
    saved `ZF9HP.dat` remains
    unlabeled/untimestamped and is not a substitute for the fresh joined trace.
 6. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps
