@@ -29,7 +29,17 @@ power remain open. A later
 found the strongest transmission-oil carrier candidate so far and rejected chip temperature as
 its label, but the candidate failed its precommitted narrow-range blind R²/scaling gates. It is
 not telemetry-allowlisted; the next decisive evidence is one broad-range independent cold-start
-leg, not another whole-bus search.
+leg, not another whole-bus search. A reviewed `--profile tcm-thermal` mode in
+[`cluster_drive_log.py`](cluster_drive_log.py) now records that exact `04FE/0301` challenge at
+two total requests per second with integrated loss-accounted raw evidence.
+
+The earlier related-profile PCM engine-oil pair `3159/315A` is now closed:
+the installed PCM entered session `92` but returned NRC `12` for both. Static
+DEX/catalog mining subsequently identified a stronger `SOHC_V6` candidate
+cluster—`B010` calculated transmission oil, `B011` measured oil thermistor,
+and `B012` calculated oil. These remain unsupported related-profile leads;
+the next PCM action is a sparse parked support check of those three DIDs, not
+another broad sweep and not a repeat of `3159/315A`.
 
 The full AlfaOBD `TIGERSHARK_CUSW` PCM Plots request alignment is now an
 executable, ECU-scoped 193-row/190-DID catalog in

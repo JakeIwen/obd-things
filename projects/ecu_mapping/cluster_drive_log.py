@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Bounded drive logger for five verified cluster ReadDataByIdentifier requests.
+"""Bounded drive logger for reviewed cluster or TCM ReadDataByIdentifier profiles.
 
 The default invocation is an inert plan. Live mode is deliberately narrow:
 
-* one verified cluster endpoint from ``lib/modules.py``;
-* physical ``22`` reads of ``1000``, ``1002``, ``0107``, ``1004``, and ``1005``;
+* one verified ECU endpoint from ``lib/modules.py``;
+* one fixed, reviewed physical-``22`` request profile;
 * no DiagnosticSessionControl, TesterPresent, DTC, routine, write, security, reset,
   functional, wake, retry, interface-recovery, or re-arm traffic;
 * at most five request attempts per second;
@@ -34,6 +34,21 @@ Live execution, started while parked before the drive:
       --execute --confirm-driving-read-only --confirm-started-parked \
       --confirm-no-other-diagnostics --pair 6/14 \
       --conditions "ordinary driving; AlfaOBD closed; PCAN on C-CAN 6/14"
+
+The opt-in TCM thermal profile reads only gearbox-oil DID ``04FE`` and TCU-chip
+temperature DID ``0301``. It exists to exact-link both controls to the same
+loss-accounted C-CAN stream during a broad cold-start drive:
+
+    ./bringup.sh --tx
+    python3 projects/ecu_mapping/cluster_drive_log.py \
+      --profile tcm-thermal \
+      --out-root /mnt/EXFAT512/obd-things/tmp/ecu_mapping/tcm-thermal-drive \
+      --raw-root /mnt/EXFAT512/obd-things/tmp/captures/ccan/tcm-thermal-drive \
+      --require-mount /mnt/EXFAT512 --duration-seconds 10800 \
+      --execute --confirm-driving-read-only --confirm-started-parked \
+      --confirm-no-other-diagnostics --confirm-tcm-thermal-correlation \
+      --pair 6/14 \
+      --conditions "cold-start drive; AlfaOBD closed; PCAN C-CAN 6/14"
 """
 
 from __future__ import annotations
@@ -102,20 +117,9 @@ def diagnostic_preflight(channel: str, bitrate: int) -> list[str]:
     return list(preflight(channel, bitrate))
 
 
-MODULE = MODULES["cluster"]
 CHANNEL = "can0"
 BITRATE = 500_000
 PAIR = "6/14"
-EXPECTED_TXID = 0x18DA60F1
-EXPECTED_RXID = 0x18DAF160
-CLUSTER_DIDS = (0x1000, 0x1002, 0x0107, 0x1004, 0x1005)
-EXPECTED_DATA_LENGTHS = {
-    0x1000: 2,
-    0x1002: 1,
-    0x0107: 1,
-    0x1004: 1,
-    0x1005: 1,
-}
 REQUEST_RATE_HZ = 5.0
 REQUEST_INTERVAL_S = 1.0 / REQUEST_RATE_HZ
 REQUEST_TIMEOUT_S = 0.75
@@ -163,6 +167,76 @@ WIRE_RE = re.compile(
 )
 
 
+@dataclasses.dataclass(frozen=True)
+class DriveProfile:
+    key: str
+    module_key: str
+    txid: int
+    rxid: int
+    dids: tuple[int, ...]
+    expected_data_lengths: dict[int, int]
+    request_rate_hz: float
+    wire_stem: str
+    purpose: str
+
+
+DRIVE_PROFILES = {
+    "cluster": DriveProfile(
+        key="cluster",
+        module_key="cluster",
+        txid=0x18DA60F1,
+        rxid=0x18DAF160,
+        dids=(0x1000, 0x1002, 0x0107, 0x1004, 0x1005),
+        expected_data_lengths={
+            0x1000: 2,
+            0x1002: 1,
+            0x0107: 1,
+            0x1004: 1,
+            0x1005: 1,
+        },
+        request_rate_hz=5.0,
+        wire_stem="cluster_wire",
+        purpose="cluster scaling and state correlation",
+    ),
+    "tcm-thermal": DriveProfile(
+        key="tcm-thermal",
+        module_key="tcm",
+        txid=0x18DA18F1,
+        rxid=0x18DAF118,
+        dids=(0x04FE, 0x0301),
+        expected_data_lengths={0x04FE: 1, 0x0301: 1},
+        request_rate_hz=2.0,
+        wire_stem="tcm_thermal_wire",
+        purpose=(
+            "broad-range gearbox-oil carrier challenge with TCU-chip "
+            "temperature negative control"
+        ),
+    ),
+}
+
+ACTIVE_PROFILE = DRIVE_PROFILES["cluster"]
+MODULE = MODULES[ACTIVE_PROFILE.module_key]
+CLUSTER_DIDS = ACTIVE_PROFILE.dids
+EXPECTED_DATA_LENGTHS = ACTIVE_PROFILE.expected_data_lengths
+
+
+def select_drive_profile(name: str) -> DriveProfile:
+    """Select one reviewed profile before planning or opening live resources."""
+    global ACTIVE_PROFILE, MODULE, CLUSTER_DIDS, EXPECTED_DATA_LENGTHS
+    try:
+        profile = DRIVE_PROFILES[name]
+    except KeyError:
+        choices = ", ".join(sorted(DRIVE_PROFILES))
+        raise DriveLogError(
+            f"unknown drive profile {name!r}; choose {choices}"
+        ) from None
+    ACTIVE_PROFILE = profile
+    MODULE = MODULES[profile.module_key]
+    CLUSTER_DIDS = profile.dids
+    EXPECTED_DATA_LENGTHS = profile.expected_data_lengths
+    return profile
+
+
 class DriveLogError(RuntimeError):
     """A bounded capture or safety invariant failed."""
 
@@ -184,6 +258,12 @@ TELEMETRY_METRICS = frozenset(
         *(name for name, _unit in TELEMETRY_RAW_DIDS.values()),
     }
 )
+
+
+def telemetry_metrics_for_profile() -> frozenset[str]:
+    if ACTIVE_PROFILE.key == "cluster":
+        return TELEMETRY_METRICS
+    return frozenset({"vehicle.ignition_on"})
 
 
 def telemetry_observation_for_did(
@@ -499,7 +579,8 @@ def utc_now() -> str:
 
 
 def campaign_stamp() -> str:
-    return dt.datetime.now().strftime("cluster_drive_%Y%m%d_%H%M%S")
+    prefix = ACTIVE_PROFILE.key.replace("-", "_")
+    return dt.datetime.now().strftime(f"{prefix}_drive_%Y%m%d_%H%M%S")
 
 
 def sha256_file(path: Path, block_size: int = 1024 * 1024) -> str:
@@ -515,8 +596,8 @@ def validate_profile_invariants() -> None:
         CHANNEL,
         BITRATE,
         "normal_29bits",
-        EXPECTED_TXID,
-        EXPECTED_RXID,
+        ACTIVE_PROFILE.txid,
+        ACTIVE_PROFILE.rxid,
     )
     observed = (
         MODULE.channel,
@@ -527,11 +608,17 @@ def validate_profile_invariants() -> None:
     )
     if observed != expected:
         raise DriveLogError(
-            "cluster registry no longer matches the reviewed drive profile: "
+            f"{ACTIVE_PROFILE.key} registry no longer matches the reviewed drive profile: "
             f"observed={observed!r}, expected={expected!r}"
         )
     if set(EXPECTED_DATA_LENGTHS) != set(CLUSTER_DIDS):
         raise DriveLogError("reviewed DID lengths no longer match the fixed DID profile")
+    if (
+        not math.isfinite(ACTIVE_PROFILE.request_rate_hz)
+        or ACTIVE_PROFILE.request_rate_hz <= 0
+        or ACTIVE_PROFILE.request_rate_hz > 5
+    ):
+        raise DriveLogError("reviewed profile request rate must be within (0, 5] Hz")
 
 
 def blocked_processes(proc_root: Path = Path("/proc")) -> list[str]:
@@ -836,8 +923,8 @@ class RawCapture:
         self.path_guard = path_guard or (lambda: None)
         self.stderr_path = run_dir / "runtime.stderr.log"
         self.manifest_path = run_dir / "manifest.jsonl"
-        self.wire_partial_path = run_dir / "cluster_wire.jsonl.partial"
-        self.wire_path = run_dir / "cluster_wire.jsonl"
+        self.wire_partial_path = run_dir / f"{ACTIVE_PROFILE.wire_stem}.jsonl.partial"
+        self.wire_path = run_dir / f"{ACTIVE_PROFILE.wire_stem}.jsonl"
         self.owner_path = run_dir / "owner.json"
         self.command = [
             self.candump,
@@ -968,7 +1055,11 @@ class RawCapture:
     ) -> None:
         if self._wire_handle is None or can_id not in (MODULE.txid, MODULE.rxid):
             return
-        direction = "tester_to_cluster" if can_id == MODULE.txid else "cluster_to_tester"
+        direction = (
+            f"tester_to_{MODULE.key}"
+            if can_id == MODULE.txid
+            else f"{MODULE.key}_to_tester"
+        )
         classification = "non_single_frame"
         payload = b""
         did: int | None = None
@@ -978,7 +1069,7 @@ class RawCapture:
                 payload = data[1 : 1 + declared]
                 classification = "other_single_frame"
                 if (
-                    direction == "tester_to_cluster"
+                    can_id == MODULE.txid
                     and len(payload) == 3
                     and payload[0] == 0x22
                 ):
@@ -987,7 +1078,7 @@ class RawCapture:
                         classification = "exact_request"
                         self.wire_request_counts[f"{did:04X}"] += 1
                 elif (
-                    direction == "cluster_to_tester"
+                    can_id == MODULE.rxid
                     and len(payload) >= 3
                     and payload[0] == 0x62
                 ):
@@ -1001,7 +1092,7 @@ class RawCapture:
                     else:
                         classification = "malformed_positive_response"
                 elif (
-                    direction == "cluster_to_tester"
+                    can_id == MODULE.rxid
                     and len(payload) == 3
                     and payload[:2] == bytes.fromhex("7F 22")
                 ):
@@ -1037,6 +1128,7 @@ class RawCapture:
                 "timestamp_source": "candump_kernel",
                 "can_id": f"{can_id:X}",
                 "direction": direction,
+                "module": MODULE.key,
                 "can_data_hex": data.hex(" ").upper(),
                 "isotp_payload_hex": payload.hex(" ").upper() if payload else None,
                 "classification": classification,
@@ -1176,7 +1268,7 @@ class RawCapture:
         classified_wire_frames = sum(self.wire_classification_counts.values())
         if classified_wire_frames != self.wire_frame_sequence:
             raise DriveLogError(
-                "cluster wire classification count "
+                f"{ACTIVE_PROFILE.key} wire classification count "
                 f"{classified_wire_frames} != wire rows {self.wire_frame_sequence}"
             )
         return {
@@ -1193,7 +1285,7 @@ class RawCapture:
             raise DriveLogError("a raw chunk finalization is already pending")
         self._finalizer = concurrent.futures.ThreadPoolExecutor(
             max_workers=1,
-            thread_name_prefix="cluster-raw-finalize",
+            thread_name_prefix=f"{ACTIVE_PROFILE.key}-raw-finalize",
         )
         self._pending_finalization = self._finalizer.submit(
             chunk.finish,
@@ -1598,6 +1690,12 @@ def query_did(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
+        "--profile",
+        choices=sorted(DRIVE_PROFILES),
+        default="cluster",
+        help="fixed reviewed diagnostic profile (default: cluster)",
+    )
+    parser.add_argument(
         "--out-root",
         required=True,
         type=Path,
@@ -1635,6 +1733,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--confirm-driving-read-only", action="store_true")
     parser.add_argument("--confirm-started-parked", action="store_true")
     parser.add_argument("--confirm-no-other-diagnostics", action="store_true")
+    parser.add_argument(
+        "--confirm-tcm-thermal-correlation",
+        action="store_true",
+        help="required live acknowledgement for the opt-in TCM 04FE/0301 profile",
+    )
     parser.add_argument("--pair")
     parser.add_argument("--conditions")
     parser.add_argument(
@@ -1688,6 +1791,22 @@ def validate_args(args: argparse.Namespace) -> tuple[int, int]:
             raise DriveLogError("--execute requires --confirm-started-parked")
         if not args.confirm_no_other_diagnostics:
             raise DriveLogError("--execute requires --confirm-no-other-diagnostics")
+        if (
+            ACTIVE_PROFILE.key == "tcm-thermal"
+            and not args.confirm_tcm_thermal_correlation
+        ):
+            raise DriveLogError(
+                "--profile tcm-thermal live use requires "
+                "--confirm-tcm-thermal-correlation"
+            )
+        if (
+            ACTIVE_PROFILE.key != "tcm-thermal"
+            and args.confirm_tcm_thermal_correlation
+        ):
+            raise DriveLogError(
+                "--confirm-tcm-thermal-correlation applies only to "
+                "--profile tcm-thermal"
+            )
         if args.pair != PAIR:
             raise DriveLogError(f"--execute requires the fixed verified --pair {PAIR}")
         if not args.conditions or not args.conditions.strip():
@@ -1700,10 +1819,12 @@ def validate_args(args: argparse.Namespace) -> tuple[int, int]:
 
 
 def plan(args: argparse.Namespace, soft: int, hard: int) -> dict[str, object]:
-    campaign = args.campaign or "<cluster_drive_TIMESTAMP>"
+    campaign = args.campaign or f"<{ACTIVE_PROFILE.key.replace('-', '_')}_drive_TIMESTAMP>"
     return {
         "mode": "execute" if args.execute else "plan_only",
         "interaction": "active physical ReadDataByIdentifier plus same-owner raw observation",
+        "profile": ACTIVE_PROFILE.key,
+        "purpose": ACTIVE_PROFILE.purpose,
         "module": {
             "key": MODULE.key,
             "txid": f"{MODULE.txid:08X}",
@@ -1715,14 +1836,16 @@ def plan(args: argparse.Namespace, soft: int, hard: int) -> dict[str, object]:
             "inherited/unknown; no DiagnosticSessionControl or TesterPresent"
         ),
         "request_payloads": [f"22 {did >> 8:02X} {did & 0xFF:02X}" for did in CLUSTER_DIDS],
-        "maximum_total_request_rate_hz": REQUEST_RATE_HZ,
+        "maximum_total_request_rate_hz": ACTIVE_PROFILE.request_rate_hz,
         "duration_seconds": args.duration_seconds,
-        "maximum_request_attempts": math.ceil(args.duration_seconds * REQUEST_RATE_HZ),
+        "maximum_request_attempts": math.ceil(
+            args.duration_seconds * ACTIVE_PROFILE.request_rate_hz
+        ),
         "raw_capture": {
             "scope": "full can0 including local TX loopback",
             "format": (
                 f"{RAW_ROTATION_SECONDS}-second zstd chunks with validated hashes, "
-                "manifest, and cluster-endpoint wire JSONL"
+                f"manifest, and {MODULE.key}-endpoint wire JSONL"
             ),
             "command": [
                 "candump",
@@ -1745,7 +1868,7 @@ def plan(args: argparse.Namespace, soft: int, hard: int) -> dict[str, object]:
                 "bounded best-effort latest-value publication; broker failure "
                 "never stalls or fails CAN evidence capture"
             ),
-            "metrics": sorted(TELEMETRY_METRICS),
+            "metrics": sorted(telemetry_metrics_for_profile()),
         },
         "stop_policy": (
             f"duration, signal, disk floor, error, or {IGNITION_LOSS_TIMEOUT_S:g}s "
@@ -1788,6 +1911,8 @@ def _running_summary(
         "tool": "projects/ecu_mapping/cluster_drive_log.py",
         "status": "running",
         "campaign": campaign,
+        "profile": ACTIVE_PROFILE.key,
+        "purpose": ACTIVE_PROFILE.purpose,
         "started_utc": started_utc,
         "completed_utc": None,
         "interaction": "active fixed physical 22 reads plus integrated raw observation",
@@ -1808,12 +1933,14 @@ def _running_summary(
         "no_other_diagnostics_confirmed": args.confirm_no_other_diagnostics,
         "diagnostic_session_policy": "inherited/unknown; no 10 or 3E sent",
         "dids": [f"{did:04X}" for did in CLUSTER_DIDS],
-        "request_rate_limit_hz": REQUEST_RATE_HZ,
+        "request_rate_limit_hz": ACTIVE_PROFILE.request_rate_hz,
         "duration_limit_seconds": args.duration_seconds,
-        "request_limit": math.ceil(args.duration_seconds * REQUEST_RATE_HZ),
+        "request_limit": math.ceil(
+            args.duration_seconds * ACTIVE_PROFILE.request_rate_hz
+        ),
         "samples_jsonl": str(samples_path.name),
         "sample_timestamp_semantics": (
-            "userspace attempt envelopes; raw cluster wire JSONL carries authoritative "
+            f"userspace attempt envelopes; raw {MODULE.key} wire JSONL carries authoritative "
             "candump kernel timestamps"
         ),
         "raw_run_dir": str(raw_capture.run_dir),
@@ -1907,7 +2034,8 @@ def validate_wire_evidence(
     other_endpoint_frames = int(raw_result.get("wire_other_endpoint_frames", 0))
     if other_endpoint_frames:
         mismatches.append(
-            f"raw recorder saw {other_endpoint_frames} unexplained cluster endpoint frames"
+            f"raw recorder saw {other_endpoint_frames} unexplained "
+            f"{MODULE.key} endpoint frames"
         )
     classifications = dict(raw_result.get("wire_classification_counts") or {})
     unexpected_classifications = {
@@ -1924,7 +2052,7 @@ def validate_wire_evidence(
     }
     if unexpected_classifications:
         mismatches.append(
-            "unexpected cluster wire classifications: "
+            f"unexpected {MODULE.key} wire classifications: "
             + ", ".join(
                 f"{key}={value}"
                 for key, value in sorted(unexpected_classifications.items())
@@ -2123,7 +2251,11 @@ def execute(args: argparse.Namespace, soft: int, hard: int) -> int:
                     raise DriveLogError("raw capture disappeared before a request")
                 raw_capture.assert_alive()
 
-            pace_request = RequestPacer(deadline, raw_health_check)
+            pace_request = RequestPacer(
+                deadline,
+                raw_health_check,
+                interval=1.0 / ACTIVE_PROFILE.request_rate_hz,
+            )
 
             while time.monotonic() < deadline and request_attempts < request_limit:
                 if raw_capture is None or watcher is None:
@@ -2191,7 +2323,8 @@ def execute(args: argparse.Namespace, soft: int, hard: int) -> int:
                             "cycle_started_epoch_us": cycle_started_us,
                             "wire_join": (
                                 "ordinal candidate only; final validation is count-level; "
-                                "authoritative payloads/timestamps are in raw cluster_wire.jsonl"
+                                "authoritative payloads/timestamps are in raw "
+                                f"{ACTIVE_PROFILE.wire_stem}.jsonl"
                             ),
                         }
                     )
@@ -2241,7 +2374,8 @@ def execute(args: argparse.Namespace, soft: int, hard: int) -> int:
                     if not startup_profile_validated:
                         if len(cycle_positives) != len(CLUSTER_DIDS):
                             raise DriveLogError(
-                                "startup profile did not complete with five positives"
+                                "startup profile did not complete with "
+                                f"{len(CLUSTER_DIDS)} positives"
                             )
                         startup_profile_validated = True
                         report["startup_profile_validated"] = True
@@ -2514,6 +2648,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        select_drive_profile(args.profile)
         soft, hard = validate_args(args)
         planned = plan(args, soft, hard)
         if not args.execute:

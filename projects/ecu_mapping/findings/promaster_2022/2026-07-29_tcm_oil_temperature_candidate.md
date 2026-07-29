@@ -155,6 +155,39 @@ should test both:
 No additional broad whole-bus search is justified before that controlled
 challenge.
 
+## Frozen broad-range challenge gates
+
+The following gates were frozen before the next cold-start capture. They do
+not replace or reinterpret the failed narrow-range independent gates above.
+The capture must:
+
+- cover at least 30 °C of exact TCM `04FE` change;
+- contain at least 1,000 exact positive `04FE` samples;
+- retain a complete integrated C-CAN stream with zero recorder-detected
+  socket drops and no unexplained TCM-endpoint traffic;
+- recover exact passive field `0x1F7` signed byte 3 (`i8le@24`) with coverage
+  at least 0.99, rank at most 10 in the bounded 8–16-bit search, and R² at
+  least 0.98;
+- retain affine slope `0.35..0.40`, intercept `95..99` DID raw counts, and
+  RMSE no greater than 1.5 DID raw counts;
+- make the fixed formula `°C = 0.375 × signed_i8 + 57` achieve RMSE no greater
+  than 1.5 °C, absolute mean bias no greater than 1.0 °C, and 95th-percentile
+  absolute error no greater than 2.5 °C; and
+- beat the paired `0301` chip-temperature control by at least 0.10 R² for the
+  exact signed byte.
+
+Failure of any gate leaves the carrier candidate-only. Passing all gates
+qualifies the fixed decode for a final telemetry-review step; it does not
+silently enable a warning threshold.
+
+The reviewed autonomous profile in
+[`cluster_drive_log.py`](../../cluster_drive_log.py) polls only physical
+`22 04FE` and `22 0301` at two total requests per second, sends no session
+change or TesterPresent, records the full bus plus exact TCM wire evidence,
+and restores the interface passive on exit. Despite the legacy filename,
+`--profile tcm-thermal` is a separate fixed request profile and does not poll
+the cluster.
+
 ## Additional same-day capture
 
 The later `pcm-plots-drive-20260729T005006Z` leg retained four clean

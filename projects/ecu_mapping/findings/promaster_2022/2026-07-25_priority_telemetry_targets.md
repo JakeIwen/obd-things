@@ -76,6 +76,17 @@ vendor-derived candidates from a different profile, not installed-vehicle
 support evidence. The next ignition-on check is therefore only the sparse
 `3159/315A` pair through the PCM's verified zero-padded `10 92` session.
 
+Update 2026-07-29 (EOT support result and replacement lead): that exact
+`3159/315A` support check had already run on 2026-07-27. The PCM confirmed
+session `92`, then returned NRC `12` for both DIDs, rejecting the pair for this
+installed ECU. Continued DEX-backed catalog mining found a more relevant
+`SOHC_V6` thermal cluster: calculated transmission oil `B010`, measured oil
+thermistor `B011`, and calculated oil `B012`. All three use Alfa's
+`((s16be × 0.015625) - 32) / 1.8 °C` decoder. They are related-profile
+candidates only; the next engine-oil step is one sparse parked support check
+of `B010/B011/B012`, with `B011` the physical-sensor priority. Do not repeat
+`3159/315A`.
+
 ## Engine-oil pressure: exact OEM context
 
 The OEM `OIL PRESSURE – UPGRADE ENGINE` table applies only when coolant is

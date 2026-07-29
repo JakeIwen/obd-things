@@ -37,6 +37,19 @@ class PcmTigersharkCatalogTests(unittest.TestCase):
             ("Engine oil temperature", "|C", "u8 - 40"),
         )
 
+    def test_sohc_v6_thermal_candidates_remain_separate(self):
+        for did in (0xB010, 0xB011, 0xB012):
+            with self.subTest(did=f"{did:04X}"):
+                self.assertNotIn(did, pcm_tigershark.BY_DID)
+        self.assertEqual(
+            pcm_tigershark.SOHC_V6_THERMAL_CANDIDATES[0xB011],
+            (
+                "oil temperature, thermistor measured",
+                "|C",
+                "((s16be * 0.015625) - 32) / 1.8",
+            ),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

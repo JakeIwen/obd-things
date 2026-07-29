@@ -195,6 +195,63 @@ That command is a dry run. Live use additionally requires
 and uses the bounded `22` request cadence without sending an unverified
 TesterPresent request.
 
+The proposed support check was completed on 2026-07-27. The installed PCM
+positively entered the exact padded legacy session (`10 92 -> 50 92`), but
+both reads returned `7F 22 12` (`subFunctionNotSupported`):
+
+| DID | result |
+|---:|---|
+| `3159` | `7F 22 12` |
+| `315A` | `7F 22 12` |
+
+The complete summary and result JSONL have SHA-256 values
+`8325855cba7a25b48d34de0423cb90549706e6144388d411e9d7ddba9eaf59d7`
+and
+`f0953be48a0e1c62d590b7d859e474ee29003c46e59436d42d2ff5ba90395438`,
+respectively. The intended independently filtered candump artifact was empty,
+so this is exact high-level request/response evidence with no second on-wire
+copy. It is sufficient to reject this pair as installed-PCM EOT leads; do not
+repeat it unless investigating transport evidence itself.
+
+### SOHC_V6 thermal cluster — 2026-07-29
+
+Continued static mining found a stronger related-profile lead. Device 238
+(`SOHC_V6`) has 163 ordered Plots rows. DEX consumer tracing proves that the
+profile branch in `z2.k` loads class `ba`, field `y`, into runtime request
+table `AlfaOBDConnect.s8` and assigns descriptor `ADDescSOHC_V6`. The table's
+163 entries align these adjacent thermal rows:
+
+| catalog order | label | table DID | Alfa decoder |
+|---:|---|---:|---|
+| 151 | calculated transmission oil temperature | `B010` | `((s16be × 0.015625) - 32) / 1.8 °C` |
+| 152 | oil temperature, thermistor measured | `B011` | `((s16be × 0.015625) - 32) / 1.8 °C` |
+| 153 | calculated oil temperature | `B012` | `((s16be × 0.015625) - 32) / 1.8 °C` |
+
+The request-table inventory result SHA-256 is
+`b19a354d6d9ce102f2f8f6b3241e6578140c772816ba21185e351d81fe8f0d77`.
+The DEX field-usage result for `ba.y` is
+`662b735e2d4327179aeb320ea7dea2e90882b8c928b0ab9e27ee0d96c00233de`;
+its only non-initializer use is `z2.k` at code-unit offset 24473, immediately
+assigned to runtime request table `s8`. `ADDescSOHC_V6` occurs once, at
+code-unit offset 24487 in the same branch; that result's SHA-256 is
+`efb410996eea3eac3fe070031c40481b5ecf6a4b9cc8adae0669b27895780a48`.
+
+These remain related-profile candidates, not installed-vehicle support facts.
+`B011` is the priority because its label explicitly names the physical oil
+thermistor, while `B012` is a calculated value and `B010` is a neighboring
+cross-check. The next parked PCM support check should use only this sparse
+trio through the already verified padded session:
+
+```bash
+python3 tools/did_sweep.py pcm \
+  --did B010 --did B011 --did B012 \
+  --session 92 --confirm-session-change \
+  --pair 6/14 \
+  --conditions "parked; ignition ON; engine OFF; SOHC_V6 thermal support check"
+```
+
+This is a dry run unless `--execute --confirm-parked` is also supplied.
+
 An initial length-only match to class `ba`, field `A0`, was wrong. Although
 that field also has 56 two-byte entries, DEX consumer tracing proves
 `z2.k` loads it into runtime request table `AlfaOBDConnect.s8` in the branch

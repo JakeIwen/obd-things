@@ -256,3 +256,27 @@ RELATED_PROFILE_EOT_CANDIDATES = MappingProxyType(
         0x315A: ("Oil temperature sensor voltage", "V", "u16be * 0.004888"),
     }
 )
+
+# The related SOHC_V6 profile has a second, structurally stronger thermal
+# cluster. DEX consumer tracing binds its 163-row catalog to the literal
+# request table containing these adjacent DIDs. They remain outside CATALOG
+# and are not installed-vehicle support claims.
+SOHC_V6_THERMAL_CANDIDATES = MappingProxyType(
+    {
+        0xB010: (
+            "calculated transmission oil temperature",
+            "|C",
+            "((s16be * 0.015625) - 32) / 1.8",
+        ),
+        0xB011: (
+            "oil temperature, thermistor measured",
+            "|C",
+            "((s16be * 0.015625) - 32) / 1.8",
+        ),
+        0xB012: (
+            "calculated oil temperature",
+            "|C",
+            "((s16be * 0.015625) - 32) / 1.8",
+        ),
+    }
+)

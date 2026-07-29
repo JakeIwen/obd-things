@@ -1,4 +1,5 @@
 import contextlib
+import dataclasses
 import io
 import json
 import os
@@ -486,6 +487,126 @@ class ClusterDriveInterfaceTests(unittest.TestCase):
             ],
         )
         self.assertNotIn(",", raw.command[-1])
+
+
+class ReviewedDriveProfileTests(unittest.TestCase):
+    def tearDown(self):
+        drive.select_drive_profile("cluster")
+
+    def test_tcm_thermal_plan_is_two_physical_reads_without_session_change(self):
+        drive.select_drive_profile("tcm-thermal")
+        parser = drive.build_parser()
+        args = parser.parse_args(
+            [
+                "--profile",
+                "tcm-thermal",
+                "--out-root",
+                "/tmp/tcm-thermal",
+                "--raw-root",
+                "/tmp/tcm-thermal-raw",
+                "--duration-seconds",
+                "10800",
+            ]
+        )
+        soft, hard = drive.validate_args(args)
+        planned = drive.plan(args, soft, hard)
+
+        self.assertEqual(planned["module"]["key"], "tcm")
+        self.assertEqual(planned["request_payloads"], ["22 04 FE", "22 03 01"])
+        self.assertEqual(planned["maximum_total_request_rate_hz"], 2.0)
+        self.assertEqual(
+            planned["diagnostic_session_policy"],
+            "inherited/unknown; no DiagnosticSessionControl or TesterPresent",
+        )
+        self.assertEqual(
+            planned["telemetry_publication"]["metrics"],
+            ["vehicle.ignition_on"],
+        )
+        self.assertIn("tcm-endpoint", planned["raw_capture"]["format"])
+
+    def test_profile_endpoint_invariant_is_pinned_not_self_referential(self):
+        profile = drive.DRIVE_PROFILES["tcm-thermal"]
+        with mock.patch.dict(
+            drive.MODULES,
+            {
+                "tcm": dataclasses.replace(
+                    drive.MODULES["tcm"],
+                    txid=profile.txid + 1,
+                )
+            },
+        ):
+            drive.select_drive_profile("tcm-thermal")
+            with self.assertRaisesRegex(
+                drive.DriveLogError,
+                "registry no longer matches",
+            ):
+                drive.validate_profile_invariants()
+
+    def test_tcm_thermal_live_mode_requires_profile_specific_confirmation(self):
+        drive.select_drive_profile("tcm-thermal")
+        parser = drive.build_parser()
+        base = [
+            "--profile",
+            "tcm-thermal",
+            "--out-root",
+            "/tmp/tcm-thermal",
+            "--raw-root",
+            "/tmp/tcm-thermal-raw",
+            "--require-mount",
+            "/tmp",
+            "--execute",
+            "--confirm-driving-read-only",
+            "--confirm-started-parked",
+            "--confirm-no-other-diagnostics",
+            "--pair",
+            "6/14",
+            "--conditions",
+            "cold-start drive",
+        ]
+        with self.assertRaisesRegex(
+            drive.DriveLogError,
+            "confirm-tcm-thermal-correlation",
+        ):
+            drive.validate_args(parser.parse_args(base))
+
+        args = parser.parse_args(base + ["--confirm-tcm-thermal-correlation"])
+        soft, hard = drive.validate_args(args)
+        self.assertGreater(soft, hard)
+
+    def test_tcm_thermal_wire_extracts_exact_dids_and_module_identity(self):
+        drive.select_drive_profile("tcm-thermal")
+        with tempfile.TemporaryDirectory() as directory:
+            raw = drive.RawCapture(Path(directory), candump="candump")
+            raw.chunk = mock.Mock()
+            raw.chunk.sequence = 0
+            raw._wire_handle = io.StringIO()
+            raw._consume_line(
+                b"(1700000000.100001) can0 18DA18F1#032204FE00000000\n",
+                fail_on_drop=True,
+            )
+            raw._consume_line(
+                b"(1700000000.200002) can0 18DAF118#046204FE76000000\n",
+                fail_on_drop=True,
+            )
+            raw._consume_line(
+                b"(1700000000.300003) can0 18DA18F1#0322030100000000\n",
+                fail_on_drop=True,
+            )
+            raw._consume_line(
+                b"(1700000000.400004) can0 18DAF118#046203016B000000\n",
+                fail_on_drop=True,
+            )
+            records = [
+                json.loads(line)
+                for line in raw._wire_handle.getvalue().splitlines()
+            ]
+
+        self.assertEqual(raw.wire_request_counts, {"0301": 1, "04FE": 1})
+        self.assertEqual(raw.wire_positive_counts, {"0301": 1, "04FE": 1})
+        self.assertTrue(all(record["module"] == "tcm" for record in records))
+        self.assertEqual(records[0]["direction"], "tester_to_tcm")
+        self.assertEqual(records[1]["direction"], "tcm_to_tester")
+        self.assertEqual(raw.wire_path.name, "tcm_thermal_wire.jsonl")
 
     def test_recorder_children_are_isolated_and_get_parent_death_signal(self):
         popen = mock.Mock(return_value=object())
