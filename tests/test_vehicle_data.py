@@ -806,7 +806,7 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(state["state"], "ignition_on")
         self.assertEqual(state["basis"], "ccan_0x2ef_ignition_gate")
 
-        broker.monotonic.value = 104.0
+        broker.monotonic.value = 106.0
         stale_state = broker.status_response()["vehicle_state"]
         self.assertEqual(stale_state["state"], "unknown")
         self.assertEqual(stale_state["confidence"], "stale")
