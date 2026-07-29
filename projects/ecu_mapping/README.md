@@ -24,7 +24,12 @@ mapped the selected PCM gauge set. The
 then established exact diagnostic engine RPM, signed loaded torque, and VVT-oil-temperature
 scales, while proving that this PCM profile's transmission-temperature and turbine-speed rows are
 unsupported. Passive torque, true sump-oil temperature, transmission temperature, and derived
-power remain open.
+power remain open. A later
+[`signed 0x1F7 byte-3 investigation`](findings/promaster_2022/2026-07-29_tcm_oil_temperature_candidate.md)
+found the strongest transmission-oil carrier candidate so far and rejected chip temperature as
+its label, but the candidate failed its precommitted narrow-range blind R²/scaling gates. It is
+not telemetry-allowlisted; the next decisive evidence is one broad-range independent cold-start
+leg, not another whole-bus search.
 
 The full AlfaOBD `TIGERSHARK_CUSW` PCM Plots request alignment is now an
 executable, ECU-scoped 193-row/190-DID catalog in

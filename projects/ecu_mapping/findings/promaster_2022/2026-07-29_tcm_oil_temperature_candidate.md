@@ -85,6 +85,76 @@ The discovery reports are byte-bound to these result hashes:
 - coarse chip: `cf1f55a1e5197e5507b6af02523c35b4ddafb7da1923c974b7d27ad87fc9ff2e`;
 - oil bit refinement: `5484e463e4cd2d043de78b20feb482d900688890205cc5093aed6e8f110a17b0`.
 
+## Independent results
+
+Both executable carrier gates failed. They are recorded as failures rather
+than being weakened after inspection:
+
+The 45-minute jobs were submitted after the gate commit:
+`20260729T030318Z-5594e071` for oil and
+`20260729T030320Z-c8c1e2dc` for the chip control.
+
+| leg | exact samples | DID raw range | signed-byte range | rank | coverage | R² | slope | intercept | raw RMSE | frozen result |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| discovery 66-minute | 2,338 | 76–118 | -56–56 | 28 in the 8–16-bit search; 1 in the exact 8-bit search | 1.000 | 0.99584 | 0.36989 | 96.9829 | 0.791 | development only |
+| independent 72-minute | 2,013 | 112–122 | 40–64 | 9 | 1.000 | 0.88605 | 0.35229 | 98.0387 | 0.811 | **fail**: R² below 0.98 |
+| independent 45-minute | 1,489 | 109–118 | 32–56 | 8 | 1.000 | 0.86623 | 0.33805 | 98.5899 | 0.848 | **fail**: R² below 0.95 and slope below 0.35 |
+
+The blind legs' narrow 9–10-count oil ranges make R² especially sensitive to
+quantization and small thermal lag. That explains why their sub-one-count RMSE
+and intercepts look much better than their R², but it does not turn a
+predeclared failure into a pass.
+
+The chip-temperature controls support the oil-specific interpretation without
+rescuing the carrier gate:
+
+- discovery `0301` versus the exact signed byte: R² `0.88367`, slope
+  `0.29380`, intercept `92.466`, and RMSE `3.526`;
+- on the 72-minute and 45-minute legs, the exact signed byte did not reach the
+  reported top 100; the best reported `0x1F7` 8-bit families reached only
+  about R² `0.6475` and `0.6520`.
+
+Thus byte 3 behaves materially more like gearbox oil than TCU chip
+temperature on all three legs. The remaining problem is stable absolute
+scaling, not label discrimination.
+
+The result-report SHA-256 values are:
+
+- discovery signed-byte chip control:
+  `6f95631a8406487cf8a7962ecc50bbe090a19039a05d96891e5c43e2e86b3e85`;
+- 72-minute oil:
+  `6020ab7a25a36871a59f4c45601de1f849f282fb38c8a21b371fb7cc1e5788e9`;
+- 72-minute chip:
+  `901582d6a9e4c7ae6631544b1d8a42287424f3e5099c20353232d1ea0b7261d5`;
+- 45-minute oil:
+  `1047e42d825d8e9489a0bbcc4cfcb34e08d102bdf37ce8fa8e3d3ae3fdf273fe`;
+- 45-minute chip:
+  `bf15c5a765646d72fcc3b83917ee83e9996262f6a537774329a19547cfe158f2`.
+
+The provenance-bound two-case evaluator reports
+`passed: false`, `telemetry_promotion_allowed: false`, and no missing case for
+this hypothesis. Its gitignored aggregate SHA-256 is
+`428f71e1d24405c26e4ee897d7f19ff261c1fe7ccae57b2dd1b7fd78fea3fcb4`.
+
+## Verdict and next evidence
+
+`0x1F7` byte 3 signed i8 is the strongest gearbox-oil carrier candidate found
+so far, and the old `0x417` candidate remains rejected. It is not allowlisted,
+must not drive a temperature warning, and must not be presented as verified
+telemetry.
+
+The next decisive run is one independent cold-start drive that covers at
+least 30 °C of `04FE` change while retaining exact TCM polling and a zero-drop
+passive stream. Its acceptance criteria must be frozen before inspection and
+should test both:
+
+1. broad-range carrier recovery (where R² is meaningful); and
+2. direct error against the provisional fixed formula
+   `°C = 0.375 × signed_i8 + 57`.
+
+No additional broad whole-bus search is justified before that controlled
+challenge.
+
 ## Additional same-day capture
 
 The later `pcm-plots-drive-20260729T005006Z` leg retained four clean

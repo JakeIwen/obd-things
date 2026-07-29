@@ -166,6 +166,14 @@ search contains no defensible replacement gearbox-oil carrier; future
 refinement needs a new evidence-led shortlist rather than a wider search around
 `0x417`.
 
+The subsequent
+[`2026-07-29 signed-byte refinement`](2026-07-29_tcm_oil_temperature_candidate.md)
+used a new broad-range drive to shortlist `0x1F7`, then isolated its standalone
+signed byte 3 as an oil-specific candidate the coarse unsigned-byte profile
+could not represent. It remains unpromoted because both precommitted
+independent carrier gates failed; this does not change the coarse-search
+conclusion or rehabilitate `0x417`.
+
 ## Actual-torque Phase-3 gate and regime result
 
 The coarse DID `1018` search supplied the concrete reason to add the regime
