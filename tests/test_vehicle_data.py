@@ -139,6 +139,7 @@ class SourceTests(unittest.TestCase):
                     "engine.rpm",
                     "engine.target_crankshaft_torque",
                     "transmission.output_speed",
+                    "transmission.oil_temperature",
                     "transmission.turbine_speed",
                     "vehicle.ignition_on",
                     "vehicle.speed",
@@ -156,6 +157,7 @@ class SourceTests(unittest.TestCase):
                 "engine.rpm",
                 "engine.target_crankshaft_torque",
                 "transmission.output_speed",
+                "transmission.oil_temperature",
                 "transmission.turbine_speed",
                 "tire.pressure.fl",
                 "tire.pressure.fr",
@@ -243,6 +245,14 @@ class SourceTests(unittest.TestCase):
             METRICS["engine.target_crankshaft_torque"].unit, "lb-ft"
         )
         self.assertEqual(METRICS["transmission.output_speed"].unit, "rpm")
+        self.assertEqual(
+            METRICS["transmission.oil_temperature"].unit,
+            "°F",
+        )
+        self.assertEqual(
+            METRICS["transmission.oil_temperature"].sources[0].name,
+            "ccan.broadcast.0x1f7",
+        )
         self.assertEqual(METRICS["transmission.turbine_speed"].unit, "rpm")
 
     def test_passive_awake_read_takes_only_observer_lock(self):
@@ -1166,6 +1176,13 @@ class BrokerTests(unittest.TestCase):
                         quality="observed_alfa_scale",
                     ),
                     SimpleNamespace(
+                        metric="transmission.oil_temperature",
+                        value=176.0,
+                        unit="°F",
+                        source="ccan.broadcast.0x1f7",
+                        quality="observed_alfa_scale",
+                    ),
+                    SimpleNamespace(
                         metric="transmission.turbine_speed",
                         value=900.0,
                         unit="rpm",
@@ -1197,7 +1214,7 @@ class BrokerTests(unittest.TestCase):
             observed_monotonic=100.0,
         )
 
-        self.assertEqual(broker._collect_passive_powertrain(ccan), 7)
+        self.assertEqual(broker._collect_passive_powertrain(ccan), 8)
         self.assertEqual(
             broker.metric_response("engine.oil_pressure")["value"], 30.2
         )
@@ -1217,6 +1234,10 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(
             broker.metric_response("transmission.output_speed")["value"],
             1200.0,
+        )
+        self.assertEqual(
+            broker.metric_response("transmission.oil_temperature")["value"],
+            176.0,
         )
         self.assertEqual(
             broker.metric_response("transmission.turbine_speed")["value"],
@@ -1543,6 +1564,7 @@ class WebTests(unittest.TestCase):
         self.assertIn(b"OIL PRESSURE", body)
         self.assertIn(b"engine-oil-pressure-reference", body)
         self.assertIn(b"COOLANT", body)
+        self.assertIn(b"TRANSMISSION OIL", body)
         self.assertIn(b"CRANK TORQUE", body)
         self.assertIn(b"Tire pressure", body)
         self.assertIn(b"Only fresh, driver-qualified values", body)
@@ -1959,6 +1981,7 @@ const emptyEngine = {
     "oil-pressure",
     "coolant-temperature",
     "oil-temperature",
+    "transmission-oil-temperature",
     "torque",
     "power",
   ].every((name) => element(`engine-${name}-card`).hidden === false),
@@ -1966,6 +1989,7 @@ const emptyEngine = {
     "oil-pressure",
     "coolant-temperature",
     "oil-temperature",
+    "transmission-oil-temperature",
     "torque",
     "power",
   ].every(
@@ -2166,12 +2190,12 @@ process.stdout.write(JSON.stringify({
         self.assertFalse(result["emptyTires"]["gridHidden"])
         self.assertFalse(result["emptyTires"]["cardsHidden"])
         self.assertEqual(result["emptyEngine"]["mapped"], 0)
-        self.assertEqual(result["emptyEngine"]["state"], "0/5 MAPPED")
+        self.assertEqual(result["emptyEngine"]["state"], "0/6 MAPPED")
         self.assertIn("remain visible", result["emptyEngine"]["note"])
         self.assertTrue(result["emptyEngine"]["cardsVisible"])
         self.assertTrue(result["emptyEngine"]["statusesPending"])
         self.assertEqual(result["liveCoolant"]["ready"], 1)
-        self.assertEqual(result["liveCoolant"]["state"], "1/5 LIVE · 1/5 MAPPED")
+        self.assertEqual(result["liveCoolant"]["state"], "1/6 LIVE · 1/6 MAPPED")
         self.assertEqual(result["liveCoolant"]["value"], "194")
         self.assertEqual(result["liveCoolant"]["unit"], "\u00b0F")
         self.assertIn("VERIFIED", result["liveCoolant"]["status"])

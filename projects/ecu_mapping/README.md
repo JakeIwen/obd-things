@@ -23,9 +23,9 @@ mapped the selected PCM gauge set. The
 [`2026-07-27 loaded-drive mapping`](findings/promaster_2022/2026-07-27_pcm_plots_loaded_drive_mapping.md)
 then established exact diagnostic engine RPM, signed loaded torque, and VVT-oil-temperature
 scales, while proving that this PCM profile's transmission-temperature and turbine-speed rows are
-unsupported. Passive torque, true sump-oil temperature, transmission temperature, and derived
-power remain open. A later
-[`signed 0x1F7 byte-3 investigation`](findings/promaster_2022/2026-07-29_tcm_oil_temperature_candidate.md)
+unsupported. Passive torque, true sump-oil temperature, and derived power
+remain open. A later
+[`signed 0x1F7 byte-3 mapping`](findings/promaster_2022/2026-07-29_tcm_oil_temperature_candidate.md)
 found the strongest transmission-oil carrier candidate so far. The candidate
 failed its precommitted narrow-range blind R²/scaling gates; a later
 zero-drop cold-start leg then passed the frozen broad-range carrier and
@@ -33,9 +33,14 @@ affine gates across 33–85 °C. The predeclared
 `°C = 0.375 × signed_i8 + 57` formula also passed directly with 0.863 °C
 RMSE, 0.135 °C absolute mean bias, and 1.0 °C p95 absolute error over 2,027
 exact samples. The leg nevertheless failed the separate requirement to beat
-TCU-chip-temperature R² by at least 0.10. It remains not telemetry-allowlisted,
-and neither another whole-bus search nor an identical warm-up trajectory is
-the next experiment. A reviewed `--profile tcm-thermal` mode in
+TCU-chip-temperature R² by at least 0.10. A subsequent predeclared hot-soak
+counterexample resolved that ambiguity: the fixed formula produced 0.838 °C
+RMSE against gearbox oil versus 13.106 °C against chip temperature, with a
+0.207 R² advantage and 1,164 consecutive paired cycles separated by at least
+3 °C. Every frozen integrity, scale, and identity gate passed. Passive
+`0x1F7` byte 3 is now telemetry-allowlisted as transmission-oil temperature
+using `°C = 0.375 × signed_i8 + 57`, displayed in °F without an invented
+warning threshold. The reviewed `--profile tcm-thermal` mode in
 [`cluster_drive_log.py`](cluster_drive_log.py) records paired `04FE/0301`
 thermal-discrimination drives at two total requests per second with integrated
 loss-accounted raw evidence.
@@ -552,9 +557,10 @@ Physical support reads and grouped live-catalog captures of the priority set
 are complete. The resulting exact DID associations and independent-drive
 carrier tests are recorded in the dated PCM/TCM findings; do not repeat the
 support inventory merely to rediscover them. Passive transmission-oil
-temperature remains candidate-only after the separately documented cold-start
-challenge passed its carrier/affine gates but failed its chip-temperature
-discrimination margin.
+temperature subsequently passed the separately predeclared hot-soak
+counterexample after the cold-start challenge could not distinguish it from
+chip temperature. `0x1F7` signed byte 3 is now a receive-only telemetry source
+using `°C = 0.375 × raw + 57`; no temperature-warning threshold is implied.
 
 `tools/did_sweep.py` accepts repeatable `--did` options, which was used to
 read exactly the thirteen reviewed ZF9HP candidates without traversing the
@@ -1231,10 +1237,12 @@ verify the `/4` rpm scale or authorize public telemetry promotion.
    `tcm-thermal` logger completed a 52 °C cold-start challenge with AlfaOBD
    closed, exact `04FE/0301` polling, and a complete zero-drop C-CAN stream.
    `0x1F7` byte 3 passed the frozen carrier/affine gates but not the required
-   0.10 R² advantage over chip temperature, so it remains candidate-only.
-   Do not repeat the same warm-up trajectory or revive the old `0x417` scale
-   without a new discriminator. Converter slip and actual measured crank
-   torque remain unresolved passive targets. The
+   0.10 R² advantage over chip temperature. The later hot-soak discriminator
+   supplied the missing counterexample and passed all frozen scale/identity
+   gates, so that byte is now the allowlisted passive transmission-oil source.
+   Do not repeat either completed thermal trajectory or revive the old `0x417`
+   scale. Converter slip and actual measured crank torque remain unresolved
+   passive targets. The
    saved `ZF9HP.dat` remains
    unlabeled/untimestamped and is not a substitute for the fresh joined trace.
 6. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps

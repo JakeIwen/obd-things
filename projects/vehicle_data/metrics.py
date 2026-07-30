@@ -311,6 +311,36 @@ TRANSMISSION_OUTPUT_SPEED = _transmission_speed_metric(
     "transmission.output_speed",
     "packed 17-bit field (byte0 bit0, then bytes 1-2) / 32 rpm",
 )
+
+TRANSMISSION_OIL_TEMPERATURE = MetricDefinition(
+    name="transmission.oil_temperature",
+    unit="°F",
+    value_type="number",
+    stale_after_seconds=5.0,
+    passive_min_interval_seconds=0.0,
+    wake_min_interval_seconds=0.0,
+    minimum=40.0,
+    maximum=250.0,
+    sources=(
+        SourceDefinition(
+            name="ccan.broadcast.0x1f7",
+            bus="c-can",
+            bitrate=500000,
+            acquisition_class="passive_broadcast",
+            quality="observed_alfa_scale",
+            provenance=(
+                "projects/ecu_mapping/findings/promaster_2022/"
+                "2026-07-29_tcm_oil_temperature_candidate.md; "
+                "0x1F7 byte 3 signed x 0.375 + 57 °C passed fixed-formula "
+                "cold-start and hot-soak oil/chip discrimination gates; "
+                "telemetry converts °C to °F"
+            ),
+            side_effects="none; observation is receive-only",
+            publisher_allowed=True,
+        ),
+    ),
+)
+
 TRANSMISSION_TURBINE_SPEED = _transmission_speed_metric(
     "transmission.turbine_speed",
     "bytes 4-5 / 2 rpm",
@@ -406,6 +436,7 @@ METRICS = {
         VEHICLE_SPEED,
         TARGET_CRANKSHAFT_TORQUE,
         TRANSMISSION_OUTPUT_SPEED,
+        TRANSMISSION_OIL_TEMPERATURE,
         TRANSMISSION_TURBINE_SPEED,
         TIRE_PRESSURE_FL,
         TIRE_PRESSURE_FR,

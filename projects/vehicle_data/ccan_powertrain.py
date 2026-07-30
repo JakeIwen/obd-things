@@ -157,6 +157,8 @@ def decode_frame_observations(
             | int.from_bytes(data[1:3], "big")
         )
         output_rpm = float(output_raw / 32.0)
+        oil_raw = int.from_bytes(data[3:4], "big", signed=True)
+        oil_celsius = float(oil_raw * 0.375 + 57.0)
         turbine_rpm = float(int.from_bytes(data[4:6], "big") / 2.0)
         return (
             PassiveObservation(
@@ -168,6 +170,17 @@ def decode_frame_observations(
                 detail=(
                     "0x1F7 packed 17-bit output speed "
                     "(byte0 bit0, then bytes 1-2) / 32 rpm"
+                ),
+            ),
+            PassiveObservation(
+                metric="transmission.oil_temperature",
+                value=oil_celsius * 9.0 / 5.0 + 32.0,
+                unit="°F",
+                source="ccan.broadcast.0x1f7",
+                quality="observed_alfa_scale",
+                detail=(
+                    "0x1F7 byte 3 signed x 0.375 + 57 °C, converted to °F "
+                    "for telemetry"
                 ),
             ),
             PassiveObservation(
@@ -259,6 +272,7 @@ def read_snapshot(
                 "engine.target_crankshaft_torque",
                 "vehicle.speed",
                 "transmission.output_speed",
+                "transmission.oil_temperature",
                 "transmission.turbine_speed",
                 "vehicle.ignition_on",
             )):

@@ -1,4 +1,4 @@
-# TCM gearbox-oil temperature candidate — 2026-07-29
+# TCM gearbox-oil temperature mapping — 2026-07-29/30
 
 ## Scope and classification
 
@@ -6,11 +6,15 @@ This is offline-only analysis of saved, listen-only C-CAN captures and exact
 PCAN-observed TCM diagnostic exchanges. No CAN interface, vehicle service, or
 ADB session was opened during the analysis.
 
-The result below is `candidate_only`. The discovery leg produced a strong new
-carrier and a plausible scale, but neither is eligible for telemetry until the
-predeclared independent-leg gates below pass. The TCM DID namespace remains
-ECU-scoped: `04FE` is the installed ZF 948TE profile's gearbox-oil-temperature
-reference, rendered by AlfaOBD as `raw - 40 °C`.
+The individual correlator reports below remain mechanically classified
+`candidate_only`; no correlation report can prove physical semantics by
+itself. The complete evidence sequence now qualifies the fixed passive decode
+for receive-only telemetry: multiple independent legs reproduced its scale,
+and the final predeclared hot-soak counterexample separated gearbox oil from
+TCU-chip temperature by a wide margin. This does not establish an overheat
+threshold. The TCM DID namespace remains ECU-scoped: `04FE` is the installed
+ZF 948TE profile's gearbox-oil-temperature reference, rendered by AlfaOBD as
+`raw - 40 °C`.
 
 ## Discovery leg
 
@@ -164,7 +168,7 @@ The provenance-bound two-case evaluator reports
 this hypothesis. Its gitignored aggregate SHA-256 is
 `428f71e1d24405c26e4ee897d7f19ff261c1fe7ccae57b2dd1b7fd78fea3fcb4`.
 
-## Verdict and next evidence
+## Pre-hot-soak verdict and next evidence
 
 `0x1F7` byte 3 signed i8 is the strongest gearbox-oil carrier candidate found
 so far, and the old `0x417` candidate remains rejected. It is not allowlisted,
@@ -353,3 +357,82 @@ not reinterpret that earlier frozen failure; it simply leaves the R² check
 unscored and relies on the predeclared direct-error and paired-divergence
 gates above. Passing this challenge permits a final telemetry-review decision
 but does not automatically allowlist the field or create a warning threshold.
+
+## Hot-soak result and telemetry review — 2026-07-30
+
+Campaign `tcm-thermal-hotsoak-20260730T000942Z` executed the protocol above
+without AlfaOBD or another diagnostic client. It began after the reported
+approximately 30-minute ignition-off soak, captured the engine-off ignition-on
+baseline, then continued through the immediate restart and ordinary drive.
+Ignition loss ended it cleanly after about 22 minutes 55 seconds.
+
+The evidence-integrity gates all passed:
+
+- 1,218 exact positive `04FE` replies and 1,217 exact positive `0301`
+  replies, forming 1,217 complete paired cycles;
+- 2,440 requests and 2,435 positive responses, with the five terminal
+  timeouts exactly accounted for by ignition loss;
+- 3,725,747 raw C-CAN frames in three finalized chunks;
+- zero recorder-detected socket drops, no negative response, no unexplained
+  TCM-endpoint frame, and no wire/high-level count mismatch; and
+- clean passive restoration and channel-lock release.
+
+The paired DIDs provided the intended counterexample. Gearbox-oil `04FE`
+covered 62–82 °C, while chip-temperature `0301` covered 51–75 °C. Their
+signed oil-minus-chip difference spanned 0–20 °C. A run of 1,164 consecutive
+complete cycles—well above the required 60—had an absolute difference of at
+least 3 °C.
+
+Remote jobs `20260730T003941Z-850129f0` (oil) and
+`20260730T003941Z-98572903` (chip control) applied the unchanged
+`predicted_raw = 0.375 × signed_i8 + 97` formula:
+
+| frozen criterion | required | oil result | chip control / margin | result |
+|---|---:|---:|---:|---|
+| exact-formula coverage | at least 0.99 | 1.000 | 1.000 | pass |
+| oil RMSE | at most 1.5 °C | 0.83833 °C | 13.10648 °C | pass |
+| oil absolute mean bias | at most 1.0 °C | 0.11658 °C | 12.57683 °C | pass |
+| oil p95 absolute error | at most 2.5 °C | 1.0 °C | 18.0 °C | pass |
+| chip-minus-oil RMSE | at least 2.0 °C | — | 12.26815 °C | pass |
+| chip-minus-oil MAE | at least 1.5 °C | — | 11.88389 °C | pass |
+| oil-minus-chip R² | at least 0.10 | 0.98464 | 0.77757 / 0.20707 | pass |
+
+The exact byte ranked first for oil with affine slope `0.36879`, intercept
+`97.39772`, and fitted raw RMSE `0.82274`; it ranked 12th for chip with much
+worse fitted RMSE `3.68337`. This is the deliberately sought condition in
+which the two physical temperatures followed different trajectories, not a
+repeat of common warm-up covariance.
+
+Final telemetry review therefore qualifies:
+
+```text
+transmission oil temperature °C =
+    0.375 × signed_i8(0x1F7 byte 3) + 57
+```
+
+for receive-only C-CAN publication with five-second staleness and conversion
+to °F for the owner-facing dashboard. Byte 3 is disjoint from the verified
+output-speed and turbine-speed fields in the same frame. No diagnostic
+polling is required. Quality remains `observed_alfa_scale` because the
+physical name and reference scale originate in the installed Alfa/TCM
+`04FE` association, while the passive carrier and fixed formula are now
+independently reproduced and counterexample-tested.
+
+This promotion deliberately creates no safe/unsafe temperature band. The OEM
+122–230 °F adaptation window is service-procedure context, not a redline, and
+the P176D calibration threshold remains undisclosed.
+
+Evidence hashes:
+
+- finalized campaign summary:
+  `d2fa08faaf5d72c75c03de6f924e552235b524895507fb50731ce82324f7c791`;
+- high-level samples:
+  `dfaf4d9a31f71a90670d855512a4205786f705324f52e34f2f369aa0b191dcd8`;
+- raw manifest:
+  `b04bd90b5337eb76670770a993a127358626d9620234e420173788544ed0093d`;
+- exact TCM wire stream:
+  `45a2ba672afe844ca810c74827b1b3ed004bf17ec6af36679eb82a7d12101f83`;
+- oil result report:
+  `a9a871daaa2191d6c8caac1bb64873d91c9622a25fe9b81da98da0e487ca76d8`;
+- chip-control result report:
+  `1fd000498914f6cf46da157338cc722640c3b3fbc3f80ac7f809b21539713159`.

@@ -74,10 +74,16 @@ class DecodeTests(unittest.TestCase):
         )
         self.assertEqual(
             [item.metric for item in shaft_speeds],
-            ["transmission.output_speed", "transmission.turbine_speed"],
+            [
+                "transmission.output_speed",
+                "transmission.oil_temperature",
+                "transmission.turbine_speed",
+            ],
         )
         self.assertEqual(shaft_speeds[0].value, 360.5)
-        self.assertEqual(shaft_speeds[1].value, 731.0)
+        self.assertAlmostEqual(shaft_speeds[1].value, 134.6)
+        self.assertEqual(shaft_speeds[1].unit, "°F")
+        self.assertEqual(shaft_speeds[2].value, 731.0)
 
         wrapped_output = ccan_powertrain.decode_frame_observations(
             0x1F7, bytes.fromhex("01 6F A1 38 12 90 03 D0")
@@ -86,7 +92,8 @@ class DecodeTests(unittest.TestCase):
             wrapped_output[0].value,
             ((1 << 16) | 0x6FA1) / 32.0,
         )
-        self.assertEqual(wrapped_output[1].value, 2376.0)
+        self.assertAlmostEqual(wrapped_output[1].value, 172.4)
+        self.assertEqual(wrapped_output[2].value, 2376.0)
 
         ignition = ccan_powertrain.decode_frame(0x2EF, b"\xff\x21")
         self.assertIs(ignition.value, True)
@@ -180,6 +187,10 @@ class DecodeTests(unittest.TestCase):
             48.0 * ccan_powertrain.KMH_TO_MPH,
         )
         self.assertEqual(by_metric["transmission.output_speed"].value, 360.5)
+        self.assertAlmostEqual(
+            by_metric["transmission.oil_temperature"].value,
+            134.6,
+        )
         self.assertEqual(by_metric["transmission.turbine_speed"].value, 731.0)
         self.assertIs(by_metric["vehicle.ignition_on"].value, True)
         self.assertEqual(fake.channel, ("can0",))

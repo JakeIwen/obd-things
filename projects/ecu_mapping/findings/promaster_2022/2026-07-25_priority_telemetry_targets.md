@@ -96,6 +96,17 @@ this ECU. True engine-oil temperature remains open; further work must locate
 an installed-calibration or separately standardized source rather than
 expanding around these unsupported related-profile addresses.
 
+Update 2026-07-30 (transmission-oil promotion): the predeclared TCM hot-soak
+counterexample qualified passive `0x1F7` signed byte 3 as transmission-oil
+temperature. Across 1,217 complete `04FE/0301` pairs, the unchanged
+`°C = 0.375 × signed_i8 + 57` formula achieved 0.838 °C RMSE against gearbox
+oil and 13.106 °C against chip temperature; 1,164 consecutive cycles differed
+by at least 3 °C, and the oil-minus-chip R² margin was 0.207. The zero-drop,
+loss-accounted capture passed every frozen gate. The receive-only dashboard
+source is now allowlisted and displayed in °F. This establishes the measured
+value and trend, not an overtemperature threshold; the OEM adaptation window
+remains context only. True engine-oil temperature remains unresolved.
+
 ## Engine-oil pressure: exact OEM context
 
 The OEM `OIL PRESSURE – UPGRADE ENGINE` table applies only when coolant is

@@ -60,6 +60,17 @@ const ENGINE_HEALTH_METRICS = Object.freeze({
     names: ["engine.oil_temperature", "engine.oil_temp"],
     roles: ["engine_oil_temperature", "oil_temperature"],
   },
+  transmissionOilTemperature: {
+    id: "transmission-oil-temperature",
+    names: [
+      "transmission.oil_temperature",
+      "transmission.fluid_temperature",
+    ],
+    roles: [
+      "transmission_oil_temperature",
+      "transmission_fluid_temperature",
+    ],
+  },
   torque: {
     id: "torque",
     names: ["engine.crankshaft_torque", "engine.torque"],
@@ -768,21 +779,22 @@ function renderEngineHealth(catalog, metrics) {
   const states = Object.keys(ENGINE_HEALTH_METRICS)
     .map((role) => renderEngineMetric(role, catalog, metrics));
   renderOilPressureReference(metrics);
+  const total = states.length;
   const mapped = states.filter((state) => state.definition).length;
   const ready = states.filter((state) => state.state.heroReady).length;
   text(
     "engine-health-state",
     ready
-      ? `${ready}/5 LIVE · ${mapped}/5 MAPPED`
-      : `${mapped}/5 MAPPED`,
+      ? `${ready}/${total} LIVE · ${mapped}/${total} MAPPED`
+      : `${mapped}/${total} MAPPED`,
   );
-  byId("engine-health-state").dataset.state = ready === 5
+  byId("engine-health-state").dataset.state = ready === total
     ? "verified"
     : "partial";
   text(
     "engine-health-note",
-    ready === 5
-      ? "All five engine-health values are fresh and driver-qualified."
+    ready === total
+      ? "All powertrain-health values are fresh and driver-qualified."
       : (
         "Priority gauges remain visible while exact C-CAN sources and " +
         "scaling are mapped. Candidate values remain available in Diagnostics."

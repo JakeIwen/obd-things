@@ -411,8 +411,12 @@ The ZF9HP support inventory and labeled AlfaOBD drive captures are complete.
 The cold-start challenge of provisional passive `0x1F7` byte 3 is complete.
 It reproduced the oil relationship across a 52 °C reference span and passed
 the frozen carrier/affine gates, but failed the separate chip-temperature
-R²-margin gate. It therefore remains candidate-only; another DID support
-inventory or an identical warm-up drive is not the next experiment.
+R²-margin gate. A later predeclared hot-soak counterexample made oil and chip
+follow different trajectories and passed every frozen gate: fixed-formula
+RMSE was 0.838 °C for oil versus 13.106 °C for chip, with a 0.207 R² margin.
+The receive-only `0x1F7` byte-3 transmission-oil metric is now qualified for
+telemetry; no temperature warning threshold is inferred. Another DID support
+inventory or identical warm-up drive is unnecessary.
 
 Participating active diagnostic tools take a nonblocking exclusive per-channel advisory lock under
 `tmp/locks/`, so two of them cannot transmit through the same SocketCAN channel concurrently.
