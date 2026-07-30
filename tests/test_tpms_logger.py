@@ -1,6 +1,12 @@
+import errno
+import socket
+import struct
 import unittest
+from itertools import count
+from types import SimpleNamespace
 from unittest import mock
 
+from lib import canbus
 from projects.tpms import tpms_logger
 
 
@@ -289,122 +295,528 @@ class TpmsInterfaceCoordinationTests(unittest.TestCase):
         self.assertFalse(result)
         sock.close.assert_called_once_with()
 
-    def test_iface_inspection_runs_only_read_only_ip_command(self):
-        output = (
-            "3: can0: <NOARP,UP,LOWER_UP,ECHO> mtu 16 state UNKNOWN\n"
-            "    can state ERROR-ACTIVE (berr-counter tx 0 rx 0) restart-ms 0\n"
-            "          bitrate 500000 sample-point 0.875\n"
-        )
-        completed = mock.Mock(returncode=0, stdout=output)
-
-        with mock.patch.object(tpms_logger.subprocess, "run", return_value=completed) as run:
-            result = tpms_logger.iface_is_armed("can0", 500000)
-
-        self.assertTrue(result)
-        run.assert_called_once_with(
-            ["ip", "-details", "link", "show", "can0"],
-            capture_output=True,
-            text=True,
-        )
-
-    def test_iface_inspection_fails_closed_without_error_active_state(self):
-        template = (
-            "3: can0: <NOARP,UP,LOWER_UP,ECHO> mtu 16 state UNKNOWN\n"
-            "    {can_line}\n"
-            "          bitrate 500000 sample-point 0.875\n"
-        )
-        for can_line in (
-            "can state ERROR-PASSIVE (berr-counter tx 1 rx 0) restart-ms 0",
-            "can state BUS-OFF (berr-counter tx 255 rx 0) restart-ms 0",
-            "restart-ms 0",
+    def test_broker_absence_requires_narrow_unix_socket_error(self):
+        for status, payload in (
+            (200, {"active_drive": {"enabled": True}}),
+            (200, {"active_drive": {"enabled": False}}),
+            (200, {}),
+            (404, {"reason": "legacy_broker"}),
+            (503, {"active_drive": {"enabled": True}}),
         ):
-            with self.subTest(can_line=can_line), mock.patch.object(
-                tpms_logger.subprocess,
-                "run",
-                return_value=mock.Mock(
-                    returncode=0,
-                    stdout=template.format(can_line=can_line),
-                ),
-            ):
-                self.assertFalse(tpms_logger.iface_is_armed("can0", 500000))
+            with self.subTest(status=status, payload=payload):
+                client = mock.Mock()
+                client.request.return_value = status, payload
+                self.assertFalse(tpms_logger.broker_absence_proven(client))
+                client.request.assert_called_once_with("GET", "/v1/status")
 
-    def test_lock_contention_skips_reconfiguration_without_mutation(self):
+        for name, error in (
+            ("timeout", TimeoutError("broker slow")),
+            ("malformed_protocol", RuntimeError("invalid JSON")),
+            (
+                "permission_denied",
+                PermissionError(errno.EACCES, "broker socket denied"),
+            ),
+            ("generic_io", OSError(errno.EIO, "broker I/O failed")),
+        ):
+            with self.subTest(name=name):
+                client = mock.Mock()
+                client.request.side_effect = error
+                self.assertFalse(tpms_logger.broker_absence_proven(client))
+
+        for name, error in (
+            (
+                "missing_socket",
+                FileNotFoundError(errno.ENOENT, "broker socket absent"),
+            ),
+            (
+                "refused_socket",
+                ConnectionRefusedError(errno.ECONNREFUSED, "broker not listening"),
+            ),
+        ):
+            with self.subTest(name=name):
+                client = mock.Mock()
+                client.request.side_effect = error
+                self.assertTrue(tpms_logger.broker_absence_proven(client))
+
+    def test_auto_mode_yields_before_any_can_operation_when_broker_owns_drive(self):
+        module = SimpleNamespace(channel="can9", bitrate=500000)
+        events = []
         with (
-            mock.patch.object(tpms_logger, "iface_is_armed", return_value=False) as inspect,
+            mock.patch.object(tpms_logger, "get", return_value=module),
+            mock.patch.object(
+                tpms_logger,
+                "broker_absence_proven",
+                side_effect=lambda _client: events.append("broker_status") or False,
+            ),
+            mock.patch.object(tpms_logger, "_passive_running_ready") as ready,
+            mock.patch.object(tpms_logger, "log_session") as log_session,
+            mock.patch.object(
+                tpms_logger.diagnostic_safety, "acquire_channel_lock"
+            ) as acquire,
+            mock.patch.object(tpms_logger.canbus, "ip_up") as ip_up,
+            mock.patch.object(
+                tpms_logger.time,
+                "sleep",
+                side_effect=lambda _seconds: (
+                    events.append("sleep")
+                    or (_ for _ in ()).throw(KeyboardInterrupt)
+                ),
+            ),
+            mock.patch("builtins.print"),
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                tpms_logger.auto_loop()
+
+        self.assertEqual(events, ["broker_status", "sleep"])
+        ready.assert_not_called()
+        log_session.assert_not_called()
+        acquire.assert_not_called()
+        ip_up.assert_not_called()
+
+    def test_auto_fallback_checks_broker_before_passive_running_gate(self):
+        module = SimpleNamespace(channel="can9", bitrate=500000)
+        events = []
+        with (
+            mock.patch.object(tpms_logger, "get", return_value=module),
+            mock.patch.object(
+                tpms_logger,
+                "broker_absence_proven",
+                side_effect=lambda _client: events.append("broker_status") or True,
+            ),
+            mock.patch.object(
+                tpms_logger,
+                "_restoration_is_latched",
+                side_effect=lambda _channel: events.append("latch") or False,
+            ),
+            mock.patch.object(
+                tpms_logger,
+                "_passive_running_ready",
+                side_effect=lambda _module: events.append("running_gate") or False,
+            ),
+            mock.patch.object(tpms_logger, "log_session") as log_session,
+            mock.patch.object(
+                tpms_logger.time,
+                "sleep",
+                side_effect=lambda _seconds: (
+                    events.append("sleep")
+                    or (_ for _ in ()).throw(KeyboardInterrupt)
+                ),
+            ),
+            mock.patch("builtins.print"),
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                tpms_logger.auto_loop()
+
+        self.assertEqual(
+            events,
+            ["broker_status", "latch", "running_gate", "sleep"],
+        )
+        log_session.assert_not_called()
+
+    def test_passive_recovery_never_arms_interface(self):
+        armed = canbus.InterfaceState(
+            "can9", True, True, 500000, False, "ERROR-ACTIVE", 0
+        )
+        passive = canbus.InterfaceState(
+            "can9", True, True, 500000, True, "ERROR-ACTIVE", 0
+        )
+        with (
+            mock.patch.object(
+                tpms_logger.canbus,
+                "interface_state",
+                side_effect=(armed, armed, passive),
+            ),
+            mock.patch.object(
+                tpms_logger,
+                "_restoration_is_latched",
+                return_value=False,
+            ),
+            mock.patch.object(tpms_logger, "_topology_is_ccan", return_value=True),
+            mock.patch.object(tpms_logger, "_active_inhibits", return_value=()),
+            mock.patch.object(
+                tpms_logger.canbus,
+                "bring_up_passive",
+                return_value=True,
+            ) as bring_up_passive,
+            mock.patch.object(tpms_logger.canbus, "ip_up") as ip_up,
+        ):
+            self.assertTrue(
+                tpms_logger._ensure_passive_coordinated("can9", 500000)
+            )
+
+        bring_up_passive.assert_called_once_with(
+            "can9",
+            500000,
+            restart_ms=0,
+            noninteractive=True,
+        )
+        ip_up.assert_not_called()
+
+    def test_safe_passive_state_requires_readable_restart_timing(self):
+        incomplete = canbus.InterfaceState(
+            "can9", True, True, 500000, True, "ERROR-ACTIVE", None
+        )
+        self.assertFalse(
+            tpms_logger._safe_passive_state(incomplete, "can9", 500000)
+        )
+
+    def test_restoration_failure_latches_process_and_same_boot_inhibit(self):
+        original = tpms_logger._restoration_failed
+        try:
+            tpms_logger._restoration_failed = False
+            with (
+                mock.patch.object(
+                    tpms_logger.can_operation_state, "begin_inhibit"
+                ) as begin_inhibit,
+                mock.patch("builtins.print"),
+            ):
+                tpms_logger._latch_restoration_failure("can9")
+
+            self.assertTrue(tpms_logger._restoration_failed)
+            begin_inhibit.assert_called_once()
+            self.assertEqual(
+                begin_inhibit.call_args.args,
+                (tpms_logger.RESTORATION_INHIBIT_NAME,),
+            )
+            self.assertEqual(begin_inhibit.call_args.kwargs["channel"], "can9")
+            self.assertIn(
+                "could not verify exact listen-only restoration",
+                begin_inhibit.call_args.kwargs["reason"],
+            )
+        finally:
+            tpms_logger._restoration_failed = original
+
+    def test_lock_contention_skips_passive_reconfiguration(self):
+        unsafe = canbus.InterfaceState(
+            "can9", True, True, 500000, False, "ERROR-ACTIVE", 0
+        )
+        with (
+            mock.patch.object(
+                tpms_logger.canbus, "interface_state", return_value=unsafe
+            ),
+            mock.patch.object(
+                tpms_logger,
+                "_restoration_is_latched",
+                return_value=False,
+            ),
+            mock.patch.object(tpms_logger, "_topology_is_ccan", return_value=True),
+            mock.patch.object(tpms_logger, "_active_inhibits", return_value=()),
             mock.patch.object(
                 tpms_logger.diagnostic_safety,
                 "channel_lock",
                 side_effect=tpms_logger.diagnostic_safety.ChannelLockError("can0 busy"),
             ) as channel_lock,
-            mock.patch.object(tpms_logger, "_reconfigure_iface") as reconfigure,
-            mock.patch("builtins.print"),
+            mock.patch.object(
+                tpms_logger.canbus, "bring_up_passive"
+            ) as bring_up_passive,
         ):
-            result = tpms_logger.ensure_iface_coordinated("can0", 500000)
+            result = tpms_logger._ensure_passive_coordinated("can9", 500000)
 
         self.assertFalse(result)
-        inspect.assert_called_once_with("can0", 500000)
-        channel_lock.assert_called_once_with("can0")
-        reconfigure.assert_not_called()
+        channel_lock.assert_called_once_with("can9")
+        bring_up_passive.assert_not_called()
 
-    def test_reconfiguration_is_locked_and_rechecked_before_mutation(self):
-        events = []
-        states = iter((False, False, True))
+    def test_engine_running_requires_multiple_consecutive_fresh_rpm_samples(self):
+        def rpm_frame(rpm, *, can_id=tpms_logger.ENGINE_SPEED_ID):
+            raw = int(rpm * 4)
+            data = raw.to_bytes(2, "big") + b"\0" * 6
+            return struct.pack("=IB3x8s", can_id, 8, data)
 
-        def inspect(_channel, _bitrate):
-            events.append("inspect")
-            return next(states)
+        class FakeSocket:
+            def __init__(self, frames):
+                self.frames = list(frames)
+                self.closed = False
+                self.filter = None
 
-        class FakeLock:
-            def __enter__(self):
-                events.append("lock")
+            def setsockopt(self, _level, _option, value):
+                self.filter = value
 
-            def __exit__(self, *_args):
-                events.append("unlock")
+            def bind(self, address):
+                self.address = address
 
-        with (
-            mock.patch.object(tpms_logger, "iface_is_armed", side_effect=inspect),
-            mock.patch.object(
-                tpms_logger.diagnostic_safety, "channel_lock", return_value=FakeLock()
-            ) as channel_lock,
-            mock.patch.object(
-                tpms_logger,
-                "_reconfigure_iface",
-                side_effect=lambda *_args: events.append("reconfigure"),
-            ) as reconfigure,
-        ):
-            result = tpms_logger.ensure_iface_coordinated("can0", 500000)
-
-        self.assertTrue(result)
-        channel_lock.assert_called_once_with("can0")
-        reconfigure.assert_called_once_with("can0", 500000)
-        self.assertEqual(
-            events,
-            ["inspect", "lock", "inspect", "reconfigure", "inspect", "unlock"],
-        )
-
-    def test_locked_recheck_avoids_unnecessary_reconfiguration(self):
-        states = iter((False, True))
-
-        class FakeLock:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_args):
+            def settimeout(self, _timeout):
                 return None
 
+            def recv(self, _size):
+                if not self.frames:
+                    raise socket.timeout
+                return self.frames.pop(0)
+
+            def close(self):
+                self.closed = True
+
+        passing = FakeSocket(
+            [rpm_frame(650), rpm_frame(651), rpm_frame(652)]
+        )
+        ticks = count(start=0.0, step=0.01)
+        self.assertTrue(
+            tpms_logger.engine_running(
+                "can9",
+                window=1.0,
+                socket_factory=lambda *_args: passing,
+                monotonic=lambda: next(ticks),
+            )
+        )
+        self.assertTrue(passing.closed)
+        self.assertEqual(passing.address, ("can9",))
+        self.assertEqual(
+            struct.unpack("=II", passing.filter),
+            (tpms_logger.ENGINE_SPEED_ID, tpms_logger.CAN_FILTER_MASK),
+        )
+
+        boundary = FakeSocket(
+            [rpm_frame(400), rpm_frame(400), rpm_frame(400)]
+        )
+        ticks = count(start=0.0, step=0.01)
+        self.assertTrue(
+            tpms_logger.engine_running(
+                "can9",
+                window=1.0,
+                socket_factory=lambda *_args: boundary,
+                monotonic=lambda: next(ticks),
+            )
+        )
+        self.assertTrue(boundary.closed)
+
+        reset = FakeSocket(
+            [
+                rpm_frame(650),
+                rpm_frame(651),
+                rpm_frame(0),
+                rpm_frame(652),
+                rpm_frame(653),
+            ]
+        )
+        ticks = count(start=0.0, step=0.01)
+        self.assertFalse(
+            tpms_logger.engine_running(
+                "can9",
+                window=1.0,
+                socket_factory=lambda *_args: reset,
+                monotonic=lambda: next(ticks),
+            )
+        )
+        self.assertTrue(reset.closed)
+
+    def test_passive_running_preflight_rejects_wrong_bus_inhibit_and_zero_rpm(self):
+        module = SimpleNamespace(channel="can9", bitrate=500000)
+        passive = canbus.InterfaceState(
+            "can9", True, True, 500000, True, "ERROR-ACTIVE", 0
+        )
+        cases = (
+            ("wrong_bus", (), "b-can", True),
+            ("inhibited", ({"name": "alfaobd"},), "c-can", True),
+            ("engine_off", (), "c-can", False),
+        )
+        for name, inhibits, bus, running in cases:
+            with (
+                self.subTest(name=name),
+                mock.patch.object(
+                    tpms_logger, "_restoration_is_latched", return_value=False
+                ),
+                mock.patch.object(
+                    tpms_logger, "_ensure_passive_coordinated", return_value=True
+                ),
+                mock.patch.object(
+                    tpms_logger, "_topology_is_ccan", return_value=True
+                ),
+                mock.patch.object(
+                    tpms_logger, "_active_inhibits", return_value=inhibits
+                ),
+                mock.patch.object(
+                    tpms_logger.diagnostic_safety,
+                    "channel_observer_lock",
+                    return_value=mock.MagicMock(),
+                ) as observer_lock,
+                mock.patch.object(
+                    tpms_logger.canbus, "interface_state", return_value=passive
+                ),
+                mock.patch.object(
+                    tpms_logger.canbus, "identify_bus", return_value=bus
+                ) as identify,
+                mock.patch.object(
+                    tpms_logger, "engine_running", return_value=running
+                ) as engine_running,
+                mock.patch.object(tpms_logger.canbus, "ip_up") as ip_up,
+                mock.patch.object(tpms_logger.uds, "open_socket") as open_socket,
+            ):
+                self.assertFalse(tpms_logger._passive_running_ready(module))
+                observer_lock.assert_called_once_with("can9")
+                ip_up.assert_not_called()
+                open_socket.assert_not_called()
+                if inhibits:
+                    identify.assert_not_called()
+                    engine_running.assert_not_called()
+
+    def test_passive_running_preflight_defers_on_observer_contention(self):
+        module = SimpleNamespace(channel="can9", bitrate=500000)
         with (
             mock.patch.object(
-                tpms_logger, "iface_is_armed", side_effect=lambda *_args: next(states)
+                tpms_logger, "_restoration_is_latched", return_value=False
             ),
             mock.patch.object(
-                tpms_logger.diagnostic_safety, "channel_lock", return_value=FakeLock()
+                tpms_logger, "_ensure_passive_coordinated", return_value=True
             ),
-            mock.patch.object(tpms_logger, "_reconfigure_iface") as reconfigure,
+            mock.patch.object(
+                tpms_logger.diagnostic_safety,
+                "channel_observer_lock",
+                side_effect=tpms_logger.diagnostic_safety.ChannelLockError("busy"),
+            ),
+            mock.patch.object(tpms_logger.canbus, "interface_state") as state,
+            mock.patch.object(tpms_logger.canbus, "identify_bus") as identify,
+            mock.patch.object(tpms_logger, "engine_running") as engine_running,
         ):
-            result = tpms_logger.ensure_iface_coordinated("can0", 500000)
+            self.assertFalse(tpms_logger._passive_running_ready(module))
 
-        self.assertTrue(result)
-        reconfigure.assert_not_called()
+        state.assert_not_called()
+        identify.assert_not_called()
+        engine_running.assert_not_called()
+
+    def test_topology_gate_requires_same_boot_ccan_on_pins_6_14(self):
+        cases = (
+            (
+                "qualified",
+                SimpleNamespace(usable=True, bus="c-can", pair="6/14"),
+                True,
+            ),
+            (
+                "wrong_pair",
+                SimpleNamespace(usable=True, bus="c-can", pair="12/13"),
+                False,
+            ),
+            (
+                "wrong_bus",
+                SimpleNamespace(usable=True, bus="can-ch", pair="6/14"),
+                False,
+            ),
+            (
+                "stale_or_missing",
+                SimpleNamespace(usable=False, bus="unknown", pair=""),
+                False,
+            ),
+        )
+        for name, topology, expected in cases:
+            with (
+                self.subTest(name=name),
+                mock.patch.object(
+                    tpms_logger.can_operation_state,
+                    "load_topology",
+                    return_value=topology,
+                ),
+            ):
+                self.assertEqual(tpms_logger._topology_is_ccan("can9"), expected)
+
+    def test_under_lock_recheck_refuses_to_arm_after_gate_loss(self):
+        module = SimpleNamespace(channel="can9", bitrate=500000)
+        passive = canbus.InterfaceState(
+            "can9", True, True, 500000, True, "ERROR-ACTIVE", 0
+        )
+        telemetry = mock.Mock()
+        for name, broker_absent, topology, inhibits, bus, running in (
+            ("broker_live_or_uncertain", False, True, (), "c-can", True),
+            ("wrong_topology", True, False, (), "c-can", True),
+            ("inhibited", True, True, ({"name": "alfaobd"},), "c-can", True),
+            ("wrong_bus", True, True, (), "can-ch", True),
+            ("engine_off", True, True, (), "c-can", False),
+        ):
+            with (
+                self.subTest(name=name),
+                mock.patch.object(
+                    tpms_logger,
+                    "broker_absence_proven",
+                    return_value=broker_absent,
+                ),
+                mock.patch.object(
+                    tpms_logger, "_restoration_is_latched", return_value=False
+                ),
+                mock.patch.object(
+                    tpms_logger, "_topology_is_ccan", return_value=topology
+                ),
+                mock.patch.object(
+                    tpms_logger, "_active_inhibits", return_value=inhibits
+                ),
+                mock.patch.object(
+                    tpms_logger.canbus, "interface_state", return_value=passive
+                ),
+                mock.patch.object(
+                    tpms_logger.canbus, "identify_bus", return_value=bus
+                ),
+                mock.patch.object(
+                    tpms_logger, "engine_running", return_value=running
+                ),
+                mock.patch.object(tpms_logger.canbus, "ip_up") as ip_up,
+                mock.patch.object(tpms_logger.uds, "open_socket") as open_socket,
+            ):
+                self.assertIsNone(
+                    tpms_logger._locked_start_state(
+                        module,
+                        auto=True,
+                        telemetry=telemetry,
+                    )
+                )
+                ip_up.assert_not_called()
+                open_socket.assert_not_called()
+
+    def test_under_lock_recheck_yields_if_broker_appears_during_rpm_gate(self):
+        module = SimpleNamespace(channel="can9", bitrate=500000)
+        passive = canbus.InterfaceState(
+            "can9", True, True, 500000, True, "ERROR-ACTIVE", 0
+        )
+        with (
+            mock.patch.object(
+                tpms_logger,
+                "broker_absence_proven",
+                side_effect=(True, False),
+            ) as broker_status,
+            mock.patch.object(
+                tpms_logger, "_restoration_is_latched", return_value=False
+            ),
+            mock.patch.object(tpms_logger, "_topology_is_ccan", return_value=True),
+            mock.patch.object(tpms_logger, "_active_inhibits", return_value=()),
+            mock.patch.object(
+                tpms_logger.canbus, "interface_state", return_value=passive
+            ),
+            mock.patch.object(
+                tpms_logger.canbus, "identify_bus", return_value="c-can"
+            ),
+            mock.patch.object(tpms_logger, "engine_running", return_value=True),
+            mock.patch.object(tpms_logger.canbus, "ip_up") as ip_up,
+            mock.patch.object(tpms_logger.uds, "open_socket") as open_socket,
+        ):
+            self.assertIsNone(
+                tpms_logger._locked_start_state(
+                    module,
+                    auto=True,
+                    telemetry=mock.Mock(),
+                )
+            )
+
+        self.assertEqual(broker_status.call_count, 2)
+        ip_up.assert_not_called()
+        open_socket.assert_not_called()
+
+    def test_manual_locked_start_also_requires_proven_broker_absence(self):
+        module = SimpleNamespace(channel="can9", bitrate=500000)
+        with (
+            mock.patch.object(
+                tpms_logger, "broker_absence_proven", return_value=False
+            ) as broker_absence,
+            mock.patch.object(tpms_logger, "_topology_is_ccan") as topology,
+            mock.patch.object(tpms_logger.canbus, "ip_up") as ip_up,
+            mock.patch.object(tpms_logger.uds, "open_socket") as open_socket,
+        ):
+            self.assertIsNone(
+                tpms_logger._locked_start_state(
+                    module,
+                    auto=False,
+                    telemetry=mock.Mock(),
+                )
+            )
+
+        broker_absence.assert_called_once()
+        topology.assert_not_called()
+        ip_up.assert_not_called()
+        open_socket.assert_not_called()
 
 
 if __name__ == "__main__":

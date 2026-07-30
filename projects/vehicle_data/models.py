@@ -23,6 +23,7 @@ class AcquisitionResult:
     source: str | None = None
     bus: str | None = None
     acquisition: str | None = None
+    interface_mode: str | None = None
     quality: str | None = None
     observed_at: datetime | None = None
     observed_monotonic: float | None = None
@@ -61,6 +62,7 @@ class AcquisitionResult:
                     "source": self.source,
                     "bus": self.bus,
                     "acquisition": self.acquisition,
+                    "interface_mode": self.interface_mode,
                     "quality": self.quality,
                     "observed_at": (
                         self.observed_at.isoformat()
@@ -82,6 +84,8 @@ class AcquisitionResult:
                     "reason": self.reason or "source_unavailable",
                     "detail": self.detail,
                     "bus": self.bus,
+                    "acquisition": self.acquisition,
+                    "interface_mode": self.interface_mode,
                 }
             )
         if self.coalesced:
@@ -101,6 +105,7 @@ def success(
     observed_monotonic: float,
     observed_at: datetime | None = None,
     detail: str = "",
+    interface_mode: str | None = None,
 ) -> AcquisitionResult:
     return AcquisitionResult(
         metric=metric,
@@ -110,6 +115,7 @@ def success(
         source=source,
         bus=bus,
         acquisition=acquisition,
+        interface_mode=interface_mode,
         quality=quality,
         observed_at=observed_at or utc_now(),
         observed_monotonic=observed_monotonic,
@@ -125,6 +131,7 @@ def failure(
     detail: str,
     bus: str | None = None,
     acquisition: str | None = None,
+    interface_mode: str | None = None,
 ) -> AcquisitionResult:
     return AcquisitionResult(
         metric=metric,
@@ -134,4 +141,5 @@ def failure(
         detail=detail,
         bus=bus,
         acquisition=acquisition,
+        interface_mode=interface_mode,
     )

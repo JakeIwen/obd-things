@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
+from lib import canbus
 from live_data import live_data
 from projects.tpms import tpms_logger
 from tools import signal_correlate, uds_send
@@ -194,13 +195,24 @@ class ActiveDiagnosticLockTests(unittest.TestCase):
         events = []
         sock = mock.Mock()
         sock.close.side_effect = lambda: events.append("close")
-        # Keep an accidentally unmocked drain bounded. A bare Mock.recv() returns another
-        # truthy Mock forever, which can turn uds.drain() into an unbounded call-recording loop.
-        sock.recv.side_effect = BlockingIOError
+        initial = canbus.InterfaceState(
+            "can9", True, True, 500000, True, "ERROR-ACTIVE", 0
+        )
         with tempfile.TemporaryDirectory() as directory:
             with (
                 mock.patch.object(tpms_logger, "CSV_PATH", os.path.join(directory, "drive.csv")),
                 mock.patch.object(tpms_logger, "get", return_value=MODULE),
+                mock.patch.object(
+                    tpms_logger, "_locked_start_state", return_value=initial
+                ),
+                mock.patch.object(
+                    tpms_logger,
+                    "_arm_iface_locked",
+                    side_effect=lambda *_args: events.append("arm") or True,
+                ),
+                mock.patch.object(
+                    tpms_logger, "_active_session_gates_hold", return_value=True
+                ),
                 mock.patch.object(
                     tpms_logger.diagnostic_safety,
                     "acquire_channel_lock",
@@ -219,33 +231,100 @@ class ActiveDiagnosticLockTests(unittest.TestCase):
                 mock.patch.object(
                     tpms_logger, "read_did_evidence", side_effect=KeyboardInterrupt
                 ),
+                mock.patch.object(
+                    tpms_logger.canbus,
+                    "restore_interface_state",
+                    side_effect=lambda *_args, **_kwargs: (
+                        events.append("restore") or True
+                    ),
+                ) as restore,
                 mock.patch("builtins.print"),
             ):
                 with self.assertRaises(KeyboardInterrupt):
                     tpms_logger.log_session(auto=False)
 
-        self.assertEqual(events, ["lock:can9", "open", "close", "unlock"])
+        restore.assert_called_once_with(initial, noninteractive=True)
+        self.assertEqual(
+            events,
+            ["lock:can9", "arm", "open", "close", "restore", "unlock"],
+        )
 
-    def test_tpms_idle_loop_does_not_lock_before_ignition(self):
-        with (
-            mock.patch.object(tpms_logger, "get", return_value=MODULE),
-            mock.patch.object(tpms_logger, "iface_is_armed", return_value=True),
-            mock.patch.object(tpms_logger, "_reconfigure_iface") as reconfigure,
-            mock.patch.object(tpms_logger, "ignition_on", side_effect=KeyboardInterrupt),
-            mock.patch.object(
-                tpms_logger.time,
-                "sleep",
-                side_effect=AssertionError("idle-loop fixture failed to exit at ignition probe"),
-            ),
-            mock.patch.object(
-                tpms_logger.diagnostic_safety, "acquire_channel_lock"
-            ) as acquire,
-            mock.patch("builtins.print"),
-        ):
-            with self.assertRaises(KeyboardInterrupt):
-                tpms_logger.auto_loop()
-        acquire.assert_not_called()
-        reconfigure.assert_not_called()
+    def test_tpms_restoration_failure_latches_before_unlock(self):
+        events = []
+        sock = mock.Mock()
+        sock.close.side_effect = lambda: events.append("close")
+        initial = canbus.InterfaceState(
+            "can9", True, True, 500000, True, "ERROR-ACTIVE", 0
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            with (
+                mock.patch.object(
+                    tpms_logger, "CSV_PATH", os.path.join(directory, "drive.csv")
+                ),
+                mock.patch.object(tpms_logger, "get", return_value=MODULE),
+                mock.patch.object(
+                    tpms_logger, "_locked_start_state", return_value=initial
+                ),
+                mock.patch.object(
+                    tpms_logger,
+                    "_arm_iface_locked",
+                    side_effect=lambda *_args: events.append("arm") or True,
+                ),
+                mock.patch.object(
+                    tpms_logger, "_active_session_gates_hold", return_value=True
+                ),
+                mock.patch.object(
+                    tpms_logger.diagnostic_safety,
+                    "acquire_channel_lock",
+                    side_effect=lambda channel: (
+                        events.append(f"lock:{channel}") or object()
+                    ),
+                ),
+                mock.patch.object(
+                    tpms_logger.diagnostic_safety,
+                    "release_channel_lock",
+                    side_effect=lambda _handle: events.append("unlock"),
+                ),
+                mock.patch.object(
+                    tpms_logger.uds,
+                    "open_socket",
+                    side_effect=lambda *_args, **_kwargs: (
+                        events.append("open") or sock
+                    ),
+                ),
+                mock.patch.object(
+                    tpms_logger, "read_did_evidence", side_effect=KeyboardInterrupt
+                ),
+                mock.patch.object(
+                    tpms_logger.canbus,
+                    "restore_interface_state",
+                    side_effect=lambda *_args, **_kwargs: (
+                        events.append("restore") or False
+                    ),
+                ),
+                mock.patch.object(
+                    tpms_logger,
+                    "_latch_restoration_failure",
+                    side_effect=lambda _channel: events.append("latch"),
+                ) as latch,
+                mock.patch("builtins.print"),
+            ):
+                with self.assertRaises(tpms_logger.RestorationFailed):
+                    tpms_logger.log_session(auto=False)
+
+        latch.assert_called_once_with("can9")
+        self.assertEqual(
+            events,
+            [
+                "lock:can9",
+                "arm",
+                "open",
+                "close",
+                "restore",
+                "latch",
+                "unlock",
+            ],
+        )
 
 
 if __name__ == "__main__":

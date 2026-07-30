@@ -10,7 +10,9 @@ The implementation has two trust zones:
 - `broker.py` owns CAN access and serves a Unix-domain HTTP API. Its GET
   endpoints only read cache. An allowlisted acquisition POST may touch the
   built-in battery reader; a separate strict observation POST may only populate
-  an exact metric/source tuple already approved for a local logger.
+  an exact metric/source tuple already approved for a local logger. While the
+  engine is proven running, the broker may supervise `active_drive.py`, a
+  termination-safe exclusive C-CAN owner described below.
 - `web.py` has no CAN imports and proxies cache/status over HTTP. It defaults
   to loopback and requires `--allow-remote-bind` for any other address. It
   rejects all acquisition requests unless deliberately started with
@@ -50,6 +52,7 @@ The initial drive-publisher vocabulary is intentionally narrow:
 | Metric | Source | Type/unit | Quality |
 |---|---|---|---|
 | `battery.voltage` | `cluster.did.1004` | number, `V` | `observed_alfa_scale` |
+| `generator.field_duty` | `pcm.did.01a1` | number, `%` | `observed_alfa_scale` |
 | `engine.oil_pressure` | `ccan.broadcast.0x41d` | number, `psi` | `observed_alfa_scale` |
 | `engine.coolant_temperature` | `ccan.broadcast.0x2ed` | number, `°F` | `observed_alfa_scale` |
 | `engine.rpm` | `ccan.broadcast.0x0fc` | number, `rpm` | `observed_alfa_scale` |
@@ -82,6 +85,14 @@ cached value instead expires after the 30-second freshness window. These are
 active physical UDS reads, not passive broadcast metrics. See
 [`projects/tpms/README.md`](../tpms/README.md) for sensor IDs, evidence, and the
 service/recorder contention boundary.
+
+`generator.field_duty` is the PCM's generator field-command duty, decoded as
+`u16be x 100 / 32768`. It is not alternator current, alternator load, or
+alternator temperature. The observed scale is not clamped: exact-vehicle data
+reached approximately 100.008%, and the public range deliberately permits that
+small overshoot. The metric expires after four seconds. Sustained high duty can
+mean high commanded charging effort, but duty alone does not establish a
+thermal-danger threshold.
 
 The raw rows preserve the original cluster evidence without presenting
 unverified speed, gear, or temperature conversions as facts. The separately
@@ -136,6 +147,8 @@ The collector defaults to a one-second pause between passive cycles. The
 powertrain scalars and ignition presence witness expire after five seconds,
 which covers the bounded bus-classification plus snapshot cycle without
 dashboard flicker while still failing stale promptly after traffic stops.
+Generator field duty is polled at approximately one hertz during a qualified
+running interval and expires after four seconds.
 
 ### Presentation units
 
@@ -310,6 +323,88 @@ be detected reliably.
 CAN-CH/grey is identified and reported but rejected as a battery source.
 Auto-retuning never transmits a CAN frame.
 
+### Coordinated engine-running diagnostic interval
+
+There is one PCAN adapter, so an independent long-running TPMS or PCM poller
+cannot arm `can0` without excluding the listen-only collector. The broker now
+uses one coordinated active-drive helper for the complete engine-running
+epoch:
+
+1. the normal listen-only collector first observes RPM from qualified C-CAN
+   `0x0FC`;
+2. the helper takes the exclusive cross-process lock, requires same-boot
+   C-CAN topology on DLC pins 6/14, no operation inhibit, a healthy
+   listen-only 500-kbit/s interface, passive C-CAN identity, and at least
+   three fresh samples at or above 400 rpm;
+3. it arms the adapter once, repeats the RPM gate, and remains the sole
+   SocketCAN owner until RPM becomes zero/sub-threshold/stale or another stop
+   condition appears;
+4. while armed it continues receiving and publishing the existing allowlisted
+   C-CAN powertrain/battery broadcasts, polls generator field duty at about
+   one hertz, and round-robins the four existing RF Hub pressure reads. Every
+   individual send consumes a new purpose-bound permit issued from the held
+   exclusive lock and that cycle's qualified RPM snapshot;
+5. it closes every socket, restores and verifies the exact prior listen-only
+   configuration, and only then releases the lock.
+
+This is an intentionally honest armed interval. Observations retain their
+source acquisition class and also report
+`interface_mode=armed_diagnostic`; status reports
+`current_owner.kind=broker_active_drive`. The interface is not described as
+passive while it is armed. The design trades one down/up transition at the
+start and end of a running epoch for continuous powertrain, generator, battery,
+and TPMS telemetry; it does not cycle SocketCAN once per poll.
+
+The PCM electrical registry currently contains exactly one immutable profile.
+Its only possible PCM transmission is the physical, 29-bit, fixed-DLC-8 frame:
+
+```text
+18DA10F1#032201A100000000
+```
+
+The response must be a single frame from `18DAF110` with an exact
+`62 01 A1` echo and exactly two data bytes. A raw CAN socket is used so a
+malformed multi-frame reply cannot cause an ISO-TP FlowControl transmission.
+There is no caller-selectable DID, service, CAN ID, payload, functional
+address, session, or tester-present option. In particular, this path contains
+no `10 92` or `3E` traffic. Future electrical metrics require a reviewed code
+change adding another fixed profile and exact decoder; candidate names do not
+create a diagnostic proxy.
+
+The coordinated helper also preserves the already reviewed TPMS pressure path.
+Those are the only other CAN frames it can construct:
+
+```text
+18DAC7F1#032231D000000000
+18DAC7F1#032231D100000000
+18DAC7F1#032231D200000000
+18DAC7F1#032231D300000000
+```
+
+All five are physical `ReadDataByIdentifier` requests to endpoints registered
+in `lib/modules.py`; no functional broadcast request exists. The helper stops
+on loss of RPM or C-CAN traffic, topology/inhibit changes, adapter health
+failure, timeout, malformed response, rejection, termination, or exception.
+`session_required` is reported distinctly and does not enable a session
+change. A failed or unverified restoration sets a persistent operation inhibit,
+is latched in the broker, and prevents another active interval.
+
+The transport methods cannot send on control-flow convention alone. Their
+opaque permit is fixed to registered `can0`, one of the two reviewed transport
+purposes, the live exclusive diagnostic-lock handle, the issuing process, and
+the latest snapshot's positive frame count plus three finite RPM samples at or
+above 400. It expires after 250 ms and is consumed by its first attempted use,
+including a wrong-purpose, stale, released-lock, or failed-send attempt. There
+is no zero-argument generator-duty sender.
+
+The direct-read evidence already includes two positive padded `22 01A1` reads
+without an explicit session change, so the implementation starts with no
+session traffic. That capture did not positively identify the inherited
+session. A clean post-ignition experiment is still useful if the research goal
+is to prove the minimal/default session label; it is not required to add
+`10 92`, and an NRC requiring another session must remain a reported blocker
+until a separate design and owner authorization exist.
+
 `wake_if_asleep` first performs the same passive path. Only a silent bus can
 proceed. It then takes the exclusive diagnostics lock and rechecks the interface
 and silence. Wake additionally requires a usable same-boot C-CAN or B-CAN
@@ -451,6 +546,11 @@ restricts clients.
 ## Current vanpi deployment
 
 Last verified 2026-07-27:
+
+The coordinated active-drive and generator-duty changes documented above were
+implemented and tested offline on 2026-07-30. They have not been installed,
+enabled, started, or exercised against live CAN in this change; the bullets
+below continue to describe the previously verified running deployment.
 
 - `van-telemetry.service`, `van-telemetry-web.service`, and a separate
   machine-local Tailscale web service are installed, enabled at boot, and

@@ -134,6 +134,45 @@ select {
   font-size: clamp(2rem, 4.2vw, 3.8rem);
 }
 
+.charging-panel {
+  grid-column: 1 / -1;
+}
+
+.charging-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.charging-tile {
+  display: grid;
+  grid-template-columns: minmax(12rem, .8fr) minmax(0, 1.2fr);
+  gap: 1rem 1.5rem;
+  align-items: start;
+}
+
+.charging-reading {
+  min-width: 0;
+}
+
+.charging-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .75rem 1rem;
+  margin: 0;
+}
+
+.charging-meta div:last-child {
+  grid-column: 1 / -1;
+}
+
+.charging-meta dd {
+  overflow-wrap: anywhere;
+}
+
+.charging-explanation {
+  color: #b9cbc2;
+}
+
 .drive-heading h2 { margin-bottom: .7rem; }
 
 .drive-hero-grid {
@@ -475,6 +514,9 @@ body[data-profile="parked"] .battery-panel {
   .drive-hero-grid, .engine-health-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .charging-tile {
+    grid-template-columns: 1fr;
+  }
   .drive-primary .drive-value { font-size: clamp(3.2rem, 14vw, 5.6rem); }
 }
 
@@ -483,6 +525,8 @@ body[data-profile="parked"] .battery-panel {
   .panel { padding: 1rem; }
   .state-panel { grid-template-columns: 1fr; }
   .detail-grid, .compact-grid, .metric-grid { grid-template-columns: 1fr; }
+  .charging-meta { grid-template-columns: 1fr; }
+  .charging-meta div:last-child { grid-column: auto; }
   .battery-panel { grid-template-columns: 1fr; gap: 1rem; }
   .badge { justify-self: start; }
   .widget-options { grid-template-columns: 1fr; }

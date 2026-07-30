@@ -1,6 +1,6 @@
 # TPMS / RF Hub diagnosis — 2022 Ram Promaster (VIN 3C6LRVDG4NE######)
 
-Handoff doc. State as of **2026-07-19**. Any agent/human should be able to resume from here.
+Handoff doc. State as of **2026-07-30**. Any agent/human should be able to resume from here.
 Link path & general UDS tooling: see repo `docs/`, `lib/modules.py`, and the radar project docs
 (same PCAN → SGW-bypass → C-CAN tap). Everything below was verified on the vehicle.
 
@@ -127,34 +127,60 @@ campaign status and
    Full sweep: `findings/rf_hub_did_sweep.txt` (118 readable / 1 locked / 0 unresolved),
    ignition-state bands in `findings/rf_hub_sweep_state_markers.txt`.
 
-## Infrastructure now running
+## TPMS logger and telemetry ownership
 
-- **`tpms_logger.py` (this dir)** — the dropout tripwire. Manual mode: `./bringup.sh --tx &&
-  python3 projects/tpms/tpms_logger.py`. Auto mode (`--auto`) runs as **systemd
-  `tpms-logger.service`** (enabled, User=pi): IDLE = pure-RX 2 s listen for **`0x2EF`** every
-  30 s (zero TX, parked bus sleeps); 0x2EF present (ignition on) → poll `31D0-31D3`,
-  `301E-3021`, `19 02 0D` every 10 s → `tmp/tpms/tpms_drive_log.csv`; 0x2EF gone → session
-  ends ≤12 s, bus asleep ~60 s later (measured).
-  **The gate MUST stay 0x2EF, not frame count: our own polling holds FCA network management
-  awake** (verified: with a frame-count gate the bus never slept; polling stopped → asleep in
-  60 s). A dropout in the CSV names its slot → physical wheel via the table above; a DTC
-  status flip timestamps fault onset. Each valid pressure is also published to the local telemetry
-  broker as `tire.pressure.fl/fr/rr/rl` with verified quality and a 30-second freshness window.
-  Publication is best-effort: broker absence or rejection is journaled but never stops CSV logging.
-  The logger drains stale ISO-TP frames before every request
-  and accepts pressure/DTC data only when the positive response echoes the requested DID or `19`
-  subfunction. Known DTCs retain both the raw ECU value and label in new rows, for example
-  `550331(C1503-31)=8F`. Raw pressure `FFFF` is invalid/no data, not a real pressure or a failed
-  UDS reply; the logger now writes an empty pressure cell and withholds telemetry instead of
-  rendering the former impossible 950.5 psi.
-  The normal pure-RX idle watch does not reserve `can0`. If the interface needs reconfiguration,
-  the idle loop briefly takes the cooperative `tmp/locks/` channel lock, rechecks under the lock,
-  and defers without changing the interface when another transmitter owns it. Each active polling
-  session holds that same lock for its complete UDS socket lifetime.
-  The live unit is `/etc/systemd/system/tpms-logger.service`; a tracked copy sits in this dir
-  (`tpms-logger.service`). (Re)install after changing the unit (NOT needed for logger edits —
-  those just need a restart):
-  `sudo cp projects/tpms/tpms-logger.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart tpms-logger`
+- **`tpms_logger.py` (this dir)** remains the dropout tripwire. Its fixed RF Hub profile polls
+  `31D0-31D3`, `301E-3021`, and `19 02 0D` every 10 seconds, writes
+  `tmp/tpms/tpms_drive_log.csv`, and publishes valid pressures as
+  `tire.pressure.fl/fr/rr/rl`. It drains stale ISO-TP frames before every request and accepts
+  pressure/DTC data only when the positive response echoes the requested DID or `19` subfunction.
+  Known DTCs retain both raw ECU value and label, for example `550331(C1503-31)=8F`. Raw pressure
+  `FFFF` is invalid/no data: the logger writes an empty pressure cell and withholds telemetry. Its
+  diagnostic request allowlist is fixed to physical RF Hub `22 31D0-31D3`,
+  `22 301E-3021`, and `19 02 0D` reads (plus ISO-TP flow control required to receive a segmented
+  response); it sends no session-control, tester-present, write, clear-DTC, routine, or security
+  request.
+- **Broker delegation is checked first in auto mode.** Any response from the broker Unix socket
+  makes the standalone logger yield completely, regardless of broker version, active-drive setting,
+  HTTP status, or response fields: it takes no CAN lock, does not change `can0`, and opens no UDS
+  socket. Timeouts, malformed responses, permission failures, and other ambiguous I/O failures also
+  yield. This fail-closed rule prevents a temporarily unhealthy or older broker's passive collector
+  from being starved by a competing TPMS session. With the current broker, its coordinated
+  active-drive collector owns the single armed interval, continues publishing the qualified C-CAN
+  powertrain metrics, and polls the four allowlisted RF Hub pressure DIDs alongside PCM electrical
+  telemetry. The standalone extended last-RX/DTC CSV campaign is not collected while delegated.
+- **The standalone path is a fail-closed fallback, not a competing collector.** It is used only
+  when the broker endpoint is narrowly proven absent because the Unix socket is missing or refuses
+  the connection. A live broker that explicitly disables active-drive still owns passive telemetry,
+  so that setting does **not** authorize this logger to take over. Before taking the exclusive
+  diagnostic lock the fallback requires a verified UP/500 kbit/s/listen-only/ERROR-ACTIVE interface,
+  a usable same-boot `c-can` topology record with exact DLC pair `6/14`, no active operation inhibit,
+  passive C-CAN identity, and three fresh standard `0x0FC` samples above 400 rpm. The passive
+  identity/RPM gate holds the shared observer lock so an interface-changing participant cannot race
+  that socket. It repeats every check under the exclusive lock, including broker absence before and
+  after the RPM sample, captures the exact safe interface state, arms once, and repeats the RPM,
+  topology, inhibit, broker-absence, and adapter-health gates throughout the session. A broker that
+  starts later therefore ends the fallback and triggers restoration. Ignition presence, charging
+  voltage, or the old `0x2EF`-only gate cannot authorize transmission.
+- The fallback closes its ISO-TP socket before exactly restoring and reading back the captured
+  listen-only configuration, all while still holding the exclusive lock. This happens after normal
+  completion, engine-RPM loss, exceptions, and termination. A failed restore is a critical fault:
+  the process latches against further polls and writes the same-boot operation inhibit
+  `tpms-restoration-failed`. Inspect and explicitly prove `can0` safe/passive before considering
+  `python3 tools/can_operation_state.py inhibit-end tpms-restoration-failed`.
+- Manual fallback has the same broker-absence gate and cleanup contract. It refuses to start while
+  the broker is live or its status is uncertain; an explicitly authorized standalone campaign must
+  stop the broker first. Start from passive mode:
+  `./bringup.sh && python3 projects/tpms/tpms_logger.py`. Do not pre-arm with `--tx`.
+- The earlier campaign used passive `0x2EF` presence as its ignition gate. Its observer-effect
+  finding remains valid—diagnostic polling can keep FCA network management awake, and stopping it
+  allowed sleep after about 60 seconds—but `0x2EF` alone is no longer an authorization gate.
+  Engine-running `0x0FC` evidence prevents the unattended logger from waking or polling an
+  ignition-on/engine-off vehicle.
+- The tracked unit is `projects/tpms/tpms-logger.service`; the previously installed live unit is
+  `/etc/systemd/system/tpms-logger.service`. The 2026-07-30 integration change is offline-only:
+  no service was installed, enabled, restarted, or live-tested. Any deployment/restart remains an
+  explicit owner-authorized operation after reviewing current broker and adapter state.
 - **`isotp_decode_rfh.py` (this dir)** — offline ISO-TP transcript decoder for candump logs
   (hardcoded to the RFH ID pair); used to decode the AlfaOBD session sniffs in
   `tmp/tpms/rfh_alfaobd_sniff_ccan_resilient.log`.
@@ -169,11 +195,13 @@ campaign status and
 - **Before any manual bus work**: `sudo systemctl stop tpms-logger` (restart after).
   Gotcha: `pkill -f`/`pgrep -f` with a pattern that appears in your own command line kills
   your own shell — use `pkill -x candump` or exact PIDs.
-- **Current integration state (verified 2026-07-27):** `tpms-logger.service` is intentionally
-  stopped while the listen-only C-CAN drive recorder owns the campaign. The telemetry registry
-  still exposes all four verified pressure mappings, so the honest dashboard state is
-  `0/4 LIVE · 4/4 MAPPED`. Reactivating this transmitting logger is a campaign choice; do not run
-  it concurrently with the passive recorder on the one PCAN channel.
+- **Current integration state (code updated 2026-07-30; deployment not live-verified):** one
+  PCAN adapter still means there can be only one armed owner. The coordinated broker owner is the
+  coexistence path for live passive powertrain, PCM electrical, and four TPMS pressures. The auto
+  standalone logger runs only when the broker Unix endpoint itself is proven absent, then only after
+  acquiring the exclusive lock. Any live or ambiguously unreachable broker makes it defer so a
+  short observer-lock gap cannot turn into a drive-long dashboard outage. Check the live service and
+  broker status before changing either.
 
 ## Campaign status (2026-07-19) — dropout repeatedly captured
 

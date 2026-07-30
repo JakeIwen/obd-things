@@ -38,6 +38,11 @@ def frame(can_id, data):
 
 class DecodeTests(unittest.TestCase):
     def test_fixed_decodes(self):
+        battery = ccan_powertrain.decode_frame(0x41A, b"\xbe")
+        self.assertEqual(battery.metric, "battery.voltage")
+        self.assertEqual(battery.value, 13.5)
+        self.assertEqual(battery.quality, "verified")
+
         oil = ccan_powertrain.decode_frame(0x41D, b"\x00\x00\x36")
         self.assertEqual(oil.metric, "engine.oil_pressure")
         self.assertAlmostEqual(oil.value, 31.328151349725194)
@@ -146,6 +151,45 @@ class DecodeTests(unittest.TestCase):
             self.assertTrue(mask & ccan_powertrain.CAN_EFF_FLAG)
             self.assertTrue(mask & ccan_powertrain.CAN_RTR_FLAG)
             self.assertFalse(mask & ccan_powertrain.CAN_ERR_FLAG)
+
+    def test_active_snapshot_filter_explicitly_includes_system_voltage(self):
+        fake = FakeSocket([])
+        ticks = count(start=0.0, step=0.1)
+        ccan_powertrain.read_broadcast_snapshot(
+            timeout=0.5,
+            include_battery=True,
+            socket_factory=lambda *_args: fake,
+            monotonic=lambda: next(ticks),
+        )
+
+        entries = [
+            struct.unpack("=II", fake.filters[offset : offset + 8])
+            for offset in range(0, len(fake.filters), 8)
+        ]
+        self.assertEqual(
+            [can_id for can_id, _mask in entries],
+            list(ccan_powertrain.ACTIVE_FILTER_IDS),
+        )
+        self.assertIn(ccan_powertrain.SYSTEM_VOLTAGE_ID, {
+            can_id for can_id, _mask in entries
+        })
+
+    def test_snapshot_rejects_malformed_raw_frame_and_classic_dlc(self):
+        cases = (
+            b"\0" * 15,
+            struct.pack("=IB3x8s", 0x0FC, 9, b"\0" * 8),
+        )
+        for raw_frame in cases:
+            with self.subTest(length=len(raw_frame)):
+                fake = FakeSocket([raw_frame])
+                ticks = count(start=0.0, step=0.1)
+                with self.assertRaises(RuntimeError):
+                    ccan_powertrain.read_broadcast_snapshot(
+                        timeout=0.5,
+                        socket_factory=lambda *_args: fake,
+                        monotonic=lambda: next(ticks),
+                    )
+                self.assertTrue(fake.closed)
 
     def test_snapshot_uses_median_and_closes_socket(self):
         fake = FakeSocket(
