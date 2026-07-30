@@ -2,6 +2,7 @@
 Description=Loopback cached van telemetry dashboard
 After=van-telemetry.service
 Requires=van-telemetry.service
+PartOf=van-telemetry.service
 
 [Service]
 Type=simple

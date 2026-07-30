@@ -77,6 +77,18 @@ class CcanInventoryCampaignTests(unittest.TestCase):
         )
         self.assertNotIn("Checking noninteractive passwordless sudo", result.stdout)
 
+    def test_live_cleanup_preserves_all_dashboard_listeners(self):
+        script = SCRIPT.read_text()
+
+        self.assertIn("van-telemetry.service", script)
+        self.assertIn("van-telemetry-web.service", script)
+        self.assertIn("van-telemetry-web-tailscale.service", script)
+        self.assertIn(
+            'systemctl start "${ACTIVE_TELEMETRY_UNITS[@]}"',
+            script,
+        )
+        self.assertNotIn("TELEMETRY_WAS_ACTIVE", script)
+
 
 if __name__ == "__main__":
     unittest.main()

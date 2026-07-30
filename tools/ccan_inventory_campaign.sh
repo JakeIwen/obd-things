@@ -24,8 +24,9 @@
 #
 # Live mode uses only noninteractive passwordless sudo; it never prompts for an account password.
 # Each child diagnostic tool restores the interface to listen-only; this driver explicitly re-arms
-# before the next child. It preserves tpms-logger's initial state. If that service was active, its
-# normal startup may leave can0 armed while the logger itself remains zero-TX until ignition is seen.
+# before the next child. It preserves tpms-logger's and every installed telemetry unit's initial
+# state. If TPMS was active, its normal startup may leave can0 armed while the logger itself remains
+# zero-TX until ignition is seen.
 set -euo pipefail
 
 REPO=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -262,10 +263,17 @@ TPMS_WAS_ACTIVE=0
 if systemctl is-active --quiet tpms-logger; then
   TPMS_WAS_ACTIVE=1
 fi
-TELEMETRY_WAS_ACTIVE=0
-if systemctl is-active --quiet van-telemetry; then
-  TELEMETRY_WAS_ACTIVE=1
-fi
+TELEMETRY_UNITS=(
+  van-telemetry.service
+  van-telemetry-web.service
+  van-telemetry-web-tailscale.service
+)
+ACTIVE_TELEMETRY_UNITS=()
+for unit in "${TELEMETRY_UNITS[@]}"; do
+  if systemctl is-active --quiet "$unit"; then
+    ACTIVE_TELEMETRY_UNITS+=("$unit")
+  fi
+done
 
 CAN_TOUCHED=0
 cleanup() {
@@ -286,11 +294,11 @@ cleanup() {
   else
     echo "tpms-logger was initially inactive and remains inactive."
   fi
-  if [ "$TELEMETRY_WAS_ACTIVE" -eq 1 ]; then
-    sudo -n systemctl start van-telemetry \
-      || echo "WARNING: van-telemetry was initially active but could not be restarted" >&2
+  if [ "${#ACTIVE_TELEMETRY_UNITS[@]}" -gt 0 ]; then
+    sudo -n systemctl start "${ACTIVE_TELEMETRY_UNITS[@]}" \
+      || echo "WARNING: one or more initially active telemetry units could not be restarted" >&2
   else
-    echo "van-telemetry was initially inactive and remains inactive."
+    echo "All telemetry units were initially inactive and remain inactive."
   fi
   exit "$status"
 }
@@ -298,9 +306,9 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 
 sudo -n systemctl stop tpms-logger
-if [ "$TELEMETRY_WAS_ACTIVE" -eq 1 ]; then
+if systemctl is-active --quiet van-telemetry.service; then
   echo "Temporarily pausing the passive telemetry broker during exclusive diagnostic reads..."
-  sudo -n systemctl stop van-telemetry
+  sudo -n systemctl stop van-telemetry.service
 fi
 CAN_TOUCHED=1
 ./bringup.sh

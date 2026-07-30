@@ -1,6 +1,7 @@
 [Unit]
 Description=Allowlisted van telemetry CAN broker
 After=local-fs.target
+Wants=van-telemetry-web.service
 
 [Service]
 Type=simple

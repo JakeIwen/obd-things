@@ -61,7 +61,9 @@ MODULES = {
             "identity containing 68532157AI. A 2026-07-22 AlfaOBD follow-up repeated the "
             "positive session and status reads ignition-on/engine-off; the same profile timed "
             "out while ignition was asleep. Default-session 22 F187 and unpadded probes timed "
-            "out; use the bounded legacy PCM probe until its session/DID behavior is mapped."
+            "out. Parked engine-running tests on 2026-07-30 independently returned "
+            "22 01A1 -> 62 01A1 8000 twice with fixed-DLC-8 zero padding and no explicit "
+            "session change; the inherited session was not positively identified."
         ),
     ),
     "rf_hub": Module(

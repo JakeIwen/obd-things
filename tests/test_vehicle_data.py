@@ -27,8 +27,10 @@ from projects.vehicle_data.metrics import METRICS
 from projects.vehicle_data.models import failure, success
 from projects.vehicle_data.sources import DecodedVoltage, VoltageAcquirer
 from projects.vehicle_data.web import (
+    DEFAULT_STREAM_INTERVAL_SECONDS,
     TelemetryWebHandler,
     TelemetryWebServer,
+    build_parser as build_web_parser,
     validate_bind,
 )
 
@@ -125,14 +127,20 @@ class FakeBackend:
 
 
 class SourceTests(unittest.TestCase):
-    def test_collector_default_keeps_engine_metrics_fresh(self):
-        args = build_parser().parse_args(["serve"])
+    def test_default_delivery_cadence_fits_measured_freshness_phase(self):
+        broker_args = build_parser().parse_args(["serve"])
+        web_args = build_web_parser().parse_args([])
 
-        self.assertEqual(args.collector_interval, 1.0)
+        self.assertEqual(broker_args.collector_interval, 1.0)
+        self.assertEqual(
+            web_args.stream_interval,
+            DEFAULT_STREAM_INTERVAL_SECONDS,
+        )
+        self.assertEqual(web_args.stream_interval, 1.0)
         self.assertTrue(
             all(
                 METRICS[name].stale_after_seconds
-                > args.collector_interval
+                > broker_args.collector_interval
                 for name in (
                     "engine.coolant_temperature",
                     "engine.oil_pressure",
@@ -145,6 +153,22 @@ class SourceTests(unittest.TestCase):
                     "vehicle.speed",
                 )
             )
+        )
+        # The synchronized 2026-07-30 live trace measured a maximum passive
+        # metric age of 3.524 s at SSE generation. The former 2 s cadence
+        # necessarily crossed the 5 s freshness bound before some next events.
+        measured_max_delivery_age_seconds = 3.524
+        stream_processing_jitter_budget_seconds = 0.100
+        freshness_seconds = METRICS["vehicle.ignition_on"].stale_after_seconds
+        self.assertGreater(
+            measured_max_delivery_age_seconds + 2.0,
+            freshness_seconds,
+        )
+        self.assertLess(
+            measured_max_delivery_age_seconds
+            + web_args.stream_interval
+            + stream_processing_jitter_budget_seconds,
+            freshness_seconds,
         )
 
     def test_registry_is_metric_allowlist_with_provenance(self):

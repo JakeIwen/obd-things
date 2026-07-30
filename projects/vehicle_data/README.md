@@ -225,6 +225,41 @@ passive acquisition can report `awake`, inferred `asleep`, or `unknown`, with
 keeps the automatic layout engine ready for a separately verified
 ignition/motion metric without silently promoting a voltage heuristic.
 
+## Dashboard freshness timing
+
+A synchronized 120-second passive trace on 2026-07-30 separated a recurring
+whole-dashboard blank from CAN and adapter failures. The raw, gitignored
+capture is under
+`tmp/vehicle_data/dropout_timing_20260730T003727/`.
+
+- C-CAN `0x2EF` delivered 2,400 frames at a median 50.003 ms interval; the
+  maximum gap was 51.499 ms and there were no gaps over 100 ms.
+- All 25 interface samples remained 500 kbit/s, listen-only, ERROR-ACTIVE,
+  with zero TX/RX bus-error counters and zero RX errors. No matching PCAN,
+  USB, undervoltage, reset, disconnect, or EXT4 event appeared in the capture
+  window.
+- The passive collector refreshed the powertrain set every 3.491–3.601
+  seconds. The former default SSE interval was 2.005–2.019 seconds. Metric age
+  at SSE generation reached 3.524 seconds.
+- Ten of 61 consecutive SSE intervals therefore carried the last powertrain
+  observation beyond its five-second registry freshness limit before the next
+  event. The calculated overrun reached 531 ms. The browser's one-second
+  freshness tick can make that short overrun visible as a whole-panel blank.
+- The broker Unix-socket snapshot stayed responsive (14.8 ms maximum). LAN
+  snapshot requests had no failures and reached 1.148 seconds maximum, below
+  the browser's separate two-second HTTP-response bound. The one-minute load
+  average was 1.05–1.90 during this trace, although swap remained full.
+
+The default SSE interval is now one second. This keeps the five-second metric
+expiry unchanged while putting the measured 3.524-second worst-phase delivery
+below the expiry boundary before the following stream event. A regression
+test preserves that measured phase relationship.
+
+An earlier Chromium reproduction under heavy Pi contention exceeded the
+two-second HTTP baseline bound and displayed `Broker unavailable`. That is a
+separate fail-closed path, not evidence of a CAN gap. It did not recur in the
+normal-load synchronized trace, so the HTTP bound has not been relaxed.
+
 ## Safety contract
 
 Passive reads:
@@ -420,6 +455,13 @@ Last verified 2026-07-27:
 - `van-telemetry.service`, `van-telemetry-web.service`, and a separate
   machine-local Tailscale web service are installed, enabled at boot, and
   running.
+- Starting the broker also pulls in the LAN listener. The LAN listener is
+  `PartOf=van-telemetry.service`, so a broker restart restarts the listener
+  rather than leaving it detached. The machine-local deployment applies the
+  same lifecycle relationship to the Tailscale listener and adds it to the
+  broker's wanted units. A deliberate broker stop therefore stops both web
+  listeners, while a later broker start restores the complete installed web
+  stack.
 - The live broker registry exposes all four verified TPMS wheel metrics. With
   the transmitting `tpms-logger.service` intentionally stopped for the current
   listen-only drive-recording campaign, all four correctly remain unavailable

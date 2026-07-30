@@ -40,6 +40,13 @@ then established exact diagnostic engine RPM, signed loaded torque, and VVT-oil-
 scales, while proving that this PCM profile's transmission-temperature and turbine-speed rows are
 unsupported. Passive torque, true sump-oil temperature, and derived power
 remain open. A later
+[`PCM generator-duty direct-read follow-up`](findings/promaster_2022/2026-07-30_pcm_generator_duty_direct_read.md)
+verified two fixed-DLC-8 zero-padded physical `22 01A1` reads without an
+explicit session change, both returning exactly 100.000%. Its corrected
+arbitrary-bitfield searches over `0x100` and `0x412` still failed to produce a
+cross-regime passive carrier, so a guarded diagnostic reader is the supported
+implementation direction.
+A later
 [`signed 0x1F7 byte-3 mapping`](findings/promaster_2022/2026-07-29_tcm_oil_temperature_candidate.md)
 found the strongest transmission-oil carrier candidate so far. The candidate
 failed its precommitted narrow-range blind R²/scaling gates; a later

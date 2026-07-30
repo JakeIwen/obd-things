@@ -23,6 +23,7 @@ from projects.vehicle_data.broker import DEFAULT_SOCKET
 
 STATIC = pathlib.Path(__file__).with_name("static")
 MAX_STREAM_SECONDS = 300.0
+DEFAULT_STREAM_INTERVAL_SECONDS = 1.0
 LOOPBACK_BINDS = frozenset(("127.0.0.1", "::1", "localhost"))
 
 
@@ -312,7 +313,11 @@ def build_parser() -> argparse.ArgumentParser:
             "provide authentication"
         ),
     )
-    parser.add_argument("--stream-interval", type=float, default=2.0)
+    parser.add_argument(
+        "--stream-interval",
+        type=float,
+        default=DEFAULT_STREAM_INTERVAL_SECONDS,
+    )
     parser.add_argument("--stream-max-seconds", type=float, default=MAX_STREAM_SECONDS)
     parser.add_argument(
         "--allow-acquisitions",
