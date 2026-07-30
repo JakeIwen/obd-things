@@ -314,3 +314,42 @@ instead corroborated by at least two seconds without `0x2EF`, it now stops
 cleanly as `diagnostic_timeout_after_ignition_frame_absent`; the independent
 ten-second ignition-loss gate remains in place. This changes future terminal
 classification only, not the retained evidence or the frozen result above.
+
+## Frozen hot-soak divergence challenge
+
+Before the next capture, the owner reported that the van had been parked with
+ignition off for about 30 minutes after driving. This creates a distinct
+hot-soak/restart experiment rather than repeating the rejected common
+cold-start trajectory. The capture protocol is:
+
+1. leave AlfaOBD closed and PCAN on C-CAN pins 6/14;
+2. turn ignition on while still parked and start the paired `04FE/0301`
+   logger before starting the engine;
+3. start the engine and begin ordinary driving promptly; and
+4. let ignition loss end the autonomous capture after the drive.
+
+The evidence must retain at least 600 exact positive samples from each DID, a
+complete zero-drop full-bus stream, exact request/response count agreement,
+verified passive restoration, and no competing TCM diagnostic client.
+
+The already frozen oil formula remains
+`predicted_04FE_raw = 0.375 × signed_i8(0x1F7 byte 3) + 97`. It must again
+achieve at least 0.99 coverage, RMSE no greater than 1.5 °C, absolute mean
+bias no greater than 1.0 °C, and p95 absolute error no greater than 2.5 °C.
+
+The semantic discriminator is frozen before inspection:
+
+- at least 60 adjacent complete `04FE/0301` polling cycles must show an
+  absolute oil/chip difference of at least 3 °C;
+- the observed signed oil-minus-chip difference must span at least 2 °C;
+- applying the unchanged oil formula against `0301` must produce RMSE at
+  least 2.0 °C worse than against `04FE`; and
+- its mean absolute error against `0301` must be at least 1.5 °C worse than
+  against `04FE`.
+
+If `04FE` spans at least 10 °C, the former R² discriminator is also reported
+unchanged: oil R² must exceed chip R² by at least 0.10. A narrower leg does
+not reinterpret that earlier frozen failure; it simply leaves the R² check
+unscored and relies on the predeclared direct-error and paired-divergence
+gates above. Passing this challenge permits a final telemetry-review decision
+but does not automatically allowlist the field or create a warning threshold.

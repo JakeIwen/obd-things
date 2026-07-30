@@ -37,7 +37,7 @@ Live execution, started while parked before the drive:
 
 The opt-in TCM thermal profile reads only gearbox-oil DID ``04FE`` and TCU-chip
 temperature DID ``0301``. It exists to exact-link both controls to the same
-loss-accounted C-CAN stream during a broad cold-start drive:
+loss-accounted C-CAN stream during a controlled thermal-discrimination drive:
 
     ./bringup.sh --tx
     python3 projects/ecu_mapping/cluster_drive_log.py \
@@ -48,7 +48,7 @@ loss-accounted C-CAN stream during a broad cold-start drive:
       --execute --confirm-driving-read-only --confirm-started-parked \
       --confirm-no-other-diagnostics --confirm-tcm-thermal-correlation \
       --pair 6/14 \
-      --conditions "cold-start drive; AlfaOBD closed; PCAN C-CAN 6/14"
+      --conditions "thermal-discrimination drive; AlfaOBD closed; PCAN C-CAN 6/14"
 """
 
 from __future__ import annotations
@@ -209,7 +209,7 @@ DRIVE_PROFILES = {
         request_rate_hz=2.0,
         wire_stem="tcm_thermal_wire",
         purpose=(
-            "broad-range gearbox-oil carrier challenge with TCU-chip "
+            "gearbox-oil carrier discrimination with paired TCU-chip "
             "temperature negative control"
         ),
     ),

@@ -36,8 +36,9 @@ exact samples. The leg nevertheless failed the separate requirement to beat
 TCU-chip-temperature R² by at least 0.10. It remains not telemetry-allowlisted,
 and neither another whole-bus search nor an identical warm-up trajectory is
 the next experiment. A reviewed `--profile tcm-thermal` mode in
-[`cluster_drive_log.py`](cluster_drive_log.py) now records that exact `04FE/0301` challenge at
-two total requests per second with integrated loss-accounted raw evidence.
+[`cluster_drive_log.py`](cluster_drive_log.py) records paired `04FE/0301`
+thermal-discrimination drives at two total requests per second with integrated
+loss-accounted raw evidence.
 
 The related-profile PCM thermal families are now closed. The installed PCM
 entered session `92` but returned NRC `12` for `3159`, `315A`, `B010`,
