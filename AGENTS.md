@@ -43,6 +43,12 @@ committed in place.
 - `tmp/locks/` — advisory per-channel lock files for participating active diagnostic tools
 - `tmp/<project>/` — project logger/tool output such as `tmp/radar/`, `tmp/battery/`, and `tmp/tpms/`
 
+Cold, large, or completed machine evidence may live in the matching tree under
+`/mnt/EXFAT512/obd-things/tmp/`. Read [`docs/data-archive.md`](docs/data-archive.md) before treating
+a local symlink as missing data or moving archived compute jobs. Verify the mount is the expected
+writable EXFAT volume before relying on an archived path. Keep active locks, current service state,
+small inventories, benchmark inputs, and artifacts requiring guaranteed access on the Pi.
+
 Committing data is deliberate promotion: move selected evidence into
 `projects/<project>/findings/`, beside the analysis that cites it, then commit it there. A file's
 location answers whether it is intended to be tracked. New tools must default output under `tmp/` and

@@ -68,10 +68,16 @@ tmp/                       gitignored — ALL machine-written data lands here, n
   <project>/                 per-project logger output (tmp/radar/, tmp/battery/, tmp/tpms/)
 ```
 
-**Data convention:** tool defaults write under `tmp/` (gitignored); keep any explicit output override
-there too. When a capture/sweep proves
-worth keeping, PROMOTE it: move it into `projects/<x>/findings/` and commit it next to the analysis
-that cites it. "Is it tracked?" is answered by location alone — nothing under `tmp/` ever is.
+**Data convention:** tool defaults write under the Pi's local `tmp/` (gitignored). Long-running
+recorders may instead use the mount-guarded cold-data mirror at
+`/mnt/EXFAT512/obd-things/tmp/`. Large completed captures and offline-compute history may be moved
+there after verification; local symlinks can preserve familiar paths, but they do not make the data
+available when the flash drive is absent. See [`docs/data-archive.md`](docs/data-archive.md) for the
+current layout, restore procedure, and van-compute symlink restriction.
+
+When a capture/sweep proves worth keeping, PROMOTE a reviewed, suitably redacted evidence subset
+into `projects/<x>/findings/` and commit it next to the analysis that cites it. "Is it tracked?" is
+answered by location alone — neither local nor EXFAT `tmp/` data is tracked.
 
 **Generic vs project-specific:** anything in `lib/`, `tools/`, `live_data/`, and `bringup.sh` is
 module-agnostic and reusable — it knows nothing about any particular ECU (addressing is passed in via
