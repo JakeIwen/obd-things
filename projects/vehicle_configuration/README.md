@@ -21,6 +21,12 @@ low-beam investigation.
   for the record's broad block structure. Individual current node bits remain
   unresolved. See the
   [`legacy FCA Windows/CDA archive triage`](../ecu_mapping/findings/promaster_2022/2026-07-29_legacy_fca_windows_archive.md).
+- Exact-model 2022 OEM service material independently says the BCM stores and
+  compares vehicle configuration against expected/present/active ECU
+  membership and places the RF Hub and ACC/radar in the PROXI population. It
+  does not publish the `2023`/`40A2` wire layouts or current node-bit
+  assignments, so it corroborates the domain without upgrading the legacy
+  field map.
 - On 2026-07-25 the owner tried AlfaOBD's labeled
   `Headlamp LED Management: Absent -> Present` change and PROXI alignment.
   AlfaOBD repeatedly reported `Failure connecting to module` for DASM even

@@ -48,6 +48,23 @@ were automatically redacted in the reports.
 Raw reports:
 `tmp/inventories/{tcm,shifter,bcm_ccan,cluster,telematics}/dids_20260721_*.{results.jsonl,summary.json}`.
 
+### Legacy shifter/GSM cross-reference
+
+Two statically decoded 2011 GSM profiles at the current shifter endpoint
+contain 32 of 48 unique current-positive requests. Ten lifecycle records
+(`1008`, `1009`, `2001-2003`, and `2008-200C`) have the same current response
+widths and use the recurring FCA direct-minute, 15-second, `0.1 km`, and
+counter layouts. These are strong historical candidates, not current
+definitions; qualify them through another time, key-cycle, or odometer
+comparison before promotion.
+
+Current `F158=16 72 03 02` is a useful built-in boundary. The old field
+positions decode model year 2022 and country USA correctly, but its vehicle
+line table calls `72` reserved and its body table calls `03` Convertible.
+The layout may persist while the old enum values do not. Full comparison and
+source hashes:
+[`2026-07-30_legacy_module_cda_overlap.md`](2026-07-30_legacy_module_cda_overlap.md).
+
 ## Current-van AlfaOBD BCM candidates
 
 The direct BCM pass independently reverified 59 positive DIDs:

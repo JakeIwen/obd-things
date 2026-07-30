@@ -17,7 +17,15 @@ The local
 recovers historical vendor labels for exact current-DID overlaps, including BCM PROXI/EOL records
 and the RF Hub TPMS family. Its 2007-2011 engineering bundles and September 2022 report for the
 owner's prior model-year 2015 diesel VF are valuable candidate/corroboration sources, not 2022
-authorities; direct conflicts between legacy variants are preserved in the finding.
+authorities; direct conflicts between legacy variants are preserved in the finding. A focused
+[`legacy PCM comparison`](findings/promaster_2022/2026-07-30_legacy_pcm_cda_overlap.md)
+finds all 14 service-`22` requests observed in current PCM recordings and 167/190 unique requests
+from the AlfaOBD PCM catalog; 157/187 already established current-positive requests also occur in
+the strongest old profiles. It corroborates ten changing mappings, preserves a fuel-level
+ambiguity, and rejects incompatible legacy throttle-blade and vehicle-speed scales. A separate
+[`legacy module comparison`](findings/promaster_2022/2026-07-30_legacy_module_cda_overlap.md)
+recovers shifter/GSM lifecycle-layout candidates while bounding ABS, EPS, and ORC results to
+identity continuity.
 
 The current owner-priority C-CAN roadmap—oil pressure, coolant/oil temperature,
 torque and derived power, OEM operating context, and the targeted PCM/TCM

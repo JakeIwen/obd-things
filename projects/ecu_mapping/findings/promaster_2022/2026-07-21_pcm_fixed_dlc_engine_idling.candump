@@ -1,6 +1,6 @@
 # Selected evidence promoted from tmp/captures/ccan/events/pcm_probe_20260721_130052_-0600.candump
 # Conditions: parked, engine idling, transmission in Park, parking brake set, PCAN on C-CAN pins 6/14
-# Interaction: physical 29-bit ISO-TP, fixed DLC 8 with zero padding; no functional broadcast
+# Interaction: physical 29-bit ISO-TP, transmitted frames zero-padded to DLC 8; no functional broadcast
 (1784660453.402189) can0 18DA10F1#0210920000000000
 (1784660453.407374) can0 18DAF110#0250920000000000
 (1784660453.407632) can0 18DA10F1#021A870000000000

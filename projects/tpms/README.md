@@ -59,6 +59,11 @@ campaign status and
    not to replace the live map with a legacy profile. Evidence and source provenance:
    [`legacy FCA Windows/CDA archive triage`](../ecu_mapping/findings/promaster_2022/2026-07-29_legacy_fca_windows_archive.md).
 
+   Exact-model 2022 OEM TPMS operation material independently says the RF Hub
+   stores four unique sensor IDs by wheel position. It does not expose the
+   `31CB-31D3` DID numbers, scale, or rear ordering, so the controlled
+   deflation and current fault-record evidence remains canonical.
+
    The ID-DID↔pressure-DID slot pairing (31CB↔31D0 … 31CE↔31D3) is no longer just a DID-adjacency
    assumption: the `40A6-40A9` records carry a position byte — pos01=`11825BA9`, pos02=`7004E049`,
    pos03=`700497DF`, pos04=`7004C287` — matching both the ID and pressure DID orders, and this same

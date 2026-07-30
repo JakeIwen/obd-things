@@ -71,7 +71,7 @@ The repeated request order was:
 | Coolant temperature | `011D`, u8 byte 0 | raw - 64 °C | exact fit; 709 samples, 59 raw values |
 | Throttle Blade Position | `0413`, u16be bytes 0–1 | approximately raw x 100/81920 % | rounded near-exact fit; 81 raw values |
 | Throttle Position Sensor Percent | `0188`, u8 byte 0 | raw x 0.655 % | exact fit; 13 raw values |
-| Fuel Level Percent | `0227`, u8 byte 0 | candidate raw x 0.5 % | constant `C8 -> 100%`; order association only |
+| Fuel Level Percent | `0227`, u8 byte 0 | unresolved: either raw x 0.5 % or historical raw - 100 % | constant `C8 -> 100%`; both formulas fit, order association only |
 | Generator Duty Cycle | `01A1`, u16be bytes 0–1 | approximately raw x 100/32768 % | rounded near-exact fit; 220 raw values |
 | Target Charging Voltage | `019B`, u16be bytes 0–1 | unresolved candidate near raw x 0.01544 V | constant `038C -> 14.020 V`; order association only |
 | Battery voltage | `019E`, u16be bytes 0–1 | approximately raw x 0.01544 V | near-exact rendered fit; 18 raw values |
@@ -83,6 +83,16 @@ The two pressure rows were similar during this idle trial but remained
 independently discriminated by their positions and zero-lag fits. A lagged
 cross-fit was materially worse. The labels must therefore remain separate;
 `069E` is not an alias for engine oil pressure.
+
+A later static decode of four 2011 FCA PCM engineering profiles independently
+reproduced all eleven service-`22` requests in this polling cycle. It exactly
+agrees with the current layouts/scales except that its `0413` throttle-blade
+scale is about 20 times larger and therefore does not apply to this PCM. Its
+`0227` fuel-level formula is `raw - 100%`, but all 733 current wire responses
+were `C8`; that value maps to 100% under both the legacy formula and the
+earlier `raw * 0.5%` candidate. A non-`C8` current response is required to
+resolve the scale. See
+[`2026-07-30_legacy_pcm_cda_overlap.md`](2026-07-30_legacy_pcm_cda_overlap.md).
 
 The passive correlation cannot make the same clean distinction because both
 pressure DIDs track `0x41D` byte 2 closely during idle. DID `022A` is the

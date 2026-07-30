@@ -32,7 +32,7 @@ modern responders returned `7F 1A 11` (`serviceNotSupported`); the other 248 tar
 That result did not prove an ECU absent. In particular, the PCM at `0x10` required the exact
 legacy session/framing recipe shown by the current-van AlfaOBD trace on physical
 `18DA10F1 -> 18DAF110`: `10 92 -> 50 92`, immediately followed by `1A 87 -> 5A 87 ...`.
-The 27-byte identity response contains ASCII `68532157AI32157`. FCA's official J2534 report maps
+The 22-byte identity response ends with ASCII `68532157AI`. FCA's official J2534 report maps
 `68532157AI` to the **2022 VF 3.6L PCM, 948TE, box on, 50-state** calibration lineage. This makes
 the role and expected identity high-confidence. The independent verification below establishes the
 endpoint from the PCAN tap.
@@ -68,7 +68,8 @@ See the [APK catalog/selector finding](2026-07-21_alfaobd_apk_catalog.md#adapter
 ## PCM independent verification — 2026-07-21
 
 The bounded retry ran parked with the engine idling, transmission in Park, parking brake set, and
-the PCAN on C-CAN. It used 29-bit normal-fixed ISO-TP and zero-padded every CAN frame to DLC 8.
+the PCAN on C-CAN. It used 29-bit normal-fixed ISO-TP and zero-padded every
+transmitted frame to DLC 8.
 The PCM answered both requests immediately:
 
 - `10 92 -> 50 92` (exact session echo)

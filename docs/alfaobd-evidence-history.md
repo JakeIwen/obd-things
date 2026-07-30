@@ -310,6 +310,25 @@ controlled physical plausibility before dashboard publication.
 
 Source: [AlfaOBD APK catalog and ZF9HP decoder recovery](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_alfaobd_apk_catalog.md#static-zf9hp-decoder-recovery--2026-07-27).
 
+### 2026-07-30 — fixed-DLC ISO-TP padding in a stale derived PCM map
+
+**Project correction — padding bytes are not response data.** An older derived
+DID map rendered the PCM's multi-frame `1A 87` identity as ending
+`...68532157AI32`, and an early finding consequently described a 27-byte
+identity string. The ISO-TP first frame declares total length `0x16`. The
+tracked raw capture and the current `alfalog.iter_exchanges` parser both
+produce the exact 22-byte response
+`5A8702407F340D204715080036383533323135374149`, ending at ASCII
+`68532157AI`; bytes after that boundary are fixed-DLC frame padding.
+
+This correction removes a false two-byte extension and makes the 2011 CDA
+profile's ten-byte ECU-part-number field an exact length/offset match to the
+current response. It does not make the rest of the legacy PCM profile
+authoritative.
+
+Source:
+[legacy PCM CDA comparison](../projects/ecu_mapping/findings/promaster_2022/2026-07-30_legacy_pcm_cda_overlap.md).
+
 ## Current trust model
 
 | AlfaOBD surface | What it can establish | What it cannot establish alone |

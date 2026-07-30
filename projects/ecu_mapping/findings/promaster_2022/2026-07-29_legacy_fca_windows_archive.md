@@ -21,6 +21,11 @@ The strongest results are:
   `40A2` in the same EOL/PROXI configuration domain;
 - a legacy RF Hub bundle contains the exact eight TPMS requests used on the
   current van and supplies per-wheel labels; and
+- four legacy PCM profiles contain all 14 service-`22` requests already
+  observed on the current PCM, corroborating ten changing conversions while
+  exposing incompatible throttle-blade and vehicle-speed scales;
+- two legacy shifter/GSM profiles supply recurring lifecycle-record candidates
+  and an old-enumeration counterexample; and
 - legacy cluster and DASM bundles supply candidate layouts and conversions for
   exact current-DID overlaps.
 
@@ -63,6 +68,33 @@ important for PCM and TCM material: their diesel powertrain mappings are
 substantially different from the current gasoline van and 948TE. The
 2007-2011 CDA bundle collection is a broader engineering archive rather than
 evidence that every included profile came from either van.
+
+## PCM overlap
+
+Four 2011 PCM profiles at variants 60/61 use the current PCM endpoint
+`18DA10F1`/`18DAF110` and contain all 14 service-`22` requests observed in the
+current idle and loaded-drive recordings. They independently agree with the
+current layouts and conversions for oil pressure, coolant temperature,
+throttle-sensor percent, generator duty, three voltage values, signed torque,
+VVT pressure, engine speed, and VVT oil temperature.
+
+This is high-value corroboration, not an exact identity match. The same
+profiles use a throttle-blade scale about 20 times the live current value and
+a vehicle-speed conversion that is incompatible with the current
+Alfa/wire result. Their fuel-level formula is `raw - 100%`, but every current
+response was `C8`, which also fits the earlier `raw * 0.5%` candidate. Two
+sparse variants at the same request/response endpoint overlap none of the
+current targets. These positive counterexamples prevent profile-wide
+promotion.
+
+A broader comparison found 167 of 190 unique requests in AlfaOBD's current
+PCM Plots catalog, but substantive intake/exhaust cam-label swaps appear among
+the overlaps. A separate comparison against existing current-positive
+captures found 157 of 187 requests and useful part-number, tank-size, and
+redundant-odometer candidates, alongside direct width conflicts. The full
+field-by-field comparison, fuel-level ambiguity, negative `21 18`/`21 62`
+current responses, profile metadata, and source hashes are recorded in
+[`2026-07-30_legacy_pcm_cda_overlap.md`](2026-07-30_legacy_pcm_cda_overlap.md).
 
 ## BCM PROXI/EOL corroboration
 
@@ -223,6 +255,46 @@ data, not a current radar decoder. The current radar's
 `084x`/`085x`/`086x` calibration family and targeted runtime DIDs are absent
 from this old bundle.
 
+## Shifter/GSM and identity-only module results
+
+Two legacy GSM profiles share 32 of 48 current-positive shifter requests.
+Ten lifecycle records have matching current widths and recurring FCA
+direct-minute, 15-second, odometer, and counter conversions. Current DID
+`F158` demonstrates the limit: the old byte layout produces model year 2022
+and country USA, but its old body-style table decodes the ProMaster as a
+Convertible.
+
+Selected ABS, EPS, and ORC profiles use the current physical endpoints but
+overlap almost entirely in identity records. Direct width and variant-layout
+conflicts prevent any runtime-signal promotion. The exact comparison and
+source hashes are in
+[`2026-07-30_legacy_module_cda_overlap.md`](2026-07-30_legacy_module_cda_overlap.md).
+
+## 2022 OEM service-corpus boundary
+
+A separate read-only search of the exact-model 2022 OEM service corpus
+corroborates the broad domains but not the recovered wire layouts:
+
+- BCM operation and PROXI DTC material says the BCM stores and compares the
+  vehicle configuration against expected/present/active ECU membership;
+- RF Hub DTC `B1051-55` and ACC DTC `C140A-55` place those modules in the
+  PROXI/configuration population; and
+- TPMS operation material says the RF Hub stores four unique sensor IDs by
+  left-front, right-front, left-rear, and right-rear position.
+
+The corpus searches found no `2023`/`40A2` payload definition, current node-bit
+assignment, `31CB-31D3` DID table, `Altitude Compensated Pressure` label, rear
+ID ordering, or DASM lifecycle decode. The OEM material therefore upgrades
+the broad system behavior only; it does not make a 2011 CDA field layout
+authoritative for 2022.
+
+The bounded corpus-search jobs were
+`20260730T042331Z-2a1782a2` (BCM operation),
+`20260730T042332Z-5c8bb2ee` (PROXI DTC semantics),
+`20260730T042508Z-58f1629a` (RF Hub),
+`20260730T042509Z-d09cb429` (ACC), and
+`20260730T042403Z-b7edcc0f` (TPMS).
+
 ## Negative applicability and identity bounds
 
 - Five selected `TCM_CUSW` variants contain none of the current
@@ -314,9 +386,47 @@ mapping objective and was not decoded or exercised.
 
 ## Guided diagnostics
 
-`guidedDiagnostics/RestoreProxiCfg/` contains readable properties and
-JavaScript around an opaque `diagnostic.exml`. The text describes this
-workflow:
+The guided-diagnostic tree contains 20 `diagnostic.exml` files, 15 JavaScript
+files, eight `.ebsh` files, localized properties, and one plaintext AspectJ
+configuration. Every `.exml` size is a multiple of 16 bytes. Their high
+entropy, repeated identical 16-byte blocks at multiple offsets, and shared
+first block are strongly consistent with uncompressed XML under a
+deterministic 128-bit ECB-style cipher, most plausibly AES-ECB. The exact
+algorithm, key, and padding remain unproved.
+
+`guidedDiagnostics/feedback/META-INF/aop.xml` explicitly excludes
+`com.dcx.NGST.crypto..*`, making that runtime package the best decryptor-loader
+lead. No matching NGST class or JAR was exposed elsewhere in the archive or
+in the inspected wiTECH sidecar ZIP listings. The likely client code remains
+inside the 830 MB installer, which was not executed or decompiled.
+
+Readable files still recover several useful facts:
+
+- `ResetECU` explicitly associates request `22 01D5` with engine RPM,
+  independently corroborating the current PCM result.
+- `RestoreProxiCfg` JavaScript processes a separate offset array for each
+  XMIT, compares old and new byte/bit values with XOR, and builds DDE
+  name/value tables before replacing each changed XMIT payload. This
+  establishes the hidden XML's broad data model without revealing its
+  commands.
+- `BPCM_FeedBack/diagnostic.js` contains 34 literal read requests:
+
+  ```text
+  F190 F18C F194 F132 F183 F100 200A
+  A002 A005 A008 A017 A018 A019 A025 A029 A037 A046 A057
+  A062 A063 A064 A301 A302 A303 A304 A305 A306 A307 A308
+  A309 A310 A311 A312 A313
+  ```
+
+  The literals after `A309` are `A310-A313`, not inferred hexadecimal
+  `A30A-A30F` requests. They are unlabeled BPCM leads with no current-vehicle
+  support claim.
+- The TCM62 workflow is titled `ZF Nine Speed Service Quality Initiative`,
+  but its readable code contains only a 30-DTC gate. One literal is `PD199`,
+  while the related TCM40 list uses valid-looking `P1D99`; preserve that
+  source defect rather than silently correcting it.
+
+`guidedDiagnostics/RestoreProxiCfg/` describes this high-level workflow:
 
 1. retrieve the vehicle configuration using VIN and sales codes;
 2. compare it with current BCM values;
@@ -326,9 +436,7 @@ workflow:
 
 Its JavaScript includes helpers for comparing byte/bit offsets and building a
 table of changed diagnostic data elements, but it does not expose the exact
-service payloads. The sampled `.exml` files have a common high-entropy header
-and are not plaintext XML; recovering their payloads likely requires the
-matching wiTECH client decoder.
+service payloads.
 
 `guidedDiagnostics/BFWrenchLightVF/diagnostic.exml` is explicitly a VF
 `Disable wrench light` procedure, but its actionable content is likewise
@@ -357,21 +465,22 @@ authorization to run one.
 ## Recommended follow-up order
 
 1. Use the decoded FCA row format only on exact current-DID overlaps, beginning
-   with RFH `31CB-31CE` and `31D0-31D3`, then BCM `2023` and
-   `40A2/40A3/40A6`.
+   with captured current-positive values. The RFH, BCM, and PCM comparisons
+   above, plus the bounded shifter comparison, are complete first passes.
 2. Recover bit layouts and conversions together with the exact module variant,
    diagnostic request, and label ID. Never export a flat/global DID list.
 3. Compare every recovered definition with current live responses or existing
    controlled captures. Preserve contradictions such as the rear sensor-ID
    swap instead of forcing a match.
-4. Apply the same offline comparison to the already captured DASM
-   maintenance DIDs and the cluster speed/temperature/gear candidates; do not
-   spend further time on the legacy TCM branch without an exact identity lead.
+4. Apply the same offline comparison to other captured current-positive
+   module values; do not spend further time on the legacy TCM branch without
+   an exact identity lead.
 5. Search for an exact current part/software/variant tuple before assigning
    higher confidence. Address or module-name overlap alone is insufficient.
-6. Defer InstallShield/client and `.exml` decoder work until the targeted
-   `.eng` extraction is exhausted; it is a larger Windows-static-analysis
-   branch with less certain payoff.
+6. If the client branch is resumed, target the code that loads
+   `com.dcx.NGST.crypto` rather than guessing a key from ciphertext. Installer
+   decompilation is a larger Windows-static-analysis branch and remains
+   secondary to bounded `.eng` comparisons.
 
 No additional live scanning is justified by this archive alone.
 
@@ -384,6 +493,8 @@ No additional live scanning is justified by this archive alone.
 | `BCM-BCM_FGA-4083EC8A-016.eng` | `e78bcd01cfbb5e4db0a423cea61affdc95676c560fd00c4fa49e204a9799b0b3` |
 | `IPC-IPC_FGA-3283CE8A-006.eng` | `e99ecdf4d6c0f294c601114027d70b056c35cbbdf605fe6182cc5aac602dbd6c` |
 | `IPC-IPC_CUSW-61-00-001.eng` | `bf20aeaef2a2479b4ca11d6c51587368dac183e4d8b8a901a8aa342b3eb4dc5f` |
+| `PCM-PCM-60-00-005.eng` | `07a9625e69dfcb1a28278f25659b91dcdfde246a9d0dfa61f0dd5ec7672f530b` |
+| `PCM-PCM-61-00-005.eng` | `7c25f3743a4f77b46d4cce647a0337a9edf261cccd5b7212450cc5c58c42b0e2` |
 | `RFH-RFHM_CUSW-60-02-001.eng` | `e56cda813892d585cdb6721698b79274481ded7d0869176eadbabc61262888b0` |
 
 The archive root is a private owner resource. These hashes identify the local

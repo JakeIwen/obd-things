@@ -84,6 +84,17 @@ checks remove the scale ambiguity:
 This establishes the diagnostic DID scale across the sign boundary. It does not by itself solve
 the passive torque broadcast's encoding.
 
+Four statically decoded 2011 FCA PCM engineering profiles independently use
+the same field widths and conversions for `022A`, `011D`, `01A1`, `01D5`,
+`06DA`, `069F`, and `019E`. In particular, they corroborate signed i16
+`06DA * 0.04 N*m` and direct u16 `01D5` rpm. They also assign incompatible
+legacy conversions to `0413` (`raw * 0.0245%`) and `03D6`
+(`raw * 0.5 mph`). The live current-vehicle Alfa/wire mappings above win both
+conflicts. The same profiles define old `21 18`/`21 62` data, while the
+current PCM's repeated `7F 21 31` responses prove that those legacy services
+are not transferable. Full comparison:
+[`2026-07-30_legacy_pcm_cda_overlap.md`](2026-07-30_legacy_pcm_cda_overlap.md).
+
 ## AlfaOBD recording traps found in this run
 
 The Plots selector showed 12 selected gauges, including Output Speed, but the final Gauge section
