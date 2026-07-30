@@ -16,6 +16,7 @@ from unittest import mock
 
 from lib import canbus
 from projects.battery import bcan_voltage, ccan_voltage
+from projects.vehicle_data import broker as broker_module
 from projects.vehicle_data.api import (
     OBSERVATION_DEADLINE_HEADER,
     TelemetryApiHandler,
@@ -864,6 +865,101 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(
             stale_state["basis"], "stale_ccan_0x2ef_ignition_gate"
         )
+
+    def test_positive_ignition_preserves_fresh_rpm_running_state(self):
+        clock = FakeClock()
+        broker = TelemetryBroker(
+            acquirer=FakeAcquirer(), monotonic=clock
+        )
+        common = {
+            "bus": "c-can",
+        }
+
+        rpm = broker.publish_observation(
+            "engine.rpm",
+            value=751.0,
+            unit="rpm",
+            source="ccan.broadcast.0x0fc",
+            quality="observed_alfa_scale",
+            **common,
+        )
+        ignition = broker.publish_observation(
+            "vehicle.ignition_on",
+            value=True,
+            unit="boolean",
+            source="ccan.broadcast.0x2ef",
+            quality="verified",
+            **common,
+        )
+
+        self.assertTrue(rpm.available)
+        self.assertTrue(ignition.available)
+        state = broker.status_response()["vehicle_state"]
+        self.assertEqual(state["state"], "running")
+        self.assertIs(state["running"], True)
+        self.assertEqual(
+            state["basis"], "qualified_ccan_0x0fc_engine_speed"
+        )
+
+        clock.value += METRICS["engine.rpm"].stale_after_seconds + 0.001
+        broker.publish_observation(
+            "vehicle.ignition_on",
+            value=True,
+            unit="boolean",
+            source="ccan.broadcast.0x2ef",
+            quality="verified",
+            **common,
+        )
+        stale_replaced = broker.status_response()["vehicle_state"]
+        self.assertEqual(stale_replaced["state"], "ignition_on")
+        self.assertIsNone(stale_replaced["running"])
+        self.assertEqual(
+            stale_replaced["basis"], "ccan_0x2ef_ignition_gate"
+        )
+
+    def test_main_disables_active_drive_on_unsupported_channel(self):
+        termination = mock.Mock()
+        broker = mock.Mock()
+        with (
+            mock.patch.object(broker_module, "VoltageAcquirer"),
+            mock.patch.object(
+                broker_module, "ActiveDriveSupervisor"
+            ) as supervisor,
+            mock.patch.object(
+                broker_module, "TelemetryBroker", return_value=broker
+            ) as broker_factory,
+            mock.patch(
+                "projects.vehicle_data.ccan_powertrain.CcanPowertrainReader"
+            ) as passive_reader,
+            mock.patch(
+                "projects.vehicle_data.api.serve_unix"
+            ) as serve_unix,
+            mock.patch.object(
+                broker_module.diagnostic_safety,
+                "interrupt_on_termination",
+                return_value=contextlib.nullcontext(termination),
+            ),
+        ):
+            result = broker_module.main(
+                ["serve", "--channel", "can1", "--no-collector"]
+            )
+
+        self.assertEqual(result, 0)
+        supervisor.assert_not_called()
+        passive_reader.assert_called_once()
+        self.assertEqual(
+            passive_reader.call_args.kwargs["channel"], "can1"
+        )
+        self.assertIsNone(
+            broker_factory.call_args.kwargs["active_drive_supervisor"]
+        )
+        self.assertFalse(
+            broker_factory.call_args.kwargs["active_drive_enabled"]
+        )
+        broker.start_collector.assert_not_called()
+        serve_unix.assert_called_once()
+        termination.begin_cleanup.assert_called_once()
+        broker.stop_collector.assert_called_once()
 
     def test_ignition_presence_publisher_rejects_false_without_changing_state(self):
         broker = TelemetryBroker(

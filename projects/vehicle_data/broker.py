@@ -34,6 +34,7 @@ from projects.vehicle_data.sources import VoltageAcquirer
 DEFAULT_SOCKET = "/run/van-telemetry/api.sock"
 RETUNE_HELPER = REPO / "projects" / "vehicle_data" / "retune.py"
 ACTIVE_DRIVE_HELPER = REPO / "projects" / "vehicle_data" / "active_drive.py"
+ACTIVE_DRIVE_CHANNEL = "can0"
 MAX_ACTIVE_EVENT_BYTES = 64 * 1024
 ACTIVE_DRIVE_RESTORATION_INHIBIT = "vehicle-data-restoration-failed"
 ACTIVE_DRIVE_SOURCES = frozenset(
@@ -1294,6 +1295,26 @@ class TelemetryBroker:
                 <= ignition_stale_after.stale_after_seconds
             ):
                 return
+        if (
+            result.available
+            and result.metric == "vehicle.ignition_on"
+            and result.value is True
+        ):
+            with self._lock:
+                current_basis = self._vehicle_state.get("basis")
+                current_observed = self._vehicle_state_observed_monotonic
+            rpm_definition = self.definitions.get("engine.rpm")
+            if (
+                current_basis == "qualified_ccan_0x0fc_engine_speed"
+                and current_observed is not None
+                and rpm_definition is not None
+                and self.monotonic() - current_observed
+                <= rpm_definition.stale_after_seconds
+            ):
+                # 0x2EF proves ignition presence, but fresh qualified RPM
+                # evidence is stronger and has already distinguished running
+                # from ignition-on/engine-off.
+                return
         state = None
         if result.available and result.metric == "vehicle.ignition_on":
             ignition_on = result.value is True
@@ -1912,12 +1933,17 @@ def main(argv=None) -> int:
         read_timeout=args.read_timeout,
     )
     broker_holder: dict[str, TelemetryBroker] = {}
-    active_supervisor = ActiveDriveSupervisor(
-        channel=args.channel,
-        event_handler=lambda event: broker_holder[
-            "broker"
-        ].handle_active_drive_event(event),
+    active_drive_enabled = (
+        not args.no_active_drive and args.channel == ACTIVE_DRIVE_CHANNEL
     )
+    active_supervisor = None
+    if active_drive_enabled:
+        active_supervisor = ActiveDriveSupervisor(
+            channel=args.channel,
+            event_handler=lambda event: broker_holder[
+                "broker"
+            ].handle_active_drive_event(event),
+        )
     broker = TelemetryBroker(
         acquirer=acquirer,
         collector_interval_seconds=args.collector_interval,
@@ -1931,7 +1957,7 @@ def main(argv=None) -> int:
             read_timeout=min(args.read_timeout, 0.5),
         ),
         active_drive_supervisor=active_supervisor,
-        active_drive_enabled=not args.no_active_drive,
+        active_drive_enabled=active_drive_enabled,
     )
     broker_holder["broker"] = broker
     if not args.no_collector:
