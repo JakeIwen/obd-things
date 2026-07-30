@@ -12,42 +12,42 @@ Polls every CYCLE_S seconds over UDS (module 'rf_hub', C-CAN via the SGW-bypass 
 
 Appends CSV to tmp/tpms/tpms_drive_log.csv, publishes valid pressure observations to
 the allowlisted local telemetry broker, and prints changes to stdout. Read-only UDS
-(22 / 19), no writes. Survives socket drops (uds.recover_socket) and ignition state
-changes (the RFH answers on battery). Ctrl-C to stop.
+(22 / 19), no writes. Survives bounded socket recovery while the engine-running and
+ownership gates remain valid; otherwise it stops and restores listen-only. Ctrl-C to stop.
 
-    ./bringup.sh --tx                       # iface must be ARMED for UDS
-    python3 projects/tpms/tpms_logger.py    # run for the duration of the drive
+    ./bringup.sh                            # verified PASSIVE C-CAN baseline
+    python3 projects/tpms/tpms_logger.py    # guarded engine-running fallback
 
 AUTO MODE (systemd service tpms-logger.service runs this):
 
     python3 projects/tpms/tpms_logger.py --auto
 
-Battery-safe unattended operation for a van that is lived in: IDLE = pure-RX watch for
-the ignition-only broadcast 0x2EF (2 s filtered listen every 30 s, transmits NOTHING, so
-a parked/asleep bus stays asleep); 0x2EF present -> poll/log as above; 0x2EF gone
-(ignition off) -> session ends within ~12 s and the bus is released to sleep. Gate is
-0x2EF, NOT raw frame count, because our own diag polling holds network management awake.
-The ready-interface pure-RX watch does not take the diagnostic lock. If the interface needs
-reconfiguration, that mutation uses a brief lock/recheck; each polling session holds the lock
-from before socket creation through final socket cleanup. Manages the iface itself (500k, armed).
+Auto mode first proves that the telemetry broker Unix socket is absent before inspecting CAN.
+Any live broker response or uncertain status failure makes this process yield completely: no
+channel lock, interface change, or UDS socket. The legacy fallback is passive-first and
+engine-running-only. It requires
+same-boot pins-6/14 C-CAN topology, no operation inhibit, passive C-CAN identity, and multiple
+fresh 0x0FC samples above 400 rpm before taking the exclusive lock. It repeats every gate under
+the lock, arms once for the session, then closes the socket and exactly restores the captured
+listen-only state before unlocking. A failed restoration creates a same-boot inhibit and latches
+the process against further polling.
 Stop before manual bus work:
 sudo systemctl stop tpms-logger
 """
 import os
 import csv
-import re
+import errno
 import sys
 import time
 import socket
 import struct
 import argparse
 import datetime
-import subprocess
 from dataclasses import dataclass
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, REPO)
-from lib import diagnostic_safety, uds
+from lib import can_operation_state, canbus, diagnostic_safety, uds
 from lib.modules import get
 from projects.vehicle_data.api import TelemetryClient
 
@@ -57,6 +57,24 @@ AUTO_POLL_BUDGET_S = 8.0
 AUTO_RECOVERY_MAX_WAIT_S = 8.0
 DEFAULT_TELEMETRY_SOCKET = "/run/van-telemetry/api.sock"
 TELEMETRY_TIMEOUT_S = 0.25
+IDLE_SLEEP_S = 28.0
+BUS_PROBE_S = 0.25
+RUNNING_WINDOW_S = 0.75
+RUNNING_SAMPLE_COUNT = 3
+RUNNING_THRESHOLD_RPM = 400.0
+CCAN_PAIR = "6/14"
+ENGINE_SPEED_ID = 0x0FC
+AF_CAN = getattr(socket, "AF_CAN", 29)
+CAN_RAW = getattr(socket, "CAN_RAW", 1)
+SOL_CAN_RAW = getattr(socket, "SOL_CAN_RAW", 101)
+CAN_RAW_FILTER = getattr(socket, "CAN_RAW_FILTER", 1)
+CAN_SFF_MASK = 0x7FF
+CAN_EFF_FLAG = 0x80000000
+CAN_RTR_FLAG = 0x40000000
+CAN_ERR_FLAG = 0x20000000
+CAN_FRAME_FLAGS = CAN_EFF_FLAG | CAN_RTR_FLAG | CAN_ERR_FLAG
+CAN_FILTER_MASK = CAN_SFF_MASK | CAN_EFF_FLAG | CAN_RTR_FLAG
+RESTORATION_INHIBIT_NAME = "tpms-restoration-failed"
 CSV_PATH = os.path.join(REPO, "tmp", "tpms", "tpms_drive_log.csv")
 # Current physical wheel names and pressure DIDs for RFH slots 1-4, verified by the
 # 2026-07-07 deflate/reinflate test. Slots 3/4 are deliberately RR/RL.
@@ -79,6 +97,13 @@ READ_AMBIGUOUS_NEGATIVE = "AMBIGUOUS_NEGATIVE"
 READ_WRONG_ECHO = "WRONG_ECHO"
 READ_MALFORMED_DATA = "MALFORMED_DATA"
 READ_BUDGET_EXHAUSTED = "BUDGET_EXHAUSTED"
+
+
+class RestorationFailed(RuntimeError):
+    """The logger could not prove that it returned CAN to its safe passive state."""
+
+
+_restoration_failed = False
 
 
 @dataclass(frozen=True)
@@ -299,64 +324,331 @@ def _dtc_csv_cell(press_results, lastrx_results, dtc_result):
     return ";".join(entries)
 
 
-def iface_is_armed(channel="can0", bitrate=500000):
-    """Pure inspection: whether ``channel`` is UP at ``bitrate`` and able to transmit."""
-    result = subprocess.run(
-        ["ip", "-details", "link", "show", channel], capture_output=True, text=True
-    )
-    if result.returncode != 0:
-        return False
-    show = result.stdout
-    flags = re.search(r"^\s*\d+:\s+[^\n]*<([^>\n]*)>", show, re.MULTILINE)
-    rate = re.search(r"\bbitrate\s+(\d+)\b", show)
-    can_state = re.search(r"\bcan(?:\s+<[^>\n]*>)?\s+state\s+([A-Z-]+)\b", show)
-    return bool(
-        flags
-        and "UP" in flags.group(1).split(",")
-        and rate
-        and int(rate.group(1)) == bitrate
-        and "LISTEN-ONLY" not in show
-        and can_state
-        and can_state.group(1) == "ERROR-ACTIVE"
-    )
+def broker_absence_proven(client=None):
+    """Whether the broker Unix endpoint is narrowly proven absent.
 
-
-def _reconfigure_iface(channel="can0", bitrate=500000):
-    """Reconfigure the interface; caller must already own the channel lock."""
-    sudo = [] if os.geteuid() == 0 else ["sudo"]
-    subprocess.run(sudo + ["ip", "link", "set", channel, "down"], check=False)
-    subprocess.run(sudo + ["ip", "link", "set", channel, "up", "type", "can",
-                           "bitrate", str(bitrate), "listen-only", "off"], check=True)
-    print(f"iface {channel} (re)configured: {bitrate} armed", flush=True)
-
-
-def _ensure_iface_locked(channel="can0", bitrate=500000):
-    """Recheck and, if needed, reconfigure while the caller owns the channel lock."""
-    if iface_is_armed(channel, bitrate):
-        return True
-    try:
-        _reconfigure_iface(channel, bitrate)
-    except (OSError, subprocess.SubprocessError) as exc:
-        print(f"iface {channel} reconfiguration failed: {exc}", flush=True)
-        return False
-    return iface_is_armed(channel, bitrate)
-
-
-def ensure_iface_coordinated(channel="can0", bitrate=500000):
-    """Ensure active mode without ever mutating an uncoordinated channel.
-
-    The common idle path is inspection only and takes no lock. A required mutation uses a
-    nonblocking lock, rechecks after acquiring it, and defers cleanly if another transmitter owns
-    the channel.
+    Any HTTP response proves that a broker is live, regardless of version,
+    configuration, status code, or payload. Timeout, malformed protocol/schema,
+    permission, and general I/O failures are uncertain and therefore fail
+    closed. Only a missing Unix socket or refused Unix connection authorizes
+    the guarded standalone fallback.
     """
-    if iface_is_armed(channel, bitrate):
-        return True
+    client = client or TelemetryClient(
+        DEFAULT_TELEMETRY_SOCKET,
+        timeout=TELEMETRY_TIMEOUT_S,
+    )
     try:
-        with diagnostic_safety.channel_lock(channel):
-            return _ensure_iface_locked(channel, bitrate)
-    except diagnostic_safety.ChannelLockError as exc:
-        print(f"iface {channel} needs reconfiguration; deferring while busy: {exc}", flush=True)
+        client.request("GET", "/v1/status")
+    except OSError as exc:
+        return exc.errno in (errno.ENOENT, errno.ECONNREFUSED)
+    except Exception:
         return False
+    return False
+
+
+def _active_inhibits(channel):
+    """Fail closed when operation-inhibit state cannot be read."""
+    try:
+        return tuple(can_operation_state.active_inhibits(channel))
+    except (OSError, RuntimeError, ValueError):
+        return ({"name": "inhibit-state-unavailable", "channel": channel},)
+
+
+def _topology_is_ccan(channel):
+    """Require the current-boot topology record for the exact pins-6/14 branch."""
+    try:
+        topology = can_operation_state.load_topology(channel)
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return bool(
+        topology.usable
+        and topology.bus == "c-can"
+        and topology.pair == CCAN_PAIR
+    )
+
+
+def _restoration_is_latched(channel):
+    if _restoration_failed:
+        return True
+    return any(
+        item.get("name") == RESTORATION_INHIBIT_NAME
+        for item in _active_inhibits(channel)
+        if isinstance(item, dict)
+    )
+
+
+def _latch_restoration_failure(channel):
+    """Persist a same-boot stop condition so a systemd restart cannot resume polling."""
+    global _restoration_failed
+    _restoration_failed = True
+    reason = (
+        "TPMS logger could not verify exact listen-only restoration; "
+        "manual inspection is required before clearing this inhibit"
+    )
+    print(f"CRITICAL: {reason}", flush=True)
+    try:
+        can_operation_state.begin_inhibit(
+            RESTORATION_INHIBIT_NAME,
+            channel=channel,
+            reason=reason,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(
+            "CRITICAL: could not persist TPMS restoration inhibit: "
+            f"{type(exc).__name__}: {exc}",
+            flush=True,
+        )
+
+
+def _safe_passive_state(state, channel, bitrate):
+    return bool(
+        isinstance(state, canbus.InterfaceState)
+        and state.channel == channel
+        and state.present
+        and state.up
+        and state.bitrate == bitrate
+        and state.listen_only
+        and state.controller_state == "ERROR-ACTIVE"
+        and state.restart_ms is not None
+    )
+
+
+def _safe_armed_state(state, channel, bitrate, restart_ms):
+    return bool(
+        isinstance(state, canbus.InterfaceState)
+        and state.channel == channel
+        and state.present
+        and state.up
+        and state.bitrate == bitrate
+        and not state.listen_only
+        and state.controller_state == "ERROR-ACTIVE"
+        and state.restart_ms == restart_ms
+    )
+
+
+def _ensure_passive_coordinated(channel="can0", bitrate=500000):
+    """Inspect or configure only the safe passive baseline, never active mode."""
+    state = canbus.interface_state(channel)
+    if _safe_passive_state(state, channel, bitrate):
+        return True
+    if (
+        _restoration_is_latched(channel)
+        or not _topology_is_ccan(channel)
+        or _active_inhibits(channel)
+    ):
+        return False
+
+    configured = False
+    try:
+        with diagnostic_safety.interrupt_on_termination() as termination:
+            with diagnostic_safety.channel_lock(channel):
+                if (
+                    _restoration_is_latched(channel)
+                    or not _topology_is_ccan(channel)
+                    or _active_inhibits(channel)
+                ):
+                    configured = False
+                else:
+                    state = canbus.interface_state(channel)
+                    if _safe_passive_state(state, channel, bitrate):
+                        configured = True
+                    elif state.present:
+                        # Once interface mutation starts, defer termination until a verified
+                        # passive readback has completed or failed closed.
+                        termination.begin_cleanup()
+                        restart_ms = (
+                            state.restart_ms if state.restart_ms is not None else 0
+                        )
+                        configured = bool(
+                            canbus.bring_up_passive(
+                                channel,
+                                bitrate,
+                                restart_ms=restart_ms,
+                                noninteractive=True,
+                            )
+                            and _safe_passive_state(
+                                canbus.interface_state(channel),
+                                channel,
+                                bitrate,
+                            )
+                        )
+            if termination.received_signal is not None:
+                raise KeyboardInterrupt
+    except diagnostic_safety.ChannelLockError:
+        return False
+    return configured
+
+
+def engine_running(
+    channel="can0",
+    window=RUNNING_WINDOW_S,
+    required_samples=RUNNING_SAMPLE_COUNT,
+    threshold_rpm=RUNNING_THRESHOLD_RPM,
+    *,
+    socket_factory=socket.socket,
+    monotonic=None,
+):
+    """Require consecutive fresh standard 0x0FC samples above the running threshold."""
+    if window <= 0 or required_samples < 1 or threshold_rpm < 0:
+        raise ValueError("invalid engine-running gate configuration")
+    monotonic = monotonic or time.monotonic
+    sock = None
+    try:
+        sock = socket_factory(AF_CAN, socket.SOCK_RAW, CAN_RAW)
+        can_filter = struct.pack("=II", ENGINE_SPEED_ID, CAN_FILTER_MASK)
+        sock.setsockopt(SOL_CAN_RAW, CAN_RAW_FILTER, can_filter)
+        sock.bind((channel,))
+        deadline = monotonic() + window
+        consecutive = 0
+        while True:
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                return False
+            sock.settimeout(max(0.01, remaining))
+            try:
+                frame = sock.recv(16)
+            except socket.timeout:
+                return False
+            if len(frame) != 16:
+                return False
+            can_id, dlc, data = struct.unpack("=IB3x8s", frame)
+            if (
+                can_id & CAN_FRAME_FLAGS
+                or (can_id & CAN_SFF_MASK) != ENGINE_SPEED_ID
+                or not 2 <= dlc <= 8
+            ):
+                continue
+            rpm = (int.from_bytes(data[:2], "big") & 0xFFFC) / 4.0
+            if rpm >= threshold_rpm:
+                consecutive += 1
+                if consecutive >= required_samples:
+                    return True
+            else:
+                consecutive = 0
+    except OSError:
+        return False
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+
+def _passive_running_ready(module):
+    """Complete the no-TX fallback preflight before attempting the exclusive lock."""
+    if (
+        _restoration_is_latched(module.channel)
+        or not _ensure_passive_coordinated(module.channel, module.bitrate)
+    ):
+        return False
+    try:
+        with diagnostic_safety.channel_observer_lock(module.channel):
+            if (
+                _restoration_is_latched(module.channel)
+                or not _topology_is_ccan(module.channel)
+                or _active_inhibits(module.channel)
+            ):
+                return False
+            state = canbus.interface_state(module.channel)
+            if not _safe_passive_state(
+                state, module.channel, module.bitrate
+            ):
+                return False
+            try:
+                bus = canbus.identify_bus(
+                    module.channel, probe=BUS_PROBE_S
+                )
+            except (OSError, RuntimeError, ValueError):
+                return False
+            return bus == "c-can" and engine_running(module.channel)
+    except diagnostic_safety.ChannelLockError:
+        return False
+
+
+def _locked_start_state(module, *, auto, telemetry):
+    """Repeat every delegation, topology, interface, bus, inhibit, and RPM gate."""
+    if not broker_absence_proven(telemetry):
+        return None
+    if (
+        _restoration_is_latched(module.channel)
+        or not _topology_is_ccan(module.channel)
+        or _active_inhibits(module.channel)
+    ):
+        return None
+    initial = canbus.interface_state(module.channel)
+    if not _safe_passive_state(initial, module.channel, module.bitrate):
+        return None
+    try:
+        bus = canbus.identify_bus(module.channel, probe=BUS_PROBE_S)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if bus != "c-can" or not engine_running(module.channel):
+        return None
+    final = canbus.interface_state(module.channel)
+    if (
+        not initial.same_configuration(final)
+        or not _safe_passive_state(final, module.channel, module.bitrate)
+        or not _topology_is_ccan(module.channel)
+        or _active_inhibits(module.channel)
+        or not broker_absence_proven(telemetry)
+    ):
+        return None
+    return final
+
+
+def _arm_iface_locked(module, initial_state, lock_handle):
+    diagnostic_safety.validate_channel_lock(lock_handle, module.channel)
+    restart_ms = (
+        initial_state.restart_ms if initial_state.restart_ms is not None else 0
+    )
+    try:
+        configured = canbus.ip_up(
+            module.channel,
+            module.bitrate,
+            listen_only=False,
+            restart_ms=restart_ms,
+            noninteractive=True,
+        )
+    except Exception:
+        return False
+    return bool(
+        configured
+        and _safe_armed_state(
+            canbus.interface_state(module.channel),
+            module.channel,
+            module.bitrate,
+            restart_ms,
+        )
+    )
+
+
+def _active_session_gates_hold(module, initial_state, *, auto, telemetry):
+    if not broker_absence_proven(telemetry):
+        return False
+    if (
+        _restoration_is_latched(module.channel)
+        or not _topology_is_ccan(module.channel)
+        or _active_inhibits(module.channel)
+    ):
+        return False
+    if not engine_running(module.channel):
+        return False
+    if (
+        not _topology_is_ccan(module.channel)
+        or _active_inhibits(module.channel)
+        or not broker_absence_proven(telemetry)
+    ):
+        return False
+    expected_restart_ms = (
+        initial_state.restart_ms if initial_state.restart_ms is not None else 0
+    )
+    return _safe_armed_state(
+        canbus.interface_state(module.channel),
+        module.channel,
+        module.bitrate,
+        expected_restart_ms,
+    )
 
 
 IGN_BCAST = 0x2EF   # broadcast only present with ignition ON (see ccan_voltage.py).
@@ -370,9 +662,9 @@ def ignition_on(channel="can0", window=2.0):
     """True if the ignition-only broadcast is on the wire. Pure RX -- never transmits."""
     s = None
     try:
-        s = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
+        s = socket.socket(AF_CAN, socket.SOCK_RAW, CAN_RAW)
         flt = struct.pack("=II", IGN_BCAST, 0x1FFFFFFF)
-        s.setsockopt(socket.SOL_CAN_RAW, socket.CAN_RAW_FILTER, flt)
+        s.setsockopt(SOL_CAN_RAW, CAN_RAW_FILTER, flt)
         s.bind((channel,))
         s.settimeout(window)
     except OSError:
@@ -391,20 +683,58 @@ def ignition_on(channel="can0", window=2.0):
         s.close()
 
 
-def log_session(auto=False):
-    """Poll/log until Ctrl-C (manual) or until the bus goes quiet (auto). """
+def log_session(auto=False, telemetry=None):
+    """Run one guarded standalone session from passive gate through passive restore."""
     os.makedirs(os.path.dirname(CSV_PATH), exist_ok=True)
     new = not os.path.exists(CSV_PATH)
     m = get("rf_hub")
+    telemetry = telemetry or TelemetryClient(
+        DEFAULT_TELEMETRY_SOCKET,
+        timeout=TELEMETRY_TIMEOUT_S,
+    )
     with diagnostic_safety.interrupt_on_termination() as termination:
         with diagnostic_safety.channel_lock(m.channel) as lock_handle:
             s = None
             f = None
+            initial_state = None
+            mutation_attempted = False
             try:
-                if auto and not _ensure_iface_locked(m.channel, m.bitrate):
-                    print("cannot arm RF Hub interface; deferring this logging session", flush=True)
-                    return
-                s = uds.open_socket(m.txid, m.rxid, m.channel, timeout=0.8)
+                initial_state = _locked_start_state(
+                    m,
+                    auto=auto,
+                    telemetry=telemetry,
+                )
+                if initial_state is None:
+                    return False
+                mutation_attempted = True
+                if not _arm_iface_locked(m, initial_state, lock_handle):
+                    print(
+                        "cannot arm RF Hub interface from the verified passive baseline; "
+                        "restoring",
+                        flush=True,
+                    )
+                    return False
+                # The one down/up transition creates a small evidence gap. Require fresh running
+                # evidence again before opening a diagnostic transport or sending any request.
+                if not _active_session_gates_hold(
+                    m,
+                    initial_state,
+                    auto=auto,
+                    telemetry=telemetry,
+                ):
+                    print(
+                        "engine/interface/ownership evidence vanished during interface transition; "
+                        "restoring without UDS",
+                        flush=True,
+                    )
+                    return False
+                s = uds.open_socket(
+                    m.txid,
+                    m.rxid,
+                    m.channel,
+                    timeout=0.8,
+                    addressing_mode=m.addressing_mode,
+                )
                 f = open(CSV_PATH, "a", newline="")
                 w = csv.writer(f)
                 if new:
@@ -412,16 +742,20 @@ def log_session(auto=False):
                                + [f"lastrx_{x}" for x in WHEELS] + ["dtcs"])
                 prev = None
                 previous_telemetry_errors = None
-                telemetry = TelemetryClient(
-                    DEFAULT_TELEMETRY_SOCKET,
-                    timeout=TELEMETRY_TIMEOUT_S,
-                )
                 print(f"logging to {CSV_PATH} every {CYCLE_S}s", flush=True)
                 while True:
-                    if auto and not ignition_on(m.channel, IGNITION_WINDOW_S):
-                        print("ignition off (0x2EF gone) -> session end, releasing bus to sleep",
-                              flush=True)
-                        return
+                    if not _active_session_gates_hold(
+                        m,
+                        initial_state,
+                        auto=auto,
+                        telemetry=telemetry,
+                    ):
+                        print(
+                            "engine/interface/ownership gate lost -> ending TPMS "
+                            "session and restoring listen-only",
+                            flush=True,
+                        )
+                        return True
                     cycle_started = time.monotonic()
                     deadline = cycle_started + AUTO_POLL_BUDGET_S if auto else None
                     try:
@@ -464,11 +798,19 @@ def log_session(auto=False):
                                 raise
                             print(f"auto-session recovery failed ({recovery_error}); releasing bus",
                                   flush=True)
-                            return
-                        if auto and not ignition_on(m.channel, IGNITION_WINDOW_S):
-                            print("ignition off during socket recovery -> releasing bus to sleep",
-                                  flush=True)
-                            return
+                            return True
+                        if not _active_session_gates_hold(
+                            m,
+                            initial_state,
+                            auto=auto,
+                            telemetry=telemetry,
+                        ):
+                            print(
+                                "running/interface gate lost during socket recovery -> "
+                                "restoring listen-only",
+                                flush=True,
+                            )
+                            return True
                         continue
                     press = [result.value if result.ok else None for result in press_results]
                     lastrx = [result.value if result.ok else None for result in lastrx_results]
@@ -496,40 +838,107 @@ def log_session(auto=False):
                         tag = f"  << READ ISSUES: {','.join(issues)}" if issues else ""
                         print(f"{now}  psi={row[0:4]}  dtc={row[8]}{tag}", flush=True)
                         prev = row
-                    if auto and not ignition_on(m.channel, IGNITION_WINDOW_S):
-                        print("ignition off (0x2EF gone) -> session end, releasing bus to sleep",
-                              flush=True)
-                        return
+                    if not _active_session_gates_hold(
+                        m,
+                        initial_state,
+                        auto=auto,
+                        telemetry=telemetry,
+                    ):
+                        print(
+                            "engine/interface/ownership gate lost -> ending TPMS "
+                            "session and restoring listen-only",
+                            flush=True,
+                        )
+                        return True
                     cycle_elapsed = time.monotonic() - cycle_started
                     time.sleep(max(0.0, CYCLE_S - cycle_elapsed))
             finally:
                 termination.begin_cleanup()
-                if f is not None:
-                    f.close()
                 try:
                     if s is not None:
                         s.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    print(
+                        f"! ISO-TP socket close failed: {type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
+                try:
+                    if f is not None:
+                        f.close()
+                except Exception as exc:
+                    print(
+                        f"! TPMS CSV close failed: {type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
+                if mutation_attempted and initial_state is not None:
+                    restored = False
+                    try:
+                        restored = bool(
+                            canbus.restore_interface_state(
+                                initial_state,
+                                noninteractive=True,
+                            )
+                        )
+                    except Exception as exc:
+                        print(
+                            "! exact TPMS interface restoration raised "
+                            f"{type(exc).__name__}: {exc}",
+                            flush=True,
+                        )
+                    if not restored:
+                        _latch_restoration_failure(m.channel)
+                        raise RestorationFailed(
+                            f"could not verify exact listen-only restoration of "
+                            f"{m.channel}; further TPMS polling is inhibited"
+                        )
 
 
 def auto_loop():
-    """IDLE (pure-RX watch, no TX, lets the bus sleep) <-> logging sessions."""
+    """Yield unless broker absence is proven, then run the guarded fallback."""
     m = get("rf_hub")
-    print("auto mode: watching for ignition (0x2EF), no TX while idle", flush=True)
+    telemetry = TelemetryClient(
+        DEFAULT_TELEMETRY_SOCKET,
+        timeout=TELEMETRY_TIMEOUT_S,
+    )
+    delegated = None
+    print(
+        "auto mode: broker delegation first; standalone fallback requires passive "
+        "C-CAN and fresh running RPM",
+        flush=True,
+    )
     while True:
-        if not ensure_iface_coordinated(m.channel, m.bitrate):
-            time.sleep(28)
+        broker_absent = broker_absence_proven(telemetry)
+        if not broker_absent:
+            if delegated is not True:
+                print(
+                    "telemetry broker is live or its status is uncertain -> TPMS "
+                    "logger yielding with no CAN lock, interface change, or UDS",
+                    flush=True,
+                )
+            delegated = True
+            time.sleep(IDLE_SLEEP_S)
             continue
-        if ignition_on(m.channel, 2.0):
-            print("ignition on (0x2EF seen) -> logging session", flush=True)
-            try:
-                log_session(auto=True)
-            except diagnostic_safety.ChannelLockError as exc:
-                print(f"RF Hub polling deferred while {m.channel} is busy: {exc}", flush=True)
-                time.sleep(28)
-        else:
-            time.sleep(28)
+        if delegated is True:
+            print(
+                "telemetry broker Unix endpoint is proven absent -> guarded "
+                "standalone TPMS fallback",
+                flush=True,
+            )
+        delegated = False
+        if _restoration_is_latched(m.channel):
+            time.sleep(IDLE_SLEEP_S)
+            continue
+        if not _passive_running_ready(m):
+            time.sleep(IDLE_SLEEP_S)
+            continue
+        print("fresh passive engine-running evidence -> guarded TPMS session", flush=True)
+        try:
+            log_session(auto=True, telemetry=telemetry)
+        except diagnostic_safety.ChannelLockError as exc:
+            print(f"RF Hub polling deferred while {m.channel} is busy: {exc}", flush=True)
+            time.sleep(IDLE_SLEEP_S)
+        except RestorationFailed as exc:
+            print(f"CRITICAL: {exc}", flush=True)
 
 
 def main(argv=None):
@@ -538,9 +947,29 @@ def main(argv=None):
                     help="unattended: log only while the bus is awake (systemd mode)")
     args = ap.parse_args(argv)
     try:
-        auto_loop() if args.auto else log_session()
+        if args.auto:
+            auto_loop()
+        else:
+            module = get("rf_hub")
+            telemetry = TelemetryClient(
+                DEFAULT_TELEMETRY_SOCKET,
+                timeout=TELEMETRY_TIMEOUT_S,
+            )
+            if not broker_absence_proven(telemetry):
+                raise SystemExit(
+                    "refusing standalone TPMS polling: the telemetry broker is "
+                    "live or its Unix-socket status is uncertain"
+                )
+            if not _passive_running_ready(module):
+                raise SystemExit(
+                    "refusing standalone TPMS polling: passive pins-6/14 C-CAN "
+                    "and fresh engine-running RPM evidence are required"
+                )
+            log_session(auto=False, telemetry=telemetry)
     except diagnostic_safety.ChannelLockError as exc:
         raise SystemExit(f"refusing to start TPMS polling: {exc}") from None
+    except RestorationFailed as exc:
+        raise SystemExit(f"TPMS restoration failure: {exc}") from None
     except KeyboardInterrupt:
         print("\nstopped")
 

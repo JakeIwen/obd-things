@@ -347,6 +347,42 @@ TRANSMISSION_TURBINE_SPEED = _transmission_speed_metric(
 )
 
 
+GENERATOR_FIELD_DUTY = MetricDefinition(
+    name="generator.field_duty",
+    unit="%",
+    value_type="number",
+    stale_after_seconds=4.0,
+    passive_min_interval_seconds=0.0,
+    wake_min_interval_seconds=0.0,
+    minimum=0.0,
+    # The current van produced approximately 100.008%. Preserve that measured
+    # overshoot rather than clamping to a presentation-driven 100% ceiling.
+    maximum=101.0,
+    sources=(
+        SourceDefinition(
+            name="pcm.did.01a1",
+            bus="c-can",
+            bitrate=500000,
+            acquisition_class="physical_read_data_by_identifier",
+            quality="observed_alfa_scale",
+            provenance=(
+                "projects/ecu_mapping/findings/promaster_2022/"
+                "2026-07-26_pcm_plots_idle_mapping.md; "
+                "2026-07-27_pcm_plots_loaded_drive_mapping.md; "
+                "2026-07-30_legacy_pcm_cda_overlap.md; "
+                "2026-07-30_pcm_generator_duty_direct_read.md; "
+                "physical padded 22 01A1, exact u16be x 100/32768 %"
+            ),
+            side_effects=(
+                "engine-running-only physical UDS 22 read during a coordinated "
+                "armed C-CAN interval; generator field command, not current or "
+                "temperature"
+            ),
+        ),
+    ),
+)
+
+
 def _tire_pressure_metric(position: str, did: str) -> MetricDefinition:
     return MetricDefinition(
         name=f"tire.pressure.{position}",
@@ -438,6 +474,7 @@ METRICS = {
         TRANSMISSION_OUTPUT_SPEED,
         TRANSMISSION_OIL_TEMPERATURE,
         TRANSMISSION_TURBINE_SPEED,
+        GENERATOR_FIELD_DUTY,
         TIRE_PRESSURE_FL,
         TIRE_PRESSURE_FR,
         TIRE_PRESSURE_RR,

@@ -143,6 +143,7 @@ class SourceTests(unittest.TestCase):
                 > broker_args.collector_interval
                 for name in (
                     "engine.coolant_temperature",
+                    "generator.field_duty",
                     "engine.oil_pressure",
                     "engine.rpm",
                     "engine.target_crankshaft_torque",
@@ -177,6 +178,7 @@ class SourceTests(unittest.TestCase):
             {
                 "battery.voltage",
                 "engine.coolant_temperature",
+                "generator.field_duty",
                 "engine.oil_pressure",
                 "engine.rpm",
                 "engine.target_crankshaft_torque",
@@ -278,6 +280,21 @@ class SourceTests(unittest.TestCase):
             "ccan.broadcast.0x1f7",
         )
         self.assertEqual(METRICS["transmission.turbine_speed"].unit, "rpm")
+        generator = METRICS["generator.field_duty"]
+        self.assertEqual(generator.unit, "%")
+        self.assertEqual(generator.stale_after_seconds, 4.0)
+        self.assertEqual(generator.maximum, 101.0)
+        self.assertEqual(generator.allowed_acquisition_modes, ())
+        self.assertEqual(generator.sources[0].name, "pcm.did.01a1")
+        self.assertEqual(
+            generator.sources[0].acquisition_class,
+            "physical_read_data_by_identifier",
+        )
+        self.assertEqual(
+            generator.sources[0].quality,
+            "observed_alfa_scale",
+        )
+        self.assertFalse(generator.sources[0].publisher_allowed)
 
     def test_passive_awake_read_takes_only_observer_lock(self):
         backend = FakeBackend()

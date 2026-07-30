@@ -1,9 +1,12 @@
 """Read evidence-qualified engine-health broadcasts from C-CAN.
 
-This reader is receive-only.  It never configures the SocketCAN interface and
-only accepts an already-UP, 500 kbit/s, listen-only, ERROR-ACTIVE C-CAN
-interface.  Signal provenance lives in the PCM plots finding and the public
-metric registry; this module only implements those fixed decodes.
+This module is receive-only and never configures or transmits through
+SocketCAN. :class:`CcanPowertrainReader` requires the normal already-UP,
+500-kbit/s, listen-only, ERROR-ACTIVE C-CAN state and an observer lock. The
+coordinated active-drive owner may instead use the lower-level bounded snapshot
+primitive while it already holds the exclusive lock and honestly reports the
+interface as armed. Signal provenance lives in the PCM plots finding and the
+public metric registry; this module only implements those fixed decodes.
 """
 
 from __future__ import annotations
@@ -43,6 +46,7 @@ TARGET_CRANK_TORQUE_ID = 0x100
 VEHICLE_SPEED_ID = 0x101
 TRANSMISSION_SHAFT_SPEED_ID = 0x1F7
 IGNITION_ON_ID = 0x2EF
+SYSTEM_VOLTAGE_ID = 0x41A
 FILTER_IDS = (
     OIL_PRESSURE_ID,
     COOLANT_TEMPERATURE_ID,
@@ -52,6 +56,7 @@ FILTER_IDS = (
     TRANSMISSION_SHAFT_SPEED_ID,
     IGNITION_ON_ID,
 )
+ACTIVE_FILTER_IDS = FILTER_IDS + (SYSTEM_VOLTAGE_ID,)
 KPA_TO_PSI = 0.14503773773020923
 KMH_TO_MPH = 0.621371192237334
 NM_TO_LB_FT = 0.7375621492772656
@@ -67,10 +72,31 @@ class PassiveObservation:
     detail: str
 
 
+@dataclass(frozen=True)
+class BroadcastSnapshot:
+    """One bounded raw-broadcast sample collected without changing CAN state."""
+
+    observations: tuple[PassiveObservation, ...]
+    rpm_samples: tuple[float, ...]
+    frame_count: int
+    completed_monotonic: float | None = None
+
+
 def decode_frame_observations(
     can_id: int, data: bytes
 ) -> tuple[PassiveObservation, ...]:
     """Decode every allowlisted observation in one C-CAN frame."""
+    if can_id == SYSTEM_VOLTAGE_ID and data:
+        return (
+            PassiveObservation(
+                metric="battery.voltage",
+                value=4.0 + float(data[0]) * 0.05,
+                unit="V",
+                source="ccan.broadcast.0x41a",
+                quality="verified",
+                detail="0x41A byte 0 x 0.05 V + 4.0 V",
+            ),
+        )
     if can_id == OIL_PRESSURE_ID and len(data) >= 3:
         native_kpa = float(data[2] * 4)
         return (
@@ -227,21 +253,38 @@ def _median_observation(
     )
 
 
-def read_snapshot(
+def read_broadcast_snapshot(
     channel: str = CHANNEL,
     *,
     timeout: float = 0.5,
+    include_battery: bool = False,
+    required_rpm_samples: int = 1,
     socket_factory: Callable[..., socket.socket] = socket.socket,
     monotonic: Callable[[], float] = time.monotonic,
-) -> tuple[PassiveObservation, ...]:
-    """Read a short filtered snapshot without changing interface state."""
+) -> BroadcastSnapshot:
+    """Read a short filtered snapshot without changing interface state.
+
+    The safety wrappers decide whether the caller is a listen-only observer or
+    the exclusive owner of an armed diagnostic interval. This primitive only
+    receives allowlisted standard broadcast identifiers; it never configures
+    or transmits through the interface.
+    """
     if timeout <= 0:
         raise ValueError("timeout must be positive")
+    if (
+        not isinstance(required_rpm_samples, int)
+        or isinstance(required_rpm_samples, bool)
+        or required_rpm_samples < 1
+    ):
+        raise ValueError("required_rpm_samples must be a positive integer")
     sock = socket_factory(AF_CAN, socket.SOCK_RAW, CAN_RAW)
     samples: dict[str, list[PassiveObservation]] = {}
+    rpm_samples: list[float] = []
+    frame_count = 0
     try:
+        filter_ids = ACTIVE_FILTER_IDS if include_battery else FILTER_IDS
         filters = b"".join(
-            struct.pack("=II", can_id, FILTER_MASK) for can_id in FILTER_IDS
+            struct.pack("=II", can_id, FILTER_MASK) for can_id in filter_ids
         )
         sock.setsockopt(SOL_CAN_RAW, CAN_RAW_FILTER, filters)
         sock.bind((channel,))
@@ -257,15 +300,26 @@ def read_snapshot(
                 if exc.errno == errno.ENETDOWN:
                     break
                 raise
+            if len(frame) != 16:
+                raise RuntimeError(
+                    f"raw SocketCAN broadcast frame length {len(frame)} is not 16"
+                )
             can_id, dlc, raw_data = struct.unpack("=IB3x8s", frame)
+            if dlc > 8:
+                raise RuntimeError(
+                    f"classic CAN broadcast DLC {dlc} exceeds 8"
+                )
             if can_id & FRAME_TYPE_FLAGS:
                 continue
+            frame_count += 1
             observations = decode_frame_observations(
                 can_id & SFF_MASK, raw_data[: min(dlc, 8)]
             )
             for observation in observations:
                 samples.setdefault(observation.metric, []).append(observation)
-            if all(metric in samples for metric in (
+                if observation.metric == "engine.rpm":
+                    rpm_samples.append(float(observation.value))
+            required_metrics = (
                 "engine.oil_pressure",
                 "engine.coolant_temperature",
                 "engine.rpm",
@@ -275,14 +329,39 @@ def read_snapshot(
                 "transmission.oil_temperature",
                 "transmission.turbine_speed",
                 "vehicle.ignition_on",
-            )):
+            ) + (("battery.voltage",) if include_battery else ())
+            if (
+                len(rpm_samples) >= required_rpm_samples
+                and all(metric in samples for metric in required_metrics)
+            ):
                 break
     finally:
         sock.close()
-    return tuple(
-        _median_observation(samples[metric])
-        for metric in sorted(samples)
+    return BroadcastSnapshot(
+        observations=tuple(
+            _median_observation(samples[metric])
+            for metric in sorted(samples)
+        ),
+        rpm_samples=tuple(rpm_samples),
+        frame_count=frame_count,
+        completed_monotonic=monotonic(),
     )
+
+
+def read_snapshot(
+    channel: str = CHANNEL,
+    *,
+    timeout: float = 0.5,
+    socket_factory: Callable[..., socket.socket] = socket.socket,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> tuple[PassiveObservation, ...]:
+    """Compatibility wrapper for the normal listen-only snapshot."""
+    return read_broadcast_snapshot(
+        channel,
+        timeout=timeout,
+        socket_factory=socket_factory,
+        monotonic=monotonic,
+    ).observations
 
 
 class CcanPowertrainReader:

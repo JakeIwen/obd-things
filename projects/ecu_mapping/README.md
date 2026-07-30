@@ -44,8 +44,12 @@ remain open. A later
 verified two fixed-DLC-8 zero-padded physical `22 01A1` reads without an
 explicit session change, both returning exactly 100.000%. Its corrected
 arbitrary-bitfield searches over `0x100` and `0x412` still failed to produce a
-cross-regime passive carrier, so a guarded diagnostic reader is the supported
-implementation direction.
+cross-regime passive carrier. The vehicle-data project now implements that
+direction offline as the narrowly allowlisted `generator.field_duty` source
+`pcm.did.01a1`: the broker supervises one engine-running armed interval,
+continues the existing broadcast telemetry during it, sends no session-control
+or tester-present traffic, and requires exact listen-only restoration. The
+implementation has not yet been deployed or live-validated.
 A later
 [`signed 0x1F7 byte-3 mapping`](findings/promaster_2022/2026-07-29_tcm_oil_temperature_candidate.md)
 found the strongest transmission-oil carrier candidate so far. The candidate

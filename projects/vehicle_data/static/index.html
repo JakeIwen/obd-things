@@ -122,6 +122,44 @@
       </p>
     </section>
 
+    <section class="panel charging-panel" data-widget="charging" aria-labelledby="charging-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">ELECTRICAL</p>
+          <h2 id="charging-heading">Charging</h2>
+        </div>
+        <span id="charging-state" class="badge">LOADING CATALOG</span>
+      </div>
+      <div class="charging-grid">
+        <article class="drive-tile charging-tile" id="charging-generator-field-duty-card">
+          <div class="charging-reading">
+            <p class="eyebrow">Generator field duty</p>
+            <p class="drive-value health-value">
+              <span id="charging-generator-field-duty">—</span><span id="charging-generator-field-duty-unit" class="drive-unit"></span>
+            </p>
+            <p id="charging-generator-field-duty-status" class="drive-status">
+              Loading metric catalog…
+            </p>
+          </div>
+          <dl class="charging-meta">
+            <div><dt>State</dt><dd id="charging-generator-field-duty-inactive-reason">—</dd></div>
+            <div><dt>Quality</dt><dd id="charging-generator-field-duty-quality">—</dd></div>
+            <div><dt>Source</dt><dd id="charging-generator-field-duty-source">—</dd></div>
+            <div><dt>Acquisition</dt><dd id="charging-generator-field-duty-acquisition">—</dd></div>
+            <div><dt>Interface mode</dt><dd id="charging-generator-field-duty-interface-mode">—</dd></div>
+          </dl>
+          <p id="charging-generator-field-duty-detail" class="muted panel-note">
+            Awaiting a registered observation.
+          </p>
+        </article>
+      </div>
+      <p class="muted panel-note charging-explanation">
+        Sustained high duty indicates high commanded charging effort. Generator
+        field duty is a field command—not alternator current or alternator
+        temperature—and this card does not infer a thermal danger threshold.
+      </p>
+    </section>
+
     <section class="panel state-panel" data-widget="vehicle" aria-labelledby="vehicle-heading">
       <div>
         <p class="eyebrow">VEHICLE STATE</p>

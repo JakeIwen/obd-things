@@ -82,6 +82,13 @@ const ENGINE_HEALTH_METRICS = Object.freeze({
     roles: ["engine_crankshaft_power", "engine_power"],
   },
 });
+const CHARGING_METRICS = Object.freeze({
+  generatorFieldDuty: {
+    id: "generator-field-duty",
+    names: ["generator.field_duty"],
+    roles: ["generator_field_duty"],
+  },
+});
 const TIRE_METRICS = Object.freeze({
   fl: {
     names: [
@@ -442,6 +449,7 @@ function findDefinition(catalog, descriptor) {
 
 function formatMetricValue(name, value) {
   if (typeof value !== "number" || !Number.isFinite(value)) return String(value);
+  if (name === "generator.field_duty") return value.toFixed(3);
   if (name.includes("rpm")) return Math.round(value).toLocaleString();
   if (name.includes("gear")) return String(value);
   if (name.includes("speed") || name.includes("pressure")) return value.toFixed(1);
@@ -803,6 +811,175 @@ function renderEngineHealth(catalog, metrics) {
   return states;
 }
 
+function sourceDefinitionFor(definition, sourceName) {
+  const sources = Array.isArray(definition?.sources)
+    ? definition.sources
+    : [];
+  return (
+    sources.find((source) => source.name === sourceName) ||
+    (sources.length === 1 ? sources[0] : null)
+  );
+}
+
+function displayInterfaceMode(mode) {
+  if (mode === "armed_diagnostic") return "Armed diagnostic";
+  if (mode === "listen_only") return "Listen-only";
+  if (mode === "unknown") return "Unknown";
+  return null;
+}
+
+function chargingInterfaceMode(status, metric) {
+  const resultMode = displayInterfaceMode(metric?.interface_mode);
+  if (resultMode) {
+    return `${resultMode} · ${
+      metric?.available ? "observation" : "acquisition result"
+    }`;
+  }
+  const activeDriveMode = displayInterfaceMode(
+    status?.active_drive?.interface_mode,
+  );
+  if (
+    activeDriveMode &&
+    !["idle", "disabled"].includes(status?.active_drive?.state)
+  ) {
+    return `${activeDriveMode} · collector`;
+  }
+  const iface = status?.interface || {};
+  if (iface.adapter_present === false) return "Adapter absent";
+  if (iface.up === false) return "Interface down";
+  if (iface.listen_only === true) return "Listen-only";
+  if (iface.listen_only === false) return "Armed (not listen-only)";
+  return "Unknown";
+}
+
+function displayChargingQuality(quality) {
+  if (quality === "observed_alfa_scale") return "OBSERVED ALFA SCALE";
+  return displayQuality(quality);
+}
+
+function chargingInactiveState(definition, metric, state) {
+  const lastError = metric?.last_acquisition_error;
+  if (lastError?.reason) {
+    return {
+      reason: String(lastError.reason),
+      detail: lastError.detail || "The latest diagnostic poll did not succeed.",
+    };
+  }
+  if (!definition) {
+    return {
+      reason: "mapping_pending",
+      detail: "generator.field_duty is not present in the metric catalog.",
+    };
+  }
+  if (!state.available) {
+    return {
+      reason: String(metric?.reason || "not_sampled"),
+      detail: metric?.detail || "No generator field-duty observation is cached.",
+    };
+  }
+  if (state.stale) {
+    return {
+      reason: "stale",
+      detail: "The last generator field-duty observation exceeded its freshness window.",
+    };
+  }
+  return null;
+}
+
+function renderCharging(status, catalog, metrics) {
+  const descriptor = CHARGING_METRICS.generatorFieldDuty;
+  const definition = findDefinition(catalog, descriptor);
+  const metric = definition ? metrics[definition.name] : null;
+  const state = observationState(definition, metric);
+  const inactive = chargingInactiveState(definition, metric, state);
+  const ready = state.heroReady && inactive === null;
+  const sourceDefinition = sourceDefinitionFor(definition, metric?.source);
+  const cardId = "charging-generator-field-duty-card";
+  const valueId = "charging-generator-field-duty";
+
+  byId(cardId).hidden = false;
+  if (ready) {
+    text(valueId, formatMetricValue(definition.name, metric.value));
+    text(`${valueId}-unit`, metric.unit || definition.unit, "");
+    setCardState(cardId, state.quality);
+  } else {
+    text(valueId, "—");
+    text(`${valueId}-unit`, "", "");
+    setCardState(
+      cardId,
+      state.stale
+        ? "stale"
+        : (
+          inactive
+            ? "unavailable"
+            : (state.available ? "unqualified" : "unavailable")
+        ),
+    );
+  }
+
+  text(
+    `${valueId}-status`,
+    ready
+      ? `${displayChargingQuality(state.quality)} · ${formatAge(metric.age_ms)} old`
+      : (
+        inactive?.reason === "mapping_pending"
+          ? "Mapping pending"
+          : humanize(inactive?.reason || "unavailable")
+      ),
+  );
+  text(
+    `${valueId}-inactive-reason`,
+    ready ? "Live" : humanize(inactive?.reason || "unavailable"),
+  );
+  text(
+    `${valueId}-quality`,
+    metric?.quality
+      ? displayChargingQuality(normalizedQuality(metric.quality))
+      : (
+        sourceDefinition?.quality
+          ? `${displayChargingQuality(normalizedQuality(sourceDefinition.quality))} · REGISTERED`
+          : null
+      ),
+  );
+  text(
+    `${valueId}-source`,
+    metric?.source || (
+      sourceDefinition?.name
+        ? `${sourceDefinition.name} · registered`
+        : null
+    ),
+  );
+  text(
+    `${valueId}-acquisition`,
+    metric?.acquisition
+      ? humanize(metric.acquisition)
+      : (
+        sourceDefinition?.acquisition_class
+          ? `${humanize(sourceDefinition.acquisition_class)} · registered`
+          : null
+      ),
+  );
+  text(`${valueId}-interface-mode`, chargingInterfaceMode(status, metric));
+  text(
+    `${valueId}-detail`,
+    inactive?.detail,
+    "Fresh broker-cached PCM generator field-command observation.",
+  );
+
+  text(
+    "charging-state",
+    ready
+      ? `1/1 LIVE · ${displayChargingQuality(state.quality)}`
+      : (definition ? "0/1 LIVE · 1/1 MAPPED" : "0/1 MAPPED"),
+  );
+  byId("charging-state").dataset.state = (
+    ready && state.quality === "verified"
+      ? "verified"
+      : "partial"
+  );
+  return {definition, state, inactive, ready};
+}
+
 function renderBattery(metrics) {
   const metric = metrics["battery.voltage"] || {
     metric: "battery.voltage",
@@ -881,6 +1058,7 @@ function featuredMetricNames(catalog) {
   [
     ...Object.values(DRIVE_METRICS),
     ...Object.values(ENGINE_HEALTH_METRICS),
+    ...Object.values(CHARGING_METRICS),
     ...Object.values(TIRE_METRICS),
   ]
     .forEach((descriptor) => {
@@ -1111,6 +1289,7 @@ function render(snapshot) {
   renderVehicleState(status);
   renderDrive(status, catalog, metrics);
   renderEngineHealth(catalog, metrics);
+  renderCharging(status, catalog, metrics);
   renderBattery(metrics);
   renderTires(catalog, metrics);
   renderAdditionalMetrics(catalog, metrics);
@@ -1137,6 +1316,7 @@ function renderTimeSensitiveSnapshot() {
   renderVehicleState(status);
   renderDrive(status, catalog, metrics);
   renderEngineHealth(catalog, metrics);
+  renderCharging(status, catalog, metrics);
   renderBattery(metrics);
   renderTires(catalog, metrics);
   renderAdditionalMetrics(catalog, metrics);

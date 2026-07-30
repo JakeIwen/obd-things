@@ -7,6 +7,7 @@
   const widgets = Object.freeze([
     {id: "drive", label: "Drive essentials"},
     {id: "engine", label: "Engine health"},
+    {id: "charging", label: "Charging"},
     {id: "vehicle", label: "Vehicle state"},
     {id: "battery", label: "Battery"},
     {id: "tires", label: "Tire pressure"},
@@ -25,6 +26,7 @@
       title: "Road systems",
       widgets: [
         "engine",
+        "charging",
         "vehicle",
         "battery",
         "tires",
@@ -41,13 +43,21 @@
     driving: {
       label: "Driving",
       title: "Drive telemetry",
-      widgets: ["drive", "engine", "tires", "battery", "metrics"],
+      widgets: [
+        "drive",
+        "engine",
+        "charging",
+        "tires",
+        "battery",
+        "metrics",
+      ],
     },
     diagnostics: {
       label: "Diagnostics",
       title: "Broker diagnostics",
       widgets: [
         "engine",
+        "charging",
         "vehicle",
         "metrics",
         "interface",

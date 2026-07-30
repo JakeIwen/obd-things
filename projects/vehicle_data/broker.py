@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import pathlib
+import queue
 import subprocess
 import sys
 import threading
@@ -18,6 +20,7 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from lib import can_operation_state, diagnostic_safety
 from projects.vehicle_data.metrics import METRICS, MetricDefinition
 from projects.vehicle_data.models import (
     AcquisitionResult,
@@ -30,6 +33,44 @@ from projects.vehicle_data.sources import VoltageAcquirer
 
 DEFAULT_SOCKET = "/run/van-telemetry/api.sock"
 RETUNE_HELPER = REPO / "projects" / "vehicle_data" / "retune.py"
+ACTIVE_DRIVE_HELPER = REPO / "projects" / "vehicle_data" / "active_drive.py"
+MAX_ACTIVE_EVENT_BYTES = 64 * 1024
+ACTIVE_DRIVE_RESTORATION_INHIBIT = "vehicle-data-restoration-failed"
+ACTIVE_DRIVE_SOURCES = frozenset(
+    {
+        "ccan.broadcast.0x0fc",
+        "ccan.broadcast.0x100",
+        "ccan.broadcast.0x101",
+        "ccan.broadcast.0x1f7",
+        "ccan.broadcast.0x2ed",
+        "ccan.broadcast.0x2ef",
+        "ccan.broadcast.0x41a",
+        "ccan.broadcast.0x41d",
+        "pcm.did.01a1",
+        "rf_hub.did.31d0",
+        "rf_hub.did.31d1",
+        "rf_hub.did.31d2",
+        "rf_hub.did.31d3",
+    }
+)
+ACTIVE_DRIVE_FAILURE_REASONS = frozenset(
+    {
+        "adapter_unhealthy",
+        "bus_asleep",
+        "can_busy",
+        "engine_not_running",
+        "helper_failed",
+        "helper_protocol_error",
+        "helper_start_failed",
+        "inhibited",
+        "malformed_response",
+        "response_rejected",
+        "response_timeout",
+        "restoration_failed",
+        "session_required",
+        "wrong_bus",
+    }
+)
 
 
 def _retune_failure(reason: str, detail: str) -> dict[str, object]:
@@ -119,6 +160,354 @@ class PassiveAutoRetuner:
         return payload
 
 
+class ActiveDriveSupervisor:
+    """Supervise the termination-safe active-drive owner subprocess."""
+
+    def __init__(
+        self,
+        *,
+        channel: str,
+        event_handler,
+        popen_factory=subprocess.Popen,
+        shutdown_timeout_seconds: float = 10.0,
+        event_silence_timeout_seconds: float = 10.0,
+        queue_poll_seconds: float = 0.1,
+    ):
+        self.channel = channel
+        self.event_handler = event_handler
+        self.popen_factory = popen_factory
+        self.shutdown_timeout_seconds = shutdown_timeout_seconds
+        self.event_silence_timeout_seconds = event_silence_timeout_seconds
+        self.queue_poll_seconds = queue_poll_seconds
+        if (
+            self.shutdown_timeout_seconds <= 0
+            or self.event_silence_timeout_seconds <= 0
+            or self.queue_poll_seconds <= 0
+        ):
+            raise ValueError("active-drive supervisor timeouts must be positive")
+        self._lock = threading.Lock()
+        self._process = None
+
+    def stop(self) -> None:
+        with self._lock:
+            process = self._process
+        if process is not None and process.poll() is None:
+            try:
+                process.terminate()
+            except (OSError, ProcessLookupError):
+                pass
+
+    def _terminate_bounded(self, process) -> str:
+        """Best-effort child termination that never drops the process handle."""
+        details = []
+        try:
+            running = process.poll() is None
+        except Exception as exc:
+            running = True
+            details.append(f"poll failed: {type(exc).__name__}: {exc}")
+        if running:
+            try:
+                process.terminate()
+            except (OSError, ProcessLookupError) as exc:
+                details.append(
+                    f"terminate failed: {type(exc).__name__}: {exc}"
+                )
+        try:
+            process.wait(timeout=self.shutdown_timeout_seconds)
+        except subprocess.TimeoutExpired:
+            details.append("graceful termination timed out; child was killed")
+            try:
+                process.kill()
+            except (OSError, ProcessLookupError) as exc:
+                details.append(f"kill failed: {type(exc).__name__}: {exc}")
+            try:
+                process.wait(timeout=self.shutdown_timeout_seconds)
+            except Exception as exc:
+                details.append(
+                    f"post-kill wait failed: {type(exc).__name__}: {exc}"
+                )
+        except Exception as exc:
+            details.append(f"wait failed: {type(exc).__name__}: {exc}")
+            try:
+                process.kill()
+            except (OSError, ProcessLookupError):
+                pass
+            try:
+                process.wait(timeout=self.shutdown_timeout_seconds)
+            except Exception:
+                pass
+        return "; ".join(details)
+
+    @staticmethod
+    def _unverified_restoration(detail: str) -> dict[str, object]:
+        return {
+            "type": "final",
+            "state": "restoration_failed",
+            "reason": "restoration_failed",
+            "detail": detail,
+            "interface_mode": "armed_diagnostic",
+            "restored": False,
+        }
+
+    def run(self, stop_event: threading.Event) -> dict[str, object]:
+        command = [
+            sys.executable,
+            str(ACTIVE_DRIVE_HELPER),
+            "--channel",
+            self.channel,
+            "--expected-parent-pid",
+            str(os.getpid()),
+        ]
+        try:
+            process = self.popen_factory(
+                command,
+                stdout=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+            )
+        except Exception as exc:
+            return {
+                "type": "final",
+                "reason": "helper_start_failed",
+                "detail": f"could not start active-drive helper: {exc}",
+                "restored": None,
+            }
+        with self._lock:
+            self._process = process
+        if stop_event.is_set() and process.poll() is None:
+            try:
+                process.terminate()
+            except (OSError, ProcessLookupError):
+                pass
+        final_event = None
+        protocol_error = None
+        supervisor_error = None
+        return_code = None
+        output_queue: queue.Queue[tuple[str, object]] = queue.Queue()
+        reader_thread = None
+
+        def read_output() -> None:
+            try:
+                if process.stdout is None:
+                    output_queue.put(
+                        (
+                            "error",
+                            RuntimeError(
+                                "active-drive helper stdout pipe is unavailable"
+                            ),
+                        )
+                    )
+                    return
+                for line in process.stdout:
+                    output_queue.put(("line", line))
+            except Exception as exc:
+                output_queue.put(("error", exc))
+            finally:
+                output_queue.put(("eof", None))
+
+        try:
+            reader_thread = threading.Thread(
+                target=read_output,
+                name="van-telemetry-active-drive-output",
+                daemon=True,
+            )
+            reader_thread.start()
+            last_event_at = time.monotonic()
+            termination_started_at = None
+            eof_seen = False
+            while True:
+                now = time.monotonic()
+                if stop_event.is_set() and termination_started_at is None:
+                    termination_started_at = now
+                    try:
+                        if process.poll() is None:
+                            process.terminate()
+                    except (OSError, ProcessLookupError):
+                        pass
+                if (
+                    termination_started_at is None
+                    and now - last_event_at
+                    > self.event_silence_timeout_seconds
+                ):
+                    protocol_error = (
+                        "active-drive helper exceeded the bounded event-silence "
+                        "interval"
+                    )
+                    termination_started_at = now
+                    try:
+                        if process.poll() is None:
+                            process.terminate()
+                    except (OSError, ProcessLookupError):
+                        pass
+                if (
+                    termination_started_at is not None
+                    and now - termination_started_at
+                    > self.shutdown_timeout_seconds
+                    and process.poll() is None
+                ):
+                    protocol_error = protocol_error or (
+                        "active-drive helper did not finish bounded cleanup "
+                        "after termination"
+                    )
+                    try:
+                        process.kill()
+                    except (OSError, ProcessLookupError):
+                        pass
+                    break
+                try:
+                    item_type, item = output_queue.get(
+                        timeout=self.queue_poll_seconds
+                    )
+                except queue.Empty:
+                    if eof_seen and process.poll() is not None:
+                        break
+                    continue
+                if item_type == "error":
+                    error = item
+                    supervisor_error = (
+                        "active-drive output reader failed: "
+                        f"{type(error).__name__}: {error}"
+                    )
+                    if termination_started_at is None:
+                        termination_started_at = time.monotonic()
+                        try:
+                            if process.poll() is None:
+                                process.terminate()
+                        except (OSError, ProcessLookupError):
+                            pass
+                    continue
+                if item_type == "eof":
+                    eof_seen = True
+                    if process.poll() is not None:
+                        break
+                    if termination_started_at is None:
+                        termination_started_at = time.monotonic()
+                        if final_event is None:
+                            protocol_error = (
+                                "active-drive helper closed stdout without a "
+                                "final restoration event"
+                            )
+                            try:
+                                process.terminate()
+                            except (OSError, ProcessLookupError):
+                                pass
+                    continue
+                line = item
+                if not isinstance(line, str):
+                    protocol_error = (
+                        "active-drive helper emitted non-text output"
+                    )
+                elif protocol_error is None and supervisor_error is None:
+                    last_event_at = time.monotonic()
+                    if len(line.encode("utf-8", errors="replace")) > MAX_ACTIVE_EVENT_BYTES:
+                        protocol_error = "active-drive helper event exceeded size limit"
+                    else:
+                        try:
+                            event = json.loads(line)
+                        except json.JSONDecodeError:
+                            protocol_error = (
+                                "active-drive helper emitted invalid JSON"
+                            )
+                        else:
+                            if not isinstance(event, dict):
+                                protocol_error = (
+                                    "active-drive helper event is not an object"
+                                )
+                            elif event.get("type") == "final":
+                                if final_event is not None:
+                                    protocol_error = (
+                                        "active-drive helper emitted more than one "
+                                        "final restoration event"
+                                    )
+                                else:
+                                    # The broker applies this returned event once,
+                                    # after supervision has completed. Streaming it
+                                    # here would duplicate status/cache/inhibit side
+                                    # effects in _run_active_drive_if_ready().
+                                    final_event = event
+                            else:
+                                try:
+                                    self.event_handler(event)
+                                except Exception as exc:
+                                    protocol_error = (
+                                        "active-drive event rejected: "
+                                        f"{type(exc).__name__}: {exc}"
+                                    )
+                if (
+                    (protocol_error or supervisor_error)
+                    and termination_started_at is None
+                ):
+                    termination_started_at = time.monotonic()
+                    try:
+                        if process.poll() is None:
+                            process.terminate()
+                    except (OSError, ProcessLookupError):
+                        pass
+            try:
+                return_code = process.wait(
+                    timeout=self.shutdown_timeout_seconds
+                )
+            except Exception as exc:
+                if not isinstance(exc, subprocess.TimeoutExpired):
+                    supervisor_error = (
+                        "active-drive helper wait failed: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                else:
+                    protocol_error = protocol_error or (
+                        "active-drive helper remained alive after bounded "
+                        "supervision shutdown"
+                    )
+                cleanup_detail = self._terminate_bounded(process)
+                if cleanup_detail:
+                    existing = supervisor_error or protocol_error or ""
+                    if supervisor_error:
+                        supervisor_error = f"{existing}; {cleanup_detail}"
+                    else:
+                        protocol_error = f"{existing}; {cleanup_detail}"
+        except Exception as exc:
+            supervisor_error = (
+                "active-drive supervision failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            cleanup_detail = self._terminate_bounded(process)
+            if cleanup_detail:
+                supervisor_error = f"{supervisor_error}; {cleanup_detail}"
+        finally:
+            if reader_thread is not None:
+                reader_thread.join(timeout=self.queue_poll_seconds)
+            if process.stdout is not None:
+                try:
+                    process.stdout.close()
+                except Exception:
+                    pass
+            try:
+                process_exited = process.poll() is not None
+            except Exception:
+                process_exited = False
+            with self._lock:
+                if self._process is process and process_exited:
+                    self._process = None
+        if supervisor_error:
+            return self._unverified_restoration(
+                f"{supervisor_error}; the parent could not verify the "
+                "helper's final listen-only restoration"
+            )
+        if protocol_error:
+            return self._unverified_restoration(
+                f"{protocol_error}; the parent could not verify the "
+                "helper's final listen-only restoration"
+            )
+        if final_event is not None:
+            return final_event
+        return self._unverified_restoration(
+            (
+                "active-drive helper exited without a final restoration event "
+                f"(status {return_code}); listen-only restoration is unverified"
+            )
+        )
+
+
 @dataclass
 class _Inflight:
     event: threading.Event = field(default_factory=threading.Event)
@@ -146,6 +535,8 @@ class TelemetryBroker:
         auto_retune_trigger: int = 3,
         auto_retune_cooldown_seconds: float = 30.0,
         passive_powertrain_reader=None,
+        active_drive_supervisor=None,
+        active_drive_enabled: bool = False,
     ):
         self.acquirer = acquirer or VoltageAcquirer()
         self.definitions = definitions or METRICS
@@ -165,6 +556,10 @@ class TelemetryBroker:
             probe_seconds=getattr(self.acquirer, "probe_seconds", 0.75),
         )
         self.passive_powertrain_reader = passive_powertrain_reader
+        self.active_drive_supervisor = active_drive_supervisor
+        self.active_drive_enabled = bool(
+            active_drive_enabled and active_drive_supervisor is not None
+        )
 
         self._lock = threading.RLock()
         # Prevent the passive collector from racing a client-triggered active
@@ -189,10 +584,34 @@ class TelemetryBroker:
             "active_inhibits": [],
         }
         self._collector_state = "stopped"
+        self._collector_failure_detail: str | None = None
         self._collector_cycles = 0
         self._collector_last_cycle_at: str | None = None
         self._collector_thread: threading.Thread | None = None
         self._collector_stop = threading.Event()
+        self._passive_engine_evidence = "unknown"
+        self._passive_stop_evidence_streak = 0
+        self._passive_unknown_evidence_streak = 0
+        self._active_drive_blocked_reason: str | None = None
+        self._active_drive_restoration_latched = False
+        self._active_drive: dict[str, object] = {
+            "enabled": self.active_drive_enabled,
+            "state": "idle" if self.active_drive_enabled else "disabled",
+            "reason": (
+                "engine_not_running"
+                if self.active_drive_enabled
+                else "disabled_by_configuration"
+            ),
+            "detail": (
+                "waiting for qualified passive engine-running evidence"
+                if self.active_drive_enabled
+                else "coordinated active-drive collection is disabled"
+            ),
+            "interface_mode": "listen_only",
+            "helper_pid": None,
+            "last_event_at": None,
+            "restoration_failed": False,
+        }
         self._started_at = datetime.now(timezone.utc).isoformat()
         self._vehicle_state_observed_monotonic: float | None = None
         self._vehicle_state: dict[str, object] = {
@@ -452,6 +871,175 @@ class TelemetryBroker:
         self._update_vehicle_state(result)
         return result
 
+    def _store_active_observation(self, event: dict[str, object]) -> None:
+        metric = event.get("metric")
+        source_name = event.get("source")
+        if not isinstance(metric, str) or not isinstance(source_name, str):
+            raise ValueError("active observation metric/source must be strings")
+        if source_name not in ACTIVE_DRIVE_SOURCES:
+            raise ValueError("active observation source is outside the helper allowlist")
+        definition = self.definitions.get(metric)
+        if definition is None:
+            raise ValueError("active observation metric is not registered")
+        source = self._source_for(definition, source_name)
+        if source is None:
+            raise ValueError("active observation source is not registered for metric")
+        if event.get("unit") != definition.unit:
+            raise ValueError("active observation unit does not match registry")
+        if event.get("bus") != source.bus or event.get("quality") != source.quality:
+            raise ValueError("active observation source metadata does not match registry")
+        value = event.get("value")
+        value_error = self._value_error(definition, value)
+        if value_error is not None:
+            raise ValueError(value_error)
+        result = success(
+            metric=metric,
+            unit=definition.unit,
+            value=value,
+            source=source.name,
+            bus=source.bus,
+            acquisition=source.acquisition_class,
+            quality=source.quality,
+            observed_monotonic=self.monotonic(),
+            detail=str(event.get("detail") or "coordinated active-drive observation"),
+            interface_mode="armed_diagnostic",
+        )
+        with self._lock:
+            self._cache[metric] = result
+            self._last_error.pop(metric, None)
+        self._update_vehicle_state(result)
+
+    def _record_active_failure(
+        self,
+        reason: str,
+        detail: str,
+        *,
+        interface_mode: str = "listen_only",
+    ) -> None:
+        if reason not in ACTIVE_DRIVE_FAILURE_REASONS:
+            reason = "helper_failed"
+        definition = self.definitions.get("generator.field_duty")
+        if definition is None:
+            return
+        source = definition.sources[0]
+        result = failure(
+            metric=definition.name,
+            unit=definition.unit,
+            reason=reason,
+            detail=detail,
+            bus=source.bus,
+            acquisition=source.acquisition_class,
+            interface_mode=interface_mode,
+        )
+        with self._lock:
+            # Generator command duty must become inactive immediately when its
+            # engine-running diagnostic owner stops. Do not leave a still-fresh
+            # pre-stop sample looking live for the remainder of its TTL.
+            self._cache.pop(definition.name, None)
+            self._last_error[definition.name] = result
+
+    def handle_active_drive_event(self, event: dict[str, object]) -> None:
+        """Validate one trusted helper-pipe event; never expose this as an API."""
+        event_type = event.get("type")
+        if event_type == "observation":
+            if event.get("interface_mode") != "armed_diagnostic":
+                raise ValueError("active observation must report armed_diagnostic mode")
+            self._store_active_observation(event)
+            return
+        if event_type not in ("status", "failure", "final"):
+            raise ValueError("unsupported active-drive event type")
+        reason = event.get("reason")
+        detail = event.get("detail")
+        if not isinstance(reason, str) or not isinstance(detail, str):
+            raise ValueError("active-drive status reason/detail must be strings")
+        interface_mode = event.get("interface_mode", "listen_only")
+        if interface_mode not in (
+            "listen_only",
+            "armed_diagnostic",
+            "unknown",
+        ):
+            raise ValueError("invalid active-drive interface mode")
+        state = event.get("state")
+        if state is None:
+            state = (
+                "restoration_failed"
+                if reason == "restoration_failed"
+                else ("idle" if event_type == "final" else event_type)
+            )
+        if not isinstance(state, str):
+            raise ValueError("active-drive state must be a string")
+        if event_type == "status":
+            if (
+                state != "armed_diagnostic"
+                or reason != "running_gate_satisfied"
+                or interface_mode != "armed_diagnostic"
+            ):
+                raise ValueError("active-drive armed status is inconsistent")
+        elif event_type == "failure":
+            if reason not in ACTIVE_DRIVE_FAILURE_REASONS:
+                raise ValueError("active-drive failure reason is not allowlisted")
+        else:
+            restored = event.get("restored")
+            if restored is not None and type(restored) is not bool:
+                raise ValueError("active-drive final restored must be boolean or null")
+            if reason not in ACTIVE_DRIVE_FAILURE_REASONS:
+                raise ValueError("active-drive final reason is not allowlisted")
+            if state not in ("idle", "restoration_failed"):
+                raise ValueError("active-drive final state is invalid")
+            if restored is True and interface_mode != "listen_only":
+                raise ValueError("restored final must report listen_only mode")
+            if restored is False and (
+                reason != "restoration_failed"
+                or state != "restoration_failed"
+                or interface_mode != "armed_diagnostic"
+            ):
+                raise ValueError("failed restoration final is inconsistent")
+            if reason == "restoration_failed" and restored is not False:
+                raise ValueError("restoration failure must carry restored=false")
+            if restored is None and interface_mode == "armed_diagnostic":
+                raise ValueError("unverified final cannot claim armed ownership")
+        with self._lock:
+            self._active_drive.update(
+                {
+                    "state": state,
+                    "reason": reason,
+                    "detail": detail,
+                    "interface_mode": interface_mode,
+                    "last_event_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            if isinstance(event.get("pid"), int) and not isinstance(
+                event.get("pid"), bool
+            ):
+                self._active_drive["helper_pid"] = event["pid"]
+            if event_type == "final":
+                self._active_drive["helper_pid"] = None
+        if event_type in ("failure", "final") and reason in ACTIVE_DRIVE_FAILURE_REASONS:
+            self._record_active_failure(
+                reason,
+                detail,
+                interface_mode=interface_mode,
+            )
+        if reason == "restoration_failed" or event.get("restored") is False:
+            with self._lock:
+                self._active_drive_restoration_latched = True
+                self._active_drive["restoration_failed"] = True
+            try:
+                can_operation_state.begin_inhibit(
+                    ACTIVE_DRIVE_RESTORATION_INHIBIT,
+                    channel=getattr(self.acquirer, "channel", "can0"),
+                    reason=(
+                        "broker could not verify active-drive listen-only "
+                        f"restoration: {detail}"
+                    ),
+                )
+            except Exception as exc:
+                with self._lock:
+                    self._active_drive["detail"] = (
+                        f"{detail}; persistent restoration inhibit could not "
+                        f"be recorded: {type(exc).__name__}: {exc}"
+                    )
+
     def _refresh_interface_status(self) -> None:
         try:
             snapshot = self.acquirer.status_snapshot()
@@ -496,8 +1084,10 @@ class TelemetryBroker:
                 "cycles": self._collector_cycles,
                 "last_cycle_at": self._collector_last_cycle_at,
                 "interval_seconds": self.collector_interval_seconds,
+                "failure_detail": self._collector_failure_detail,
             }
             auto_retune = json.loads(json.dumps(self._auto_retune))
+            active_drive = json.loads(json.dumps(self._active_drive))
             last_retune = self._auto_retune_last_attempt_monotonic
             vehicle_state = json.loads(json.dumps(self._vehicle_state))
             vehicle_observed = self._vehicle_state_observed_monotonic
@@ -536,6 +1126,26 @@ class TelemetryBroker:
                     ),
                 }
             )
+        rpm_definition = self.definitions.get("engine.rpm")
+        if (
+            vehicle_state.get("basis") == "qualified_ccan_0x0fc_engine_speed"
+            and vehicle_observed is not None
+            and rpm_definition is not None
+            and self.monotonic() - vehicle_observed
+            > rpm_definition.stale_after_seconds
+        ):
+            vehicle_state.update(
+                {
+                    "state": "unknown",
+                    "running": None,
+                    "confidence": "stale",
+                    "basis": "stale_ccan_0x0fc_engine_speed",
+                    "detail": (
+                        "the last qualified passive engine-speed observation "
+                        "is stale; current running state is unknown"
+                    ),
+                }
+            )
         topology = interface.get("topology") or {}
         inhibits = interface.get("active_inhibits") or []
         busy_error = next(
@@ -546,6 +1156,27 @@ class TelemetryBroker:
             ),
             None,
         )
+        active_drive_owns = (
+            active_drive.get("interface_mode") == "armed_diagnostic"
+            and active_drive.get("state")
+            not in ("idle", "disabled", "restoration_failed")
+        )
+        active_drive_reserved = active_drive_owns or active_drive.get(
+            "state"
+        ) == "starting"
+        if active_drive_owns:
+            # The last normal status probe predates the child-owned interval.
+            # Overlay the helper's verified mode so status never calls an armed
+            # adapter listen-only merely because the normal collector is
+            # synchronously waiting for the child.
+            interface["listen_only"] = False
+            interface["mode"] = "armed_diagnostic"
+        else:
+            interface["mode"] = (
+                "listen_only"
+                if interface.get("listen_only") is True
+                else "armed_or_unknown"
+            )
         active_permitted = bool(
             interface.get("adapter_present")
             and interface.get("up")
@@ -556,8 +1187,15 @@ class TelemetryBroker:
             and not inhibits
             and not inflight
             and busy_error is None
+            and not active_drive_reserved
+            and not active_drive.get("restoration_failed")
         )
-        if inhibits:
+        if active_drive_reserved:
+            current_owner = {
+                "kind": "broker_active_drive",
+                "detail": active_drive.get("detail"),
+            }
+        elif inhibits:
             current_owner = {
                 "kind": "external_inhibit",
                 "names": inhibits,
@@ -581,6 +1219,7 @@ class TelemetryBroker:
             "current_owner": current_owner,
             "active_acquisition_permitted": active_permitted,
             "collector": collector,
+            "active_drive": active_drive,
             "auto_retune": auto_retune,
             "vehicle_state": vehicle_state,
             "inflight": inflight,
@@ -595,7 +1234,42 @@ class TelemetryBroker:
         a fob wake, or a charger-powered module wake. In particular, battery
         voltage is never used as an engine-running heuristic.
         """
-        if result.metric not in ("battery.voltage", "vehicle.ignition_on"):
+        if result.metric not in (
+            "battery.voltage",
+            "engine.rpm",
+            "vehicle.ignition_on",
+        ):
+            return
+        if (
+            result.metric == "engine.rpm"
+            and result.available
+            and result.source == "ccan.broadcast.0x0fc"
+            and isinstance(result.value, (int, float))
+            and not isinstance(result.value, bool)
+        ):
+            running = float(result.value) >= 400.0
+            state = {
+                "state": "running" if running else "ignition_on",
+                "running": running,
+                "confidence": "verified",
+                "basis": "qualified_ccan_0x0fc_engine_speed",
+                "detail": (
+                    f"qualified passive 0x0FC engine speed is "
+                    f"{float(result.value):.0f} rpm"
+                ),
+                "observed_at": (
+                    result.observed_at.isoformat()
+                    if result.observed_at is not None
+                    else datetime.now(timezone.utc).isoformat()
+                ),
+            }
+            with self._lock:
+                self._vehicle_state = state
+                self._vehicle_state_observed_monotonic = (
+                    result.observed_monotonic
+                    if result.observed_monotonic is not None
+                    else self.monotonic()
+                )
             return
         if (
             result.metric == "battery.voltage"
@@ -825,11 +1499,14 @@ class TelemetryBroker:
             if self._collector_thread is not None:
                 return
             self._collector_state = "starting"
+            self._collector_failure_detail = None
             self._collector_stop.clear()
             thread = threading.Thread(
                 target=self._collector_loop,
                 name="van-telemetry-passive",
-                daemon=True,
+                # Active-drive cleanup must finish before process exit; a
+                # daemon thread could be discarded while can0 is still armed.
+                daemon=False,
             )
             self._collector_thread = thread
             thread.start()
@@ -975,18 +1652,24 @@ class TelemetryBroker:
     def _collect_passive_powertrain(
         self, bus_result: AcquisitionResult
     ) -> int:
+        self._passive_engine_evidence = "unknown"
         if not (
             bus_result.available
             and bus_result.bus == "c-can"
             and bus_result.acquisition == "passive"
             and self.passive_powertrain_reader is not None
         ):
+            self._passive_stop_evidence_streak = 0
+            self._passive_unknown_evidence_streak += 1
             return 0
         try:
             observations = self.passive_powertrain_reader.read()
         except Exception:
+            self._passive_stop_evidence_streak = 0
+            self._passive_unknown_evidence_streak += 1
             return 0
         accepted = 0
+        rpm_evidence = None
         for observation in observations:
             result = self.publish_observation(
                 observation.metric,
@@ -997,36 +1680,181 @@ class TelemetryBroker:
                 quality=observation.quality,
             )
             accepted += int(result.available)
+            if (
+                observation.metric == "engine.rpm"
+                and result.available
+                and observation.source == "ccan.broadcast.0x0fc"
+                and isinstance(observation.value, (int, float))
+                and not isinstance(observation.value, bool)
+            ):
+                rpm_evidence = (
+                    "running"
+                    if float(observation.value) >= 400.0
+                    else "stopped"
+                )
+        if rpm_evidence == "running":
+            self._passive_engine_evidence = "running"
+            self._passive_stop_evidence_streak = 0
+            self._passive_unknown_evidence_streak = 0
+        elif rpm_evidence == "stopped":
+            self._passive_engine_evidence = "stopped"
+            self._passive_stop_evidence_streak += 1
+            self._passive_unknown_evidence_streak = 0
+        else:
+            self._passive_stop_evidence_streak = 0
+            self._passive_unknown_evidence_streak += 1
         return accepted
+
+    def _run_active_drive_if_ready(self) -> None:
+        if not self.active_drive_enabled or self.active_drive_supervisor is None:
+            return
+        if self._active_drive_restoration_latched:
+            self._record_active_failure(
+                "restoration_failed",
+                "active-drive polling is latched off after failed passive restoration",
+            )
+            return
+        if self._passive_engine_evidence != "running":
+            epoch_ended = (
+                self._passive_engine_evidence == "stopped"
+                and self._passive_stop_evidence_streak >= 2
+            ) or (
+                self._passive_engine_evidence == "unknown"
+                and self._passive_unknown_evidence_streak >= 5
+            )
+            if (
+                self._active_drive_blocked_reason is not None
+                and epoch_ended
+            ):
+                self._active_drive_blocked_reason = None
+            with self._lock:
+                self._active_drive.update(
+                    {
+                        "state": "idle",
+                        "reason": "engine_not_running",
+                        "detail": (
+                            "waiting for qualified passive 0x0FC engine-running "
+                            "evidence; a failed running epoch is cleared only "
+                            "after two explicit stopped samples or five "
+                            "consecutive cycles without fresh RPM"
+                        ),
+                        "interface_mode": "listen_only",
+                    }
+                )
+            self._record_active_failure(
+                "engine_not_running",
+                "qualified passive engine-running evidence is absent",
+            )
+            return
+        if self._active_drive_blocked_reason is not None:
+            with self._lock:
+                self._active_drive.update(
+                    {
+                        "state": "blocked_until_engine_stop",
+                        "reason": self._active_drive_blocked_reason,
+                        "detail": (
+                            "active-drive polling remains disabled until "
+                            "qualified passive evidence observes the engine stop"
+                        ),
+                        "interface_mode": "listen_only",
+                    }
+                )
+            self._record_active_failure(
+                self._active_drive_blocked_reason,
+                "active-drive polling remains disabled until the engine stops",
+            )
+            return
+        with self._lock:
+            self._active_drive.update(
+                {
+                    "state": "starting",
+                    "reason": "running_gate_satisfied",
+                    "detail": "starting the coordinated active-drive helper",
+                    "interface_mode": "listen_only",
+                    "last_event_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+        outcome = self.active_drive_supervisor.run(self._collector_stop)
+        try:
+            self.handle_active_drive_event(outcome)
+        except (KeyError, TypeError, ValueError) as exc:
+            outcome = {
+                "type": "final",
+                "state": "restoration_failed",
+                "reason": "restoration_failed",
+                "detail": (
+                    f"active-drive final event rejected: {exc}; the parent "
+                    "could not verify final listen-only restoration"
+                ),
+                "restored": False,
+                "interface_mode": "armed_diagnostic",
+            }
+            self.handle_active_drive_event(outcome)
+        reason = str(outcome.get("reason", "helper_failed"))
+        if outcome.get("restored") is True or reason in {
+            "malformed_response",
+            "response_rejected",
+            "response_timeout",
+            "session_required",
+        }:
+            self._active_drive_blocked_reason = reason
+        if reason == "restoration_failed" or outcome.get("restored") is False:
+            self._active_drive_restoration_latched = True
+        self._refresh_interface_status()
 
     def _collector_loop(self) -> None:
         with self._lock:
             self._collector_state = "running"
-        while not self._collector_stop.is_set():
-            result = self.acquire("battery.voltage", "passive")
-            self._collect_passive_powertrain(result)
-            self._consider_auto_retune(result)
+        try:
+            while not self._collector_stop.is_set():
+                result = self.acquire("battery.voltage", "passive")
+                self._collect_passive_powertrain(result)
+                self._consider_auto_retune(result)
+                self._run_active_drive_if_ready()
+                with self._lock:
+                    self._collector_cycles += 1
+                    self._collector_last_cycle_at = datetime.now(
+                        timezone.utc
+                    ).isoformat()
+                self._collector_stop.wait(
+                    self.collector_interval_seconds
+                )
+        except Exception as exc:
             with self._lock:
-                self._collector_cycles += 1
-                self._collector_last_cycle_at = datetime.now(
-                    timezone.utc
-                ).isoformat()
-            self._collector_stop.wait(self.collector_interval_seconds)
-        with self._lock:
-            self._collector_state = "stopped"
+                self._collector_state = "failed"
+                self._collector_failure_detail = (
+                    f"{type(exc).__name__}: {exc}"
+                )
+            self._record_active_failure(
+                "helper_failed",
+                "telemetry collector stopped after an unexpected exception: "
+                f"{type(exc).__name__}: {exc}",
+            )
+        finally:
+            if self.active_drive_supervisor is not None:
+                self.active_drive_supervisor.stop()
+            with self._lock:
+                if self._collector_state != "failed":
+                    self._collector_state = "stopped"
 
     def stop_collector(self, timeout: float = 10.0) -> None:
         self._collector_stop.set()
+        if self.active_drive_supervisor is not None:
+            self.active_drive_supervisor.stop()
         with self._lock:
             thread = self._collector_thread
         if thread is not None:
             thread.join(timeout)
         with self._lock:
-            self._collector_thread = None
             if thread is not None and thread.is_alive():
+                # Retain the non-daemon handle so a caller can inspect or retry
+                # shutdown; losing it would make an armed child cleanup
+                # impossible to supervise.
                 self._collector_state = "stop_timeout"
             else:
-                self._collector_state = "stopped"
+                self._collector_thread = None
+                if self._collector_state != "failed":
+                    self._collector_state = "stopped"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1049,6 +1877,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--auto-retune-trigger", type=int, default=3)
     parser.add_argument("--auto-retune-cooldown", type=float, default=30.0)
     parser.add_argument("--no-collector", action="store_true")
+    parser.add_argument(
+        "--no-active-drive",
+        action="store_true",
+        help="disable the coordinated engine-running diagnostic collector",
+    )
     return parser
 
 
@@ -1078,6 +1911,13 @@ def main(argv=None) -> int:
         probe_seconds=args.probe_seconds,
         read_timeout=args.read_timeout,
     )
+    broker_holder: dict[str, TelemetryBroker] = {}
+    active_supervisor = ActiveDriveSupervisor(
+        channel=args.channel,
+        event_handler=lambda event: broker_holder[
+            "broker"
+        ].handle_active_drive_event(event),
+    )
     broker = TelemetryBroker(
         acquirer=acquirer,
         collector_interval_seconds=args.collector_interval,
@@ -1090,13 +1930,18 @@ def main(argv=None) -> int:
             probe_seconds=min(args.probe_seconds, 0.25),
             read_timeout=min(args.read_timeout, 0.5),
         ),
+        active_drive_supervisor=active_supervisor,
+        active_drive_enabled=not args.no_active_drive,
     )
+    broker_holder["broker"] = broker
     if not args.no_collector:
         broker.start_collector()
-    try:
-        serve_unix(broker, args.socket, mode=socket_mode)
-    finally:
-        broker.stop_collector()
+    with diagnostic_safety.interrupt_on_termination() as termination:
+        try:
+            serve_unix(broker, args.socket, mode=socket_mode)
+        finally:
+            termination.begin_cleanup()
+            broker.stop_collector()
     return 0
 
 
