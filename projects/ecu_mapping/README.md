@@ -12,6 +12,13 @@ The cross-project [`AlfaOBD evidence history`](../../docs/alfaobd-evidence-histo
 canonical chronology of confirmed mis-mappings, incompatible profiles, recording/catalog traps,
 project parser corrections, and the trust rules derived from them.
 
+The local
+[`legacy FCA Windows/CDA archive triage`](findings/promaster_2022/2026-07-29_legacy_fca_windows_archive.md)
+recovers historical vendor labels for exact current-DID overlaps, including BCM PROXI/EOL records
+and the RF Hub TPMS family. Its 2007-2011 engineering bundles and September 2022 report for the
+owner's prior model-year 2015 diesel VF are valuable candidate/corroboration sources, not 2022
+authorities; direct conflicts between legacy variants are preserved in the finding.
+
 The current owner-priority C-CAN roadmap—oil pressure, coolant/oil temperature,
 torque and derived power, OEM operating context, and the targeted PCM/TCM
 acquisition order—is recorded in
@@ -119,6 +126,7 @@ tools/alfaobd_dat.py <post.dat> --baseline <pre.dat>  # detect cached/duplicated
 tools/alfaobd_apk_db.py  <base.apk>              # reconstruct catalog DB + label resource -> tmp/
 tools/alfaobd_catalog.py <db> <labels> --device-id N  # read-only model/device export -> tmp/
 tools/alfaobd_bcm_decode.py                   # apply current-BCM field layouts to existing evidence
+tools/fca_hsql_decode.py <db.data> --script <db.script> --properties <db.properties>  # legacy FCA .eng DB -> JSON
 tools/alfaobd_singleton_campaign.py plan <plan.json>  # guarded one-label Status monitor
 tools/passive_drive_capture.py --out-root <path>      # bounded C-CAN recorder; plan by default
 tools/alfaobd_singleton_join.py <campaign> --capture-set <json>  # offline evidence join

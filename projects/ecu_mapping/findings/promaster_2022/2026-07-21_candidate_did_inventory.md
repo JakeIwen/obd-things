@@ -113,9 +113,20 @@ the following associations within the BCM namespace:
 The following remain order-based groups rather than exact field maps: `0130` for door inputs;
 `0131/0132` for vehicle-status and brake material; `0137/0138` for Generic Inputs; `0151` for
 windows/doors actuators; `0152/0153/0154` for internal-light, wiper/climate-output, and FPS
-material; and `2010/1921` for the ignition/power-mode section. The structured
-`40A1/40A2/40A3/40A6/40AA` values feed the configuration-fail snapshot, but their individual
-module/bit assignments remain unresolved.
+material; and `2010/1921` for the ignition/power-mode section.
+
+A later
+[`legacy FCA Windows/CDA archive`](2026-07-29_legacy_fca_windows_archive.md)
+provides a strong structural candidate for `40A2`. A 2011 CUSW BCM definition
+uses the same 80-byte length and divides it into five 128-bit node maps:
+present, has-EOL, active, EOL-required, and EOL-OK. The current value consists
+of five byte-identical 16-byte blocks, while a separate wiTECH report for the
+owner's prior model-year 2015 diesel VF renders five shorter node maps. This
+convergence supports the five-block structure, but not the old per-node names:
+several current set bits correspond to labels that were reserved or unnamed
+in 2011. Individual current module/bit assignments therefore remain
+candidate-only. The old `40A3` and `40A6` labels are useful, but their 12- and
+8-byte layouts differ from the current 14- and 16-byte values.
 
 The same observation exposes three AlfaOBD rendering defects. `1008=000389A0` is 231,840 minutes,
 but the UI displayed `905` after truncating the last response byte; `1009=0023` should be 525 seconds

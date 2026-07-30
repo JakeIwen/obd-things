@@ -48,6 +48,17 @@ campaign status and
    Pressure scale **0.1 kPa** (confirmed: deflations tracked exactly). Placard-ish targets:
    fronts 55 / rears 75 psi. `31C6`/`31C7` (2207/5517) likely front/rear thresholds.
 
+   A 2011 CDA engineering bundle independently labels `31D0-31D3` as left-front, right-front,
+   right-rear, and left-rear `Altitude Compensated Pressure`, matching the current physical
+   pressure-channel order. Its decoded rows use a 16-bit `0.0145 psi/raw` conversion, which
+   independently agrees with the live-verified `0.1 kPa/raw` scale to the old database's
+   four-place precision. Treat the extra `Altitude Compensated` wording as a historical semantic
+   candidate only.
+   The same old profile labels sensor-ID DIDs `31CD/31CE` as rear-left/rear-right, the reverse of
+   the current van's evidence-backed rear ID order. This contradiction is an explicit warning
+   not to replace the live map with a legacy profile. Evidence and source provenance:
+   [`legacy FCA Windows/CDA archive triage`](../ecu_mapping/findings/promaster_2022/2026-07-29_legacy_fca_windows_archive.md).
+
    The ID-DID↔pressure-DID slot pairing (31CB↔31D0 … 31CE↔31D3) is no longer just a DID-adjacency
    assumption: the `40A6-40A9` records carry a position byte — pos01=`11825BA9`, pos02=`7004E049`,
    pos03=`700497DF`, pos04=`7004C287` — matching both the ID and pressure DID orders, and this same

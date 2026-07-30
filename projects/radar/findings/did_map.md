@@ -26,14 +26,27 @@ internal C-CAN — this is why UDS works here and why OBD-II PIDs don't route. C
 | `0x1006` | `85` | u8 ×0.1 → 13.3 V | control-module voltage | V |
 | `0x0835` | `4C` | u8 −40 → 36 °C | ECU internal temp (only DID that drifts at idle) | V |
 
-## Counters / timers (rise over time/distance — NOT angles)
-| DID | idle raw | decode | meaning | conf |
+## Lifecycle / maintenance data (historical same-address candidates)
+
+A decoded 2011 `DASM_CUSW` profile uses the same diagnostic address tuple and
+supplies the candidate meanings and layouts below. It is not an exact
+hardware/software identity match; confidence remains suspected until a
+current-vehicle condition or independent source verifies each interpretation.
+Provenance and limits:
+[`2026-07-29 legacy FCA Windows/CDA archive`](../../ecu_mapping/findings/promaster_2022/2026-07-29_legacy_fca_windows_archive.md).
+
+| DID | idle raw | candidate decode | historical label/meaning | conf |
 |---|---|---|---|---|
-| `0x1008` | `00029A48` | u32 → 170,568 | rising counter (ignition cycles / operation count) | S |
-| `0x2008` | `00029A49` | u32 → 170,569 | paired counter (≈ `1008`+1) | S |
-| `0x200B` | `0002996E` | u32 → 170,350 | related counter | S |
-| `0x1009` | `0018` | u16 → 24 | monotonic counter during a drive (steps +2) — sample/odometer-ish | S |
-| `0x2009` | `001E` | u16 → 30 | coarse stepping counter (steps of ~12 while driving) | S |
+| `0x1008` | `00029A48` | u32 minutes → 170,568 min | ECU timestamp in RAM | S |
+| `0x2008` | `00029A49` | u32 minutes → 170,569 min | ECU timestamp in EEPROM | S |
+| `0x200B` | `0002996E` | u32 minutes → 170,350 min | ECU time at first DTC detection | S |
+| `0x1009` | `0018` | u16 ×15 s → 360 s | timestamp since key-on in RAM; observed drive stepping is consistent | S |
+| `0x2009` | `001E` | u16 ×15 s → 450 s | timestamp since key-on in EEPROM | S |
+| `0x2001` | `0C3FD2` | u24 ×0.1 km → 80,277.0 km | odometer; magnitude is plausible but not independently compared here | S |
+| `0x2002` | `000000` | u24 ×0.1 km → 0 km | odometer content at last flash update | S |
+| `0x2003` | `01` | u8 → 1 | flash-rewrite count | S |
+| `0x200A` | `04E8` | u16 → 1,256 | key-on counter | S |
+| `0x200C` | `004A` | u16 ×15 s → 1,110 s | key-on time at first DTC detection | S |
 | `0x0F1A1`/`F1A1` | `00000025 9810` | — | build/usage counter or timer | ? |
 
 ## Status / config / unknown (small or sentinel)
@@ -44,12 +57,7 @@ internal C-CAN — this is why UDS works here and why OBD-II PIDs don't route. C
 | `0x0858` | `00` | flag | ? |
 | `0x0863` | `01` | flag/enable | ? |
 | `0x0872` | `00` | flag | ? |
-| `0x2001` | `0C3FD2` | 3-byte status/measurement | ? |
-| `0x2002` | `000000` | unknown (zeros) | ? |
-| `0x2003` | `01` | flag/enable | ? |
-| `0x200A` | `04E8` | u16 → 1256 (static; ~1270 elsewhere) | fixed parameter? | ? |
-| `0x200C` | `004A` | u16 → 74 (static) | fixed parameter? | ? |
-| `0x2010` | `FFFFFFFF` | invalid / N-A sentinel | I |
+| `0x2010` | `FFFFFFFF` | legacy profile defines 32 programming-status bitfields; all-set current value remains an invalid/N-A candidate | S |
 | `0x2013` | `02` | enum/flag | ? |
 | `0x292E` | `07` | enum/flag | ? |
 | `0x102A` | `00×9` | 9-byte data block, empty at idle | ? |

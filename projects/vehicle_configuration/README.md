@@ -11,6 +11,16 @@ low-beam investigation.
 - The pre-change 250-byte BCM configuration was independently read twice and
   both reads are byte-identical. AlfaOBD's native backup decodes to the same
   bytes and records `Headlamp LED Management: Absent`.
+- Historical FCA sources now place the records in the same broad PROXI/EOL
+  configuration domain: 2011 CDA BCM bundles label DID `2023` as system
+  configuration/PROXI and `40A2` as EOL data, while a September 2022 wiTECH
+  report for the owner's prior model-year 2015 diesel VF labels them EOL data
+  and an EOL configuration table. These are candidate labels, not a 2022
+  field layout; however, the legacy 80-byte CUSW `40A2` layout and the current
+  value both divide into five 128-bit node maps, providing a strong candidate
+  for the record's broad block structure. Individual current node bits remain
+  unresolved. See the
+  [`legacy FCA Windows/CDA archive triage`](../ecu_mapping/findings/promaster_2022/2026-07-29_legacy_fca_windows_archive.md).
 - On 2026-07-25 the owner tried AlfaOBD's labeled
   `Headlamp LED Management: Absent -> Present` change and PROXI alignment.
   AlfaOBD repeatedly reported `Failure connecting to module` for DASM even
