@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Protocol
@@ -134,6 +135,9 @@ class VoltageAcquirer:
         locks: LockProvider | None = None,
         probe_seconds: float = 0.75,
         read_timeout: float = 2.0,
+        exclusive_lock_attempts: int = 9,
+        lock_retry_seconds: float = 0.5,
+        sleep=time.sleep,
         monotonic=time.monotonic,
         wall_clock=lambda: datetime.now(timezone.utc),
     ):
@@ -142,6 +146,9 @@ class VoltageAcquirer:
         self.locks = locks or SystemLockProvider()
         self.probe_seconds = probe_seconds
         self.read_timeout = read_timeout
+        self.exclusive_lock_attempts = exclusive_lock_attempts
+        self.lock_retry_seconds = lock_retry_seconds
+        self.sleep = sleep
         self.monotonic = monotonic
         self.wall_clock = wall_clock
 
@@ -284,9 +291,27 @@ class VoltageAcquirer:
             return passive
         return self._acquire_wake_assisted()
 
+    @contextmanager
+    def _bounded_exclusive_lock(self):
+        """Let a short passive probe finish without waiting behind a capture."""
+        attempts = max(1, self.exclusive_lock_attempts)
+        for attempt in range(attempts):
+            stack = ExitStack()
+            try:
+                handle = stack.enter_context(self.locks.exclusive(self.channel))
+            except diagnostic_safety.ChannelLockError:
+                stack.close()
+                if attempt + 1 >= attempts:
+                    raise
+                self.sleep(max(0.0, self.lock_retry_seconds))
+                continue
+            with stack:
+                yield handle
+            return
+
     def _acquire_wake_assisted(self) -> AcquisitionResult:
         try:
-            with self.locks.exclusive(self.channel) as lock_handle:
+            with self._bounded_exclusive_lock() as lock_handle:
                 state, blocked = self._interface_gate()
                 if blocked is not None:
                     return blocked

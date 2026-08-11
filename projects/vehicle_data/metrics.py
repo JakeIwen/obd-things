@@ -276,6 +276,37 @@ TARGET_CRANKSHAFT_TORQUE = MetricDefinition(
     ),
 )
 
+CRANKSHAFT_TORQUE = MetricDefinition(
+    name="engine.crankshaft_torque",
+    unit="lb-ft",
+    value_type="number",
+    stale_after_seconds=4.0,
+    passive_min_interval_seconds=0.0,
+    wake_min_interval_seconds=0.0,
+    minimum=-1000.0,
+    maximum=1000.0,
+    sources=(
+        SourceDefinition(
+            name="pcm.did.06da",
+            bus="c-can",
+            bitrate=500000,
+            acquisition_class="physical_read_data_by_identifier",
+            quality="observed_alfa_scale",
+            provenance=(
+                "projects/ecu_mapping/findings/promaster_2022/"
+                "2026-07-27_pcm_plots_loaded_drive_mapping.md; "
+                "physical padded 22 06DA, exact signed i16be x 0.04 Nm "
+                "across positive load and negative overrun; telemetry "
+                "converts Nm to lb-ft"
+            ),
+            side_effects=(
+                "engine-running-only physical UDS 22 read during a coordinated "
+                "armed C-CAN interval; ECU-reported current engine torque"
+            ),
+        ),
+    ),
+)
+
 
 def _transmission_speed_metric(name: str, field: str) -> MetricDefinition:
     return MetricDefinition(
@@ -471,6 +502,7 @@ METRICS = {
         ENGINE_RPM,
         VEHICLE_SPEED,
         TARGET_CRANKSHAFT_TORQUE,
+        CRANKSHAFT_TORQUE,
         TRANSMISSION_OUTPUT_SPEED,
         TRANSMISSION_OIL_TEMPERATURE,
         TRANSMISSION_TURBINE_SPEED,

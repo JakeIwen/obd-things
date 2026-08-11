@@ -109,6 +109,7 @@ def report(did, field, r_squared):
     return {
         "schema_version": 1,
         "classification": "candidate_only",
+        "evidence_tier": "exploratory_candidate",
         "candidate_only": True,
         "physical_identity_verified": False,
         "scale_verified": False,
@@ -167,6 +168,7 @@ def report(did, field, r_squared):
                     "dlc": 8,
                     "field": field,
                     "classification": "candidate_only",
+                    "evidence_tier": "exploratory_candidate",
                     "candidate_only": True,
                     "physical_identity_verified": False,
                     "scale_verified": False,
@@ -294,6 +296,125 @@ class BenchmarkTests(unittest.TestCase):
             benchmark.BenchmarkError, "reports candidates but a null"
         ):
             benchmark.evaluate_case(case, dataset, payload)
+
+    def test_operational_proxy_uses_explicit_error_tolerances(self):
+        packed_field = {
+            "kind": "u13be-low5",
+            "offset": 0,
+            "width_bytes": 2,
+            "byte_order": "big",
+            "signed": False,
+        }
+        case = {
+            **manifest()["cases"][0],
+            "id": "torque_trend_proxy",
+            "expectation": {
+                "kind": "operational_proxy",
+                "stream": {
+                    "channel": "can0",
+                    "can_id": "100",
+                    "id_bits": 11,
+                    "dlc": 8,
+                },
+                "field": {
+                    "dbc_start_bit": 4,
+                    "length_bits": 13,
+                    "byte_order": "big",
+                    "signed": False,
+                },
+                "intended_use": "trend",
+                "error_unit": "lb-ft",
+                "units_per_reference_raw": 0.1,
+                "minimum_coverage": 0.95,
+                "maximum_rmse": 2.0,
+                "maximum_p95_absolute_error": 3.0,
+                "maximum_absolute_mean_bias": 1.0,
+            },
+        }
+        dataset = manifest()["datasets"]["leg"]
+        payload = report("101B", packed_field, 0.8)
+        payload["fixed_formula_evaluation"] = {
+            "classification": "candidate_only",
+            "evidence_tier": "operational_proxy_evaluation",
+            "candidate_only": True,
+            "physical_identity_verified": False,
+            "scale_verified": False,
+            "telemetry_promotion_allowed": False,
+            "result": {
+                "formula": {
+                    "candidate": {
+                        "channel": "can0",
+                        "can_id_hex": "100",
+                        "id_bits": 11,
+                        "dlc": 8,
+                        "field": packed_field,
+                    },
+                    "scale": 1.0,
+                    "intercept": 0.0,
+                },
+                "sample_count": 20,
+                "coverage_ratio": 1.0,
+                "rmse": 10.0,
+                "p95_absolute_error": 20.0,
+                "absolute_mean_bias": 5.0,
+            },
+        }
+
+        passed = benchmark.evaluate_case(case, dataset, payload)
+        self.assertTrue(passed["passed"])
+        self.assertEqual(passed["evidence_tier"], "operational_proxy")
+        self.assertTrue(passed["operational_proxy_use_allowed"])
+        self.assertFalse(passed["physical_identity_verified"])
+        self.assertFalse(passed["telemetry_promotion_allowed"])
+        self.assertEqual(passed["observed_error"]["rmse"], 1.0)
+        self.assertEqual(
+            passed["observed_error"]["p95_absolute_error"], 2.0
+        )
+
+        data = manifest()
+        data["cases"] = [case]
+        with tempfile.TemporaryDirectory() as directory:
+            report_path = Path(directory) / "proxy.json"
+            job_path = Path(directory) / "proxy-job.json"
+            report_path.write_text(json.dumps(payload), encoding="utf-8")
+            job_path.write_text(
+                json.dumps(job_manifest(report_path)), encoding="utf-8"
+            )
+            evaluation = benchmark.build_evaluation(
+                data,
+                {"torque_trend_proxy": report_path},
+                {"torque_trend_proxy": job_path},
+            )
+        self.assertTrue(evaluation["benchmark_complete"])
+        self.assertEqual(evaluation["qualified_operational_proxy_count"], 1)
+
+        payload["fixed_formula_evaluation"]["result"]["rmse"] = 30.0
+        failed = benchmark.evaluate_case(case, dataset, payload)
+        self.assertFalse(failed["passed"])
+        self.assertEqual(
+            failed["status"], "operational_proxy_tolerance_failed"
+        )
+        self.assertEqual(failed["evidence_tier"], "exploratory_candidate")
+        self.assertFalse(failed["operational_proxy_use_allowed"])
+
+    def test_operational_proxy_manifest_rejects_safety_critical_use(self):
+        data = manifest()
+        case = data["cases"][0]
+        case["expectation"] = {
+            **case["expectation"],
+            "kind": "operational_proxy",
+            "intended_use": "safety_alert",
+            "error_unit": "raw",
+            "maximum_rmse": 5.0,
+            "maximum_p95_absolute_error": 10.0,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "manifest.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaisesRegex(
+                benchmark.BenchmarkError, "intended_use"
+            ):
+                benchmark.load_manifest(path)
 
     def test_evaluation_reports_holdout_status_without_sample_splitting(self):
         data = manifest()

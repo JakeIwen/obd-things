@@ -18,6 +18,10 @@ The implementation has two trust zones:
   rejects all acquisition requests unless deliberately started with
   `--allow-acquisitions`; neither the tracked nor live systemd service enables
   that flag.
+- `drive_recorder.py` is a receive-only companion to the broker-owned active
+  interval. It opens no diagnostic transport, takes no channel lock, never
+  configures `can0`, and never transmits. It records only after the broker's
+  status proves the reviewed active-drive helper owns the armed interface.
 
 The code does not install or enable itself. The units under `systemd/` retain
 safe loopback defaults and must be reviewed against the target host. The
@@ -53,6 +57,7 @@ The initial drive-publisher vocabulary is intentionally narrow:
 |---|---|---|---|
 | `battery.voltage` | `cluster.did.1004` | number, `V` | `observed_alfa_scale` |
 | `generator.field_duty` | `pcm.did.01a1` | number, `%` | `observed_alfa_scale` |
+| `engine.crankshaft_torque` | `pcm.did.06da` | number, `lb-ft` | `observed_alfa_scale` |
 | `engine.oil_pressure` | `ccan.broadcast.0x41d` | number, `psi` | `observed_alfa_scale` |
 | `engine.coolant_temperature` | `ccan.broadcast.0x2ed` | number, `°F` | `observed_alfa_scale` |
 | `engine.rpm` | `ccan.broadcast.0x0fc` | number, `rpm` | `observed_alfa_scale` |
@@ -93,6 +98,19 @@ reached approximately 100.008%, and the public range deliberately permits that
 small overshoot. The metric expires after four seconds. Sustained high duty can
 mean high commanded charging effort, but duty alone does not establish a
 thermal-danger threshold.
+
+`engine.crankshaft_torque` is the PCM's diagnostic current-engine-torque
+value from DID `06DA`, decoded as signed `i16be x 0.04 Nm` and converted to
+lb-ft for presentation. The exact sign and scale were observed across
+positive load and negative overrun in the synchronized 2026-07-27 drive. It
+is an ECU-reported crankshaft estimate, not wheel torque or a dynamometer
+measurement. It is polled only inside the same qualified engine-running
+interval as generator field duty and expires after four seconds.
+If the optional torque request fails, the helper reports that metric-specific
+reason and disables only torque for the remainder of that engine-running
+epoch. Generator duty, TPMS, passive powertrain telemetry, and broker-owned
+raw recording continue. Safety-gate, lock, topology, adapter, and restoration
+failures still stop the complete armed interval.
 
 The raw rows preserve the original cluster evidence without presenting
 unverified speed, gear, or temperature conversions as facts. The separately
@@ -147,8 +165,9 @@ The collector defaults to a one-second pause between passive cycles. The
 powertrain scalars and ignition presence witness expire after five seconds,
 which covers the bounded bus-classification plus snapshot cycle without
 dashboard flicker while still failing stale promptly after traffic stops.
-Generator field duty is polled at approximately one hertz during a qualified
-running interval and expires after four seconds.
+Generator field duty and current crankshaft torque are each polled at
+approximately one hertz during a qualified running interval and expire after
+four seconds.
 
 ### Presentation units
 
@@ -161,23 +180,24 @@ publication as lb-ft. Raw diagnostic metrics remain raw and are never
 unit-converted.
 
 Engine-oil temperature, passive **actual** loaded torque, and derived power
-are not yet qualified. Transmission-oil temperature is now available from
+are not yet qualified. Diagnostic current crankshaft torque is now available
+from guarded PCM DID `06DA`; transmission-oil temperature is available from
 the receive-only source above. The available
 `engine.target_crankshaft_torque` metric is a TCM command target and is
 deliberately excluded from the dashboard's actual-torque and power roles.
-Diagnostic actual torque and RPM are mapped, and passive RPM is available;
-the unresolved item is the passive actual-torque encoding needed for a
-receive-only power calculation. Their evidence, exact OEM
+Passive RPM is available; `0x100 u13be@9` is now a strong replicated passive
+current-torque candidate, but it remains unpromoted pending a frozen proxy or
+identity gate and therefore cannot yet feed a receive-only power calculation.
+The evidence, exact OEM
 pressure/thermostat context, alert-design constraints, PCM/TCM acquisition
 sequence, and later mechanical and electrical targets are maintained in the
 [`priority telemetry finding`](../ecu_mapping/findings/promaster_2022/2026-07-25_priority_telemetry_targets.md).
-The dashboard keeps inert roadmap cards visible for oil pressure, coolant
+The dashboard keeps roadmap cards visible for oil pressure, coolant
 temperature, engine-oil temperature, crankshaft torque, and crankshaft power.
-The oil-pressure and coolant cards and the Driving RPM tile now receive values
-after fresh observations;
-the other roadmap labels do not create metrics or imply that a source is
-available. Context-aware oil-pressure bands, engine-running/startup gates, and
-fresh time-aligned torque/RPM power derivation still require specialized
+Oil pressure, coolant, RPM, and guarded diagnostic crankshaft torque now
+receive fresh observations. The remaining roadmap labels do not create
+metrics or imply that a source is available. Context-aware oil-pressure bands
+and fresh time-aligned torque/RPM power derivation still require specialized
 evaluation and presentation logic. Passive RPM sends no diagnostic traffic.
 
 The oil-pressure card does provide **advisory OEM context**, not an alert. When
@@ -340,10 +360,11 @@ epoch:
    SocketCAN owner until RPM becomes zero/sub-threshold/stale or another stop
    condition appears;
 4. while armed it continues receiving and publishing the existing allowlisted
-   C-CAN powertrain/battery broadcasts, polls generator field duty at about
-   one hertz, and round-robins the four existing RF Hub pressure reads. Every
-   individual send consumes a new purpose-bound permit issued from the held
-   exclusive lock and that cycle's qualified RPM snapshot;
+   C-CAN powertrain/battery broadcasts, polls generator field duty and PCM
+   current crankshaft torque at about one hertz each, and round-robins the
+   four existing RF Hub pressure reads. Every individual send consumes a new
+   purpose-bound permit issued from the held exclusive lock and that cycle's
+   qualified RPM snapshot;
 5. it closes every socket, restores and verifies the exact prior listen-only
    configuration, and only then releases the lock.
 
@@ -355,21 +376,24 @@ passive while it is armed. The design trades one down/up transition at the
 start and end of a running epoch for continuous powertrain, generator, battery,
 and TPMS telemetry; it does not cycle SocketCAN once per poll.
 
-The PCM electrical registry currently contains exactly one immutable profile.
-Its only possible PCM transmission is the physical, 29-bit, fixed-DLC-8 frame:
+The closed PCM engine-running registry contains exactly two immutable
+profiles. Its only possible PCM transmissions are these physical, 29-bit,
+fixed-DLC-8 frames:
 
 ```text
 18DA10F1#032201A100000000
+18DA10F1#032206DA00000000
 ```
 
-The response must be a single frame from `18DAF110` with an exact
-`62 01 A1` echo and exactly two data bytes. A raw CAN socket is used so a
-malformed multi-frame reply cannot cause an ISO-TP FlowControl transmission.
+Each response must be a single frame from `18DAF110` with the corresponding
+exact `62 01 A1` or `62 06 DA` echo and exactly two data bytes. A raw CAN
+socket is used so a malformed multi-frame reply cannot cause an ISO-TP
+FlowControl transmission.
 There is no caller-selectable DID, service, CAN ID, payload, functional
 address, session, or tester-present option. In particular, this path contains
-no `10 92` or `3E` traffic. Future electrical metrics require a reviewed code
-change adding another fixed profile and exact decoder; candidate names do not
-create a diagnostic proxy.
+no `10 92` or `3E` traffic. Future PCM metrics require a reviewed code change
+adding another fixed profile and exact decoder; candidate names do not create
+a diagnostic proxy.
 
 The coordinated helper also preserves the already reviewed TPMS pressure path.
 Those are the only other CAN frames it can construct:
@@ -381,7 +405,7 @@ Those are the only other CAN frames it can construct:
 18DAC7F1#032231D300000000
 ```
 
-All five are physical `ReadDataByIdentifier` requests to endpoints registered
+All six are physical `ReadDataByIdentifier` requests to endpoints registered
 in `lib/modules.py`; no functional broadcast request exists. The helper stops
 on loss of RPM or C-CAN traffic, topology/inhibit changes, adapter health
 failure, timeout, malformed response, rejection, termination, or exception.
@@ -389,21 +413,59 @@ failure, timeout, malformed response, rejection, termination, or exception.
 change. A failed or unverified restoration sets a persistent operation inhibit,
 is latched in the broker, and prevents another active interval.
 
+The newly added torque read is optional within an otherwise healthy interval:
+its first response failure is published as a metric-specific acquisition
+failure and suppresses further `06DA` requests until the next engine-running
+epoch. It does not stop generator duty, TPMS, passive broadcast publication,
+or the receive-only drive recorder. This narrower behavior does not relax any
+interface, topology, RPM, permit, or restoration gate.
+
 The transport methods cannot send on control-flow convention alone. Their
-opaque permit is fixed to registered `can0`, one of the two reviewed transport
-purposes, the live exclusive diagnostic-lock handle, the issuing process, and
+opaque permit is fixed to registered `can0`, one of the three reviewed
+transport purposes, the live exclusive diagnostic-lock handle, the issuing
+process, and
 the latest snapshot's positive frame count plus three finite RPM samples at or
 above 400. It expires after 250 ms and is consumed by its first attempted use,
 including a wrong-purpose, stale, released-lock, or failed-send attempt. There
 is no zero-argument generator-duty sender.
 
-The direct-read evidence already includes two positive padded `22 01A1` reads
-without an explicit session change, so the implementation starts with no
-session traffic. That capture did not positively identify the inherited
-session. A clean post-ignition experiment is still useful if the research goal
-is to prove the minimal/default session label; it is not required to add
-`10 92`, and an NRC requiring another session must remain a reported blocker
-until a separate design and owner authorization exist.
+The direct-read evidence includes positive padded `22 01A1` reads without an
+explicit session change, and the synchronized Alfa/PCAN drive repeatedly
+observed padded `22 06DA`, so the implementation starts with no session
+traffic. The standalone `01A1` capture did not positively identify the
+inherited session. A clean post-ignition experiment is still useful if the
+research goal is to prove the minimal/default session label; it is not
+required to add `10 92`, and an NRC requiring another session must remain a
+reported blocker until a separate design and owner authorization exist.
+
+### Broker-coordinated raw drive recording
+
+`drive_recorder.py` preserves full-bus evidence while the broker owns the one
+PCAN adapter. The normal observer lock and the standalone
+`passive_drive_capture.py` entry point intentionally reject an armed interface;
+this narrower companion instead requires one exact broker status:
+
+- active drive enabled and `armed_diagnostic`, with an integer helper PID and
+  `current_owner.kind=broker_active_drive`;
+- qualified `0x0FC` engine-running state, usable same-boot C-CAN pins 6/14
+  topology, no operation inhibit, and healthy 500-kbit/s ERROR-ACTIVE `can0`;
+- an initial `0x2EF` frame within five seconds of opening the receive socket.
+
+It then reuses the loss-accounted recorder with `candump -D`, a 16 MiB socket
+receive buffer, ten-minute zstd chunks, full and priority streams, and the
+existing 30/25 GiB free-space floors. `-D` keeps the receive process attached
+across the broker's expected end-of-interval interface down/up restoration.
+The recorder accepts an armed interface only while the exact broker owner is
+present, but may continue after verified listen-only restoration so the raw
+session includes the key-off tail. Twenty seconds without `0x2EF` cleanly ends
+and verifies the campaign.
+
+The daemon loops after a successful finalization: while parked it opens no CAN
+socket and waits for the next broker-owned running interval, then creates a new
+timestamped campaign automatically. Consequently the installed service does
+not need manual re-arming between ordinary drive legs. Output is under
+`/mnt/EXFAT512/obd-things/tmp/captures/ccan/broker-drive/`, and the small
+operational state is `tmp/vehicle_data/drive-recorder-state.json`.
 
 `wake_if_asleep` first performs the same passive path. Only a silent bus can
 proceed. It then takes the exclusive diagnostics lock and rechecks the interface
@@ -545,16 +607,94 @@ restricts clients.
 
 ## Current vanpi deployment
 
-Last verified 2026-07-27:
+Last verified 2026-08-04:
 
-The coordinated active-drive and generator-duty changes documented above were
-implemented and tested offline on 2026-07-30. They have not been installed,
-enabled, started, or exercised against live CAN in this change; the bullets
-below continue to describe the previously verified running deployment.
+Guarded PCM current crankshaft torque was deployed at 03:14 MDT. The broker
+catalog and LAN dashboard expose `engine.crankshaft_torque` from fixed physical
+DID `06DA` in lb-ft while preserving the approximately-one-hertz
+`generator.field_duty` path. Two later complete drive captures contain 8,514
+changing `06DA` positives from -67.28 through 269.88 Nm, paired one-for-one
+with their physical requests. A torque-only failure remains isolated for that
+epoch and cannot terminate generator/TPMS collection or the broker-owned raw
+drive recorder.
+
+The merged coordinated active-drive and generator-duty code is installed and
+the broker has been restarted on it. Active-drive collection is enabled and
+the LAN dashboard's `generator.field_duty` route is verified end-to-end. The
+first live engine-running interval on 2026-07-30 sustained fresh approximately
+one-hertz `01A1` observations, initially 72.083% and then 100.000%, while all
+four TPMS positions and the allowlisted broadcasts continued to refresh.
+PCAN remained ERROR-ACTIVE with zero TX/RX errors or drops throughout the
+checked interval.
+
+The tracked `van-drive-recorder.service` is also installed, enabled at boot,
+and active. It was deployed receive-only during an ongoing drive with
+overlapping temporary `candump` coverage, without restarting the broker or
+reconfiguring `can0`. Its hardened campaign
+`broker-drive-20260731T001704814083` began at
+`2026-07-31T00:17:04.935569Z`; the manifest records
+`candump -L -D -d -r 16777216 can0`. The compressed full stream continued to
+grow after the overlap recorder stopped; its first ten-minute full and
+priority rotations finalized and passed zstd verification. The stream
+contained local PCM
+`18DA10F1` requests, `18DAF110` positives, RF Hub `18DAC7F1` requests, and
+`18DAF1C7` positives. No `DROPCOUNT` marker appeared. During the same check,
+the LAN dashboard returned HTTP 200, generator duty remained fresh at
+approximately one hertz (47.516%, 49.243%, then 59.494%), and every TPMS value
+remained fresh. Interface RX/TX error and drop counters were zero; the
+cumulative arbitration-lost counter was one before and after deployment and
+did not increase.
+
+The campaign finalized successfully at `2026-07-31T01:09:26.666381Z` after
+52 minutes 22 seconds. Six full and priority rotations were complete, with
+8,514,259 full-stream frames, 4,256,864 priority-stream frames, zero detected
+socket drops, no leftover partials, and `full_stream_complete=true`. The final
+chunk still contained exactly 121 PCM requests/positives and 121 RF Hub
+requests/positives. The terminal reason was the intended
+`tracked_id_absent`: the last `0x2EF` was followed by the configured 20-second
+key-off tail.
+
+The recorder's `can0: interface down` stderr line coincided with the broker's
+expected restoration transition; `candump -D` remained alive and the campaign
+completed normally. Broker status then reported `restoration_failed=false`,
+no active inhibit, and a usable C-CAN pins-6/14 topology. `can0` read back UP,
+500 kbit/s, listen-only, ERROR-ACTIVE, with zero RX/TX error and drop counters.
+The recorder daemon returned automatically to its broker-owned-drive wait with
+no child `candump` process. This proves clean finalization and automatic
+rearming-to-wait; creation of the next timestamped campaign necessarily awaits
+the next qualified engine-running interval.
+
+Two later engine-running intervals then exercised that rearm path end to end.
+Campaigns `broker-drive-20260731T012751675165` and
+`broker-drive-20260731T030218233898` started without manual recorder action and
+successfully finalized after 4,862.603 and 4,000.368 seconds. Together with the
+first hardened campaign, all 22 full/priority rotations are complete:
+32,555,907 full-stream frames, 16,273,335 priority-stream frames, zero detected
+socket drops, and no leftover partial. This is direct multi-leg evidence that
+the installed service automatically primes each subsequent drive.
+
+The 2026-08-01/02 campaigns `broker-drive-20260801T225441745239` and
+`broker-drive-20260802T014258086240` add 23,227,794 full-stream frames across
+142.6 minutes, 16 verified chunks, and zero socket drops. Offline physical-wire
+accounting found 8,514 complete scheduler cycles: every `01A1`, `06DA`, and RF
+Hub request received its expected positive response, with 3.605 ms median and
+9.203 ms maximum PCM response latency. The three one-hertz diagnostic reads
+add six extended frames per second, conservatively below 0.2% of the 500-kbit/s
+link. Full provenance and the failed zero-frame B-CAN attempt are recorded in
+the
+[`broker-drive poll validation`](../ecu_mapping/findings/promaster_2022/2026-08-04_broker_drive_poll_validation.md).
+
+A machine-local `10-can0-passive-baseline.conf` drop-in performs a guarded
+passive interface preflight before broker startup; it leaves an already-correct
+interface untouched and otherwise uses the locked passive bring-up path.
 
 - `van-telemetry.service`, `van-telemetry-web.service`, and a separate
   machine-local Tailscale web service are installed, enabled at boot, and
   running.
+- `van-drive-recorder.service` is installed, enabled, and running. It is
+  independent of the broker's service lifetime, waits safely when the broker is
+  unavailable or not armed, and restarts on recorder failure with bounded
+  systemd backoff.
 - Starting the broker also pulls in the LAN listener. The LAN listener is
   `PartOf=van-telemetry.service`, so a broker restart restarts the listener
   rather than leaving it detached. The machine-local deployment applies the
@@ -562,10 +702,11 @@ below continue to describe the previously verified running deployment.
   broker's wanted units. A deliberate broker stop therefore stops both web
   listeners, while a later broker start restores the complete installed web
   stack.
-- The live broker registry exposes all four verified TPMS wheel metrics. With
-  the transmitting `tpms-logger.service` intentionally stopped for the current
-  listen-only drive-recording campaign, all four correctly remain unavailable
-  and the dashboard reports `0/4 LIVE · 4/4 MAPPED`.
+- The live broker registry exposes all four verified TPMS wheel metrics.
+  `tpms-logger.service` is enabled and running, but the merged process detects
+  the live broker and yields without taking a CAN lock or opening a diagnostic
+  socket. The broker's coordinated active-drive owner polls TPMS alongside
+  `01A1` while the engine-running gate holds.
 - The broker is available only through
   `/run/van-telemetry/api.sock`, owned by the unprivileged `pi` user/group.
 - The tracked web unit remains loopback-only. A machine-local systemd drop-in
@@ -589,11 +730,12 @@ host:
 
 ```bash
 systemctl is-enabled van-telemetry.service van-telemetry-web.service \
-  van-telemetry-web-tailscale.service
+  van-telemetry-web-tailscale.service van-drive-recorder.service
 systemctl is-active van-telemetry.service van-telemetry-web.service \
-  van-telemetry-web-tailscale.service
+  van-telemetry-web-tailscale.service van-drive-recorder.service
 systemctl cat van-telemetry-web.service
 systemctl cat van-telemetry-web-tailscale.service
+cat tmp/vehicle_data/drive-recorder-state.json
 ss -lntp | grep ':8765'
 curl --fail http://vanpi.lan:8765/v1/status
 curl --fail http://<tailscale-ip>:8765/v1/status
@@ -610,7 +752,12 @@ override.
 If the socket exists but is invalid or unreachable, the monitor fails closed
 instead of bypassing the intended owner. Before the service is deployed it uses
 the same in-process `VoltageAcquirer`, so its scheduler and notification path
-continue to work while acquisition safety still has one implementation.
+continue to work while acquisition safety still has one implementation. After
+a silent passive read, that acquirer releases its shared observer lock before
+requesting exclusive wake ownership. It retries that exclusive request every
+0.5 seconds for at most nine attempts, allowing a short passive recorder probe
+to finish without waiting indefinitely behind a real capture or diagnostic
+operation. No observer lock is retained during the retry interval.
 
 ## Validation
 
@@ -619,7 +766,9 @@ cache-only GETs, strict local publication, typed values, source-metadata
 allowlists, broker-stamped age, passive acquisition,
 silent-bus wake gates, coalescing/rate limits, post-wake restoration failure,
 Unix API behavior, the registry-driven snapshot, evidence-qualified vehicle
-state, dashboard profile assets, and cache-only web defaults.
+state, dashboard profile assets, cache-only web defaults, exact broker-owned
+recorder admission, initial-ignition timeout, and persistent-candump command
+construction.
 
 The services are deployed on vanpi as described above. Service health and
 offline validation are not evidence of a successful live CAN acquisition;

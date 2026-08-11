@@ -1,0 +1,22 @@
+[Unit]
+Description=Receive-only raw recorder for broker-owned C-CAN drive intervals
+After=local-fs.target van-telemetry.service
+Wants=van-telemetry.service
+RequiresMountsFor=/mnt/EXFAT512
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/dev/obd-things
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=+/usr/sbin/sysctl -w net.core.rmem_max=16777216
+ExecStart=/usr/bin/python3 /home/pi/dev/obd-things/projects/vehicle_data/drive_recorder.py --execute --confirm-broker-owned-receive-only
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=180
+
+[Install]
+WantedBy=multi-user.target

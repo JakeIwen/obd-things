@@ -640,13 +640,15 @@ def run_active_session(
             reason="running_gate_satisfied",
             detail=(
                 "exclusive C-CAN owner is armed; broadcast telemetry, PCM "
-                "generator duty, and fixed RF Hub pressures share this interval"
+                "generator duty/current torque, and fixed RF Hub pressures "
+                "share this interval"
             ),
             interface_mode="armed_diagnostic",
             pid=os.getpid(),
         )
 
         next_cycle = backend.monotonic()
+        torque_enabled = True
         while True:
             cycle_started = backend.monotonic()
             gate_failure = _active_gate(backend, initial)
@@ -692,16 +694,63 @@ def run_active_session(
                 "observation",
                 metric=pcm_result.metric,
                 value=pcm_result.value,
-                unit="%",
-                source="pcm.did.01a1",
-                bus="c-can",
-                quality="observed_alfa_scale",
+                unit=pcm_result.unit,
+                source=pcm_result.source,
+                bus=pcm_result.bus,
+                quality=pcm_result.quality,
                 detail=pcm_result.detail,
                 interface_mode="armed_diagnostic",
             )
 
-            # The PCM response wait is another bounded gap. Recheck again before
-            # the independent RF Hub request.
+            if torque_enabled:
+                # Each PCM response wait is a bounded gap. Recheck before
+                # issuing the second, independently permitted fixed request.
+                gate_failure = _active_gate(backend, initial)
+                if gate_failure is not None:
+                    outcome = gate_failure
+                    break
+                torque_permit = transmit_permit.issue(
+                    lock_handle,
+                    snapshot,
+                    purpose=transmit_permit.PCM_CRANKSHAFT_TORQUE,
+                    monotonic=backend.monotonic,
+                )
+                torque_result = pcm_poller.poll_crankshaft_torque(
+                    torque_permit
+                )
+                failed = _pcm_outcome(torque_result)
+                if failed is not None:
+                    # Torque is useful but not an ownership or capture safety
+                    # prerequisite. Report one exact failure and stop polling
+                    # it for this epoch; keep generator, TPMS, passive
+                    # telemetry, and the receive-only recorder alive.
+                    torque_enabled = False
+                    sink.emit(
+                        "metric_failure",
+                        metric=torque_result.metric,
+                        unit=torque_result.unit,
+                        source=torque_result.source,
+                        bus=torque_result.bus,
+                        quality=torque_result.quality,
+                        reason=failed.reason,
+                        detail=failed.detail,
+                        interface_mode="armed_diagnostic",
+                    )
+                else:
+                    sink.emit(
+                        "observation",
+                        metric=torque_result.metric,
+                        value=torque_result.value,
+                        unit=torque_result.unit,
+                        source=torque_result.source,
+                        bus=torque_result.bus,
+                        quality=torque_result.quality,
+                        detail=torque_result.detail,
+                        interface_mode="armed_diagnostic",
+                    )
+
+            # The second PCM response wait is another bounded gap. Recheck
+            # again before the independent RF Hub request.
             gate_failure = _active_gate(backend, initial)
             if gate_failure is not None:
                 outcome = gate_failure

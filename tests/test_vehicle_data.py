@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest import mock
 
-from lib import canbus
+from lib import canbus, diagnostic_safety
 from projects.battery import bcan_voltage, ccan_voltage
 from projects.vehicle_data import broker as broker_module
 from projects.vehicle_data.api import (
@@ -68,6 +68,20 @@ class FakeLocks:
     @contextlib.contextmanager
     def exclusive(self, _channel):
         self.exclusive_count += 1
+        yield self.handle
+
+
+class FlakyExclusiveLocks(FakeLocks):
+    def __init__(self, failures):
+        super().__init__()
+        self.failures = failures
+
+    @contextlib.contextmanager
+    def exclusive(self, _channel):
+        self.exclusive_count += 1
+        if self.failures:
+            self.failures -= 1
+            raise diagnostic_safety.ChannelLockError("temporary observer")
         yield self.handle
 
 
@@ -144,6 +158,7 @@ class SourceTests(unittest.TestCase):
                 > broker_args.collector_interval
                 for name in (
                     "engine.coolant_temperature",
+                    "engine.crankshaft_torque",
                     "generator.field_duty",
                     "engine.oil_pressure",
                     "engine.rpm",
@@ -179,6 +194,7 @@ class SourceTests(unittest.TestCase):
             {
                 "battery.voltage",
                 "engine.coolant_temperature",
+                "engine.crankshaft_torque",
                 "generator.field_duty",
                 "engine.oil_pressure",
                 "engine.rpm",
@@ -271,6 +287,15 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(
             METRICS["engine.target_crankshaft_torque"].unit, "lb-ft"
         )
+        torque = METRICS["engine.crankshaft_torque"]
+        self.assertEqual(torque.unit, "lb-ft")
+        self.assertEqual(torque.stale_after_seconds, 4.0)
+        self.assertEqual(torque.sources[0].name, "pcm.did.06da")
+        self.assertEqual(
+            torque.sources[0].quality,
+            "observed_alfa_scale",
+        )
+        self.assertFalse(torque.sources[0].publisher_allowed)
         self.assertEqual(METRICS["transmission.output_speed"].unit, "rpm")
         self.assertEqual(
             METRICS["transmission.oil_temperature"].unit,
@@ -376,6 +401,47 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(
             backend.last_wake, ("c-can", locks.handle, interface())
         )
+
+    def test_wake_waits_boundedly_for_short_observer_probe(self):
+        backend = FakeBackend(
+            buses=("silent", "silent", "silent", "c-can"),
+            states=(interface(), interface(), interface()),
+        )
+        locks = FlakyExclusiveLocks(failures=2)
+        sleeps = []
+
+        result = VoltageAcquirer(
+            backend=backend,
+            locks=locks,
+            exclusive_lock_attempts=3,
+            lock_retry_seconds=0.25,
+            sleep=sleeps.append,
+            monotonic=lambda: 10.0,
+        ).acquire("wake_if_asleep")
+
+        self.assertTrue(result.available)
+        self.assertEqual(locks.exclusive_count, 3)
+        self.assertEqual(sleeps, [0.25, 0.25])
+        self.assertEqual(backend.wake_count, 1)
+
+    def test_wake_lock_retry_remains_bounded_behind_long_observer(self):
+        backend = FakeBackend(buses=("silent",))
+        locks = FlakyExclusiveLocks(failures=10)
+        sleeps = []
+
+        result = VoltageAcquirer(
+            backend=backend,
+            locks=locks,
+            exclusive_lock_attempts=3,
+            lock_retry_seconds=0.25,
+            sleep=sleeps.append,
+        ).acquire("wake_if_asleep")
+
+        self.assertFalse(result.available)
+        self.assertEqual(result.reason, "can_busy")
+        self.assertEqual(locks.exclusive_count, 3)
+        self.assertEqual(sleeps, [0.25, 0.25])
+        self.assertEqual(backend.wake_count, 0)
 
     def test_post_wake_state_change_overrides_success(self):
         backend = FakeBackend(
@@ -2159,6 +2225,36 @@ const liveCoolant = {
   unit: element("engine-coolant-temperature-unit").textContent,
   status: element("engine-coolant-temperature-status").textContent,
 };
+const torqueDefinition = {
+  name: "engine.crankshaft_torque",
+  unit: "lb-ft",
+  stale_after_seconds: 4,
+  sources: [{
+    name: "pcm.did.06da",
+    quality: "observed_alfa_scale",
+  }],
+};
+const torqueStates = dashboard.renderEngineHealth(
+  [torqueDefinition],
+  {
+    "engine.crankshaft_torque": {
+      available: true,
+      stale: false,
+      value: -46.4,
+      unit: "lb-ft",
+      quality: "observed_alfa_scale",
+      source: "pcm.did.06da",
+      age_ms: 100,
+    },
+  },
+);
+const liveTorque = {
+  ready: torqueStates.filter((state) => state.state.heroReady).length,
+  state: element("engine-health-state").textContent,
+  value: element("engine-torque").textContent,
+  unit: element("engine-torque-unit").textContent,
+  status: element("engine-torque-status").textContent,
+};
 const freshMetric = (value) => ({
   available: true,
   stale: false,
@@ -2232,6 +2328,7 @@ process.stdout.write(JSON.stringify({
   emptyTires,
   emptyEngine,
   liveCoolant,
+  liveTorque,
   oilReferences,
 }));
 """
@@ -2336,6 +2433,14 @@ process.stdout.write(JSON.stringify({
         self.assertEqual(result["liveCoolant"]["value"], "194")
         self.assertEqual(result["liveCoolant"]["unit"], "\u00b0F")
         self.assertIn("VERIFIED", result["liveCoolant"]["status"])
+        self.assertEqual(result["liveTorque"]["ready"], 1)
+        self.assertEqual(
+            result["liveTorque"]["state"],
+            "1/6 LIVE · 1/6 MAPPED",
+        )
+        self.assertEqual(result["liveTorque"]["value"], "-46.4")
+        self.assertEqual(result["liveTorque"]["unit"], "lb-ft")
+        self.assertIn("ALFA SCALE", result["liveTorque"]["status"])
         self.assertIn(
             "OEM warm reference", result["oilReferences"]["missing"]
         )

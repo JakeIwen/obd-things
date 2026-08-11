@@ -1,10 +1,11 @@
-"""Closed, single-frame PCM electrical telemetry reads.
+"""Closed, single-frame PCM engine-running telemetry reads.
 
 This module deliberately is not a general UDS transport.  Its public poller can
-send one reviewed, physical, 29-bit SocketCAN frame for generator field duty.
-The expected response is also single-frame, so a raw CAN socket is used instead
-of an ISO-TP socket: malformed multi-frame traffic is rejected without any
-possibility of transmitting an ISO-TP FlowControl frame.
+send only the reviewed, physical, 29-bit SocketCAN frames for generator field
+duty and current crankshaft torque.  Both expected responses are single-frame,
+so a raw CAN socket is used instead of an ISO-TP socket: malformed multi-frame
+traffic is rejected without any possibility of transmitting an ISO-TP
+FlowControl frame.
 
 Interface arming, topology checks, operation inhibits, and listen-only
 restoration belong to the coordinated active-drive owner.  Every poll also
@@ -45,6 +46,11 @@ GENERATOR_DUTY_REQUEST_DATA = bytes.fromhex(
     "03 22 01 A1 00 00 00 00"
 )
 GENERATOR_DUTY_POSITIVE_ECHO = bytes.fromhex("62 01 A1")
+CRANKSHAFT_TORQUE_REQUEST_DATA = bytes.fromhex(
+    "03 22 06 DA 00 00 00 00"
+)
+CRANKSHAFT_TORQUE_POSITIVE_ECHO = bytes.fromhex("62 06 DA")
+NM_TO_LB_FT = 0.7375621492772656
 SESSION_REQUIRED_NRCS = frozenset((0x7E, 0x7F))
 
 
@@ -126,18 +132,46 @@ _GENERATOR_FIELD_DUTY_PROFILE = PcmElectricalProfile(
     maximum=101.0,
 )
 GENERATOR_FIELD_DUTY_PROFILE = _GENERATOR_FIELD_DUTY_PROFILE
+_CRANKSHAFT_TORQUE_PROFILE = PcmElectricalProfile(
+    metric="engine.crankshaft_torque",
+    did=0x06DA,
+    unit="lb-ft",
+    source="pcm.did.06da",
+    bus="c-can",
+    quality="observed_alfa_scale",
+    acquisition_class="physical_read_data_by_identifier",
+    channel=_PCM.channel,
+    bitrate=_PCM.bitrate,
+    addressing_mode=_PCM.addressing_mode,
+    request_id=_PCM.txid,
+    response_id=_PCM.rxid,
+    request_data=CRANKSHAFT_TORQUE_REQUEST_DATA,
+    positive_echo=CRANKSHAFT_TORQUE_POSITIVE_ECHO,
+    response_data_length=2,
+    minimum=-1000.0,
+    maximum=1000.0,
+)
+CRANKSHAFT_TORQUE_PROFILE = _CRANKSHAFT_TORQUE_PROFILE
 
 # MappingProxyType plus a frozen value makes the reviewed registry immutable at
 # runtime.  No function below accepts a profile name, DID, CAN ID, or payload.
 PCM_ELECTRICAL_PROFILES = MappingProxyType(
-    {_GENERATOR_FIELD_DUTY_PROFILE.metric: _GENERATOR_FIELD_DUTY_PROFILE}
+    {
+        _GENERATOR_FIELD_DUTY_PROFILE.metric: _GENERATOR_FIELD_DUTY_PROFILE,
+        _CRANKSHAFT_TORQUE_PROFILE.metric: _CRANKSHAFT_TORQUE_PROFILE,
+    }
 )
 
 
 def _validate_closed_registry() -> None:
-    profile = _GENERATOR_FIELD_DUTY_PROFILE
-    if tuple(PCM_ELECTRICAL_PROFILES) != ("generator.field_duty",):
-        raise RuntimeError("PCM electrical allowlist must contain exactly one metric")
+    if tuple(PCM_ELECTRICAL_PROFILES) != (
+        "generator.field_duty",
+        "engine.crankshaft_torque",
+    ):
+        raise RuntimeError(
+            "PCM engine-running allowlist must contain exactly the two "
+            "reviewed metrics"
+        )
     expected_module = (
         "pcm",
         "c-can",
@@ -160,34 +194,53 @@ def _validate_closed_registry() -> None:
             f"profile: observed={observed_module!r}"
         )
     if (
-        profile.did != 0x01A1
-        or profile.request_data != bytes.fromhex("03 22 01 A1 00 00 00 00")
-        or profile.positive_echo != bytes.fromhex("62 01 A1")
-        or profile.response_data_length != 2
+        _GENERATOR_FIELD_DUTY_PROFILE.did != 0x01A1
+        or _GENERATOR_FIELD_DUTY_PROFILE.request_data
+        != bytes.fromhex("03 22 01 A1 00 00 00 00")
+        or _GENERATOR_FIELD_DUTY_PROFILE.positive_echo
+        != bytes.fromhex("62 01 A1")
+        or _GENERATOR_FIELD_DUTY_PROFILE.response_data_length != 2
     ):
         raise RuntimeError("Generator field duty wire profile changed")
+    if (
+        _CRANKSHAFT_TORQUE_PROFILE.did != 0x06DA
+        or _CRANKSHAFT_TORQUE_PROFILE.request_data
+        != bytes.fromhex("03 22 06 DA 00 00 00 00")
+        or _CRANKSHAFT_TORQUE_PROFILE.positive_echo
+        != bytes.fromhex("62 06 DA")
+        or _CRANKSHAFT_TORQUE_PROFILE.response_data_length != 2
+    ):
+        raise RuntimeError("Crankshaft torque wire profile changed")
 
 
 _validate_closed_registry()
 
 
-def _failure(reason: str, detail: str) -> PcmElectricalResult:
-    profile = _GENERATOR_FIELD_DUTY_PROFILE
+def _failure(
+    profile: PcmElectricalProfile,
+    reason: str,
+    detail: str,
+) -> PcmElectricalResult:
     return PcmElectricalResult(
         metric=profile.metric,
         available=False,
         unit=profile.unit,
+        source=profile.source,
         bus=profile.bus,
+        quality=profile.quality,
         acquisition=profile.acquisition_class,
         reason=reason,
         detail=detail,
     )
 
 
-def _decode_response(frame: bytes) -> PcmElectricalResult:
-    profile = _GENERATOR_FIELD_DUTY_PROFILE
+def _decode_response(
+    profile: PcmElectricalProfile,
+    frame: bytes,
+) -> PcmElectricalResult:
     if len(frame) != CAN_FRAME_SIZE:
         return _failure(
+            profile,
             "malformed_response",
             f"raw SocketCAN response length {len(frame)} is not {CAN_FRAME_SIZE}",
         )
@@ -195,43 +248,55 @@ def _decode_response(frame: bytes) -> PcmElectricalResult:
     raw_can_id, dlc, padded_data = struct.unpack(CAN_FRAME_FORMAT, frame)
     if dlc > 8:
         return _failure(
+            profile,
             "malformed_response",
             f"response DLC {dlc} exceeds classic CAN capacity",
         )
     if raw_can_id & (CAN_RTR_FLAG | CAN_ERR_FLAG):
         return _failure(
+            profile,
             "malformed_response",
             "response carried an RTR or CAN error flag",
         )
     if not raw_can_id & CAN_EFF_FLAG:
         return _failure(
+            profile,
             "malformed_response",
             "response did not use the reviewed 29-bit extended identifier",
         )
     response_id = raw_can_id & CAN_EFF_MASK
     if response_id != profile.response_id:
         return _failure(
+            profile,
             "malformed_response",
             f"response identifier 0x{response_id:08X} did not match PCM",
         )
     if dlc < 1:
-        return _failure("malformed_response", "response omitted ISO-TP PCI")
+        return _failure(
+            profile,
+            "malformed_response",
+            "response omitted ISO-TP PCI",
+        )
 
     data = padded_data[:dlc]
     pci = data[0]
     if pci >> 4 != 0:
         return _failure(
+            profile,
             "malformed_response",
             "response was not an ISO-TP SingleFrame; no FlowControl was sent",
         )
     payload_length = pci & 0x0F
     if payload_length != 3 + profile.response_data_length:
         return _failure(
+            profile,
             "malformed_response",
-            f"response SingleFrame length {payload_length} is not 5",
+            "response SingleFrame length "
+            f"{payload_length} is not {3 + profile.response_data_length}",
         )
     if dlc < payload_length + 1:
         return _failure(
+            profile,
             "malformed_response",
             "response was truncated before its declared SingleFrame payload",
         )
@@ -241,25 +306,38 @@ def _decode_response(frame: bytes) -> PcmElectricalResult:
         # A valid UDS negative response is three bytes, so it cannot also have
         # the five-byte length required by the positive Generator Duty profile.
         return _failure(
+            profile,
             "malformed_response",
             "negative response used the positive response payload length",
         )
     if payload[:3] != profile.positive_echo:
         return _failure(
+            profile,
             "malformed_response",
-            "response did not exactly echo service 62 and DID 01A1",
+            "response did not exactly echo service 62 and the reviewed DID",
         )
 
-    raw_value = int.from_bytes(payload[3:5], "big")
-    value = raw_value * 100.0 / 32768.0
+    if profile is _GENERATOR_FIELD_DUTY_PROFILE:
+        raw_value = int.from_bytes(payload[3:5], "big")
+        value = raw_value * 100.0 / 32768.0
+        decode_detail = "u16be x 100 / 32768"
+    elif profile is _CRANKSHAFT_TORQUE_PROFILE:
+        raw_value = int.from_bytes(payload[3:5], "big", signed=True)
+        torque_nm = raw_value * 0.04
+        value = torque_nm * NM_TO_LB_FT
+        decode_detail = "i16be x 0.04 Nm, converted to lb-ft"
+    else:
+        raise RuntimeError("unreviewed PCM profile reached the decoder")
     if (
         not math.isfinite(value)
         or value < profile.minimum
         or value > profile.maximum
     ):
         return _failure(
+            profile,
             "response_rejected",
-            f"decoded generator field duty {value:.6f}% is implausible",
+            f"decoded {profile.metric} value {value:.6f} {profile.unit} "
+            "is implausible",
         )
     return PcmElectricalResult(
         metric=profile.metric,
@@ -272,18 +350,20 @@ def _decode_response(frame: bytes) -> PcmElectricalResult:
         quality=profile.quality,
         acquisition=profile.acquisition_class,
         detail=(
-            "physical PCM 22 01A1; exact 62 01A1 echo; "
-            "u16be x 100 / 32768"
+            f"physical PCM 22 {profile.did:04X}; exact "
+            f"62 {profile.did:04X} echo; {decode_detail}"
         ),
     )
 
 
-def _decode_wire_response(frame: bytes) -> PcmElectricalResult:
+def _decode_wire_response(
+    profile: PcmElectricalProfile,
+    frame: bytes,
+) -> PcmElectricalResult:
     """Decode a positive or negative fixed-ID ISO-TP SingleFrame."""
 
-    profile = _GENERATOR_FIELD_DUTY_PROFILE
     if len(frame) != CAN_FRAME_SIZE:
-        return _decode_response(frame)
+        return _decode_response(profile, frame)
     raw_can_id, dlc, padded_data = struct.unpack(CAN_FRAME_FORMAT, frame)
     if (
         dlc <= 8
@@ -298,26 +378,31 @@ def _decode_wire_response(frame: bytes) -> PcmElectricalResult:
         if pci >> 4 == 0 and payload_length == 3:
             if dlc < 4:
                 return _failure(
+                    profile,
                     "malformed_response",
                     "negative response was truncated",
                 )
             payload = data[1:4]
             if payload[:2] != b"\x7F\x22":
                 return _failure(
+                    profile,
                     "malformed_response",
                     "negative response did not echo request service 22",
                 )
             nrc = payload[2]
             if nrc in SESSION_REQUIRED_NRCS:
                 return _failure(
+                    profile,
                     "session_required",
-                    f"PCM rejected 22 01A1 in the active session with NRC {nrc:02X}",
+                    f"PCM rejected 22 {profile.did:04X} in the active "
+                    f"session with NRC {nrc:02X}",
                 )
             return _failure(
+                profile,
                 "response_rejected",
-                f"PCM rejected 22 01A1 with NRC {nrc:02X}",
+                f"PCM rejected 22 {profile.did:04X} with NRC {nrc:02X}",
             )
-    return _decode_response(frame)
+    return _decode_response(profile, frame)
 
 
 def _positive_finite_timeout(value: object) -> float:
@@ -335,7 +420,7 @@ def _positive_finite_timeout(value: object) -> float:
 
 
 class PcmElectricalPoller:
-    """Reusable owner-scoped transport for the sole reviewed PCM metric.
+    """Reusable owner-scoped transport for two reviewed PCM metrics.
 
     ``channel`` exists so a coordinated active-drive owner can pass its already
     verified interface explicitly.  It must still equal the PCM registry
@@ -404,12 +489,39 @@ class PcmElectricalPoller:
         return False
 
     def poll(self, permit: object) -> PcmElectricalResult:
+        """Poll generator field duty; retained as the narrow legacy entrypoint."""
+
+        return self._poll(
+            _GENERATOR_FIELD_DUTY_PROFILE,
+            transmit_permit.PCM_GENERATOR_DUTY,
+            permit,
+        )
+
+    def poll_crankshaft_torque(
+        self,
+        permit: object,
+    ) -> PcmElectricalResult:
+        """Consume one torque permit and send only physical PCM ``22 06DA``."""
+
+        return self._poll(
+            _CRANKSHAFT_TORQUE_PROFILE,
+            transmit_permit.PCM_CRANKSHAFT_TORQUE,
+            permit,
+        )
+
+    def _poll(
+        self,
+        profile: PcmElectricalProfile,
+        purpose: str,
+        permit: object,
+    ) -> PcmElectricalResult:
         """Consume one owner permit, send one fixed request, and validate it."""
 
         try:
             self.open()
         except (OSError, RuntimeError, ValueError) as exc:
             return _failure(
+                profile,
                 "response_rejected",
                 f"could not open the fixed PCM raw transport: {exc}",
             )
@@ -419,26 +531,29 @@ class PcmElectricalPoller:
         try:
             transmit_permit.consume(
                 permit,
-                purpose=transmit_permit.PCM_GENERATOR_DUTY,
+                purpose=purpose,
                 channel=self.channel,
             )
         except transmit_permit.TransmitPermitError as exc:
             return _failure(
+                profile,
                 "response_rejected",
                 f"fixed PCM request lacked a valid transmit permit: {exc}",
             )
         deadline = self._monotonic() + self.timeout_seconds
         try:
-            sent = sock.send(_GENERATOR_FIELD_DUTY_PROFILE.request_frame)
+            sent = sock.send(profile.request_frame)
         except OSError as exc:
             self.close()
             return _failure(
+                profile,
                 "response_rejected",
                 f"fixed PCM request could not be sent: {exc}",
             )
         if sent != CAN_FRAME_SIZE:
             self.close()
             return _failure(
+                profile,
                 "response_rejected",
                 f"fixed PCM request send length {sent} is not {CAN_FRAME_SIZE}",
             )
@@ -446,6 +561,7 @@ class PcmElectricalPoller:
         remaining = deadline - self._monotonic()
         if remaining <= 0:
             return _failure(
+                profile,
                 "response_timeout",
                 "PCM response deadline expired after the fixed request",
             )
@@ -454,12 +570,15 @@ class PcmElectricalPoller:
             frame = sock.recv(CAN_FRAME_SIZE)
         except (socket.timeout, TimeoutError):
             return _failure(
+                profile,
                 "response_timeout",
-                "PCM did not answer physical 22 01A1 before the deadline",
+                f"PCM did not answer physical 22 {profile.did:04X} "
+                "before the deadline",
             )
         except OSError as exc:
             self.close()
             return _failure(
+                profile,
                 "response_rejected",
                 f"PCM response receive failed: {exc}",
             )
@@ -467,7 +586,8 @@ class PcmElectricalPoller:
             frame_bytes = bytes(frame)
         except (TypeError, ValueError):
             return _failure(
+                profile,
                 "malformed_response",
                 "raw SocketCAN transport returned a non-byte response",
             )
-        return _decode_wire_response(frame_bytes)
+        return _decode_wire_response(profile, frame_bytes)

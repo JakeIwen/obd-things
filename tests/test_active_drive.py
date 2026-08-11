@@ -113,12 +113,32 @@ class EventSink:
 
 
 class FakePcmPoller:
-    def __init__(self, result=None, exception=None, events=None):
+    def __init__(
+        self,
+        result=None,
+        torque_result=None,
+        exception=None,
+        events=None,
+    ):
         self.result = result or SimpleNamespace(
             available=True,
             metric="generator.field_duty",
             value=100.008,
+            unit="%",
+            source="pcm.did.01a1",
+            bus="c-can",
+            quality="observed_alfa_scale",
             detail="exact 62 01A1 replay",
+        )
+        self.torque_result = torque_result or SimpleNamespace(
+            available=True,
+            metric="engine.crankshaft_torque",
+            value=177.6,
+            unit="lb-ft",
+            source="pcm.did.06da",
+            bus="c-can",
+            quality="observed_alfa_scale",
+            detail="exact 62 06DA replay",
         )
         self.exception = exception
         self.events = events
@@ -134,6 +154,15 @@ class FakePcmPoller:
         if self.exception is not None:
             raise self.exception
         return self.result
+
+    def poll_crankshaft_torque(self, permit):
+        self.poll_count += 1
+        self.permits.append(permit)
+        if self.events is not None:
+            self.events.append("pcm_torque_poll")
+        if self.exception is not None:
+            raise self.exception
+        return self.torque_result
 
     def close(self):
         self.closed = True
@@ -327,9 +356,10 @@ class ActiveSessionTests(unittest.TestCase):
 
         self.assertEqual(outcome.reason, "engine_not_running")
         self.assertTrue(outcome.restored)
-        self.assertEqual(pcm.poll_count, 1)
+        self.assertEqual(pcm.poll_count, 2)
         self.assertEqual(tpms.poll_count, 1)
-        self.assertIsNot(pcm.permits[0], tpms.permits[0])
+        self.assertIsNot(pcm.permits[0], pcm.permits[1])
+        self.assertIsNot(pcm.permits[1], tpms.permits[0])
         self.assertTrue(pcm.closed)
         self.assertTrue(tpms.closed)
         self.assertEqual(backend.arm_count, 1)
@@ -348,6 +378,7 @@ class ActiveSessionTests(unittest.TestCase):
                 "vehicle.speed",
                 "battery.voltage",
                 "generator.field_duty",
+                "engine.crankshaft_torque",
                 "tire.pressure.fl",
             },
         )
@@ -360,6 +391,57 @@ class ActiveSessionTests(unittest.TestCase):
         self.assertEqual(emitted[-1]["type"], "final")
         self.assertEqual(emitted[-1]["interface_mode"], "listen_only")
         self.assertTrue(emitted[-1]["restored"])
+
+    def test_torque_only_failure_is_reported_once_without_ending_capture(self):
+        pcm = FakePcmPoller(
+            torque_result=SimpleNamespace(
+                available=False,
+                metric="engine.crankshaft_torque",
+                unit="lb-ft",
+                source="pcm.did.06da",
+                bus="c-can",
+                quality="observed_alfa_scale",
+                reason="session_required",
+                detail="PCM rejected 22 06DA with NRC 7E",
+            )
+        )
+        tpms = FakeTpmsPoller()
+        backend = FakeBackend(
+            snapshots=[
+                snapshot((750.0, 752.0, 751.0), rpm_observation()),
+                snapshot((750.0, 751.0, 752.0), rpm_observation()),
+                snapshot((751.0, 752.0, 753.0), rpm_observation()),
+                snapshot((0.0, 0.0, 0.0), rpm_observation(0.0)),
+            ],
+            pcm=pcm,
+            tpms=tpms,
+        )
+
+        outcome, emitted, _inhibit = self.run_session(backend)
+
+        self.assertEqual(outcome.reason, "engine_not_running")
+        self.assertTrue(outcome.restored)
+        self.assertEqual(pcm.poll_count, 2)
+        self.assertEqual(tpms.poll_count, 1)
+        failures = [
+            event
+            for event in emitted
+            if event["type"] == "metric_failure"
+        ]
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(
+            failures[0]["metric"],
+            "engine.crankshaft_torque",
+        )
+        self.assertEqual(failures[0]["reason"], "session_required")
+        observations = {
+            event["metric"]
+            for event in emitted
+            if event["type"] == "observation"
+        }
+        self.assertIn("generator.field_duty", observations)
+        self.assertIn("tire.pressure.fl", observations)
+        self.assertNotIn("engine.crankshaft_torque", observations)
 
     def test_ignition_only_stale_rpm_sleep_wrong_topology_and_inhibit_never_arm(self):
         running = snapshot((750.0, 751.0, 752.0), rpm_observation())
@@ -502,7 +584,11 @@ class ActiveSessionTests(unittest.TestCase):
         self.assertTrue(outcome.restored)
 
     def test_inhibit_is_rechecked_at_each_transmission_boundary(self):
-        for inhibit_on_call, expected_pcm_polls in ((3, 0), (4, 1)):
+        for inhibit_on_call, expected_pcm_polls in (
+            (3, 0),
+            (4, 1),
+            (5, 2),
+        ):
             with self.subTest(inhibit_on_call=inhibit_on_call):
                 backend = FakeBackend(
                     snapshots=[
@@ -846,12 +932,17 @@ class PressureWireTests(unittest.TestCase):
         self.assertEqual(second.reason, "response_rejected")
         self.assertEqual(len(fake.sent), 1)
 
-    def test_complete_transmit_allowlist_is_exactly_five_fixed_frames(self):
+    def test_complete_transmit_allowlist_is_exactly_six_fixed_frames(self):
         pcm = pcm_electrical.GENERATOR_FIELD_DUTY_PROFILE
+        torque = pcm_electrical.CRANKSHAFT_TORQUE_PROFILE
         allowed = {
             (
                 pcm.request_id,
                 pcm.request_data,
+            ),
+            (
+                torque.request_id,
+                torque.request_data,
             ),
             *{
                 (
@@ -867,6 +958,7 @@ class PressureWireTests(unittest.TestCase):
             allowed,
             {
                 (0x18DA10F1, bytes.fromhex("03 22 01 A1 00 00 00 00")),
+                (0x18DA10F1, bytes.fromhex("03 22 06 DA 00 00 00 00")),
                 (0x18DAC7F1, bytes.fromhex("03 22 31 D0 00 00 00 00")),
                 (0x18DAC7F1, bytes.fromhex("03 22 31 D1 00 00 00 00")),
                 (0x18DAC7F1, bytes.fromhex("03 22 31 D2 00 00 00 00")),
@@ -1000,7 +1092,7 @@ class BrokerActiveDriveTests(unittest.TestCase):
         )
         return broker, clock
 
-    def test_active_pipe_validates_and_caches_generator_and_passive_metrics(self):
+    def test_active_pipe_validates_and_caches_pcm_and_passive_metrics(self):
         broker, clock = self.make_broker()
         events = (
             {
@@ -1033,11 +1125,22 @@ class BrokerActiveDriveTests(unittest.TestCase):
                 "quality": "observed_alfa_scale",
                 "interface_mode": "armed_diagnostic",
             },
+            {
+                "type": "observation",
+                "metric": "engine.crankshaft_torque",
+                "value": 177.6,
+                "unit": "lb-ft",
+                "source": "pcm.did.06da",
+                "bus": "c-can",
+                "quality": "observed_alfa_scale",
+                "interface_mode": "armed_diagnostic",
+            },
         )
         for event in events:
             broker.handle_active_drive_event(event)
 
         generator = broker.metric_response("generator.field_duty")
+        torque = broker.metric_response("engine.crankshaft_torque")
         speed = broker.metric_response("vehicle.speed")
         self.assertTrue(generator["available"])
         self.assertEqual(generator["value"], 100.008)
@@ -1046,6 +1149,9 @@ class BrokerActiveDriveTests(unittest.TestCase):
             "physical_read_data_by_identifier",
         )
         self.assertEqual(generator["interface_mode"], "armed_diagnostic")
+        self.assertTrue(torque["available"])
+        self.assertEqual(torque["value"], 177.6)
+        self.assertEqual(torque["interface_mode"], "armed_diagnostic")
         self.assertTrue(speed["available"])
         self.assertEqual(speed["interface_mode"], "armed_diagnostic")
         self.assertEqual(
@@ -1055,6 +1161,9 @@ class BrokerActiveDriveTests(unittest.TestCase):
         clock.value = 105.0
         self.assertTrue(
             broker.metric_response("generator.field_duty")["stale"]
+        )
+        self.assertTrue(
+            broker.metric_response("engine.crankshaft_torque")["stale"]
         )
 
         broker.handle_active_drive_event(
@@ -1074,7 +1183,48 @@ class BrokerActiveDriveTests(unittest.TestCase):
             broker.metric_response("generator.field_duty")["reason"],
             "engine_not_running",
         )
+        self.assertEqual(
+            broker.metric_response("engine.crankshaft_torque")["reason"],
+            "engine_not_running",
+        )
         self.assertTrue(broker.metric_response("vehicle.speed")["available"])
+
+    def test_optional_torque_failure_does_not_change_active_owner_state(self):
+        broker, _clock = self.make_broker()
+        broker.handle_active_drive_event(
+            {
+                "type": "status",
+                "state": "armed_diagnostic",
+                "reason": "running_gate_satisfied",
+                "detail": "coordinated owner is armed",
+                "interface_mode": "armed_diagnostic",
+                "pid": 123,
+            }
+        )
+        broker.handle_active_drive_event(
+            {
+                "type": "metric_failure",
+                "metric": "engine.crankshaft_torque",
+                "unit": "lb-ft",
+                "source": "pcm.did.06da",
+                "bus": "c-can",
+                "quality": "observed_alfa_scale",
+                "reason": "session_required",
+                "detail": "PCM rejected 22 06DA with NRC 7E",
+                "interface_mode": "armed_diagnostic",
+            }
+        )
+
+        torque = broker.metric_response("engine.crankshaft_torque")
+        self.assertFalse(torque["available"])
+        self.assertEqual(torque["reason"], "session_required")
+        self.assertEqual(
+            torque["interface_mode"],
+            "armed_diagnostic",
+        )
+        active = broker.status_response()["active_drive"]
+        self.assertEqual(active["state"], "armed_diagnostic")
+        self.assertEqual(active["reason"], "running_gate_satisfied")
 
     def test_armed_status_is_honest_and_blocks_other_active_acquisition(self):
         broker, _clock = self.make_broker()

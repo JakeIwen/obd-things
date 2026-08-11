@@ -45,11 +45,20 @@ verified two fixed-DLC-8 zero-padded physical `22 01A1` reads without an
 explicit session change, both returning exactly 100.000%. Its corrected
 arbitrary-bitfield searches over `0x100` and `0x412` still failed to produce a
 cross-regime passive carrier. The vehicle-data project now implements that
-direction offline as the narrowly allowlisted `generator.field_duty` source
+direction as the narrowly allowlisted `generator.field_duty` source
 `pcm.did.01a1`: the broker supervises one engine-running armed interval,
 continues the existing broadcast telemetry during it, sends no session-control
 or tester-present traffic, and requires exact listen-only restoration. The
-implementation has not yet been deployed or live-validated.
+implementation is deployed and has live-validated approximately one-hertz
+dashboard updates while the same PCAN also records its PCM and RF Hub
+request/positive-response pairs.
+The subsequent
+[`broker-drive poll validation`](findings/promaster_2022/2026-08-04_broker_drive_poll_validation.md)
+accounts for 8,514 complete production scheduler cycles across two zero-drop
+drives: all 17,028 PCM requests and all 8,514 RF Hub requests received exact
+physical positive responses. It also bounds the three-read scheduler's added
+C-CAN duty below 0.2% and records that the attempted B-CAN leg captured no
+frames because its interface was down.
 A later
 [`signed 0x1F7 byte-3 mapping`](findings/promaster_2022/2026-07-29_tcm_oil_temperature_candidate.md)
 found the strongest transmission-oil carrier candidate so far. The candidate
@@ -424,6 +433,114 @@ systemctl status promaster-mapping-drive.service
 cat tmp/ecu_mapping/ignition-drive-arm/state.json
 ```
 
+### Current broker-coordinated automatic drive capture
+
+The one-shot `promaster-mapping-drive.service` above remains deliberately
+inactive because its standalone passive safety contract cannot coexist with
+the broker's armed engine-running interval. The current enabled,
+automatically rearming recorder is instead
+[`projects/vehicle_data/drive_recorder.py`](../vehicle_data/drive_recorder.py),
+installed as `van-drive-recorder.service`.
+
+This companion is receive-only: it does not take the channel lock, configure
+or restore `can0`, control the broker, or transmit. It waits until broker status
+proves that the reviewed active-drive helper owns healthy armed C-CAN, requires
+an initial `0x2EF` within five seconds, then records full and priority
+loss-accounted zstd streams on EXFAT512. `candump -D` survives the broker's
+expected end-of-interval SocketCAN restoration; twenty seconds without `0x2EF`
+ends and verifies that drive. After successful finalization the daemon returns
+to its broker-status wait and automatically starts a new timestamped campaign
+on the next drive, including after reboot because the unit is enabled.
+
+The live mid-drive deployment on 2026-07-30 used overlapping receive-only raw
+coverage and did not restart the broker or reconfigure the interface. The
+hardened campaign began as
+`broker-drive-20260731T001704814083` under
+`/mnt/EXFAT512/obd-things/tmp/captures/ccan/broker-drive/`. It contains PCM
+`01A1` and RF Hub request/positive-response pairs with no observed candump
+drop marker while telemetry duty and all four tire pressures continued
+refreshing. It cleanly finalized after 52 minutes 22 seconds and 8,514,259
+full-stream frames: all six full and priority rotations completed, no partial
+remained, and the manifest reported zero socket drops,
+`full_stream_complete=true`, `reason=tracked_id_absent`, and `success=true`.
+The broker restored verified 500-kbit/s listen-only C-CAN without an inhibit,
+and the enabled recorder returned automatically to its idle broker-ownership
+wait. The next drive therefore needs no manual recorder arming; actual creation
+of its new campaign awaits qualified engine-running evidence.
+
+That automatic rearm then succeeded for two subsequent legs. Campaigns
+`broker-drive-20260731T012751675165` and
+`broker-drive-20260731T030218233898` independently started on later qualified
+engine-running intervals and finalized normally after 81 minutes 3 seconds and
+66 minutes 40 seconds. Across all three clean campaigns the recorder retained
+32,555,907 full-stream frames and 16,273,335 priority-stream frames in 22
+complete rotations, with zero detected socket drops and no partials. Offline
+exact-wire extraction recovered 2,400 PCM `01A1` positives from each leg's
+first four chunks. The cross-leg passive-field comparison and its compute
+provenance are in the
+[`PCM generator-duty finding`](findings/promaster_2022/2026-07-30_pcm_generator_duty_direct_read.md).
+The bounded bit search found no transferable passive carrier: even the
+repeatable `0x417 u8be@18` geometry failed no-refit validation at 12.8–13.9
+percentage points RMSE. Continue using the guarded direct `01A1` read.
+
+### Persistent B-CAN automatic capture mode
+
+[`bcan_drive_recorder.py`](bcan_drive_recorder.py) is the receive-only mode for
+campaigns where the PCAN is physically moved to the labeled pins-3/11 B-CAN
+branch. Its systemd unit establishes 125 kbit/s listen-only mode and then the
+daemon takes the shared channel observer lock around each passive probe. A
+successful identity probe retains that same lock without a gap through capture
+startup and the complete recording. A silent probe releases it before the
+five-second idle wait, allowing the scheduled voltage monitor to take its
+brief exclusive lock and wake a sleeping B-CAN. The daemon does not configure
+CAN, wake the bus, transmit, or make diagnostic requests.
+
+Before creating a capture directory it requires at least three identifiers from
+the verified B-CAN signature set during one three-second passive probe, rejects
+the wrong-rate RX-error threshold, and then requires `0x46C` within five seconds
+of opening the loss-accounted recorder. Thirty seconds without `0x46C` closes
+and verifies the interval; the daemon then automatically re-arms. It deliberately
+retains every verified B-CAN awake interval, not only proven drives, because a
+fob wake may immediately precede departure and short body-network captures are
+also useful wake/sleep evidence.
+
+The same passive signature witness records a same-boot `b-can`, pair `3/11`
+topology through `lib/can_operation_state.py`. Consequently `voltage_mon` can
+read `0x46C` concurrently under another shared observer lock while the bus is
+awake, or wake it under the exclusive lock while the recorder is idle. If the
+monitor first overlaps one recorder probe, its acquirer retries the exclusive
+request for a bounded four seconds; if the monitor owns the exclusive lock
+first, the recorder defers its probe. No interface-changing operation can race
+a live capture, and a long capture still causes the bounded voltage attempt to
+fail closed.
+
+Output is written below
+`/mnt/EXFAT512/obd-things/tmp/captures/bcan/auto-drive/`; live state is in
+`tmp/ecu_mapping/bcan-drive-recorder-state.json`. Full and B-CAN-priority zstd
+streams retain the normal 30/25 GiB soft/hard free-space floors. The unit is
+mutually exclusive with the C-CAN telemetry, TPMS, broker-drive, and one-shot
+mapping services because one PCAN channel observes only one physical pair.
+Switching back to C-CAN therefore requires stopping/disabling this unit,
+restoring the normal C-CAN services, and physically selecting the pins-6/14
+branch.
+
+The mode was deployed on vanpi on 2026-08-07 as
+`promaster-bcan-recorder.service`. At deployment, the PCAN readback was UP at
+125 kbit/s, listen-only, ERROR-ACTIVE with zero RX errors/drops; the sleeping
+bus produced no frames, so the service correctly published `status=waiting`
+without creating an empty campaign. The mutually exclusive
+`van-telemetry.service`, `van-drive-recorder.service`, and
+`tpms-logger.service` units were stopped and disabled for this B-CAN campaign.
+The B-CAN recorder is enabled across reboot and retries indefinitely if its
+process or adapter preflight fails. Subsequent same-boot captures verified 12
+known B-CAN signature IDs and exercised automatic re-arming. On 2026-08-07, a
+deliberately unsynchronized `voltage_mon --no-notify` run began while the
+recorder held its passive probe lock, waited through that probe, returned a
+verified wake-assisted `0x46C` value of 12.48 V, and left `can0` at the exact
+125 kbit/s listen-only, ERROR-ACTIVE, `restart-ms 0` baseline with zero RX
+errors/drops. The recorder then independently refreshed the same-boot B-CAN
+topology from all 12 signature IDs and opened a passive awake-interval capture.
+
 The automatic passive recording remains valuable if AlfaOBD is absent, but it
 cannot by itself attach labels to unresolved signals. For the intended PCM
 correlation run, AlfaOBD must be connected through the OBDLink MX+, on the
@@ -735,6 +852,10 @@ one full-bus `candump`, rotates ten-minute zstd chunks asynchronously, detects s
 and writes a small kernel-timestamped wire stream for the exact cluster endpoint. Finalization
 requires its request/positive/NRC counts to agree with the append-only high-level attempt records.
 AlfaOBD and every other diagnostic client must remain closed for the whole run.
+This statement concerns the standalone passive entry point. The vehicle-data
+broker companion described above has a different, narrower safety contract: it
+opens only a receive socket after proving the broker owns armed C-CAN and never
+competes for the diagnostic lock.
 
 The same guarded logger also feeds the local telemetry cache by default. It
 publishes cluster battery voltage, fresh verified `0x2EF` ignition presence,
@@ -887,10 +1008,14 @@ crankshaft torque from DID `101B`, and `0x0F0` is maximum engine torque
 requested by the transmission from `101F`. Actual torque `1018`, converter
 slip `0500`, and a passive gearbox-oil temperature remain unresolved. The
 frozen regime analysis now covers all five operating states on 2,014 blind
-`1018` samples and rejects `0x100`, `0x1F4`, and `0x0FC` as a universal
-actual-torque identity. The paired `101A` torque-without-TCU-requests pass
-also rejects `0x100` as that stage. Measured horsepower remains intentionally
-unavailable.
+`1018` samples and rejects the tested `0x100 u13be@4`, `0x1F4`, and `0x0FC`
+fields as universal actual-torque identities. The paired `101A`
+torque-without-TCU-requests pass also rejects `0x100 u13be@4` as that stage.
+A later production-drive search found the distinct adjacent `0x100 u13be@9`
+field as a replicated, candidate-only current-torque proxy; see the
+[`2026-08-04 broker-drive validation`](findings/promaster_2022/2026-08-04_broker_drive_poll_validation.md).
+Measured horsepower remains intentionally unavailable pending a reviewed
+promotion decision.
 
 `tools/can_timeseries_correlate.py` performs the offline broadcast-candidate
 search against one exact-positive module DID. It streams saved plain or zstd
@@ -1055,6 +1180,24 @@ generator, not promotion evidence; confirm candidates with independent driving v
 ground truth. The report exact-links raw frames but deliberately states that it does not itself
 validate the chunk manifest, socket-drop accounting, or final campaign summary; retain and review
 the completed `summary.json` alongside it.
+
+This mechanical fail-safe no longer means every useful field must immediately
+pass verified-decode gates. The repository-wide
+[`CAN evidence-tier policy`](../../docs/can-evidence-tiers.md) distinguishes:
+
+- `exploratory_candidate` for fast discovery from one representative capture;
+- `operational_proxy` for a frozen field/formula that passes explicit
+  non-critical whole-leg error tolerances; and
+- `verified_decode` for independently established identity and scale eligible
+  for canonical-map and ordinary telemetry promotion.
+
+`can_timeseries_correlate.py` records the exploratory or proxy-evaluation tier
+while preserving all candidate-only promotion flags.
+`can_signal_benchmark.py` accepts an `operational_proxy` expectation with a
+declared `trend`, `state_detection`, or `approximate_display` use, error-unit
+conversion, minimum coverage, maximum RMSE, maximum p95 absolute error, and an
+optional bias limit. Passing permits only the declared proxy use; it does not
+assert physical identity or enable verified telemetry promotion.
 
 `reassemble_commands.py <decoded.txt> <out.txt> [atsh]` — rebuilds multi-frame COMMANDS.
 AlfaOBD sends long requests as MANUAL ISO-TP frames: First Frame `1L LL <6 data>` + a trailing

@@ -174,6 +174,14 @@ class NearestCorrelationTests(unittest.TestCase):
 
         row = candidate(report, 0x123, "byte", 0)
         self.assertEqual(report["classification"], "candidate_only")
+        self.assertEqual(
+            report["evidence_tier"],
+            correlate.EXPLORATORY_EVIDENCE_TIER,
+        )
+        self.assertEqual(
+            row["evidence_tier"],
+            correlate.EXPLORATORY_EVIDENCE_TIER,
+        )
         self.assertTrue(report["offline_only"])
         self.assertNotIn("regime_analysis", report)
         self.assertEqual(report["reference"]["module"]["key"], "cluster")
@@ -742,6 +750,10 @@ class WindowCorrelationTests(unittest.TestCase):
 
         evaluation = report["fixed_formula_evaluation"]
         result = evaluation["result"]
+        self.assertEqual(
+            evaluation["evidence_tier"],
+            correlate.PROXY_EVALUATION_EVIDENCE_TIER,
+        )
         self.assertTrue(evaluation["candidate_only"])
         self.assertFalse(evaluation["telemetry_promotion_allowed"])
         self.assertEqual(result["sample_count"], 5)

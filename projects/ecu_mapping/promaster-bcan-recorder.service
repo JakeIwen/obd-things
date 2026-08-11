@@ -1,0 +1,22 @@
+[Unit]
+Description=Persistent passive ProMaster B-CAN awake-interval recorder
+After=local-fs.target
+RequiresMountsFor=/mnt/EXFAT512
+Conflicts=van-telemetry.service van-drive-recorder.service tpms-logger.service promaster-mapping-drive.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/dev/obd-things
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=+/usr/sbin/sysctl -w net.core.rmem_max=16777216
+ExecStartPre=+/home/pi/dev/obd-things/bringup.sh --bcan
+ExecStart=/usr/bin/python3 /home/pi/dev/obd-things/projects/ecu_mapping/bcan_drive_recorder.py --execute --confirm-passive-bcan
+Restart=always
+RestartSec=15
+TimeoutStopSec=180
+
+[Install]
+WantedBy=multi-user.target

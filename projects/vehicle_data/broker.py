@@ -48,11 +48,15 @@ ACTIVE_DRIVE_SOURCES = frozenset(
         "ccan.broadcast.0x41a",
         "ccan.broadcast.0x41d",
         "pcm.did.01a1",
+        "pcm.did.06da",
         "rf_hub.did.31d0",
         "rf_hub.did.31d1",
         "rf_hub.did.31d2",
         "rf_hub.did.31d3",
     }
+)
+ACTIVE_DRIVE_OPTIONAL_METRICS = frozenset(
+    {"engine.crankshaft_torque"}
 )
 ACTIVE_DRIVE_FAILURE_REASONS = frozenset(
     {
@@ -919,10 +923,75 @@ class TelemetryBroker:
     ) -> None:
         if reason not in ACTIVE_DRIVE_FAILURE_REASONS:
             reason = "helper_failed"
-        definition = self.definitions.get("generator.field_duty")
+        with self._lock:
+            # Engine-running PCM metrics must become inactive immediately when
+            # their diagnostic owner stops. Do not leave a still-fresh pre-stop
+            # sample looking live for the remainder of its TTL.
+            for metric in (
+                "generator.field_duty",
+                "engine.crankshaft_torque",
+            ):
+                definition = self.definitions.get(metric)
+                if definition is None:
+                    continue
+                source = definition.sources[0]
+                result = failure(
+                    metric=definition.name,
+                    unit=definition.unit,
+                    reason=reason,
+                    detail=detail,
+                    bus=source.bus,
+                    acquisition=source.acquisition_class,
+                    interface_mode=interface_mode,
+                )
+                self._cache.pop(definition.name, None)
+                self._last_error[definition.name] = result
+
+    def _record_active_metric_failure(
+        self,
+        event: dict[str, object],
+    ) -> None:
+        if event.get("interface_mode") != "armed_diagnostic":
+            raise ValueError(
+                "active metric failure must report armed_diagnostic mode"
+            )
+        metric = event.get("metric")
+        source_name = event.get("source")
+        if metric not in ACTIVE_DRIVE_OPTIONAL_METRICS:
+            raise ValueError(
+                "active metric failure is outside the optional metric allowlist"
+            )
+        if source_name not in ACTIVE_DRIVE_SOURCES:
+            raise ValueError(
+                "active metric failure source is outside the helper allowlist"
+            )
+        definition = self.definitions.get(metric)
         if definition is None:
-            return
-        source = definition.sources[0]
+            raise ValueError("active metric failure metric is not registered")
+        source = self._source_for(definition, source_name)
+        if source is None:
+            raise ValueError(
+                "active metric failure source is not registered for metric"
+            )
+        if event.get("unit") != definition.unit:
+            raise ValueError(
+                "active metric failure unit does not match registry"
+            )
+        if (
+            event.get("bus") != source.bus
+            or event.get("quality") != source.quality
+        ):
+            raise ValueError(
+                "active metric failure source metadata does not match registry"
+            )
+        reason = event.get("reason")
+        detail = event.get("detail")
+        if reason not in ACTIVE_DRIVE_FAILURE_REASONS:
+            raise ValueError(
+                "active metric failure reason is not allowlisted"
+            )
+        if not isinstance(detail, str):
+            raise ValueError("active metric failure detail must be a string")
         result = failure(
             metric=definition.name,
             unit=definition.unit,
@@ -930,12 +999,9 @@ class TelemetryBroker:
             detail=detail,
             bus=source.bus,
             acquisition=source.acquisition_class,
-            interface_mode=interface_mode,
+            interface_mode="armed_diagnostic",
         )
         with self._lock:
-            # Generator command duty must become inactive immediately when its
-            # engine-running diagnostic owner stops. Do not leave a still-fresh
-            # pre-stop sample looking live for the remainder of its TTL.
             self._cache.pop(definition.name, None)
             self._last_error[definition.name] = result
 
@@ -946,6 +1012,9 @@ class TelemetryBroker:
             if event.get("interface_mode") != "armed_diagnostic":
                 raise ValueError("active observation must report armed_diagnostic mode")
             self._store_active_observation(event)
+            return
+        if event_type == "metric_failure":
+            self._record_active_metric_failure(event)
             return
         if event_type not in ("status", "failure", "final"):
             raise ValueError("unsupported active-drive event type")

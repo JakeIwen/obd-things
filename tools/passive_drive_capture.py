@@ -733,6 +733,8 @@ class Recorder:
         policy: DiskPolicy,
         stop_after_id: int | None = None,
         stop_after_id_absence_seconds: float | None = None,
+        required_start_id: int | None = None,
+        required_start_id_timeout_seconds: float | None = None,
         *,
         popen: Callable[..., subprocess.Popen] = subprocess.Popen,
         runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
@@ -741,6 +743,7 @@ class Recorder:
         mount_check: Callable[[], None] | None = None,
         zstd: str = "zstd",
         candump: str = "candump",
+        candump_extra_args: Sequence[str] = (),
     ) -> None:
         self.run_dir = run_dir
         self.priority_ids = priority_ids
@@ -749,6 +752,30 @@ class Recorder:
         self.policy = policy
         self.stop_after_id = stop_after_id
         self.stop_after_id_absence_seconds = stop_after_id_absence_seconds
+        self.required_start_id = required_start_id
+        self.required_start_id_timeout_seconds = required_start_id_timeout_seconds
+        if (required_start_id is None) != (
+            required_start_id_timeout_seconds is None
+        ):
+            raise ValueError(
+                "required_start_id and required_start_id_timeout_seconds "
+                "must be configured together"
+            )
+        if (
+            required_start_id_timeout_seconds is not None
+            and required_start_id_timeout_seconds <= 0
+        ):
+            raise ValueError(
+                "required_start_id_timeout_seconds must be positive"
+            )
+        if (
+            required_start_id_timeout_seconds is not None
+            and required_start_id_timeout_seconds >= duration_seconds
+        ):
+            raise ValueError(
+                "required_start_id_timeout_seconds must be shorter than "
+                "duration_seconds"
+            )
         self.popen = popen
         self.runner = runner
         self.disk_free = disk_free
@@ -758,9 +785,21 @@ class Recorder:
         self.mount_check = mount_check or (lambda: None)
         self.zstd = zstd
         self.candump = candump
+        self.candump_extra_args = tuple(candump_extra_args)
         self.manifest = run_dir / "manifest.jsonl"
         self.checkpoint = run_dir / "checkpoint.json"
         self.stop_requested = False
+
+    def _candump_command(self) -> list[str]:
+        return [
+            self.candump,
+            "-L",
+            *self.candump_extra_args,
+            "-d",
+            "-r",
+            str(RECEIVE_BUFFER),
+            CHANNEL,
+        ]
 
     def _verifier(self, path: Path) -> bool:
         return verify_zstd_file(path, runner=self.runner, zstd=self.zstd)
@@ -895,6 +934,7 @@ class Recorder:
         stop_requested_at: float | None = None
         tracked_id_first_seen: float | None = None
         tracked_id_last_seen: float | None = None
+        required_start_id_seen_at: float | None = None
 
         def request_stop(signum, _frame) -> None:
             nonlocal stop_requested_at, stop_signal
@@ -932,7 +972,9 @@ class Recorder:
                     raise CaptureError("one or more zstd chunks failed validation")
 
         def write_line(line: bytes) -> CaptureError | None:
-            nonlocal detected_drops, tracked_id_first_seen, tracked_id_last_seen
+            nonlocal detected_drops
+            nonlocal tracked_id_first_seen, tracked_id_last_seen
+            nonlocal required_start_id_seen_at
             if chunk is None:
                 raise CaptureError("received candump data without an active chunk")
             chunk.write(line, self.priority_ids)
@@ -942,6 +984,12 @@ class Recorder:
                 if tracked_id_first_seen is None:
                     tracked_id_first_seen = observed
                 tracked_id_last_seen = observed
+            if (
+                self.required_start_id is not None
+                and can_id == self.required_start_id
+                and required_start_id_seen_at is None
+            ):
+                required_start_id_seen_at = time.monotonic()
             dropped = parse_drop_line(line)
             if dropped is not None:
                 frames, total = dropped
@@ -989,15 +1037,9 @@ class Recorder:
             for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
         }
         try:
+            candump_command = self._candump_command()
             process = self.popen(
-                [
-                    self.candump,
-                    "-L",
-                    "-d",
-                    "-r",
-                    str(RECEIVE_BUFFER),
-                    CHANNEL,
-                ],
+                candump_command,
                 stdout=subprocess.PIPE,
                 stderr=runtime_log,
                 bufsize=0,
@@ -1021,14 +1063,7 @@ class Recorder:
                 {
                     "type": "capture_start",
                     "time_utc": utc_now(),
-                    "candump_command": [
-                        self.candump,
-                        "-L",
-                        "-d",
-                        "-r",
-                        str(RECEIVE_BUFFER),
-                        CHANNEL,
-                    ],
+                    "candump_command": candump_command,
                     "full_enabled": full_enabled,
                     "priority_ids": [f"0x{value:X}" for value in sorted(self.priority_ids)],
                     "free_bytes": free,
@@ -1069,6 +1104,19 @@ class Recorder:
                         )
                         break
                 if now - started >= self.duration_seconds:
+                    break
+                if (
+                    self.required_start_id is not None
+                    and required_start_id_seen_at is None
+                    and now - started
+                    >= self.required_start_id_timeout_seconds
+                ):
+                    reason = "required_start_id_missing"
+                    fatal = CaptureError(
+                        "required start CAN ID "
+                        f"0x{self.required_start_id:X} was not observed within "
+                        f"{self.required_start_id_timeout_seconds} seconds"
+                    )
                     break
                 if (
                     self.stop_after_id is not None
@@ -1254,6 +1302,19 @@ class Recorder:
             "tracked_id_absence_seconds": (
                 self.stop_after_id_absence_seconds
                 if reason == "tracked_id_absent"
+                else None
+            ),
+            "required_start_id": (
+                f"0x{self.required_start_id:X}"
+                if self.required_start_id is not None
+                else None
+            ),
+            "required_start_id_timeout_seconds": (
+                self.required_start_id_timeout_seconds
+            ),
+            "required_start_id_seen_elapsed_seconds": (
+                required_start_id_seen_at - started
+                if required_start_id_seen_at is not None
                 else None
             ),
             "signal_number": stop_signal if reason == "signal" else None,

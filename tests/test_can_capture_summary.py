@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from tools import can_capture_summary
 
@@ -130,6 +131,41 @@ class SummaryTests(unittest.TestCase):
         )
         self.assertTrue(state["trailing_partial_line_ignored"])
 
+    def test_streams_finalized_zstd_capture_through_decompressor(self):
+        process = mock.Mock()
+        process.stdout = io.StringIO(
+            "(10.0) can0 123#AA\n(11.0) can0 123#AB\n"
+        )
+        process.stderr = io.StringIO("")
+        process.wait.return_value = 0
+        popen = mock.Mock(return_value=process)
+        capture = Path("/tmp/final.candump.zst")
+
+        summary = can_capture_summary.summarize_file(capture, popen=popen)
+
+        self.assertEqual(summary["total_frames"], 2)
+        self.assertEqual(summary["source"], str(capture))
+        popen.assert_called_once_with(
+            ["zstd", "-dc", "--", str(capture)],
+            stdout=can_capture_summary.subprocess.PIPE,
+            stderr=can_capture_summary.subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+
+    def test_rejects_failed_zstd_decompression(self):
+        process = mock.Mock()
+        process.stdout = io.StringIO("")
+        process.stderr = io.StringIO("corrupt frame\n")
+        process.wait.return_value = 1
+        popen = mock.Mock(return_value=process)
+
+        with self.assertRaisesRegex(OSError, "corrupt frame"):
+            can_capture_summary.summarize_file(
+                Path("/tmp/bad.candump.zst"), popen=popen
+            )
+
 
 class CliTests(unittest.TestCase):
     def test_human_stdout_and_explicit_json_output(self):
@@ -194,6 +230,19 @@ class CliTests(unittest.TestCase):
             self.assertEqual(payload["snapshot"]["byte_limit"], len(complete + partial))
             self.assertTrue(payload["snapshot"]["trailing_partial_line_ignored"])
             self.assertIn("Snapshot boundary:", stdout.getvalue())
+
+    def test_snapshot_rejects_compressed_input(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            result = can_capture_summary.main(
+                ["/tmp/final.candump.zst", "--snapshot"]
+            )
+
+        self.assertEqual(result, 2)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("does not support compressed .zst", stderr.getvalue())
 
 
 if __name__ == "__main__":

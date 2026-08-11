@@ -28,8 +28,10 @@ fixed argv invokes ``zstd -dc -- <path>`` for a ``.zst`` input.  Plain inputs
 use no subprocess.
 
 Correlation establishes association and a candidate affine relationship, not
-signal identity or physical scaling.  Reports therefore always carry the
-``candidate_only`` classification.
+signal identity or physical scaling. Reports therefore remain mechanically
+``candidate_only`` for promotion safety, while the orthogonal
+``evidence_tier`` distinguishes exploratory discovery from a frozen-formula
+operational-proxy evaluation.
 """
 
 from __future__ import annotations
@@ -70,6 +72,8 @@ DEFAULT_MODULE = MODULES["cluster"]
 CLUSTER_MODULE = DEFAULT_MODULE
 
 SCHEMA_VERSION = 1
+EXPLORATORY_EVIDENCE_TIER = "exploratory_candidate"
+PROXY_EVALUATION_EVIDENCE_TIER = "operational_proxy_evaluation"
 MAX_WIRE_LINE_BYTES = 1 << 20
 MAX_WIRE_STREAM_LINES = 1_500_000
 MAX_WIRE_STREAM_BYTES = 1 << 30
@@ -2242,6 +2246,7 @@ class StreamingCorrelator:
     ) -> dict[str, object]:
         return {
             "classification": "candidate_only",
+            "evidence_tier": EXPLORATORY_EVIDENCE_TIER,
             "candidate_only": True,
             "physical_identity_verified": False,
             "scale_verified": False,
@@ -2659,6 +2664,7 @@ def run_analysis(
     return {
         "schema_version": SCHEMA_VERSION,
         "classification": "candidate_only",
+        "evidence_tier": EXPLORATORY_EVIDENCE_TIER,
         "candidate_only": True,
         "physical_identity_verified": False,
         "scale_verified": False,
@@ -2865,6 +2871,7 @@ def run_analysis(
             else {
                 "fixed_formula_evaluation": {
                     "classification": "candidate_only",
+                    "evidence_tier": PROXY_EVALUATION_EVIDENCE_TIER,
                     "candidate_only": True,
                     "physical_identity_verified": False,
                     "scale_verified": False,
@@ -2899,6 +2906,7 @@ def run_analysis(
             else {
                 "regime_analysis": {
                     "classification": "candidate_only",
+                    "evidence_tier": EXPLORATORY_EVIDENCE_TIER,
                     "candidate_only": True,
                     "physical_identity_verified": False,
                     "scale_verified": False,
@@ -3342,7 +3350,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     print(
         f"Wrote {report['ranking']['reported_candidate_count']} "
-        f"candidate-only correlations to {output}"
+        f"exploratory candidate-only correlations to {output}"
     )
     return 0
 

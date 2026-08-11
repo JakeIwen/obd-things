@@ -36,12 +36,21 @@ EXPECTATION_KINDS = frozenset(
         "verified_positive",
         "carrier_only",
         "no_defensible_match",
+        "operational_proxy",
         "proxy_challenge",
         "pending",
     )
 )
 ASSERTIVE_EXPECTATION_KINDS = frozenset(
-    ("verified_positive", "carrier_only", "no_defensible_match")
+    (
+        "verified_positive",
+        "carrier_only",
+        "no_defensible_match",
+        "operational_proxy",
+    )
+)
+PROXY_INTENDED_USES = frozenset(
+    ("trend", "state_detection", "approximate_display")
 )
 _HEX_SHA256 = re.compile(r"[0-9a-f]{64}")
 _CASE_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,79}")
@@ -257,8 +266,14 @@ def load_manifest(path: Path) -> dict[str, object]:
         )
         if expectation.get("kind") not in EXPECTATION_KINDS:
             raise BenchmarkError(f"case {case_id} has invalid expectation kind")
-        if expectation.get("kind") in ("verified_positive", "carrier_only"):
+        if expectation.get("kind") in (
+            "verified_positive",
+            "carrier_only",
+            "operational_proxy",
+        ):
             _expected_geometry(expectation, case_id)
+        if expectation.get("kind") == "operational_proxy":
+            _validate_operational_proxy_expectation(expectation, case_id)
     return manifest
 
 
@@ -308,6 +323,61 @@ def _finite_number(value: object, context: str) -> float:
     if not math.isfinite(number):
         raise BenchmarkError(f"{context} must be finite")
     return number
+
+
+def _validate_operational_proxy_expectation(
+    expectation: dict[str, object], case_id: str
+) -> None:
+    intended_use = expectation.get("intended_use")
+    if intended_use not in PROXY_INTENDED_USES:
+        choices = ", ".join(sorted(PROXY_INTENDED_USES))
+        raise BenchmarkError(
+            f"case {case_id} operational proxy intended_use must be one of "
+            f"{choices}"
+        )
+    error_unit = expectation.get("error_unit")
+    if (
+        not isinstance(error_unit, str)
+        or not error_unit.strip()
+        or len(error_unit) > 64
+    ):
+        raise BenchmarkError(
+            f"case {case_id} operational proxy requires a short error_unit"
+        )
+    units_per_raw = _finite_number(
+        expectation.get("units_per_reference_raw", 1.0),
+        f"case {case_id} units_per_reference_raw",
+    )
+    if units_per_raw <= 0:
+        raise BenchmarkError(
+            f"case {case_id} units_per_reference_raw must be positive"
+        )
+    minimum_coverage = _finite_number(
+        expectation.get("minimum_coverage", 0.9),
+        f"case {case_id} minimum_coverage",
+    )
+    if not 0.0 < minimum_coverage <= 1.0:
+        raise BenchmarkError(
+            f"case {case_id} minimum_coverage must be in (0, 1]"
+        )
+    for key in ("maximum_rmse", "maximum_p95_absolute_error"):
+        threshold = _finite_number(
+            expectation.get(key), f"case {case_id} {key}"
+        )
+        if threshold < 0:
+            raise BenchmarkError(
+                f"case {case_id} {key} must be nonnegative"
+            )
+    if "maximum_absolute_mean_bias" in expectation:
+        maximum_bias = _finite_number(
+            expectation["maximum_absolute_mean_bias"],
+            f"case {case_id} maximum_absolute_mean_bias",
+        )
+        if maximum_bias < 0:
+            raise BenchmarkError(
+                f"case {case_id} maximum_absolute_mean_bias must be "
+                "nonnegative"
+            )
 
 
 def _validate_search_config(
@@ -485,6 +555,166 @@ def _validate_report_job_binding(
         )
 
 
+def _evaluate_operational_proxy(
+    case_id: str,
+    expectation: dict[str, object],
+    report: dict[str, object],
+) -> dict[str, object]:
+    _validate_operational_proxy_expectation(expectation, case_id)
+    evaluation = _object(
+        report.get("fixed_formula_evaluation"),
+        f"case {case_id} fixed formula evaluation",
+    )
+    if (
+        evaluation.get("classification") != "candidate_only"
+        or evaluation.get("candidate_only") is not True
+        or evaluation.get("physical_identity_verified") is not False
+        or evaluation.get("scale_verified") is not False
+        or evaluation.get("telemetry_promotion_allowed") is not False
+    ):
+        raise BenchmarkError(
+            f"case {case_id} fixed formula violates candidate-only gates"
+        )
+    result = _object(
+        evaluation.get("result"), f"case {case_id} fixed formula result"
+    )
+    formula = _object(
+        result.get("formula"), f"case {case_id} fixed formula"
+    )
+    _finite_number(
+        formula.get("scale"), f"case {case_id} fixed formula scale"
+    )
+    _finite_number(
+        formula.get("intercept"), f"case {case_id} fixed formula intercept"
+    )
+    candidate = _object(
+        formula.get("candidate"), f"case {case_id} fixed formula candidate"
+    )
+    stream = _object(
+        expectation.get("stream"), f"case {case_id} stream"
+    )
+    if (
+        candidate.get("channel") != stream.get("channel")
+        or candidate.get("can_id_hex") != stream.get("can_id")
+        or candidate.get("id_bits") != stream.get("id_bits")
+        or candidate.get("dlc") != stream.get("dlc")
+    ):
+        raise BenchmarkError(
+            f"case {case_id} fixed formula candidate stream mismatch"
+        )
+    expected_field = _expected_geometry(expectation, case_id)
+    observed_field = _candidate_geometry(candidate)
+    if (
+        observed_field.signed != expected_field.signed
+        or observed_field.value_signature()
+        != expected_field.value_signature()
+    ):
+        raise BenchmarkError(
+            f"case {case_id} fixed formula candidate geometry mismatch"
+        )
+
+    coverage = _finite_number(
+        result.get("coverage_ratio"),
+        f"case {case_id} proxy coverage_ratio",
+    )
+    if not 0.0 <= coverage <= 1.0:
+        raise BenchmarkError(
+            f"case {case_id} proxy coverage_ratio must be in [0, 1]"
+        )
+    sample_count = result.get("sample_count")
+    if (
+        isinstance(sample_count, bool)
+        or not isinstance(sample_count, int)
+        or sample_count <= 0
+    ):
+        raise BenchmarkError(
+            f"case {case_id} proxy sample_count must be positive"
+        )
+    units_per_raw = _finite_number(
+        expectation.get("units_per_reference_raw", 1.0),
+        f"case {case_id} units_per_reference_raw",
+    )
+    raw_metrics = {
+        "rmse": _finite_number(
+            result.get("rmse"), f"case {case_id} proxy rmse"
+        ),
+        "p95_absolute_error": _finite_number(
+            result.get("p95_absolute_error"),
+            f"case {case_id} proxy p95_absolute_error",
+        ),
+        "absolute_mean_bias": _finite_number(
+            result.get("absolute_mean_bias"),
+            f"case {case_id} proxy absolute_mean_bias",
+        ),
+    }
+    if any(value < 0 for value in raw_metrics.values()):
+        raise BenchmarkError(
+            f"case {case_id} proxy error metrics must be nonnegative"
+        )
+    observed_metrics = {
+        key: value * units_per_raw for key, value in raw_metrics.items()
+    }
+    limits = {
+        "minimum_coverage": _finite_number(
+            expectation.get("minimum_coverage", 0.9),
+            f"case {case_id} minimum_coverage",
+        ),
+        "maximum_rmse": _finite_number(
+            expectation.get("maximum_rmse"),
+            f"case {case_id} maximum_rmse",
+        ),
+        "maximum_p95_absolute_error": _finite_number(
+            expectation.get("maximum_p95_absolute_error"),
+            f"case {case_id} maximum_p95_absolute_error",
+        ),
+    }
+    bias_limit = None
+    if "maximum_absolute_mean_bias" in expectation:
+        bias_limit = _finite_number(
+            expectation["maximum_absolute_mean_bias"],
+            f"case {case_id} maximum_absolute_mean_bias",
+        )
+        limits["maximum_absolute_mean_bias"] = bias_limit
+    passed = (
+        coverage >= limits["minimum_coverage"]
+        and observed_metrics["rmse"] <= limits["maximum_rmse"]
+        and observed_metrics["p95_absolute_error"]
+        <= limits["maximum_p95_absolute_error"]
+        and (
+            bias_limit is None
+            or observed_metrics["absolute_mean_bias"] <= bias_limit
+        )
+    )
+    return {
+        "passed": passed,
+        "status": (
+            "qualified_operational_proxy"
+            if passed
+            else "operational_proxy_tolerance_failed"
+        ),
+        "evidence_tier": (
+            "operational_proxy" if passed else "exploratory_candidate"
+        ),
+        "operational_proxy_use_allowed": passed,
+        "physical_identity_verified": False,
+        "telemetry_promotion_allowed": False,
+        "intended_use": expectation["intended_use"],
+        "error_unit": expectation["error_unit"],
+        "units_per_reference_raw": units_per_raw,
+        "sample_count": sample_count,
+        "coverage_ratio": coverage,
+        "observed_error": observed_metrics,
+        "limits": limits,
+        "field": candidate["field"],
+        "stream": {
+            "channel": candidate["channel"],
+            "can_id": candidate["can_id_hex"],
+            "id_bits": candidate["id_bits"],
+            "dlc": candidate["dlc"],
+        },
+    }
+
+
 def evaluate_case(
     case: dict[str, object],
     dataset: dict[str, object],
@@ -596,6 +826,9 @@ def evaluate_case(
         "hypothesis": case.get("hypothesis"),
         "split": dataset["split"],
         "expectation_kind": kind,
+        "evidence_tier": "exploratory_candidate",
+        "operational_proxy_use_allowed": False,
+        "telemetry_promotion_allowed": False,
         "passed": False,
     }
     if kind == "pending":
@@ -651,6 +884,12 @@ def evaluate_case(
                 "status": "non_asserting_proxy_challenge",
                 "candidate_count": len(candidates),
             }
+        )
+        return result
+
+    if kind == "operational_proxy":
+        result.update(
+            _evaluate_operational_proxy(case_id, expectation, report)
         )
         return result
 
@@ -734,6 +973,8 @@ def build_plan(
         if selected_cases is not None and case_id not in selected_cases:
             continue
         dataset = _object(datasets[case["dataset"]], "dataset")
+        expectation = _object(case["expectation"], "expectation")
+        expectation_kind = expectation["kind"]
         planned.append(
             {
                 "case_id": case_id,
@@ -745,9 +986,22 @@ def build_plan(
                 "module": dataset["module"],
                 "reference": case["reference"],
                 "search": case.get("search", {}),
-                "expectation_kind": _object(
-                    case["expectation"], "expectation"
-                )["kind"],
+                "expectation_kind": expectation_kind,
+                "target_evidence_tier": (
+                    "operational_proxy"
+                    if expectation_kind == "operational_proxy"
+                    else "verified_decode_candidate"
+                    if expectation_kind in ("verified_positive", "carrier_only")
+                    else "exploratory_candidate"
+                ),
+                **(
+                    {
+                        "intended_use": expectation["intended_use"],
+                        "error_unit": expectation["error_unit"],
+                    }
+                    if expectation_kind == "operational_proxy"
+                    else {}
+                ),
             }
         )
     return {
@@ -874,8 +1128,17 @@ def build_evaluation(
         "offline_only": True,
         "candidate_only": True,
         "telemetry_promotion_allowed": False,
+        "evidence_policy": (
+            "operational proxies may pass explicit whole-leg tolerances "
+            "without asserting physical identity or verified-decode promotion"
+        ),
         "sample_split_policy": "whole_independent_drive_legs_only",
         "evaluated_case_count": len(results),
+        "qualified_operational_proxy_count": sum(
+            result.get("evidence_tier") == "operational_proxy"
+            and result.get("passed") is True
+            for result in results
+        ),
         "passed": bool(results) and all(result["passed"] for result in results),
         "benchmark_complete": benchmark_complete,
         "cases": results,

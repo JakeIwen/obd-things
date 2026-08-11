@@ -73,7 +73,11 @@ const ENGINE_HEALTH_METRICS = Object.freeze({
   },
   torque: {
     id: "torque",
-    names: ["engine.crankshaft_torque", "engine.torque"],
+    names: [
+      "engine.crankshaft_torque",
+      "engine.current_torque",
+      "engine.torque",
+    ],
     roles: ["engine_crankshaft_torque", "engine_torque"],
   },
   power: {

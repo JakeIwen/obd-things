@@ -253,9 +253,9 @@ The strong cruise slice is therefore a mode-specific near-match, not a
 universal identity. The leading field family itself also changes: `0x0FC`
 leads idle/lift, a different `0x100` byte view leads positive pull, the expected
 `0x100` packed field leads cruise, and another `0x100` view leads overrun. This
-independent counterexample rejects all three shortlisted families as a safe
-actual-torque telemetry source. Actual measured torque and derived horsepower
-remain unavailable.
+independent counterexample rejects the exact fields evaluated in all three
+shortlisted families as a safe actual-torque telemetry source. At the time,
+actual measured torque and derived horsepower remained unavailable.
 
 The evidence-led `101A` comparator then tested the specific alternative that
 `0x100` might be Alfa's “Crankshaft Torque, without TCU Torque Requests.”
@@ -266,10 +266,11 @@ again failed the stable physical relationship: idle
 `0.19772 / -301.55` for slope/intercept, with overrun R² only 0.58459.
 `0x1F4` ranked higher globally (R² 0.98514), but its independently sourced
 request semantics and incompatible physical slope prevent relabeling it as
-`101A`. Thus `0x100` is neither TCM `1018` actual torque nor `101A` torque
-without TCU requests. The already-established `101B` target torque and `101F`
-maximum request live in different passive fields, so repeating their known
-identities as regime searches would not resolve `0x100`.
+`101A`. Thus the tested `0x100 u13be@4` field is neither TCM `1018` actual
+torque nor `101A` torque without TCU requests. The already-established `101B`
+target torque and `101F` maximum request live in different passive fields, so
+repeating their known identities as regime searches would not resolve that
+field.
 
 ## Concrete utility gained
 
@@ -282,16 +283,31 @@ dashboard metric. It produced four concrete project gains instead:
 2. `0x417` is removed from consideration as both gearbox-oil temperature and
    the provisional chip-temperature alternative, preventing a wrong
    transmission-temperature gauge.
-3. `0x100` is now explicitly ruled out as both `1018` actual torque and `101A`
-   torque without TCU requests across every operating regime, preventing
-   misleading torque/horsepower telemetry.
+3. The tested `0x100 u13be@4` field is explicitly ruled out as both `1018`
+   actual torque and `101A` torque without TCU requests across every operating
+   regime, preventing misleading torque/horsepower telemetry from that field.
 4. Every accepted benchmark result is byte-bound to its compute manifest and
    exact input hashes; older reports lacking the new staleness/provenance
    fields are excluded until rerun rather than silently grandfathered.
 
-The immediate utility is therefore higher confidence in three existing
-transmission signals and two avoided false mappings. True gearbox-oil
-temperature and measured engine torque remain the next discovery targets.
+### 2026-08-04 scope correction
+
+The rejection above applies to `0x100 u13be@4` and the other exact fields that
+the benchmark evaluated; it was too broad when summarized as rejecting every
+possible field in frame `0x100`. Later production-drive evidence isolated the
+distinct adjacent field `u13be@9`, whose raw geometry is
+`((b1 & 3) << 11) | (b2 << 3) | (b3 >> 5)`. It replicated against PCM current
+torque DID `06DA` at R² 0.997877 on 2,400 development samples and R² 0.996981
+on 1,783 samples from a separate drive, with full coverage. The candidate
+formula `raw * 0.125 - 500 Nm` had 5.233 Nm RMSE and 2.25 Nm p95 absolute error
+on that second slice. This new field does not rehabilitate `u13be@4`; it is a
+separate candidate documented in the
+[`2026-08-04 broker-drive validation`](2026-08-04_broker_drive_poll_validation.md).
+
+The immediate utility at the time was therefore higher confidence in three
+existing transmission signals and two avoided false mappings. The later
+`u13be@9` result above supersedes measured engine torque as a wholly open
+discovery target without weakening the earlier field-specific rejections.
 
 ## Compute execution note
 

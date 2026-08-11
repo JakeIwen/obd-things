@@ -90,24 +90,36 @@ def authorization(
 
 
 class PcmElectricalProfileTests(unittest.TestCase):
-    def test_registry_has_one_immutable_reviewed_profile(self):
-        self.assertEqual(tuple(pcm.PCM_ELECTRICAL_PROFILES), ("generator.field_duty",))
+    def test_registry_has_two_immutable_reviewed_profiles(self):
+        self.assertEqual(
+            tuple(pcm.PCM_ELECTRICAL_PROFILES),
+            ("generator.field_duty", "engine.crankshaft_torque"),
+        )
         profile = pcm.PCM_ELECTRICAL_PROFILES["generator.field_duty"]
+        torque = pcm.PCM_ELECTRICAL_PROFILES["engine.crankshaft_torque"]
         module = MODULES["pcm"]
 
         self.assertIs(profile, pcm.GENERATOR_FIELD_DUTY_PROFILE)
+        self.assertIs(torque, pcm.CRANKSHAFT_TORQUE_PROFILE)
         self.assertEqual(profile.did, 0x01A1)
+        self.assertEqual(torque.did, 0x06DA)
         self.assertEqual(profile.request_id, module.txid)
+        self.assertEqual(torque.request_id, module.txid)
         self.assertEqual(profile.response_id, module.rxid)
+        self.assertEqual(torque.response_id, module.rxid)
         self.assertEqual(profile.channel, module.channel)
         self.assertEqual(profile.bitrate, module.bitrate)
         self.assertEqual(profile.bus, module.bus)
         self.assertEqual(profile.source, "pcm.did.01a1")
+        self.assertEqual(torque.source, "pcm.did.06da")
+        self.assertEqual(torque.unit, "lb-ft")
         self.assertEqual(profile.maximum, 101.0)
         with self.assertRaises(TypeError):
             pcm.PCM_ELECTRICAL_PROFILES["arbitrary"] = profile
         with self.assertRaises(dataclasses.FrozenInstanceError):
             profile.did = 0x1234
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            torque.did = 0x1234
 
     def test_public_poller_has_no_did_payload_id_or_session_argument(self):
         self.assertFalse(hasattr(pcm, "poll_generator_field_duty"))
@@ -121,6 +133,14 @@ class PcmElectricalProfileTests(unittest.TestCase):
         )
         self.assertEqual(
             tuple(inspect.signature(pcm.PcmElectricalPoller.poll).parameters),
+            ("self", "permit"),
+        )
+        self.assertEqual(
+            tuple(
+                inspect.signature(
+                    pcm.PcmElectricalPoller.poll_crankshaft_torque
+                ).parameters
+            ),
             ("self", "permit"),
         )
         for forbidden in ("did", "payload", "request_id", "response_id", "session"):
@@ -146,6 +166,23 @@ class PcmElectricalWireTests(unittest.TestCase):
         )
         try:
             result = poller.poll(authorization())
+        finally:
+            poller.close()
+        return result, fake
+
+    def poll_torque(self, response, *, ticks=(10.0, 10.0)):
+        fake = FakeSocket(response)
+        times = iter(ticks)
+        poller = pcm.PcmElectricalPoller(
+            socket_factory=lambda *_args: fake,
+            monotonic=lambda: next(times),
+        )
+        try:
+            result = poller.poll_crankshaft_torque(
+                authorization(
+                    purpose=transmit_permit.PCM_CRANKSHAFT_TORQUE
+                )
+            )
         finally:
             poller.close()
         return result, fake
@@ -178,6 +215,33 @@ class PcmElectricalWireTests(unittest.TestCase):
             filter_mask,
             pcm.CAN_EFF_FLAG | pcm.CAN_RTR_FLAG | pcm.CAN_EFF_MASK,
         )
+
+    def test_exact_torque_request_decodes_positive_and_negative_signed_values(self):
+        cases = (
+            (bytes.fromhex("05 62 06 DA 17 83 00 00"), 6019, 240.76),
+            (bytes.fromhex("05 62 06 DA F9 DB 00 00"), -1573, -62.92),
+        )
+        expected = struct.pack(
+            pcm.CAN_FRAME_FORMAT,
+            pcm.CAN_EFF_FLAG | 0x18DA10F1,
+            8,
+            bytes.fromhex("03 22 06 DA 00 00 00 00"),
+        )
+        for payload, signed_raw, torque_nm in cases:
+            with self.subTest(signed_raw=signed_raw):
+                result, fake = self.poll_torque(
+                    response_frame(payload, dlc=8)
+                )
+                self.assertEqual(fake.sent, [expected])
+                self.assertTrue(result.available)
+                self.assertEqual(result.metric, "engine.crankshaft_torque")
+                self.assertEqual(result.raw_value, signed_raw)
+                self.assertEqual(result.unit, "lb-ft")
+                self.assertEqual(result.source, "pcm.did.06da")
+                self.assertAlmostEqual(
+                    result.value,
+                    torque_nm * pcm.NM_TO_LB_FT,
+                )
 
     def test_reusable_poller_open_does_not_transmit_and_context_closes(self):
         fake = FakeSocket(

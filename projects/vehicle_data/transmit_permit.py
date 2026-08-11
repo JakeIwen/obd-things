@@ -21,8 +21,11 @@ from projects.vehicle_data import ccan_powertrain
 
 
 PCM_GENERATOR_DUTY = "pcm.generator_field_duty"
+PCM_CRANKSHAFT_TORQUE = "pcm.crankshaft_torque"
 RF_HUB_PRESSURE = "rf_hub.pressure"
-ALLOWED_PURPOSES = frozenset((PCM_GENERATOR_DUTY, RF_HUB_PRESSURE))
+ALLOWED_PURPOSES = frozenset(
+    (PCM_GENERATOR_DUTY, PCM_CRANKSHAFT_TORQUE, RF_HUB_PRESSURE)
+)
 RUNNING_RPM = 400.0
 REQUIRED_RPM_SAMPLES = 3
 PERMIT_TTL_SECONDS = 0.25

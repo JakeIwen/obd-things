@@ -6,10 +6,11 @@ Accepted input is the common absolute-timestamp output produced by ``candump -ta
     (1782677301.162015) can0 100 [8] 50 19 A7 40 60 00 04 6C
     (1782677301.162015) can0 100#5019A7406000046C
 
-The input is processed one line at a time.  Memory use is therefore proportional to the
-number of distinct CAN identifiers, not the number of frames in the capture.  In each
-changed-byte mask, bit 0 represents payload byte 0, bit 1 represents byte 1, and so on.
-A byte is marked when its value or presence differs from that identifier's first frame.
+Plain-text logs and finalized ``.zst`` logs are accepted.  The input is processed one line
+at a time, including streaming decompression, so memory use is proportional to the number
+of distinct CAN identifiers rather than the number of frames in the capture.  In each
+changed-byte mask, bit 0 represents payload byte 0, bit 1 represents byte 1, and so on.  A
+byte is marked when its value or presence differs from that identifier's first frame.
 
 JSON reports also retain per-byte minimums, maximums, and presence counts.  This makes a
 constant value that changes between two captures detectable, but those statistics can reveal
@@ -30,6 +31,7 @@ import math
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 from typing import BinaryIO, Iterable, Iterator, TextIO
 
@@ -268,7 +270,40 @@ def summarize_lines(lines: Iterable[str], source: str = "<stream>") -> dict[str,
     }
 
 
-def summarize_file(path: Path) -> dict[str, object]:
+def summarize_file(
+    path: Path,
+    *,
+    popen: object = subprocess.Popen,
+) -> dict[str, object]:
+    if path.suffix.lower() == ".zst":
+        try:
+            process = popen(
+                ["zstd", "-dc", "--", str(path)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except OSError as exc:
+            raise OSError(f"cannot start zstd for {path}: {exc}") from exc
+        if process.stdout is None or process.stderr is None:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+            raise OSError("zstd did not provide stdout/stderr pipes")
+        try:
+            summary = summarize_lines(process.stdout, source=str(path))
+            stderr = process.stderr.read()
+            returncode = process.wait()
+        finally:
+            process.stdout.close()
+            process.stderr.close()
+        if returncode != 0:
+            detail = stderr.strip() or f"exit status {returncode}"
+            raise OSError(f"zstd decompression failed for {path}: {detail}")
+        return summary
+
     with path.open("r", encoding="utf-8", errors="replace") as capture:
         return summarize_lines(capture, source=str(path))
 
@@ -296,6 +331,11 @@ def _bounded_text_lines(
 
 def summarize_file_snapshot(path: Path) -> dict[str, object]:
     """Summarize only bytes present when the file is opened, even if it keeps growing."""
+    if path.suffix.lower() == ".zst":
+        raise ValueError(
+            "--snapshot does not support compressed .zst input; "
+            "summarize only finalized compressed chunks"
+        )
     with path.open("rb") as capture:
         byte_limit = os.fstat(capture.fileno()).st_size
         state = {"trailing_partial_line_ignored": False}
@@ -398,8 +438,8 @@ def write_json(path: Path, summary: dict[str, object]) -> None:
 def parser() -> argparse.ArgumentParser:
     argument_parser = argparse.ArgumentParser(
         description=(
-            "Stream and summarize a saved candump -ta log. This is an offline-only tool; "
-            "it never touches SocketCAN or system services."
+            "Stream and summarize a saved candump -ta log or finalized .zst log. This is "
+            "an offline-only tool; it never touches SocketCAN or system services."
         ),
         epilog=(
             "Changed-byte-mask bit N corresponds to payload byte N. JSON byte minima/maxima "
@@ -444,7 +484,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         if args.json is not None:
             write_json(args.json, summary)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 

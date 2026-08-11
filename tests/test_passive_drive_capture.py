@@ -823,6 +823,69 @@ class PassiveDriveCaptureTests(unittest.TestCase):
             self.assertEqual(capture_end["tracked_id_absence_seconds"], 2)
             self.assertEqual(checkpoint["status"], "complete")
 
+    def test_required_start_id_timeout_fails_bounded_and_records_command(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            process = FakeProcess(exit_on_signal=True, descriptor=99)
+            clock = [0.0]
+            selector = FakeSelector(
+                process.stdout.fileno(),
+                [False, False],
+                on_select=lambda _timeout: clock.__setitem__(0, clock[0] + 1),
+            )
+            baseline = interface_state_with_counters(0, 0)
+            recorder = capture.Recorder(
+                run_dir,
+                frozenset({0x2EF}),
+                rotation_seconds=600,
+                duration_seconds=100,
+                policy=capture.DiskPolicy(300, 200),
+                required_start_id=0x2EF,
+                required_start_id_timeout_seconds=2,
+                popen=lambda *_args, **_kwargs: process,
+                disk_free=lambda _path: 1000,
+                safety_check=lambda: baseline,
+                mount_check=lambda: None,
+                candump_extra_args=("-D",),
+            )
+            self.assertEqual(
+                recorder._candump_command(),
+                [
+                    "candump",
+                    "-L",
+                    "-D",
+                    "-d",
+                    "-r",
+                    str(capture.RECEIVE_BUFFER),
+                    "can0",
+                ],
+            )
+            RecordingChunk.writes = []
+            with mock.patch.object(capture, "Chunk", RecordingChunk), mock.patch.object(
+                capture.selectors, "DefaultSelector", return_value=selector
+            ), mock.patch.object(capture.os, "set_blocking"), mock.patch.object(
+                capture.os, "read", side_effect=BlockingIOError
+            ), mock.patch.object(
+                capture.signal, "signal", return_value=capture.signal.SIG_DFL
+            ), mock.patch.object(
+                capture.time, "monotonic", side_effect=lambda: clock[0]
+            ):
+                with self.assertRaisesRegex(
+                    capture.CaptureError,
+                    "required start CAN ID 0x2EF",
+                ):
+                    recorder.run()
+
+            rows = [
+                json.loads(line)
+                for line in (run_dir / "manifest.jsonl").read_text().splitlines()
+            ]
+            start = next(row for row in rows if row["type"] == "capture_start")
+            end = next(row for row in rows if row["type"] == "capture_end")
+            self.assertIn("-D", start["candump_command"])
+            self.assertEqual(end["reason"], "required_start_id_missing")
+            self.assertFalse(end["success"])
+
     def test_priority_only_degradation_marks_full_stream_incomplete(self):
         with tempfile.TemporaryDirectory() as temporary:
             run_dir = Path(temporary)

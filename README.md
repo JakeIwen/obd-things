@@ -18,6 +18,13 @@ At every diagnostic fork, **before** going heads-down on bus-level reverse engin
 Hard-won lesson on this project: the decisive clues lived in the **tool/OEM/community ecosystem**, not on
 the wire. Low-level CAN/UDS RE is the *fallback*, not the opener. (See memory `research-first-diagnostics`.)
 
+Signal work uses the tiered policy in
+[`docs/can-evidence-tiers.md`](docs/can-evidence-tiers.md): exploratory
+candidates may move quickly, operational proxies may pass explicit
+non-critical error tolerances, and only independently established physical
+decodes enter the verified bus map or ordinary telemetry allowlist. Safety and
+provenance gates do not loosen with the statistical tier.
+
 ---
 
 ## Layout
@@ -44,7 +51,7 @@ tools/                     GENERIC, module-agnostic CLI tools (take a module key
   ecu_discover.py            bounded active ECU presence scan -> tmp/discovery/
   identity_inventory.py      bounded per-ECU identity reads -> tmp/inventories/<key>/
   dtc_inventory.py           non-clearing per-ECU DTC inventory -> tmp/inventories/<key>/
-  can_capture_summary.py     streaming offline candump summary (`--snapshot` bounds growing logs)
+  can_capture_summary.py     streaming offline candump/.zst summary (`--snapshot` bounds growing text logs)
   alfaobd_dat.py             offline AlfaOBD .dat cache inventory/baseline comparison
   can_operation_state.py     explicit topology/inhibit status CLI; performs no CAN I/O
   did_sweep.py               dry-run-first, checkpointed ReadDataByIdentifier inventory (22)
