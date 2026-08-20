@@ -1,6 +1,7 @@
 [Unit]
 Description=Allowlisted van telemetry CAN broker
-After=local-fs.target
+After=local-fs.target sys-subsystem-net-devices-can0.device
+BindsTo=sys-subsystem-net-devices-can0.device
 Wants=van-telemetry-web.service
 
 [Service]
@@ -17,4 +18,4 @@ RestartSec=5
 TimeoutStopSec=15
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=sys-subsystem-net-devices-can0.device

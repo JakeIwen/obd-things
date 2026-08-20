@@ -688,9 +688,15 @@ A machine-local `10-can0-passive-baseline.conf` drop-in performs a guarded
 passive interface preflight before broker startup; it leaves an already-correct
 interface untouched and otherwise uses the locked passive bring-up path.
 
-- `van-telemetry.service`, `van-telemetry-web.service`, and a separate
-  machine-local Tailscale web service are installed, enabled at boot, and
-  running.
+- As of 2026-08-11, `van-telemetry.service` is enabled from
+  `sys-subsystem-net-devices-can0.device`, not `multi-user.target`. It binds to
+  that device unit, so an absent PCAN leaves the telemetry stack inactive
+  without blocking boot or retrying, appearance of `can0` starts the broker,
+  and removal of `can0` stops it.
+- `van-telemetry-web.service` and the separate machine-local Tailscale web
+  service are installed but are not enabled independently at boot. Starting
+  the device-activated broker pulls both listeners in through its wanted-unit
+  relationships.
 - `van-drive-recorder.service` is installed, enabled, and running. It is
   independent of the broker's service lifetime, waits safely when the broker is
   unavailable or not armed, and restarts on recorder failure with bounded
@@ -733,6 +739,7 @@ systemctl is-enabled van-telemetry.service van-telemetry-web.service \
   van-telemetry-web-tailscale.service van-drive-recorder.service
 systemctl is-active van-telemetry.service van-telemetry-web.service \
   van-telemetry-web-tailscale.service van-drive-recorder.service
+systemctl status sys-subsystem-net-devices-can0.device
 systemctl cat van-telemetry-web.service
 systemctl cat van-telemetry-web-tailscale.service
 cat tmp/vehicle_data/drive-recorder-state.json

@@ -17,6 +17,3 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-
-[Install]
-WantedBy=multi-user.target
