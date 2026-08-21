@@ -5,14 +5,14 @@
     python3 projects/radar/radar_acc_live.py --execute --confirm-parked --confirm-engine-off \
         --confirm-session-change --confirm-no-active-routine --pair 6/14 \
         --conditions "parked, ignition ON, engine OFF"  # ACTIVE parked direct view
-    python3 projects/radar/radar_acc_live.py --follow # NO bus access -- tails the newest cron
-                                                      #   drive CSV (tmp/radar/radar_acc_drive_*.csv)
+    python3 projects/radar/radar_acc_live.py --follow # NO bus access -- tails the newest saved
+                                                      #   historical drive CSV, if present
     python3 projects/radar/radar_acc_live.py --follow <path.csv>
 
 Direct mode is bounded active UDS, dry-run by default, and limited to five total requests/s by default.
-Do not run it while another logger is active. Use **--follow [csv]** during a logged drive: it only reads
-an existing CSV, so there is zero bus contention, but it does not start a logger or prove the file is
-fresh. DID provenance/scaling: findings/ + docs/.
+Its guarded serial-role ownership coordinates the selected C-CAN role independently of other buses.
+``--follow [csv]`` only reads an existing historical CSV; it does not start a logger or prove freshness.
+DID provenance/scaling: findings/ + docs/.
 """
 import os
 import sys
@@ -26,9 +26,35 @@ while _root != os.path.dirname(_root) and not os.path.isdir(os.path.join(_root, 
 sys.path.insert(0, _root)
 from lib.modules import MODULES
 from live_data.live_data import run, Metric, s16, s32, u8
-# share the SETTLED detector with the drive logger so the live view tracks exactly what the chime fires on
-from radar_acc_drive_log import (slope_dpm, SETTLE_MOVE_KMH, SETTLE_WINDOW_S, SETTLE_MIN_MOVE_S,
-                                 SETTLE_RANGE_DEG, SETTLE_SLOPE_DPM, SPEC_DEG as SETTLE_SPEC)
+
+# Historical CSV-follow analysis remains useful even though the retired
+# fixed-channel drive logger itself is no longer executable. These values are
+# copied from the verified completed alignment campaign.
+SETTLE_MOVE_KMH = 30.0
+SETTLE_WINDOW_S = 300.0
+SETTLE_MIN_MOVE_S = 600.0
+SETTLE_RANGE_DEG = 0.05
+SETTLE_SLOPE_DPM = 0.02
+SETTLE_SPEC = 0.30
+
+
+def slope_dpm(samples):
+    """Least-squares elevation slope in degrees/minute."""
+
+    count = len(samples)
+    if count < 2:
+        return 0.0
+    times = [timestamp / 60.0 for timestamp, _value in samples]
+    mean_time = sum(times) / count
+    mean_value = sum(value for _timestamp, value in samples) / count
+    variance = sum((timestamp - mean_time) ** 2 for timestamp in times)
+    if variance <= 0:
+        return 0.0
+    covariance = sum(
+        (times[index] - mean_time) * (samples[index][1] - mean_value)
+        for index in range(count)
+    )
+    return covariance / variance
 
 MILLIDEG = 1.0 / 1000.0           # raw int / 1000 -> degrees   (inferred)
 MICRODEG = 1.0 / 1_000_000        # raw int / 1e6  -> degrees   (inferred)
@@ -63,7 +89,7 @@ METRICS = [
 ]
 
 def follow_csv(path=None):
-    """Tail the cron logger's drive CSV (no bus access -> no contention). Shows 0845 elevation with
+    """Tail a saved drive CSV (no bus access). Shows 0845 elevation with
     delta/direction from the start-of-drive baseline, the decoded DTC status byte (F/C/W flags), and a
     speed-gated SETTLED indicator + trailing-window slope -- the same plateau gate the logger chimes on."""
     GRN, RED, CYA, YEL, DIM, RST = "\033[32m", "\033[31m", "\033[36m", "\033[33m", "\033[2m", "\033[0m"
@@ -72,8 +98,8 @@ def follow_csv(path=None):
                              key=os.path.getmtime) or [None])[-1]
     cur = os.path.abspath(path) if path else newest()
     if not cur or not os.path.exists(cur):
-        print("No radar_acc_drive_*.csv in tmp/radar yet — start driving (the cron logger creates it), "
-              "then re-run with --follow."); return
+        print("No historical radar_acc_drive_*.csv was found in tmp/radar; "
+              "pass an explicit saved CSV path."); return
     print(f"following {cur}\n(no bus access; Ctrl-C to stop)\n")
 
     def fnum(v):

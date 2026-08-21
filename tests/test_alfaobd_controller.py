@@ -20,7 +20,7 @@ class AlfaCampaignGateTests(unittest.TestCase):
 
         begin.assert_called_once_with(
             "alfaobd",
-            channel="can0",
+            channel="*",
             reason="explicit AlfaOBD campaign begin",
         )
         live.assert_not_called()
@@ -88,19 +88,24 @@ class AlfaCampaignGateTests(unittest.TestCase):
 
         self.assertEqual(events, ["inhibit", "adb"])
 
-    def test_adapter_prompt_invalidates_topology(self):
+    def test_adapter_prompt_sets_global_inhibit_without_topology_stamp(self):
         snapshot = SimpleNamespace(states=frozenset((UiState.ADAPTER_PROMPT,)))
-        with mock.patch.object(
-            controller.can_operation_state, "set_topology"
-        ) as set_topology:
-            controller._invalidate_topology_for_adapter_prompt(snapshot)
+        with (
+            mock.patch.object(
+                controller.can_operation_state, "begin_inhibit"
+            ) as begin,
+            mock.patch.object(
+                controller.can_operation_state, "set_topology"
+            ) as set_topology,
+        ):
+            controller._inhibit_for_adapter_prompt(snapshot)
 
-        set_topology.assert_called_once_with(
-            "can0",
-            "unknown",
-            source="alfaobd_adapter_prompt",
-            note="adapter prompt requires physical topology confirmation",
+        begin.assert_called_once_with(
+            "alfaobd",
+            channel="*",
+            reason="AlfaOBD adapter prompt requires external campaign review",
         )
+        set_topology.assert_not_called()
 
 
 if __name__ == "__main__":

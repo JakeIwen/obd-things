@@ -1,10 +1,15 @@
 import argparse
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
 from projects.vehicle_data import drive_recorder
 from tools import passive_drive_capture as capture
+
+
+TEST_CHANNEL = "can7"
+TEST_SERIAL = "serial-a"
 
 
 def ready_status():
@@ -20,6 +25,7 @@ def ready_status():
         },
         "current_owner": {"kind": "broker_active_drive"},
         "interface": {
+            "channel": TEST_CHANNEL,
             "adapter_present": True,
             "up": True,
             "bitrate": 500000,
@@ -30,6 +36,17 @@ def ready_status():
                 "usable": True,
                 "bus": "c-can",
                 "pair": "6/14",
+            },
+            "role_interfaces": {
+                "roles": {
+                    "c-can": {
+                        "channel": TEST_CHANNEL,
+                        "expected": {
+                            "usb_serial": TEST_SERIAL,
+                            "dev_id": 0,
+                        },
+                    }
+                }
             },
         },
         "vehicle_state": {
@@ -64,10 +81,97 @@ class DriveRecorderTests(unittest.TestCase):
             mutate(value)
             self.assertFalse(drive_recorder.broker_armed_ready(value))
 
+        wrong_channel = ready_status()
+        wrong_channel["interface"]["channel"] = "c-can"
+        self.assertFalse(drive_recorder.broker_armed_ready(wrong_channel))
+
+    def test_broker_route_preserves_dynamic_channel_and_usb_identity(self):
+        status = ready_status()
+        self.assertEqual(
+            drive_recorder.broker_c_can_route(status),
+            (TEST_CHANNEL, TEST_SERIAL, 0),
+        )
+
+    def test_interface_query_rejects_reused_channel_usb_identity(self):
+        resolver = mock.Mock()
+        resolver.inventory.return_value = (
+            (
+                SimpleNamespace(
+                    channel="can7",
+                    usb_vid="1d50",
+                    usb_pid="606f",
+                    usb_serial="other-board",
+                    dev_id=0,
+                ),
+            ),
+            (),
+        )
+
+        with self.assertRaisesRegex(
+            drive_recorder.DriveRecorderError, "no longer matches"
+        ):
+            drive_recorder.query_interface(
+                channel="can7",
+                expected_usb_serial="serial-a",
+                expected_dev_id=0,
+                role_resolver=resolver,
+                runner=mock.Mock(),
+            )
+
+    def test_interface_query_parses_resolved_non_can0_channel(self):
+        details = """\
+7: can7: <NOARP,UP,LOWER_UP,ECHO> mtu 16 state UP mode DEFAULT
+    link/can
+    can state ERROR-ACTIVE (berr-counter tx 0 rx 0) restart-ms 0
+          bitrate 500000 sample-point 0.875
+    RX:  bytes packets errors dropped  missed   mcast
+            4096      64      0       0       0       0
+"""
+        runner = mock.Mock(
+            return_value=SimpleNamespace(returncode=0, stdout=details, stderr="")
+        )
+
+        state = drive_recorder.query_interface(
+            channel="can7",
+            runner=runner,
+        )
+
+        self.assertTrue(state.up)
+        self.assertEqual(state.controller_state, "ERROR-ACTIVE")
+        self.assertEqual(runner.call_args.args[0][-1], "can7")
+
+    def test_interface_query_rejects_duplicate_usb_identity(self):
+        resolver = mock.Mock()
+        resolver.inventory.return_value = (
+            tuple(
+                SimpleNamespace(
+                    channel=channel,
+                    usb_vid="1d50",
+                    usb_pid="606f",
+                    usb_serial="serial-a",
+                    dev_id=0,
+                )
+                for channel in ("can7", "can8")
+            ),
+            (),
+        )
+
+        with self.assertRaisesRegex(
+            drive_recorder.DriveRecorderError, "no longer matches"
+        ):
+            drive_recorder.query_interface(
+                channel="can7",
+                expected_usb_serial="serial-a",
+                expected_dev_id=0,
+                role_resolver=resolver,
+                runner=mock.Mock(),
+            )
+
     def test_coordinated_safety_accepts_passive_without_broker_request(self):
         client = mock.Mock()
         check = drive_recorder.CoordinatedSafetyCheck(
             client,
+            channel=TEST_CHANNEL,
             interface_reader=lambda: interface(listen_only=True),
         )
         self.assertTrue(check().listen_only)
@@ -78,6 +182,7 @@ class DriveRecorderTests(unittest.TestCase):
         client.request.return_value = (200, ready_status())
         check = drive_recorder.CoordinatedSafetyCheck(
             client,
+            channel=TEST_CHANNEL,
             interface_reader=lambda: interface(listen_only=False),
         )
         self.assertFalse(check().listen_only)
@@ -102,6 +207,7 @@ class DriveRecorderTests(unittest.TestCase):
         )
         check = drive_recorder.InitialArmedSafetyCheck(
             client,
+            channel=TEST_CHANNEL,
             interface_reader=lambda: next(states),
         )
         self.assertFalse(check().listen_only)
@@ -110,6 +216,7 @@ class DriveRecorderTests(unittest.TestCase):
 
         blocked = drive_recorder.InitialArmedSafetyCheck(
             client,
+            channel=TEST_CHANNEL,
             interface_reader=lambda: interface(listen_only=True),
         )
         with self.assertRaises(drive_recorder.BrokerOwnershipLost):

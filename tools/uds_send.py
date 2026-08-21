@@ -19,9 +19,9 @@ import string
 import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from lib import canbus, diagnostic_safety, uds
+from lib import can_runtime_route, diagnostic_safety, uds
 from lib.modules import get
-from tools.ecu_discover import preflight
+from tools.ecu_discover import prearm_conflict_errors, preflight
 
 
 MUTATING_SERVICES = {
@@ -171,17 +171,21 @@ def main(argv=None):
         )
         return 2
 
+    try:
+        ownership = can_runtime_route.acquire_armed_module_route(
+            module,
+            asserted_pair=args.pair,
+            prearm_check=prearm_conflict_errors,
+        )
+        module = ownership.route.module
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"ERROR: stable runtime route/arm failed: {exc}", file=sys.stderr)
+        return 2
     errors = preflight(module.channel, module.bitrate)
     if errors:
         for error in errors:
             print(f"ERROR: {error}", file=sys.stderr)
-        return 2
-
-    try:
-        lock = diagnostic_safety.acquire_channel_lock(module.channel)
-    except (OSError, RuntimeError, ValueError) as exc:
-        print(f"ERROR: refusing to transmit: {exc}", file=sys.stderr)
-        return 2
+        return 2 if ownership.release() else 1
 
     sock = None
     response = None
@@ -217,12 +221,12 @@ def main(argv=None):
                     fatal_error = f"socket close failed: {type(exc).__name__}: {exc}"
             finally:
                 try:
-                    restored_passive = bool(canbus.restore_passive(module.channel, module.bitrate))
+                    restored_passive = ownership.release()
                 except Exception as exc:
                     if fatal_error is None:
                         fatal_error = f"passive restore failed: {type(exc).__name__}: {exc}"
                 finally:
-                    diagnostic_safety.release_channel_lock(lock)
+                    pass
 
     if termination.received_signal is not None:
         interrupted = True

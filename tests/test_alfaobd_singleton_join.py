@@ -328,6 +328,11 @@ class EvidenceFixture:
                     "type": "run_metadata",
                     "campaign": "cluster-join-test",
                     "interaction": "passive_receive_only",
+                    "logical_bus": "c-can",
+                    "channel": "can0",
+                    "physical_pair": "6/14",
+                    "bitrate": 500000,
+                    "topology_fingerprint": "0123456789abcdef",
                     "duration_seconds": 32,
                     "interface": {
                         "up": True,
@@ -450,6 +455,11 @@ def write_capture_run(
         "type": "run_metadata",
         "campaign": run_id,
         "interaction": "passive_receive_only",
+        "logical_bus": "c-can",
+        "channel": "can0",
+        "physical_pair": "6/14",
+        "bitrate": 500000,
+        "topology_fingerprint": "0123456789abcdef",
         "duration_seconds": duration,
         "interface": {
             "up": True,
@@ -562,6 +572,30 @@ class SingletonJoinTests(unittest.TestCase):
         self.assertTrue(first["segments"][0]["info_wire_count_match"])
         self.assertEqual(first["anchor_checks"][0]["request"], "221000")
         self.assertEqual(first["passive_capture"]["stream_kind"], "priority")
+        self.assertEqual(first["passive_capture"]["wire_channel"], "can0")
+        self.assertEqual(
+            first["passive_capture"]["route_validation"],
+            {
+                "expected_logical_bus": "c-can",
+                "expected_physical_pair": "6/14",
+                "expected_bitrate": 500000,
+                "declared_channel": "can0",
+                "topology_fingerprint": "0123456789abcdef",
+                "metadata_fields_present": [
+                    "bitrate",
+                    "channel",
+                    "logical_bus",
+                    "physical_pair",
+                    "topology_fingerprint",
+                ],
+                "wire_channel_matches_declared": True,
+                "all_hash_verified_rows_single_channel": True,
+            },
+        )
+        self.assertEqual(
+            {segment["wire"]["channel"] for segment in first["segments"]},
+            {"can0"},
+        )
 
     def test_incomplete_campaign_and_artifact_hash_mismatch_fail_closed(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -585,6 +619,92 @@ class SingletonJoinTests(unittest.TestCase):
             payload[-1] ^= 1
             debug.write_bytes(payload)
             with self.assertRaisesRegex(join.JoinError, "hash mismatch"):
+                join.build_report(fixture.campaign, fixture.capture)
+
+    def test_capture_route_metadata_must_match_registered_module(self):
+        for field, value, message in (
+            ("logical_bus", "b-can", "logical_bus.*does not match"),
+            ("physical_pair", "12/13", "physical_pair.*does not match"),
+            ("bitrate", 125000, "bitrate does not match"),
+        ):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                fixture = EvidenceFixture(Path(directory))
+                run_path = fixture.capture / "run.json"
+                run = json.loads(run_path.read_text(encoding="utf-8"))
+                run[field] = value
+                run_path.write_text(json.dumps(run, sort_keys=True), encoding="utf-8")
+                with self.assertRaisesRegex(join.JoinError, message):
+                    join.build_report(fixture.campaign, fixture.capture)
+
+    def test_legacy_capture_without_explicit_route_fields_keeps_wire_channel(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = EvidenceFixture(Path(directory))
+            run_path = fixture.capture / "run.json"
+            run = json.loads(run_path.read_text(encoding="utf-8"))
+            for field in (
+                "logical_bus",
+                "channel",
+                "physical_pair",
+                "bitrate",
+                "topology_fingerprint",
+            ):
+                del run[field]
+            run_path.write_text(json.dumps(run, sort_keys=True), encoding="utf-8")
+
+            report = join.build_report(fixture.campaign, fixture.capture)
+
+        validation = report["passive_capture"]["route_validation"]
+        self.assertIsNone(validation["declared_channel"])
+        self.assertIsNone(validation["topology_fingerprint"])
+        self.assertEqual(report["passive_capture"]["wire_channel"], "can0")
+        self.assertTrue(validation["wire_channel_matches_declared"])
+
+    def test_route_claims_on_manifest_rows_are_also_validated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = EvidenceFixture(Path(directory))
+            manifest_path = fixture.capture / "manifest.jsonl"
+            rows = read_jsonl(manifest_path)
+            chunk = next(row for row in rows if row.get("type") == "chunk")
+            chunk["logical_bus"] = "can-ch"
+            write_jsonl(manifest_path, rows)
+
+            with self.assertRaisesRegex(join.JoinError, "logical_bus.*does not match"):
+                join.build_report(fixture.campaign, fixture.capture)
+
+    def test_conflicting_topology_fingerprints_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = EvidenceFixture(Path(directory))
+            manifest_path = fixture.capture / "manifest.jsonl"
+            rows = read_jsonl(manifest_path)
+            chunk = next(row for row in rows if row.get("type") == "chunk")
+            chunk["topology_fingerprint"] = "fedcba9876543210"
+            write_jsonl(manifest_path, rows)
+
+            with self.assertRaisesRegex(join.JoinError, "conflicting topology"):
+                join.build_report(fixture.campaign, fixture.capture)
+
+    def test_declared_or_mixed_wire_channels_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = EvidenceFixture(Path(directory))
+            run_path = fixture.capture / "run.json"
+            run = json.loads(run_path.read_text(encoding="utf-8"))
+            run["channel"] = "can1"
+            run_path.write_text(json.dumps(run, sort_keys=True), encoding="utf-8")
+            with self.assertRaisesRegex(join.JoinError, "does not match declared channel"):
+                join.build_report(fixture.campaign, fixture.capture)
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = EvidenceFixture(Path(directory))
+            run_path = fixture.capture / "run.json"
+            run = json.loads(run_path.read_text(encoding="utf-8"))
+            del run["channel"]
+            run_path.write_text(json.dumps(run, sort_keys=True), encoding="utf-8")
+            stream = fixture.capture / "chunk_000000_priority.candump"
+            lines = stream.read_bytes().splitlines(keepends=True)
+            lines[-1] = lines[-1].replace(b" can0 ", b" can1 ")
+            stream.write_bytes(b"".join(lines))
+            refresh_capture_stream_record(fixture.capture)
+            with self.assertRaisesRegex(join.JoinError, "mixed candump channels"):
                 join.build_report(fixture.campaign, fixture.capture)
 
     def test_shortened_capture_and_checkpoint_disagreement_fail_closed(self):
@@ -1030,6 +1150,31 @@ class SingletonJoinTests(unittest.TestCase):
         with self.assertRaisesRegex(join.JoinError, "not continuous"):
             join.validate_continuous_coverage([capture], [segment])
 
+    def test_capture_set_merge_refuses_different_wire_channels(self):
+        captures = [
+            join.ValidatedCapture(
+                spec=join.CaptureSpec(Path(f"/evidence/run-{channel}"), channel),
+                frames=(
+                    join.WireFrame(
+                        timestamp=1.0,
+                        can_id=TXID,
+                        data=bytes.fromhex("03221000"),
+                        source_index=index,
+                        channel=channel,
+                    ),
+                ),
+                coverage_intervals=((0.0, 2.0, 0),),
+                provenance={
+                    "route_validation": {
+                        "topology_fingerprint": "0123456789abcdef"
+                    }
+                },
+            )
+            for index, channel in enumerate(("can0", "can1"))
+        ]
+        with self.assertRaisesRegex(join.JoinError, "mixed wire channels"):
+            join.merge_capture_frames(captures)
+
     def test_chunk_timing_and_hash_verified_stream_lines_are_validated(self):
         with tempfile.TemporaryDirectory() as directory:
             fixture = EvidenceFixture(Path(directory))
@@ -1110,18 +1255,33 @@ class SingletonJoinTests(unittest.TestCase):
             [(message.can_id, message.payload) for message in messages],
             [(0x7E0, bytes.fromhex("22F190")), (0x7E8, payload)],
         )
+        self.assertEqual({message.channel for message in messages}, {"can0"})
+
+    def test_iso_tp_reassembly_never_combines_selected_channels(self):
+        lines = [
+            sf_line(1.0, 0x7E0, bytes.fromhex("22F190")),
+            sf_line(1.1, 0x7E8, bytes.fromhex("62F19000")).replace(
+                b" can0 ", b" can1 "
+            ),
+        ]
+        with self.assertRaisesRegex(join.JoinError, "mixed wire channels"):
+            join.reassemble_wire_messages(
+                lines,
+                selected_ids=frozenset((0x7E0, 0x7E8)),
+                maximum_messages=10,
+            )
 
     def test_pre_boundary_first_frame_is_reassembled_before_message_filtering(self):
         payload = bytes.fromhex("62F19031323334353637")
         frames = [
             join.WireFrame(
-                0.9, 0x7E8, bytes.fromhex("100A62F190313233"), 0
+                0.9, 0x7E8, bytes.fromhex("100A62F190313233"), 0, "can0"
             ),
             join.WireFrame(
-                1.0, 0x7E0, bytes.fromhex("3000000000000000"), 0
+                1.0, 0x7E0, bytes.fromhex("3000000000000000"), 0, "can0"
             ),
             join.WireFrame(
-                1.1, 0x7E8, bytes.fromhex("2134353637000000"), 0
+                1.1, 0x7E8, bytes.fromhex("2134353637000000"), 0, "can0"
             ),
         ]
         messages = join.reassemble_wire_frames(

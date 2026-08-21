@@ -1,12 +1,12 @@
 """Read evidence-qualified engine-health broadcasts from C-CAN.
 
 This module is receive-only and never configures or transmits through
-SocketCAN. :class:`CcanPowertrainReader` requires the normal already-UP,
-500-kbit/s, listen-only, ERROR-ACTIVE C-CAN state and an observer lock. The
-coordinated active-drive owner may instead use the lower-level bounded snapshot
-primitive while it already holds the exclusive lock and honestly reports the
-interface as armed. Signal provenance lives in the PCM plots finding and the
-public metric registry; this module only implements those fixed decodes.
+SocketCAN. Callers must supply the channel resolved for the C-CAN USB identity
+and hold the appropriate logical-role and resolved-channel locks. The
+coordinated active-drive owner may use the bounded snapshot primitive while it
+holds exclusive ownership and honestly reports the interface as armed. Signal
+provenance lives in the PCM plots finding and the public metric registry; this
+module only implements those fixed decodes.
 """
 
 from __future__ import annotations
@@ -18,10 +18,6 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
-from lib import canbus, diagnostic_safety
-
-
-CHANNEL = "can0"
 # Linux SocketCAN numeric constants keep fake-socket offline tests portable to
 # Python builds that do not expose AF_CAN/CAN_RAW (for example macOS workers).
 # Real CAN access still fails normally on a host without SocketCAN.
@@ -254,7 +250,7 @@ def _median_observation(
 
 
 def read_broadcast_snapshot(
-    channel: str = CHANNEL,
+    channel: str,
     *,
     timeout: float = 0.5,
     include_battery: bool = False,
@@ -349,7 +345,7 @@ def read_broadcast_snapshot(
 
 
 def read_snapshot(
-    channel: str = CHANNEL,
+    channel: str,
     *,
     timeout: float = 0.5,
     socket_factory: Callable[..., socket.socket] = socket.socket,
@@ -362,41 +358,3 @@ def read_snapshot(
         socket_factory=socket_factory,
         monotonic=monotonic,
     ).observations
-
-
-class CcanPowertrainReader:
-    """Safety wrapper for the fixed passive powertrain snapshot."""
-
-    def __init__(
-        self,
-        *,
-        channel: str = CHANNEL,
-        probe_seconds: float = 0.25,
-        read_timeout: float = 0.5,
-    ):
-        self.channel = channel
-        self.probe_seconds = probe_seconds
-        self.read_timeout = read_timeout
-
-    def read(self) -> tuple[PassiveObservation, ...]:
-        with diagnostic_safety.channel_observer_lock(self.channel):
-            state = canbus.interface_state(self.channel)
-            if not (
-                state.present
-                and state.up
-                and state.bitrate == canbus.BITRATE_CCAN
-                and state.listen_only
-                and state.controller_state == "ERROR-ACTIVE"
-            ):
-                return ()
-            if (
-                canbus.identify_bus(
-                    self.channel, probe=self.probe_seconds
-                )
-                != "c-can"
-            ):
-                return ()
-            return read_snapshot(
-                self.channel,
-                timeout=self.read_timeout,
-            )

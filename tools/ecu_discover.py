@@ -11,15 +11,15 @@ Dry-run the current-van C-CAN verified-endpoint profile (default; sends nothing)
 
     python3 tools/ecu_discover.py
 
-After stopping tpms-logger and explicitly arming C-CAN, execute it with recorded conditions:
+For live C-CAN use, let the tool resolve, own, arm, and restore the exact role:
 
-    sudo systemctl stop tpms-logger
-    ./bringup.sh --tx
     python3 tools/ecu_discover.py --execute --confirm-parked --pair 6/14 \
-        --conditions "ignition ON, engine OFF, PCAN on SGW-bypass C-CAN"
+        --conditions "ignition ON, engine OFF, serial-role C-CAN on pins 6/14"
 
-The tool refuses to run while tpms-logger is active, the interface is listen-only/down, or
-the bitrate differs. It never uses functional broadcast. It restores listen-only mode even
+The tool refuses to run on unresolved/wrong hardware. Cooperative observers,
+including the three-bus recorder, are coordinated by per-role and per-channel
+locks, so activity on one physical bus does not imply another bus is unavailable.
+It never uses functional broadcast. It restores listen-only mode even
 after an interrupted/failed scan and writes a JSON report under tmp/discovery/.
 
 For an independently researched 11-bit pair, replace the profile with one or more
@@ -34,7 +34,7 @@ confirmation. It still sends physical 0x18DAxxF1 requests, never functional broa
     python3 tools/ecu_discover.py --all-29bit-targets
     python3 tools/ecu_discover.py --all-29bit-targets --confirm-expanded-scan \
         --execute --confirm-parked --pair 6/14 \
-        --conditions "ignition ON, engine OFF, PCAN on SGW-bypass C-CAN"
+        --conditions "ignition ON, engine OFF, serial-role C-CAN on pins 6/14"
 
 A bounded portion of that address-byte space can be selected without repeating a completed scan:
 
@@ -46,18 +46,19 @@ The owner-supplied AlfaOBD 2.4.4.0 model-88 catalog and its on-tablet unit selec
 eight adapter-6 targets as MS-CAN/BLUE-adapter modules. A 2026-07-21 live pass on the van's
 independently verified 125-kbit/s B-CAN pair established exact 29-bit UDS endpoints at addresses
 ``85``, ``87``, ``98``, and ``D9``; ``4A``, ``62``, ``65``, and ``6A`` timed out to both F1A5
-and F187 and remain unresolved rather than proven absent. Dry-run the bounded profile before
-moving the PEAK connection to the B-CAN DB9::
+and F187 and remain unresolved rather than proven absent. Dry-run the bounded
+profile before executing it against the permanent serial-resolved B-CAN role
+on DLC pins 3/11::
 
     python3 tools/ecu_discover.py --profile promaster88-bcan
 
 Live use additionally requires ``--confirm-catalog-candidates`` and the ordinary parked,
-physical-pair, interface, service, and passive-restoration gates::
+physical-pair, exact-role ownership, host-privilege, interface, inhibit, and
+passive-restoration gates::
 
-    ./bringup.sh --bcan --tx
     python3 tools/ecu_discover.py --profile promaster88-bcan \
         --execute --confirm-catalog-candidates --confirm-parked --pair 3/11 \
-        --conditions "ignition ON, engine OFF, PCAN on pigtail B-CAN DB9"
+        --conditions "ignition ON, engine OFF, serial-role B-CAN on pins 3/11"
 
 FCA modules using legacy ECU identification can be surveyed separately with
 ``--probe legacy-1a87``. This sends ReadECUIdentification, not a write or session change.
@@ -88,8 +89,7 @@ from dataclasses import asdict, dataclass
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, REPO)
 
-from lib import canbus, uds
-from lib import diagnostic_safety
+from lib import can_runtime_route, canbus, uds
 from lib.modules import MODULES, Module, NORMAL_11BITS, NORMAL_29BITS
 
 
@@ -383,45 +383,55 @@ def build_targets(args):
     return list(PROMASTER_CCAN_CANDIDATES)
 
 
-def service_active(name):
-    return subprocess.run(
-        ["systemctl", "is-active", "--quiet", name],
-        capture_output=True,
-    ).returncode == 0
+def prearm_conflict_errors():
+    """Return host capabilities required before scoped link mutation."""
 
-
-def tpms_logger_active():
-    return service_active("tpms-logger")
-
-
-def preflight(channel, bitrate):
     errors = []
-    if tpms_logger_active():
-        errors.append("tpms-logger is active; stop it first: sudo systemctl stop tpms-logger")
-    if service_active("promaster-drive-capture"):
+    if subprocess.run(["sudo", "-n", "true"], capture_output=True).returncode != 0:
         errors.append(
-            "promaster-drive-capture is active; finish/stop the passive drive capture before "
-            "arming diagnostics"
+            "noninteractive sudo is unavailable; arm/restoration cannot be guaranteed"
         )
-    current_bitrate = canbus.iface_bitrate(channel)
-    if current_bitrate is None:
+    return errors
+
+
+def active_interface_errors(channel, bitrate):
+    """Require the exact post-arm classical-CAN state."""
+
+    errors = []
+    interface = canbus.interface_state(channel)
+    if (
+        not isinstance(interface, canbus.InterfaceState)
+        or interface.channel != channel
+        or not interface.present
+        or not interface.up
+    ):
         errors.append(f"{channel} is missing or down; explicitly arm the intended bus first")
-    elif current_bitrate != bitrate:
-        errors.append(f"{channel} bitrate is {current_bitrate}, expected {bitrate}")
-    if current_bitrate is not None and canbus.is_listen_only(channel):
+    elif interface.bitrate != bitrate:
+        errors.append(f"{channel} bitrate is {interface.bitrate}, expected {bitrate}")
+    if interface.present and interface.up and interface.fd_enabled is not False:
+        errors.append(
+            f"{channel} must prove classical CAN with FD off before active discovery"
+        )
+    if interface.present and interface.up and interface.listen_only:
         errors.append(
             f"{channel} is listen-only; discovery is active diagnostic traffic, so arm it explicitly"
         )
-    state = canbus.controller_state(channel)
-    if state != "ERROR-ACTIVE":
+    if interface.controller_state != "ERROR-ACTIVE":
         errors.append(
-            f"{channel} controller state is {state or 'unknown'}, expected ERROR-ACTIVE"
+            f"{channel} controller state is {interface.controller_state or 'unknown'}, "
+            "expected ERROR-ACTIVE"
         )
-    if subprocess.run(["sudo", "-n", "true"], capture_output=True).returncode != 0:
+    if interface.present and interface.up and interface.restart_ms != 0:
         errors.append(
-            "noninteractive sudo is unavailable; passive restoration cannot be guaranteed"
+            f"{channel} restart-ms is {interface.restart_ms}; active discovery requires 0"
         )
     return errors
+
+
+def preflight(channel, bitrate):
+    """Compatibility aggregate for an already-armed active interface."""
+
+    return prearm_conflict_errors() + active_interface_errors(channel, bitrate)
 
 
 def classify_response(request_payload, response, status):
@@ -591,7 +601,13 @@ def write_report(path, report):
 def parser():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--execute", action="store_true", help="actually send the listed diagnostic reads")
-    p.add_argument("--channel", default="can0")
+    p.add_argument(
+        "--channel",
+        help=(
+            "legacy/offline display override only; live execution resolves --bus "
+            "by installed USB serial/dev_id and rejects an explicit canN"
+        ),
+    )
     p.add_argument(
         "--probe",
         choices=tuple(PROBE_PAYLOADS),
@@ -739,7 +755,13 @@ def main(argv=None):
         f"ACTIVE DIAGNOSTIC ECU DISCOVERY "
         f"(physical {uds.hx(request_payload)}; never functional broadcast)"
     )
-    print(f"channel={args.channel} targets={len(targets)} max_rate={args.rate:g}/s")
+    target_buses = {target.bus for target in targets}
+    route_label = (
+        args.channel
+        if args.channel is not None
+        else ",".join(sorted(target_buses)) + " -> runtime USB serial/dev_id"
+    )
+    print(f"route={route_label} targets={len(targets)} max_rate={args.rate:g}/s")
     if args.session is not None:
         print(f"session preamble: physical 10 {args.session:02X}; exact 50 {args.session:02X} echo required")
     for candidate in targets:
@@ -792,6 +814,13 @@ def main(argv=None):
             file=sys.stderr,
         )
         return 2
+    if args.channel is not None:
+        print(
+            "ERROR: live --channel is no longer supported; select the logical --bus "
+            "and let stable USB identity resolve canN",
+            file=sys.stderr,
+        )
+        return 2
     expected_pair = PROFILE_EXPECTED_PAIRS.get(args.profile)
     if expected_pair and normalize_physical_pair(args.pair) != expected_pair:
         print(
@@ -805,17 +834,25 @@ def main(argv=None):
         print("ERROR: one scan cannot mix target bitrates", file=sys.stderr)
         return 2
     bitrate = bitrates.pop()
+    buses = {target.bus for target in targets}
+    if len(buses) != 1:
+        print("ERROR: one scan cannot mix logical buses", file=sys.stderr)
+        return 2
+    try:
+        ownership = can_runtime_route.acquire_armed_module_route(
+            targets[0].module(None),
+            asserted_pair=normalize_physical_pair(args.pair),
+            prearm_check=prearm_conflict_errors,
+        )
+        args.channel = ownership.route.channel
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"ERROR: stable runtime route/arm failed: {exc}", file=sys.stderr)
+        return 2
     errors = preflight(args.channel, bitrate)
     if errors:
         for error in errors:
             print(f"ERROR: {error}", file=sys.stderr)
-        return 2
-
-    try:
-        diagnostic_lock = diagnostic_safety.acquire_channel_lock(args.channel)
-    except (OSError, RuntimeError, ValueError) as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 2
+        return 2 if ownership.release() else 1
 
     results = []
     interrupted = False
@@ -866,7 +903,7 @@ def main(argv=None):
     finally:
         cleanup_started = True
         try:
-            restored_passive = bool(canbus.restore_passive(args.channel, bitrate))
+            restored_passive = ownership.release()
             if not restored_passive:
                 append_fatal("passive restoration verification failed")
         except Exception as exc:
@@ -956,7 +993,7 @@ def main(argv=None):
                 append_fatal(f"report publication failed: {type(exc).__name__}: {exc}")
             finally:
                 try:
-                    diagnostic_safety.release_channel_lock(diagnostic_lock)
+                    pass
                 except Exception as exc:
                     append_fatal(f"diagnostic lock release failed: {type(exc).__name__}: {exc}")
                 finally:
@@ -972,7 +1009,6 @@ def main(argv=None):
     if path is not None:
         print(f"report: {path}")
     print(f"adapter restored passive: {'yes' if restored_passive else 'NO - CHECK IT NOW'}")
-    print("When the manual CAN campaign is finished: sudo systemctl start tpms-logger")
     if not restored_passive or fatal_errors:
         return 1
     return 130 if interrupted else 0

@@ -2,7 +2,7 @@
 
 This is deliberately not a generic transmission permission.  A permit can be
 issued only for one of the two fixed active-drive transports, while a live
-exclusive ``can0`` diagnostic lock is held and the latest qualified C-CAN
+exclusive resolved C-CAN diagnostic lock is held and the latest qualified C-CAN
 snapshot contains three running-RPM samples.  It expires quickly and is
 consumed by the first attempted transport use, successful or otherwise.
 """
@@ -32,9 +32,8 @@ PERMIT_TTL_SECONDS = 0.25
 
 _PCM = MODULES["pcm"]
 _RF_HUB = MODULES["rf_hub"]
-if _PCM.channel != "can0" or _RF_HUB.channel != "can0":
-    raise RuntimeError("active-drive transmit permits require registered can0 modules")
-REGISTERED_CHANNEL = "can0"
+if _PCM.bus != "c-can" or _RF_HUB.bus != "c-can":
+    raise RuntimeError("active-drive transmit permits require C-CAN modules")
 _CONSTRUCTION_TOKEN = object()
 
 
@@ -62,6 +61,7 @@ class _TransmitPermit:
         construction_token: object,
         *,
         purpose: str,
+        channel: str,
         lock_handle: object,
         issued_at: float,
         expires_at: float,
@@ -69,7 +69,7 @@ class _TransmitPermit:
     ) -> None:
         if construction_token is not _CONSTRUCTION_TOKEN:
             raise TypeError("transmit permits cannot be constructed directly")
-        self._channel = REGISTERED_CHANNEL
+        self._channel = channel
         self._purpose = purpose
         self._lock_handle = lock_handle
         self._issued_at = issued_at
@@ -159,6 +159,7 @@ def issue(
     snapshot: ccan_powertrain.BroadcastSnapshot,
     *,
     purpose: str,
+    channel: str,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> object:
     """Issue one short-lived capability for one fixed transport purpose."""
@@ -167,17 +168,18 @@ def issue(
     try:
         diagnostic_safety.validate_channel_lock(
             lock_handle,
-            REGISTERED_CHANNEL,
+            channel,
         )
     except (diagnostic_safety.ChannelLockError, OSError, ValueError) as exc:
         raise TransmitPermitError(
-            "a live exclusive can0 diagnostic lock is required"
+            f"a live exclusive {channel} diagnostic lock is required"
         ) from exc
     issued_at = _monotonic_value(monotonic)
     evidence_at = _validate_running_snapshot(snapshot, now=issued_at)
     return _TransmitPermit(
         _CONSTRUCTION_TOKEN,
         purpose=purpose,
+        channel=channel,
         lock_handle=lock_handle,
         issued_at=issued_at,
         expires_at=evidence_at + PERMIT_TTL_SECONDS,
@@ -205,9 +207,9 @@ def consume(permit: object, *, purpose: str, channel: str) -> None:
             raise TransmitPermitError(
                 "active-drive transmit permit purpose did not match the fixed request"
             )
-        if channel != REGISTERED_CHANNEL or channel != permit._channel:
+        if channel != permit._channel:
             raise TransmitPermitError(
-                "active-drive transmit permit channel did not match registered can0"
+                "active-drive transmit permit channel did not match its resolved C-CAN channel"
             )
         if os.getpid() != permit._pid:
             raise TransmitPermitError(
@@ -216,11 +218,11 @@ def consume(permit: object, *, purpose: str, channel: str) -> None:
         try:
             diagnostic_safety.validate_channel_lock(
                 permit._lock_handle,
-                REGISTERED_CHANNEL,
+                permit._channel,
             )
         except (diagnostic_safety.ChannelLockError, OSError, ValueError) as exc:
             raise TransmitPermitError(
-                "active-drive transmit permit lost its exclusive can0 lock"
+                "active-drive transmit permit lost its exclusive C-CAN lock"
             ) from exc
         now = _monotonic_value(permit._monotonic)
         if now < permit._issued_at or now >= permit._expires_at:

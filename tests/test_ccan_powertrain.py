@@ -6,6 +6,9 @@ from itertools import count
 from projects.vehicle_data import ccan_powertrain
 
 
+TEST_CHANNEL = "can7"
+
+
 class FakeSocket:
     def __init__(self, frames):
         self.frames = list(frames)
@@ -123,6 +126,7 @@ class DecodeTests(unittest.TestCase):
         )
         ticks = count(start=0.0, step=0.1)
         observations = ccan_powertrain.read_snapshot(
+            TEST_CHANNEL,
             timeout=0.5,
             socket_factory=lambda *_args: fake,
             monotonic=lambda: next(ticks),
@@ -133,6 +137,7 @@ class DecodeTests(unittest.TestCase):
         fake = FakeSocket([])
         ticks = count(start=0.0, step=0.1)
         ccan_powertrain.read_snapshot(
+            TEST_CHANNEL,
             timeout=0.5,
             socket_factory=lambda *_args: fake,
             monotonic=lambda: next(ticks),
@@ -156,6 +161,7 @@ class DecodeTests(unittest.TestCase):
         fake = FakeSocket([])
         ticks = count(start=0.0, step=0.1)
         ccan_powertrain.read_broadcast_snapshot(
+            TEST_CHANNEL,
             timeout=0.5,
             include_battery=True,
             socket_factory=lambda *_args: fake,
@@ -185,6 +191,7 @@ class DecodeTests(unittest.TestCase):
                 ticks = count(start=0.0, step=0.1)
                 with self.assertRaises(RuntimeError):
                     ccan_powertrain.read_broadcast_snapshot(
+                        TEST_CHANNEL,
                         timeout=0.5,
                         socket_factory=lambda *_args: fake,
                         monotonic=lambda: next(ticks),
@@ -207,6 +214,7 @@ class DecodeTests(unittest.TestCase):
         )
         ticks = count(start=0.0, step=0.01)
         observations = ccan_powertrain.read_snapshot(
+            TEST_CHANNEL,
             timeout=1.0,
             socket_factory=lambda *_args: fake,
             monotonic=lambda: next(ticks),
@@ -237,7 +245,7 @@ class DecodeTests(unittest.TestCase):
         )
         self.assertEqual(by_metric["transmission.turbine_speed"].value, 731.0)
         self.assertIs(by_metric["vehicle.ignition_on"].value, True)
-        self.assertEqual(fake.channel, ("can0",))
+        self.assertEqual(fake.channel, (TEST_CHANNEL,))
         self.assertTrue(fake.closed)
 
 

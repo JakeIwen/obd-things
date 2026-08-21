@@ -1,6 +1,7 @@
 [Unit]
 Description=TPMS passive drive sniffer (RX-only C-CAN capture to find the pressure broadcast)
-After=multi-user.target
+Wants=van-telemetry.service
+After=multi-user.target van-telemetry.service
 
 [Service]
 User=pi

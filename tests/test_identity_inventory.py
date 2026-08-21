@@ -1,9 +1,11 @@
 import contextlib
 import io
 import json
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+from lib.modules import bind_channel
 from tools import identity_inventory
 
 
@@ -108,21 +110,23 @@ class IdentityResponseTests(unittest.TestCase):
 
 class IdentityCliSafetyTests(unittest.TestCase):
     def setUp(self):
-        # Live telemetry can legitimately hold the shared can0 observer lock.
-        # These unit tests mock preflight/CAN behavior, so isolate their control
-        # flow from that host state as well.
+        self.ownerships = []
+
+        def acquire_route(module, **_kwargs):
+            ownership = mock.Mock()
+            ownership.route = SimpleNamespace(
+                module=bind_channel(module, "can0"), channel="can0"
+            )
+            ownership.release.return_value = True
+            self.ownerships.append(ownership)
+            return ownership
+
         acquire = mock.patch.object(
-            identity_inventory.diagnostic_safety,
-            "acquire_channel_lock",
-            return_value=mock.sentinel.channel_lock,
-        )
-        release = mock.patch.object(
-            identity_inventory.diagnostic_safety,
-            "release_channel_lock",
+            identity_inventory.can_runtime_route,
+            "acquire_armed_module_route",
+            side_effect=acquire_route,
         )
         acquire.start()
-        release.start()
-        self.addCleanup(release.stop)
         self.addCleanup(acquire.stop)
 
     def test_dry_run_never_preflights_or_opens_socket(self):
@@ -155,7 +159,6 @@ class IdentityCliSafetyTests(unittest.TestCase):
             mock.patch.object(identity_inventory, "preflight", return_value=[]),
             mock.patch.object(identity_inventory, "selected_dids", return_value=[]),
             mock.patch.object(identity_inventory.uds, "open_module_socket", return_value=sock),
-            mock.patch.object(identity_inventory.canbus, "restore_passive", return_value=True) as restore,
             mock.patch.object(identity_inventory, "write_report"),
             contextlib.redirect_stdout(io.StringIO()),
             contextlib.redirect_stderr(io.StringIO()),
@@ -168,7 +171,7 @@ class IdentityCliSafetyTests(unittest.TestCase):
             )
 
         self.assertEqual(result, 1)
-        restore.assert_called_once_with("can0", 500000)
+        self.ownerships[-1].release.assert_called_once_with()
 
     def test_sigterm_preserves_report_closes_socket_and_restores_passive(self):
         sock = mock.Mock()
@@ -192,17 +195,8 @@ class IdentityCliSafetyTests(unittest.TestCase):
 
         with (
             mock.patch.object(identity_inventory, "preflight", return_value=[]),
-            mock.patch.object(
-                identity_inventory.diagnostic_safety,
-                "acquire_channel_lock",
-                return_value=mock.sentinel.lock,
-            ),
-            mock.patch.object(identity_inventory.diagnostic_safety, "release_channel_lock"),
             mock.patch.object(identity_inventory.uds, "open_module_socket", return_value=sock),
             mock.patch.object(identity_inventory, "query_identity", side_effect=interrupt_query),
-            mock.patch.object(
-                identity_inventory.canbus, "restore_passive", return_value=True
-            ) as restore,
             mock.patch.object(identity_inventory.signal, "signal", side_effect=fake_signal) as set_signal,
             mock.patch.object(
                 identity_inventory,
@@ -221,7 +215,7 @@ class IdentityCliSafetyTests(unittest.TestCase):
 
         self.assertEqual(result, 130)
         sock.close.assert_called_once_with()
-        restore.assert_called_once_with("can0", 500000)
+        self.ownerships[-1].release.assert_called_once_with()
         self.assertTrue(report["interrupted"])
         self.assertTrue(report["partial"])
         self.assertEqual(report["interruption_signal"], "SIGTERM")
@@ -248,28 +242,26 @@ class IdentityCliSafetyTests(unittest.TestCase):
 
         sock.close.side_effect = lambda: signal_now(identity_inventory.signal.SIGTERM)
 
-        def restore(*_args):
+        def release_route():
             signal_now(identity_inventory.signal.SIGHUP)
             return True
 
-        def release(*_args):
-            signal_now(identity_inventory.signal.SIGTERM)
+        ownership = mock.Mock()
+        ownership.route = SimpleNamespace(
+            module=bind_channel(identity_inventory.get("radar_acc"), "can0"),
+            channel="can0",
+        )
+        ownership.release.side_effect = release_route
 
         with (
             mock.patch.object(identity_inventory, "preflight", return_value=[]),
             mock.patch.object(identity_inventory, "selected_dids", return_value=[]),
             mock.patch.object(
-                identity_inventory.diagnostic_safety,
-                "acquire_channel_lock",
-                return_value=mock.sentinel.lock,
+                identity_inventory.can_runtime_route,
+                "acquire_armed_module_route",
+                return_value=ownership,
             ),
-            mock.patch.object(
-                identity_inventory.diagnostic_safety,
-                "release_channel_lock",
-                side_effect=release,
-            ) as unlock,
             mock.patch.object(identity_inventory.uds, "open_module_socket", return_value=sock),
-            mock.patch.object(identity_inventory.canbus, "restore_passive", side_effect=restore) as passive,
             mock.patch.object(identity_inventory.signal, "signal", side_effect=fake_signal),
             mock.patch.object(
                 identity_inventory,
@@ -287,8 +279,7 @@ class IdentityCliSafetyTests(unittest.TestCase):
             )
 
         self.assertEqual(result, 130)
-        passive.assert_called_once_with("can0", 500000)
-        unlock.assert_called_once_with(mock.sentinel.lock)
+        ownership.release.assert_called_once_with()
         self.assertTrue(report["interrupted"])
         self.assertEqual(report["interruption_signal"], "SIGTERM")
 
@@ -301,7 +292,6 @@ class IdentityCliSafetyTests(unittest.TestCase):
             ),
             mock.patch.object(identity_inventory.uds, "drain"),
             mock.patch.object(identity_inventory.uds, "request", side_effect=OSError("receive failed")),
-            mock.patch.object(identity_inventory.canbus, "restore_passive", return_value=True),
             mock.patch.object(
                 identity_inventory,
                 "write_report",

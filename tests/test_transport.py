@@ -1,6 +1,5 @@
 import unittest
 import errno
-from contextlib import contextmanager
 from unittest import mock
 
 from lib import uds
@@ -62,7 +61,9 @@ class UdsTransportTests(unittest.TestCase):
             mock.patch.object(uds.isotp, "socket", return_value=sock),
             mock.patch.object(uds.isotp, "Address") as address,
         ):
-            result = uds.open_socket(0x18DA2AF1, 0x18DAF12A, timeout=0.75)
+            result = uds.open_socket(
+                0x18DA2AF1, 0x18DAF12A, "can9", timeout=0.75
+            )
 
         self.assertIs(result, sock)
         address.assert_called_once_with(
@@ -70,7 +71,7 @@ class UdsTransportTests(unittest.TestCase):
             txid=0x18DA2AF1,
             rxid=0x18DAF12A,
         )
-        sock.bind.assert_called_once_with("can0", address=address.return_value)
+        sock.bind.assert_called_once_with("can9", address=address.return_value)
         sock.settimeout.assert_called_once_with(0.75)
 
     def test_open_module_socket_selects_11_bit_mode(self):
@@ -99,7 +100,9 @@ class UdsTransportTests(unittest.TestCase):
         sock.bind.assert_called_once_with("can9", address=address.return_value)
 
     def test_open_module_socket_can_request_fixed_dlc_padding(self):
-        module = Module("pcm", "PCM fixture", 0x18DA10F1, 0x18DAF110)
+        module = Module(
+            "pcm", "PCM fixture", 0x18DA10F1, 0x18DAF110, channel="can9"
+        )
         sock = mock.Mock()
         with (
             mock.patch.object(uds.isotp, "socket", return_value=sock),
@@ -120,142 +123,17 @@ class UdsTransportTests(unittest.TestCase):
                     mock.patch.object(uds.isotp, "socket") as socket_factory,
                     self.assertRaisesRegex(ValueError, "tx_padding must be a byte"),
                 ):
-                    uds.open_socket(0x18DA10F1, 0x18DAF110, tx_padding=padding)
+                    uds.open_socket(
+                        0x18DA10F1, 0x18DAF110, "can9", tx_padding=padding
+                    )
                 socket_factory.assert_not_called()
-
-    def test_recover_module_socket_uses_registry_bitrate_and_mode(self):
-        module = Module(
-            "test_bcm",
-            "Unverified test fixture",
-            0x760,
-            0x768,
-            channel="can9",
-            bus="b-can",
-            bitrate=125000,
-            addressing_mode=NORMAL_11BITS,
-        )
-        reopened = object()
-        with (
-            mock.patch.object(uds, "bring_up_can", return_value=True) as bring_up,
-            mock.patch.object(uds, "open_socket", return_value=reopened) as open_socket,
-        ):
-            result = uds.recover_module_socket(module, max_wait=1, timeout=0.25)
-
-        self.assertIs(result, reopened)
-        bring_up.assert_called_once_with("can9", 125000, lock_handle=mock.ANY)
-        open_socket.assert_called_once_with(0x760, 0x768, "can9", 0.25, NORMAL_11BITS)
-
-    def test_bring_up_can_mutates_only_inside_its_channel_lock(self):
-        events = []
-        handle = object()
-
-        @contextmanager
-        def locked(channel):
-            events.append(("lock", channel))
-            try:
-                yield handle
-            finally:
-                events.append(("unlock", channel))
-
-        def run(command, **_kwargs):
-            events.append(("command", tuple(command)))
-            return mock.Mock(returncode=0)
-
-        with (
-            mock.patch.object(uds.diagnostic_safety, "channel_lock", side_effect=locked),
-            mock.patch.object(uds.diagnostic_safety, "validate_channel_lock", return_value=handle),
-            mock.patch.object(uds.subprocess, "run", side_effect=run),
-            mock.patch.object(uds.time, "sleep"),
-        ):
-            self.assertTrue(uds.bring_up_can("can9", 125000))
-
-        self.assertEqual(events[0], ("lock", "can9"))
-        self.assertEqual(events[-1], ("unlock", "can9"))
-        self.assertEqual([event[0] for event in events].count("command"), 3)
-
-    def test_bring_up_can_lock_contention_never_runs_interface_command(self):
-        with (
-            mock.patch.object(
-                uds.diagnostic_safety,
-                "channel_lock",
-                side_effect=uds.diagnostic_safety.ChannelLockError("busy"),
-            ),
-            mock.patch.object(uds.subprocess, "run") as run,
-        ):
-            self.assertFalse(uds.bring_up_can("can9", 500000))
-
-        run.assert_not_called()
-
-    def test_bring_up_can_rejects_invalid_supplied_lock_before_mutation(self):
-        with (
-            mock.patch.object(
-                uds.diagnostic_safety,
-                "validate_channel_lock",
-                side_effect=uds.diagnostic_safety.ChannelLockError("wrong channel"),
-            ),
-            mock.patch.object(uds.subprocess, "run") as run,
-            self.assertRaises(uds.diagnostic_safety.ChannelLockError),
-        ):
-            uds.bring_up_can("can9", 500000, lock_handle=object())
-
-        run.assert_not_called()
-
-    def test_recover_socket_holds_one_supplied_lock_across_reconfigure_and_open(self):
-        handle = object()
-        reopened = object()
-        with (
-            mock.patch.object(uds.diagnostic_safety, "validate_channel_lock", return_value=handle),
-            mock.patch.object(uds, "bring_up_can", return_value=True) as bring_up,
-            mock.patch.object(uds, "open_socket", return_value=reopened) as open_socket,
-        ):
-            result = uds.recover_socket(
-                0x760,
-                0x768,
-                "can9",
-                125000,
-                max_wait=1,
-                timeout=0.25,
-                addressing_mode=NORMAL_11BITS,
-                lock_handle=handle,
-            )
-
-        self.assertIs(result, reopened)
-        bring_up.assert_called_once_with("can9", 125000, lock_handle=handle)
-        open_socket.assert_called_once_with(0x760, 0x768, "can9", 0.25, NORMAL_11BITS)
-
-    def test_recover_socket_rejects_invalid_bounds_before_lock_or_interface_use(self):
-        for max_wait in (0, -1, float("nan"), float("inf"), True, "1"):
-            with self.subTest(max_wait=max_wait):
-                with (
-                    mock.patch.object(uds.diagnostic_safety, "channel_lock") as channel_lock,
-                    mock.patch.object(uds, "bring_up_can") as bring_up,
-                    self.assertRaisesRegex(ValueError, "max_wait must be a positive finite"),
-                ):
-                    uds.recover_socket(0x760, 0x768, "can9", max_wait=max_wait)
-                channel_lock.assert_not_called()
-                bring_up.assert_not_called()
-
-    def test_recover_socket_uses_monotonic_deadline_and_bounds_final_sleep(self):
-        handle = object()
-        with (
-            mock.patch.object(uds.diagnostic_safety, "validate_channel_lock", return_value=handle),
-            mock.patch.object(uds, "bring_up_can", return_value=False) as bring_up,
-            mock.patch.object(uds.time, "monotonic", side_effect=(100.0, 100.0, 100.4, 101.0)),
-            mock.patch.object(uds.time, "sleep") as sleep,
-            self.assertRaisesRegex(RuntimeError, "within 1s"),
-        ):
-            uds.recover_socket(
-                0x760, 0x768, "can9", max_wait=1, lock_handle=handle
-            )
-
-        bring_up.assert_called_once_with("can9", 500000, lock_handle=handle)
-        sleep.assert_called_once()
-        self.assertAlmostEqual(sleep.call_args.args[0], 0.6)
 
     def test_unknown_addressing_mode_fails_before_opening_socket(self):
         with mock.patch.object(uds.isotp, "socket") as socket_factory:
             with self.assertRaisesRegex(ValueError, "unsupported addressing_mode"):
-                uds.open_socket(0x700, 0x708, addressing_mode="extended_magic")
+                uds.open_socket(
+                    0x700, 0x708, "can9", addressing_mode="extended_magic"
+                )
 
         socket_factory.assert_not_called()
 
@@ -267,7 +145,7 @@ class UdsTransportTests(unittest.TestCase):
             mock.patch.object(uds.isotp, "Address"),
             self.assertRaises(OSError),
         ):
-            uds.open_socket(0x18DA2AF1, 0x18DAF12A)
+            uds.open_socket(0x18DA2AF1, 0x18DAF12A, "can9")
 
         sock.close.assert_called_once_with()
 

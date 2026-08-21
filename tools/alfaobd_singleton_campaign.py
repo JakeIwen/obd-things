@@ -48,7 +48,7 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from lib import diagnostic_safety
+from lib import can_runtime_route, diagnostic_safety
 from lib.alfaobd_adb import (
     AlfaUiError,
     UiPoller,
@@ -86,7 +86,6 @@ BLOCKING_DIALOG_TEXT = {
     "Failed!",
     "Interface message: NO DATA",
 }
-BLOCKED_SERVICES = ("tpms-logger", "tpms-drivesniff")
 GLOBAL_UI_LOCK = LOCK_DIR / "alfaobd-singleton.lock"
 MIN_PULL_TIMEOUT_SECONDS = 180.0
 MAX_PULL_TIMEOUT_SECONDS = 3600.0
@@ -1439,6 +1438,7 @@ def _run_campaign_locked(
     required_mount: Path,
     mount_device: int,
     conditions: str,
+    route_ownership,
     termination_guard: object | None = None,
 ) -> Path:
     require_writable_mount(
@@ -1446,11 +1446,10 @@ def _run_campaign_locked(
         required_mount,
         expected_device=mount_device,
     )
-    for service in BLOCKED_SERVICES:
-        if _service_active(runner, service):
-            raise CampaignError(
-                f"{service} is active; stop it before the AlfaOBD campaign"
-            )
+    try:
+        route_ownership.revalidate()
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise CampaignError(f"CAN role ownership is no longer safe: {exc}") from exc
     monitor_active = _service_active(runner, "system-event-monitor")
     xml_text, initial_nodes = audit_device(plan, adb)
     if _capture_monitor_state(plan, adb, initial_nodes) != "stopped":
@@ -1520,11 +1519,12 @@ def _run_campaign_locked(
                     required_mount,
                     expected_device=mount_device,
                 )
-                for service in BLOCKED_SERVICES:
-                    if _service_active(runner, service):
-                        raise CampaignError(
-                            f"{service} became active during the AlfaOBD campaign"
-                        )
+                try:
+                    route_ownership.revalidate()
+                except (OSError, RuntimeError, ValueError) as exc:
+                    raise CampaignError(
+                        f"CAN role ownership changed during campaign: {exc}"
+                    ) from exc
                 current_sequence = sequence
                 current_target = target
                 free_before = _disk_guard(campaign_dir, plan.min_free_bytes)
@@ -2042,22 +2042,17 @@ def run_campaign(
     required_mount: Path,
     conditions: str,
 ) -> Path:
-    """Serialize tablet input and reserve the module's Pi CAN channel."""
+    """Serialize tablet input and hold the module's exact passive CAN role."""
     with _ui_supervisor_lock():
-        for service in BLOCKED_SERVICES:
-            if _service_active(runner, service):
-                raise CampaignError(
-                    f"{service} is active; stop it before the AlfaOBD campaign"
-                )
         mount_device = require_writable_mount(out_root, required_mount)
         module = MODULES[plan.module_key]
         try:
-            channel_handle = diagnostic_safety.acquire_channel_observer_lock(
-                module.channel
+            ownership = can_runtime_route.acquire_passive_bus_route(
+                module.bus
             )
-        except diagnostic_safety.ChannelLockError as exc:
+        except (OSError, RuntimeError, ValueError) as exc:
             raise CampaignError(str(exc)) from exc
-        try:
+        with ownership:
             require_writable_mount(
                 out_root,
                 required_mount,
@@ -2072,10 +2067,9 @@ def run_campaign(
                     required_mount,
                     mount_device,
                     conditions,
+                    ownership,
                     termination_guard=guard,
                 )
-        finally:
-            diagnostic_safety.release_channel_lock(channel_handle)
 
 
 def _parser() -> argparse.ArgumentParser:

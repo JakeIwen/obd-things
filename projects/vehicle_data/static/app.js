@@ -4,7 +4,15 @@ const byId = (id) => document.getElementById(id);
 const profileManager = window.VanDashboardProfiles;
 let acquisitionEnabled = false;
 let settings = profileManager.loadSettings();
-let lastSnapshot = {status: {}, catalog: [], metrics: {}};
+let lastSnapshot = {
+  status: {},
+  catalog: [],
+  metrics: {},
+};
+let supplemental = {history: {}, earlyWarnings: {}, dtcs: {}};
+let supplementalRequestSequence = 0;
+let supplementalRequestStartedEpochMs = null;
+let supplementalRequestInFlight = null;
 let acceptedDelivery = null;
 let serverMonotonicOffsetMs = null;
 let serverMonotonicUncertaintyMs = null;
@@ -26,6 +34,7 @@ const MAX_HTTP_ROUND_TRIP_MS = 2000;
 const STREAM_STALL_RESYNC_MS = 3000;
 const FRESHNESS_TICK_MS = 1000;
 const RESYNC_RETRY_MS = 2000;
+const SUPPLEMENTAL_REFRESH_MS = 60000;
 const DRIVE_METRICS = Object.freeze({
   speed: {
     names: ["vehicle.speed", "cluster.vehicle_speed"],
@@ -1214,26 +1223,35 @@ function renderInterface(status) {
       ? iface.active_inhibits.join(", ")
       : "None",
   );
-}
-
-function renderRetune(status) {
-  const retune = status.auto_retune || {};
-  text(
-    "auto-retune-state",
-    retune.enabled === false ? "Disabled" : humanize(retune.state),
-  );
-  let detail = retune.detail || "No status detail.";
-  if (retune.wrong_rate_streak) {
-    detail += ` Evidence ${retune.wrong_rate_streak}/${retune.trigger_after}.`;
-  }
-  if (retune.cooldown_remaining_seconds > 0) {
-    detail += ` Cooldown ${retune.cooldown_remaining_seconds} s.`;
-  }
-  if (retune.last_attempt) {
-    const attempt = retune.last_attempt;
-    detail += ` Last attempt: ${humanize(attempt.reason)} — ${attempt.detail}`;
-  }
-  text("auto-retune", detail);
+  const roleSnapshot = iface.role_interfaces || {};
+  const roles = roleSnapshot.roles && typeof roleSnapshot.roles === "object"
+    ? roleSnapshot.roles
+    : {};
+  const roleGrid = byId("interface-roles");
+  roleGrid.replaceChildren();
+  Object.entries(roles).forEach(([role, payload]) => {
+    const expected = payload?.expected || {};
+    const actual = payload?.actual || {};
+    const card = document.createElement("article");
+    card.className = "role-card";
+    card.dataset.state = payload?.safe ? "ready" : "unavailable";
+    const heading = document.createElement("h3");
+    heading.textContent = `${role} · ${payload?.channel || "unresolved"}`;
+    const link = document.createElement("p");
+    link.textContent = expected.passive_required === false
+      ? `spare · ${actual.up === false ? "down" : humanize(payload?.reason)}`
+      : `${expected.pair ? `pins ${expected.pair} · ` : ""}` +
+        `${actual.bitrate ?? expected.bitrate ?? "—"} bit/s · ` +
+        `${actual.fd_enabled === false ? "classical CAN" : actual.fd_enabled === true ? "CAN FD" : "CAN mode unknown"} · ` +
+        `${actual.listen_only === true ? "listen-only" : humanize(payload?.reason)}`;
+    const identity = document.createElement("p");
+    identity.textContent = expected.usb_serial
+      ? `board ${expected.board} ${expected.connector} · serial …${String(expected.usb_serial).slice(-6)} · dev ${expected.dev_id}`
+      : payload?.detail || "Identity unavailable";
+    card.append(heading, link, identity);
+    roleGrid.append(card);
+  });
+  roleGrid.hidden = roleGrid.children.length === 0;
 }
 
 function renderCollector(status) {
@@ -1246,6 +1264,496 @@ function renderCollector(status) {
     collector.interval_seconds == null
       ? null
       : `${collector.interval_seconds} s`,
+  );
+}
+
+function formatTimestamp(value) {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return String(value);
+  return parsed.toLocaleString();
+}
+
+function numeric(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function renderSparkline(container, points) {
+  container.replaceChildren();
+  const values = (Array.isArray(points) ? points : [])
+    .map((point) => numeric(typeof point === "object" ? point?.value : point))
+    .filter((value) => value != null)
+    .slice(-48);
+  if (values.length < 2) return;
+  const minimum = Math.min(...values);
+  const maximum = Math.max(...values);
+  const span = maximum - minimum;
+  values.forEach((value) => {
+    const bar = document.createElement("span");
+    const normalized = span > 0 ? (value - minimum) / span : .5;
+    bar.style.height = `${Math.round(20 + normalized * 80)}%`;
+    bar.title = String(value);
+    container.append(bar);
+  });
+}
+
+function renderHistory(history) {
+  const summary = history && typeof history === "object" ? history : {};
+  const coverage = summary.coverage || {};
+  const currentTrip = summary.current_trip || null;
+  const recentTrips = Array.isArray(summary.recent_trips)
+    ? summary.recent_trips
+    : [];
+  const trends = summary.metric_trends && typeof summary.metric_trends === "object"
+    ? summary.metric_trends
+    : {};
+  const available = summary.available !== false && (
+    Boolean(coverage.last_snapshot_at) ||
+    Boolean(currentTrip) ||
+    recentTrips.length > 0 ||
+    Object.keys(trends).length > 0
+  );
+  text(
+    "history-state",
+    available ? humanize(coverage.status || "recording") : "NO HISTORY",
+  );
+  text(
+    "history-current-trip",
+    currentTrip
+      ? `${humanize(currentTrip.state || "active")} · ${formatAge(
+        numeric(currentTrip.duration_seconds) == null
+          ? null
+          : currentTrip.duration_seconds * 1000,
+      )}`
+      : "None active",
+  );
+  const metricGaps = Array.isArray(coverage.active_metric_gaps)
+    ? coverage.active_metric_gaps.length
+    : 0;
+  const interfaceGaps = Array.isArray(coverage.active_interface_gaps)
+    ? coverage.active_interface_gaps.length
+    : 0;
+  const retention = coverage.retention && typeof coverage.retention === "object"
+    ? coverage.retention
+    : {};
+  const maintenanceHook = summary.maintenance_hook &&
+    typeof summary.maintenance_hook === "object"
+    ? summary.maintenance_hook
+    : {};
+  const retentionIssue = ["partial", "blocked_rollup_backlog"].includes(
+    retention.last_status,
+  )
+    ? `retention ${humanize(retention.last_status)}`
+    : (maintenanceHook.last_error ? "retention check failed" : null);
+  text(
+    "history-coverage",
+    available
+      ? (metricGaps || interfaceGaps
+        ? `${metricGaps} metric · ${interfaceGaps} interface gap(s)` +
+          (retentionIssue ? ` · ${retentionIssue}` : "")
+        : (retentionIssue || "No active gaps"))
+      : "Not recording",
+  );
+  text("history-trip-count", recentTrips.length);
+  text("history-last-sample", formatTimestamp(coverage.last_snapshot_at));
+
+  const grid = byId("history-trends");
+  grid.replaceChildren();
+  Object.entries(trends).slice(0, 12).forEach(([metricName, trend]) => {
+    const current = trend?.current_trip || {};
+    const seven = trend?.days_7 || {};
+    const thirty = trend?.days_30 || {};
+    const article = document.createElement("article");
+    article.className = "trend-card";
+    const heading = document.createElement("h3");
+    heading.textContent = metricName;
+    const regime = document.createElement("p");
+    regime.textContent = trend?.prior_trips
+      ? `${trend.prior_trips.trip_count} comparable prior trip(s)`
+      : "Comparable prior-trip baseline pending";
+    const stats = document.createElement("dl");
+    stats.className = "trend-stats";
+    [
+      ["Current", current.mean],
+      ["7 day", seven?.mean],
+      ["30 day", thirty?.mean],
+    ].forEach(([label, value]) => {
+      const wrapper = document.createElement("div");
+      const term = document.createElement("dt");
+      const detail = document.createElement("dd");
+      term.textContent = label;
+      detail.textContent = numeric(value) == null
+        ? "—"
+        : `${formatMetricValue(metricName, value)} ${trend?.unit || ""}`.trim();
+      wrapper.append(term, detail);
+      stats.append(wrapper);
+    });
+    const sparkline = document.createElement("div");
+    sparkline.className = "sparkline";
+    sparkline.setAttribute("aria-label", `${metricName} bounded trend`);
+    renderSparkline(
+      sparkline,
+      trend?.sparkline || trend?.points || [],
+    );
+    article.append(heading, regime, stats, sparkline);
+    grid.append(article);
+  });
+  text(
+    "history-note",
+    summary.detail || (
+      available
+        ? "Current-trip comparisons and bounded 7-day/30-day aggregates preserve missing telemetry as explicit coverage gaps."
+        : "The historian has not recorded a usable telemetry sample yet."
+    ),
+  );
+}
+
+function renderEarlyWarnings(health) {
+  const summary = health && typeof health === "object" ? health : {};
+  const active = Array.isArray(summary.active) ? summary.active : [];
+  const assessments = Array.isArray(summary.assessments)
+    ? summary.assessments
+    : [];
+  const unavailable = summary.available === false;
+  const training = assessments.some(
+    (assessment) => assessment?.state === "insufficient_history",
+  );
+  const dataUnavailable = assessments.some(
+    (assessment) => assessment?.state === "unavailable",
+  );
+  const allNormal = assessments.length > 0 && assessments.every(
+    (assessment) => assessment?.state === "normal",
+  );
+  text(
+    "warning-state",
+    unavailable
+      ? "UNAVAILABLE"
+      : (active.length
+        ? `${active.length} TO REVIEW`
+        : (training
+          ? "TRAINING"
+          : (allNormal
+            ? "NO PERSISTENT CHANGES"
+            : (dataUnavailable ? "DATA UNAVAILABLE" : "NO ASSESSMENTS")))),
+  );
+  const list = byId("warning-list");
+  list.replaceChildren();
+  const shown = active.length
+    ? active
+    : assessments.filter(
+      (assessment) => assessment?.state !== "normal",
+    ).slice(0, 8);
+  shown.forEach((assessment) => {
+    const article = document.createElement("article");
+    article.className = "summary-card";
+    article.dataset.state = assessment.state || "unavailable";
+    const heading = document.createElement("h3");
+    heading.textContent = assessment.title || assessment.label ||
+      assessment.metric || "Telemetry change";
+    const reason = document.createElement("p");
+    const reasons = Array.isArray(assessment.reasons)
+      ? assessment.reasons.join(" ")
+      : assessment.reason || assessment.detail;
+    reason.textContent = reasons || humanize(assessment.state || "unavailable");
+    const evidence = document.createElement("p");
+    const baseline = assessment.baseline || {};
+    const deviation = numeric(
+      assessment.signed_deviation ?? assessment.deviation?.signed_from_median,
+    );
+    evidence.textContent = [
+      assessment.regime ? `Regime ${humanize(assessment.regime)}` : null,
+      numeric(baseline.median) == null ? null : `baseline median ${baseline.median}`,
+      numeric(baseline.mad) == null ? null : `MAD ${baseline.mad}`,
+      deviation == null ? null : `deviation ${deviation.toFixed(2)}`,
+      assessment.persistence?.observed == null
+        ? null
+        : `${assessment.persistence.observed}/${assessment.persistence.required} persistent observations`,
+    ].filter(Boolean).join(" · ");
+    article.append(heading, reason);
+    if (evidence.textContent) article.append(evidence);
+    list.append(article);
+  });
+  if (!shown.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = unavailable
+      ? summary.detail || "Early-warning history is unavailable."
+      : "No persistent regime-matched change is currently active.";
+    list.append(empty);
+  }
+  text(
+    "warning-note",
+    summary.detail || (
+      "Warnings require persistent, like-for-like deviations and show their baseline evidence. They are not a diagnosis or an opaque health score."
+    ),
+  );
+}
+
+function dtcGroupTitle(key) {
+  return {
+    current: "Current / test-failed when last observed",
+    pending: "Pending",
+    confirmed_history: "Confirmed history",
+    incomplete_only: "Test not completed only",
+    other: "Other status combinations",
+  }[key] || humanize(key);
+}
+
+function dtcObservationLabel(entry) {
+  return {
+    observed_in_latest_success: "observed in latest successful module result",
+    stale_after_unavailable_attempt: (
+      "stale saved state: latest module attempt unavailable"
+    ),
+    retained_incompatible_status_mask: (
+      "retained saved state: latest successful status-mask coverage was incompatible"
+    ),
+  }[entry?.observation_state] || "saved observation state unavailable";
+}
+
+function dtcModuleGapDetail(module) {
+  if (module?.availability === "never_scanned") {
+    return "Never scanned by the repository reader";
+  }
+  if (module?.availability === "unavailable") {
+    return [
+      `Latest module attempt unavailable: ${humanize(module.unavailable_reason)}`,
+      module.last_success_at
+        ? `last successful evidence ${formatTimestamp(module.last_success_at)}`
+        : "no successful saved result",
+    ].join(" · ");
+  }
+  if (
+    module?.result_state === "status_coverage_incomplete" ||
+    (
+      module?.last_success_dtc_count === 0 &&
+      module?.absence_authoritative !== true
+    )
+  ) {
+    return (
+      "Status coverage incomplete: the saved zero-record response does not " +
+      "establish DTC absence"
+    );
+  }
+  return null;
+}
+
+function renderDtcs(dtcs) {
+  const summary = dtcs && typeof dtcs === "object" ? dtcs : {};
+  const groups = summary.groups && typeof summary.groups === "object"
+    ? summary.groups
+    : {};
+  const modules = summary.modules && typeof summary.modules === "object"
+    ? Object.values(summary.modules)
+    : (Array.isArray(summary.modules) ? summary.modules : []);
+  const coverage = summary.coverage && typeof summary.coverage === "object"
+    ? summary.coverage
+    : {};
+  const groupCounts = summary.group_counts &&
+    typeof summary.group_counts === "object"
+    ? summary.group_counts
+    : {};
+  const groupReturnedCounts = summary.group_returned_counts &&
+    typeof summary.group_returned_counts === "object"
+    ? summary.group_returned_counts
+    : {};
+  const groupsTruncated = summary.groups_truncated === true;
+  const records = Object.keys(groupCounts).length
+    ? Object.values(groupCounts).reduce(
+      (count, value) => count + (numeric(value) || 0),
+      0,
+    )
+    : Object.values(groups).reduce(
+      (count, entries) => count + (Array.isArray(entries) ? entries.length : 0),
+      0,
+    );
+  const returnedRecords = Object.keys(groupReturnedCounts).length
+    ? Object.values(groupReturnedCounts).reduce(
+      (count, value) => count + (numeric(value) || 0),
+      0,
+    )
+    : Object.values(groups).reduce(
+      (count, entries) => count + (Array.isArray(entries) ? entries.length : 0),
+      0,
+    );
+  const newestEvidence = coverage.last_attempt_at || coverage.last_success_at;
+  const available = numeric(coverage.available_modules) ?? modules.filter(
+    (module) => module?.availability === "available",
+  ).length;
+  const unavailable = numeric(coverage.unavailable_modules) ?? modules.filter(
+    (module) => module?.availability === "unavailable",
+  ).length;
+  const neverScanned = numeric(coverage.never_scanned_modules) ?? modules.filter(
+    (module) => module?.availability === "never_scanned",
+  ).length;
+  const statusCoverageIncomplete = numeric(
+    coverage.modules_status_coverage_incomplete,
+  ) ?? modules.filter(
+    (module) => module?.result_state === "status_coverage_incomplete",
+  ).length;
+  const authoritativeZero = modules.filter(
+    (module) => (
+      module?.result_state === "no_dtcs" &&
+      module?.absence_authoritative === true
+    ),
+  ).length;
+  const hasCoverageGaps = (
+    unavailable > 0 || neverScanned > 0 || statusCoverageIncomplete > 0
+  );
+  const allAuthoritativeZero = (
+    modules.length > 0 &&
+    authoritativeZero === modules.length &&
+    records === 0 &&
+    !hasCoverageGaps
+  );
+  text(
+    "dtc-state",
+    summary.available === false
+      ? "UNAVAILABLE"
+      : (!newestEvidence
+        ? "NEVER SCANNED"
+        : (records
+          ? `${records} SAVED STATUS RECORD${records === 1 ? "" : "S"}` +
+            (hasCoverageGaps ? " · COVERAGE GAPS" : "")
+          : (allAuthoritativeZero
+            ? "NO DTCs IN AUTHORITATIVE RESULTS"
+            : "COVERAGE INCOMPLETE"))),
+  );
+  text(
+    "dtc-last-scan",
+    formatTimestamp(newestEvidence),
+  );
+  text(
+    "dtc-module-coverage",
+    coverage.total_modules != null
+      ? `${available}/${coverage.total_modules} available saved module results` +
+        `${unavailable ? ` · ${unavailable} unavailable` : ""}` +
+        `${neverScanned ? ` · ${neverScanned} never scanned` : ""}` +
+        `${statusCoverageIncomplete ? ` · ${statusCoverageIncomplete} status coverage incomplete` : ""}` +
+        `${authoritativeZero ? ` · ${authoritativeZero} authoritative zero-DTC` : ""}`
+      : "No validated module coverage",
+  );
+  const root = byId("dtc-groups");
+  root.replaceChildren();
+  const coverageGaps = modules.filter((module) => dtcModuleGapDetail(module));
+  if (coverageGaps.length) {
+    const section = document.createElement("details");
+    section.className = "dtc-group";
+    const heading = document.createElement("summary");
+    heading.textContent = `Module coverage gaps · ${coverageGaps.length}`;
+    const list = document.createElement("ul");
+    list.className = "dtc-list";
+    coverageGaps.forEach((module) => {
+      const item = document.createElement("li");
+      const name = document.createElement("span");
+      name.className = "dtc-code";
+      name.textContent = module.module_name || module.module_key || "Unknown module";
+      const detail = document.createElement("span");
+      detail.className = "dtc-detail";
+      detail.textContent = [
+        module.logical_bus,
+        dtcModuleGapDetail(module),
+      ].filter(Boolean).join(" · ");
+      item.append(name, detail);
+      list.append(item);
+    });
+    section.append(heading, list);
+    root.append(section);
+  }
+  const order = [
+    "current",
+    "pending",
+    "confirmed_history",
+    "incomplete_only",
+    "other",
+  ];
+  let renderedRecordGroups = 0;
+  order.forEach((key) => {
+    const entries = Array.isArray(groups[key]) ? groups[key] : [];
+    if (!entries.length) return;
+    renderedRecordGroups += 1;
+    const section = document.createElement(
+      key === "incomplete_only" ? "details" : "section",
+    );
+    section.className = "dtc-group";
+    const heading = document.createElement(
+      key === "incomplete_only" ? "summary" : "h3",
+    );
+    const total = numeric(groupCounts[key]) ?? entries.length;
+    const returned = numeric(groupReturnedCounts[key]) ?? entries.length;
+    heading.textContent = `${dtcGroupTitle(key)} · ${total}` +
+      (
+        groupsTruncated && returned < total
+          ? ` · showing ${returned} of ${total}`
+          : ""
+      );
+    const list = document.createElement("ul");
+    list.className = "dtc-list";
+    entries.slice(0, returned).forEach((entry) => {
+      const item = document.createElement("li");
+      const code = document.createElement("span");
+      code.className = "dtc-code";
+      code.textContent = (
+        entry.fca_display || entry.display_code || entry.code || entry.dtc ||
+        entry.raw_dtc || entry.raw_code ||
+        entry.module_key || entry.module || "—"
+      );
+      const detail = document.createElement("span");
+      detail.className = "dtc-detail";
+      detail.textContent = [
+        entry.module_name || entry.module_key || entry.module,
+        entry.logical_bus || entry.bus,
+        entry.label || entry.description,
+        Array.isArray(entry.status_flags)
+          ? entry.status_flags.join(", ")
+          : entry.status_text || entry.status,
+        entry.current ? "current / test-failed when this DTC was last observed" : null,
+        dtcObservationLabel(entry),
+        entry.last_seen_at ? `last ${formatTimestamp(entry.last_seen_at)}` : null,
+      ].filter(Boolean).join(" · ");
+      item.append(code, detail);
+      list.append(item);
+    });
+    section.append(heading, list);
+    root.append(section);
+  });
+  if (!renderedRecordGroups) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    if (summary.available === false) {
+      empty.textContent = summary.detail || "The saved DTC cache is unavailable.";
+    } else if (!newestEvidence) {
+      empty.textContent = (
+        "No saved DTC inventory is available. Run the parked local scanner; " +
+        "this page cannot start it."
+      );
+    } else if (allAuthoritativeZero) {
+      empty.textContent = (
+        "No DTCs were returned in the saved authoritative module results."
+      );
+    } else {
+      empty.textContent = (
+        "No reportable saved DTC records. DTC absence is not established " +
+        "because module or status-mask coverage is incomplete."
+      );
+    }
+    root.append(empty);
+  }
+  const noteParts = [
+    summary.detail || (
+      "Cached ReadDTCInformation only; this page cannot scan or clear DTCs."
+    ),
+    (
+      "Current and pending describe each module's dated successful " +
+      "observation, not live vehicle state."
+    ),
+    groupsTruncated
+      ? `Compact cache: showing ${returnedRecords} of ${records} saved records.`
+      : null,
+  ];
+  text(
+    "dtc-note",
+    noteParts.filter(Boolean).join(" "),
   );
 }
 
@@ -1279,7 +1787,12 @@ function render(snapshot) {
   const web = snapshot.web || status.web || {};
   const metrics = snapshot.metrics || {};
   const catalog = Array.isArray(snapshot.catalog) ? snapshot.catalog : [];
-  lastSnapshot = {status, web, metrics, catalog};
+  lastSnapshot = {
+    status,
+    web,
+    metrics,
+    catalog,
+  };
   if (Object.hasOwn(web, "active_acquisition_enabled")) {
     acquisitionEnabled = Boolean(web.active_acquisition_enabled);
   }
@@ -1287,7 +1800,7 @@ function render(snapshot) {
   text(
     "control-note",
     acquisitionEnabled
-      ? "Wake requests are enabled and remain broker-gated and rate-limited."
+      ? "A receive-only voltage read can be requested from the broker."
       : "Web acquisition is disabled; this page only reads broker cache.",
   );
   renderVehicleState(status);
@@ -1298,8 +1811,10 @@ function render(snapshot) {
   renderTires(catalog, metrics);
   renderAdditionalMetrics(catalog, metrics);
   renderInterface(status);
-  renderRetune(status);
   renderCollector(status);
+  renderEarlyWarnings(supplemental.earlyWarnings);
+  renderHistory(supplemental.history);
+  renderDtcs(supplemental.dtcs);
   renderCatalog(catalog);
   const collector = status.collector || {};
   text(
@@ -1373,6 +1888,58 @@ function freshnessTick() {
   ) {
     resyncSnapshot("stream_stall");
   }
+}
+
+function fetchSupplemental() {
+  if (supplementalRequestInFlight) return supplementalRequestInFlight;
+  const startedAt = Date.now();
+  if (
+    supplementalRequestStartedEpochMs != null &&
+    startedAt - supplementalRequestStartedEpochMs < SUPPLEMENTAL_REFRESH_MS
+  ) {
+    return Promise.resolve(false);
+  }
+  supplementalRequestStartedEpochMs = startedAt;
+  const sequence = ++supplementalRequestSequence;
+  const requests = [
+    ["history", "/v1/history"],
+    ["earlyWarnings", "/v1/health"],
+    ["dtcs", "/v1/diagnostics/dtcs"],
+  ];
+  const operation = (async () => {
+    const results = await Promise.all(requests.map(async ([key, path]) => {
+      try {
+        const response = await fetch(
+          `${path}?fresh=${startedAt}-${sequence}`,
+          {cache: "no-store"},
+        );
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.detail || `HTTP ${response.status}`);
+        }
+        return [key, payload];
+      } catch (error) {
+        return [key, {
+          available: false,
+          reason: "cache_unavailable",
+          detail: String(error),
+        }];
+      }
+    }));
+    if (sequence !== supplementalRequestSequence) return false;
+    supplemental = Object.fromEntries(results);
+    renderHistory(supplemental.history);
+    renderEarlyWarnings(supplemental.earlyWarnings);
+    renderDtcs(supplemental.dtcs);
+    return true;
+  })();
+  const trackedOperation = operation.finally(() => {
+    if (supplementalRequestInFlight === trackedOperation) {
+      supplementalRequestInFlight = null;
+    }
+  });
+  supplementalRequestInFlight = trackedOperation;
+  return trackedOperation;
 }
 
 async function fetchSnapshot(expectedResyncGeneration = null) {
@@ -1475,6 +2042,7 @@ async function resyncSnapshot(reason) {
       generation === resyncGeneration &&
       document.visibilityState !== "hidden"
     ) {
+      void fetchSupplemental();
       startEventStream();
     }
   } catch (error) {
@@ -1495,15 +2063,10 @@ byId("refresh").addEventListener("click", () => {
 
 byId("acquire").addEventListener("click", async () => {
   if (!acquisitionEnabled) return;
-  const confirmed = window.confirm(
-    "Wake the selected ordinary CAN bus if asleep? " +
-    "This may transmit and briefly power modules.",
-  );
-  if (!confirmed) return;
   const response = await fetch("/v1/acquisitions/battery.voltage", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({mode: "wake_if_asleep"}),
+    body: JSON.stringify({mode: "passive"}),
   });
   const result = await response.json();
   if (!response.ok) {
@@ -1531,3 +2094,6 @@ window.addEventListener("pageshow", () => {
 setupProfiles();
 resyncSnapshot("initial");
 window.setInterval(freshnessTick, FRESHNESS_TICK_MS);
+window.setInterval(() => {
+  if (document.visibilityState !== "hidden") void fetchSupplemental();
+}, SUPPLEMENTAL_REFRESH_MS);

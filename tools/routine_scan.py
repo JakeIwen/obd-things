@@ -31,9 +31,9 @@ import time
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, REPO)
 
-from lib import canbus, diagnostic_safety, uds
+from lib import can_runtime_route, diagnostic_safety, uds
 from lib.modules import get
-from tools.ecu_discover import preflight
+from tools.ecu_discover import prearm_conflict_errors, preflight
 
 
 DEFAULT_START = 0x0200
@@ -480,17 +480,21 @@ def main(argv=None):
             file=sys.stderr,
         )
         return 2
+    try:
+        ownership = can_runtime_route.acquire_armed_module_route(
+            module,
+            asserted_pair=args.pair,
+            prearm_check=prearm_conflict_errors,
+        )
+        module = ownership.route.module
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"ERROR: stable runtime route/arm failed: {exc}", file=sys.stderr)
+        return 2
     errors = preflight(module.channel, module.bitrate)
     if errors:
         for error in errors:
             print(f"ERROR: {error}", file=sys.stderr)
-        return 2
-
-    try:
-        diagnostic_lock = diagnostic_safety.acquire_channel_lock(module.channel)
-    except (OSError, RuntimeError, ValueError) as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 2
+        return 2 if ownership.release() else 1
 
     results = []
     session_result = None
@@ -562,7 +566,7 @@ def main(argv=None):
                 _append_error(fatal_errors, f"socket close failed: {type(exc).__name__}: {exc}")
             finally:
                 try:
-                    restored_passive = bool(canbus.restore_passive(module.channel, module.bitrate))
+                    restored_passive = ownership.release()
                     if not restored_passive:
                         _append_error(fatal_errors, "passive restoration verification failed")
                 except Exception as exc:
@@ -571,7 +575,7 @@ def main(argv=None):
                         f"passive restore failed: {type(exc).__name__}: {exc}",
                     )
                 finally:
-                    diagnostic_safety.release_channel_lock(diagnostic_lock)
+                    pass
 
     if termination.received_signal is not None:
         interrupted = True
@@ -652,7 +656,10 @@ def main(argv=None):
     write_report(path, report)
     print(f"report: {path}")
     print(f"adapter restored passive: {'yes' if restored_passive else 'NO - CHECK IT NOW'}")
-    print("When the manual CAN campaign is finished: sudo systemctl start tpms-logger")
+    print(
+        "Restart only a same-role service deliberately stopped for this campaign, "
+        "and only through its current deployment handoff."
+    )
     if fatal_errors or not restored_passive:
         return 1
     return 130 if interrupted else 0

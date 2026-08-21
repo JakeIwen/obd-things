@@ -71,6 +71,27 @@ class OperationStateTests(unittest.TestCase):
         ):
             self.assertEqual(state.active_inhibits("can0"), ())
 
+    def test_global_inhibit_survives_same_boot_channel_renumber(self):
+        written = state.begin_inhibit(
+            "restoration-failed",
+            channel="*",
+            reason="exact passive restoration was not verified",
+        )
+
+        self.assertEqual(written["channel"], "*")
+        self.assertEqual(
+            [item["name"] for item in state.active_inhibits("can0")],
+            ["restoration-failed"],
+        )
+        self.assertEqual(
+            [item["name"] for item in state.active_inhibits("can7")],
+            ["restoration-failed"],
+        )
+        with mock.patch.object(
+            state, "current_boot_id", return_value="boot-next"
+        ):
+            self.assertEqual(state.active_inhibits("can7"), ())
+
     def test_malformed_inhibit_blocks_wake(self):
         self.state_dir.mkdir(parents=True, exist_ok=True)
         (self.state_dir / "inhibit-broken.json").write_text(

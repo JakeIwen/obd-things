@@ -23,15 +23,17 @@ Work passive-first, preserve provenance, and keep every conclusion scoped to the
 
 Do not infer actuation permission from permission to survey or read. Require explicit owner authorization, an exact payload review, safe vehicle conditions, and a verification/recovery plan before actuation.
 
-## Coordinate the live adapter safely
+## Coordinate live CAN ownership safely
 
 Before manual CAN work:
 
-1. Read `projects/tpms/README.md`, then inspect `tpms-logger`, `can*`, PCAN USB presence, bitrate, listen-only state, and error counters.
-2. Stop `tpms-logger` using the documented exception. Do not alter its unit, enablement, cron, or unrelated services.
-3. Confirm the PCAN is physically connected to the intended DLC pair. One channel observes one pair at a time.
-4. For surveys, bring the interface up explicitly listen-only and write raw output below `tmp/captures/` using pair, rate, ignition state, wake condition, and timestamp in metadata or filename.
-5. Restore the documented passive state and restart `tpms-logger` when the manual campaign ends, including after failures.
+1. Read `projects/vehicle_data/README.md` and `projects/tpms/README.md`, then inspect the broker, recorder, TPMS logger, every `can*` interface, USB identity, bitrate, classical-CAN/FD mode, listen-only state, restart policy, and error counters. Read-only inspection does not authorize a service or link change.
+2. Determine which permanent role is in scope. The installed dual-USBCANFD topology has three vehicle roles and one unused channel; use the exact USB serial plus `dev_id` map in `lib/vehicle_can_roles.py` through a role-aware resolver/owner. Linux `canN` names are ephemeral and must never select a physical bus. Historical PEAK captures remain evidence for their recorded physical pair, but the retired single-adapter workflow is not a current operating path.
+3. Coordinate ownership of the one logical role in scope before manual work. Cooperative passive observers may coexist under shared role/channel locks; stop only an active non-cooperating owner or an observer that blocks the required exclusive lease, following its deployment handoff. Do not stop an owner merely because it uses another physical bus, and do not alter service enablement, cron, or unrelated services without explicit authorization.
+4. Use role-aware tools whose live path derives the channel from `Module.bus`, holds the logical-role lock and the resolved-channel lock, and rechecks the USB identity after locking. Do not recreate the removed single-adapter bring-up workflow, save a current `canN`, or manually substitute one role's netdev for another.
+5. For passive surveys, require the exact resolved role to be classical CAN with FD off, at its fixed rate, listen-only, ERROR-ACTIVE, and `restart-ms 0`. Use shared role/channel observer ownership and write raw output below `tmp/captures/` with logical bus, physical pair, resolved identity, ignition state, wake condition, and timestamp in the metadata or filename.
+6. Active diagnostics must use an already reviewed role-aware arming/restoration path. Dry-run first; require the tool's vehicle-state, physical-pair, inhibit, identity, rate, and cleanup gates. Never clear listen-only on a guessed or merely current `canN`.
+7. Restore and verify the exact passive role state before releasing ownership. Restore only a service that was deliberately stopped **and** whose current deployment handoff authorizes restarting that effective installed unit; never start a disabled/staged migration as generic cleanup. A failed or unprovable CAN restoration is a blocking fault, not permission to retry on another channel.
 
 Never transmit during a passive DLC-pair survey. A silent capture is inconclusive until bus wake state, wiring, polarity, bitrate candidates, and RX error behavior are accounted for.
 
@@ -81,7 +83,7 @@ Use AlfaOBD or wiTECH observation only for unresolved labels or explicitly autho
 
 For DID-to-passive mapping, use this staged offline workflow:
 
-1. Establish the ECU-scoped label and physical scale, then extract exact PCAN-observed diagnostic request/response timestamps. Do not sample-hold buffered CSV values as the primary timebase.
+1. Establish the ECU-scoped label and physical scale, then extract exact kernel-timestamped raw diagnostic request/response observations (including historical PCAN captures where that was the observer). Do not sample-hold buffered CSV values as the primary timebase.
 2. Run `tools/can_timeseries_correlate.py` with its backward-compatible coarse profile. Keep channel, SFF/EFF namespace, CAN ID, DLC, source hashes, and maximum match staleness in the evidence.
 3. Shortlist at most two identifiers, then use `--bit-search-id` with selected lengths and byte orders for arbitrary DBC/cantools Intel or Motorola geometry. Do not exhaustively expand the whole bus.
 4. Keep the first-pass result `exploratory_candidate`; one representative capture is sufficient to shortlist and learn from it. Evaluate a frozen field on a complete independent drive leg only when pursuing an operational proxy or verified decode. Never randomly split adjacent samples from one drive into train and holdout sets.

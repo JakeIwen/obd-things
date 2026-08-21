@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Compare two saved ``can_capture_summary.py`` JSON reports offline.
 
-The comparison distinguishes 11-bit and 29-bit identifiers with the same numeric value.  In
+The comparison distinguishes interface, 11/29-bit namespace, and numeric CAN ID.  In
 addition to the within-activity rate already stored in each summary, it computes a rate across
 the *whole capture* and the fraction of the capture spanned by an ID.  Those metrics keep a
 short startup burst from looking like a continuously active periodic frame.
 
-Schema-v2 summaries include per-byte ranges.  The comparator uses them to flag bytes that are
+Schema-v2+ summaries include per-byte ranges.  The comparator uses them to flag bytes that are
 constant in both captures but changed value between conditions; it reports only a mask, not the
-underlying payload values.  Schema-v1 reports remain accepted, but cannot provide that check.
+underlying payload values.  Schema-v1/v2 reports remain accepted only when they describe one
+interface, because their ID rows did not preserve the interface dimension.  Ambiguous legacy
+multi-interface reports are rejected rather than compared as if their buses were one stream.
 
 No CAN or service modules are imported.  This tool reads JSON files and writes only when an
 explicit ``--json`` path is supplied.
@@ -24,8 +26,16 @@ import sys
 from typing import TextIO
 
 
-def _id_key(row: dict[str, object]) -> tuple[int, int]:
-    return int(row["id_bits"]), int(row["can_id"])
+StreamKey = tuple[str, int, int]
+
+
+def _id_key(
+    row: dict[str, object], *, legacy_interface: str | None = None
+) -> StreamKey:
+    interface = row.get("interface", legacy_interface)
+    if not isinstance(interface, str) or not interface:
+        raise ValueError("ID row does not identify its capture interface")
+    return interface, int(row["id_bits"]), int(row["can_id"])
 
 
 def _format_can_id(can_id: int, id_bits: int) -> str:
@@ -47,19 +57,39 @@ def _finite_nonnegative(value: object, label: str) -> float:
     return number
 
 
-def _index(summary: dict[str, object], label: str) -> dict[tuple[int, int], dict[str, object]]:
+def _index(summary: dict[str, object], label: str) -> dict[StreamKey, dict[str, object]]:
     if not isinstance(summary, dict) or not isinstance(summary.get("ids"), list):
         raise ValueError(f"{label} is not a can_capture_summary JSON report")
-    if summary.get("schema_version") not in (1, 2):
+    schema_version = summary.get("schema_version")
+    if schema_version not in (1, 2, 3):
         raise ValueError(f"{label} has unsupported schema_version {summary.get('schema_version')!r}")
-    indexed: dict[tuple[int, int], dict[str, object]] = {}
+    interfaces = summary.get("interfaces")
+    if not isinstance(interfaces, dict):
+        raise ValueError(f"{label} has no interface inventory")
+    interface_names = tuple(
+        name for name in interfaces if isinstance(name, str) and name
+    )
+    legacy_interface = None
+    if schema_version in (1, 2) and summary["ids"]:
+        if len(interface_names) != 1:
+            raise ValueError(
+                f"{label} is an ambiguous legacy multi-interface summary; "
+                "regenerate it with can_capture_summary schema 3"
+            )
+        legacy_interface = interface_names[0]
+    indexed: dict[StreamKey, dict[str, object]] = {}
     for row in summary["ids"]:
         if not isinstance(row, dict):
             raise ValueError(f"{label} contains a non-object ID row")
-        key = _id_key(row)
+        key = _id_key(row, legacy_interface=legacy_interface)
+        if interface_names and key[0] not in interface_names:
+            raise ValueError(
+                f"{label} ID row names interface {key[0]!r} outside its inventory"
+            )
         if key in indexed:
             raise ValueError(
-                f"{label} repeats {_format_can_id(key[1], key[0])} ({key[0]}-bit)"
+                f"{label} repeats {key[0]}/"
+                f"{_format_can_id(key[2], key[1])} ({key[1]}-bit)"
             )
         indexed[key] = row
     return indexed
@@ -142,10 +172,11 @@ def compare_summaries(
     current_duration = _finite_nonnegative(current.get("duration_s") or 0, "current duration")
 
     def standalone(
-        key: tuple[int, int], row: dict[str, object], duration: float
+        key: StreamKey, row: dict[str, object], duration: float
     ) -> dict[str, object]:
-        bits, can_id = key
+        interface, bits, can_id = key
         return {
+            "interface": interface,
             "can_id": can_id,
             "can_id_hex": _format_can_id(can_id, bits),
             "id_bits": bits,
@@ -165,7 +196,7 @@ def compare_summaries(
     motion_candidates = []
     constant_value_change_candidates = []
     for key in sorted(baseline_ids.keys() & current_ids.keys()):
-        bits, can_id = key
+        interface, bits, can_id = key
         baseline_row = baseline_ids[key]
         current_row = current_ids[key]
         before = _activity(baseline_row, baseline_duration)
@@ -215,6 +246,7 @@ def compare_summaries(
             reasons.append("dlc_set")
 
         row = {
+            "interface": interface,
             "can_id": can_id,
             "can_id_hex": _format_can_id(can_id, bits),
             "id_bits": bits,
@@ -244,7 +276,7 @@ def compare_summaries(
             constant_value_change_candidates.append(row)
 
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "baseline": {
             "source": baseline.get("source"),
             "summary_schema_version": baseline.get("schema_version"),
@@ -281,13 +313,16 @@ def _print_standalone(title: str, rows: list[dict[str, object]], output: TextIO)
     if not rows:
         print("  (none)", file=output)
         return
-    print("  ID          bits  capture-fps  coverage  DLCs  variable-mask", file=output)
+    print(
+        "  interface  ID          bits  capture-fps  coverage  DLCs  variable-mask",
+        file=output,
+    )
     for row in rows:
         activity = row["activity"]
         dlcs = ",".join(str(value) for value in activity["dlcs"])
         mask = _mask_text(int(activity["changed_byte_mask"]), (activity,))
         print(
-            f"  {row['can_id_hex']:<11} {row['id_bits']:>4}  "
+            f"  {row['interface']:<10} {row['can_id_hex']:<11} {row['id_bits']:>4}  "
             f"{_display_number(activity['capture_rate_fps']):>11}  "
             f"{_display_number(activity['activity_coverage_fraction']):>8}  "
             f"{dlcs:<4}  {mask}",
@@ -327,13 +362,14 @@ def print_human(comparison: dict[str, object], output: TextIO | None = None) -> 
         print("  (none)", file=output)
     else:
         print(
-            "  ID          bits  cap-rate ratio  coverage delta  new-var-mask  "
+            "  interface  ID          bits  cap-rate ratio  coverage delta  new-var-mask  "
             "state-shift  reasons",
             file=output,
         )
         for row in changed:
             print(
-                f"  {row['can_id_hex']:<11} {row['id_bits']:>4}  "
+                f"  {row['interface']:<10} {row['can_id_hex']:<11} "
+                f"{row['id_bits']:>4}  "
                 f"{_display_number(row['capture_rate_ratio']):>14}  "
                 f"{_display_number(row['activity_coverage_change']):>14}  "
                 f"{row['newly_variable_byte_mask_hex']:<12}  "
@@ -353,7 +389,8 @@ def print_human(comparison: dict[str, object], output: TextIO | None = None) -> 
     else:
         for row in candidates:
             print(
-                f"  {row['can_id_hex']} ({row['id_bits']}-bit): "
+                f"  {row['interface']}/{row['can_id_hex']} "
+                f"({row['id_bits']}-bit): "
                 f"{row['newly_variable_byte_mask_hex']}",
                 file=output,
             )
@@ -369,7 +406,8 @@ def print_human(comparison: dict[str, object], output: TextIO | None = None) -> 
     else:
         for row in state_changes:
             print(
-                f"  {row['can_id_hex']} ({row['id_bits']}-bit): "
+                f"  {row['interface']}/{row['can_id_hex']} "
+                f"({row['id_bits']}-bit): "
                 f"{row['constant_value_change_byte_mask_hex']}",
                 file=output,
             )

@@ -36,6 +36,7 @@ class DiagnosticWireTests(unittest.TestCase):
                 summary = wire.extract(
                     module=MODULES["pcm"],
                     captures=[capture],
+                    capture_channel="can0",
                     output=output,
                 )
 
@@ -59,6 +60,7 @@ class DiagnosticWireTests(unittest.TestCase):
             )
             self.assertEqual(rows[1]["direction"], "ecu_to_tester")
             self.assertEqual(rows[1]["module_key"], "pcm")
+            self.assertEqual(rows[1]["channel"], "can0")
             self.assertEqual(rows[1]["can_data_hex"], "04 62 02 2A 34 00 00 00")
 
             summary_path = root / "pcm_wire.summary.json"
@@ -82,6 +84,7 @@ class DiagnosticWireTests(unittest.TestCase):
                 wire.extract(
                     module=MODULES["pcm"],
                     captures=[capture],
+                    capture_channel="can0",
                     output=output,
                 )
             stats = correlate.StreamStats(str(output), "none")
@@ -91,6 +94,7 @@ class DiagnosticWireTests(unittest.TestCase):
                     did=0x022A,
                     decoder=correlate.ReferenceDecoder("byte:0"),
                     stats=stats,
+                    capture_channel="can0",
                     module=MODULES["pcm"],
                 )
             )
@@ -110,6 +114,7 @@ class DiagnosticWireTests(unittest.TestCase):
                     wire.extract(
                         module=MODULES["pcm"],
                         captures=[partial],
+                        capture_channel="can0",
                         output=root / "pcm_wire.jsonl",
                     )
 
@@ -121,6 +126,7 @@ class DiagnosticWireTests(unittest.TestCase):
                     wire.extract(
                         module=MODULES["pcm"],
                         captures=[capture],
+                        capture_channel="can0",
                         output=root / "wrong.jsonl",
                     )
 

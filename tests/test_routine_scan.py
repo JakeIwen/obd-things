@@ -3,9 +3,11 @@ import io
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+from lib.modules import bind_channel
 from tools import routine_scan
 
 
@@ -104,28 +106,29 @@ class RoutineResponseTests(unittest.TestCase):
 
 class RoutineCliSafetyTests(unittest.TestCase):
     def setUp(self):
-        # Live telemetry legitimately holds the repository's shared can0 observer
-        # lock. These are unit tests of routine-scan control flow, so isolate them
-        # from that machine state just as the CAN socket and preflight are mocked.
+        self.ownerships = []
+
+        def acquire_route(module, **_kwargs):
+            ownership = mock.Mock()
+            ownership.route = SimpleNamespace(
+                module=bind_channel(module, "can0"), channel="can0"
+            )
+            ownership.release.return_value = True
+            self.ownerships.append(ownership)
+            return ownership
+
         acquire = mock.patch.object(
-            routine_scan.diagnostic_safety,
-            "acquire_channel_lock",
-            return_value=mock.sentinel.channel_lock,
-        )
-        release = mock.patch.object(
-            routine_scan.diagnostic_safety,
-            "release_channel_lock",
+            routine_scan.can_runtime_route,
+            "acquire_armed_module_route",
+            side_effect=acquire_route,
         )
         acquire.start()
-        release.start()
-        self.addCleanup(release.stop)
         self.addCleanup(acquire.stop)
 
     def test_dry_run_does_not_preflight_or_touch_can(self):
         with (
             mock.patch.object(routine_scan, "preflight") as preflight,
             mock.patch.object(routine_scan.uds, "open_module_socket") as open_socket,
-            mock.patch.object(routine_scan.canbus, "restore_passive") as restore,
             contextlib.redirect_stdout(io.StringIO()),
         ):
             result = routine_scan.main(["radar_acc", "0251", "0251"])
@@ -133,7 +136,6 @@ class RoutineCliSafetyTests(unittest.TestCase):
         self.assertEqual(result, 0)
         preflight.assert_not_called()
         open_socket.assert_not_called()
-        restore.assert_not_called()
 
     def test_live_requires_every_gate_before_preflight(self):
         cases = (
@@ -238,7 +240,6 @@ class RoutineCliSafetyTests(unittest.TestCase):
             mock.patch.object(routine_scan.uds, "drain"),
             mock.patch.object(routine_scan.uds, "request", side_effect=respond) as request,
             mock.patch.object(routine_scan.time, "sleep"),
-            mock.patch.object(routine_scan.canbus, "restore_passive", return_value=True),
             mock.patch.object(routine_scan, "report_path", return_value="/tmp/routines.json"),
             mock.patch.object(routine_scan, "append_result_checkpoint"),
             mock.patch.object(
@@ -278,7 +279,6 @@ class RoutineCliSafetyTests(unittest.TestCase):
             mock.patch.object(routine_scan.uds, "drain"),
             mock.patch.object(routine_scan.uds, "request", side_effect=respond),
             mock.patch.object(routine_scan.time, "sleep"),
-            mock.patch.object(routine_scan.canbus, "restore_passive", return_value=True),
             mock.patch.object(routine_scan, "append_result_checkpoint"),
             mock.patch.object(routine_scan, "write_report"),
             contextlib.redirect_stdout(io.StringIO()),
@@ -332,7 +332,6 @@ class RoutineCliSafetyTests(unittest.TestCase):
                     mock.patch.object(routine_scan.uds, "drain"),
                     mock.patch.object(routine_scan.uds, "request", side_effect=respond),
                     mock.patch.object(routine_scan.time, "sleep"),
-                    mock.patch.object(routine_scan.canbus, "restore_passive", return_value=True),
                     mock.patch.object(routine_scan, "append_result_checkpoint"),
                     mock.patch.object(
                         routine_scan,
@@ -468,7 +467,6 @@ class RoutineCliSafetyTests(unittest.TestCase):
             mock.patch.object(routine_scan.uds, "request", side_effect=respond),
             mock.patch.object(routine_scan.time, "sleep"),
             mock.patch.object(routine_scan, "TESTER_PRESENT_INTERVAL_S", 0.0),
-            mock.patch.object(routine_scan.canbus, "restore_passive", return_value=True),
             mock.patch.object(routine_scan, "append_result_checkpoint"),
             mock.patch.object(
                 routine_scan, "write_report", side_effect=lambda _path, data: report.update(data)
@@ -519,7 +517,6 @@ class RoutineCliSafetyTests(unittest.TestCase):
                 "request",
                 return_value=(bytes.fromhex("50 02"), "POSITIVE"),
             ) as request,
-            mock.patch.object(routine_scan.canbus, "restore_passive", return_value=True),
             mock.patch.object(routine_scan, "append_result_checkpoint"),
             mock.patch.object(
                 routine_scan, "write_report", side_effect=lambda _path, data: report.update(data)
@@ -555,7 +552,6 @@ class RoutineCliSafetyTests(unittest.TestCase):
             mock.patch.object(routine_scan, "preflight", return_value=[]),
             mock.patch.object(routine_scan.uds, "open_module_socket", return_value=sock),
             mock.patch.object(routine_scan, "scan_routines", side_effect=partial_failure),
-            mock.patch.object(routine_scan.canbus, "restore_passive", return_value=True) as restore,
             mock.patch.object(
                 routine_scan, "write_report", side_effect=lambda _path, data: report.update(data)
             ),
@@ -571,7 +567,7 @@ class RoutineCliSafetyTests(unittest.TestCase):
 
         self.assertEqual(result, 1)
         sock.close.assert_called_once_with()
-        restore.assert_called_once_with("can0", 500000)
+        self.ownerships[-1].release.assert_called_once_with()
         self.assertEqual(report["results"], [{"rid": "0251", "category": "timeout"}])
         self.assertTrue(report["partial"])
         self.assertIn("scan fixture", report["fatal_error"])
@@ -589,7 +585,6 @@ class RoutineCliSafetyTests(unittest.TestCase):
             mock.patch.object(routine_scan, "preflight", return_value=[]),
             mock.patch.object(routine_scan.uds, "open_module_socket", return_value=sock),
             mock.patch.object(routine_scan, "scan_routines", side_effect=interrupt),
-            mock.patch.object(routine_scan.canbus, "restore_passive", return_value=True) as restore,
             mock.patch.object(
                 routine_scan, "write_report", side_effect=lambda _path, data: report.update(data)
             ),
@@ -605,7 +600,7 @@ class RoutineCliSafetyTests(unittest.TestCase):
 
         self.assertEqual(result, 130)
         sock.close.assert_called_once_with()
-        restore.assert_called_once_with("can0", 500000)
+        self.ownerships[-1].release.assert_called_once_with()
         self.assertTrue(report["interrupted"])
         self.assertTrue(report["partial"])
         self.assertEqual(len(report["results"]), 1)
@@ -631,15 +626,8 @@ class RoutineCliSafetyTests(unittest.TestCase):
 
         with (
             mock.patch.object(routine_scan, "preflight", return_value=[]),
-            mock.patch.object(
-                routine_scan.diagnostic_safety,
-                "acquire_channel_lock",
-                return_value=mock.sentinel.lock,
-            ),
-            mock.patch.object(routine_scan.diagnostic_safety, "release_channel_lock"),
             mock.patch.object(routine_scan.uds, "open_module_socket", return_value=sock),
             mock.patch.object(routine_scan, "scan_routines", side_effect=interrupt),
-            mock.patch.object(routine_scan.canbus, "restore_passive", return_value=True) as restore,
             mock.patch.object(routine_scan.signal, "signal", side_effect=fake_signal) as set_signal,
             mock.patch.object(
                 routine_scan,
@@ -658,7 +646,7 @@ class RoutineCliSafetyTests(unittest.TestCase):
 
         self.assertEqual(result, 130)
         sock.close.assert_called_once_with()
-        restore.assert_called_once_with("can0", 500000)
+        self.ownerships[-1].release.assert_called_once_with()
         self.assertTrue(report["interrupted"])
         self.assertEqual(report["interruption_signal"], "SIGTERM")
         set_signal.assert_any_call(routine_scan.signal.SIGTERM, mock.sentinel.old_term)
@@ -682,28 +670,24 @@ class RoutineCliSafetyTests(unittest.TestCase):
 
         sock.close.side_effect = lambda: signal_now(routine_scan.signal.SIGTERM)
 
-        def restore(*_args):
+        def release_route():
             signal_now(routine_scan.signal.SIGHUP)
             return True
 
-        def release(*_args):
-            signal_now(routine_scan.signal.SIGTERM)
+        ownership = mock.Mock()
+        module = bind_channel(routine_scan.get("radar_acc"), "can0")
+        ownership.route = SimpleNamespace(module=module, channel="can0")
+        ownership.release.side_effect = release_route
 
         with (
             mock.patch.object(routine_scan, "build_rids", return_value=[]),
             mock.patch.object(routine_scan, "preflight", return_value=[]),
             mock.patch.object(
-                routine_scan.diagnostic_safety,
-                "acquire_channel_lock",
-                return_value=mock.sentinel.lock,
+                routine_scan.can_runtime_route,
+                "acquire_armed_module_route",
+                return_value=ownership,
             ),
-            mock.patch.object(
-                routine_scan.diagnostic_safety,
-                "release_channel_lock",
-                side_effect=release,
-            ) as unlock,
             mock.patch.object(routine_scan.uds, "open_module_socket", return_value=sock),
-            mock.patch.object(routine_scan.canbus, "restore_passive", side_effect=restore) as passive,
             mock.patch.object(routine_scan.signal, "signal", side_effect=fake_signal),
             mock.patch.object(
                 routine_scan,
@@ -721,8 +705,7 @@ class RoutineCliSafetyTests(unittest.TestCase):
             )
 
         self.assertEqual(result, 130)
-        passive.assert_called_once_with("can0", 500000)
-        unlock.assert_called_once_with(mock.sentinel.lock)
+        ownership.release.assert_called_once_with()
         self.assertTrue(report["interrupted"])
         self.assertEqual(report["interruption_signal"], "SIGTERM")
 

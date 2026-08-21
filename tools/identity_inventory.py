@@ -12,12 +12,15 @@ Dry run (nothing transmitted):
 
     python3 tools/identity_inventory.py radar_acc
 
-Live use requires tpms-logger stopped and the intended bus explicitly armed:
+Live use resolves the module's permanent bus role, acquires only that role and
+its current serial/``dev_id``-resolved channel, then performs its own bounded
+arm/restore cycle.  An active same-role observer may need to be stopped if it
+blocks the exclusive lease; owners on other buses remain independent:
 
     python3 tools/identity_inventory.py radar_acc --execute --confirm-parked --pair 6/14 \
         --conditions "ignition ON, engine OFF, SGW-bypass C-CAN"
 
-The interface is restored to listen-only mode after every attempted live run. Machine output
+The exact resolved interface is restored to listen-only mode after every attempted live run. Machine output
 lands under tmp/inventories/<module>/ and must be reviewed/masked before promotion.
 """
 import argparse
@@ -32,10 +35,10 @@ import time
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, REPO)
 
-from lib import canbus, uds
+from lib import can_runtime_route, uds
 from lib import diagnostic_safety
 from lib.modules import get
-from tools.ecu_discover import preflight
+from tools.ecu_discover import prearm_conflict_errors, preflight
 
 
 MIN_REQUEST_RATE = 0.1
@@ -254,17 +257,21 @@ def main(argv=None):
             file=sys.stderr,
         )
         return 2
+    try:
+        ownership = can_runtime_route.acquire_armed_module_route(
+            module,
+            asserted_pair=args.pair,
+            prearm_check=prearm_conflict_errors,
+        )
+        module = ownership.route.module
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"ERROR: stable runtime route/arm failed: {exc}", file=sys.stderr)
+        return 2
     errors = preflight(module.channel, module.bitrate)
     if errors:
         for error in errors:
             print(f"ERROR: {error}", file=sys.stderr)
-        return 2
-
-    try:
-        diagnostic_lock = diagnostic_safety.acquire_channel_lock(module.channel)
-    except (OSError, RuntimeError, ValueError) as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 2
+        return 2 if ownership.release() else 1
 
     results = []
     fatal_error = None
@@ -302,7 +309,7 @@ def main(argv=None):
                     print(f"ERROR: {fatal_error}", file=sys.stderr)
             finally:
                 try:
-                    restored_passive = bool(canbus.restore_passive(module.channel, module.bitrate))
+                    restored_passive = ownership.release()
                     if not restored_passive and fatal_error is None:
                         fatal_error = "passive restoration verification failed"
                 except Exception as exc:
@@ -310,7 +317,7 @@ def main(argv=None):
                     if fatal_error is None:
                         fatal_error = f"passive restoration failed: {type(exc).__name__}: {exc}"
                 finally:
-                    diagnostic_safety.release_channel_lock(diagnostic_lock)
+                    pass
 
     if termination.received_signal is not None:
         interrupted = True
@@ -363,7 +370,10 @@ def main(argv=None):
     write_report(path, report)
     print(f"report: {path}")
     print(f"adapter restored passive: {'yes' if restored_passive else 'NO - CHECK IT NOW'}")
-    print("When the manual CAN campaign is finished: sudo systemctl start tpms-logger")
+    print(
+        "Restart only a same-role service deliberately stopped for this campaign, "
+        "and only through its current deployment handoff."
+    )
     if fatal_error or not restored_passive:
         return 1
     return 130 if interrupted else 0

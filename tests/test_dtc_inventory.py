@@ -1,8 +1,10 @@
 import contextlib
 import io
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+from lib.modules import bind_channel
 from tools import dtc_inventory
 
 
@@ -51,21 +53,49 @@ class DtcDecodeTests(unittest.TestCase):
 
 class DtcCliSafetyTests(unittest.TestCase):
     def setUp(self):
-        # Live telemetry can legitimately hold the shared can0 observer lock.
-        # These unit tests mock preflight/CAN behavior, so isolate their control
-        # flow from that host state as well.
+        self.ownerships = []
+
+        def acquire_route(module, **_kwargs):
+            ownership = mock.Mock()
+            ownership.route = SimpleNamespace(
+                module=bind_channel(module, "can0"),
+                channel="can0",
+                pair="6/14",
+                topology_fingerprint="fixture-topology",
+            )
+            ownership.manager = mock.Mock()
+            ownership.release.return_value = True
+            self.ownerships.append(ownership)
+            return ownership
+
         acquire = mock.patch.object(
-            dtc_inventory.diagnostic_safety,
-            "acquire_channel_lock",
-            return_value=mock.sentinel.channel_lock,
+            dtc_inventory.can_runtime_route,
+            "acquire_armed_module_route",
+            side_effect=acquire_route,
         )
-        release = mock.patch.object(
-            dtc_inventory.diagnostic_safety,
-            "release_channel_lock",
+        revalidate = mock.patch.object(
+            dtc_inventory.can_runtime_route,
+            "revalidate_module_route",
+        )
+        inhibits = mock.patch.object(
+            dtc_inventory.can_operation_state,
+            "active_inhibits",
+            return_value=(),
+        )
+        interface_state = mock.patch.object(
+            dtc_inventory.canbus,
+            "interface_state",
+            side_effect=lambda channel: dtc_inventory.canbus.InterfaceState(
+                channel, True, True, 500000, False, "ERROR-ACTIVE", 0, False
+            ),
         )
         acquire.start()
-        release.start()
-        self.addCleanup(release.stop)
+        revalidate.start()
+        inhibits.start()
+        interface_state.start()
+        self.addCleanup(interface_state.stop)
+        self.addCleanup(inhibits.stop)
+        self.addCleanup(revalidate.stop)
         self.addCleanup(acquire.stop)
 
     def test_request_set_contains_no_clear_service(self):
@@ -92,6 +122,183 @@ class DtcCliSafetyTests(unittest.TestCase):
         preflight.assert_not_called()
         open_socket.assert_not_called()
 
+    def test_runtime_route_holds_role_then_channel_and_reports_identity_source(self):
+        ownership = mock.Mock()
+        ownership.route = SimpleNamespace(
+            module=bind_channel(dtc_inventory.get("rf_hub"), "can7"),
+            channel="can7",
+            pair="6/14",
+            topology_fingerprint="topology-a",
+        )
+        ownership.manager = mock.Mock()
+        ownership.release.return_value = True
+        report = {}
+        with (
+            mock.patch.object(
+                dtc_inventory.can_runtime_route,
+                "acquire_armed_module_route",
+                return_value=ownership,
+            ) as acquire,
+            mock.patch.object(dtc_inventory, "preflight", return_value=[]),
+            mock.patch.object(dtc_inventory, "selected_requests", return_value=[]),
+            mock.patch.object(
+                dtc_inventory.uds, "open_module_socket", return_value=mock.Mock()
+            ),
+            mock.patch.object(
+                dtc_inventory,
+                "write_report",
+                side_effect=lambda _path, data: report.update(data),
+            ),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            result = dtc_inventory.main(
+                [
+                    "rf_hub",
+                    "--resolve-runtime",
+                    "--execute",
+                    "--confirm-parked",
+                    "--pair",
+                    "6/14",
+                    "--conditions",
+                    "parked",
+                ]
+            )
+
+        self.assertEqual(result, 0)
+        acquire.assert_called_once()
+        ownership.release.assert_called_once_with()
+        self.assertEqual(report["module"]["channel"], "can7")
+        self.assertEqual(report["module"]["route_source"], "usb_serial_and_dev_id")
+        self.assertEqual(report["module"]["expected_physical_pair"], "6/14")
+
+    def test_runtime_route_rejects_wrong_asserted_physical_pair_before_can(self):
+        with (
+            mock.patch.object(
+                dtc_inventory.can_runtime_route,
+                "acquire_armed_module_route",
+                side_effect=RuntimeError("asserted pair 3/11 does not match 6/14"),
+            ),
+            mock.patch.object(dtc_inventory, "preflight") as preflight,
+            mock.patch.object(
+                dtc_inventory.uds, "open_module_socket"
+            ) as open_socket,
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            result = dtc_inventory.main(
+                [
+                    "rf_hub",
+                    "--resolve-runtime",
+                    "--execute",
+                    "--confirm-parked",
+                    "--pair",
+                    "3/11",
+                    "--conditions",
+                    "parked",
+                ]
+            )
+
+        self.assertEqual(result, 2)
+        preflight.assert_not_called()
+        open_socket.assert_not_called()
+
+    def test_runtime_route_honors_wildcard_inhibit_under_both_locks(self):
+        ownership = mock.Mock()
+        ownership.route = SimpleNamespace(
+            module=bind_channel(dtc_inventory.get("rf_hub"), "can7"),
+            channel="can7",
+            pair="6/14",
+            topology_fingerprint="topology-a",
+        )
+        ownership.manager = mock.Mock()
+        ownership.release.return_value = True
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(
+                dtc_inventory.can_runtime_route,
+                "acquire_armed_module_route",
+                return_value=ownership,
+            ) as acquire,
+            mock.patch.object(
+                dtc_inventory.can_operation_state,
+                "active_inhibits",
+                return_value=(
+                    {
+                        "name": "vehicle-data-restoration-failed",
+                        "channel": "*",
+                    },
+                ),
+            ) as inhibits,
+            mock.patch.object(dtc_inventory, "preflight") as preflight,
+            mock.patch.object(
+                dtc_inventory.uds, "open_module_socket"
+            ) as open_socket,
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(stderr),
+        ):
+            result = dtc_inventory.main(
+                [
+                    "rf_hub",
+                    "--resolve-runtime",
+                    "--execute",
+                    "--confirm-parked",
+                    "--pair",
+                    "6/14",
+                    "--conditions",
+                    "parked",
+                ]
+            )
+
+        self.assertEqual(result, 2)
+        acquire.assert_called_once()
+        inhibits.assert_called_once_with("can7")
+        ownership.release.assert_called_once_with()
+        self.assertIn("restoration-failed", stderr.getvalue())
+        preflight.assert_not_called()
+        open_socket.assert_not_called()
+
+    def test_fd_enabled_interface_is_rejected_before_preflight_or_socket(self):
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(
+                dtc_inventory.canbus,
+                "interface_state",
+                return_value=dtc_inventory.canbus.InterfaceState(
+                    channel="can0",
+                    present=True,
+                    up=True,
+                    bitrate=500000,
+                    listen_only=False,
+                    controller_state="ERROR-ACTIVE",
+                    restart_ms=0,
+                    fd_enabled=True,
+                ),
+            ),
+            mock.patch.object(dtc_inventory, "preflight") as preflight,
+            mock.patch.object(
+                dtc_inventory.uds, "open_module_socket"
+            ) as open_socket,
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(stderr),
+        ):
+            result = dtc_inventory.main(
+                [
+                    "rf_hub",
+                    "--execute",
+                    "--confirm-parked",
+                    "--pair",
+                    "6/14",
+                    "--conditions",
+                    "parked",
+                ]
+            )
+
+        self.assertEqual(result, 2)
+        self.assertIn("FD off", stderr.getvalue())
+        preflight.assert_not_called()
+        open_socket.assert_not_called()
+
     def test_sighup_preserves_report_closes_socket_and_restores_passive(self):
         sock = mock.Mock()
         report = {}
@@ -112,15 +319,8 @@ class DtcCliSafetyTests(unittest.TestCase):
 
         with (
             mock.patch.object(dtc_inventory, "preflight", return_value=[]),
-            mock.patch.object(
-                dtc_inventory.diagnostic_safety,
-                "acquire_channel_lock",
-                return_value=mock.sentinel.lock,
-            ),
-            mock.patch.object(dtc_inventory.diagnostic_safety, "release_channel_lock"),
             mock.patch.object(dtc_inventory.uds, "open_module_socket", return_value=sock),
             mock.patch.object(dtc_inventory, "query", side_effect=interrupt_query),
-            mock.patch.object(dtc_inventory.canbus, "restore_passive", return_value=True) as restore,
             mock.patch.object(dtc_inventory.signal, "signal", side_effect=fake_signal) as set_signal,
             mock.patch.object(
                 dtc_inventory,
@@ -139,7 +339,7 @@ class DtcCliSafetyTests(unittest.TestCase):
 
         self.assertEqual(result, 130)
         sock.close.assert_called_once_with()
-        restore.assert_called_once_with("can0", 500000)
+        self.ownerships[-1].release.assert_called_once_with()
         self.assertTrue(report["interrupted"])
         self.assertTrue(report["partial"])
         self.assertEqual(report["interruption_signal"], "SIGHUP")
@@ -164,28 +364,29 @@ class DtcCliSafetyTests(unittest.TestCase):
 
         sock.close.side_effect = lambda: signal_now(dtc_inventory.signal.SIGHUP)
 
-        def restore(*_args):
+        def release_route():
             signal_now(dtc_inventory.signal.SIGTERM)
             return True
 
-        def release(*_args):
-            signal_now(dtc_inventory.signal.SIGHUP)
+        ownership = mock.Mock()
+        ownership.route = SimpleNamespace(
+            module=bind_channel(dtc_inventory.get("rf_hub"), "can0"),
+            channel="can0",
+            pair="6/14",
+            topology_fingerprint="fixture",
+        )
+        ownership.manager = mock.Mock()
+        ownership.release.side_effect = release_route
 
         with (
             mock.patch.object(dtc_inventory, "preflight", return_value=[]),
             mock.patch.object(dtc_inventory, "selected_requests", return_value=[]),
             mock.patch.object(
-                dtc_inventory.diagnostic_safety,
-                "acquire_channel_lock",
-                return_value=mock.sentinel.lock,
+                dtc_inventory.can_runtime_route,
+                "acquire_armed_module_route",
+                return_value=ownership,
             ),
-            mock.patch.object(
-                dtc_inventory.diagnostic_safety,
-                "release_channel_lock",
-                side_effect=release,
-            ) as unlock,
             mock.patch.object(dtc_inventory.uds, "open_module_socket", return_value=sock),
-            mock.patch.object(dtc_inventory.canbus, "restore_passive", side_effect=restore) as passive,
             mock.patch.object(dtc_inventory.signal, "signal", side_effect=fake_signal),
             mock.patch.object(
                 dtc_inventory,
@@ -203,8 +404,7 @@ class DtcCliSafetyTests(unittest.TestCase):
             )
 
         self.assertEqual(result, 130)
-        passive.assert_called_once_with("can0", 500000)
-        unlock.assert_called_once_with(mock.sentinel.lock)
+        ownership.release.assert_called_once_with()
         self.assertTrue(report["interrupted"])
         self.assertEqual(report["interruption_signal"], "SIGHUP")
 
@@ -215,7 +415,6 @@ class DtcCliSafetyTests(unittest.TestCase):
             mock.patch.object(dtc_inventory.uds, "open_module_socket", return_value=mock.Mock()),
             mock.patch.object(dtc_inventory.uds, "drain"),
             mock.patch.object(dtc_inventory.uds, "request", side_effect=OSError("receive failed")),
-            mock.patch.object(dtc_inventory.canbus, "restore_passive", return_value=True),
             mock.patch.object(
                 dtc_inventory,
                 "write_report",

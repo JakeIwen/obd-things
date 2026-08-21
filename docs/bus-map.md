@@ -20,12 +20,54 @@ Provenance shorthand: capture logs live under `tmp/captures/` (bus-state referen
 
 | bus | rate | where | access | notes |
 |---|---|---|---|---|
-| **C-CAN / HS-CAN** | 500 kbit/s | OBD pins **6/14** | PCAN via **SGW bypass** (ECRI tap on internal C-CAN) | powertrain + diagnostics. `bringup.sh` default. The bypass is why our UDS reaches gated modules at all; legislated OBD-II Mode 01 PIDs do NOT route through it. |
-| **B-CAN / CAN IHS** | **125 kbit/s, live-verified** | DLC pins **3/11** (OEM: CAN IHS +/−) | PCAN through the **B-CAN DB9** of the owner's labeled dual-pair OBD pigtail; `bringup.sh --bcan` | Comfort/body effects (locks, lights, interior) and the established B-CAN signature set were captured with listen-only explicitly on and zero RX errors on 2026-07-20. Owner confirmed the pigtail directly selects the documented 2022 ProMaster B-CAN pair; the DIY yellow adapter has never been used on this van. The installed AlfaOBD selector independently renders catalog adapter `6` as `MS-CAN BLUE`; a 2026-07-21 live pass verified four of its eight 29-bit diagnostic targets and left four unresolved. [Evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_bcan_live_ecu_discovery.md). |
-| **CAN CH / second high-speed CAN** | **500 kbit/s, live-verified** | DLC pins **12/13** (OEM: CAN CH +/−) | PCAN through the owner's grey adapter; vehicle 12/13 remapped to interface 6/14 | A 2026-07-25 passive PCAN capture at 500 kbit/s had zero TX/RX errors while AlfaOBD independently completed identification/DTC reads from installed ABS (`0x28`), EPS (`0x30`), HALF (`0x31`), and ORC (`0xC0`). Addresses `0x26` PAM and `0xA0` park assist remain configured absent/unverified. [Evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-25_canch_live_verification.md). |
+| **C-CAN / HS-CAN** | 500 kbit/s | OBD pins **6/14** | permanent Board A CAN1 role through the **SGW bypass** internal-C-CAN tap | Powertrain + diagnostics. The bypass is why UDS reaches gated modules; legislated OBD-II Mode 01 PIDs do not route through it. Historical PCAN work on this same pair remains valid provenance, not the current interface-selection method. |
+| **B-CAN / CAN IHS** | **125 kbit/s, live-verified** | DLC pins **3/11** (OEM: CAN IHS +/−) | permanent Board A CAN2 role through the B-CAN leg of the labeled pigtail | Comfort/body effects and the signature set were captured listen-only with zero RX errors on 2026-07-20 using the former PCAN workflow. The owner confirmed the pigtail directly selects the documented pair; the DIY yellow adapter has never been used on this van. AlfaOBD independently renders catalog adapter `6` as `MS-CAN BLUE`; a 2026-07-21 pass verified four of its eight 29-bit diagnostic targets and left four unresolved. [Evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_bcan_live_ecu_discovery.md). |
+| **CAN CH / second high-speed CAN** | **500 kbit/s, live-verified** | DLC pins **12/13** (OEM: CAN CH +/−) | permanent Board B CAN1 role through the grey 12/13 adapter | A 2026-07-25 passive PCAN capture at 500 kbit/s had zero TX/RX errors while AlfaOBD independently completed identification/DTC reads from installed ABS (`0x28`), EPS (`0x30`), HALF (`0x31`), and ORC (`0xC0`). That PCAN/grey-adapter setup is historical provenance for this permanent role. Addresses `0x26` PAM and `0xA0` park assist remain configured absent/unverified. [Evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-25_canch_live_verification.md). |
 
-The currently configured C-CAN/B-CAN modes come up **passive (listen-only)** by default;
-`bringup.sh --tx` arms transmission (UDS needs it).
+### Installed dual-USBCANFD role map
+
+The permanent three-tap installation uses two dual-channel can-module.com
+USBCANFD adapters (`gs_usb`, USB VID:PID `1d50:606f`). Linux `canN` numbers are
+enumeration order and are **not** an identity. Resolve each channel by the
+adapter USB serial plus `dev_id`:
+
+| logical role | adapter serial | `dev_id` / connector | vehicle pair | policy |
+|---|---|---|---|---|
+| C-CAN | `207C3384413250013` | `0` / CAN1 | 6/14 | classical CAN, 500 kbit/s, listen-only by default |
+| B-CAN | `207C3384413250013` | `1` / CAN2 | 3/11 | classical CAN, 125 kbit/s, listen-only by default |
+| CAN CH | `207E33A4413250013` | `0` / CAN1 | 12/13 | classical CAN, 500 kbit/s, listen-only by default |
+| unused spare | `207E33A4413250013` | `1` / CAN2 | none | keep down |
+
+All four red on-board termination jumpers are removed: the three taps join
+already-terminated vehicle networks and the unused channel adds no terminator.
+Although the adapters support CAN FD, all three exposed ProMaster buses above
+are configured as **classical CAN with FD off**. The product insert supplied by
+the owner established the connector/pin conventions; the exact four
+serial/`dev_id` identities were re-read from vanpi sysfs on 2026-08-20. During
+the 2026-08-21 live commissioning they resolved as C-CAN `can0`, B-CAN `can1`,
+CAN CH `can2`, and spare `can3`, but software must not save or infer that
+ordering after a USB/hub reset. The executable role
+specifications live in `lib/vehicle_can_roles.py`; the fail-closed resolver is
+`lib/can_role_resolver.py`, and the broker's passive role manager is
+`projects/vehicle_data/can_interfaces.py`.
+
+The installed, enabled, and active dual-USBCANFD vehicle-data reconciler brings
+the three vehicle roles up as **classical CAN, FD off, passive (listen-only),
+restart-ms 0**. Its 2026-08-21 passive readback verified C-CAN at 500 kbit/s,
+B-CAN at 125 kbit/s, and CAN CH at 500 kbit/s, all ERROR-ACTIVE, while the spare
+remained down; TX and error counters were zero. The normal active-drive feature
+was then enabled, but the vehicle remained asleep, so no helper ran and TX
+remained zero. That commissioning therefore validates passive routing and link
+policy, not an active diagnostic interval. Current service details are tracked
+in `projects/vehicle_data/README.md`.
+
+The single-PCAN bring-up script is retired and removed; do not recreate its
+fixed-interface or cable-switching workflow on these permanent roles. The
+broker's guarded active-drive helper is currently the reviewed armer for its
+resolved C-CAN role. Generic live inventory tools use a separate scoped
+role-aware armer and restore before returning; there is no command that leaves
+a bus armed. The multi-module DTC planner/importer itself remains CAN-free and
+cannot run a live scan.
 
 The DLC pin names above come from local OEM diagram `2022_VF_EN_18-000-000`, revision 2064:
 `/home/pi/dev/ram_2022_GAS/diagrams/systems/data_link_connector.html`. That source establishes
@@ -209,13 +251,21 @@ and exits; missing, stale, malformed, or unknown topology fails closed.
 - **CAN-CH wake is intentionally unmapped.** Never reuse the C-CAN RFH poke or B-CAN `0x7FF`
   burst on pins 12/13. `voltage_mon.py` treats passively identified or explicitly recorded
   same-boot CAN-CH as a notify-and-exit topology.
-- **B-CAN wake:** a **key-fob UNLOCK wakes it (~95 s window)**; **a door-open does NOT** (capture = 0 frames). Ignition/engine wakes it too. `bcan_voltage.py --wake` TX-wakes a silent B-CAN with a `0x7FF` burst. Verified 2026-06-26; captures in `tmp/captures/bcan/events/wake_from_*`.
+- **B-CAN wake:** a **key-fob UNLOCK wakes it (~95 s window)**; **a door-open does NOT** (capture = 0 frames). Ignition/engine wakes it too. A historical guarded `bcan_voltage.py --wake` test TX-woke silent B-CAN with a `0x7FF` burst. Verified 2026-06-26; captures in `tmp/captures/bcan/events/wake_from_*`. The fixed-channel CLI is not a current dual-hardware runbook.
 - **C-CAN wake — the Pi CAN wake it, but only with an *addressed* poke (verified 2026-07-08, twice):**
   - A raw `0x7FF` broadcast burst @500k does **NOT** wake a parked C-CAN (verified 2026-07-07 — ~490 frames drew only a lone 0x200). Selective wake: junk broadcast frames aren't a wake reason.
   - But **a single addressed UDS read to `rf_hub`** (KL30-powered / always-awake RKE receiver) **wakes the full C-CAN broadcast schedule**: confirmed-asleep bus (0 frames/3 s) → one `22` read → ~17.5k frames/15 s incl. **`0x41A` @10 Hz (~12.8 V)** → re-sleeps **~30 s** after traffic stops (shorter than B-CAN's ~95 s). A diag exchange with an awake KL30 module is what triggers the gateway's network-management wake.
-  - **Consequence:** autonomous parked voltage polling works from the C-CAN tap (wake-poke rf_hub → passive `0x41A` read) — no need to sit on B-CAN. This dissolved the old one-adapter B-CAN-vs-C-CAN conflict. (Earlier "C-CAN readable only when something else wakes it" was too narrow — it predated the rf_hub-poke test.)
-  - **Implemented for manual and guarded unattended use:** `ccan_voltage.py --wake` was live-tested 2026-07-08 (one `22 F190` read to rf_hub → raw `0x41A=B0`, now correctly decoded as **12.80 V**; the former divisor rendered 12.39 V). `voltage_mon.py` may call the same primitive only after it holds the exclusive SocketCAN lock, finds no same-boot external-operation inhibit, verifies a same-boot C-CAN topology record, and rechecks passive silence under the lock. AlfaOBD controller actions create an external inhibit before ADB opens.
-  - **Reusable API (2026-07-09):** the detect + wake logic is factored into **`lib/canbus.py`** — `identify_bus()` / `detect_bus()` (which bus, from the signature sets above), `tx_wake_burst()` (B-CAN), `poke_wake()` (C-CAN rf_hub), and `wake()` (detect + wake, the "keep a parked bus awake" primitive). The signature id sets `CCAN_SIG`/`BCAN_SIG` live there too (sourced from this doc). Both voltage readers now call these; a new project needing to find+rouse whichever bus is connected should import them.
+  - **Consequence:** the physical wake method can obtain parked voltage from the C-CAN tap (wake-poke RF Hub → passive `0x41A` read); it also explains why the former single-adapter B-CAN-vs-C-CAN conflict was unnecessary. This is evidence about vehicle behavior, not authorization to wake a permanent role.
+  - **Historical implementation evidence:** `ccan_voltage.py --wake` was live-tested 2026-07-08 (one `22 F190` read to RF Hub → raw `0x41A=B0`, correctly decoded as **12.80 V**). That wake mode was removed. Current `ccan_voltage.py`, `bcan_voltage.py`, and the scheduled monitor resolve one exact role and read only an already-awake, exact passive classical-CAN interface under shared role/channel locks. The broker and in-process fallback both reject wake-assisted mode; a sleeping bus is an expected unavailable sample.
+  - **Historical low-level implementation (2026-07-09):** `lib/canbus.py`
+    formerly included `detect_bus()`, `tx_wake_burst()`, `poke_wake()`, and
+    `wake()`. Those fixed-channel wake helpers were removed during the
+    permanent-role migration. The maintained low-level API retains passive
+    `identify_bus()` and the `CCAN_SIG`/`BCAN_SIG` evidence sets; it neither
+    resolves USB identity nor confers ownership. Current callers must first own
+    and revalidate the exact logical role/channel, and no maintained voltage or
+    recorder path uses these signatures to transmit or hunt among ephemeral
+    `canN` devices.
 - **TX side effect (GOTCHA):** the rf_hub wake-poke also wakes the BCM → **switched accessory rails power up** (dash USB / dashcam boots), following the ~30–60 s awake window. Verified 2026-07-08. Owner has OK'd unprompted parked TX; just account for the side effect when reading evidence (an unexplained parked dashcam boot may be our own diag traffic — or a free bus-wake detector). tpms-logger is zero-TX in idle by design.
 - **Remote-unlock status:** BCM diagnostic actuation is power-mode gated (`7F..22` key-off even with bus awake); recommended path is a spare-fob relay, not CAN. Full detail in memory `bcan-bringup` / the B-CAN section above.
 

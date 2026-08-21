@@ -47,7 +47,16 @@ class BcanDriveRecorderTests(unittest.TestCase):
         def runner(_command, **_kwargs):
             return Result(stdout=PASSIVE_BCAN_DETAILS)
 
-        state = recorder.query_interface(runner=runner)
+        exact = recorder.canbus.InterfaceState(
+            "can0", True, True, 125000, True, "ERROR-ACTIVE", 0, False
+        )
+        with (
+            mock.patch.object(recorder, "CHANNEL", "can0"),
+            mock.patch.object(
+                recorder.canbus, "interface_state", return_value=exact
+            ),
+        ):
+            state = recorder.query_interface(runner=runner)
         self.assertTrue(state.up)
         self.assertTrue(state.listen_only)
         self.assertEqual(state.bitrate, 125000)
@@ -55,13 +64,25 @@ class BcanDriveRecorderTests(unittest.TestCase):
         def ccan_runner(_command, **_kwargs):
             return Result(stdout=PASSIVE_BCAN_DETAILS.replace("125000", "500000"))
 
-        with self.assertRaisesRegex(recorder.BcanRecorderError, "expected 125000"):
+        with (
+            mock.patch.object(recorder, "CHANNEL", "can0"),
+            mock.patch.object(
+                recorder.canbus, "interface_state", return_value=exact
+            ),
+            self.assertRaisesRegex(recorder.BcanRecorderError, "expected 125000"),
+        ):
             recorder.query_interface(runner=ccan_runner)
 
         def armed_runner(_command, **_kwargs):
             return Result(stdout=PASSIVE_BCAN_DETAILS.replace("<LISTEN-ONLY>", ""))
 
-        with self.assertRaisesRegex(recorder.BcanRecorderError, "not LISTEN-ONLY"):
+        with (
+            mock.patch.object(recorder, "CHANNEL", "can0"),
+            mock.patch.object(
+                recorder.canbus, "interface_state", return_value=exact
+            ),
+            self.assertRaisesRegex(recorder.BcanRecorderError, "not LISTEN-ONLY"),
+        ):
             recorder.query_interface(runner=armed_runner)
 
     def test_validate_args_requires_explicit_passive_confirmation(self):
@@ -102,7 +123,8 @@ class BcanDriveRecorderTests(unittest.TestCase):
         setter = mock.Mock(return_value=object())
         signatures = frozenset((0x46C, 0x0A0, 0x3DC))
 
-        recorder.record_bcan_topology(signatures, setter=setter)
+        with mock.patch.object(recorder, "CHANNEL", "can0"):
+            recorder.record_bcan_topology(signatures, setter=setter)
 
         setter.assert_called_once_with(
             "can0",
@@ -115,16 +137,18 @@ class BcanDriveRecorderTests(unittest.TestCase):
             recorder.BcanRecorderError,
             "required signature witness",
         ):
-            recorder.record_bcan_topology(
-                frozenset((0x46C, 0x0A0)), setter=setter
-            )
+            with mock.patch.object(recorder, "CHANNEL", "can0"):
+                recorder.record_bcan_topology(
+                    frozenset((0x46C, 0x0A0)), setter=setter
+                )
         with self.assertRaisesRegex(
             recorder.BcanRecorderError,
             "required signature witness",
         ):
-            recorder.record_bcan_topology(
-                frozenset((0x123, 0x124, 0x125)), setter=setter
-            )
+            with mock.patch.object(recorder, "CHANNEL", "can0"):
+                recorder.record_bcan_topology(
+                    frozenset((0x123, 0x124, 0x125)), setter=setter
+                )
 
     def test_idle_probe_releases_observer_lock_before_sleep(self):
         args = recorder.build_parser().parse_args([])

@@ -4,9 +4,10 @@
 The default invocation is a plan: it performs no subprocess calls and writes no
 files.  Live recording requires ``--execute --confirm-passive --conditions``.
 
-This tool never configures CAN, controls a service, or transmits.  It accepts
-only an already-UP, 500 kbit/s, LISTEN-ONLY, ERROR-ACTIVE ``can0`` and then
-runs one persistent ``candump`` process.  Its text stream is compressed into
+This tool never configures CAN, controls a service, or transmits. It resolves
+the requested logical role and accepts only its already-UP, exact-bitrate,
+LISTEN-ONLY, ERROR-ACTIVE interface, then runs one persistent ``candump`` process.
+Its text stream is compressed into
 bounded zstd chunks.  Selected CAN IDs may also be duplicated into a much
 smaller priority stream which can continue after the disk soft floor disables
 the full-bus stream.
@@ -40,12 +41,11 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from lib import diagnostic_safety
+from lib import can_runtime_route
 from lib.modules import MODULES
 
 
-CHANNEL = "can0"
-BITRATE = 500_000
+DEFAULT_BUS = "c-can"
 # Keep enough kernel-side backlog for transient EXFAT/zstd stalls.  A 4 MiB
 # reserve overflowed once during an otherwise healthy 46-minute C-CAN drive;
 # the loss gate worked, but that leg could not be treated as complete evidence.
@@ -57,7 +57,6 @@ DEFAULT_STOP_ID_ABSENCE_SECONDS = 20.0
 MAX_PENDING_FINALIZATION_SECONDS = 120
 DEFAULT_SOFT_FREE_BYTES = 30 * 1024**3
 DEFAULT_HARD_FREE_BYTES = 25 * 1024**3
-SERVICE_BLOCKLIST = ("tpms-logger", "tpms-drivesniff")
 CAMPAIGN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
 CANDUMP_RE = re.compile(
     rb"^\((?P<timestamp>[^)]+)\)\s+\S+\s+(?P<can_id>[0-9A-Fa-f]{3,8})#"
@@ -160,10 +159,18 @@ def resolved_priority_ids(args: argparse.Namespace) -> frozenset[int]:
     return frozenset(selected)
 
 
-def parse_interface_state(details: str) -> InterfaceState:
-    """Parse ``ip -details link show can0`` without consulting live state."""
+def parse_interface_state(
+    details: str,
+    *,
+    channel: str,
+) -> InterfaceState:
+    """Parse ``ip -details link show CHANNEL`` without consulting live state."""
 
-    flags_match = re.search(r"^\d+:\s+can0:\s+<([^>]*)>", details, re.MULTILINE)
+    flags_match = re.search(
+        rf"^\d+:\s+{re.escape(channel)}:\s+<([^>]*)>",
+        details,
+        re.MULTILINE,
+    )
     flags = set(flags_match.group(1).split(",")) if flags_match else set()
     bitrate_match = re.search(r"\bbitrate\s+(\d+)\b", details)
     state_match = re.search(
@@ -423,67 +430,44 @@ def recover_partials(
 
 def runtime_safety_check(
     *,
+    channel: str,
+    bitrate: int,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
 ) -> InterfaceState:
     errors: list[str] = []
     try:
         details_result = runner(
-            ["ip", "-details", "-statistics", "link", "show", CHANNEL],
+            ["ip", "-details", "-statistics", "link", "show", channel],
             capture_output=True,
             text=True,
             check=False,
             timeout=5,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        errors.append(f"{CHANNEL} state query failed: {type(exc).__name__}: {exc}")
+        errors.append(f"{channel} state query failed: {type(exc).__name__}: {exc}")
         state = InterfaceState(False, None, False, None)
     else:
         if details_result.returncode != 0:
-            errors.append(f"{CHANNEL} is missing or unreadable")
+            errors.append(f"{channel} is missing or unreadable")
             state = InterfaceState(False, None, False, None)
         else:
-            state = parse_interface_state(details_result.stdout)
+            state = parse_interface_state(details_result.stdout, channel=channel)
             if not state.up:
-                errors.append(f"{CHANNEL} is not UP")
-            if state.bitrate != BITRATE:
-                errors.append(f"{CHANNEL} bitrate is {state.bitrate}, expected {BITRATE}")
+                errors.append(f"{channel} is not UP")
+            if state.bitrate != bitrate:
+                errors.append(f"{channel} bitrate is {state.bitrate}, expected {bitrate}")
             if not state.listen_only:
-                errors.append(f"{CHANNEL} is not LISTEN-ONLY")
+                errors.append(f"{channel} is not LISTEN-ONLY")
             if state.controller_state != "ERROR-ACTIVE":
                 errors.append(
-                    f"{CHANNEL} controller state is {state.controller_state}, "
+                    f"{channel} controller state is {state.controller_state}, "
                     "expected ERROR-ACTIVE"
                 )
             if state.rx_dropped is None or state.rx_missed is None:
                 errors.append(
-                    f"{CHANNEL} RX dropped/missed counters are unavailable"
+                    f"{channel} RX dropped/missed counters are unavailable"
                 )
 
-    for service in SERVICE_BLOCKLIST:
-        try:
-            result = runner(
-                ["systemctl", "is-active", service],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=5,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            errors.append(
-                f"cannot establish {service} state: {type(exc).__name__}: {exc}"
-            )
-            continue
-        service_state = result.stdout.strip()
-        if result.returncode == 0 and service_state == "active":
-            errors.append(f"{service} is active; stop it before this dedicated capture")
-        elif not (
-            service_state in {"inactive", "failed", "unknown"}
-            and result.returncode in {3, 4}
-        ):
-            errors.append(
-                f"cannot establish {service} state: rc={result.returncode}, "
-                f"stdout={service_state!r}, stderr={result.stderr.strip()!r}"
-            )
     if errors:
         raise CaptureError("runtime safety check failed:\n- " + "\n- ".join(errors))
     return state
@@ -493,6 +477,8 @@ def preflight(
     out_root: Path,
     policy: DiskPolicy,
     *,
+    channel: str,
+    bitrate: int,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
     which: Callable[[str], str | None] = shutil.which,
     disk_free: Callable[[Path], int] = available_bytes,
@@ -514,7 +500,11 @@ def preflight(
         errors.append(str(exc))
 
     try:
-        state = runtime_safety_check(runner=runner)
+        state = runtime_safety_check(
+            channel=channel,
+            bitrate=bitrate,
+            runner=runner,
+        )
     except CaptureError as exc:
         errors.append(str(exc))
         state = InterfaceState(False, None, False, None)
@@ -744,6 +734,8 @@ class Recorder:
         zstd: str = "zstd",
         candump: str = "candump",
         candump_extra_args: Sequence[str] = (),
+        channel: str,
+        bitrate: int,
     ) -> None:
         self.run_dir = run_dir
         self.priority_ids = priority_ids
@@ -776,11 +768,21 @@ class Recorder:
                 "required_start_id_timeout_seconds must be shorter than "
                 "duration_seconds"
             )
+        if not isinstance(channel, str) or not re.fullmatch(r"can[0-9]+", channel):
+            raise ValueError("recorder channel must be a resolved kernel canN")
+        if not isinstance(bitrate, int) or isinstance(bitrate, bool) or bitrate <= 0:
+            raise ValueError("recorder bitrate must be a positive integer")
+        self.channel = channel
+        self.bitrate = bitrate
         self.popen = popen
         self.runner = runner
         self.disk_free = disk_free
         self.safety_check = safety_check or (
-            lambda: runtime_safety_check(runner=self.runner)
+            lambda: runtime_safety_check(
+                channel=self.channel,
+                bitrate=self.bitrate,
+                runner=self.runner,
+            )
         )
         self.mount_check = mount_check or (lambda: None)
         self.zstd = zstd
@@ -798,7 +800,7 @@ class Recorder:
             "-d",
             "-r",
             str(RECEIVE_BUFFER),
-            CHANNEL,
+            self.channel,
         ]
 
     def _verifier(self, path: Path) -> bool:
@@ -1340,6 +1342,12 @@ class Recorder:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--bus",
+        choices=("c-can", "b-can", "can-ch"),
+        default=DEFAULT_BUS,
+        help="logical installed bus resolved by USB serial/dev_id (default: c-can)",
+    )
+    parser.add_argument(
         "--out-root",
         required=True,
         type=Path,
@@ -1365,7 +1373,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--confirm-passive",
         action="store_true",
-        help="confirm that PCAN must remain listen-only and this tool must never transmit",
+        help="confirm that the resolved interface must remain listen-only and never transmit",
     )
     parser.add_argument(
         "--conditions",
@@ -1464,6 +1472,11 @@ def validate_args(args: argparse.Namespace) -> DiskPolicy:
             raise CaptureError("--execute requires non-empty --conditions")
         if args.require_mount is None:
             raise CaptureError("--execute requires --require-mount")
+        if args.priority_profile == "ccan-correlation" and args.bus != "c-can":
+            raise CaptureError(
+                "--priority-profile ccan-correlation requires --bus c-can; "
+                "select --priority-profile none for another bus"
+            )
     return policy
 
 
@@ -1497,20 +1510,20 @@ def plan(args: argparse.Namespace, policy: DiskPolicy) -> dict:
         "mode": "execute" if args.execute else "plan_only",
         "interaction": "passive_receive_only",
         "interface_requirement": {
-            "channel": CHANNEL,
+            "logical_role": args.bus,
+            "channel": "resolved at execution by USB serial/dev_id",
             "up": True,
-            "bitrate": BITRATE,
+            "bitrate": "from canonical role configuration",
             "listen_only": True,
             "controller_state": "ERROR-ACTIVE",
         },
-        "blocked_services": list(SERVICE_BLOCKLIST),
         "candump_command": [
             "candump",
             "-L",
             "-d",
             "-r",
             str(RECEIVE_BUFFER),
-            CHANNEL,
+            "<resolved-canN>",
         ],
         "output": str(args.out_root / campaign),
         "required_mount": str(args.require_mount) if args.require_mount else None,
@@ -1545,20 +1558,32 @@ def execute(args: argparse.Namespace, policy: DiskPolicy) -> int:
     campaign = args.campaign or campaign_stamp()
     capture_root = args.out_root
     priority_ids = resolved_priority_ids(args)
-    mount_device = require_writable_mount(capture_root, args.require_mount)
-    state, free = preflight(capture_root, policy)
     try:
-        lock_handle = diagnostic_safety.acquire_channel_observer_lock(CHANNEL)
-    except diagnostic_safety.ChannelLockError as exc:
-        raise CaptureError(str(exc)) from exc
+        ownership = can_runtime_route.acquire_passive_bus_route(args.bus)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise CaptureError(f"stable passive route failed: {exc}") from exc
+    route = ownership.route
     try:
-        # Close the service/interface race after reserving the participating channel.
+        mount_device = require_writable_mount(capture_root, args.require_mount)
+        state, free = preflight(
+            capture_root,
+            policy,
+            channel=route.channel,
+            bitrate=route.bitrate,
+        )
+        # Close the mount/interface race after reserving the participating channel.
         require_writable_mount(
             capture_root,
             args.require_mount,
             expected_device=mount_device,
         )
-        state, free = preflight(capture_root, policy)
+        ownership.revalidate()
+        state, free = preflight(
+            capture_root,
+            policy,
+            channel=route.channel,
+            bitrate=route.bitrate,
+        )
         capture_root.mkdir(parents=True, exist_ok=True)
         run_dir = capture_root / campaign
         if run_dir.exists():
@@ -1571,6 +1596,11 @@ def execute(args: argparse.Namespace, policy: DiskPolicy) -> int:
             "campaign": campaign,
             "conditions": args.conditions.strip(),
             "interaction": "passive_receive_only",
+            "logical_bus": route.role,
+            "channel": route.channel,
+            "physical_pair": route.pair,
+            "bitrate": route.bitrate,
+            "topology_fingerprint": route.topology_fingerprint,
             "interface": dataclasses.asdict(state),
             "required_mount": str(args.require_mount.resolve()),
             "free_bytes_at_preflight": free,
@@ -1613,11 +1643,20 @@ def execute(args: argparse.Namespace, policy: DiskPolicy) -> int:
             ),
             zstd=zstd,
             candump=shutil.which("candump") or "candump",
+            channel=route.channel,
+            bitrate=route.bitrate,
+            safety_check=lambda: (
+                ownership.revalidate()
+                or runtime_safety_check(
+                    channel=route.channel,
+                    bitrate=route.bitrate,
+                )
+            ),
         )
         with campaign_file_lock(run_dir):
             return recorder.run()
     finally:
-        diagnostic_safety.release_channel_lock(lock_handle)
+        ownership.release()
 
 
 def execute_recovery(args: argparse.Namespace) -> int:

@@ -345,6 +345,11 @@ class TpmsInterfaceCoordinationTests(unittest.TestCase):
             mock.patch.object(tpms_logger, "get", return_value=module),
             mock.patch.object(
                 tpms_logger,
+                "_resolved_rfh_route",
+                return_value=SimpleNamespace(module=module),
+            ),
+            mock.patch.object(
+                tpms_logger,
                 "broker_absence_proven",
                 side_effect=lambda _client: events.append("broker_status") or False,
             ),
@@ -380,6 +385,11 @@ class TpmsInterfaceCoordinationTests(unittest.TestCase):
             mock.patch.object(tpms_logger, "get", return_value=module),
             mock.patch.object(
                 tpms_logger,
+                "_resolved_rfh_route",
+                return_value=SimpleNamespace(module=module),
+            ),
+            mock.patch.object(
+                tpms_logger,
                 "broker_absence_proven",
                 side_effect=lambda _client: events.append("broker_status") or True,
             ),
@@ -413,18 +423,15 @@ class TpmsInterfaceCoordinationTests(unittest.TestCase):
         )
         log_session.assert_not_called()
 
-    def test_passive_recovery_never_arms_interface(self):
-        armed = canbus.InterfaceState(
-            "can9", True, True, 500000, False, "ERROR-ACTIVE", 0
-        )
-        passive = canbus.InterfaceState(
-            "can9", True, True, 500000, True, "ERROR-ACTIVE", 0
-        )
+    def test_passive_fallback_uses_role_ownership_and_never_configures_interface(self):
+        ownership = mock.Mock()
+        ownership.route.channel = "can9"
+        ownership.release.return_value = True
         with (
             mock.patch.object(
-                tpms_logger.canbus,
-                "interface_state",
-                side_effect=(armed, armed, passive),
+                tpms_logger.can_runtime_route,
+                "acquire_passive_bus_route",
+                return_value=ownership,
             ),
             mock.patch.object(
                 tpms_logger,
@@ -433,28 +440,19 @@ class TpmsInterfaceCoordinationTests(unittest.TestCase):
             ),
             mock.patch.object(tpms_logger, "_topology_is_ccan", return_value=True),
             mock.patch.object(tpms_logger, "_active_inhibits", return_value=()),
-            mock.patch.object(
-                tpms_logger.canbus,
-                "bring_up_passive",
-                return_value=True,
-            ) as bring_up_passive,
+            mock.patch.object(tpms_logger.canbus, "identify_bus", return_value="c-can"),
+            mock.patch.object(tpms_logger, "engine_running", return_value=True),
             mock.patch.object(tpms_logger.canbus, "ip_up") as ip_up,
         ):
-            self.assertTrue(
-                tpms_logger._ensure_passive_coordinated("can9", 500000)
-            )
+            self.assertTrue(tpms_logger._passive_running_ready())
 
-        bring_up_passive.assert_called_once_with(
-            "can9",
-            500000,
-            restart_ms=0,
-            noninteractive=True,
-        )
+        ownership.revalidate.assert_called_once_with()
+        ownership.release.assert_called_once_with()
         ip_up.assert_not_called()
 
     def test_safe_passive_state_requires_readable_restart_timing(self):
         incomplete = canbus.InterfaceState(
-            "can9", True, True, 500000, True, "ERROR-ACTIVE", None
+            "can9", True, True, 500000, True, "ERROR-ACTIVE", None, False
         )
         self.assertFalse(
             tpms_logger._safe_passive_state(incomplete, "can9", 500000)
@@ -478,7 +476,7 @@ class TpmsInterfaceCoordinationTests(unittest.TestCase):
                 begin_inhibit.call_args.args,
                 (tpms_logger.RESTORATION_INHIBIT_NAME,),
             )
-            self.assertEqual(begin_inhibit.call_args.kwargs["channel"], "can9")
+            self.assertEqual(begin_inhibit.call_args.kwargs["channel"], "*")
             self.assertIn(
                 "could not verify exact listen-only restoration",
                 begin_inhibit.call_args.kwargs["reason"],
@@ -487,34 +485,19 @@ class TpmsInterfaceCoordinationTests(unittest.TestCase):
             tpms_logger._restoration_failed = original
 
     def test_lock_contention_skips_passive_reconfiguration(self):
-        unsafe = canbus.InterfaceState(
-            "can9", True, True, 500000, False, "ERROR-ACTIVE", 0
-        )
         with (
             mock.patch.object(
-                tpms_logger.canbus, "interface_state", return_value=unsafe
-            ),
-            mock.patch.object(
-                tpms_logger,
-                "_restoration_is_latched",
-                return_value=False,
-            ),
-            mock.patch.object(tpms_logger, "_topology_is_ccan", return_value=True),
-            mock.patch.object(tpms_logger, "_active_inhibits", return_value=()),
-            mock.patch.object(
-                tpms_logger.diagnostic_safety,
-                "channel_lock",
-                side_effect=tpms_logger.diagnostic_safety.ChannelLockError("can0 busy"),
-            ) as channel_lock,
-            mock.patch.object(
-                tpms_logger.canbus, "bring_up_passive"
-            ) as bring_up_passive,
+                tpms_logger.can_runtime_route,
+                "acquire_passive_bus_route",
+                side_effect=tpms_logger.can_runtime_route.RuntimeRouteError("c-can busy"),
+            ) as acquire,
+            mock.patch.object(tpms_logger.canbus, "ip_up") as ip_up,
         ):
-            result = tpms_logger._ensure_passive_coordinated("can9", 500000)
+            result = tpms_logger._passive_running_ready()
 
         self.assertFalse(result)
-        channel_lock.assert_called_once_with("can9")
-        bring_up_passive.assert_not_called()
+        acquire.assert_called_once_with("c-can", asserted_pair="6/14")
+        ip_up.assert_not_called()
 
     def test_engine_running_requires_multiple_consecutive_fresh_rpm_samples(self):
         def rpm_frame(rpm, *, can_id=tpms_logger.ENGINE_SPEED_ID):
@@ -599,37 +582,31 @@ class TpmsInterfaceCoordinationTests(unittest.TestCase):
         self.assertTrue(reset.closed)
 
     def test_passive_running_preflight_rejects_wrong_bus_inhibit_and_zero_rpm(self):
-        module = SimpleNamespace(channel="can9", bitrate=500000)
-        passive = canbus.InterfaceState(
-            "can9", True, True, 500000, True, "ERROR-ACTIVE", 0
-        )
+        module = tpms_logger.get("rf_hub")
         cases = (
             ("wrong_bus", (), "b-can", True),
             ("inhibited", ({"name": "alfaobd"},), "c-can", True),
             ("engine_off", (), "c-can", False),
         )
         for name, inhibits, bus, running in cases:
+            ownership = mock.Mock()
+            ownership.route.channel = "can9"
+            ownership.release.return_value = True
             with (
                 self.subTest(name=name),
                 mock.patch.object(
-                    tpms_logger, "_restoration_is_latched", return_value=False
+                    tpms_logger.can_runtime_route,
+                    "acquire_passive_bus_route",
+                    return_value=ownership,
                 ),
                 mock.patch.object(
-                    tpms_logger, "_ensure_passive_coordinated", return_value=True
+                    tpms_logger, "_restoration_is_latched", return_value=False
                 ),
                 mock.patch.object(
                     tpms_logger, "_topology_is_ccan", return_value=True
                 ),
                 mock.patch.object(
                     tpms_logger, "_active_inhibits", return_value=inhibits
-                ),
-                mock.patch.object(
-                    tpms_logger.diagnostic_safety,
-                    "channel_observer_lock",
-                    return_value=mock.MagicMock(),
-                ) as observer_lock,
-                mock.patch.object(
-                    tpms_logger.canbus, "interface_state", return_value=passive
                 ),
                 mock.patch.object(
                     tpms_logger.canbus, "identify_bus", return_value=bus
@@ -641,7 +618,7 @@ class TpmsInterfaceCoordinationTests(unittest.TestCase):
                 mock.patch.object(tpms_logger.uds, "open_socket") as open_socket,
             ):
                 self.assertFalse(tpms_logger._passive_running_ready(module))
-                observer_lock.assert_called_once_with("can9")
+                ownership.release.assert_called_once_with()
                 ip_up.assert_not_called()
                 open_socket.assert_not_called()
                 if inhibits:
@@ -649,26 +626,18 @@ class TpmsInterfaceCoordinationTests(unittest.TestCase):
                     engine_running.assert_not_called()
 
     def test_passive_running_preflight_defers_on_observer_contention(self):
-        module = SimpleNamespace(channel="can9", bitrate=500000)
+        module = tpms_logger.get("rf_hub")
         with (
             mock.patch.object(
-                tpms_logger, "_restoration_is_latched", return_value=False
+                tpms_logger.can_runtime_route,
+                "acquire_passive_bus_route",
+                side_effect=tpms_logger.can_runtime_route.RuntimeRouteError("busy"),
             ),
-            mock.patch.object(
-                tpms_logger, "_ensure_passive_coordinated", return_value=True
-            ),
-            mock.patch.object(
-                tpms_logger.diagnostic_safety,
-                "channel_observer_lock",
-                side_effect=tpms_logger.diagnostic_safety.ChannelLockError("busy"),
-            ),
-            mock.patch.object(tpms_logger.canbus, "interface_state") as state,
             mock.patch.object(tpms_logger.canbus, "identify_bus") as identify,
             mock.patch.object(tpms_logger, "engine_running") as engine_running,
         ):
             self.assertFalse(tpms_logger._passive_running_ready(module))
 
-        state.assert_not_called()
         identify.assert_not_called()
         engine_running.assert_not_called()
 
@@ -709,7 +678,7 @@ class TpmsInterfaceCoordinationTests(unittest.TestCase):
     def test_under_lock_recheck_refuses_to_arm_after_gate_loss(self):
         module = SimpleNamespace(channel="can9", bitrate=500000)
         passive = canbus.InterfaceState(
-            "can9", True, True, 500000, True, "ERROR-ACTIVE", 0
+            "can9", True, True, 500000, True, "ERROR-ACTIVE", 0, False
         )
         telemetry = mock.Mock()
         for name, broker_absent, topology, inhibits, bus, running in (
@@ -760,7 +729,7 @@ class TpmsInterfaceCoordinationTests(unittest.TestCase):
     def test_under_lock_recheck_yields_if_broker_appears_during_rpm_gate(self):
         module = SimpleNamespace(channel="can9", bitrate=500000)
         passive = canbus.InterfaceState(
-            "can9", True, True, 500000, True, "ERROR-ACTIVE", 0
+            "can9", True, True, 500000, True, "ERROR-ACTIVE", 0, False
         )
         with (
             mock.patch.object(

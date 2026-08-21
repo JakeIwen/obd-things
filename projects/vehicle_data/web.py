@@ -130,7 +130,13 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
             return self._static("profiles.js", "text/javascript; charset=utf-8")
         if path == "/style.css":
             return self._static("style.css", "text/css; charset=utf-8")
-        if path in ("/v1/status", "/v1/snapshot"):
+        if path in (
+            "/v1/status",
+            "/v1/snapshot",
+            "/v1/history",
+            "/v1/health",
+            "/v1/diagnostics/dtcs",
+        ):
             return self._broker_request("GET", path)
         metric_prefix = "/v1/metrics/"
         if (
@@ -185,7 +191,7 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
         if (
             not isinstance(payload, dict)
             or set(payload) != {"mode"}
-            or payload["mode"] not in ("passive", "wake_if_asleep")
+            or payload["mode"] != "passive"
         ):
             return self._json(
                 400,
@@ -322,7 +328,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--allow-acquisitions",
         action="store_true",
-        help="allow the dashboard to request allowlisted passive/wake acquisitions",
+        help="allow the dashboard to request an allowlisted passive acquisition",
     )
     return parser
 

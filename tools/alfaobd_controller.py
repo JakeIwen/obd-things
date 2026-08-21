@@ -34,7 +34,6 @@ from lib import can_operation_state  # noqa: E402
 
 
 ALFA_INHIBIT_NAME = "alfaobd"
-CAN_CHANNEL = "can0"
 
 
 def _event_logger(path: Path | None):
@@ -137,15 +136,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser(
         "campaign-begin",
-        help="inhibit unattended CAN wake for an external AlfaOBD campaign",
+        help="inhibit Pi-side active CAN operations during an external AlfaOBD campaign",
     )
     subparsers.add_parser(
         "campaign-end",
-        help="explicitly release the AlfaOBD unattended-wake inhibit",
+        help="explicitly release the AlfaOBD external-campaign inhibit",
     )
     subparsers.add_parser(
         "campaign-status",
-        help="show AlfaOBD inhibit and physical-topology wake gates",
+        help="show the global AlfaOBD external-campaign inhibit state",
     )
     return parser
 
@@ -163,14 +162,13 @@ def _live_objects(args):
     return serial, adb, poller
 
 
-def _invalidate_topology_for_adapter_prompt(snapshot) -> None:
+def _inhibit_for_adapter_prompt(snapshot) -> None:
     if UiState.ADAPTER_PROMPT not in snapshot.states:
         return
-    can_operation_state.set_topology(
-        CAN_CHANNEL,
-        "unknown",
-        source="alfaobd_adapter_prompt",
-        note="adapter prompt requires physical topology confirmation",
+    can_operation_state.begin_inhibit(
+        ALFA_INHIBIT_NAME,
+        channel="*",
+        reason="AlfaOBD adapter prompt requires external campaign review",
     )
 
 
@@ -180,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "campaign-begin":
             result = can_operation_state.begin_inhibit(
                 ALFA_INHIBIT_NAME,
-                channel=CAN_CHANNEL,
+                channel="*",
                 reason="explicit AlfaOBD campaign begin",
             )
             print(json.dumps(result, indent=2, sort_keys=True))
@@ -202,7 +200,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "campaign-status":
             print(
                 json.dumps(
-                    can_operation_state.status(CAN_CHANNEL),
+                    {
+                        "name": ALFA_INHIBIT_NAME,
+                        "active_inhibits": [
+                            item
+                            for item in can_operation_state.all_active_inhibits()
+                            if item.get("name") == ALFA_INHIBIT_NAME
+                        ],
+                        "scope": "global; no ephemeral SocketCAN topology is recorded",
+                    },
                     indent=2,
                     sort_keys=True,
                 )
@@ -241,21 +247,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "action":
             can_operation_state.begin_inhibit(
                 ALFA_INHIBIT_NAME,
-                channel=CAN_CHANNEL,
+                channel="*",
                 reason=f"AlfaOBD controller action: {args.name}",
             )
-            if args.name == "adapter-ok":
-                can_operation_state.set_topology(
-                    CAN_CHANNEL,
-                    "unknown",
-                    source="alfaobd_adapter_acknowledgement",
-                    note="adapter physical topology must be explicitly recorded",
-                )
 
         serial, adb, poller = _live_objects(args)
         if args.command == "observe":
             snapshot = poller.observe()
-            _invalidate_topology_for_adapter_prompt(snapshot)
+            _inhibit_for_adapter_prompt(snapshot)
             print(
                 json.dumps(
                     {"serial": serial, **_snapshot_payload(snapshot)},
@@ -282,7 +281,7 @@ def main(argv: list[str] | None = None) -> int:
                     args.confirm_read_only_diagnostics
                 ),
             )
-        _invalidate_topology_for_adapter_prompt(result.snapshot)
+        _inhibit_for_adapter_prompt(result.snapshot)
         print(
             json.dumps(
                 {"serial": serial, **_result_payload(result)},

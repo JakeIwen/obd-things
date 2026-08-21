@@ -5,7 +5,7 @@ Dry-run plan:
 
     python3 projects/ecu_mapping/cluster_live.py
 
-Parked live view after explicitly arming C-CAN:
+Parked live view (the shared runner resolves, owns, arms, and restores C-CAN):
 
     python3 projects/ecu_mapping/cluster_live.py \
         --execute --confirm-parked --confirm-engine-off --pair 6/14 \

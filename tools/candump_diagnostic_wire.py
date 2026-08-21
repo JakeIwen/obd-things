@@ -31,6 +31,8 @@ from tools.can_timeseries_correlate import (  # noqa: E402
     CorrelateError,
     MAX_CAPTURE_FILES,
     StreamStats,
+    _parse_capture_channel,
+    _validate_capture_channel,
     iter_candump_frames,
 )
 
@@ -76,6 +78,7 @@ def _wire_row(
         "timestamp_epoch_us": frame.timestamp_us,
         "timestamp_text": _timestamp_text(frame.timestamp_us),
         "raw_line_sequence": frame.raw_line_sequence,
+        "channel": frame.channel,
         "can_id": f"{frame.can_id:08X}",
         "can_data_hex": frame.payload.hex(" ").upper(),
         "isotp_payload_hex": payload.hex(" ").upper(),
@@ -174,9 +177,11 @@ def extract(
     *,
     module: Module,
     captures: Sequence[Path],
+    capture_channel: str,
     output: Path,
     allow_van_compute_result: bool = False,
 ) -> dict[str, object]:
+    _validate_capture_channel(capture_channel)
     if not captures or len(captures) > MAX_CAPTURE_FILES:
         raise CorrelateError(
             f"capture count must be between 1 and {MAX_CAPTURE_FILES}"
@@ -233,7 +238,7 @@ def extract(
                 captures,
                 stats=stats,
                 decompressor=CliZstdDecompressor(),
-                expected_channel=module.channel,
+                expected_channel=capture_channel,
             ):
                 payload = _single_frame_payload(frame.payload)
                 if payload is None:
@@ -325,11 +330,11 @@ def extract(
             "key": module.key,
             "name": module.name,
             "bus": module.bus,
-            "channel": module.channel,
             "txid_hex": f"{module.txid:08X}",
             "rxid_hex": f"{module.rxid:08X}",
             "addressing_mode": module.addressing_mode,
         },
+        "capture_channel": capture_channel,
         "captures": [item.as_dict() for item in stats],
         "exchange_count": exchange_count,
         "wire_row_count": output_sequence,
@@ -361,6 +366,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("module", choices=tuple(MODULES))
     parser.add_argument(
+        "--capture-channel",
+        required=True,
+        type=_parse_capture_channel,
+        help=(
+            "SocketCAN interface name recorded by these historical inputs "
+            "(for example can0)"
+        ),
+    )
+    parser.add_argument(
         "--output",
         required=True,
         type=Path,
@@ -384,6 +398,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         summary = extract(
             module=MODULES[args.module],
             captures=args.captures,
+            capture_channel=args.capture_channel,
             output=args.output,
             allow_van_compute_result=args.allow_van_compute_result,
         )

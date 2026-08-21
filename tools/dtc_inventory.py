@@ -25,10 +25,17 @@ import time
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, REPO)
 
-from lib import canbus, uds
-from lib import diagnostic_safety
+from lib import can_operation_state, can_runtime_route, canbus, diagnostic_safety, uds
+from lib.dtc import (
+    STATUS_BITS,
+    decode_status,
+    fca_dtc_name,
+    parse_dtc_records,
+    parse_positive_response,
+    parse_snapshot_identifiers,
+)
 from lib.modules import get
-from tools.ecu_discover import preflight
+from tools.ecu_discover import prearm_conflict_errors, preflight
 
 
 MIN_REQUEST_RATE = 0.1
@@ -47,98 +54,6 @@ def selected_requests(args):
     if args.include_supported:
         requests.append(SUPPORTED_DTCS_REQUEST)
     return requests
-
-STATUS_BITS = (
-    (0x01, "test_failed"),
-    (0x02, "test_failed_this_operation_cycle"),
-    (0x04, "pending"),
-    (0x08, "confirmed"),
-    (0x10, "test_not_completed_since_last_clear"),
-    (0x20, "test_failed_since_last_clear"),
-    (0x40, "test_not_completed_this_operation_cycle"),
-    (0x80, "warning_indicator_requested"),
-)
-
-
-def decode_status(status):
-    return [name for mask, name in STATUS_BITS if status & mask]
-
-
-def fca_dtc_name(dtc_bytes):
-    first, second, failure_type = dtc_bytes
-    letter = "PCBU"[(first >> 6) & 0x03]
-    code = ((first & 0x3F) << 8) | second
-    return f"{letter}{code:04X}-{failure_type:02X}"
-
-
-def parse_dtc_records(body):
-    records = []
-    trailing = b""
-    for offset in range(0, len(body) - 3, 4):
-        dtc = bytes(body[offset:offset + 3])
-        status = body[offset + 3]
-        records.append(
-            {
-                "raw_dtc": dtc.hex().upper(),
-                "fca_display": fca_dtc_name(dtc),
-                "status": f"{status:02X}",
-                "status_flags": decode_status(status),
-            }
-        )
-    consumed = len(records) * 4
-    if consumed != len(body):
-        trailing = bytes(body[consumed:])
-    return records, trailing
-
-
-def parse_snapshot_identifiers(body):
-    records = []
-    trailing = b""
-    for offset in range(0, len(body) - 3, 4):
-        dtc = bytes(body[offset:offset + 3])
-        records.append(
-            {
-                "raw_dtc": dtc.hex().upper(),
-                "fca_display": fca_dtc_name(dtc),
-                "snapshot_record": f"{body[offset + 3]:02X}",
-            }
-        )
-    consumed = len(records) * 4
-    if consumed != len(body):
-        trailing = bytes(body[consumed:])
-    return records, trailing
-
-
-def parse_positive_response(request, response):
-    subfunction = request[1]
-    if len(response) < 2 or response[:2] != bytes((0x59, subfunction)):
-        return {"parse_error": "positive SID/subfunction echo mismatch"}
-    if subfunction == 0x01:
-        if len(response) < 6:
-            return {"parse_error": "short reportNumberOfDTCByStatusMask response"}
-        return {
-            "status_availability_mask": f"{response[2]:02X}",
-            "dtc_format_identifier": f"{response[3]:02X}",
-            "dtc_count": int.from_bytes(response[4:6], "big"),
-            "trailing_hex": uds.hx(response[6:]) if len(response) > 6 else None,
-        }
-    if subfunction in (0x02, 0x0A):
-        if len(response) < 3:
-            return {"parse_error": "short DTC-list response"}
-        records, trailing = parse_dtc_records(response[3:])
-        return {
-            "status_availability_mask": f"{response[2]:02X}",
-            "dtcs": records,
-            "trailing_hex": uds.hx(trailing) if trailing else None,
-        }
-    if subfunction == 0x03:
-        records, trailing = parse_snapshot_identifiers(response[2:])
-        return {
-            "snapshots": records,
-            "trailing_hex": uds.hx(trailing) if trailing else None,
-        }
-    return {"parse_error": "unsupported local parser subfunction"}
-
 
 def query(sock, label, payload, timeout, accounting=None):
     started = time.monotonic()
@@ -186,10 +101,68 @@ def write_report(path, report):
     os.replace(temporary, path)
 
 
+def active_inhibit_detail(channel):
+    """Return one fail-closed reason when active diagnostics are inhibited."""
+    try:
+        inhibits = can_operation_state.active_inhibits(channel)
+    except (OSError, RuntimeError, ValueError) as exc:
+        return (
+            "same-boot external-operation inhibit state is unavailable: "
+            f"{type(exc).__name__}: {exc}"
+        )
+    if not inhibits:
+        return None
+    names = ",".join(str(item.get("name", "invalid")) for item in inhibits)
+    return f"active diagnostic traffic is inhibited by {names}"
+
+
+def active_interface_detail(channel, bitrate):
+    """Require one exact, healthy classical-CAN transmit state."""
+    try:
+        state = canbus.interface_state(channel)
+    except (OSError, RuntimeError, ValueError) as exc:
+        return (
+            "SocketCAN interface state is unavailable: "
+            f"{type(exc).__name__}: {exc}"
+        )
+    if not isinstance(state, canbus.InterfaceState) or state.channel != channel:
+        return "SocketCAN interface state identity is invalid"
+    if not state.present or not state.up:
+        return f"{channel} is missing or down"
+    if state.bitrate != bitrate:
+        return f"{channel} bitrate is {state.bitrate}, expected {bitrate}"
+    if state.fd_enabled is not False:
+        return (
+            f"{channel} must prove classical CAN MTU with FD off before "
+            "ReadDTCInformation traffic"
+        )
+    if state.listen_only:
+        return f"{channel} is listen-only; active DTC reads require an explicit arm"
+    if state.controller_state != "ERROR-ACTIVE":
+        return (
+            f"{channel} controller state is "
+            f"{state.controller_state or 'unknown'}, expected ERROR-ACTIVE"
+        )
+    if state.restart_ms != 0:
+        return (
+            f"{channel} restart-ms is {state.restart_ms}; the dual-USBCANFD "
+            "classical-CAN policy requires 0"
+        )
+    return None
+
+
 def parser():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("module", help="verified key from lib/modules.py")
     p.add_argument("--execute", action="store_true", help="actually send the listed reads")
+    p.add_argument(
+        "--resolve-runtime",
+        action="store_true",
+        help=(
+            "compatibility flag; live execution always resolves the stable "
+            "dual-USBCANFD serial/dev_id route"
+        ),
+    )
     p.add_argument(
         "--include-supported",
         action="store_true",
@@ -206,6 +179,8 @@ def parser():
 def main(argv=None):
     args = parser().parse_args(argv)
     module = get(args.module)
+    topology_fingerprint = None
+    expected_pair = None
     requests = selected_requests(args)
     if not math.isfinite(args.rate) or not MIN_REQUEST_RATE <= args.rate <= MAX_REQUEST_RATE:
         print(
@@ -225,6 +200,9 @@ def main(argv=None):
         f"{module.addressing_mode} {module.bitrate} bit/s "
         f"TX={module.txid:X} RX={module.rxid:X}"
     )
+    print(
+        f"route: {module.bus} -> runtime USB serial/dev_id resolution on --execute"
+    )
     print("requests: " + ", ".join(uds.hx(payload) for _, payload in requests))
     print("ClearDiagnosticInformation (14) is not implemented by this tool.")
     if not args.execute:
@@ -236,17 +214,34 @@ def main(argv=None):
             file=sys.stderr,
         )
         return 2
+    try:
+        ownership = can_runtime_route.acquire_armed_module_route(
+            module,
+            asserted_pair=args.pair,
+            prearm_check=prearm_conflict_errors,
+        )
+        module = ownership.route.module
+        expected_pair = ownership.route.pair
+        topology_fingerprint = ownership.route.topology_fingerprint
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"ERROR: stable runtime route/arm failed: {exc}", file=sys.stderr)
+        return 2
+    inhibit_detail = active_inhibit_detail(module.channel)
+    if inhibit_detail is not None:
+        restored = ownership.release()
+        print(f"ERROR: {inhibit_detail}", file=sys.stderr)
+        return 2 if restored else 1
+    interface_detail = active_interface_detail(module.channel, module.bitrate)
+    if interface_detail is not None:
+        restored = ownership.release()
+        print(f"ERROR: {interface_detail}", file=sys.stderr)
+        return 2 if restored else 1
     errors = preflight(module.channel, module.bitrate)
     if errors:
+        restored = ownership.release()
         for error in errors:
             print(f"ERROR: {error}", file=sys.stderr)
-        return 2
-
-    try:
-        diagnostic_lock = diagnostic_safety.acquire_channel_lock(module.channel)
-    except (OSError, RuntimeError, ValueError) as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 2
+        return 2 if restored else 1
 
     results = []
     fatal_error = None
@@ -261,6 +256,15 @@ def main(argv=None):
         try:
             sock = uds.open_module_socket(module, timeout=args.timeout)
             for index, (label, payload) in enumerate(requests):
+                can_runtime_route.revalidate_module_route(
+                    ownership.route,
+                    manager=ownership.manager,
+                )
+                inhibit_detail = active_inhibit_detail(module.channel)
+                if inhibit_detail is not None:
+                    fatal_error = inhibit_detail
+                    print(f"ERROR: {fatal_error}", file=sys.stderr)
+                    break
                 result = query(sock, label, payload, args.timeout, accounting=accounting)
                 results.append(result)
                 parsed = result["parsed"] or {}
@@ -287,7 +291,7 @@ def main(argv=None):
                     print(f"ERROR: {fatal_error}", file=sys.stderr)
             finally:
                 try:
-                    restored_passive = bool(canbus.restore_passive(module.channel, module.bitrate))
+                    restored_passive = ownership.release()
                     if not restored_passive and fatal_error is None:
                         fatal_error = "passive restoration verification failed"
                 except Exception as exc:
@@ -295,7 +299,7 @@ def main(argv=None):
                     if fatal_error is None:
                         fatal_error = f"passive restoration failed: {type(exc).__name__}: {exc}"
                 finally:
-                    diagnostic_safety.release_channel_lock(diagnostic_lock)
+                    pass
 
     if termination.received_signal is not None:
         interrupted = True
@@ -315,6 +319,9 @@ def main(argv=None):
             "name": module.name,
             "bus": module.bus,
             "channel": module.channel,
+            "route_source": "usb_serial_and_dev_id",
+            "topology_fingerprint": topology_fingerprint,
+            "expected_physical_pair": expected_pair,
             "bitrate": module.bitrate,
             "addressing_mode": module.addressing_mode,
             "txid": f"{module.txid:X}",
@@ -323,6 +330,7 @@ def main(argv=None):
         "physical_pair": args.pair,
         "conditions": args.conditions,
         "parked_asserted": args.confirm_parked,
+        "same_boot_inhibits_checked": True,
         "max_request_rate_hz": args.rate,
         "timeout_s": args.timeout,
         "request_attempts": accounting["request_attempts"],
@@ -349,7 +357,10 @@ def main(argv=None):
     write_report(path, report)
     print(f"report: {path}")
     print(f"adapter restored passive: {'yes' if restored_passive else 'NO - CHECK IT NOW'}")
-    print("When the manual CAN campaign is finished: sudo systemctl start tpms-logger")
+    print(
+        "Restart only a same-role service deliberately stopped for this campaign, "
+        "and only through its current deployment handoff."
+    )
     if fatal_error or not restored_passive:
         return 1
     return 130 if interrupted else 0

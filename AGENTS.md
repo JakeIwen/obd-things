@@ -40,7 +40,7 @@ committed in place.
   and their `events/` subdirectories)
 - `tmp/inventories/` — per-module identity, DTC, checkpointed DID, and routine reports
 - `tmp/sweeps/` — completed DID compatibility text and `tools/signal_correlate.py` output
-- `tmp/locks/` — advisory per-channel lock files for participating active diagnostic tools
+- `tmp/locks/` — advisory logical-role and resolved-channel lock files for participating CAN tools
 - `tmp/<project>/` — project logger/tool output such as `tmp/radar/`, `tmp/battery/`, and `tmp/tpms/`
 
 Cold, large, or completed machine evidence may live in the matching tree under
@@ -71,9 +71,19 @@ adding a competing summary elsewhere.
 - Default to passive/listen-only CAN work. Treat transmission, routines, IO control, coding, DTC
   clearing, and service changes as actuation; follow the root README's safety gates and obtain any
   owner authorization it requires.
-- Before manual bus work, stop the background TPMS logger with
-  `sudo systemctl stop tpms-logger`; restart it afterward. Read `projects/tpms/README.md` section
-  "Infrastructure now running" first because services and campaigns evolve.
+- Before manual bus work, inspect the current broker and TPMS service state and
+  coordinate the exact logical role in scope. Shared passive observers may
+  coexist; stop only a non-cooperating owner or a process blocking the required
+  exclusive role/channel lease, never an owner merely because another bus is
+  in use. As of 2026-08-21 the role-aware `van-telemetry` unit is installed,
+  enabled, and active as the normal passive reconciler/broker. Its active-drive
+  feature is enabled, but commissioning occurred with the vehicle asleep, so no
+  helper ran and no active CAN path was exercised. The installed
+  `tpms-logger` unit matches the tracked role-aware fallback but remains
+  disabled/inactive and has not been live-validated; do not start it without
+  following its deployment handoff. Read `projects/tpms/README.md` section
+  "TPMS logger and telemetry ownership" first because services and campaigns
+  evolve.
 - C-CAN RF Hub wake traffic can also wake BCM accessory rails and boot the dashcam. Account for this
   observer effect when interpreting parked captures; details live in `docs/bus-map.md`.
 - Do not expose the full VIN in tracked output. Use the `OBD_VIN` environment variable where tools
@@ -81,7 +91,9 @@ adding a competing summary elsewhere.
 - Exact live hardware/service state is temporal. Inspect the interface, service, cron, and repository
   state before acting; do not rely solely on an older handoff date.
 - Never modify or disable the user's crontab, cron daemon, or unrelated background services without
-  explicit permission. Stopping/restarting `tpms-logger` for manual bus work is the documented exception.
+  explicit permission. Stopping an active participating CAN service for manual
+  bus work is the documented exception; restarting or changing enablement still
+  follows that service's current deployment handoff.
 
 ## Working preferences
 

@@ -28,7 +28,6 @@ class MetricDefinition:
     value_type: str
     stale_after_seconds: float
     passive_min_interval_seconds: float
-    wake_min_interval_seconds: float
     sources: tuple[SourceDefinition, ...]
     allowed_acquisition_modes: tuple[str, ...] = ()
     minimum: float | None = None
@@ -63,8 +62,7 @@ BATTERY_VOLTAGE = MetricDefinition(
     value_type="number",
     stale_after_seconds=30.0,
     passive_min_interval_seconds=1.0,
-    wake_min_interval_seconds=900.0,
-    allowed_acquisition_modes=("passive", "wake_if_asleep"),
+    allowed_acquisition_modes=("passive",),
     minimum=0.0,
     maximum=32.0,
     sources=(
@@ -81,10 +79,10 @@ BATTERY_VOLTAGE = MetricDefinition(
             name="ccan.broadcast.0x41a",
             bus="c-can",
             bitrate=500000,
-            acquisition_class="passive_or_wake_assisted_broadcast",
+            acquisition_class="passive_broadcast",
             quality="verified",
             provenance="docs/bus-map.md C-CAN 0x41A byte0 x0.05 V +4.0 V decode",
-            side_effects="C-CAN RFH wake powers BCM accessory rails briefly",
+            side_effects="none for receive-only acquisition",
         ),
         SourceDefinition(
             name="cluster.did.1004",
@@ -113,7 +111,6 @@ IGNITION_ON = MetricDefinition(
     value_type="boolean",
     stale_after_seconds=5.0,
     passive_min_interval_seconds=0.0,
-    wake_min_interval_seconds=0.0,
     sources=(
         SourceDefinition(
             name="ccan.broadcast.0x2ef",
@@ -141,7 +138,6 @@ ENGINE_OIL_PRESSURE = MetricDefinition(
     value_type="number",
     stale_after_seconds=5.0,
     passive_min_interval_seconds=0.0,
-    wake_min_interval_seconds=0.0,
     minimum=0.0,
     maximum=150.0,
     sources=(
@@ -170,7 +166,6 @@ ENGINE_COOLANT_TEMPERATURE = MetricDefinition(
     value_type="number",
     stale_after_seconds=5.0,
     passive_min_interval_seconds=0.0,
-    wake_min_interval_seconds=0.0,
     minimum=-40.0,
     maximum=419.0,
     sources=(
@@ -198,7 +193,6 @@ ENGINE_RPM = MetricDefinition(
     value_type="number",
     stale_after_seconds=5.0,
     passive_min_interval_seconds=0.0,
-    wake_min_interval_seconds=0.0,
     minimum=0.0,
     maximum=9000.0,
     sources=(
@@ -226,7 +220,6 @@ VEHICLE_SPEED = MetricDefinition(
     value_type="number",
     stale_after_seconds=5.0,
     passive_min_interval_seconds=0.0,
-    wake_min_interval_seconds=0.0,
     minimum=0.0,
     maximum=160.0,
     sources=(
@@ -254,7 +247,6 @@ TARGET_CRANKSHAFT_TORQUE = MetricDefinition(
     value_type="number",
     stale_after_seconds=5.0,
     passive_min_interval_seconds=0.0,
-    wake_min_interval_seconds=0.0,
     minimum=-400.0,
     maximum=1200.0,
     sources=(
@@ -282,7 +274,6 @@ CRANKSHAFT_TORQUE = MetricDefinition(
     value_type="number",
     stale_after_seconds=4.0,
     passive_min_interval_seconds=0.0,
-    wake_min_interval_seconds=0.0,
     minimum=-1000.0,
     maximum=1000.0,
     sources=(
@@ -315,7 +306,6 @@ def _transmission_speed_metric(name: str, field: str) -> MetricDefinition:
         value_type="number",
         stale_after_seconds=5.0,
         passive_min_interval_seconds=0.0,
-        wake_min_interval_seconds=0.0,
         minimum=0.0,
         maximum=20000.0,
         sources=(
@@ -349,7 +339,6 @@ TRANSMISSION_OIL_TEMPERATURE = MetricDefinition(
     value_type="number",
     stale_after_seconds=5.0,
     passive_min_interval_seconds=0.0,
-    wake_min_interval_seconds=0.0,
     minimum=40.0,
     maximum=250.0,
     sources=(
@@ -384,7 +373,6 @@ GENERATOR_FIELD_DUTY = MetricDefinition(
     value_type="number",
     stale_after_seconds=4.0,
     passive_min_interval_seconds=0.0,
-    wake_min_interval_seconds=0.0,
     minimum=0.0,
     # The current van produced approximately 100.008%. Preserve that measured
     # overshoot rather than clamping to a presentation-driven 100% ceiling.
@@ -421,7 +409,6 @@ def _tire_pressure_metric(position: str, did: str) -> MetricDefinition:
         value_type="number",
         stale_after_seconds=30.0,
         passive_min_interval_seconds=0.0,
-        wake_min_interval_seconds=0.0,
         minimum=0.0,
         maximum=150.0,
         sources=(
@@ -461,7 +448,6 @@ def _raw_cluster_metric(did: str, unit: str, maximum: int) -> MetricDefinition:
         value_type="integer",
         stale_after_seconds=5.0,
         passive_min_interval_seconds=0.0,
-        wake_min_interval_seconds=0.0,
         minimum=0,
         maximum=maximum,
         sources=(

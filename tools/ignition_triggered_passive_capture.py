@@ -31,10 +31,12 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from lib import can_runtime_route  # noqa: E402
 from tools import passive_drive_capture as passive  # noqa: E402
 
 
-CHANNEL = "can0"
+CHANNEL: str | None = None
+C_CAN_BITRATE = 500_000
 IGNITION_ID = 0x2EF
 DEFAULT_OUT_ROOT = (
     Path("/mnt/EXFAT512")
@@ -96,6 +98,8 @@ def atomic_write_json(path: Path, payload: dict[str, object]) -> None:
 
 
 def open_ignition_socket() -> socket.socket:
+    if CHANNEL is None:
+        raise ArmError("C-CAN runtime role has not been resolved")
     try:
         can_socket = socket.socket(
             socket.PF_CAN,
@@ -129,7 +133,12 @@ def wait_for_ignition(
         while True:
             now = monotonic()
             if now >= next_preflight:
-                passive.runtime_safety_check()
+                if CHANNEL is None:
+                    raise ArmError("C-CAN runtime role has not been resolved")
+                passive.runtime_safety_check(
+                    channel=CHANNEL,
+                    bitrate=C_CAN_BITRATE,
+                )
                 next_preflight = now + preflight_interval_seconds
                 if can_socket is None:
                     can_socket = open_ignition_socket()
@@ -174,6 +183,8 @@ def child_command(args: argparse.Namespace, run_id: str) -> list[str]:
     return [
         sys.executable,
         str(REPO / "tools" / "passive_drive_capture.py"),
+        "--bus",
+        "c-can",
         "--out-root",
         str(args.out_root),
         "--require-mount",
@@ -264,8 +275,9 @@ def plan(args: argparse.Namespace, policy: passive.DiskPolicy) -> dict[str, obje
     return {
         "mode": "execute" if args.execute else "plan_only",
         "interaction": "passive_one_drive_ignition_trigger",
-        "channel": CHANNEL,
-        "bitrate": passive.BITRATE,
+        "logical_role": "c-can",
+        "channel": "resolved at execution by USB serial/dev_id",
+        "bitrate": C_CAN_BITRATE,
         "listen_only_required": True,
         "ignition_trigger_id": f"0x{IGNITION_ID:X}",
         "ignition_absence_seconds": args.ignition_absence_seconds,
@@ -287,64 +299,90 @@ def plan(args: argparse.Namespace, policy: passive.DiskPolicy) -> dict[str, obje
 
 
 def execute(args: argparse.Namespace, policy: passive.DiskPolicy) -> int:
-    mount_device = passive.require_writable_mount(
-        args.out_root,
-        args.require_mount,
-    )
-    passive.preflight(args.out_root, policy)
-    state = {
-        "status": "waiting_for_ignition",
-        "armed_utc": utc_now(),
-        "channel": CHANNEL,
-        "bitrate": passive.BITRATE,
-        "listen_only_required": True,
-        "trigger_id": f"0x{IGNITION_ID:X}",
-        "out_root": str(args.out_root),
-        "conditions": args.conditions.strip(),
-    }
-    atomic_write_json(args.state_path, state)
-    print(
-        f"{utc_now()} armed: waiting passively for ignition frame "
-        f"0x{IGNITION_ID:X}",
-        flush=True,
-    )
-    wait_for_ignition(
-        preflight_interval_seconds=args.preflight_interval_seconds,
-    )
-
-    passive.require_writable_mount(
-        args.out_root,
-        args.require_mount,
-        expected_device=mount_device,
-    )
-    passive.preflight(args.out_root, policy)
-    run_id = campaign_id()
-    command = child_command(args, run_id)
-    state.update(
-        {
-            "status": "capture_starting",
-            "triggered_utc": utc_now(),
-            "campaign": run_id,
-            "capture_dir": str(args.out_root / run_id),
-        }
-    )
-    atomic_write_json(args.state_path, state)
-    print(f"{utc_now()} ignition observed; starting {run_id}", flush=True)
-    result = subprocess.run(command, check=False)
-    state.update(
-        {
-            "status": "complete" if result.returncode == 0 else "error",
-            "completed_utc": utc_now(),
-            "capture_exit_status": result.returncode,
-        }
-    )
-    atomic_write_json(args.state_path, state)
-    if result.returncode != 0:
-        raise ArmError(
-            f"passive capture child exited with status {result.returncode}"
+    global CHANNEL
+    try:
+        ownership = can_runtime_route.acquire_passive_bus_route(
+            "c-can",
+            asserted_pair="6/14",
         )
-    print(f"{utc_now()} one-drive capture finalized: {run_id}", flush=True)
-    return 0
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ArmError(f"stable passive C-CAN route failed: {exc}") from exc
+    CHANNEL = ownership.route.channel
+    try:
+        mount_device = passive.require_writable_mount(
+            args.out_root,
+            args.require_mount,
+        )
+        passive.preflight(
+            args.out_root,
+            policy,
+            channel=CHANNEL,
+            bitrate=ownership.route.bitrate,
+        )
+        state = {
+            "status": "waiting_for_ignition",
+            "armed_utc": utc_now(),
+            "channel": CHANNEL,
+            "logical_bus": ownership.route.role,
+            "physical_pair": ownership.route.pair,
+            "bitrate": ownership.route.bitrate,
+            "topology_fingerprint": ownership.route.topology_fingerprint,
+            "listen_only_required": True,
+            "trigger_id": f"0x{IGNITION_ID:X}",
+            "out_root": str(args.out_root),
+            "conditions": args.conditions.strip(),
+        }
+        atomic_write_json(args.state_path, state)
+        print(
+            f"{utc_now()} armed: waiting passively for ignition frame "
+            f"0x{IGNITION_ID:X}",
+            flush=True,
+        )
+        wait_for_ignition(
+            preflight_interval_seconds=args.preflight_interval_seconds,
+        )
+
+        ownership.revalidate()
+        passive.require_writable_mount(
+            args.out_root,
+            args.require_mount,
+            expected_device=mount_device,
+        )
+        passive.preflight(
+            args.out_root,
+            policy,
+            channel=CHANNEL,
+            bitrate=ownership.route.bitrate,
+        )
+        run_id = campaign_id()
+        command = child_command(args, run_id)
+        state.update(
+            {
+                "status": "capture_starting",
+                "triggered_utc": utc_now(),
+                "campaign": run_id,
+                "capture_dir": str(args.out_root / run_id),
+            }
+        )
+        atomic_write_json(args.state_path, state)
+        print(f"{utc_now()} ignition observed; starting {run_id}", flush=True)
+        result = subprocess.run(command, check=False)
+        state.update(
+            {
+                "status": "complete" if result.returncode == 0 else "error",
+                "completed_utc": utc_now(),
+                "capture_exit_status": result.returncode,
+            }
+        )
+        atomic_write_json(args.state_path, state)
+        if result.returncode != 0:
+            raise ArmError(
+                f"passive capture child exited with status {result.returncode}"
+            )
+        print(f"{utc_now()} one-drive capture finalized: {run_id}", flush=True)
+        return 0
+    finally:
+        ownership.release()
 
 
 def main(argv: Sequence[str] | None = None) -> int:

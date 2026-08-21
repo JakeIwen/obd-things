@@ -7,22 +7,15 @@ SYSTEMD_DIR = REPO_ROOT / "projects" / "vehicle_data" / "systemd"
 
 
 class VehicleDataSystemdTests(unittest.TestCase):
-    def test_broker_is_activated_and_bound_by_can0_device(self):
+    def test_broker_uses_serial_resolved_roles_and_durable_history(self):
         unit = (SYSTEMD_DIR / "van-telemetry.service").read_text()
 
-        self.assertIn(
-            "BindsTo=sys-subsystem-net-devices-can0.device",
-            unit,
-        )
-        self.assertIn(
-            "After=local-fs.target sys-subsystem-net-devices-can0.device",
-            unit,
-        )
-        self.assertIn(
-            "WantedBy=sys-subsystem-net-devices-can0.device",
-            unit,
-        )
-        self.assertNotIn("WantedBy=multi-user.target", unit)
+        self.assertNotIn("sys-subsystem-net-devices-can0.device", unit)
+        self.assertIn("--can-interface-mode dual-usbcanfd", unit)
+        self.assertIn("StateDirectory=van-telemetry", unit)
+        self.assertIn("--history-db /var/lib/van-telemetry/history.sqlite3", unit)
+        self.assertIn("--history-interval 5", unit)
+        self.assertIn("WantedBy=multi-user.target", unit)
 
     def test_web_listener_is_not_independently_boot_enabled(self):
         unit = (SYSTEMD_DIR / "van-telemetry-web.service").read_text()

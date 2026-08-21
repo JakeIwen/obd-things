@@ -73,6 +73,10 @@ where consumed.
 
 Example expectation:
 
+The `channel` below identifies the netdev recorded inside that historical
+capture. It is offline provenance, not a live bus selector; current hardware
+resolves C-CAN/B-CAN/CAN-CH from USB identity before recording.
+
 ```json
 {
   "kind": "operational_proxy",

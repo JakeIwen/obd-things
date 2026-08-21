@@ -59,13 +59,8 @@ def build_parser() -> argparse.ArgumentParser:
     acquire.add_argument("metric", choices=ACQUIRE_METRICS)
     acquire.add_argument(
         "--mode",
-        choices=("passive", "wake_if_asleep"),
+        choices=("passive",),
         default="passive",
-    )
-    acquire.add_argument(
-        "--confirm-wake",
-        action="store_true",
-        help="required for wake_if_asleep because it may transmit and power accessory rails",
     )
     publish = sub.add_parser(
         "publish",
@@ -84,14 +79,6 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     if args.timeout <= 0:
         raise SystemExit("--timeout must be positive")
-    if (
-        args.command == "acquire"
-        and args.mode == "wake_if_asleep"
-        and not args.confirm_wake
-    ):
-        raise SystemExit(
-            "wake_if_asleep requires --confirm-wake; it may transmit on CAN"
-        )
     client = TelemetryClient(args.socket, timeout=args.timeout)
     if args.command == "status":
         status, payload = client.request("GET", "/v1/status")

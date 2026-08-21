@@ -14,12 +14,13 @@ tmp/tpms/tpms_drive_log.csv (same wall clock). A dedicated timestamp-aligned bro
 is still needed; `tools/signal_correlate.py` analyzes its own active-DID JSON, not candump plus TPMS CSV.
 
 **PURE RX. This script NEVER transmits** — it only opens a raw CAN socket and reads, so it adds
-no bus traffic and no observer effect of its own. It also never reconfigures the interface
-(tpms-logger owns that); if the iface is down or at the wrong bitrate it just waits.
+no bus traffic and no observer effect of its own. It resolves the logical C-CAN role from the
+installed adapter USB serial/controller id, holds shared role and current-channel locks, and
+requires the interface to remain exact passive classical CAN. It never reconfigures a link.
 
 DECIMATION: keeps at most one frame per CAN ID per DECIM_S (default 2 s). Pressure is a slow
 signal, so this loses nothing that matters while keeping a 90-minute drive around ~10 MB instead
-of ~90 MB. Output is candump-compatible: "(epoch) can0 ID#HEX".
+of ~90 MB. Output is candump-compatible: ``(epoch) <resolved-channel> ID#HEX``.
 
     python3 projects/tpms/drive_sniff.py --auto     # systemd mode: capture each drive
     python3 projects/tpms/drive_sniff.py            # capture now until Ctrl-C
@@ -34,27 +35,30 @@ import argparse
 import datetime
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+sys.path.insert(0, REPO)
+from lib import can_runtime_route  # noqa: E402
+
 OUT_DIR = os.path.join(REPO, "tmp", "tpms", "captures")
-CHANNEL = "can0"
+BUS = "c-can"
 IGN_BCAST = 0x2EF          # ignition-on gate; same one tpms_logger uses
 DECIM_S = 2.0              # keep <=1 frame per CAN id per this many seconds
 MIN_KEEP_MIN = 10          # discard a session shorter than this (not enough thermal rise)
 CAP_BYTES = 400 * 1024**2  # stop starting NEW sessions once captures/ exceeds this
 
 
-def open_rx(filter_id=None):
+def open_rx(channel, filter_id=None):
     """Raw CAN RX socket. Never sends."""
     s = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
     if filter_id is not None:
         s.setsockopt(socket.SOL_CAN_RAW, socket.CAN_RAW_FILTER,
                      struct.pack("=II", filter_id, 0x1FFFFFFF))
-    s.bind((CHANNEL,))
+    s.bind((channel,))
     return s
 
 
-def ignition_on(window=2.0):
+def ignition_on(channel, window=2.0):
     try:
-        s = open_rx(IGN_BCAST)
+        s = open_rx(channel, IGN_BCAST)
         s.settimeout(window)
     except OSError:
         return False
@@ -73,53 +77,69 @@ def dir_bytes():
     return sum(os.path.getsize(os.path.join(OUT_DIR, f)) for f in os.listdir(OUT_DIR))
 
 
-def capture(auto):
+def capture(auto, *, bus=BUS):
     os.makedirs(OUT_DIR, exist_ok=True)
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     path = os.path.join(OUT_DIR, f"drive_{stamp}.log")
     try:
-        s = open_rx()
-        s.settimeout(1.0)
-    except OSError as e:
-        print(f"cannot open {CHANNEL} ({e}); waiting", flush=True)
+        ownership = can_runtime_route.acquire_passive_bus_route(bus)
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"cannot acquire passive {bus} role ({exc}); waiting", flush=True)
         return
-    last = {}                       # can_id -> last kept timestamp
-    kept = seen = 0
-    t0 = time.time()
-    quiet_since = None
-    print(f"capturing -> {path}", flush=True)
-    with open(path, "w") as f:
-        while True:
-            try:
-                frame = s.recv(16)
-            except socket.timeout:
-                frame = None
-            except OSError as e:
-                if e.errno in (errno.ENETDOWN, errno.ENODEV):
-                    print("iface went down; ending session", flush=True)
-                    break
-                continue
-            now = time.time()
-            if frame:
-                seen += 1
-                cid = struct.unpack("<I", frame[:4])[0] & 0x1FFFFFFF
-                dlc = frame[4]
-                data = frame[8:8 + dlc]
-                if now - last.get(cid, 0) >= DECIM_S:
-                    last[cid] = now
-                    f.write(f"({now:.6f}) {CHANNEL} {cid:03X}#{data.hex().upper()}\n")
-                    kept += 1
-                    if kept % 2000 == 0:
-                        f.flush()
-            if auto:
-                # end the session when the ignition broadcast stops appearing
-                if not frame:
-                    quiet_since = quiet_since or now
-                    if now - quiet_since > 8:
-                        break
-                elif cid == IGN_BCAST:
-                    quiet_since = None
-    s.close()
+    with ownership:
+        channel = ownership.route.channel
+        try:
+            s = open_rx(channel)
+            s.settimeout(1.0)
+        except OSError as e:
+            print(f"cannot open {bus}/{channel} ({e}); waiting", flush=True)
+            return
+        last = {}                       # can_id -> last kept timestamp
+        kept = seen = 0
+        t0 = time.time()
+        quiet_since = None
+        next_revalidate = time.monotonic() + 2.0
+        print(f"capturing {bus}/{channel} -> {path}", flush=True)
+        try:
+            with open(path, "w") as f:
+                while True:
+                    if time.monotonic() >= next_revalidate:
+                        ownership.revalidate()
+                        next_revalidate = time.monotonic() + 2.0
+                    try:
+                        frame = s.recv(16)
+                    except socket.timeout:
+                        frame = None
+                    except OSError as e:
+                        if e.errno in (errno.ENETDOWN, errno.ENODEV):
+                            print("iface went down; ending session", flush=True)
+                            break
+                        continue
+                    now = time.time()
+                    if frame:
+                        seen += 1
+                        cid = struct.unpack("<I", frame[:4])[0] & 0x1FFFFFFF
+                        dlc = frame[4]
+                        data = frame[8:8 + dlc]
+                        if now - last.get(cid, 0) >= DECIM_S:
+                            last[cid] = now
+                            f.write(
+                                f"({now:.6f}) {channel} {cid:03X}#"
+                                f"{data.hex().upper()}\n"
+                            )
+                            kept += 1
+                            if kept % 2000 == 0:
+                                f.flush()
+                    if auto:
+                        # end when the ignition broadcast stops appearing
+                        if not frame:
+                            quiet_since = quiet_since or now
+                            if now - quiet_since > 8:
+                                break
+                        elif cid == IGN_BCAST:
+                            quiet_since = None
+        finally:
+            s.close()
     mins = (time.time() - t0) / 60
     if auto and mins < MIN_KEEP_MIN:
         os.remove(path)
@@ -131,9 +151,15 @@ def capture(auto):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--auto", action="store_true", help="wait for ignition, capture each drive")
+    ap.add_argument(
+        "--bus",
+        default=BUS,
+        choices=(BUS,),
+        help="stable logical vehicle bus (C-CAN only for the TPMS broadcast)",
+    )
     a = ap.parse_args()
     if not a.auto:
-        capture(auto=False)
+        capture(auto=False, bus=a.bus)
         return
     print("drive_sniff auto: waiting for ignition (0x2EF). PURE RX, never transmits.", flush=True)
     while True:
@@ -141,8 +167,14 @@ def main():
             print("capture dir over cap; sleeping (delete old captures to resume)", flush=True)
             time.sleep(600)
             continue
-        if ignition_on(2.0):
-            capture(auto=True)
+        try:
+            with can_runtime_route.acquire_passive_bus_route(a.bus) as ownership:
+                awake = ignition_on(ownership.route.channel, 2.0)
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"passive {a.bus} unavailable ({exc}); waiting", flush=True)
+            awake = False
+        if awake:
+            capture(auto=True, bus=a.bus)
         else:
             time.sleep(20)
 

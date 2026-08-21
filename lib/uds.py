@@ -1,4 +1,4 @@
-"""Generic UDS-over-ISO-TP helpers for the vehicle bus (PCAN/SocketCAN, 11- or 29-bit).
+"""Generic UDS-over-ISO-TP helpers for explicit SocketCAN channels.
 
 Shared by the live_data viewers and the tools/scanners. Nothing module-specific lives here;
 addressing is always passed in (see lib/modules.py). This transport is safety-neutral: callers
@@ -7,9 +7,6 @@ choose the payload, so a caller can read, change session, start a routine, write
 import math
 import time
 import struct
-import subprocess
-
-from lib import diagnostic_safety
 from lib.modules import NORMAL_11BITS, NORMAL_29BITS
 
 try:
@@ -17,8 +14,6 @@ try:
 except ImportError:
     raise SystemExit("Missing dependency: pip3 install --break-system-packages can-isotp")
 
-DEFAULT_CHANNEL = "can0"
-DEFAULT_BITRATE = 500000
 DEFAULT_ADDRESSING_MODE = NORMAL_29BITS
 
 ISOTP_ADDRESSING_MODES = {
@@ -86,7 +81,7 @@ def _resolve_addressing_mode(addressing_mode):
         raise ValueError(f"unsupported addressing_mode {addressing_mode!r}; choose {choices}") from None
 
 
-def open_socket(txid, rxid, channel=DEFAULT_CHANNEL, timeout=2.0,
+def open_socket(txid, rxid, channel, timeout=2.0,
                 addressing_mode=DEFAULT_ADDRESSING_MODE, tx_padding=None):
     """Open an ISO-TP socket for explicit CAN IDs and addressing mode.
 
@@ -119,101 +114,18 @@ def open_socket(txid, rxid, channel=DEFAULT_CHANNEL, timeout=2.0,
 
 def open_module_socket(module, timeout=2.0, channel=None, tx_padding=None):
     """Open a socket using all transport metadata from a module registry entry."""
+    resolved_channel = channel if channel is not None else module.channel
+    if not isinstance(resolved_channel, str) or not resolved_channel:
+        raise ValueError(
+            "module has no runtime SocketCAN channel; resolve its logical bus first"
+        )
     return open_socket(
         module.txid,
         module.rxid,
-        channel=channel or module.channel,
+        channel=resolved_channel,
         timeout=timeout,
         addressing_mode=module.addressing_mode,
         tx_padding=tx_padding,
-    )
-
-
-def _bring_up_can_locked(channel, bitrate, lock_handle):
-    """Mutate one CAN interface after proving that the caller owns its advisory lock."""
-    diagnostic_safety.validate_channel_lock(lock_handle, channel)
-    try:
-        if subprocess.run(["ip", "link", "show", channel], capture_output=True).returncode != 0:
-            return False
-        subprocess.run(["sudo", "ip", "link", "set", channel, "down"], capture_output=True)
-        r = subprocess.run(["sudo", "ip", "link", "set", channel, "up", "type", "can",
-                            "bitrate", str(bitrate), "listen-only", "off"], capture_output=True)
-        time.sleep(0.3)
-        return r.returncode == 0
-    except Exception:
-        return False
-
-
-def bring_up_can(channel=DEFAULT_CHANNEL, bitrate=DEFAULT_BITRATE, *, lock_handle=None):
-    """Best-effort: configure an armed CAN interface without racing a diagnostic holder.
-
-    A caller that already owns the full active-diagnostic lifecycle passes the exact handle from
-    :func:`lib.diagnostic_safety.acquire_channel_lock`. Otherwise this helper takes the nonblocking
-    per-channel lock for the interface mutation and releases it before returning. Lock contention
-    fails closed as ``False``; an invalid supplied capability is a programming error and raises.
-    """
-    if lock_handle is not None:
-        return _bring_up_can_locked(channel, bitrate, lock_handle)
-    try:
-        with diagnostic_safety.channel_lock(channel) as acquired_lock:
-            return _bring_up_can_locked(channel, bitrate, acquired_lock)
-    except diagnostic_safety.ChannelLockError:
-        return False
-
-
-def _recover_socket_locked(txid, rxid, channel, bitrate, max_wait, timeout,
-                           addressing_mode, lock_handle):
-    """Recovery loop with one validated lock held across every interface mutation."""
-    diagnostic_safety.validate_channel_lock(lock_handle, channel)
-    deadline = time.monotonic() + max_wait
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
-        if bring_up_can(channel, bitrate, lock_handle=lock_handle):
-            try:
-                return open_socket(txid, rxid, channel, timeout, addressing_mode)
-            except OSError:
-                pass
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
-        time.sleep(min(1.0, remaining))
-    raise RuntimeError(f"{channel} did not come back within {max_wait:g}s; replug the adapter")
-
-
-def recover_socket(txid, rxid, channel=DEFAULT_CHANNEL, bitrate=DEFAULT_BITRATE,
-                   max_wait=60, timeout=0.6, addressing_mode=DEFAULT_ADDRESSING_MODE,
-                   *, lock_handle=None):
-    """Wait boundedly for a dropped adapter, reconfigure it, and reopen ISO-TP.
-
-    Recovery mutates the whole SocketCAN interface, so a long-lived diagnostic caller must pass
-    its held channel-lock capability. A standalone caller may omit it; recovery then owns the lock
-    for the complete wait/reconfigure/open loop. ``max_wait`` uses a monotonic, finite deadline.
-    """
-    max_wait = _positive_finite_timeout(max_wait, "max_wait")
-    timeout = _positive_finite_timeout(timeout, "timeout")
-    if lock_handle is not None:
-        return _recover_socket_locked(
-            txid, rxid, channel, bitrate, max_wait, timeout, addressing_mode, lock_handle
-        )
-    with diagnostic_safety.channel_lock(channel) as acquired_lock:
-        return _recover_socket_locked(
-            txid, rxid, channel, bitrate, max_wait, timeout, addressing_mode, acquired_lock
-        )
-
-
-def recover_module_socket(module, max_wait=60, timeout=0.6, channel=None, *, lock_handle=None):
-    """Recover the CAN link using bitrate and addressing metadata from a module entry."""
-    return recover_socket(
-        module.txid,
-        module.rxid,
-        channel=channel or module.channel,
-        bitrate=module.bitrate,
-        max_wait=max_wait,
-        timeout=timeout,
-        addressing_mode=module.addressing_mode,
-        lock_handle=lock_handle,
     )
 
 

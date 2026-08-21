@@ -259,13 +259,7 @@
         <div><dt>Current owner</dt><dd id="current-owner">—</dd></div>
         <div><dt>Inhibits</dt><dd id="inhibits">—</dd></div>
       </dl>
-    </section>
-
-    <section class="panel" data-widget="retune" aria-labelledby="retune-heading">
-      <p class="eyebrow">BUS ROUTING</p>
-      <h2 id="retune-heading">Automatic bus switch</h2>
-      <p id="auto-retune-state" class="status-line">—</p>
-      <p id="auto-retune" class="muted panel-note">No switch status available.</p>
+      <div id="interface-roles" class="role-grid" hidden></div>
     </section>
 
     <section class="panel" data-widget="collector" aria-labelledby="collector-heading">
@@ -277,6 +271,62 @@
         <div><dt>Last cycle</dt><dd id="collector-last">—</dd></div>
         <div><dt>Interval</dt><dd id="collector-interval">—</dd></div>
       </dl>
+    </section>
+
+    <section class="panel warning-panel" data-widget="warnings" aria-labelledby="warnings-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">EARLY WARNING</p>
+          <h2 id="warnings-heading">Changes worth watching</h2>
+        </div>
+        <span id="warning-state" class="badge">NO HISTORY</span>
+      </div>
+      <div id="warning-list" class="summary-list"></div>
+      <p id="warning-note" class="muted panel-note">
+        Warnings compare like-for-like operating regimes and require persistence;
+        they are evidence to inspect, not a mechanical diagnosis or health score.
+      </p>
+    </section>
+
+    <section class="panel history-panel" data-widget="history" aria-labelledby="history-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">VEHICLE HISTORY</p>
+          <h2 id="history-heading">Trips and trends</h2>
+        </div>
+        <span id="history-state" class="badge">NO HISTORY</span>
+      </div>
+      <dl class="detail-grid history-overview">
+        <div><dt>Current trip</dt><dd id="history-current-trip">—</dd></div>
+        <div><dt>Coverage</dt><dd id="history-coverage">—</dd></div>
+        <div><dt>Recent trips</dt><dd id="history-trip-count">—</dd></div>
+        <div><dt>Last sample</dt><dd id="history-last-sample">—</dd></div>
+      </dl>
+      <div id="history-trends" class="trend-grid"></div>
+      <p id="history-note" class="muted panel-note">
+        Current-trip comparisons sit beside bounded 7-day and 30-day
+        aggregates; missing or stale telemetry remains a visible coverage gap.
+      </p>
+    </section>
+
+    <section class="panel dtc-panel" data-widget="dtcs" aria-labelledby="dtcs-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">DIAGNOSTICS · CACHED ONLY</p>
+          <h2 id="dtcs-heading">Diagnostic trouble codes</h2>
+        </div>
+        <span id="dtc-state" class="badge">NEVER SCANNED</span>
+      </div>
+      <dl class="detail-grid dtc-overview">
+        <div><dt>Newest module evidence</dt><dd id="dtc-last-scan">—</dd></div>
+        <div><dt>Module coverage</dt><dd id="dtc-module-coverage">—</dd></div>
+      </dl>
+      <div id="dtc-groups" class="dtc-groups"></div>
+      <p id="dtc-note" class="muted panel-note">
+        This page displays dated ReadDTCInformation results. Current and
+        pending mean when that DTC was last observed, not live vehicle state.
+        It cannot trigger a scan or clear a code.
+      </p>
     </section>
 
     <section class="panel" data-widget="catalog" aria-labelledby="catalog-heading">
@@ -294,7 +344,7 @@
       <h2 id="controls-heading">Acquisition</h2>
       <div class="button-row">
         <button id="refresh" type="button">Refresh cache</button>
-        <button id="acquire" type="button" disabled>Wake if asleep</button>
+        <button id="acquire" type="button" disabled>Read voltage now</button>
       </div>
       <p id="control-note" class="muted panel-note">
         Web acquisition is disabled by default.

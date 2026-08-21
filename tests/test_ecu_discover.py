@@ -299,52 +299,46 @@ class ResponseTests(unittest.TestCase):
 
 class CliSafetyTests(unittest.TestCase):
     def setUp(self):
-        # Live telemetry can legitimately hold the shared can0 observer lock.
-        # These unit tests mock preflight/CAN behavior, so isolate their control
-        # flow from that host state as well.
+        # Live execution owns and arms one serial-resolved logical role. Keep
+        # CLI unit tests independent of host hardware while retaining the
+        # ownership/release boundary in their control flow.
+        self.ownerships = []
+
+        def fake_acquire(*_args, **_kwargs):
+            ownership = mock.Mock()
+            ownership.route.channel = "can0"
+            ownership.release.return_value = True
+            self.ownerships.append(ownership)
+            return ownership
+
         acquire = mock.patch.object(
-            ecu_discover.diagnostic_safety,
-            "acquire_channel_lock",
-            return_value=mock.sentinel.channel_lock,
-        )
-        release = mock.patch.object(
-            ecu_discover.diagnostic_safety,
-            "release_channel_lock",
+            ecu_discover.can_runtime_route,
+            "acquire_armed_module_route",
+            side_effect=fake_acquire,
         )
         acquire.start()
-        release.start()
-        self.addCleanup(release.stop)
         self.addCleanup(acquire.stop)
 
-    def test_preflight_rejects_background_drive_capture(self):
-        with (
-            mock.patch.object(ecu_discover, "tpms_logger_active", return_value=False),
-            mock.patch.object(ecu_discover, "service_active", return_value=True),
-            mock.patch.object(ecu_discover.canbus, "iface_bitrate", return_value=500000),
-            mock.patch.object(ecu_discover.canbus, "is_listen_only", return_value=False),
-            mock.patch.object(ecu_discover.canbus, "controller_state", return_value="ERROR-ACTIVE"),
-            mock.patch.object(ecu_discover.subprocess, "run", return_value=mock.Mock(returncode=0)),
+    def test_prearm_has_no_global_service_exclusion(self):
+        with mock.patch.object(
+            ecu_discover.subprocess,
+            "run",
+            return_value=mock.Mock(returncode=0),
         ):
-            errors = ecu_discover.preflight("can0", 500000)
+            errors = ecu_discover.prearm_conflict_errors()
 
-        self.assertTrue(any("promaster-drive-capture" in error for error in errors))
+        self.assertEqual(errors, [])
 
     def test_preflight_requires_known_error_active_controller_state(self):
         for state in (None, "ERROR-WARNING", "ERROR-PASSIVE", "BUS-OFF"):
             with self.subTest(state=state):
                 with (
                     mock.patch.object(
-                        ecu_discover, "tpms_logger_active", return_value=False
-                    ),
-                    mock.patch.object(ecu_discover, "service_active", return_value=False),
-                    mock.patch.object(
-                        ecu_discover.canbus, "iface_bitrate", return_value=500000
-                    ),
-                    mock.patch.object(
-                        ecu_discover.canbus, "is_listen_only", return_value=False
-                    ),
-                    mock.patch.object(
-                        ecu_discover.canbus, "controller_state", return_value=state
+                        ecu_discover.canbus,
+                        "interface_state",
+                        return_value=ecu_discover.canbus.InterfaceState(
+                            "can0", True, True, 500000, False, state, 0, False
+                        ),
                     ),
                     mock.patch.object(
                         ecu_discover.subprocess, "run", return_value=mock.Mock(returncode=0)
@@ -353,6 +347,37 @@ class CliSafetyTests(unittest.TestCase):
                     errors = ecu_discover.preflight("can0", 500000)
 
                 self.assertTrue(any("expected ERROR-ACTIVE" in error for error in errors))
+
+    def test_preflight_rejects_fd_or_nonzero_restart_policy(self):
+        for name, fd_enabled, restart_ms, expected in (
+            ("fd", True, 0, "FD off"),
+            ("unproved", None, 0, "FD off"),
+            ("restart", False, 100, "restart-ms"),
+        ):
+            with self.subTest(name=name):
+                state = ecu_discover.canbus.InterfaceState(
+                    "can0",
+                    True,
+                    True,
+                    500000,
+                    False,
+                    "ERROR-ACTIVE",
+                    restart_ms,
+                    fd_enabled,
+                )
+                with (
+                    mock.patch.object(
+                        ecu_discover.canbus, "interface_state", return_value=state
+                    ),
+                    mock.patch.object(
+                        ecu_discover.subprocess,
+                        "run",
+                        return_value=mock.Mock(returncode=0),
+                    ),
+                ):
+                    errors = ecu_discover.preflight("can0", 500000)
+
+                self.assertTrue(any(expected in error for error in errors), errors)
 
     def test_dry_run_does_not_preflight_or_open_can(self):
         stdout = io.StringIO()
@@ -413,14 +438,7 @@ class CliSafetyTests(unittest.TestCase):
 
         with (
             mock.patch.object(ecu_discover, "preflight", return_value=[]) as preflight,
-            mock.patch.object(
-                ecu_discover.diagnostic_safety,
-                "acquire_channel_lock",
-                return_value=mock.sentinel.lock,
-            ),
-            mock.patch.object(ecu_discover.diagnostic_safety, "release_channel_lock"),
             mock.patch.object(ecu_discover, "scan_targets", side_effect=fake_scan),
-            mock.patch.object(ecu_discover.canbus, "restore_passive", return_value=True),
             mock.patch.object(ecu_discover, "report_path", return_value="/tmp/bcan-probe.json"),
             mock.patch.object(
                 ecu_discover,
@@ -595,14 +613,7 @@ class CliSafetyTests(unittest.TestCase):
 
         with (
             mock.patch.object(ecu_discover, "preflight", return_value=[]),
-            mock.patch.object(
-                ecu_discover.diagnostic_safety,
-                "acquire_channel_lock",
-                return_value=mock.sentinel.lock,
-            ),
-            mock.patch.object(ecu_discover.diagnostic_safety, "release_channel_lock"),
             mock.patch.object(ecu_discover, "scan_targets", side_effect=fake_scan),
-            mock.patch.object(ecu_discover.canbus, "restore_passive", return_value=True),
             mock.patch.object(ecu_discover, "report_path", return_value="/tmp/pcm-probe.json"),
             mock.patch.object(
                 ecu_discover, "write_report", side_effect=lambda _path, payload: report.update(payload)
@@ -717,7 +728,6 @@ class CliSafetyTests(unittest.TestCase):
         with (
             mock.patch.object(ecu_discover, "preflight", return_value=[]),
             mock.patch.object(ecu_discover, "scan_targets", side_effect=RuntimeError("fixture failure")),
-            mock.patch.object(ecu_discover.canbus, "restore_passive", return_value=True) as restore,
             mock.patch.object(ecu_discover, "report_path", return_value="/tmp/test-discovery.json"),
             mock.patch.object(ecu_discover, "write_report", side_effect=remember_report),
             contextlib.redirect_stdout(io.StringIO()),
@@ -731,7 +741,7 @@ class CliSafetyTests(unittest.TestCase):
             )
 
         self.assertEqual(result, 1)
-        restore.assert_called_once_with("can0", 500000)
+        self.ownerships[-1].release.assert_called_once_with()
         self.assertTrue(report["restored_passive"])
         self.assertEqual(report["fatal_error"], "RuntimeError: fixture failure")
         self.assertFalse(report["functional_broadcast"])
@@ -776,24 +786,22 @@ class CliSafetyTests(unittest.TestCase):
                     installed[terminating_signal](terminating_signal, None)
                     return True
 
+                ownership = mock.Mock()
+                ownership.route.channel = "can0"
+                ownership.release.side_effect = lambda: restore_with_repeated_signals(
+                    "can0", 500000
+                )
+
                 with tempfile.TemporaryDirectory() as directory:
                     path = Path(directory) / "discovery.json"
                     with (
                         mock.patch.object(ecu_discover, "preflight", return_value=[]),
                         mock.patch.object(
-                            ecu_discover.diagnostic_safety,
-                            "acquire_channel_lock",
-                            return_value=mock.sentinel.lock,
+                            ecu_discover.can_runtime_route,
+                            "acquire_armed_module_route",
+                            return_value=ownership,
                         ),
-                        mock.patch.object(
-                            ecu_discover.diagnostic_safety, "release_channel_lock"
-                        ) as release,
                         mock.patch.object(ecu_discover, "scan_targets", side_effect=interrupt_scan),
-                        mock.patch.object(
-                            ecu_discover.canbus,
-                            "restore_passive",
-                            side_effect=restore_with_repeated_signals,
-                        ) as restore,
                         mock.patch.object(ecu_discover, "report_path", return_value=str(path)),
                         mock.patch.object(ecu_discover.signal, "signal", side_effect=fake_signal),
                         contextlib.redirect_stdout(io.StringIO()),
@@ -813,8 +821,7 @@ class CliSafetyTests(unittest.TestCase):
                 self.assertTrue(payload["restored_passive"])
                 self.assertEqual(payload["request_attempts"], 1)
                 self.assertEqual(payload["responses_received"], 1)
-                restore.assert_called_once_with("can0", 500000)
-                release.assert_called_once_with(mock.sentinel.lock)
+                ownership.release.assert_called_once_with()
 
 
 if __name__ == "__main__":

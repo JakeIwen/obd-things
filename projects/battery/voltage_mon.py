@@ -1,20 +1,13 @@
 #!/usr/bin/env python3
-"""Scheduled low-battery monitor: passively read system voltage and push an ntfy alert when low.
+"""Scheduled passive battery monitor using the serial-resolved C-CAN role.
 
-This scheduler-facing monitor is passive unless every autonomous-wake gate succeeds:
-  * awake recognized buses are read without interface changes or transmission;
-  * a silent bus may be woken only while holding the exclusive can0 diagnostics lock, with no
-    same-boot external-operation inhibit and an explicit same-boot C-CAN/B-CAN topology record;
-  * the interface and passive-silence conditions are rechecked under the lock immediately before TX;
-  * it skips silent buses unless all wake gates pass, plus every unknown, wrong-rate, armed, down,
-    and BUS-OFF interface;
-  * CAN-CH/grey is never woken; it sends one grey-adapter notice and exits untouched.
-
-Acquisition delegates to a running projects/vehicle_data broker when present, otherwise to that project's
-shared guarded acquirer. Its cooperative lock excludes participating Pi tools. External tools such as
-AlfaOBD must hold an explicit campaign inhibit; controller diagnostic actions create it automatically and
-only an explicit campaign-end removes it. Physical adapter changes must invalidate/set topology through
-tools/can_operation_state.py. Missing, stale-boot, malformed, unknown, or CAN-CH topology fails closed.
+Acquisition delegates to a running ``projects/vehicle_data`` broker when
+present.  Otherwise it uses the same read-only role manager in-process.  Both
+paths resolve the installed adapter by USB serial plus controller ``dev_id``,
+hold shared logical-role and current-channel locks, require the exact passive
+classical-CAN state, and never reconfigure or transmit.  A silent/asleep bus is
+therefore an expected unavailable sample; this scheduled monitor does not wake
+vehicle modules merely to obtain a voltage reading.
 
 Alerts go to ntfy (free push, no account): edge-triggered when it first drops below WARN_V, a
 throttled re-alert while it stays low, and one 'recovered' note on the way back up. Every message
@@ -44,7 +37,8 @@ sys.path.insert(0, HERE)
 import bcan_voltage as bv            # sibling module owns CSV path/root and append helper
 from projects.vehicle_data.api import TelemetryClient
 from projects.vehicle_data.broker import DEFAULT_SOCKET
-from projects.vehicle_data.sources import VoltageAcquirer
+from projects.vehicle_data.can_interfaces import PassiveInterfaceManager
+from projects.vehicle_data.can_runtime import RoleAwareVoltageAcquirer
 
 NTFY_VOLTAGE_URL = os.environ.get("NTFY_VOLTAGE_URL", "")  # topic in ~/secrets/.bash_variables (sourced by .bashrc + cron BASH_ENV); never hardcode
 WARN_V    = 12.0                 # alert below this resting voltage (tune to taste)
@@ -63,7 +57,7 @@ def _load_state():
         with open(STATE) as f:
             return json.load(f)
     except Exception:
-        return {"low": False, "last_alert": None, "grey_connected": False}
+        return {"low": False, "last_alert": None}
 
 
 def _save_state(s):
@@ -104,9 +98,8 @@ def maybe_alert(volts, allow_send):
     _save_state(st)
 
 
-CAN_CH_STATUS = "CAN-CH confirmed: grey adapter connected"
 BROKER_SOCKET = pathlib.Path(DEFAULT_SOCKET)
-_VOLTAGE_ACQUIRER = VoltageAcquirer()
+_VOLTAGE_ACQUIRER = RoleAwareVoltageAcquirer(PassiveInterfaceManager())
 
 
 def _monitor_result(
@@ -119,23 +112,21 @@ def _monitor_result(
     quality,
     detail,
 ):
-    if bus == "can-ch":
-        return None, CAN_CH_STATUS
     if not available:
         return None, detail
+    if acquisition != "passive":
+        return None, (
+            "telemetry acquisition returned a non-passive result; "
+            "scheduled voltage monitoring withheld it"
+        )
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None, "telemetry acquisition returned an invalid voltage value"
     bus_label = {"c-can": "C-CAN", "b-can": "B-CAN"}.get(
         bus, bus or "unknown bus"
     )
-    mode = (
-        "passive"
-        if acquisition == "passive"
-        else "wake-assisted"
-    )
     return (
         value,
-        f"{detail} [{mode} {bus_label}; source={source}; "
+        f"{detail} [passive {bus_label}; source={source}; "
         f"quality={quality}]",
     )
 
@@ -154,7 +145,7 @@ def acquire():
             ).request(
                 "POST",
                 "/v1/acquisitions/battery.voltage",
-                {"mode": "wake_if_asleep"},
+                {"mode": "passive"},
             )
         except (OSError, RuntimeError, json.JSONDecodeError) as exc:
             return None, (
@@ -176,7 +167,7 @@ def acquire():
             detail=detail,
         )
 
-    result = _VOLTAGE_ACQUIRER.acquire("wake_if_asleep")
+    result = _VOLTAGE_ACQUIRER.acquire("passive")
     return _monitor_result(
         available=result.available,
         value=result.value,
@@ -188,31 +179,9 @@ def acquire():
     )
 
 
-def handle_grey_adapter(status, allow_send):
-    """Edge-trigger one notice while a live CAN-CH signature remains connected."""
-    st = _load_state()
-    if status == CAN_CH_STATUS:
-        if not st.get("grey_connected"):
-            notify(
-                "Grey adapter / CAN-CH is connected. Voltage monitor skipped CAN without "
-                "reconfiguring the interface or transmitting.",
-                allow_send,
-                title="Van CAN monitor",
-            )
-        st["grey_connected"] = True
-        _save_state(st)
-        return True
-    # Only a positively identified ordinary bus proves that grey is no longer selected.
-    if "passive C-CAN" in status or "passive B-CAN" in status:
-        if st.get("grey_connected"):
-            st["grey_connected"] = False
-            _save_state(st)
-    return False
-
-
 def have_connectivity(url=NTFY_VOLTAGE_URL, timeout=6):
-    """True if the ntfy host is reachable (DNS + TCP connect). No point waking the CAN bus (which draws
-    battery) if we can't deliver the alert anyway. Probes the actual NTFY_VOLTAGE_URL host, so a custom/self-hosted
+    """True if the ntfy host is reachable (DNS + TCP connect). No point taking a passive sample
+    if we can't deliver the alert anyway. Probes the actual NTFY_VOLTAGE_URL host, so a custom/self-hosted
     topic is tracked too."""
     try:
         u = urllib.parse.urlparse(url)
@@ -240,16 +209,13 @@ def main():
         log("NTFY_VOLTAGE_URL unset (define it in ~/secrets/.bash_variables) -- skipping notify path")
         return
 
-    # Gate on connectivity BEFORE acquire(): no point waking the bus (draws battery) if we can't alert.
+    # Gate on connectivity before opening a passive CAN observer.
     if allow_send and not have_connectivity():
-        log("no internet (ntfy host unreachable) -- skipping; not waking the bus")
+        log("no internet (ntfy host unreachable) -- skipping passive CAN read")
         return
 
     volts, status = acquire()
     bv.append_csv(bv.CSV_PATH, volts if volts is not None else "", status)
-    if handle_grey_adapter(status, allow_send):
-        log(f"{status}; battery read intentionally skipped")
-        return
     if volts is None:
         log(f"voltage read FAILED: {status}")
         sys.exit(1)

@@ -34,9 +34,9 @@ import time
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, REPO)
 
-from lib import canbus, diagnostic_safety, uds
+from lib import can_runtime_route, uds
 from lib.modules import get
-from tools.ecu_discover import preflight
+from tools.ecu_discover import prearm_conflict_errors, preflight
 from tools.identity_inventory import redact_response_vins
 
 
@@ -521,17 +521,21 @@ def main(argv=None):
     if args.session is not None and not args.confirm_session_change:
         print("ERROR: --session requires --confirm-session-change with --execute", file=sys.stderr)
         return 2
+    try:
+        ownership = can_runtime_route.acquire_armed_module_route(
+            module,
+            asserted_pair=args.pair,
+            prearm_check=prearm_conflict_errors,
+        )
+        module = ownership.route.module
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"ERROR: stable runtime route/arm failed: {exc}", file=sys.stderr)
+        return 2
     errors = preflight(module.channel, module.bitrate)
     if errors:
         for error in errors:
             print(f"ERROR: {error}", file=sys.stderr)
-        return 2
-
-    try:
-        diagnostic_lock = diagnostic_safety.acquire_channel_lock(module.channel)
-    except (OSError, RuntimeError, ValueError) as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 2
+        return 2 if ownership.release() else 1
 
     interval = 1.0 / args.rate
     last_transmit = None
@@ -704,7 +708,7 @@ def main(argv=None):
             append_fatal(f"socket close failed: {type(exc).__name__}: {exc}")
         finally:
             try:
-                restored_passive = bool(canbus.restore_passive(module.channel, module.bitrate))
+                restored_passive = ownership.release()
                 if not restored_passive:
                     append_fatal("passive restoration verification failed")
             except Exception as exc:
@@ -768,7 +772,9 @@ def main(argv=None):
                         )
 
                 try:
-                    diagnostic_safety.release_channel_lock(diagnostic_lock)
+                    # Role and channel ownership were released by the exact
+                    # passive restoration above.
+                    pass
                 except Exception as exc:
                     append_fatal(f"diagnostic lock release failed: {type(exc).__name__}: {exc}")
                 finally:

@@ -10,14 +10,15 @@ FlowControl frame.
 Interface arming, topology checks, operation inhibits, and listen-only
 restoration belong to the coordinated active-drive owner.  Every poll also
 requires an opaque, short-lived, one-use permit that independently proves the
-owner still holds the exclusive ``can0`` lock and issued the capability from a
-qualified running-RPM snapshot.
+owner still holds the exclusive resolved C-CAN ``canN`` lock and issued the
+capability from a qualified running-RPM snapshot.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import re
 from types import MappingProxyType
 import socket
 import struct
@@ -63,7 +64,6 @@ class PcmElectricalProfile:
     bus: str
     quality: str
     acquisition_class: str
-    channel: str
     bitrate: int
     addressing_mode: str
     request_id: int
@@ -120,7 +120,6 @@ _GENERATOR_FIELD_DUTY_PROFILE = PcmElectricalProfile(
     bus="c-can",
     quality="observed_alfa_scale",
     acquisition_class="physical_read_data_by_identifier",
-    channel=_PCM.channel,
     bitrate=_PCM.bitrate,
     addressing_mode=_PCM.addressing_mode,
     request_id=_PCM.txid,
@@ -140,7 +139,6 @@ _CRANKSHAFT_TORQUE_PROFILE = PcmElectricalProfile(
     bus="c-can",
     quality="observed_alfa_scale",
     acquisition_class="physical_read_data_by_identifier",
-    channel=_PCM.channel,
     bitrate=_PCM.bitrate,
     addressing_mode=_PCM.addressing_mode,
     request_id=_PCM.txid,
@@ -423,23 +421,20 @@ class PcmElectricalPoller:
     """Reusable owner-scoped transport for two reviewed PCM metrics.
 
     ``channel`` exists so a coordinated active-drive owner can pass its already
-    verified interface explicitly.  It must still equal the PCM registry
-    channel; selecting another bus fails before a socket is opened.
+    identity- and topology-verified interface explicitly. The immutable PCM
+    IDs, bus role, bitrate, requests, and response filters remain fixed.
     """
 
     def __init__(
         self,
-        channel: str = _GENERATOR_FIELD_DUTY_PROFILE.channel,
+        channel: str,
         *,
         timeout_seconds: float = 0.5,
         socket_factory: Callable[..., socket.socket] = socket.socket,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
-        if channel != _GENERATOR_FIELD_DUTY_PROFILE.channel:
-            raise ValueError(
-                "PCM electrical polling is restricted to "
-                f"{_GENERATOR_FIELD_DUTY_PROFILE.channel!r}"
-            )
+        if not isinstance(channel, str) or not re.fullmatch(r"can[0-9]+", channel):
+            raise ValueError("PCM electrical polling requires a SocketCAN canN channel")
         self.channel = channel
         self.timeout_seconds = _positive_finite_timeout(timeout_seconds)
         self._socket_factory = socket_factory

@@ -881,7 +881,7 @@ class ProvenanceTests(unittest.TestCase):
             campaign.MAX_PULL_TIMEOUT_SECONDS,
         )
 
-    def test_blocked_service_prevents_device_audit_and_directory_creation(self):
+    def test_unavailable_logical_role_prevents_device_audit_and_directory_creation(self):
         plan = campaign.CampaignPlan(
             campaign_id="blocked",
             module_key="cluster",
@@ -905,11 +905,19 @@ class ProvenanceTests(unittest.TestCase):
         )
         adb = mock.Mock()
         runner = mock.Mock()
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
-            campaign, "_service_active", side_effect=lambda _runner, name: name == "tpms-logger"
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(
+                campaign, "require_writable_mount", return_value=1234
+            ),
+            mock.patch.object(
+                campaign.can_runtime_route,
+                "acquire_passive_bus_route",
+                side_effect=RuntimeError("c-can role busy"),
+            ) as acquire,
         ):
             out = Path(directory) / "out"
-            with self.assertRaisesRegex(campaign.CampaignError, "tpms-logger is active"):
+            with self.assertRaisesRegex(campaign.CampaignError, "c-can role busy"):
                 campaign.run_campaign(
                     plan,
                     adb,
@@ -920,6 +928,7 @@ class ProvenanceTests(unittest.TestCase):
                 )
             self.assertFalse(out.exists())
             adb.resolve_serial.assert_not_called()
+            acquire.assert_called_once_with("c-can")
 
     def test_service_query_error_is_not_treated_as_inactive(self):
         runner = mock.Mock()

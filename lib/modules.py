@@ -5,12 +5,14 @@ passing the module key. For a live view, make a thin wrapper that passes this en
 table to live_data/live_data.py; do not copy radar-specific follow logic. Per-target work and
 docs live under projects/<name>/. Broadcast frames + wake behavior per bus: docs/bus-map.md.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import re
 
 
 NORMAL_29BITS = "normal_29bits"
 NORMAL_11BITS = "normal_11bits"
 ADDRESSING_MODES = frozenset((NORMAL_29BITS, NORMAL_11BITS))
+SOCKETCAN_CHANNEL_RE = re.compile(r"can[0-9]+\Z")
 
 
 @dataclass(frozen=True)
@@ -19,7 +21,11 @@ class Module:
     name: str
     txid: int           # tester -> ECU CAN id
     rxid: int           # ECU -> tester CAN id
-    channel: str = "can0"
+    # Runtime SocketCAN names are intentionally not persisted in the registry.
+    # Linux assigns canN by enumeration order, while ``bus`` is the stable
+    # physical role.  Live callers must bind a freshly serial/dev_id-resolved
+    # channel with ``bind_channel`` before opening a socket.
+    channel: str | None = None
     bus: str = "c-can"  # physical-bus key; bitrate is explicit below; see docs/bus-map.md
     note: str = ""      # operational quirk a caller should know (power gating, ignition state, etc.)
     bitrate: int = 500000
@@ -39,6 +45,25 @@ class Module:
             raise ValueError("txid and rxid must be different for physical ISO-TP addressing")
         if not isinstance(self.bitrate, int) or isinstance(self.bitrate, bool) or self.bitrate <= 0:
             raise ValueError("bitrate must be a positive integer")
+        if self.channel is not None and (
+            not isinstance(self.channel, str)
+            or SOCKETCAN_CHANNEL_RE.fullmatch(self.channel) is None
+        ):
+            raise ValueError("channel must be an explicit canN name or None")
+
+
+def bind_channel(module: Module, channel: str) -> Module:
+    """Return ``module`` bound to one already-resolved SocketCAN netdev.
+
+    This helper deliberately does no discovery.  Use the stable USB role
+    resolver for live work, then bind only the resulting exact ``canN`` name.
+    """
+
+    if not isinstance(module, Module):
+        raise TypeError("module must be a Module")
+    if not isinstance(channel, str) or SOCKETCAN_CHANNEL_RE.fullmatch(channel) is None:
+        raise ValueError(f"invalid SocketCAN channel {channel!r}; expected canN")
+    return replace(module, channel=channel)
 
 
 MODULES = {

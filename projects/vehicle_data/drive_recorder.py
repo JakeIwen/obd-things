@@ -3,7 +3,7 @@
 
 This daemon never configures SocketCAN, acquires a diagnostic lock, or sends a
 CAN frame.  It waits until the telemetry broker proves that its reviewed
-active-drive helper owns ``can0``, then attaches an independent receive socket
+active-drive helper owns the serial-resolved C-CAN channel, then attaches an independent receive socket
 through ``candump`` and writes loss-accounted zstd chunks to the required
 external mount.
 
@@ -23,6 +23,7 @@ import datetime as dt
 import json
 import math
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -36,10 +37,10 @@ if str(REPO) not in sys.path:
 
 from projects.vehicle_data.api import TelemetryClient  # noqa: E402
 from projects.vehicle_data.broker import DEFAULT_SOCKET  # noqa: E402
+from lib.can_role_resolver import SysfsCanRoleResolver  # noqa: E402
 from tools import passive_drive_capture as capture  # noqa: E402
 
 
-CHANNEL = "can0"
 BITRATE = 500_000
 IGNITION_ID = 0x2EF
 PAIR = "6/14"
@@ -55,7 +56,7 @@ DEFAULT_REQUIRED_MOUNT = Path("/mnt/EXFAT512")
 DEFAULT_STATE_PATH = REPO / "tmp" / "vehicle_data" / "drive-recorder-state.json"
 DEFAULT_CONDITIONS = (
     "ordinary driving; broker-owned fixed PCM 01A1/06DA and RF Hub polling; "
-    "receive-only PCAN companion; no external diagnostic client"
+    "serial-resolved receive-only C-CAN companion; no external diagnostic client"
 )
 WAIT_SECONDS = 1.0
 STATUS_TIMEOUT_SECONDS = 2.0
@@ -91,7 +92,9 @@ def read_broker_status(
     return payload
 
 
-def broker_armed_ready(status: object) -> bool:
+def broker_armed_ready(
+    status: object, *, expected_channel: str | None = None
+) -> bool:
     """Whether one status object proves the reviewed broker owns active C-CAN."""
     if not isinstance(status, dict):
         return False
@@ -106,6 +109,13 @@ def broker_armed_ready(status: object) -> bool:
         return False
     topology = interface.get("topology")
     inhibits = interface.get("active_inhibits")
+    channel = interface.get("channel")
+    role_snapshot = interface.get("role_interfaces")
+    roles = role_snapshot.get("roles") if isinstance(role_snapshot, dict) else None
+    ccan = roles.get("c-can") if isinstance(roles, dict) else None
+    expected = ccan.get("expected") if isinstance(ccan, dict) else None
+    usb_serial = expected.get("usb_serial") if isinstance(expected, dict) else None
+    dev_id = expected.get("dev_id") if isinstance(expected, dict) else None
     return bool(
         active.get("enabled") is True
         and active.get("state") == "armed_diagnostic"
@@ -115,6 +125,16 @@ def broker_armed_ready(status: object) -> bool:
         and isinstance(active.get("helper_pid"), int)
         and not isinstance(active.get("helper_pid"), bool)
         and owner.get("kind") == "broker_active_drive"
+        and isinstance(channel, str)
+        and re.fullmatch(r"can[0-9]+", channel)
+        and (expected_channel is None or channel == expected_channel)
+        and isinstance(ccan, dict)
+        and ccan.get("channel") == channel
+        and isinstance(usb_serial, str)
+        and bool(usb_serial)
+        and isinstance(dev_id, int)
+        and not isinstance(dev_id, bool)
+        and dev_id >= 0
         and interface.get("adapter_present") is True
         and interface.get("up") is True
         and interface.get("bitrate") == BITRATE
@@ -130,13 +150,66 @@ def broker_armed_ready(status: object) -> bool:
     )
 
 
+def broker_c_can_route(
+    status: dict[str, object],
+) -> tuple[str, str, int]:
+    """Return the broker-proven channel and immutable USB identity."""
+    if not broker_armed_ready(status):
+        raise BrokerOwnershipLost("broker does not prove an armed C-CAN route")
+    interface = status["interface"]
+    assert isinstance(interface, dict)
+    channel = interface["channel"]
+    assert isinstance(channel, str)
+    role_snapshot = interface.get("role_interfaces")
+    roles = role_snapshot.get("roles") if isinstance(role_snapshot, dict) else None
+    ccan = roles.get("c-can") if isinstance(roles, dict) else None
+    expected = ccan.get("expected") if isinstance(ccan, dict) else None
+    serial = expected.get("usb_serial") if isinstance(expected, dict) else None
+    dev_id = expected.get("dev_id") if isinstance(expected, dict) else None
+    if (
+        not isinstance(serial, str)
+        or not serial
+        or not isinstance(dev_id, int)
+        or isinstance(dev_id, bool)
+        or dev_id < 0
+    ):
+        raise BrokerOwnershipLost("broker C-CAN USB identity is invalid")
+    return channel, serial, dev_id
+
+
 def query_interface(
     *,
+    channel: str,
+    expected_usb_serial: str | None = None,
+    expected_dev_id: int | None = None,
+    role_resolver: SysfsCanRoleResolver | None = None,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
 ) -> capture.InterfaceState:
+    if not isinstance(channel, str) or not re.fullmatch(r"can[0-9]+", channel):
+        raise DriveRecorderError("C-CAN route is not a resolved kernel canN")
+    if (expected_usb_serial is None) != (expected_dev_id is None):
+        raise DriveRecorderError("C-CAN USB identity is incomplete")
+    if expected_usb_serial is not None:
+        resolver = role_resolver or SysfsCanRoleResolver()
+        inventory, _issues = resolver.inventory(drivers=("gs_usb",))
+        matches = [
+            item
+            for item in inventory
+            if item.usb_vid == "1d50"
+            and item.usb_pid == "606f"
+            and item.usb_serial == expected_usb_serial
+            and item.dev_id == expected_dev_id
+        ]
+        if not (
+            len(matches) == 1
+            and matches[0].channel == channel
+        ):
+            raise DriveRecorderError(
+                f"{channel} no longer matches the broker-proven C-CAN USB identity"
+            )
     try:
         result = runner(
-            ["ip", "-details", "-statistics", "link", "show", CHANNEL],
+            ["ip", "-details", "-statistics", "link", "show", channel],
             capture_output=True,
             text=True,
             check=False,
@@ -144,11 +217,11 @@ def query_interface(
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise DriveRecorderError(
-            f"cannot inspect {CHANNEL}: {type(exc).__name__}: {exc}"
+            f"cannot inspect {channel}: {type(exc).__name__}: {exc}"
         ) from exc
     if result.returncode != 0:
-        raise DriveRecorderError(f"{CHANNEL} is missing or unreadable")
-    state = capture.parse_interface_state(result.stdout)
+        raise DriveRecorderError(f"{channel} is missing or unreadable")
+    state = capture.parse_interface_state(result.stdout, channel=channel)
     errors = []
     if not state.up:
         errors.append("interface is not UP")
@@ -162,7 +235,7 @@ def query_interface(
         errors.append("RX dropped/missed counters are unavailable")
     if errors:
         raise DriveRecorderError(
-            f"{CHANNEL} receive gate failed: " + "; ".join(errors)
+            f"{channel} receive gate failed: " + "; ".join(errors)
         )
     return state
 
@@ -174,10 +247,22 @@ class CoordinatedSafetyCheck:
         self,
         client: TelemetryClient,
         *,
-        interface_reader: Callable[[], capture.InterfaceState] = query_interface,
+        channel: str,
+        expected_usb_serial: str | None = None,
+        expected_dev_id: int | None = None,
+        interface_reader: Callable[[], capture.InterfaceState] | None = None,
     ) -> None:
         self.client = client
-        self.interface_reader = interface_reader
+        self.channel = channel
+        self.expected_usb_serial = expected_usb_serial
+        self.expected_dev_id = expected_dev_id
+        self.interface_reader = interface_reader or (
+            lambda: query_interface(
+                channel=self.channel,
+                expected_usb_serial=self.expected_usb_serial,
+                expected_dev_id=self.expected_dev_id,
+            )
+        )
 
     def __call__(self) -> capture.InterfaceState:
         interface = self.interface_reader()
@@ -190,7 +275,7 @@ class CoordinatedSafetyCheck:
                 "armed interface cannot be attributed to the broker: "
                 f"{type(exc).__name__}: {exc}"
             ) from exc
-        if not broker_armed_ready(status):
+        if not broker_armed_ready(status, expected_channel=self.channel):
             raise DriveRecorderError(
                 "armed interface is not owned by the reviewed broker active-drive interval"
             )
@@ -215,7 +300,9 @@ class InitialArmedSafetyCheck(CoordinatedSafetyCheck):
                 "broker status disappeared during the initial armed gate: "
                 f"{type(exc).__name__}: {exc}"
             ) from exc
-        if interface.listen_only or not broker_armed_ready(status):
+        if interface.listen_only or not broker_armed_ready(
+            status, expected_channel=self.channel
+        ):
             raise BrokerOwnershipLost(
                 "broker-owned armed mode disappeared during recorder startup"
             )
@@ -290,11 +377,17 @@ def record_one_interval(
         raise BrokerOwnershipLost(
             "broker ownership disappeared before raw capture setup"
         )
+    channel, usb_serial, dev_id = broker_c_can_route(initial_status)
     mount_device = capture.require_writable_mount(
         args.out_root,
         args.require_mount,
     )
-    initial_safety_check = InitialArmedSafetyCheck(client)
+    initial_safety_check = InitialArmedSafetyCheck(
+        client,
+        channel=channel,
+        expected_usb_serial=usb_serial,
+        expected_dev_id=dev_id,
+    )
     interface, free = validate_dependencies(
         args.out_root,
         policy,
@@ -305,7 +398,9 @@ def record_one_interval(
         args.require_mount,
         expected_device=mount_device,
     )
-    if not broker_armed_ready(read_broker_status(client)):
+    if not broker_armed_ready(
+        read_broker_status(client), expected_channel=channel
+    ):
         raise BrokerOwnershipLost(
             "broker ownership disappeared during raw capture preflight"
         )
@@ -323,7 +418,9 @@ def record_one_interval(
         "campaign": run_id,
         "conditions": args.conditions.strip(),
         "interaction": "receive_only_broker_armed_companion",
-        "channel": CHANNEL,
+        "channel": channel,
+        "usb_serial": usb_serial,
+        "dev_id": dev_id,
         "bitrate": BITRATE,
         "initial_interface": dataclasses.asdict(interface),
         "initial_broker_status": initial_status,
@@ -356,7 +453,12 @@ def record_one_interval(
             "listen_only" if interface.listen_only else "armed_diagnostic"
         ),
     )
-    recorder_safety_check = InitialArmedSafetyCheck(client)
+    recorder_safety_check = InitialArmedSafetyCheck(
+        client,
+        channel=channel,
+        expected_usb_serial=usb_serial,
+        expected_dev_id=dev_id,
+    )
     recorder = capture.Recorder(
         run_dir,
         selected_ids,
@@ -376,6 +478,7 @@ def record_one_interval(
         zstd=shutil.which("zstd") or "zstd",
         candump=shutil.which("candump") or "candump",
         candump_extra_args=("-D",),
+        channel=channel,
     )
     try:
         with capture.campaign_file_lock(run_dir):
@@ -551,7 +654,7 @@ def plan(args: argparse.Namespace, policy: capture.DiskPolicy) -> dict[str, obje
         "mode": "execute" if args.execute else "plan_only",
         "interaction": "receive_only_broker_armed_companion",
         "trigger": "broker active_drive state=armed_diagnostic",
-        "channel": CHANNEL,
+        "channel": "broker-resolved c-can",
         "bitrate": BITRATE,
         "output_root": str(args.out_root),
         "required_mount": str(args.require_mount),

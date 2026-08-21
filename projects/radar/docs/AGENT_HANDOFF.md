@@ -5,6 +5,18 @@ the **RESEARCH-FIRST** working method) and the **authoritative OEM docs** in [`d
 those over our inference). Background: `radar_acc_handoff.md`; raw data in `../findings/`;
 AlfaOBD write-up `radar_acc_alfaobd_bugreport.md`.
 
+> **Operational topology warning (2026-08-20):** the fault result, UDS evidence,
+> and ruled-out list below remain valid, but every PCAN, `can0`, former
+> single-adapter bring-up command, cable-moving step, and single-adapter service
+> instruction documents the completed
+> 2026-06/07 legacy campaign. The permanent installation now resolves C-CAN as
+> Board A CAN1 by USB serial/`dev_id`; Linux `canN` names are ephemeral. The only
+> maintained radar executable is `radar_acc_live.py`; its gated direct mode uses
+> the shared scoped role owner, while `--follow` is bus-free. The old logger and
+> actuation executables were deleted. Do not translate their commands to a
+> current netdev or rerun the already successful alignment. Inspect actual services
+> and cron read-only before relying on the historical teardown inventory.
+
 ---
 
 ## ✅ RESOLVED (2026-06-27) — DIY Service Drive Alignment fixed it
@@ -30,10 +42,11 @@ a **limited capture window**; −1.26° was **beyond** it (proven: a 2-hour driv
 **gate was physical**: re-seat/level the mount to bring the deviation back inside the window, then run the
 SDA (which we did). **Van is the owner's home/office → no shop visits**; everything was in-place DIY.
 
-Most diagnostic tools are non-mutating but still transmit and may change session state. The two
-dedicated radar actuators are `radar_acc_sda_drive.py` and the older
-`radar_acc_align_0251.py`; generic gated `tools/uds_send.py` can also send an explicitly authorized
-mutation or actuation payload.
+Most diagnostic tools are non-mutating but still transmit and may change
+session state. The two former dedicated radar actuators were
+`radar_acc_sda_drive.py` and `radar_acc_align_0251.py`; both were deleted after
+the repair. Generic gated `tools/uds_send.py` can still send an explicitly
+authorized mutation or actuation payload.
 
 ---
 
@@ -41,7 +54,8 @@ mutation or actuation payload.
 1. **Static-mirror alignment** (the 3-position +2°/0°/−2° mirror flow). **WRONG method for this van** — it
    came from a Giulia doc. The Promaster uses the **dynamic SDA**. Running `0x0251` with a parked mirror
    does **nothing** (stays "RUNNING", `0845` unchanged, DTC stays). The mirror prompts still in
-   `radar_acc_align_0251.py` are **history — ignore them**; use `radar_acc_sda_drive.py` instead.
+   `radar_acc_align_0251.py` are **history — ignore them**. The dynamic SDA
+   executable that ultimately fixed the van was also retired after completion.
 2. **OBD-II PIDs (Mode 01) for vehicle data.** Functional `0x7DF` + physical `0x7E0`, 11- and 29-bit, **all
    NO RESPONSE** behind the SGW bypass (we're on the internal bus, not the gateway's OBD path). Vehicle
    **speed = radar DID `0x1002`** (km/h, 1 byte) — already wired into the logger. Don't re-probe OBD.
@@ -110,7 +124,12 @@ seed/key oracle, not the C1418-78 fix.
 
 ---
 
-## Fix path (priority order — van = home, NO shop; all in-place DIY)
+## Historical fix path — completed; do not execute again for this resolved fault
+
+The numbered sequence below records the campaign that produced the repair. Its
+cron, marker, and active-CAN commands are retired and are not ported operating
+instructions for the permanent adapters.
+
 1. **Physically re-seat / correct the mount — THE GATE.** (FCA STAR S2123000064, `docs/oem/`.) Seat the
    module fully + **level** in its bracket; pull it and check for **witness/rub marks** where the aluminum
    bumper bar contacts it (bar too high → loosen, slide bumper **DOWN**, retighten bottom-first). Use a
@@ -150,9 +169,11 @@ seed/key oracle, not the C1418-78 fix.
    until it COMMITS (progress→100% / DTC `0x8F`→`0x0E`, plays SUCCESS chime) or progress stalls 10 min /
    the routine resets (TIMEOUT chime). Took ~17 min of steady driving. **Pause the cron auto-logger first**
    (its per-minute `10 03` resets the routine). If START returns `7F..33` (security) → #2b.
-2b. **If it stalls on security (`7F..33`): sniff AlfaOBD (no dealer).** PCAN **listen-only** (`./bringup.sh`)
-   while AlfaOBD talks to the radar (even its wrong `0250` attempt); capture the `27` seed→key (per-ECU-family;
-   almost certainly the same unlock `0251` needs), replicate before `31 01 0251`. Also offline-computable (DiagCode).
+2b. **Historical contingency, never needed:** if it had stalled on security
+   (`7F..33`), the plan was to passively record AlfaOBD and capture the `27`
+   seed→key. Any future trace must use a reviewed role-aware passive recorder;
+   the old single-PCAN command is removed. Do not revisit this for the resolved
+   fault.
 3. **Confirm Promaster geometry** — the TSB is FCA-generic (car-platform photos); verify the RU-van's
    bracket/bumper against service info "08 - Electrical / 8E - ECMs / MODULE, ACC / Removal and Installation".
 4. **Tooling fallback (last resort, still IN-PLACE):** aftermarket **Autel/Launch + AutoAuth** (~$50/yr/brand)
@@ -162,7 +183,9 @@ seed/key oracle, not the C1418-78 fix.
 ---
 
 ## VERIFIED — trust these, do not re-test
-- **Bus:** HS-CAN / C-CAN, **500 kbit/s**, OBD pins 6/14. (Body B-CAN = 125k via `bringup.sh --bcan`.)
+- **Bus:** HS-CAN / C-CAN, **500 kbit/s**, OBD pins 6/14. Body B-CAN is 125 kbit/s on pins 3/11.
+  Current interfaces are the permanent serial-resolved roles in `docs/bus-map.md`; the old
+  single-PCAN bring-up method is retired and removed.
 - **Radar addressing:** UDS/ISO-TP, **29-bit normal-fixed**. TX `0x18DA2AF1`, RX `0x18DAF12A` (phys 0x2A, tester 0xF1).
 - **LINK PATH — everything goes through a physical SGW BYPASS.** A 2018+ FCA Security Gateway sits between
   the OBD port and the internal buses; this van has an **ECRI-style SGW-bypass cable** that taps the
@@ -191,9 +214,13 @@ seed/key oracle, not the C1418-78 fix.
 
 ---
 
-## Run it (commands)
+## Non-executable legacy-PCAN command record
+
+The block below is provenance for the completed campaign. Its bring-up command
+no longer exists and none of these live invocations is a current runbook.
+
 ```bash
-./bringup.sh --tx                              # can0 @500k ARMED; ignition ON
+./bringup.sh --tx                              # HISTORICAL PEAK-only can0 arm
 python3 projects/radar/radar_acc_baseline.py   # active non-mutating baseline + DTC reads
 python3 projects/radar/radar_acc_live.py       # dry-run plan only; prints every live gate
 python3 projects/radar/radar_acc_live.py --follow [CSV]  # bus-free view of an existing CSV
@@ -201,33 +228,37 @@ python3 projects/radar/radar_acc_drive_log.py  # active non-mutating UDS drive l
 python3 projects/radar/radar_acc_sda_drive.py --arm      # ** ACTUATION ** start 0x0251
 python3 tools/uds_send.py radar_acc 22 F1 91   # dry-run plan; prints exact live gates
 ```
-Architecture: generic platform at repo root (`lib/`, `tools/`, `live_data/live_data.py`, `bringup.sh`);
+Architecture at the time: generic platform at repo root (`lib/`, `tools/`,
+`live_data/live_data.py`, plus the now-removed PEAK bring-up script);
 radar-specific work here under `projects/radar/`.
 
-## Gotchas
-- **`listen-only` is sticky** — `bringup.sh` is **passive by default**; UDS tools need `--tx`. Symptom if wrong: RX fine, all TX dropped.
+## Historical adapter gotchas
+- **`listen-only` was sticky** — the removed PEAK script defaulted passive and required an explicit transmit arm. Symptom when wrong was RX fine, all TX dropped.
 - **USB brownout** on a shared hub (`Rx urb aborted -32`) — keep PCAN on the **powered hub**; scanners auto-recover.
 - **Ignition auto-powers-down**; asleep = bus silent but the radar still ACKs direct reads. Engine running = ~14 V.
 - `0x0251` session times out (~5 s) when idle, and **`10 03` re-entry resets the routine** — hold with `3E`.
 
-## ⚠ TEARDOWN — temporary rig on the Pi (NOT in git; remove when done)
-1. **Cron auto drive-logger** (`crontab -l` → `projects/radar/auto_drive_logger.py` every minute). Bus-aware:
-   operates only on C-CAN 500k, **auto-arms** to log, **skips when can0 is at 125k B-CAN**. Logs each drive to
-   `tmp/radar/radar_acc_drive_*.csv`. **Remove via `crontab -e` once the radar is fixed/abandoned.**
-2. `tmp/CAPTURE_RAW` and `tmp/HUNT_DIDS` markers — **retired**; `did_hunt_log.py` + raw-burst code remain dormant
-   (only fire if a marker is re-created). Speed (`0x1002`) is wired into the normal logger.
-3. `tmp/CHIME` marker — while present, the cron logger arms the **two-tier chime** (SUCCESS = C1418-78
-   clears; SETTLED = `elev_0845` plateaus while driving — see Fix path #1b) for mount-verification drives.
-   **`rm tmp/CHIME`** when done so normal commutes don't chime.
+## ⚠ Historical teardown inventory — inspect, do not assume it is live
+1. **Historical cron auto drive-logger** (`crontab -l` formerly showed
+   `projects/radar/auto_drive_logger.py` every minute). It auto-armed a legacy
+   PCAN `can0` and skipped the old B-CAN cable position. This is incompatible
+   with the permanent role map. Inspect current cron read-only; do not edit it
+   without explicit owner authorization.
+2. `tmp/CAPTURE_RAW` and `tmp/HUNT_DIDS` markers — **retired**; their former
+   DID-hunt/raw-burst executables were deleted, so recreating a marker has no
+   supported effect.
+3. `tmp/CHIME` marker — **retired** with the deleted cron logger. It formerly
+   armed the two-tier SUCCESS/SETTLED chime described in Fix path #1b; creating
+   that marker now has no supported effect.
 
 ## Safety
 Forward-collision radar. `22`/`19`/`31 03` are non-mutating diagnostic requests, not passive capture.
-`radar_acc_align_0251.py` and `radar_acc_sda_drive.py` send `31 01`; generic gated `tools/uds_send.py`
+The deleted `radar_acc_align_0251.py` and `radar_acc_sda_drive.py` sent `31 01`; generic gated `tools/uds_send.py`
 can send other authorized payloads. A mis-aimed radar can cause phantom braking or missed detection.
 Actuation is owner-consent-only, on your own vehicle. The former active DTC is resolved and ACC/FCW is
 functional, so never assume the radar is inert. Legal/liability terms: repo-root README "Safety & liability".
 
-## Environment
+## Historical campaign environment
 Raspberry Pi, `/home/pi/dev/obd-things`. `can-utils` (apt); `python-can`, `can-isotp` (pip --break-system-packages).
 PCAN-USB on a powered hub → **SGW-bypass cable** → vehicle internal C-CAN; `can0` via in-kernel `peak_usb`.
 Van has **Starlink** (internet available in-vehicle). The whole link depends on the SGW bypass (see VERIFIED).

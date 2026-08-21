@@ -73,8 +73,8 @@ class CompareTests(unittest.TestCase):
             can_capture_compare.compare_summaries(empty, empty, rate_factor=1)
         duplicate = dict(empty)
         duplicate["ids"] = [
-            {"can_id": 0x100, "id_bits": 11, "count": 1},
-            {"can_id": 0x100, "id_bits": 11, "count": 1},
+            {"interface": "can0", "can_id": 0x100, "id_bits": 11, "count": 1},
+            {"interface": "can0", "can_id": 0x100, "id_bits": 11, "count": 1},
         ]
         with self.assertRaisesRegex(ValueError, "repeats"):
             can_capture_compare.compare_summaries(duplicate, empty)
@@ -107,7 +107,7 @@ class CompareTests(unittest.TestCase):
 
         comparison = can_capture_compare.compare_summaries(baseline, current)
 
-        self.assertEqual(comparison["schema_version"], 2)
+        self.assertEqual(comparison["schema_version"], 3)
         self.assertEqual(len(comparison["constant_value_change_candidates"]), 1)
         changed = comparison["constant_value_change_candidates"][0]
         self.assertEqual(changed["constant_value_change_byte_mask"], 0b10)
@@ -131,6 +131,7 @@ class CompareTests(unittest.TestCase):
             report["schema_version"] = 1
             report.pop("payload_statistics_warning", None)
             for row in report["ids"]:
+                row.pop("interface")
                 row.pop("byte_minimums", None)
                 row.pop("byte_maximums", None)
                 row.pop("byte_presence_counts", None)
@@ -141,6 +142,34 @@ class CompareTests(unittest.TestCase):
 
         self.assertEqual(comparison["constant_value_change_candidates"], [])
         self.assertEqual(comparison["baseline"]["summary_schema_version"], 1)
+
+    def test_same_numeric_id_on_different_interfaces_is_not_common(self):
+        baseline = summary(
+            ["(0.0) can0 123#01\n", "(1.0) can0 123#02\n"],
+            "c-can.log",
+        )
+        current = summary(
+            ["(0.0) can1 123#A0\n", "(1.0) can1 123#A1\n"],
+            "b-can.log",
+        )
+
+        comparison = can_capture_compare.compare_summaries(baseline, current)
+
+        self.assertEqual(comparison["common_ids"], [])
+        self.assertEqual(comparison["missing_ids"][0]["interface"], "can0")
+        self.assertEqual(comparison["new_ids"][0]["interface"], "can1")
+
+    def test_legacy_multi_interface_summary_is_rejected_as_ambiguous(self):
+        legacy = summary(
+            ["(0.0) can0 123#01\n", "(1.0) can1 124#02\n"],
+            "mixed.log",
+        )
+        legacy["schema_version"] = 2
+        for row in legacy["ids"]:
+            row.pop("interface")
+
+        with self.assertRaisesRegex(ValueError, "ambiguous legacy multi-interface"):
+            can_capture_compare.compare_summaries(legacy, legacy)
 
 
 class CliTests(unittest.TestCase):

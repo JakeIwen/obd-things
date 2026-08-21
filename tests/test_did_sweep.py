@@ -4,9 +4,11 @@ import io
 import json
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+from lib.modules import bind_channel
 from tools import did_sweep
 
 
@@ -108,6 +110,26 @@ class DidResponseTests(unittest.TestCase):
 
 
 class DidCliSafetyTests(unittest.TestCase):
+    def setUp(self):
+        self.ownerships = []
+
+        def acquire_route(module, **_kwargs):
+            ownership = mock.Mock()
+            ownership.route = SimpleNamespace(
+                module=bind_channel(module, "can0"), channel="can0"
+            )
+            ownership.release.return_value = True
+            self.ownerships.append(ownership)
+            return ownership
+
+        acquire = mock.patch.object(
+            did_sweep.can_runtime_route,
+            "acquire_armed_module_route",
+            side_effect=acquire_route,
+        )
+        acquire.start()
+        self.addCleanup(acquire.stop)
+
     def test_dry_run_never_preflights_opens_can_or_writes(self):
         with (
             mock.patch.object(did_sweep, "preflight") as preflight,
@@ -222,14 +244,6 @@ class DidCliSafetyTests(unittest.TestCase):
             with (
                 mock.patch.object(did_sweep, "preflight", return_value=[]),
                 mock.patch.object(
-                    did_sweep.diagnostic_safety,
-                    "acquire_channel_lock",
-                    return_value=mock.sentinel.lock,
-                ),
-                mock.patch.object(
-                    did_sweep.diagnostic_safety, "release_channel_lock"
-                ) as release,
-                mock.patch.object(
                     did_sweep, "output_paths", return_value=(str(summary), str(results))
                 ),
                 mock.patch.object(
@@ -239,7 +253,6 @@ class DidCliSafetyTests(unittest.TestCase):
                 mock.patch.object(did_sweep.uds, "request", side_effect=respond),
                 mock.patch.object(did_sweep.time, "sleep"),
                 mock.patch.object(did_sweep, "TESTER_PRESENT_INTERVAL_S", 0.0),
-                mock.patch.object(did_sweep.canbus, "restore_passive", return_value=True),
                 contextlib.redirect_stdout(io.StringIO()),
                 contextlib.redirect_stderr(io.StringIO()),
             ):
@@ -272,7 +285,7 @@ class DidCliSafetyTests(unittest.TestCase):
         self.assertIn("no unverified 3E", report["session_keepalive_policy"])
         self.assertEqual(report["request_attempts"]["tester_present"], 0)
         self.assertEqual(report["request_attempts"]["did_reads"], 2)
-        release.assert_called_once_with(mock.sentinel.lock)
+        self.ownerships[-1].release.assert_called_once_with()
 
     def test_explicit_session_refuses_rate_below_keepalive_floor(self):
         with (
@@ -311,19 +324,10 @@ class DidCliSafetyTests(unittest.TestCase):
             results = root / "results.jsonl"
             with (
                 mock.patch.object(did_sweep, "preflight", return_value=[]),
-                mock.patch.object(
-                    did_sweep.diagnostic_safety,
-                    "acquire_channel_lock",
-                    return_value=mock.sentinel.lock,
-                ),
-                mock.patch.object(
-                    did_sweep.diagnostic_safety, "release_channel_lock"
-                ) as release,
                 mock.patch.object(did_sweep, "output_paths", return_value=(str(summary), str(results))),
                 mock.patch.object(did_sweep.uds, "open_module_socket", return_value=sock),
                 mock.patch.object(did_sweep.uds, "drain"),
                 mock.patch.object(did_sweep.uds, "request", side_effect=OSError("adapter gone")),
-                mock.patch.object(did_sweep.canbus, "restore_passive", return_value=True) as restore,
                 contextlib.redirect_stdout(io.StringIO()),
                 contextlib.redirect_stderr(io.StringIO()),
             ):
@@ -335,14 +339,13 @@ class DidCliSafetyTests(unittest.TestCase):
                 )
 
             self.assertEqual(result, 1)
-            restore.assert_called_once_with("can0", 500000)
+            self.ownerships[-1].release.assert_called_once_with()
             payload = json.loads(summary.read_text())
             self.assertEqual(payload["status"], "failed")
             self.assertIn("adapter gone", payload["fatal_error"])
             self.assertEqual(payload["request_attempts"]["did_reads"], 1)
             self.assertEqual(payload["responses_received"]["did_reads"], 0)
             self.assertNotIn("did_reads", payload["transmit_counts"])
-            release.assert_called_once_with(mock.sentinel.lock)
 
     def test_failed_result_write_is_not_counted_as_written(self):
         real_open = open
@@ -365,14 +368,6 @@ class DidCliSafetyTests(unittest.TestCase):
             with (
                 mock.patch.object(did_sweep, "preflight", return_value=[]),
                 mock.patch.object(
-                    did_sweep.diagnostic_safety,
-                    "acquire_channel_lock",
-                    return_value=mock.sentinel.lock,
-                ),
-                mock.patch.object(
-                    did_sweep.diagnostic_safety, "release_channel_lock"
-                ) as release,
-                mock.patch.object(
                     did_sweep, "output_paths", return_value=(str(summary), str(results))
                 ),
                 mock.patch.object(did_sweep.uds, "open_module_socket", return_value=sock),
@@ -382,7 +377,6 @@ class DidCliSafetyTests(unittest.TestCase):
                     "request",
                     return_value=(bytes.fromhex("62 08 00 01"), "POSITIVE"),
                 ),
-                mock.patch.object(did_sweep.canbus, "restore_passive", return_value=True),
                 mock.patch("builtins.open", side_effect=selective_open),
                 contextlib.redirect_stdout(io.StringIO()),
                 contextlib.redirect_stderr(io.StringIO()),
@@ -400,7 +394,7 @@ class DidCliSafetyTests(unittest.TestCase):
         self.assertEqual(payload["request_attempts"]["did_reads"], 1)
         self.assertEqual(payload["results_written"], 0)
         self.assertIn("results write fixture", payload["fatal_error"])
-        release.assert_called_once_with(mock.sentinel.lock)
+        self.ownerships[-1].release.assert_called_once_with()
 
     def test_initial_summary_write_failure_still_restores_releases_and_publishes_failure(self):
         original_atomic_json = did_sweep.atomic_json
@@ -420,21 +414,10 @@ class DidCliSafetyTests(unittest.TestCase):
             with (
                 mock.patch.object(did_sweep, "preflight", return_value=[]),
                 mock.patch.object(
-                    did_sweep.diagnostic_safety,
-                    "acquire_channel_lock",
-                    return_value=mock.sentinel.lock,
-                ),
-                mock.patch.object(
-                    did_sweep.diagnostic_safety, "release_channel_lock"
-                ) as release,
-                mock.patch.object(
                     did_sweep, "output_paths", return_value=(str(summary), str(results))
                 ),
                 mock.patch.object(did_sweep, "atomic_json", side_effect=fail_first_write),
                 mock.patch.object(did_sweep.uds, "open_module_socket") as open_socket,
-                mock.patch.object(
-                    did_sweep.canbus, "restore_passive", return_value=True
-                ) as restore,
                 contextlib.redirect_stdout(io.StringIO()),
                 contextlib.redirect_stderr(io.StringIO()),
             ):
@@ -452,8 +435,7 @@ class DidCliSafetyTests(unittest.TestCase):
         self.assertTrue(payload["restored_passive"])
         self.assertEqual(payload["status"], "failed")
         open_socket.assert_not_called()
-        restore.assert_called_once_with("can0", 500000)
-        release.assert_called_once_with(mock.sentinel.lock)
+        self.ownerships[-1].release.assert_called_once_with()
 
     def test_sigterm_and_repeated_sigterm_cannot_interrupt_cleanup_or_partial_summary(self):
         installed = {}
@@ -471,10 +453,17 @@ class DidCliSafetyTests(unittest.TestCase):
         def interrupt_query(*_args, **_kwargs):
             installed[did_sweep.signal.SIGTERM](did_sweep.signal.SIGTERM, None)
 
-        def restore_with_repeated_term(_channel, _bitrate):
+        def release_with_repeated_term():
             installed[did_sweep.signal.SIGTERM](did_sweep.signal.SIGTERM, None)
             installed[did_sweep.signal.SIGTERM](did_sweep.signal.SIGTERM, None)
             return True
+
+        ownership = mock.Mock()
+        ownership.route = SimpleNamespace(
+            module=bind_channel(did_sweep.get("radar_acc"), "can0"),
+            channel="can0",
+        )
+        ownership.release.side_effect = release_with_repeated_term
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -484,23 +473,15 @@ class DidCliSafetyTests(unittest.TestCase):
             with (
                 mock.patch.object(did_sweep, "preflight", return_value=[]),
                 mock.patch.object(
-                    did_sweep.diagnostic_safety,
-                    "acquire_channel_lock",
-                    return_value=mock.sentinel.lock,
+                    did_sweep.can_runtime_route,
+                    "acquire_armed_module_route",
+                    return_value=ownership,
                 ),
-                mock.patch.object(
-                    did_sweep.diagnostic_safety, "release_channel_lock"
-                ) as release,
                 mock.patch.object(
                     did_sweep, "output_paths", return_value=(str(summary), str(results))
                 ),
                 mock.patch.object(did_sweep.uds, "open_module_socket", return_value=sock),
                 mock.patch.object(did_sweep, "query_did", side_effect=interrupt_query),
-                mock.patch.object(
-                    did_sweep.canbus,
-                    "restore_passive",
-                    side_effect=restore_with_repeated_term,
-                ) as restore,
                 mock.patch.object(did_sweep.signal, "signal", side_effect=fake_signal),
                 contextlib.redirect_stdout(io.StringIO()),
                 contextlib.redirect_stderr(io.StringIO()),
@@ -520,8 +501,7 @@ class DidCliSafetyTests(unittest.TestCase):
         self.assertEqual(payload["status"], "interrupted")
         self.assertTrue(payload["restored_passive"])
         sock.close.assert_called_once_with()
-        restore.assert_called_once_with("can0", 500000)
-        release.assert_called_once_with(mock.sentinel.lock)
+        ownership.release.assert_called_once_with()
 
     def test_bad_tester_present_is_persisted_and_marks_explicit_session_uncertain(self):
         sock = mock.Mock()
@@ -542,14 +522,6 @@ class DidCliSafetyTests(unittest.TestCase):
             with (
                 mock.patch.object(did_sweep, "preflight", return_value=[]),
                 mock.patch.object(
-                    did_sweep.diagnostic_safety,
-                    "acquire_channel_lock",
-                    return_value=mock.sentinel.lock,
-                ),
-                mock.patch.object(
-                    did_sweep.diagnostic_safety, "release_channel_lock"
-                ) as release,
-                mock.patch.object(
                     did_sweep, "output_paths", return_value=(str(summary), str(results))
                 ),
                 mock.patch.object(did_sweep.uds, "open_module_socket", return_value=sock),
@@ -557,7 +529,6 @@ class DidCliSafetyTests(unittest.TestCase):
                 mock.patch.object(did_sweep.uds, "request", side_effect=respond),
                 mock.patch.object(did_sweep.time, "sleep"),
                 mock.patch.object(did_sweep, "TESTER_PRESENT_INTERVAL_S", 0.0),
-                mock.patch.object(did_sweep.canbus, "restore_passive", return_value=True),
                 contextlib.redirect_stdout(io.StringIO()),
                 contextlib.redirect_stderr(io.StringIO()),
             ):
@@ -581,7 +552,7 @@ class DidCliSafetyTests(unittest.TestCase):
         self.assertEqual(report["responses_received"]["tester_present"], 1)
         self.assertEqual(report["request_attempts"]["did_reads"], 0)
         self.assertIn("explicit session is uncertain", report["fatal_error"])
-        release.assert_called_once_with(mock.sentinel.lock)
+        self.ownerships[-1].release.assert_called_once_with()
 
 
 if __name__ == "__main__":

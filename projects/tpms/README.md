@@ -1,8 +1,11 @@
 # TPMS / RF Hub diagnosis — 2022 Ram Promaster (VIN 3C6LRVDG4NE######)
 
-Handoff doc. State as of **2026-07-30**. Any agent/human should be able to resume from here.
-Link path & general UDS tooling: see repo `docs/`, `lib/modules.py`, and the radar project docs
-(same PCAN → SGW-bypass → C-CAN tap). Everything below was verified on the vehicle.
+Handoff doc. Campaign findings are current through **2026-07-30**; the
+operational-topology update below was made **2026-08-21**. Link path and general
+UDS tooling: see repo `docs/`, `lib/modules.py`, and the radar project docs. The
+RF Hub remains on the SGW-bypass C-CAN tap, now permanently routed as Board A
+CAN1 by USB serial plus `dev_id`. Historical captures below used a PCAN on that
+same physical pair and remain valid evidence, not current interface guidance.
 
 **Data locations (repo convention, 2026-07-08 — see root `AGENTS.md` / `README.md`):** all
 tool output for this project goes to **`tmp/tpms/`** (gitignored: drive-log CSV, AlfaOBD
@@ -129,6 +132,13 @@ campaign status and
 
 ## TPMS logger and telemetry ownership
 
+> **Current topology:** broker-owned TPMS polling is the supported path on the
+> permanent dual-USBCANFD installation. The role-aware broker is installed,
+> enabled, and active. The installed standalone fallback resolves the RF Hub's
+> logical C-CAN role from exact USB serial/`dev_id`, but its service remains
+> disabled/inactive and has not been live-CAN validated. A current `canN` must
+> never be supplied or saved as a substitute for role resolution.
+
 - **`tpms_logger.py` (this dir)** remains the dropout tripwire. Its fixed RF Hub profile polls
   `31D0-31D3`, `301E-3021`, and `19 02 0D` every 10 seconds, writes
   `tmp/tpms/tpms_drive_log.csv`, and publishes valid pressures as
@@ -142,66 +152,87 @@ campaign status and
   request.
 - **Broker delegation is checked first in auto mode.** Any response from the broker Unix socket
   makes the standalone logger yield completely, regardless of broker version, active-drive setting,
-  HTTP status, or response fields: it takes no CAN lock, does not change `can0`, and opens no UDS
+  HTTP status, or response fields: it takes no CAN lock, changes no interface, and opens no UDS
   socket. Timeouts, malformed responses, permission failures, and other ambiguous I/O failures also
   yield. This fail-closed rule prevents a temporarily unhealthy or older broker's passive collector
   from being starved by a competing TPMS session. With the current broker, its coordinated
   active-drive collector owns the single armed interval, continues publishing the qualified C-CAN
   powertrain metrics, and polls the four allowlisted RF Hub pressure DIDs alongside PCM electrical
   telemetry. The standalone extended last-RX/DTC CSV campaign is not collected while delegated.
-- **The standalone path is a fail-closed fallback, not a competing collector.** It is used only
+- **The standalone path is an installed but disabled fail-closed fallback, not a competing
+  collector or a manual runbook.** It is considered only
   when the broker endpoint is narrowly proven absent because the Unix socket is missing or refuses
   the connection. A live broker that explicitly disables active-drive still owns passive telemetry,
-  so that setting does **not** authorize this logger to take over. Before taking the exclusive
-  diagnostic lock the fallback requires a verified UP/500 kbit/s/listen-only/ERROR-ACTIVE interface,
+  so that setting does **not** authorize this logger to take over. It resolves
+  the RF Hub through `Module.bus`, holds shared logical-role and resolved-channel
+  locks for passive readiness, then re-resolves and holds both locks exclusively
+  for any transmit session. Before arming, it requires a verified
+  UP/500-kbit/s/classical-CAN/FD-off/listen-only/ERROR-ACTIVE interface with
+  `restart-ms 0`,
   a usable same-boot `c-can` topology record with exact DLC pair `6/14`, no active operation inhibit,
   passive C-CAN identity, and three fresh standard `0x0FC` samples above 400 rpm. The passive
   identity/RPM gate holds the shared observer lock so an interface-changing participant cannot race
   that socket. It repeats every check under the exclusive lock, including broker absence before and
   after the RPM sample, captures the exact safe interface state, arms once, and repeats the RPM,
   topology, inhibit, broker-absence, and adapter-health gates throughout the session. A broker that
-  starts later therefore ends the fallback and triggers restoration. Ignition presence, charging
+  starts later or a USB/socket error therefore ends the fallback and triggers
+  exact restoration; any later attempt must resolve the role afresh rather than
+  recovering on a stale netdev. Ignition presence, charging
   voltage, or the old `0x2EF`-only gate cannot authorize transmission.
 - The fallback closes its ISO-TP socket before exactly restoring and reading back the captured
   listen-only configuration, all while still holding the exclusive lock. This happens after normal
   completion, engine-RPM loss, exceptions, and termination. A failed restore is a critical fault:
-  the process latches against further polls and writes the same-boot operation inhibit
-  `tpms-restoration-failed`. Inspect and explicitly prove `can0` safe/passive before considering
-  `python3 tools/can_operation_state.py inhibit-end tpms-restoration-failed`.
-- Manual fallback has the same broker-absence gate and cleanup contract. It refuses to start while
-  the broker is live or its status is uncertain; an explicitly authorized standalone campaign must
-  stop the broker first. Start from passive mode:
-  `./bringup.sh && python3 projects/tpms/tpms_logger.py`. Do not pre-arm with `--tx`.
+  the process latches against further polls and writes the wildcard same-boot
+  operation inhibit `tpms-restoration-failed`. Do not clear that inhibit or retry on another
+  channel from this handoff; first prove the exact permanent role and repair the
+  role-aware restoration path.
 - The earlier campaign used passive `0x2EF` presence as its ignition gate. Its observer-effect
   finding remains valid—diagnostic polling can keep FCA network management awake, and stopping it
   allowed sleep after about 60 seconds—but `0x2EF` alone is no longer an authorization gate.
   Engine-running `0x0FC` evidence prevents the unattended logger from waking or polling an
   ignition-on/engine-off vehicle.
-- The tracked unit is `projects/tpms/tpms-logger.service`; the previously installed live unit is
-  `/etc/systemd/system/tpms-logger.service`. The 2026-07-30 integration change is offline-only:
-  no service was installed, enabled, restarted, or live-tested. Any deployment/restart remains an
-  explicit owner-authorized operation after reviewing current broker and adapter state.
+- The tracked unit is `projects/tpms/tpms-logger.service`; the installed copy at
+  `/etc/systemd/system/tpms-logger.service` matches it as of 2026-08-21 and
+  remains disabled/inactive. It was not exercised during broker commissioning;
+  keep it disabled until a separately authorized live validation, with no
+  manual bring-up beforehand. A running broker continues to supersede this
+  standalone path.
 - **`isotp_decode_rfh.py` (this dir)** — offline ISO-TP transcript decoder for candump logs
   (hardcoded to the RFH ID pair); used to decode the AlfaOBD session sniffs in
   `tmp/tpms/rfh_alfaobd_sniff_ccan_resilient.log`.
-- **voltage_mon cron remains COMMENTED OUT** (dated tag in `crontab -l`), so there are no
-  scheduled low-battery ntfy alerts. The 2026-07-25 hardening keeps awake-bus reads passive and
-  permits a sleeping-bus wake only behind the exclusive SocketCAN lock, absence of same-boot
+- **The voltage-monitor cron is active.** Read-only `crontab -l` on 2026-08-20
+  showed `projects/battery/voltage_mon.sh` scheduled every two hours from 10:00
+  through 22:00. It was not changed during this migration. Both its broker path
+  and its in-process fallback now resolve the exact C-CAN role, hold shared
+  role/channel locks, and read only an already-awake passive interface. They do
+  not configure or transmit, so the schedule does not guarantee a sample while
+  the bus is asleep. The historical 2026-07-25
+  single-adapter implementation permitted a sleeping-bus wake only behind the exclusive SocketCAN lock, absence of same-boot
   external-tool inhibits, an explicit same-boot C-CAN/B-CAN topology record, and an immediate
   under-lock interface/silence recheck. Armed/down/unhealthy/unknown/CAN-CH states never wake.
-  AlfaOBD controller actions automatically inhibit unattended wake. It no longer needs to wait for
-  PCAN to return to B-CAN for contention safety, but re-enabling cron remains a separate owner
-  decision.
-- **Before any manual bus work**: `sudo systemctl stop tpms-logger` (restart after).
+  The deployed multi-role broker is receive-only for voltage and rejects
+  wake-assisted acquisition; do not recreate the old wake path on a current
+  netdev.
+  AlfaOBD controller actions automatically inhibit unattended wake. The
+  permanent topology has dedicated C-CAN and B-CAN roles; no adapter is moved
+  between them. Do not alter the user's cron without explicit permission.
+- **Before manual active C-CAN work**, coordinate the exact role/channel lease.
+  Cooperative passive observers may coexist; stop `tpms-logger` only if it is
+  active and blocks the required exclusive C-CAN lease. B-CAN and CAN-CH work
+  does not require stopping a C-CAN owner merely because another bus is in use.
+  On 2026-08-21 the logger remained disabled and inactive; do not start it
+  unless its standalone live validation has been separately authorized.
   Gotcha: `pkill -f`/`pgrep -f` with a pattern that appears in your own command line kills
   your own shell — use `pkill -x candump` or exact PIDs.
-- **Current integration state (code updated 2026-07-30; deployment not live-verified):** one
-  PCAN adapter still means there can be only one armed owner. The coordinated broker owner is the
-  coexistence path for live passive powertrain, PCM electrical, and four TPMS pressures. The auto
-  standalone logger runs only when the broker Unix endpoint itself is proven absent, then only after
-  acquiring the exclusive lock. Any live or ambiguously unreachable broker makes it defer so a
-  short observer-lock gap cannot turn into a drive-long dashboard outage. Check the live service and
-  broker status before changing either.
+- **Current integration state (live host validation 2026-08-21):**
+  `van-telemetry.service` is installed, enabled, and active on the resolved
+  three-role topology. Its normal active-drive feature is enabled, but the
+  vehicle was asleep during commissioning, so the helper remained idle and CAN
+  TX stayed at zero; four-pressure polling was not exercised in that validation.
+  The coordinated broker remains the supported engine-running coexistence path
+  for passive powertrain, PCM electrical, and TPMS pressures on C-CAN.
+  `tpms-logger.service` remains disabled/inactive and unvalidated as a
+  broker-absence safety net, not an operator arming command.
 
 ## Campaign status (2026-07-19) — dropout repeatedly captured
 
@@ -249,18 +280,32 @@ found**, by four independent methods:
 **Likely reason:** the RFH→IPC pressure data is gateway-routed to the interior/IHS CAN (where the
 cluster lives) and does not traverse the internal diagnostic C-CAN our SGW-bypass taps. The
 `31D0-31D3` DID poll works only because UDS diagnostic addressing IS routed to us. **Consequence:
-passive-only TPMS logging is not achievable on this tap; the logger must keep polling.** Captures
-kept under `tmp/tpms/captures/`; `drive_sniff.py` / `tpms-drivesniff.service` can be stopped
-(`sudo systemctl disable --now tpms-drivesniff`) unless re-run for a different signal.
+the completed C-CAN evidence does not provide a passive TPMS source; any live
+pressure collection still requires bounded diagnostic polling.** The permanent B-CAN tap now makes a separately
+designed IHS correlation possible, but no per-wheel B-CAN pressure decode is
+verified. Captures kept under `tmp/tpms/captures/`. The maintained `drive_sniff.py` is now a
+role-resolved, receive-only recorder: it holds shared C-CAN role/channel locks,
+periodically revalidates USB identity and passive classical-CAN state, and never
+changes the link. The role-aware `tpms-drivesniff.service` replacement was
+installed on 2026-08-21 and remains disabled/inactive; it was not capture-
+validated during broker commissioning. Keep it disabled unless a new signal
+question justifies a separately reviewed campaign; the completed pressure hunt
+does not.
 
-To resolve the observer-effect question without a passive bus channel: either (a) slow the poll
-(e.g. 60 s — a dropout persists a full 20-min driving period before a C150x fault sets, so 60 s still
-catches it) to cut bus intervention ~6×, or (b) go truly off-bus with an RTL-SDR on 433 MHz.
+To resolve the observer-effect question without frequent diagnostic polling:
+either (a) run a new, narrowly designed role-aware B-CAN correlation, (b) slow
+the poll (e.g. 60 s — a dropout persists a full 20-min driving period before a
+C150x fault sets, so 60 s still catches it) to cut bus intervention ~6×, or
+(c) go truly off-bus with an RTL-SDR on 433 MHz.
 
 ## Next steps
 
-1. Keep the logger running to measure recurrence. The tripwire objective is achieved: physical RL,
-   sensor ID `7004C287`, is the isolated dropout channel.
+1. On the next ordinary engine-running drive, confirm the deployed broker's
+   active helper and four-pressure path only if recurrence data is still useful;
+   the asleep-vehicle commissioning did not exercise them. The objective is
+   already achieved: physical RL, sensor ID `7004C287`, is the isolated dropout
+   channel. The standalone logger remains disabled/inactive and should not be
+   started merely for that confirmation.
 2. Find the 2024 Discount Tire invoice/work order and later replacement invoices. Brand/SKU and
    recorded wheel positions may identify which current sensor bodies are aftermarket; IDs alone
    cannot, because a programmable replacement may clone an OEM ID stored in the RF Hub. Confirm

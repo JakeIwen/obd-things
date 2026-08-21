@@ -1,6 +1,7 @@
 # LED low beams / IPC lamp-out handoff
 
-Last reviewed: 2026-07-26 after the tablet-log recovery and raw-trace analysis
+Last reviewed: 2026-08-20 for permanent dual-USBCANFD coordination; the
+configuration evidence and recovery decision remain the dated 2026-07-26 state.
 
 ## Decision state
 
@@ -183,13 +184,20 @@ Canonical physical routing is maintained in
 
 | Branch | Vehicle pins | Current access |
 |---|---:|---|
-| C-CAN | 6/14, 500 kbit/s | standard SGW-bypass path; BCM, PCM, TCM, shifter, IPC, RFH, and other C-CAN participants |
-| B-CAN / CAN-IHS | 3/11, 125 kbit/s | OBDLink MX+ internal routing for the successful Alfa reads; PCAN uses the dedicated B-CAN pigtail leg |
-| CAN-CH | 12/13, 500 kbit/s | grey adapter remaps vehicle 12/13 to interface 6/14; ABS, EPS, HALF, and ORC verified |
+| C-CAN | 6/14, 500 kbit/s | permanent Pi Board A CAN1 role through the SGW-bypass tap; AlfaOBD standard routing reaches BCM, PCM, TCM, shifter, IPC, RFH, and other C-CAN participants |
+| B-CAN / CAN-IHS | 3/11, 125 kbit/s | permanent Pi Board A CAN2 role; OBDLink MX+ internal adapter-6 routing produced the successful Alfa reads |
+| CAN-CH | 12/13, 500 kbit/s | permanent Pi Board B CAN1 role through the grey 12/13 adapter; AlfaOBD grey routing reached ABS, EPS, HALF, and ORC |
 
-The known physical stack during CAN-CH work was:
+The known physical stack during the dated 2026-07-25 CAN-CH verification was:
 
 `SGW bypass -> grey adapter -> Y-splitter -> PEAK PCAN + OBDLink MX+`
+
+That line is capture provenance, not the current operating layout. The Pi now
+observes all three buses simultaneously. Its `canN` names are ephemeral; use
+the serial/`dev_id` role map in `docs/bus-map.md`. The fourth adapter channel is
+unconnected and stays down. The single-PCAN bring-up script is retired and
+removed; do not translate a saved PCAN `can0` command to one of the permanent
+roles.
 
 The extra historical `B10 -> A11` wire was removed before the verified grey
 campaign. The verified grey mapping must not be repurposed as a blue adapter.
@@ -201,13 +209,14 @@ AlfaOBD requests an unowned or unclear adapter during alignment, stop at the
 prompt. Do not guess a routing or continue on the wrong branch.
 
 The exact 2022+ alignment prompt sequence is still unobserved. It may request
-grey and then standard routing as participating modules are visited. Every
-physical adapter change must:
-
-1. occur only when AlfaOBD explicitly pauses for it;
-2. invalidate the Pi's topology record before movement;
-3. be confirmed against the exact pin pair after movement; and
-4. leave the PCAN listen-only if it remains attached as an observer.
+grey and then standard AlfaOBD routing as participating modules are visited.
+The permanent Pi taps do not move in response to those prompts. An AlfaOBD
+adapter prompt changes only the OBDLink/grey routing. Stop on an unclear prompt;
+do not detach, move, or reconfigure a Pi role as a substitute for an AlfaOBD
+adapter it cannot replace. Physical maintenance to the permanent taps is a
+separate, owner-authorized operation outside this alignment runbook and would
+require topology invalidation plus complete identity/passive-state validation
+before any campaign resumed.
 
 ## Alignment and rollback requirements
 
@@ -258,18 +267,27 @@ This is a supervised runbook, not authorization for unattended execution.
 2. **Establish power support.** Connect a regulated supply that can hold
    13.2–13.5 V continuously without a timeout. Verify independently that it
    cannot climb above 13.5 V. Engine remains off.
-3. **Freeze unrelated automation.** Inspect rather than assume service and
-   interface state. Keep the AlfaOBD campaign inhibit active. Do not modify
-   cron or unrelated services. If a logger owns the selected CAN interface,
-   follow its documented stop/restart procedure.
-4. **Verify physical routing.** Start on standard C-CAN pins 6/14 for the BCM.
-   Grey is removed. If the PCAN is attached, it is 500 kbit/s,
-   listen-only, error-active, and has clean error counters. Record
-   same-boot topology as C-CAN only after physical confirmation.
+3. **Freeze unrelated automation.** Inspect rather than assume the telemetry
+   broker, drive recorder, TPMS logger, external diagnostic owner, all four USB
+   identities, and every role state. Keep the wildcard AlfaOBD campaign inhibit
+   active. Do not modify cron or unrelated services. Follow each participating
+   service's documented stop/restart procedure and retain the exact initial
+   state for cleanup.
+4. **Verify physical routing.** Start AlfaOBD on its standard C-CAN route for
+   the BCM. Independently prove the Pi's Board A CAN1 identity is the pins-6/14
+   C-CAN role and is classical CAN, FD off, 500 kbit/s, listen-only,
+   ERROR-ACTIVE, `restart-ms 0`, with clean counters. Board A CAN2 remains
+   B-CAN, Board B CAN1 remains CAN-CH through grey, and the spare remains down;
+   do not detach or repurpose them for the campaign.
 5. **Collect the pre-write checkpoint.** Save current BCM System ID, PROXI
    status, fail/write counters, `Headlamp LED Management`, battery voltage,
    a new DID `0x2023` response, and targeted non-clearing DTC inventories for
-   BCM, IPC, TCM, shifter/ESM, RFH, and the CAN-CH safety modules.
+   BCM, IPC, TCM, shifter/ESM, RFH, and the CAN-CH safety modules. While the
+   wildcard AlfaOBD inhibit is active, collect these through the supervised
+   AlfaOBD session and keep Pi CAN paths passive. Any Pi-side
+   `dtc_inventory.py` checkpoint must instead finish and restore passive state
+   **before** the external campaign/inhibit begins; the scoped route correctly
+   refuses to transmit through that inhibit.
 6. **Verify exact equality.** Extract the new 250-byte configuration and
    compare it byte-for-byte with both retained known-good binaries. Stop on
    any difference until it is explained. Save all new raw output under
@@ -294,9 +312,9 @@ This is a supervised runbook, not authorization for unattended execution.
     evidence. Alignment begins only after a second explicit approval. A
     no-op/test alignment is never part of preflight.
 12. **Run alignment under continuous support.** Follow only AlfaOBD's exact
-    prompts. Record each participant/result. For an adapter prompt, stop,
-    invalidate topology, make the verified physical change, then resume. Stop
-    on an unclear prompt, power excursion, disconnect, app failure, or
+    prompts. Record each participant/result. For an adapter prompt, pause and
+    change only AlfaOBD's documented OBDLink/grey routing; leave all Pi roles
+    fixed. Stop on an unclear prompt, power excursion, disconnect, app failure, or
     critical module rejection.
 13. **Verify before any movement.** Read final PROXI status, fail/write
     counters, full configured/present snapshot, and non-clearing DTCs. Perform
@@ -317,9 +335,9 @@ This is a supervised runbook, not authorization for unattended execution.
     perform the supported restore-and-realign recovery while voltage and
     communications are stable; otherwise stop for diagnosis.
 17. **Close the campaign only after recovery/success.** Save the final raw
-    evidence under `tmp/vehicle_configuration/`, return physical routing and
-    PCAN/service state deliberately, update the topology record, and only then
-    end the AlfaOBD campaign inhibit.
+    evidence under `tmp/vehicle_configuration/`, return every role and service
+    to its recorded initial state, verify the serial-resolved topology and
+    passive readbacks, and only then end the AlfaOBD campaign inhibit.
 
 ## Unresolved questions
 

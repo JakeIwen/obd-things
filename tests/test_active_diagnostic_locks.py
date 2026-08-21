@@ -5,15 +5,16 @@ from types import SimpleNamespace
 from unittest import mock
 
 from lib import canbus
+from lib.modules import Module, bind_channel
 from live_data import live_data
 from projects.tpms import tpms_logger
 from tools import signal_correlate, uds_send
 
 
-MODULE = SimpleNamespace(
+MODULE = Module(
     key="test_ecu",
     name="Test ECU",
-    channel="can9",
+    bus="c-can",
     bitrate=500000,
     txid=0x18DA10F1,
     rxid=0x18DAF110,
@@ -21,24 +22,31 @@ MODULE = SimpleNamespace(
 )
 
 
+def owned_route(events, *, release_result=True):
+    ownership = mock.Mock()
+    ownership.route = SimpleNamespace(
+        module=bind_channel(MODULE, "can9"), channel="can9"
+    )
+    ownership.release.side_effect = lambda: (
+        events.append("restore/unlock") or release_result
+    )
+    return ownership
+
+
 class ActiveDiagnosticLockTests(unittest.TestCase):
     def test_uds_send_holds_lock_until_socket_is_closed(self):
         events = []
         sock = mock.Mock()
         sock.close.side_effect = lambda: events.append("close")
+        ownership = owned_route(events)
 
         with (
             mock.patch.object(uds_send, "get", return_value=MODULE),
             mock.patch.object(
-                uds_send.diagnostic_safety,
-                "acquire_channel_lock",
-                side_effect=lambda channel: events.append("lock") or object(),
+                uds_send.can_runtime_route,
+                "acquire_armed_module_route",
+                side_effect=lambda *_args, **_kwargs: events.append("own") or ownership,
             ) as acquire,
-            mock.patch.object(
-                uds_send.diagnostic_safety,
-                "release_channel_lock",
-                side_effect=lambda _handle: events.append("unlock"),
-            ),
             mock.patch.object(uds_send, "preflight", return_value=[]),
             mock.patch.object(
                 uds_send.uds, "open_module_socket", side_effect=lambda _m, timeout: (
@@ -49,11 +57,6 @@ class ActiveDiagnosticLockTests(unittest.TestCase):
             mock.patch.object(
                 uds_send.uds, "request", return_value=(bytes.fromhex("62 F1 87 01"), "positive")
             ),
-            mock.patch.object(
-                uds_send.canbus,
-                "restore_passive",
-                side_effect=lambda *_args: events.append("restore") or True,
-            ),
             mock.patch("builtins.print"),
         ):
             result = uds_send.main([
@@ -62,17 +65,16 @@ class ActiveDiagnosticLockTests(unittest.TestCase):
             ])
 
         self.assertEqual(result, 0)
-        acquire.assert_called_once_with("can9")
-        self.assertEqual(events, ["lock", "open", "close", "restore", "unlock"])
+        acquire.assert_called_once()
+        self.assertEqual(events, ["own", "open", "close", "restore/unlock"])
 
     def test_uds_send_contention_does_not_open_socket(self):
         with (
             mock.patch.object(uds_send, "get", return_value=MODULE),
-            mock.patch.object(uds_send, "preflight", return_value=[]),
             mock.patch.object(
-                uds_send.diagnostic_safety,
-                "acquire_channel_lock",
-                side_effect=uds_send.diagnostic_safety.ChannelLockError("can9 busy"),
+                uds_send.can_runtime_route,
+                "acquire_armed_module_route",
+                side_effect=RuntimeError("c-can/can9 busy"),
             ),
             mock.patch.object(uds_send.uds, "open_module_socket") as open_socket,
             mock.patch("builtins.print"),
@@ -88,18 +90,14 @@ class ActiveDiagnosticLockTests(unittest.TestCase):
         events = []
         sock = mock.Mock()
         sock.close.side_effect = lambda: events.append("close")
+        ownership = owned_route(events)
 
         with (
             mock.patch.object(
-                signal_correlate.diagnostic_safety,
-                "acquire_channel_lock",
-                side_effect=lambda channel: events.append("lock") or object(),
+                signal_correlate.can_runtime_route,
+                "acquire_armed_module_route",
+                side_effect=lambda *_args, **_kwargs: events.append("own") or ownership,
             ) as acquire,
-            mock.patch.object(
-                signal_correlate.diagnostic_safety,
-                "release_channel_lock",
-                side_effect=lambda _handle: events.append("unlock"),
-            ),
             mock.patch.object(signal_correlate, "preflight", return_value=[]),
             mock.patch.object(
                 signal_correlate.uds,
@@ -114,11 +112,6 @@ class ActiveDiagnosticLockTests(unittest.TestCase):
             ),
             mock.patch.object(signal_correlate.time, "time", return_value=0.0),
             mock.patch.object(signal_correlate.time, "monotonic", return_value=0.0),
-            mock.patch.object(
-                signal_correlate.canbus,
-                "restore_passive",
-                side_effect=lambda *_args: events.append("restore") or True,
-            ),
             mock.patch.object(signal_correlate, "_dump") as dump,
             mock.patch("builtins.print"),
         ):
@@ -134,35 +127,26 @@ class ActiveDiagnosticLockTests(unittest.TestCase):
                 confirmed_no_active_routine=True,
             )
 
-        acquire.assert_called_once_with("can9")
+        acquire.assert_called_once()
         self.assertEqual(report["status"], "complete")
         self.assertEqual(dump.call_count, 2)
-        self.assertEqual(events, ["lock", "open", "close", "restore", "unlock"])
+        self.assertEqual(events, ["own", "open", "close", "restore/unlock"])
 
     def test_live_view_releases_after_keyboard_interrupt(self):
         events = []
         link = mock.Mock()
         link.request_attempts = 0
         link.drop.side_effect = lambda: events.append("drop")
+        ownership = owned_route(events)
         with (
             mock.patch.object(live_data, "preflight", return_value=[]),
             mock.patch.object(
-                live_data.diagnostic_safety,
-                "acquire_channel_lock",
-                side_effect=lambda channel: events.append(f"lock:{channel}") or object(),
-            ),
-            mock.patch.object(
-                live_data.diagnostic_safety,
-                "release_channel_lock",
-                side_effect=lambda _handle: events.append("unlock"),
+                live_data.can_runtime_route,
+                "acquire_armed_module_route",
+                side_effect=lambda *_args, **_kwargs: events.append("own") or ownership,
             ),
             mock.patch.object(live_data, "Link", return_value=link),
             mock.patch.object(live_data, "render", side_effect=KeyboardInterrupt),
-            mock.patch.object(
-                live_data.canbus,
-                "restore_passive",
-                side_effect=lambda *_args: events.append("restore") or True,
-            ),
             mock.patch.object(live_data.sys.stdout, "write"),
             mock.patch.object(live_data.sys.stdout, "flush"),
             mock.patch("builtins.print"),
@@ -189,19 +173,27 @@ class ActiveDiagnosticLockTests(unittest.TestCase):
             )
 
         self.assertEqual(result, 130)
-        self.assertEqual(events, ["lock:can9", "drop", "restore", "unlock"])
+        self.assertEqual(events, ["own", "drop", "restore/unlock"])
 
     def test_tpms_polling_holds_lock_across_recovery_until_socket_close(self):
         events = []
         sock = mock.Mock()
         sock.close.side_effect = lambda: events.append("close")
         initial = canbus.InterfaceState(
-            "can9", True, True, 500000, True, "ERROR-ACTIVE", 0
+            "can9", True, True, 500000, True, "ERROR-ACTIVE", 0, False
         )
         with tempfile.TemporaryDirectory() as directory:
             with (
                 mock.patch.object(tpms_logger, "CSV_PATH", os.path.join(directory, "drive.csv")),
                 mock.patch.object(tpms_logger, "get", return_value=MODULE),
+                mock.patch.object(
+                    tpms_logger,
+                    "_resolved_rfh_route",
+                    return_value=SimpleNamespace(channel="can9"),
+                ),
+                mock.patch.object(
+                    tpms_logger.can_runtime_route, "revalidate_module_route"
+                ),
                 mock.patch.object(
                     tpms_logger, "_locked_start_state", return_value=initial
                 ),
@@ -246,7 +238,16 @@ class ActiveDiagnosticLockTests(unittest.TestCase):
         restore.assert_called_once_with(initial, noninteractive=True)
         self.assertEqual(
             events,
-            ["lock:can9", "arm", "open", "close", "restore", "unlock"],
+            [
+                "lock:can-role-c-can",
+                "lock:can9",
+                "arm",
+                "open",
+                "close",
+                "restore",
+                "unlock",
+                "unlock",
+            ],
         )
 
     def test_tpms_restoration_failure_latches_before_unlock(self):
@@ -254,7 +255,7 @@ class ActiveDiagnosticLockTests(unittest.TestCase):
         sock = mock.Mock()
         sock.close.side_effect = lambda: events.append("close")
         initial = canbus.InterfaceState(
-            "can9", True, True, 500000, True, "ERROR-ACTIVE", 0
+            "can9", True, True, 500000, True, "ERROR-ACTIVE", 0, False
         )
         with tempfile.TemporaryDirectory() as directory:
             with (
@@ -262,6 +263,14 @@ class ActiveDiagnosticLockTests(unittest.TestCase):
                     tpms_logger, "CSV_PATH", os.path.join(directory, "drive.csv")
                 ),
                 mock.patch.object(tpms_logger, "get", return_value=MODULE),
+                mock.patch.object(
+                    tpms_logger,
+                    "_resolved_rfh_route",
+                    return_value=SimpleNamespace(channel="can9"),
+                ),
+                mock.patch.object(
+                    tpms_logger.can_runtime_route, "revalidate_module_route"
+                ),
                 mock.patch.object(
                     tpms_logger, "_locked_start_state", return_value=initial
                 ),
@@ -316,12 +325,14 @@ class ActiveDiagnosticLockTests(unittest.TestCase):
         self.assertEqual(
             events,
             [
+                "lock:can-role-c-can",
                 "lock:can9",
                 "arm",
                 "open",
                 "close",
                 "restore",
                 "latch",
+                "unlock",
                 "unlock",
             ],
         )

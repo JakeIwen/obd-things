@@ -4,13 +4,13 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
+from lib.modules import Module, bind_channel
 from tools import uds_send
 
 
-MODULE = SimpleNamespace(
+MODULE = Module(
     key="test_ecu",
     name="Test ECU",
-    channel="can9",
     bus="c-can",
     bitrate=500000,
     addressing_mode="normal_29bits",
@@ -21,6 +21,19 @@ READ_LIVE = [
     "test_ecu", "22", "F1", "87", "--execute", "--confirm-parked",
     "--pair", "6/14", "--conditions", "parked fixture",
 ]
+
+
+def owned_route(*, release_result=True):
+    ownership = mock.Mock()
+    module = bind_channel(MODULE, "can9")
+    ownership.route = SimpleNamespace(
+        module=module,
+        channel="can9",
+        pair="6/14",
+        topology_fingerprint="fixture",
+    )
+    ownership.release.return_value = release_result
+    return ownership
 
 
 class UdsSendClassificationTests(unittest.TestCase):
@@ -114,26 +127,32 @@ class UdsSendCliSafetyTests(unittest.TestCase):
     def test_service_or_capture_preflight_error_prevents_lock(self):
         with (
             mock.patch.object(uds_send, "get", return_value=MODULE),
-            mock.patch.object(uds_send, "preflight", return_value=["tpms-logger is active"]),
-            mock.patch.object(uds_send.diagnostic_safety, "acquire_channel_lock") as lock,
+            mock.patch.object(
+                uds_send.can_runtime_route,
+                "acquire_armed_module_route",
+                side_effect=RuntimeError("global capture is active"),
+            ) as acquire,
+            mock.patch.object(uds_send.uds, "open_module_socket") as open_socket,
             contextlib.redirect_stdout(io.StringIO()),
             contextlib.redirect_stderr(io.StringIO()),
         ):
             result = uds_send.main(READ_LIVE)
 
         self.assertEqual(result, 2)
-        lock.assert_not_called()
+        acquire.assert_called_once()
+        open_socket.assert_not_called()
 
     def test_live_read_drains_sends_once_closes_restores_and_unlocks(self):
         sock = mock.Mock()
-        handle = object()
+        ownership = owned_route()
         with (
             mock.patch.object(uds_send, "get", return_value=MODULE),
             mock.patch.object(uds_send, "preflight", return_value=[]),
             mock.patch.object(
-                uds_send.diagnostic_safety, "acquire_channel_lock", return_value=handle
+                uds_send.can_runtime_route,
+                "acquire_armed_module_route",
+                return_value=ownership,
             ),
-            mock.patch.object(uds_send.diagnostic_safety, "release_channel_lock") as release,
             mock.patch.object(uds_send.uds, "open_module_socket", return_value=sock),
             mock.patch.object(uds_send.uds, "drain") as drain,
             mock.patch.object(
@@ -141,7 +160,6 @@ class UdsSendCliSafetyTests(unittest.TestCase):
                 "request",
                 return_value=(bytes.fromhex("62 F1 87 31"), "POSITIVE"),
             ) as request,
-            mock.patch.object(uds_send.canbus, "restore_passive", return_value=True) as restore,
             contextlib.redirect_stdout(io.StringIO()),
         ):
             result = uds_send.main(READ_LIVE)
@@ -152,22 +170,22 @@ class UdsSendCliSafetyTests(unittest.TestCase):
         self.assertEqual(request.call_args.args[1], bytes.fromhex("22 F1 87"))
         self.assertEqual(request.call_args.kwargs["retries"], 0)
         sock.close.assert_called_once_with()
-        restore.assert_called_once_with("can9", 500000)
-        release.assert_called_once_with(handle)
+        ownership.release.assert_called_once_with()
 
     def test_restore_failure_returns_failure(self):
         sock = mock.Mock()
+        ownership = owned_route(release_result=False)
         with (
             mock.patch.object(uds_send, "get", return_value=MODULE),
             mock.patch.object(uds_send, "preflight", return_value=[]),
             mock.patch.object(
-                uds_send.diagnostic_safety, "acquire_channel_lock", return_value=object()
+                uds_send.can_runtime_route,
+                "acquire_armed_module_route",
+                return_value=ownership,
             ),
-            mock.patch.object(uds_send.diagnostic_safety, "release_channel_lock"),
             mock.patch.object(uds_send.uds, "open_module_socket", return_value=sock),
             mock.patch.object(uds_send.uds, "drain"),
             mock.patch.object(uds_send.uds, "request", return_value=(None, "NO_RESPONSE")),
-            mock.patch.object(uds_send.canbus, "restore_passive", return_value=False),
             contextlib.redirect_stdout(io.StringIO()),
             contextlib.redirect_stderr(io.StringIO()),
         ):
@@ -194,26 +212,21 @@ class UdsSendCliSafetyTests(unittest.TestCase):
 
         sock.close.side_effect = lambda: signal_now(sig.SIGTERM)
 
-        def restore(*_args):
+        def release_route():
             signal_now(sig.SIGHUP)
             return True
 
-        def release(*_args):
-            signal_now(sig.SIGTERM)
+        ownership = owned_route()
+        ownership.release.side_effect = release_route
 
         with (
             mock.patch.object(uds_send, "get", return_value=MODULE),
             mock.patch.object(uds_send, "preflight", return_value=[]),
             mock.patch.object(
-                uds_send.diagnostic_safety,
-                "acquire_channel_lock",
-                return_value=mock.sentinel.lock,
+                uds_send.can_runtime_route,
+                "acquire_armed_module_route",
+                return_value=ownership,
             ),
-            mock.patch.object(
-                uds_send.diagnostic_safety,
-                "release_channel_lock",
-                side_effect=release,
-            ) as unlock,
             mock.patch.object(uds_send.diagnostic_safety.signal, "signal", side_effect=fake_signal),
             mock.patch.object(uds_send.uds, "open_module_socket", return_value=sock),
             mock.patch.object(uds_send.uds, "drain"),
@@ -222,15 +235,13 @@ class UdsSendCliSafetyTests(unittest.TestCase):
                 "request",
                 return_value=(bytes.fromhex("62 F1 87 31"), "POSITIVE"),
             ),
-            mock.patch.object(uds_send.canbus, "restore_passive", side_effect=restore) as passive,
             contextlib.redirect_stdout(io.StringIO()),
             contextlib.redirect_stderr(io.StringIO()),
         ):
             result = uds_send.main(READ_LIVE)
 
         self.assertEqual(result, 130)
-        passive.assert_called_once_with("can9", 500000)
-        unlock.assert_called_once_with(mock.sentinel.lock)
+        ownership.release.assert_called_once_with()
 
     def test_combined_multibyte_token_is_rejected(self):
         with (

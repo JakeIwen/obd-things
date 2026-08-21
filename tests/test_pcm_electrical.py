@@ -10,6 +10,9 @@ from projects.vehicle_data import pcm_electrical as pcm
 from projects.vehicle_data import transmit_permit
 
 
+TEST_CHANNEL = "can7"
+
+
 def response_frame(data, *, can_id=0x18DAF110, dlc=None, extended=True):
     payload = bytes(data)
     if dlc is None:
@@ -59,7 +62,7 @@ class FakeSocket:
 class FakeDiagnosticLock:
     closed = False
     _diagnostic_lock_held = True
-    _diagnostic_lock_channel = "can0"
+    _diagnostic_lock_channel = TEST_CHANNEL
     _diagnostic_lock_mode = "exclusive"
 
     def fileno(self):
@@ -85,6 +88,7 @@ def authorization(
         lock_handle or FakeDiagnosticLock(),
         snapshot,
         purpose=purpose,
+        channel=TEST_CHANNEL,
         monotonic=clock,
     )
 
@@ -107,7 +111,6 @@ class PcmElectricalProfileTests(unittest.TestCase):
         self.assertEqual(torque.request_id, module.txid)
         self.assertEqual(profile.response_id, module.rxid)
         self.assertEqual(torque.response_id, module.rxid)
-        self.assertEqual(profile.channel, module.channel)
         self.assertEqual(profile.bitrate, module.bitrate)
         self.assertEqual(profile.bus, module.bus)
         self.assertEqual(profile.source, "pcm.did.01a1")
@@ -146,14 +149,30 @@ class PcmElectricalProfileTests(unittest.TestCase):
         for forbidden in ("did", "payload", "request_id", "response_id", "session"):
             self.assertNotIn(forbidden, constructor)
 
-    def test_poller_rejects_another_channel_before_opening_socket(self):
+    def test_poller_accepts_dynamic_can_channel_and_rejects_invalid_names(self):
         socket_calls = []
-        with self.assertRaises(ValueError):
-            pcm.PcmElectricalPoller(
-                channel="can1",
-                socket_factory=lambda *_args: socket_calls.append(_args),
-            )
+        factory = lambda *_args: socket_calls.append(_args)
+        poller = pcm.PcmElectricalPoller(
+            channel="can7",
+            socket_factory=factory,
+        )
+        self.assertEqual(poller.channel, "can7")
+        for channel in ("c-can", "vcan0", "can", "can-1", ""):
+            with self.subTest(channel=channel), self.assertRaises(ValueError):
+                pcm.PcmElectricalPoller(
+                    channel=channel,
+                    socket_factory=factory,
+                )
         self.assertEqual(socket_calls, [])
+
+        dynamic_socket = FakeSocket(b"")
+        dynamic = pcm.PcmElectricalPoller(
+            channel="can7",
+            socket_factory=lambda *_args: dynamic_socket,
+        )
+        dynamic.open()
+        dynamic.close()
+        self.assertEqual(dynamic_socket.bound, ("can7",))
 
 
 class PcmElectricalWireTests(unittest.TestCase):
@@ -161,6 +180,7 @@ class PcmElectricalWireTests(unittest.TestCase):
         fake = FakeSocket(response)
         times = iter(ticks)
         poller = pcm.PcmElectricalPoller(
+            channel=TEST_CHANNEL,
             socket_factory=lambda *_args: fake,
             monotonic=lambda: next(times),
         )
@@ -174,6 +194,7 @@ class PcmElectricalWireTests(unittest.TestCase):
         fake = FakeSocket(response)
         times = iter(ticks)
         poller = pcm.PcmElectricalPoller(
+            channel=TEST_CHANNEL,
             socket_factory=lambda *_args: fake,
             monotonic=lambda: next(times),
         )
@@ -199,7 +220,7 @@ class PcmElectricalWireTests(unittest.TestCase):
             bytes.fromhex("03 22 01 A1 00 00 00 00"),
         )
         self.assertEqual(fake.sent, [expected])
-        self.assertEqual(fake.bound, ("can0",))
+        self.assertEqual(fake.bound, (TEST_CHANNEL,))
         self.assertTrue(fake.closed)
         self.assertTrue(result.available)
         self.assertEqual(result.value, 100.0)
@@ -249,6 +270,7 @@ class PcmElectricalWireTests(unittest.TestCase):
         )
         times = iter((1.0, 1.0, 2.0, 2.0))
         poller = pcm.PcmElectricalPoller(
+            channel=TEST_CHANNEL,
             socket_factory=lambda *_args: fake,
             monotonic=lambda: next(times),
         )
@@ -262,7 +284,7 @@ class PcmElectricalWireTests(unittest.TestCase):
 
         self.assertTrue(first.available)
         self.assertTrue(second.available)
-        self.assertEqual(fake.bound, ("can0",))
+        self.assertEqual(fake.bound, (TEST_CHANNEL,))
         self.assertEqual(len(fake.sent), 2)
         self.assertFalse(poller.is_open)
         self.assertTrue(fake.closed)
@@ -270,6 +292,7 @@ class PcmElectricalWireTests(unittest.TestCase):
     def test_context_exception_closes_without_transmitting(self):
         fake = FakeSocket(b"")
         poller = pcm.PcmElectricalPoller(
+            channel=TEST_CHANNEL,
             socket_factory=lambda *_args: fake,
         )
 
@@ -289,6 +312,7 @@ class PcmElectricalWireTests(unittest.TestCase):
 
         fake.bind = interrupted_bind
         poller = pcm.PcmElectricalPoller(
+            channel=TEST_CHANNEL,
             socket_factory=lambda *_args: fake,
         )
 
@@ -307,6 +331,7 @@ class PcmElectricalWireTests(unittest.TestCase):
 
         missing_socket = FakeSocket(response)
         missing = pcm.PcmElectricalPoller(
+            channel=TEST_CHANNEL,
             socket_factory=lambda *_args: missing_socket
         )
         with self.assertRaises(TypeError):
@@ -316,6 +341,7 @@ class PcmElectricalWireTests(unittest.TestCase):
 
         invalid_socket = FakeSocket(response)
         invalid = pcm.PcmElectricalPoller(
+            channel=TEST_CHANNEL,
             socket_factory=lambda *_args: invalid_socket
         )
         invalid_result = invalid.poll(object())
@@ -325,6 +351,7 @@ class PcmElectricalWireTests(unittest.TestCase):
 
         wrong_socket = FakeSocket(response)
         wrong = pcm.PcmElectricalPoller(
+            channel=TEST_CHANNEL,
             socket_factory=lambda *_args: wrong_socket
         )
         wrong_result = wrong.poll(
@@ -339,6 +366,7 @@ class PcmElectricalWireTests(unittest.TestCase):
         clock.value += transmit_permit.PERMIT_TTL_SECONDS
         stale_socket = FakeSocket(response)
         stale = pcm.PcmElectricalPoller(
+            channel=TEST_CHANNEL,
             socket_factory=lambda *_args: stale_socket
         )
         stale_result = stale.poll(stale_permit)
@@ -353,6 +381,7 @@ class PcmElectricalWireTests(unittest.TestCase):
         )
         fake = FakeSocket(response)
         poller = pcm.PcmElectricalPoller(
+            channel=TEST_CHANNEL,
             socket_factory=lambda *_args: fake,
             monotonic=lambda: 1.0,
         )
@@ -371,6 +400,7 @@ class PcmElectricalWireTests(unittest.TestCase):
         lock_handle._diagnostic_lock_held = False
         released_socket = FakeSocket(response)
         released = pcm.PcmElectricalPoller(
+            channel=TEST_CHANNEL,
             socket_factory=lambda *_args: released_socket
         )
         released_result = released.poll(released_permit)
@@ -411,6 +441,7 @@ class PcmElectricalWireTests(unittest.TestCase):
                 FakeDiagnosticLock(),
                 old_snapshot,
                 purpose=transmit_permit.RF_HUB_PRESSURE,
+                channel=TEST_CHANNEL,
                 monotonic=lambda: (
                     1.0 + transmit_permit.PERMIT_TTL_SECONDS
                 ),

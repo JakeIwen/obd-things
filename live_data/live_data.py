@@ -17,9 +17,9 @@ import shutil
 from collections import namedtuple
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from lib import canbus, diagnostic_safety, uds
+from lib import can_runtime_route, diagnostic_safety, uds
 from lib.uds import s16, s32, u8        # re-export so metric tables can `from ... import s16,...`
-from tools.ecu_discover import preflight
+from tools.ecu_discover import prearm_conflict_errors, preflight
 
 # A displayed row: which DID to read, friendly name, fn(data)->number (or None for raw-only),
 # scale, unit string.
@@ -177,7 +177,11 @@ def render(link, metrics, title, spec_deg, interval, tick):
 
     live = link.connected and any(v is not None for v in cache.values())
     ts = time.strftime("%H:%M:%S")
-    status = f"{GRN}LIVE{RST}" if live else f"{RED}NO DATA{RST} {DIM}(ign on? can0 up? bus awake?){RST}"
+    status = (
+        f"{GRN}LIVE{RST}"
+        if live
+        else f"{RED}NO DATA{RST} {DIM}(ignition on? resolved bus awake?){RST}"
+    )
 
     lines = []
     lines.append(f"{BOLD}{CYA}{title}{RST}  {link.m.name}  TX {link.m.txid:08X} / RX {link.m.rxid:08X}")
@@ -313,13 +317,20 @@ def run(
             "--confirm-no-active-routine with --execute"
         )
 
+    try:
+        ownership = can_runtime_route.acquire_armed_module_route(
+            module,
+            asserted_pair=args.pair,
+            prearm_check=prearm_conflict_errors,
+        )
+        module = ownership.route.module
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise SystemExit(f"stable runtime route/arm failed: {exc}") from None
     errors = preflight(module.channel, module.bitrate)
     if errors:
-        raise SystemExit("live-data preflight failed: " + "; ".join(errors))
-    try:
-        lock = diagnostic_safety.acquire_channel_lock(module.channel)
-    except (OSError, RuntimeError, ValueError) as exc:
-        raise SystemExit(f"refusing to start live diagnostics: {exc}") from None
+        restored = ownership.release()
+        suffix = "" if restored else "; passive restoration failed"
+        raise SystemExit("live-data preflight failed: " + "; ".join(errors) + suffix)
 
     link = None
     fatal_error = None
@@ -363,12 +374,12 @@ def run(
                     fatal_error = f"link close failed: {type(exc).__name__}: {exc}"
             finally:
                 try:
-                    restored_passive = bool(canbus.restore_passive(module.channel, module.bitrate))
+                    restored_passive = ownership.release()
                 except Exception as exc:
                     if fatal_error is None:
                         fatal_error = f"passive restore failed: {type(exc).__name__}: {exc}"
                 finally:
-                    diagnostic_safety.release_channel_lock(lock)
+                    pass
             if terminal_active:
                 sys.stdout.write(CUR_ON + ALT_OFF)
                 sys.stdout.flush()

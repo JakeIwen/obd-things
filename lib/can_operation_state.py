@@ -47,6 +47,15 @@ def _validate_name(value: str, label: str) -> str:
     return value
 
 
+def _validate_inhibit_channel(value: str) -> str:
+    # A literal wildcard is permitted only in inhibit payloads. It is never
+    # used in a path or passed to a subprocess, and lets a same-boot safety
+    # latch survive ephemeral SocketCAN renumbering.
+    if value == "*":
+        return value
+    return _validate_name(value, "channel")
+
+
 def _bounded_text(value: str, label: str, *, maximum: int = 240) -> str:
     if not isinstance(value, str) or "\n" in value or "\r" in value or len(value) > maximum:
         raise ValueError(f"invalid {label}")
@@ -167,11 +176,11 @@ def load_topology(channel: str) -> TopologyState:
 def begin_inhibit(
     name: str,
     *,
-    channel: str = "can0",
+    channel: str,
     reason: str,
 ) -> dict[str, object]:
     name = _validate_name(name, "inhibit name")
-    channel = _validate_name(channel, "channel")
+    channel = _validate_inhibit_channel(channel)
     reason = _bounded_text(reason, "reason")
     boot_id = current_boot_id()
     if not boot_id:
@@ -222,7 +231,32 @@ def active_inhibits(channel: str) -> tuple[dict[str, object], ...]:
     return tuple(active)
 
 
-def status(channel: str = "can0") -> dict[str, object]:
+def all_active_inhibits() -> tuple[dict[str, object], ...]:
+    """Return every same-boot inhibit without inventing a netdev identity."""
+
+    boot_id = current_boot_id()
+    if not boot_id:
+        return ({"name": "boot-id-unavailable", "channel": "*"},)
+    try:
+        entries = sorted(STATE_DIR.glob("inhibit-*.json"))
+    except OSError:
+        return ({"name": "inhibit-state-unreadable", "channel": "*"},)
+    active: list[dict[str, object]] = []
+    for path in entries:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            active.append({"name": path.name, "channel": "*", "invalid": True})
+            continue
+        if not isinstance(payload, dict):
+            active.append({"name": path.name, "channel": "*", "invalid": True})
+            continue
+        if payload.get("boot_id") == boot_id:
+            active.append(payload)
+    return tuple(active)
+
+
+def status(channel: str) -> dict[str, object]:
     topology = load_topology(channel)
     return {
         "topology": asdict(topology),

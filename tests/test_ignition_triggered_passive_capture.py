@@ -107,7 +107,19 @@ class IgnitionTriggeredPassiveCaptureTests(unittest.TestCase):
                 ]
             )
             policy = arm.validate_args(args)
+            ownership = mock.Mock()
+            ownership.route = mock.Mock(
+                channel="can7",
+                bitrate=500000,
+                role="c-can",
+                pair="6/14",
+                topology_fingerprint="fixture",
+            )
             with mock.patch.object(
+                arm.can_runtime_route,
+                "acquire_passive_bus_route",
+                return_value=ownership,
+            ), mock.patch.object(
                 arm.passive,
                 "require_writable_mount",
                 return_value=123,

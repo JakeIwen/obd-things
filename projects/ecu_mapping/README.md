@@ -8,6 +8,19 @@ DID oracle: a mismatched profile can poll unsupported DIDs or apply the wrong la
 Treat its raw request/response trace as evidence and verify rendered interpretations against the
 installed subtype or controlled ground truth.
 
+> **Operational topology update (2026-08-21):** the permanent Pi installation
+> has simultaneous serial-resolved C-CAN, B-CAN, and CAN-CH roles. Historical
+> campaigns below accurately preserve the PCAN observer, physical pair, and
+> evidence provenance that produced their findings, but their `can0`,
+> `bringup.sh`, cable-moving, and mutually exclusive service instructions are
+> not current operations. Never translate those commands to an arbitrary
+> `gs_usb` netdev. Current passive telemetry belongs to the installed, enabled,
+> and active role-aware vehicle-data broker. Maintained live diagnostic tools
+> now use the shared, tool-scoped role owner: each resolves and exclusively owns its exact
+> role/channel, arms only for the bounded operation, and restores passive state.
+> There is no standalone command that leaves a role armed, and completed legacy
+> drive campaigns must not be reconstructed around one.
+
 The cross-project [`AlfaOBD evidence history`](../../docs/alfaobd-evidence-history.md) is the
 canonical chronology of confirmed mis-mappings, incompatible profiles, recording/catalog traps,
 project parser corrections, and the trust rules derived from them.
@@ -49,9 +62,13 @@ direction as the narrowly allowlisted `generator.field_duty` source
 `pcm.did.01a1`: the broker supervises one engine-running armed interval,
 continues the existing broadcast telemetry during it, sends no session-control
 or tester-present traffic, and requires exact listen-only restoration. The
-implementation is deployed and has live-validated approximately one-hertz
-dashboard updates while the same PCAN also records its PCM and RF Hub
-request/positive-response pairs.
+former PCAN deployment live-validated approximately one-hertz dashboard
+updates while recording PCM and RF Hub request/positive-response pairs. The
+serial-resolved dual-USBCANFD broker was installed and passively live-validated
+on 2026-08-21. Its normal active-drive feature is enabled, but the vehicle was
+asleep during commissioning, so no helper ran and no active diagnostic polling
+was validated; consult the vehicle-data deployment section before treating that
+path as exercised.
 The subsequent
 [`broker-drive poll validation`](findings/promaster_2022/2026-08-04_broker_drive_poll_validation.md)
 accounts for 8,514 complete production scheduler cycles across two zero-drop
@@ -76,9 +93,10 @@ RMSE against gearbox oil versus 13.106 °C against chip temperature, with a
 `0x1F7` byte 3 is now telemetry-allowlisted as transmission-oil temperature
 using `°C = 0.375 × signed_i8 + 57`, displayed in °F without an invented
 warning threshold. The reviewed `--profile tcm-thermal` mode in
-[`cluster_drive_log.py`](cluster_drive_log.py) records paired `04FE/0301`
+the now-retired `cluster_drive_log.py` recorded the paired `04FE/0301`
 thermal-discrimination drives at two total requests per second with integrated
-loss-accounted raw evidence.
+loss-accounted raw evidence. The executable was deleted after the completed
+campaign; the evidence and conclusions remain in the linked findings.
 
 The related-profile PCM thermal families are now closed. The installed PCM
 entered session `92` but returned NRC `12` for `3159`, `315A`, `B010`,
@@ -237,7 +255,14 @@ vehicle-condition provenance into each observation, and keeps all names/units as
 catalog references. Its default JSON report lives under `tmp/ecu_mapping/android_tablet/`; it does
 not open CAN or ADB.
 
-## Prepared AlfaOBD + passive-PCAN correlation campaign
+## Capture and correlation workflows
+
+### Current AlfaOBD + role-aware passive C-CAN capture workflow
+
+The July campaign results and PCAN condition strings remain in dated findings
+and capture manifests as evidence provenance. The operating examples here use
+the maintained permanent-role path: no adapter moves, no saved netdev, and no
+manual CAN link bring-up.
 
 Two guarded tools now turn the useful part of the 2026-07-22 AlfaOBD experiment into a repeatable
 campaign:
@@ -251,12 +276,15 @@ campaign:
   anchors, the qualified `0x0FC` RPM, `0x2ED` coolant, and `0x41D` oil-pressure
   sources, the leading `0x100` torque, `0x412` temperature, and `0x41B`
   throttle candidates, and all registered C-CAN diagnostic request/response
-  IDs. It never configures or transmits on CAN and stops if `can0` ceases to
-  be UP, 500 kbit/s, listen-only, and ERROR-ACTIVE.
+  IDs. Its maintained live path resolves C-CAN by exact USB identity, holds
+  shared role/channel locks, never configures or transmits, and stops if the
+  identity or exact passive classical-CAN state changes.
 
-Both hold shared observer locks, so they may run together while every participating Pi-side
-transmitter or interface reconfiguration remains excluded. They also refuse to compete with
-`tpms-logger` or `tpms-drivesniff`; neither tool stops or restarts a service.
+Both hold shared observer locks, so they may run together while an exclusive
+owner or interface reconfiguration on that same role/channel remains excluded.
+They do not stop, restart, or globally block `tpms-logger`, `tpms-drivesniff`,
+or an owner of another bus; normal lock contention is scoped to the resolved
+role in use.
 
 The tracked five-signal cluster shakedown was completed on 2026-07-24:
 
@@ -269,8 +297,12 @@ Before executing it, connect the tablet by USB, connect AlfaOBD to
 `Instrument panel Continental`, open System status with `Monitor parameters` enabled, and leave
 the red **play triangle** visible (monitor stopped). AlfaOBD Debug Data recording must already be
 enabled, and both `AlfaOBD_Debug.bin` and `MARELLI_DASH_EP_Info.log` must already exist so their
-starting offsets are unambiguous. Put PCAN on C-CAN pins 6/14, stop the TPMS logger, raise the
-receive-buffer ceiling for the long recorder, and explicitly restore passive C-CAN:
+starting offsets are unambiguous. Inspect the broker, recorders, TPMS services,
+and role state before the campaign; stop an active participating owner through
+its current handoff. `passive_drive_capture.py` resolves C-CAN itself and
+requires the exact passive classical-CAN state. It neither configures the link
+nor stops/restarts a service. Do not precede it with raw `ip link`, a historical
+bring-up command, or an adapter move.
 
 The 2026-07-23 vanpi storage audit (`findmnt`, numeric ownership, and the kernel exFAT warning)
 found that EXFAT512 needed a clean fsck/remount and that its automatic exFAT mount lacked
@@ -281,12 +313,6 @@ found that EXFAT512 needed a clean fsck/remount and that its automatic exFAT mou
 58 GiB free, the capture tree belonged to `pi:pi`, and the disk-health watchdog's create/remove
 probe succeeded as `pi`. Recheck the exact mount, ownership, writability, and free space after every
 reconnect; these are temporal host facts, not permanent disk guarantees.
-
-```bash
-sudo systemctl stop tpms-logger
-sudo sysctl -w net.core.rmem_max=16777216
-./bringup.sh
-```
 
 For a simultaneous shakedown, choose one safe timestamped identifier (for example
 `cluster-shakedown-20260724-120000`), replace `RUN_ID` with that exact value in both panes, and
@@ -303,7 +329,7 @@ python3 tools/passive_drive_capture.py \
   --duration-seconds 1200 \
   --soft-free-gib 30 --hard-free-gib 25 \
   --execute --confirm-passive \
-  --conditions "parked; ignition ON; engine OFF; PCAN C-CAN 6/14; OBDLink MX+ parallel"
+  --conditions "parked; ignition ON; engine OFF; serial-resolved C-CAN 6/14 passive; OBDLink MX+ parallel"
 ```
 
 The AlfaOBD pane is:
@@ -351,7 +377,7 @@ python3 tools/passive_drive_capture.py \
   --duration-seconds 1800 \
   --soft-free-gib 30 --hard-free-gib 25 \
   --execute --confirm-passive \
-  --conditions "ordinary driving; parked start; engine running; PCAN C-CAN 6/14 listen-only; OBDLink MX+ parallel"
+  --conditions "ordinary driving; parked start; engine running; serial-resolved C-CAN 6/14 passive; OBDLink MX+ parallel"
 
 python3 tools/alfaobd_singleton_campaign.py run \
   projects/ecu_mapping/configs/alfaobd_cluster_scaling_drive.json \
@@ -400,57 +426,57 @@ finalization, or pre-duration hard-floor stop makes the command fail and the fin
 stream, but the manifest then says `full_stream_complete: false`. Raw output remains under the
 external disk's `obd-things/tmp/` tree and is never committed in place.
 
-### One-shot ignition-triggered PCM mapping drive
+### Role-aware one-shot passive C-CAN mapping-drive service
 
 `tools/ignition_triggered_passive_capture.py` removes the SSH/Codex-session
 dependency from one ordinary drive. Its default is an inert plan. When explicitly
-armed, it listens only for the verified C-CAN ignition-presence frame `0x2EF`;
-it does not reserve the channel or transmit while the van is off. The first fresh
+executed, it resolves the permanent C-CAN role by USB identity and holds shared
+role/channel ownership while listening for the verified ignition-presence frame
+`0x2EF`; it never changes the link or transmits. The first fresh
 `0x2EF` starts `passive_drive_capture.py` on EXFAT512. After `0x2EF` has first
 been seen, 20 seconds of absence cleanly ends the run, finalizes and verifies all
 zstd chunks, and records `reason: tracked_id_absent` with `success: true`.
 External termination, CAN-interface drift, new SocketCAN drops, storage failure,
 or the hard disk floor still produce a failed campaign.
 
-The tracked `promaster-mapping-drive.service` is deliberately one-shot and is
-installed/started for a selected drive, not permanently enabled. It survives an
-SSH or Codex disconnect but not a Pi reboot. It also does not configure `can0`,
-mount storage, stop a conflicting service, or control AlfaOBD; all live
-preconditions must already be true when it is armed and are rechecked before the
-capture starts. Its privileged `ExecStartPre` raises only
+The tracked `promaster-mapping-drive.service` now uses that serial-resolved
+passive path and contains no fixed channel or adapter movement. It is a one-shot
+campaign unit, not a boot telemetry service: it still does not configure the
+interfaces, control AlfaOBD, or stop other services, and the external mount plus
+exact passive C-CAN role must already be available. Its privileged `ExecStartPre` raises only
 `net.core.rmem_max` to the recorder's guarded 16 MiB socket reserve. This
 quadruples the former reserve after one 46-minute capture reported 3,728
 socket drops during a transient consumer/storage stall; drop detection and
-the zero-drop evidence gate remain unchanged:
+the zero-drop evidence gate remain mandatory.
 
-```bash
-sudo cp projects/ecu_mapping/promaster-mapping-drive.service \
-  /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl start promaster-mapping-drive.service
+The tracked role-aware unit replaced the historical installed copy on
+2026-08-21 and is disabled/inactive. It was not started or capture-validated
+during broker commissioning. Before a future owner-authorized campaign, inspect
+the effective unit and verify the role reconciler and exact passive C-CAN role
+are available.
 
-systemctl status promaster-mapping-drive.service
-cat tmp/ecu_mapping/ignition-drive-arm/state.json
-```
+### Broker-coordinated automatic drive capture
 
-### Current broker-coordinated automatic drive capture
-
-The one-shot `promaster-mapping-drive.service` above remains deliberately
-inactive because its standalone passive safety contract cannot coexist with
-the broker's armed engine-running interval. The current enabled,
-automatically rearming recorder is instead
+The one-shot `promaster-mapping-drive.service` above is for a deliberately
+bounded passive campaign. The maintained, automatically rearming production
+recorder is instead
 [`projects/vehicle_data/drive_recorder.py`](../vehicle_data/drive_recorder.py),
-installed as `van-drive-recorder.service`.
+tracked as `van-drive-recorder.service`. Its installed copy matches the tracked
+role-aware unit as of 2026-08-21 but remains disabled/inactive; no new
+dual-USBCANFD drive recording was validated during passive broker commissioning.
 
 This companion is receive-only: it does not take the channel lock, configure
-or restore `can0`, control the broker, or transmit. It waits until broker status
+or restore the serial-resolved C-CAN channel, control the broker, or transmit.
+It waits until broker status
 proves that the reviewed active-drive helper owns healthy armed C-CAN, requires
 an initial `0x2EF` within five seconds, then records full and priority
 loss-accounted zstd streams on EXFAT512. `candump -D` survives the broker's
 expected end-of-interval SocketCAN restoration; twenty seconds without `0x2EF`
 ends and verifies that drive. After successful finalization the daemon returns
 to its broker-status wait and automatically starts a new timestamped campaign
-on the next drive, including after reboot because the unit is enabled.
+on the next drive. In dual mode it binds the broker-reported netdev only after
+rechecking the exact USB serial/`dev_id`; the dated campaigns below used the
+former PCAN `can0` and remain historical deployment evidence.
 
 The live mid-drive deployment on 2026-07-30 used overlapping receive-only raw
 coverage and did not restart the broker or reconfigure the interface. The
@@ -483,63 +509,41 @@ The bounded bit search found no transferable passive carrier: even the
 repeatable `0x417 u8be@18` geometry failed no-refit validation at 12.8–13.9
 percentage points RMSE. Continue using the guarded direct `01A1` read.
 
-### Persistent B-CAN automatic capture mode
+### Role-aware B-CAN awake-interval recorder
 
-[`bcan_drive_recorder.py`](bcan_drive_recorder.py) is the receive-only mode for
-campaigns where the PCAN is physically moved to the labeled pins-3/11 B-CAN
-branch. Its systemd unit establishes 125 kbit/s listen-only mode and then the
-daemon takes the shared channel observer lock around each passive probe. A
-successful identity probe retains that same lock without a gap through capture
-startup and the complete recording. A silent probe releases it before the
-five-second idle wait, allowing the scheduled voltage monitor to take its
-brief exclusive lock and wake a sleeping B-CAN. The daemon does not configure
-CAN, wake the bus, transmit, or make diagnostic requests.
+[`bcan_drive_recorder.py`](bcan_drive_recorder.py) is a receive-only recorder
+for the permanent Board A CAN2 role. Each probe resolves B-CAN from exact USB
+serial/`dev_id`, acquires shared logical-role and resolved-channel locks, and
+requires an exact 125-kbit/s classical-CAN, FD-off, listen-only,
+ERROR-ACTIVE, `restart-ms 0` readback. It periodically revalidates identity
+through capture and never configures a link, wakes a bus, transmits, or issues a
+diagnostic request.
 
-Before creating a capture directory it requires at least three identifiers from
-the verified B-CAN signature set during one three-second passive probe, rejects
-the wrong-rate RX-error threshold, and then requires `0x46C` within five seconds
-of opening the loss-accounted recorder. Thirty seconds without `0x46C` closes
-and verifies the interval; the daemon then automatically re-arms. It deliberately
-retains every verified B-CAN awake interval, not only proven drives, because a
-fob wake may immediately precede departure and short body-network captures are
-also useful wake/sleep evidence.
+A successful probe requires at least three IDs from the verified B-CAN
+signature set and retains the same ownership through recorder startup and the
+complete interval. A silent probe releases ownership for the retry wait.
+`0x46C` must appear within five seconds after the recorder opens; thirty
+seconds without it ends and verifies the interval. Short fob-wake intervals are
+kept deliberately because they remain useful wake/sleep evidence.
 
-The same passive signature witness records a same-boot `b-can`, pair `3/11`
-topology through `lib/can_operation_state.py`. Consequently `voltage_mon` can
-read `0x46C` concurrently under another shared observer lock while the bus is
-awake, or wake it under the exclusive lock while the recorder is idle. If the
-monitor first overlaps one recorder probe, its acquirer retries the exclusive
-request for a bounded four seconds; if the monitor owns the exclusive lock
-first, the recorder defers its probe. No interface-changing operation can race
-a live capture, and a long capture still causes the bounded voltage attempt to
-fail closed.
+Output lives below
+`/mnt/EXFAT512/obd-things/tmp/captures/bcan/auto-drive/`; state lives at
+`tmp/ecu_mapping/bcan-drive-recorder-state.json`. Full and priority streams
+retain the 30/25 GiB soft/hard free-space floors.
 
-Output is written below
-`/mnt/EXFAT512/obd-things/tmp/captures/bcan/auto-drive/`; live state is in
-`tmp/ecu_mapping/bcan-drive-recorder-state.json`. Full and B-CAN-priority zstd
-streams retain the normal 30/25 GiB soft/hard free-space floors. The unit is
-mutually exclusive with the C-CAN telemetry, TPMS, broker-drive, and one-shot
-mapping services because one PCAN channel observes only one physical pair.
-Switching back to C-CAN therefore requires stopping/disabling this unit,
-restoring the normal C-CAN services, and physically selecting the pins-6/14
-branch.
+The tracked `promaster-bcan-recorder.service` now orders after/wants the
+role-aware telemetry broker, has no fixed-interface bring-up or mutual-bus
+Conflicts, and may coexist with independent C-CAN ownership. On 2026-08-21 this
+tracked unit replaced the legacy installed unit and its old enablement; it is
+disabled/inactive and was not capture-validated during broker commissioning.
+Before a future authorized campaign, inspect the effective unit and then
+validate its first passive B-CAN interval without disturbing the other roles.
 
-The mode was deployed on vanpi on 2026-08-07 as
-`promaster-bcan-recorder.service`. At deployment, the PCAN readback was UP at
-125 kbit/s, listen-only, ERROR-ACTIVE with zero RX errors/drops; the sleeping
-bus produced no frames, so the service correctly published `status=waiting`
-without creating an empty campaign. The mutually exclusive
-`van-telemetry.service`, `van-drive-recorder.service`, and
-`tpms-logger.service` units were stopped and disabled for this B-CAN campaign.
-The B-CAN recorder is enabled across reboot and retries indefinitely if its
-process or adapter preflight fails. Subsequent same-boot captures verified 12
-known B-CAN signature IDs and exercised automatic re-arming. On 2026-08-07, a
-deliberately unsynchronized `voltage_mon --no-notify` run began while the
-recorder held its passive probe lock, waited through that probe, returned a
-verified wake-assisted `0x46C` value of 12.48 V, and left `can0` at the exact
-125 kbit/s listen-only, ERROR-ACTIVE, `restart-ms 0` baseline with zero RX
-errors/drops. The recorder then independently refreshed the same-boot B-CAN
-topology from all 12 signature IDs and opened a passive awake-interval capture.
+The original 2026-08-07 PCAN deployment and its captures remain valid
+provenance: it verified the 125-kbit/s signature, automatic interval rearming,
+zero-error passive readback, and a guarded historical `0x46C` voltage sample.
+Its adapter-moving, fixed-`can0`, wake-assisted-voltage, and mutually exclusive
+service procedure is retired and must not be reconstructed.
 
 The automatic passive recording remains valuable if AlfaOBD is absent, but it
 cannot by itself attach labels to unresolved signals. For the intended PCM
@@ -806,18 +810,21 @@ prove a non-observed scale or enum. The completed schema-2 report resolved all s
 segments, passed both repeated-anchor checks, and has SHA-256
 `8f7e198ea2a9fedf55a64b4d1c44e970eadb48d69136b3a2d11acb058c21f1e1`.
 
+### Current role-aware parked cluster viewer
+
 The follow-up direct comparison proved the five mapped DIDs are compatible with both explicit
 default session `01` and extended session `03`; a session-unchanged pass also succeeded. The
 resulting parked viewer defaults to physical `22` reads and sends no DiagnosticSessionControl or
 TesterPresent. Repeated `22` traffic can refresh S3 and may therefore prolong an inherited session;
 the viewer does not claim that inherited state is default or that it forces an S3 timeout. An
 explicit `--session 03` override is available only behind the normal session-change confirmations.
-It is dry-run-first, bounded, lock-protected, and restores passive mode. It is not a drive logger:
+It is dry-run-first and bounded. Live mode resolves C-CAN by USB identity,
+holds exclusive role/channel ownership, arms only for the viewer, and restores
+the exact passive baseline. It is not a drive logger:
 
 ```bash
 python3 projects/ecu_mapping/cluster_live.py
 
-./bringup.sh --tx
 python3 projects/ecu_mapping/cluster_live.py \
   --execute --confirm-parked --confirm-engine-off --pair 6/14 \
   --conditions "parked, ignition ON, engine OFF"
@@ -826,136 +833,20 @@ python3 projects/ecu_mapping/cluster_live.py \
 Its RPM, speed, gear, and temperature rows remain raw/candidate displays. Battery alone uses the
 qualified Alfa `raw x 0.1 V` rendering; the raw bytes remain visible for every row.
 
-## Bounded cluster drive logger
+## Historical bounded cluster-drive campaign
 
-`cluster_drive_log.py` is the unattended moving-vehicle companion to the parked viewer. Its
-profile is immutable: cluster `18DA60F1 -> 18DAF160`, physical `22` reads of
-`1000/1002/0107/1004/1005`, and at most five total request attempts per second. It sends no
-DiagnosticSessionControl, TesterPresent, DTC, routine, write, IO-control, security, reset,
-functional, retry, wake, re-arm, or recovery traffic. Repeated `22` requests may still refresh
-the cluster's inherited S3 timer.
+The completed single-PCAN `cluster_drive_log.py` campaign is preserved only as
+evidence; its executable was deleted during the permanent-role migration rather
+than carrying forward a moving-vehicle/manual-arm path. Do not reconstruct its
+fixed-channel command from git history.
 
-The logger must be launched while parked, preferably after the engine is running. Before opening
-ISO-TP it requires the verified ignition-presence frame `0x2EF`, persists a first raw CAN frame,
-and obtains one exact positive response of the reviewed length from every DID. It then tracks
-failures separately per DID and ordinarily fails after three consecutive
-failures of any one signal. Three timeouts corroborated by at least two
-seconds without `0x2EF` are instead classified as a clean ignition-shutdown
-stop; a fresh `0x2EF` keeps the original fail-closed behavior. Independent
-loss of `0x2EF` for ten seconds also ends the campaign, so each ignition leg
-is a separate run.
-
-Raw capture is integrated because an active diagnostic owner and
-`passive_drive_capture.py` cannot share one PCAN: the former requires armed CAN plus the exclusive
-lock, while the latter requires listen-only plus an observer lock. The integrated recorder drains
-one full-bus `candump`, rotates ten-minute zstd chunks asynchronously, detects socket-drop notices,
-and writes a small kernel-timestamped wire stream for the exact cluster endpoint. Finalization
-requires its request/positive/NRC counts to agree with the append-only high-level attempt records.
-AlfaOBD and every other diagnostic client must remain closed for the whole run.
-This statement concerns the standalone passive entry point. The vehicle-data
-broker companion described above has a different, narrower safety contract: it
-opens only a receive socket after proving the broker owns armed C-CAN and never
-competes for the diagnostic lock.
-
-The same guarded logger also feeds the local telemetry cache by default. It
-publishes cluster battery voltage, fresh verified `0x2EF` ignition presence,
-and the four unresolved DIDs as explicitly raw/candidate metrics through the
-Unix-only broker observation endpoint. A fixed latest-value queue and
-250-millisecond socket timeout keep the dashboard outside the CAN timing and
-evidence path: a stopped, outdated, or unavailable broker cannot delay a
-request, grow memory without bound, or fail the capture. Publication counts,
-superseded values, errors, and any unfinished publisher thread are recorded in
-the final `summary.json`. Use `--no-telemetry-publish` only when deliberately
-testing without the dashboard.
-
-First inspect the inert plan:
-
-```bash
-python3 projects/ecu_mapping/cluster_drive_log.py \
-  --out-root /mnt/EXFAT512/obd-things/tmp/ecu_mapping/cluster-drive \
-  --raw-root /mnt/EXFAT512/obd-things/tmp/captures/ccan/cluster-drive \
-  --require-mount /mnt/EXFAT512 \
-  --campaign cluster-drive-shakedown-YYYYMMDD-HHMMSS \
-  --duration-seconds 720
-```
-
-Before the first long run, use a parked, engine-idling 12-minute shakedown so real candump/zstd/
-EXFAT operation crosses one ten-minute rotation boundary. Confirm that `tpms-logger`,
-`tpms-drivesniff`, and `promaster-drive-capture` are inactive, AlfaOBD is closed, and the PCAN is
-on C-CAN pins 6/14. Then:
-
-```bash
-sudo sysctl -w net.core.rmem_max=16777216
-./bringup.sh --tx
-
-python3 projects/ecu_mapping/cluster_drive_log.py \
-  --out-root /mnt/EXFAT512/obd-things/tmp/ecu_mapping/cluster-drive \
-  --raw-root /mnt/EXFAT512/obd-things/tmp/captures/ccan/cluster-drive \
-  --require-mount /mnt/EXFAT512 \
-  --campaign cluster-drive-shakedown-YYYYMMDD-HHMMSS \
-  --duration-seconds 720 \
-  --execute --confirm-driving-read-only --confirm-started-parked \
-  --confirm-no-other-diagnostics --pair 6/14 \
-  --conditions "started parked, engine running; parked idling rotation shakedown; AlfaOBD closed; PCAN on C-CAN 6/14"
-```
-
-The first real-hardware shakedown completed on 2026-07-25 as
-`cluster-drive-shakedown-20260726T050955Z`; see the
-[`idling logger finding`](findings/promaster_2022/2026-07-25_cluster_idle_logger_shakedown.md).
-It produced 3,114/3,114 exact positives, two valid raw chunks containing
-1,960,920 frames, zero drops, exact wire/high-level counts, and verified
-passive restoration/lock release. Cluster `1000` varied from `2936..6136` and
-settled near `3000` while speed stayed zero and gear stayed `00`, which is
-strong engine-speed behavior and is consistent with—but does not yet prove—a
-`raw / 4` RPM rendering. This emergency shakedown used local ext4 `tmp/` while
-`EXFAT512` was being repaired, so a long run still requires the external
-mount's independent read-write/fsync/free-space preflight.
-
-Use `--duration-seconds 72000` and a new campaign name for a 20-hour ignition leg only after that
-shakedown passes. The process is noninteractive once started; do not interact with it while driving.
-It stops on duration, ignition loss, disk floor, interface/drop change, child failure, signal, or
-evidence mismatch and never auto-recovers while moving. Socket/observer close, final active drop
-counter sampling, passive restoration, and lock release occur before the remaining current-chunk
-finalization and final hashes; completed earlier chunks are verified asynchronously while live.
-External-mount identity is sticky: once loss, change, or read-only state of the expected EXFAT
-mount is detected, every later path-based publication is suppressed, preventing subsequent
-metadata helpers from recreating the campaign tree on the Pi root filesystem. A hard storage I/O
-stall can still delay a userspace write or filesystem call; no userspace timeout can make a
-blocked kernel filesystem operation instantaneously return.
-
-The two campaign directories have the same name but distinct canonical roots:
-
-- DID evidence: `tmp/ecu_mapping/cluster-drive/<campaign>/samples.jsonl` plus `run.json` and
-  `summary.json`.
-- Raw evidence: `tmp/captures/ccan/cluster-drive/<campaign>/`, with zstd chunks,
-  `manifest.jsonl`, `cluster_wire.jsonl`, and recorder diagnostics.
-
-The external-volume start/stop floors remain 30/25 GiB. A crash can leave a recoverable
-`*.zst.partial` and `cluster_wire.jsonl.partial`; do not mistake either for a clean campaign.
-A zstd partial is automatically recoverable only when it contains a complete, verifiable zstd
-frame; a truncated partial is retained for manual salvage. Recovery is a separate explicit
-evidence-preservation operation.
-
-Accept a shakedown or drive leg only from the final DID `summary.json`, not from `run.json`,
-`owner.json`, a renamed raw file, or the mere absence of `.partial` names. The final summary must
-report `status: complete`, `startup_profile_validated: true`, `restored_passive: true`,
-`lock_released: true`, no fatal errors, complete wire count cross-validation, zero drops, and
-complete raw chunks with matching internal frame accounting. Also inspect `stop_reason` and
-`duration_complete`: `status: complete` means clean finalization, while ignition loss or the soft
-disk floor can intentionally end a shorter leg; `request_limit` is also a normal near-deadline
-bound but does not set `duration_complete`. If the mount disappears, its last on-disk summary can
-remain `running` or `finalizing` because the logger deliberately refuses to redirect a replacement
-summary onto the root disk.
-
-Wire cross-validation is count-level by exact echoed DID: it reconciles requests, exact-length
-positives, and aggregate negative responses. It does not yet prove a chronological or
-payload-byte join between every high-level row and raw frame. Both streams retain sequence,
-payload, and timestamp fields for that stricter offline join.
-
-This campaign can establish nonzero raw ranges, ordering, lag, gear transitions, relative
-relationships, and broadcast candidates. It does not by itself prove absolute RPM/speed,
-temperature, or every gear enum. Radar/GPS/tachometer, a stable temperature reference, or another
-controlled ground truth is still required before promoting those scalings.
+The 2026-07-25 parked/idling shakedown
+`cluster-drive-shakedown-20260726T050955Z` produced 3,114/3,114 exact
+positives, two verified raw chunks containing 1,960,920 frames, zero drops,
+exact wire/high-level counts, and verified passive restoration. The campaign
+layout and acceptance evidence remain documented in the
+[idling logger finding](findings/promaster_2022/2026-07-25_cluster_idle_logger_shakedown.md);
+the later packed-field conclusions below remain valid historical results.
 
 ### Current packed-field mapping doctrine
 
@@ -963,8 +854,9 @@ The first three phases are current doctrine, with the first two implemented as
 the default operational path:
 
 1. **Establish evidence and timing.** Research the exact ECU/tool context, bind
-   the label and physical scale to its ECU-scoped DID, and use the
-   PCAN-observed diagnostic response timestamp as the reference. Alfa CSV is
+   the label and physical scale to its ECU-scoped DID, and use the exact
+   kernel-timestamped diagnostic response as the reference (including PCAN
+   captures where that was the historical observer). Alfa CSV is
    label/scale evidence, not a sample-held timebase.
 2. **Discover coarsely, then refine narrowly.** Run the stable coarse field
    profile over the bus, shortlist no more than two exact stream identities,
@@ -1316,9 +1208,10 @@ verify the `/4` rpm scale or authorize public telemetry promotion.
   SQLite catalog reconstructed offline. The model-code-88 catalog matches the app's `RAM PRO MASTER
   (VF) 2022+` selection, includes the correct BCM profile, and exposes a 67-entry action menu with
   front/rear door-lock relay labels. It still does not directly associate those menu labels with the
-  six captured `2F` DIDs, so a fresh, one-action-at-a-time AlfaOBD session with PCAN listening in
-  parallel remains the next evidence-producing step for unlock labels; do not guess them from menu
-  order or command timing. See
+  six captured `2F` DIDs, so a fresh, one-action-at-a-time AlfaOBD session with
+  the maintained role-aware passive C-CAN recorder in parallel remains the next
+  evidence-producing step for unlock labels; do not guess them from menu order
+  or command timing. See
   [`2026-07-21_alfaobd_apk_catalog.md`](findings/promaster_2022/2026-07-21_alfaobd_apk_catalog.md).
 - **RFH (0xC7)** full ID block + TPMS; pair with labeled `RFH_FGA_Info.log` (current faults
   `U0001/B1040/C1502-FR/C1501-FL`) for the TPMS project. See `../tpms/`.
@@ -1340,8 +1233,9 @@ verify the `/4` rpm scale or authorize public telemetry promotion.
    unpadded repeat is not useful unless testing framing itself.
 2. **Unlock:** the APK catalog confirms that the current BCM profile offers separate front/rear
    door-lock relay actions, but not which captured `2F` DID implements each. Correlate one deliberate
-   AlfaOBD action at a time with Debug Data plus listen-only PCAN, then verify the result before any
-   replay. Do not use the adjacent PROXI/configuration menu entries.
+   AlfaOBD action at a time with Debug Data plus a role-aware passive C-CAN
+   capture, then verify the result before any replay. Do not use the adjacent
+   PROXI/configuration menu entries.
 3. **BCM structural decode completed:** all 75 definitions are represented in the offline report;
    55 DIDs have positive trace evidence and 20 are negative. Continue with controlled scaling/name
    validation, not another live sweep of the same requests.
@@ -1359,12 +1253,12 @@ verify the `/4` rpm scale or authorize public telemetry promotion.
    mismatch. Direct PCAN reads then produced identical results after exact `10 01` and `10 03` echoes,
    proving default compatibility without requiring extended session. The bounded standalone viewer
    may leave the inherited session unchanged and fail closed rather than sending `10`/`3E`; do not
-   label that inherited state as positively identified default. The fixed-profile
+   label that inherited state as positively identified default. The retired
    `cluster_drive_log.py` completed its 12-minute parked/idling rotation shakedown with exact
    request/wire accounting, zero drops, and passive restoration. Its nonzero `1000` range is
-   consistent with `raw / 4` RPM but remains unverified; use the guarded Alfa scaling drive for
-   moving speed, rendered RPM, and non-P gear evidence. The logger owns integrated raw capture
-   under the active lock, so do not pair it with the separate passive recorder on the same PCAN.
+   consistent with `raw / 4` RPM but remains unverified. That completed moving
+   workflow was deleted during migration and must not be reconstructed; use a
+   newly reviewed role-aware campaign only if a new scaling question warrants it.
    Preserve the validated singleton Status workflow for its bounded labels. The owner-priority PCM
    Plots catalog and simultaneous eleven-gauge idle mapping are complete: passive `0x41D` oil
    pressure and `0x2ED` coolant are telemetry sources. Loaded evidence now supports a packed

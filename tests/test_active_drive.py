@@ -14,15 +14,21 @@ from projects.vehicle_data import active_drive, ccan_powertrain, pcm_electrical
 from projects.vehicle_data.broker import ActiveDriveSupervisor, TelemetryBroker
 
 
-def interface(*, listen_only):
+TEST_CHANNEL = "can7"
+TEST_SERIAL = "serial-a"
+TEST_DEV_ID = 0
+
+
+def interface(*, listen_only, restart_ms=0, fd_enabled=False):
     return canbus.InterfaceState(
-        channel="can0",
+        channel=TEST_CHANNEL,
         present=True,
         up=True,
         bitrate=500000,
         listen_only=listen_only,
         controller_state="ERROR-ACTIVE",
-        restart_ms=100,
+        restart_ms=restart_ms,
+        fd_enabled=fd_enabled,
     )
 
 
@@ -43,7 +49,7 @@ def snapshot(
 class FakeDiagnosticLock:
     closed = False
     _diagnostic_lock_held = True
-    _diagnostic_lock_channel = "can0"
+    _diagnostic_lock_channel = TEST_CHANNEL
     _diagnostic_lock_mode = "exclusive"
 
     def fileno(self):
@@ -67,6 +73,7 @@ def transmit_authorization(
             completed_monotonic=evidence_at,
         ),
         purpose=purpose,
+        channel=TEST_CHANNEL,
         monotonic=clock,
     )
 
@@ -197,7 +204,7 @@ class FakeTpmsPoller:
 
 
 class FakeBackend:
-    channel = "can0"
+    channel = TEST_CHANNEL
 
     def __init__(
         self,
@@ -515,13 +522,14 @@ class ActiveSessionTests(unittest.TestCase):
             ]
         )
         backend.interface_state = lambda: canbus.InterfaceState(
-            channel="can0",
+            channel=TEST_CHANNEL,
             present=True,
             up=True,
             bitrate=500000,
             listen_only=True,
             controller_state="ERROR-ACTIVE",
             restart_ms=None,
+            fd_enabled=False,
         )
 
         outcome, emitted, _inhibit = self.run_session(backend)
@@ -531,6 +539,26 @@ class ActiveSessionTests(unittest.TestCase):
         self.assertEqual(backend.open_pcm_count, 0)
         self.assertIsNone(outcome.restored)
         self.assertEqual(emitted[-1]["interface_mode"], "unknown")
+
+    def test_fd_enabled_or_nonzero_restart_policy_never_arms(self):
+        for name, unsafe in (
+            ("fd_enabled", interface(listen_only=True, fd_enabled=True)),
+            ("restart_ms", interface(listen_only=True, restart_ms=100)),
+        ):
+            with self.subTest(name=name):
+                backend = FakeBackend(
+                    snapshots=[
+                        snapshot((750.0, 751.0, 752.0), rpm_observation())
+                    ]
+                )
+                backend.interface_state = lambda state=unsafe: state
+
+                outcome, emitted, _inhibit = self.run_session(backend)
+
+                self.assertEqual(outcome.reason, "adapter_unhealthy")
+                self.assertEqual(backend.arm_count, 0)
+                self.assertIsNone(outcome.restored)
+                self.assertEqual(emitted[-1]["interface_mode"], "unknown")
 
     def test_lock_contention_cannot_reach_any_backend_gate_or_transmitter(self):
         backend = FakeBackend(snapshots=[])
@@ -678,9 +706,109 @@ class ActiveSessionTests(unittest.TestCase):
         self.assertEqual(emitted[-1]["state"], "restoration_failed")
         self.assertEqual(emitted[-1]["interface_mode"], "armed_diagnostic")
         begin_inhibit.assert_called_once()
+        self.assertEqual(begin_inhibit.call_args.kwargs["channel"], "*")
 
 
 class ParentDeathHandshakeTests(unittest.TestCase):
+    def test_system_backend_matches_exact_resolved_usb_channel(self):
+        resolver = mock.Mock()
+        resolver.inventory.return_value = (
+            (
+                SimpleNamespace(
+                    channel="can7",
+                    driver="gs_usb",
+                    usb_vid="1d50",
+                    usb_pid="606f",
+                    usb_serial="serial-a",
+                    dev_id=1,
+                ),
+            ),
+            (),
+        )
+        backend = active_drive.SystemBackend(
+            "can7",
+            expected_usb_serial="serial-a",
+            expected_dev_id=1,
+            role_resolver=resolver,
+        )
+
+        self.assertTrue(backend.identity_matches())
+        backend.channel = "can8"
+        self.assertFalse(backend.identity_matches())
+
+    def test_system_backend_rejects_duplicate_identity_on_another_channel(self):
+        resolver = mock.Mock()
+        resolver.inventory.return_value = (
+            tuple(
+                SimpleNamespace(
+                    channel=channel,
+                    driver="gs_usb",
+                    usb_vid="1d50",
+                    usb_pid="606f",
+                    usb_serial="serial-a",
+                    dev_id=1,
+                )
+                for channel in ("can7", "can8")
+            ),
+            (),
+        )
+        backend = active_drive.SystemBackend(
+            "can7",
+            expected_usb_serial="serial-a",
+            expected_dev_id=1,
+            role_resolver=resolver,
+        )
+
+        self.assertFalse(backend.identity_matches())
+
+    def test_system_backend_passes_resolved_channel_to_both_pollers(self):
+        backend = active_drive.SystemBackend(
+            TEST_CHANNEL,
+            expected_usb_serial=TEST_SERIAL,
+            expected_dev_id=TEST_DEV_ID,
+            role_resolver=mock.Mock(),
+        )
+        pcm_poller = mock.Mock()
+        tpms_poller = mock.Mock()
+        with (
+            mock.patch.object(
+                active_drive.pcm_electrical,
+                "PcmElectricalPoller",
+                return_value=pcm_poller,
+            ) as pcm_factory,
+            mock.patch.object(
+                active_drive,
+                "RfHubPressurePoller",
+                return_value=tpms_poller,
+            ) as tpms_factory,
+        ):
+            self.assertIs(backend.open_pcm(), pcm_poller)
+            self.assertIs(backend.open_tpms(), tpms_poller)
+
+        pcm_factory.assert_called_once_with(
+            channel="can7",
+            timeout_seconds=active_drive.REQUEST_TIMEOUT_SECONDS,
+        )
+        tpms_factory.assert_called_once_with(
+            channel="can7",
+            timeout=active_drive.REQUEST_TIMEOUT_SECONDS,
+        )
+        pcm_poller.open.assert_called_once_with()
+        tpms_poller.open.assert_called_once_with()
+
+    def test_cli_requires_both_usb_identity_arguments(self):
+        with self.assertRaises(SystemExit):
+            active_drive.build_parser().parse_args(
+                [
+                    "--channel",
+                    TEST_CHANNEL,
+                    "--expected-usb-serial",
+                    TEST_SERIAL,
+                    "--expected-parent-pid",
+                    "4242",
+                ]
+            )
+
     def test_parent_pid_is_checked_before_and_after_prctl(self):
         expected = 4242
         parents = iter((expected, expected))
@@ -738,9 +866,18 @@ class ParentDeathHandshakeTests(unittest.TestCase):
         }
         self.assertEqual(
             set(actions),
-            {"help", "channel", "expected_parent_pid"},
+            {
+                "help",
+                "channel",
+                "expected_usb_serial",
+                "expected_dev_id",
+                "expected_parent_pid",
+            },
         )
-        self.assertEqual(tuple(actions["channel"].choices), ("can0",))
+        self.assertIsNone(actions["channel"].choices)
+        self.assertTrue(actions["channel"].required)
+        self.assertTrue(actions["expected_usb_serial"].required)
+        self.assertTrue(actions["expected_dev_id"].required)
         self.assertTrue(actions["expected_parent_pid"].required)
 
         with (
@@ -756,7 +893,11 @@ class ParentDeathHandshakeTests(unittest.TestCase):
                 active_drive.main(
                     [
                         "--channel",
-                        "can0",
+                        TEST_CHANNEL,
+                        "--expected-usb-serial",
+                        TEST_SERIAL,
+                        "--expected-dev-id",
+                        hex(TEST_DEV_ID),
                         "--expected-parent-pid",
                         "4242",
                     ]
@@ -820,7 +961,7 @@ class PressureWireTests(unittest.TestCase):
     def poll_response(self, response, *, permit=None):
         fake = self.FakeSocket(response)
         poller = active_drive.RfHubPressurePoller(
-            channel="can0",
+            channel=TEST_CHANNEL,
             timeout=0.5,
             socket_factory=lambda *_args: fake,
             monotonic=lambda: 10.0,
@@ -834,16 +975,17 @@ class PressureWireTests(unittest.TestCase):
         finally:
             poller.close()
 
-    def test_constructor_rejects_wrong_channel_and_invalid_timeout_before_open(self):
+    def test_constructor_accepts_dynamic_can_channel_and_rejects_invalid_input(self):
         socket_factory = mock.Mock()
         invalid_arguments = (
-            {"channel": "can1", "timeout": 0.5},
-            {"channel": "can0", "timeout": 0},
-            {"channel": "can0", "timeout": -0.1},
-            {"channel": "can0", "timeout": float("nan")},
-            {"channel": "can0", "timeout": float("inf")},
-            {"channel": "can0", "timeout": True},
-            {"channel": "can0", "timeout": "0.5"},
+            {"channel": "c-can", "timeout": 0.5},
+            {"channel": "vcan0", "timeout": 0.5},
+            {"channel": TEST_CHANNEL, "timeout": 0},
+            {"channel": TEST_CHANNEL, "timeout": -0.1},
+            {"channel": TEST_CHANNEL, "timeout": float("nan")},
+            {"channel": TEST_CHANNEL, "timeout": float("inf")},
+            {"channel": TEST_CHANNEL, "timeout": True},
+            {"channel": TEST_CHANNEL, "timeout": "0.5"},
         )
 
         for arguments in invalid_arguments:
@@ -855,6 +997,23 @@ class PressureWireTests(unittest.TestCase):
                     )
 
         socket_factory.assert_not_called()
+        poller = active_drive.RfHubPressurePoller(
+            channel="can7",
+            timeout=0.5,
+            socket_factory=socket_factory,
+        )
+        self.assertEqual(poller.channel, "can7")
+        socket_factory.assert_not_called()
+
+        dynamic_socket = self.FakeSocket(b"")
+        dynamic = active_drive.RfHubPressurePoller(
+            channel="can7",
+            timeout=0.5,
+            socket_factory=lambda *_args: dynamic_socket,
+        )
+        dynamic.open()
+        dynamic.close()
+        self.assertEqual(dynamic_socket.bound, ("can7",))
 
     def test_pressure_send_requires_correct_fresh_one_use_permit(self):
         response = self.response_frame(
@@ -863,7 +1022,7 @@ class PressureWireTests(unittest.TestCase):
 
         missing_socket = self.FakeSocket(response)
         missing = active_drive.RfHubPressurePoller(
-            channel="can0",
+            channel=TEST_CHANNEL,
             timeout=0.5,
             socket_factory=lambda *_args: missing_socket,
             monotonic=lambda: 10.0,
@@ -913,7 +1072,7 @@ class PressureWireTests(unittest.TestCase):
         )
         fake = self.FakeSocket(response)
         poller = active_drive.RfHubPressurePoller(
-            channel="can0",
+            channel=TEST_CHANNEL,
             timeout=0.5,
             socket_factory=lambda *_args: fake,
             monotonic=lambda: 10.0,
@@ -1065,14 +1224,15 @@ class BrokerActiveDriveTests(unittest.TestCase):
             return self.value
 
     class Acquirer:
-        channel = "can0"
+        channel = TEST_CHANNEL
 
         def status_snapshot(self):
             return {
-                "channel": "can0",
+                "channel": TEST_CHANNEL,
                 "adapter_present": True,
                 "up": True,
                 "bitrate": 500000,
+                "fd_enabled": False,
                 "listen_only": True,
                 "controller_state": "ERROR-ACTIVE",
                 "topology": {
@@ -1228,7 +1388,32 @@ class BrokerActiveDriveTests(unittest.TestCase):
 
     def test_armed_status_is_honest_and_blocks_other_active_acquisition(self):
         broker, _clock = self.make_broker()
-        broker._interface_status = self.Acquirer().status_snapshot()
+        interface_status = self.Acquirer().status_snapshot()
+        interface_status["role_interfaces"] = {
+            "ready": True,
+            "issues": [],
+            "roles": {
+                "c-can": {
+                    "resolution": "resolved",
+                    "channel": TEST_CHANNEL,
+                    "expected": {
+                        "usb_serial": "serial-a",
+                        "dev_id": 0,
+                        "passive_required": True,
+                    },
+                    "actual": {
+                        "up": True,
+                        "bitrate": 500000,
+                        "listen_only": True,
+                        "controller_state": "ERROR-ACTIVE",
+                        "restart_ms": 0,
+                    },
+                    "passive_ready": True,
+                    "reason": "ready",
+                }
+            },
+        }
+        broker._interface_status = interface_status
         broker.handle_active_drive_event(
             {
                 "type": "status",
@@ -1249,6 +1434,14 @@ class BrokerActiveDriveTests(unittest.TestCase):
         self.assertEqual(
             status["current_owner"]["kind"], "broker_active_drive"
         )
+        role_snapshot = status["interface"]["role_interfaces"]
+        ccan = role_snapshot["roles"]["c-can"]
+        self.assertFalse(role_snapshot["ready"])
+        self.assertFalse(ccan["actual"]["listen_only"])
+        self.assertEqual(ccan["actual"]["mode"], "armed_diagnostic")
+        self.assertFalse(ccan["passive_ready"])
+        self.assertTrue(ccan["topology_usable"])
+        self.assertEqual(ccan["operating_mode"], "armed_diagnostic")
 
     def test_active_pipe_rejects_unregistered_source_and_public_spoofing(self):
         broker, _clock = self.make_broker()
@@ -1365,6 +1558,7 @@ class BrokerActiveDriveTests(unittest.TestCase):
 
         self.assertEqual(supervisor.calls, 1)
         begin_inhibit.assert_called_once()
+        self.assertEqual(begin_inhibit.call_args.kwargs["channel"], "*")
         self.assertTrue(
             broker.status_response()["active_drive"]["restoration_failed"]
         )
@@ -1451,7 +1645,9 @@ class BrokerActiveDriveTests(unittest.TestCase):
 
         commands = []
         supervisor = ActiveDriveSupervisor(
-            channel="can0",
+            channel=TEST_CHANNEL,
+            expected_usb_serial=TEST_SERIAL,
+            expected_dev_id=TEST_DEV_ID,
             event_handler=lambda _event: None,
             popen_factory=lambda command, **_kwargs: (
                 commands.append(command) or Process()
@@ -1467,8 +1663,58 @@ class BrokerActiveDriveTests(unittest.TestCase):
         self.assertFalse(result["restored"])
         self.assertEqual(result["interface_mode"], "armed_diagnostic")
         self.assertEqual(
+            commands[0][2:],
+            [
+                "--channel",
+                TEST_CHANNEL,
+                "--expected-parent-pid",
+                "4242",
+                "--expected-usb-serial",
+                TEST_SERIAL,
+                "--expected-dev-id",
+                hex(TEST_DEV_ID),
+            ],
+        )
+
+    def test_supervisor_passes_resolved_usb_identity_to_helper(self):
+        class Process:
+            stdout = iter(())
+
+            def poll(self):
+                return 0
+
+            def wait(self, timeout=None):
+                del timeout
+                return 0
+
+            def terminate(self):
+                return None
+
+            def kill(self):
+                return None
+
+        commands = []
+        supervisor = ActiveDriveSupervisor(
+            channel=TEST_CHANNEL,
+            expected_usb_serial=TEST_SERIAL,
+            expected_dev_id=TEST_DEV_ID,
+            event_handler=lambda _event: None,
+            popen_factory=lambda command, **_kwargs: (
+                commands.append(command) or Process()
+            ),
+        )
+
+        with mock.patch("projects.vehicle_data.broker.os.getpid", return_value=4242):
+            supervisor.run(threading.Event())
+
+        self.assertEqual(
             commands[0][-4:],
-            ["--channel", "can0", "--expected-parent-pid", "4242"],
+            [
+                "--expected-usb-serial",
+                TEST_SERIAL,
+                "--expected-dev-id",
+                hex(TEST_DEV_ID),
+            ],
         )
 
     def test_supervisor_streams_nonfinal_events_but_returns_final_exactly_once(self):
@@ -1510,7 +1756,9 @@ class BrokerActiveDriveTests(unittest.TestCase):
 
         streamed = []
         supervisor = ActiveDriveSupervisor(
-            channel="can0",
+            channel=TEST_CHANNEL,
+            expected_usb_serial=TEST_SERIAL,
+            expected_dev_id=TEST_DEV_ID,
             event_handler=streamed.append,
             popen_factory=lambda *_args, **_kwargs: Process(),
         )
@@ -1545,7 +1793,9 @@ class BrokerActiveDriveTests(unittest.TestCase):
         stopped = threading.Event()
         stopped.set()
         supervisor = ActiveDriveSupervisor(
-            channel="can0",
+            channel=TEST_CHANNEL,
+            expected_usb_serial=TEST_SERIAL,
+            expected_dev_id=TEST_DEV_ID,
             event_handler=lambda _event: None,
             popen_factory=lambda *_args, **_kwargs: process,
         )
@@ -1584,7 +1834,9 @@ class BrokerActiveDriveTests(unittest.TestCase):
 
         process = Process()
         supervisor = ActiveDriveSupervisor(
-            channel="can0",
+            channel=TEST_CHANNEL,
+            expected_usb_serial=TEST_SERIAL,
+            expected_dev_id=TEST_DEV_ID,
             event_handler=lambda _event: None,
             popen_factory=lambda *_args, **_kwargs: process,
         )
@@ -1618,7 +1870,9 @@ class BrokerActiveDriveTests(unittest.TestCase):
 
         process = Process()
         supervisor = ActiveDriveSupervisor(
-            channel="can0",
+            channel=TEST_CHANNEL,
+            expected_usb_serial=TEST_SERIAL,
+            expected_dev_id=TEST_DEV_ID,
             event_handler=lambda _event: None,
             popen_factory=lambda *_args, **_kwargs: process,
             shutdown_timeout_seconds=0.001,
@@ -1672,7 +1926,9 @@ class BrokerActiveDriveTests(unittest.TestCase):
 
         process = Process()
         supervisor = ActiveDriveSupervisor(
-            channel="can0",
+            channel=TEST_CHANNEL,
+            expected_usb_serial=TEST_SERIAL,
+            expected_dev_id=TEST_DEV_ID,
             event_handler=lambda _event: None,
             popen_factory=lambda *_args, **_kwargs: process,
             event_silence_timeout_seconds=0.01,
@@ -1733,7 +1989,9 @@ class BrokerActiveDriveTests(unittest.TestCase):
         broker.stop_collector(timeout=0.01)
 
         self.assertIs(broker._collector_thread, thread)
-        self.assertEqual(thread.join_calls, [0.01])
+        self.assertEqual(len(thread.join_calls), 1)
+        self.assertGreater(thread.join_calls[0], 0)
+        self.assertLessEqual(thread.join_calls[0], 0.01)
         self.assertEqual(
             broker.status_response()["collector"]["state"],
             "stop_timeout",

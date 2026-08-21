@@ -41,6 +41,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from lib.modules import MODULES
+from lib.vehicle_can_roles import CAN_ROLE_SPECS, normalize_can_role
 from tools.alfaobd_singleton_campaign import CampaignError, CampaignPlan, load_plan
 
 
@@ -72,6 +73,9 @@ CANDUMP_RE = re.compile(
     rb"^\((?P<timestamp>[^)]+)\)\s+(?P<channel>\S+)\s+"
     rb"(?P<can_id>[0-9A-Fa-f]{3,8})#(?P<data>[0-9A-Fa-f]*)\s*$"
 )
+CHANNEL_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+TOPOLOGY_FINGERPRINT_RE = re.compile(r"^[0-9a-f]{16}$")
+ROLE_SPECS = {spec.role: spec for spec in CAN_ROLE_SPECS}
 
 
 class JoinError(RuntimeError):
@@ -96,6 +100,7 @@ class WireMessage:
     payload: bytes
     first_timestamp: float
     last_timestamp: float
+    channel: str
 
 
 @dataclass(frozen=True)
@@ -104,6 +109,7 @@ class WireFrame:
     can_id: int
     data: bytes
     source_index: int
+    channel: str
 
 
 @dataclass
@@ -900,7 +906,7 @@ def parse_info_runs(
     return runs, hashlib.sha256(raw).hexdigest()
 
 
-def parse_candump_frame(line: bytes) -> tuple[float, int, bytes] | None:
+def parse_candump_frame(line: bytes) -> tuple[float, int, bytes, str] | None:
     match = CANDUMP_RE.fullmatch(line.rstrip(b"\r\n"))
     if not match:
         return None
@@ -908,15 +914,19 @@ def parse_candump_frame(line: bytes) -> tuple[float, int, bytes] | None:
         timestamp = float(match.group("timestamp"))
         can_id = int(match.group("can_id"), 16)
         data = bytes.fromhex(match.group("data").decode("ascii"))
+        channel = match.group("channel").decode("ascii")
     except (ValueError, UnicodeDecodeError):
         return None
     if (
         not math.isfinite(timestamp)
         or not 0 <= can_id <= 0x1FFFFFFF
         or len(data) > 8
+        or CHANNEL_RE.fullmatch(channel) is None
     ):
         return None
-    return timestamp, can_id, data
+    # Preserve the established tuple prefix for callers that only consume
+    # timestamp/identifier/payload while adding the load-bearing wire channel.
+    return timestamp, can_id, data, channel
 
 
 def reassemble_wire_messages(
@@ -934,13 +944,21 @@ def reassemble_wire_messages(
         parsed = parse_candump_frame(line)
         if parsed is None:
             continue
-        timestamp, can_id, data = parsed
+        timestamp, can_id, data, channel = parsed
         if minimum_timestamp is not None and timestamp < minimum_timestamp:
             continue
         if maximum_timestamp is not None and timestamp > maximum_timestamp:
             continue
         if can_id in selected_ids and data:
-            frames.append(WireFrame(timestamp, can_id, data, 0))
+            frames.append(
+                WireFrame(
+                    timestamp=timestamp,
+                    can_id=can_id,
+                    data=data,
+                    source_index=0,
+                    channel=channel,
+                )
+            )
     return reassemble_wire_frames(
         frames,
         maximum_messages=maximum_messages,
@@ -955,12 +973,20 @@ def reassemble_wire_frames(
     maximum_payload_bytes: int = DEFAULT_MAX_WIRE_PAYLOAD_BYTES,
 ) -> list[WireMessage]:
     """Reassemble an already validated, chronological, de-duplicated frame stream."""
-    pending: dict[int, _IsoTpPending] = {}
+    pending: dict[tuple[str, int], _IsoTpPending] = {}
     messages: list[WireMessage] = []
     retained_payload_bytes = 0
     previous_timestamp: float | None = None
 
-    def emit(can_id: int, payload: bytes, first: float, last: float) -> None:
+    wire_channel: str | None = None
+
+    def emit(
+        channel: str,
+        can_id: int,
+        payload: bytes,
+        first: float,
+        last: float,
+    ) -> None:
         nonlocal retained_payload_bytes
         if len(messages) >= maximum_messages:
             raise JoinError(f"wire-message cap exceeded: {maximum_messages}")
@@ -969,43 +995,60 @@ def reassemble_wire_frames(
             raise JoinError(
                 f"wire-payload retention cap exceeded: {maximum_payload_bytes}"
             )
-        messages.append(WireMessage(can_id, payload, first, last))
+        messages.append(WireMessage(can_id, payload, first, last, channel))
 
     for frame in frames:
         timestamp, can_id, data = frame.timestamp, frame.can_id, frame.data
+        channel = frame.channel
+        if CHANNEL_RE.fullmatch(channel) is None:
+            raise JoinError(f"invalid or missing wire channel {channel!r}")
+        if wire_channel is None:
+            wire_channel = channel
+        elif channel != wire_channel:
+            raise JoinError(
+                "mixed wire channels cannot be reassembled or merged: "
+                f"{wire_channel!r} and {channel!r}"
+            )
         if previous_timestamp is not None and timestamp < previous_timestamp:
             raise JoinError("merged wire frames are not chronological")
         previous_timestamp = timestamp
         if not data:
             raise JoinError(f"empty selected CAN frame on 0x{can_id:X}")
+        stream_key = (channel, can_id)
         frame_type = data[0] >> 4
         if frame_type == 0:
-            if can_id in pending:
+            if stream_key in pending:
                 raise JoinError(
                     f"wire ISO-TP single frame interrupted pending message on 0x{can_id:X}"
                 )
             length = data[0] & 0x0F
             if length == 0 or length > len(data) - 1:
                 raise JoinError(f"invalid wire ISO-TP single frame on 0x{can_id:X}")
-            emit(can_id, data[1 : 1 + length], timestamp, timestamp)
+            emit(
+                channel,
+                can_id,
+                data[1 : 1 + length],
+                timestamp,
+                timestamp,
+            )
         elif frame_type == 1:
             if len(data) < 3:
                 raise JoinError(f"short wire ISO-TP first frame on 0x{can_id:X}")
-            if can_id in pending:
+            if stream_key in pending:
                 raise JoinError(
                     f"wire ISO-TP first frame interrupted pending message on 0x{can_id:X}"
                 )
             total = ((data[0] & 0x0F) << 8) | data[1]
             if total <= len(data) - 2:
                 raise JoinError(f"invalid wire ISO-TP first-frame length on 0x{can_id:X}")
-            pending[can_id] = _IsoTpPending(
+            pending[stream_key] = _IsoTpPending(
                 total_length=total,
                 payload=bytearray(data[2:]),
                 next_sequence=1,
                 first_timestamp=timestamp,
             )
         elif frame_type == 2:
-            state = pending.get(can_id)
+            state = pending.get(stream_key)
             if state is None:
                 raise JoinError(
                     f"wire ISO-TP consecutive frame without first frame on 0x{can_id:X}"
@@ -1020,19 +1063,22 @@ def reassemble_wire_frames(
             state.next_sequence = (state.next_sequence + 1) & 0x0F
             if len(state.payload) >= state.total_length:
                 emit(
+                    channel,
                     can_id,
                     bytes(state.payload[: state.total_length]),
                     state.first_timestamp,
                     timestamp,
                 )
-                del pending[can_id]
+                del pending[stream_key]
         elif frame_type == 3:
             # FlowControl is transport metadata, not a UDS payload.
             continue
         else:
             raise JoinError(f"unsupported wire ISO-TP PCI on 0x{can_id:X}")
     if pending:
-        identifiers = ", ".join(f"0x{value:X}" for value in sorted(pending))
+        identifiers = ", ".join(
+            f"{channel}:0x{can_id:X}" for channel, can_id in sorted(pending)
+        )
         raise JoinError(f"incomplete wire ISO-TP message(s): {identifiers}")
     return messages
 
@@ -1130,6 +1176,127 @@ def _validate_expected_hash(
         raise JoinError(f"{context} hash does not match capture-set declaration")
 
 
+def _route_metadata_records(
+    run: dict,
+    checkpoint: dict,
+    manifest: Sequence[dict],
+) -> Iterator[tuple[str, dict]]:
+    """Yield every recorder metadata object that may repeat route identity."""
+
+    yield "run", run
+    interface = run.get("interface")
+    if isinstance(interface, dict):
+        yield "run.interface", interface
+    yield "checkpoint", checkpoint
+    for index, row in enumerate(manifest):
+        yield f"manifest[{index}]", row
+        streams = row.get("streams")
+        if not isinstance(streams, dict):
+            continue
+        for name, stream in streams.items():
+            if isinstance(stream, dict):
+                yield f"manifest[{index}].streams[{name!r}]", stream
+
+
+def validate_capture_route_metadata(
+    *,
+    run: dict,
+    checkpoint: dict,
+    manifest: Sequence[dict],
+    module_key: str,
+) -> dict[str, object]:
+    """Validate every available route claim against the registered module.
+
+    Older, hash-pinned recorder evidence may predate explicit logical-role
+    fields, so absence remains representable.  Any field that *is* present is
+    authoritative and must agree across the capture and with the module's
+    canonical physical role.
+    """
+
+    module = MODULES[module_key]
+    try:
+        expected_role = normalize_can_role(module.bus)
+    except ValueError as exc:
+        raise JoinError(
+            f"module {module_key!r} has an invalid logical bus {module.bus!r}"
+        ) from exc
+    role_spec = ROLE_SPECS.get(expected_role)
+    if role_spec is None or role_spec.pair is None:
+        raise JoinError(
+            f"module {module_key!r} has no canonical connected-bus route"
+        )
+    if role_spec.bitrate != module.bitrate:
+        raise JoinError(
+            f"module {module_key!r} bitrate disagrees with canonical role"
+        )
+
+    channels: set[str] = set()
+    topology_fingerprints: set[str] = set()
+    present_fields: set[str] = set()
+    for context, record in _route_metadata_records(run, checkpoint, manifest):
+        if "logical_bus" in record:
+            present_fields.add("logical_bus")
+            value = record.get("logical_bus")
+            try:
+                logical_bus = normalize_can_role(value)  # type: ignore[arg-type]
+            except ValueError as exc:
+                raise JoinError(
+                    f"{context}.logical_bus is not a valid installed bus role"
+                ) from exc
+            if logical_bus != expected_role:
+                raise JoinError(
+                    f"{context}.logical_bus {logical_bus!r} does not match "
+                    f"module {module_key!r} bus {expected_role!r}"
+                )
+        if "physical_pair" in record:
+            present_fields.add("physical_pair")
+            pair = record.get("physical_pair")
+            if pair != role_spec.pair:
+                raise JoinError(
+                    f"{context}.physical_pair {pair!r} does not match "
+                    f"module {module_key!r} pair {role_spec.pair!r}"
+                )
+        if "bitrate" in record:
+            present_fields.add("bitrate")
+            if record.get("bitrate") != module.bitrate:
+                raise JoinError(
+                    f"{context}.bitrate does not match module {module_key!r}"
+                )
+        if "channel" in record:
+            present_fields.add("channel")
+            channel = record.get("channel")
+            if not isinstance(channel, str) or CHANNEL_RE.fullmatch(channel) is None:
+                raise JoinError(f"{context}.channel is not a valid interface name")
+            channels.add(channel)
+        if "topology_fingerprint" in record:
+            present_fields.add("topology_fingerprint")
+            fingerprint = record.get("topology_fingerprint")
+            if (
+                not isinstance(fingerprint, str)
+                or TOPOLOGY_FINGERPRINT_RE.fullmatch(fingerprint) is None
+            ):
+                raise JoinError(
+                    f"{context}.topology_fingerprint is not a canonical fingerprint"
+                )
+            topology_fingerprints.add(fingerprint)
+
+    if len(channels) > 1:
+        raise JoinError(
+            "capture metadata declares mixed wire channels: "
+            + ", ".join(sorted(channels))
+        )
+    if len(topology_fingerprints) > 1:
+        raise JoinError("capture metadata contains conflicting topology fingerprints")
+    return {
+        "expected_logical_bus": expected_role,
+        "expected_physical_pair": role_spec.pair,
+        "expected_bitrate": module.bitrate,
+        "declared_channel": next(iter(channels), None),
+        "topology_fingerprint": next(iter(topology_fingerprints), None),
+        "metadata_fields_present": sorted(present_fields),
+    }
+
+
 def validate_capture_evidence(
     spec: CaptureSpec,
     *,
@@ -1184,6 +1351,12 @@ def validate_capture_evidence(
         raise JoinError("capture provenance is not passive_receive_only")
     interface = _require_dict(run.get("interface"), "run.interface")
     module = MODULES[plan.module_key]
+    route_validation = validate_capture_route_metadata(
+        run=run,
+        checkpoint=checkpoint,
+        manifest=manifest,
+        module_key=plan.module_key,
+    )
     if (
         interface.get("up") is not True
         or interface.get("listen_only") is not True
@@ -1458,6 +1631,9 @@ def validate_capture_evidence(
     frames: list[WireFrame] = []
     budget_before = byte_budget[0]
     previous_timestamp: float | None = None
+    observed_channel: str | None = None
+    declared_channel = route_validation["declared_channel"]
+    assert declared_channel is None or isinstance(declared_channel, str)
     maximum_frames = min(
         maximum_wire_messages * 64,
         HARD_MAX_WIRE_FRAMES,
@@ -1476,7 +1652,19 @@ def validate_capture_evidence(
                     f"hash-verified recorder stream contains a malformed "
                     f"candump line: {path.name}"
                 )
-            timestamp, can_id, data = parsed
+            timestamp, can_id, data, channel = parsed
+            if observed_channel is None:
+                observed_channel = channel
+            elif channel != observed_channel:
+                raise JoinError(
+                    f"capture {spec.run_id!r} contains mixed candump channels "
+                    f"{observed_channel!r} and {channel!r}"
+                )
+            if declared_channel is not None and channel != declared_channel:
+                raise JoinError(
+                    f"capture {spec.run_id!r} wire channel {channel!r} does not "
+                    f"match declared channel {declared_channel!r}"
+                )
             if timestamp < chunk_first - 1e-6 or timestamp > chunk_last + 1e-6:
                 raise JoinError(
                     f"hash-verified recorder stream frame falls outside "
@@ -1505,10 +1693,19 @@ def validate_capture_evidence(
                     f"capture {spec.run_id!r}: "
                     f"{maximum_frames}"
                 )
-            frames.append(WireFrame(timestamp, can_id, data, source_index))
+            frames.append(
+                WireFrame(
+                    timestamp=timestamp,
+                    can_id=can_id,
+                    data=data,
+                    source_index=source_index,
+                    channel=channel,
+                )
+            )
             frame_budget[0] += 1
     if not frames:
         raise JoinError("selected passive stream contains no module diagnostic frames")
+    assert observed_channel is not None
     provenance = {
         "run_id": spec.run_id,
         "run_sha256": run_hash,
@@ -1517,6 +1714,14 @@ def validate_capture_evidence(
         "stream_kind": stream_kind,
         "decompressed_bytes_read": byte_budget[0] - budget_before,
         "selected_frame_count": len(frames),
+        "wire_channel": observed_channel,
+        "route_validation": {
+            **route_validation,
+            "wire_channel_matches_declared": (
+                declared_channel is None or observed_channel == declared_channel
+            ),
+            "all_hash_verified_rows_single_channel": True,
+        },
         "coverage": {
             "first_frame_timestamp": first_frame_timestamp,
             "last_frame_timestamp": last_frame_timestamp,
@@ -1682,10 +1887,31 @@ def merge_capture_frames(
     captures: Sequence[ValidatedCapture],
 ) -> tuple[list[WireFrame], dict[str, object]]:
     """Merge recorder views, de-duplicating only identical cross-run observations."""
+    channels = {frame.channel for capture in captures for frame in capture.frames}
+    if len(channels) != 1:
+        raise JoinError(
+            "capture set contains mixed wire channels and cannot be merged: "
+            + ", ".join(sorted(channels))
+        )
+    wire_channel = next(iter(channels))
+    topology_fingerprints = {
+        fingerprint
+        for capture in captures
+        if isinstance(capture.provenance.get("route_validation"), dict)
+        for fingerprint in (
+            capture.provenance["route_validation"].get("topology_fingerprint"),
+        )
+        if fingerprint is not None
+    }
+    if len(topology_fingerprints) > 1:
+        raise JoinError(
+            "capture set route metadata contains conflicting topology fingerprints"
+        )
     records = sorted(
         (frame for capture in captures for frame in capture.frames),
         key=lambda frame: (
             frame.timestamp,
+            frame.channel,
             frame.can_id,
             frame.data,
             frame.source_index,
@@ -1700,6 +1926,7 @@ def merge_capture_frames(
         while (
             end < len(records)
             and records[end].timestamp == first.timestamp
+            and records[end].channel == first.channel
             and records[end].can_id == first.can_id
         ):
             end += 1
@@ -1717,7 +1944,13 @@ def merge_capture_frames(
                 f"{first.timestamp:.6f} on 0x{first.can_id:X}"
             )
         merged.append(
-            WireFrame(first.timestamp, first.can_id, first.data, min(sources))
+            WireFrame(
+                timestamp=first.timestamp,
+                can_id=first.can_id,
+                data=first.data,
+                source_index=min(sources),
+                channel=first.channel,
+            )
         )
         duplicate_observations += len(group) - 1
         index = end
@@ -1725,6 +1958,8 @@ def merge_capture_frames(
         "source_frame_count": len(records),
         "merged_frame_count": len(merged),
         "exact_overlap_observations_deduplicated": duplicate_observations,
+        "wire_channel": wire_channel,
+        "topology_fingerprint": next(iter(topology_fingerprints), None),
     }
 
 
@@ -1827,6 +2062,12 @@ def parse_wire_segment(
             f"segment {segment.sequence} contains an ISO-TP message that "
             "straddles its authoritative host-timed boundary"
         )
+    channels = {message.channel for message in overlapping}
+    if len(channels) > 1:
+        raise JoinError(
+            f"segment {segment.sequence} contains mixed wire channels: "
+            + ", ".join(sorted(channels))
+        )
 
     diagnostic: list[WireMessage] = []
     tester_present = 0
@@ -1898,6 +2139,7 @@ def parse_wire_segment(
     return exchanges, {
         "matched": True,
         "status": "authoritative_host_timed_pairs",
+        "channel": diagnostic[0].channel,
         "request": request.hex().upper(),
         "did": f"0x{int.from_bytes(request[1:], 'big'):04X}",
         "pair_count": len(exchanges),

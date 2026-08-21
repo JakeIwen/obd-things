@@ -13,34 +13,64 @@ Why two states: a single capture of a resting van is nearly all-constant, so a r
 byte is indistinguishable from a default like 0x80. Capture the SAME bus at two clearly
 different voltages and the voltage field is the one that moved.
 
-Workflow (battery voltage on the 125k body bus -- the bus that wakes on a door open):
+Consume finalized logs made by the role-aware passive recorder, for example
+``tools/passive_drive_capture.py --bus b-can``.  Supply captures made at two independently
+measured target values; this offline tool neither establishes a bus state nor assumes how the
+vehicle network was awakened::
 
-    ./bringup.sh --bcan                      # body bus, PASSIVE (listen-only, never TX)
-    # 1) ENGINE OFF, open/close a door a few times to wake the body bus, ~60 s:
-    candump -ta can0 > /tmp/v_off.log        # Ctrl-C after ~60 s
-    # 2) START ENGINE, idle (alternator ~14.2 V), re-bring-up passive, ~60 s:
-    ./bringup.sh --bcan ; candump -ta can0 > /tmp/v_run.log
-
-    # tag each log with the voltage at the battery during it (a multimeter, the dash gauge,
-    # or a one-off armed read of radar DID 0x1006 all work as ground truth):
     python3 tools/can_field_finder.py /tmp/v_off.log=12.5 /tmp/v_run.log=14.2
 
 Without "=value" tags it falls back to ranking whatever changed most between the captures
 (decoded under common voltage scales) so you can eyeball candidates. Accepts candump's
-"(ts) can0 ID  [n]  b0 b1 .."  , "(ts) can0 ID#HEX" , and untimestamped variants.
+"(ts) INTERFACE ID  [n]  b0 b1 ..", "(ts) INTERFACE ID#HEX", and untimestamped variants.
 """
 import os
 import re
 import sys
 import glob
 import struct
+from dataclasses import dataclass
+from typing import Iterable
 
-# matches: optional "(ts)", iface, hex id, then either "[len] b b b.." or "#HEXBYTES"
-_LINE = re.compile(r'(?:\(\s*[\d.]+\)\s*)?\w+\s+([0-9A-Fa-f]+)(?:\s+\[\d+\]\s+(.*)|\s*#([0-9A-Fa-f]*))')
+# Matches: optional ``(ts)``, interface, hex ID, then either
+# ``[len] b0 b1 ...`` or ``#HEXBYTES``.  The textual identifier width is
+# load-bearing: candump renders SFF identifiers with three digits and EFF
+# identifiers with eight, even when their numeric values are equal.
+_LINE = re.compile(
+    r"(?:\(\s*[\d.]+\)\s*)?"
+    r"(?P<channel>[A-Za-z0-9_.-]+)\s+"
+    r"(?P<can_id>[0-9A-Fa-f]+)"
+    r"(?:"
+    r"\s+\[(?P<declared_dlc>\d+)\]\s*(?P<spaced>(?:[0-9A-Fa-f]{2}(?:\s+|$))*)"
+    r"|\s*#(?!#)(?P<compact>[0-9A-Fa-f]*)"
+    r")"
+)
+
+
+@dataclass(frozen=True, order=True)
+class StreamKey:
+    """One exact captured CAN stream; no component is safe to discard."""
+
+    channel: str
+    id_bits: int
+    can_id: int
+    dlc: int
+
+    @property
+    def namespace(self) -> str:
+        return "SFF" if self.id_bits == 11 else "EFF"
+
+
+def _identifier_bits(text: str, can_id: int) -> int | None:
+    if len(text) <= 3 and can_id <= 0x7FF:
+        return 11
+    if len(text) <= 8 and can_id <= 0x1FFFFFFF:
+        return 29
+    return None
 
 
 def parse(path):
-    """candump log -> {can_id: [bytes, ...]} for whatever format the file is in."""
+    """Return frames keyed by channel, namespace, numeric ID, and exact DLC."""
     rows = {}
     with open(path, errors="ignore") as f:
         for ln in f:
@@ -48,15 +78,31 @@ def parse(path):
             if not m:
                 continue
             try:
-                cid = int(m.group(1), 16)
-                if m.group(2) is not None:
-                    data = bytes(int(x, 16) for x in m.group(2).split())
+                can_id_text = m.group("can_id")
+                cid = int(can_id_text, 16)
+                id_bits = _identifier_bits(can_id_text, cid)
+                if id_bits is None:
+                    continue
+                if m.group("spaced") is not None:
+                    data = bytes(
+                        int(x, 16) for x in m.group("spaced").split()
+                    )
+                    if len(data) != int(m.group("declared_dlc")):
+                        continue
                 else:
-                    h = m.group(3)
+                    h = m.group("compact")
                     data = bytes.fromhex(h) if h else b""
             except ValueError:
                 continue
-            rows.setdefault(cid, []).append(data)
+            if len(data) > 8:
+                continue
+            key = StreamKey(
+                channel=m.group("channel"),
+                id_bits=id_bits,
+                can_id=cid,
+                dlc=len(data),
+            )
+            rows.setdefault(key, []).append(data)
     return rows
 
 
@@ -66,7 +112,7 @@ def median(xs):
     return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2.0
 
 
-def field_value(frames, off, width, endian):
+def field_value(frames: Iterable[bytes], off, width, endian):
     """Median decoded value of bytes[off:off+width] over all frames long enough; None if none."""
     fmt = endian + {1: "B", 2: "H"}[width]
     vals = [struct.unpack_from(fmt, d, off)[0] for d in frames if len(d) >= off + width]
@@ -104,13 +150,13 @@ def find(logs, truths, top):
     common = set(caps[0])
     for c in caps[1:]:
         common &= set(c)
-    print(f"# {len(common)} CAN ids common to all captures\n")
+    print(f"# {len(common)} exact CAN streams common to all captures\n")
 
     known = truths is not None
     results = []
-    for cid in sorted(common):
-        per = [c[cid] for c in caps]
-        minlen = min(min(len(d) for d in frs) for frs in per)
+    for stream in sorted(common):
+        per = [c[stream] for c in caps]
+        minlen = stream.dlc
         for width in (1, 2):
             lo, hi = SLOPE_BAND[width]
             for off in range(minlen - width + 1):
@@ -131,31 +177,54 @@ def find(logs, truths, top):
                         if not all(V_SANE[0] <= a * v + b <= V_SANE[1] for v in vals):
                             continue
                         score = r2 - 0.001 * abs(off)     # tie-break toward earlier bytes
-                        results.append((score, r2, cid, off, width, endian, a, b, vals))
+                        results.append((score, r2, stream, off, width, endian, a, b, vals))
                     else:
                         # no ground truth: rank by movement, decoded sane under x0.1 / x0.01
                         a = 0.1 if width == 1 else 0.01
                         if spread == 0 or not all(V_SANE[0] <= a * v <= V_SANE[1] for v in vals):
                             continue
-                        results.append((spread, 0.0, cid, off, width, endian, a, 0.0, vals))
+                        results.append((spread, 0.0, stream, off, width, endian, a, 0.0, vals))
 
     results.sort(reverse=True)
     if known:
-        print(f"{'r2':>6}  {'ID':>3} {'off':>3} {'w':>1} {'e':>1}  {'V/LSB':>8} {'offset':>8}  decoded-per-capture")
+        print(
+            f"{'r2':>6}  {'interface':<10} {'ns':<3} {'ID':>8} {'dlc':>3} "
+            f"{'off':>3} {'w':>1} {'e':>2}  {'V/LSB':>8} {'offset':>8}  "
+            "decoded-per-capture"
+        )
     else:
-        print(f"{'spread':>6}  {'ID':>3} {'off':>3} {'w':>1} {'e':>1}  assuming  decoded-per-capture")
-    print("-" * 78)
-    for sc, r2, cid, off, width, endian, a, b, vals in results[:top]:
+        print(
+            f"{'spread':>6}  {'interface':<10} {'ns':<3} {'ID':>8} {'dlc':>3} "
+            f"{'off':>3} {'w':>1} {'e':>2}  assuming  decoded-per-capture"
+        )
+    print("-" * 108)
+    for sc, r2, stream, off, width, endian, a, b, vals in results[:top]:
         dec = "  ".join(f"{a * v + b:5.2f}" for v in vals)
         e = "" if width == 1 else ("BE" if endian == ">" else "LE")
+        can_id = (
+            f"{stream.can_id:03X}"
+            if stream.id_bits == 11
+            else f"{stream.can_id:08X}"
+        )
         if known:
-            print(f"{r2:6.3f}  {cid:03X} {off:>3} {width} {e:>2}  {a:8.4f} {b:8.3f}  [{dec}] V")
+            print(
+                f"{r2:6.3f}  {stream.channel:<10} {stream.namespace:<3} "
+                f"{can_id:>8} {stream.dlc:>3} {off:>3} {width} {e:>2}  "
+                f"{a:8.4f} {b:8.3f}  [{dec}] V"
+            )
         else:
-            print(f"{sc:6.1f}  {cid:03X} {off:>3} {width} {e:>2}  x{a:<6}  raw->[{dec}] V")
+            print(
+                f"{sc:6.1f}  {stream.channel:<10} {stream.namespace:<3} "
+                f"{can_id:>8} {stream.dlc:>3} {off:>3} {width} {e:>2}  "
+                f"x{a:<6}  raw->[{dec}] V"
+            )
     if not results:
         print("(no plausible voltage field -- did the bus carry voltage in BOTH states? "
               "if the body bus shows nothing, voltage may only be on C-CAN with ignition on.)")
-    print("\nTop row's ID/off/width/scale is the field to wire into the passive monitor.")
+    print(
+        "\nTop row's interface/namespace/ID/DLC/offset/width/scale is the "
+        "candidate field; keep that complete identity in downstream evidence."
+    )
 
 
 def main():

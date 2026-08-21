@@ -28,13 +28,10 @@ from projects.vehicle_data.models import (
     failure,
     success,
 )
-from projects.vehicle_data.sources import VoltageAcquirer
-
-
 DEFAULT_SOCKET = "/run/van-telemetry/api.sock"
-RETUNE_HELPER = REPO / "projects" / "vehicle_data" / "retune.py"
+DEFAULT_HISTORY_DB = REPO / "tmp" / "vehicle_data" / "history.sqlite3"
+DEFAULT_DTC_CACHE = REPO / "tmp" / "vehicle_data" / "dtc-cache.json"
 ACTIVE_DRIVE_HELPER = REPO / "projects" / "vehicle_data" / "active_drive.py"
-ACTIVE_DRIVE_CHANNEL = "can0"
 MAX_ACTIVE_EVENT_BYTES = 64 * 1024
 ACTIVE_DRIVE_RESTORATION_INHIBIT = "vehicle-data-restoration-failed"
 ACTIVE_DRIVE_SOURCES = frozenset(
@@ -76,95 +73,6 @@ ACTIVE_DRIVE_FAILURE_REASONS = frozenset(
         "wrong_bus",
     }
 )
-
-
-def _retune_failure(reason: str, detail: str) -> dict[str, object]:
-    return {
-        "state": "failed",
-        "reason": reason,
-        "detail": detail,
-        "from_bitrate": None,
-        "to_bitrate": None,
-        "bus": None,
-        "completed_at": datetime.now(timezone.utc).isoformat(),
-    }
-
-
-class PassiveAutoRetuner:
-    """Run the termination-safe passive retune helper as a child process."""
-
-    _STATES = frozenset(("switched", "blocked", "failed", "no_change"))
-
-    def __init__(
-        self,
-        *,
-        channel: str,
-        probe_seconds: float,
-        timeout_seconds: float = 15.0,
-    ):
-        self.channel = channel
-        self.probe_seconds = probe_seconds
-        self.timeout_seconds = timeout_seconds
-
-    def attempt(self, expected_bitrate: int) -> dict[str, object]:
-        command = [
-            sys.executable,
-            str(RETUNE_HELPER),
-            "--channel",
-            self.channel,
-            "--expected-bitrate",
-            str(expected_bitrate),
-            "--probe-seconds",
-            str(self.probe_seconds),
-        ]
-        try:
-            process = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-        except OSError as exc:
-            return _retune_failure(
-                "helper_start_failed", f"could not start retune helper: {exc}"
-            )
-        try:
-            stdout, stderr = process.communicate(timeout=self.timeout_seconds)
-        except subprocess.TimeoutExpired:
-            process.terminate()
-            try:
-                stdout, stderr = process.communicate(timeout=5.0)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                stdout, stderr = process.communicate()
-            return _retune_failure(
-                "helper_timeout",
-                "retune helper exceeded its bounded runtime and was terminated",
-            )
-        if process.returncode != 0:
-            detail = (stderr or stdout).strip()[-500:]
-            return _retune_failure(
-                "helper_failed",
-                detail or f"retune helper exited {process.returncode}",
-            )
-        lines = [line for line in stdout.splitlines() if line.strip()]
-        try:
-            payload = json.loads(lines[-1]) if lines else None
-        except json.JSONDecodeError:
-            payload = None
-        if (
-            not isinstance(payload, dict)
-            or payload.get("state") not in self._STATES
-            or not isinstance(payload.get("reason"), str)
-            or not isinstance(payload.get("detail"), str)
-        ):
-            return _retune_failure(
-                "invalid_helper_response",
-                "retune helper did not return one valid result object",
-            )
-        return payload
-
-
 class ActiveDriveSupervisor:
     """Supervise the termination-safe active-drive owner subprocess."""
 
@@ -173,6 +81,8 @@ class ActiveDriveSupervisor:
         *,
         channel: str,
         event_handler,
+        expected_usb_serial: str,
+        expected_dev_id: int,
         popen_factory=subprocess.Popen,
         shutdown_timeout_seconds: float = 10.0,
         event_silence_timeout_seconds: float = 10.0,
@@ -184,6 +94,19 @@ class ActiveDriveSupervisor:
         self.shutdown_timeout_seconds = shutdown_timeout_seconds
         self.event_silence_timeout_seconds = event_silence_timeout_seconds
         self.queue_poll_seconds = queue_poll_seconds
+        self.expected_usb_serial = expected_usb_serial
+        self.expected_dev_id = expected_dev_id
+        if (
+            not isinstance(self.expected_usb_serial, str)
+            or not self.expected_usb_serial
+        ):
+            raise ValueError("active-drive USB serial is required")
+        if (
+            not isinstance(self.expected_dev_id, int)
+            or isinstance(self.expected_dev_id, bool)
+            or self.expected_dev_id < 0
+        ):
+            raise ValueError("active-drive dev_id must be a non-negative integer")
         if (
             self.shutdown_timeout_seconds <= 0
             or self.event_silence_timeout_seconds <= 0
@@ -263,6 +186,14 @@ class ActiveDriveSupervisor:
             "--expected-parent-pid",
             str(os.getpid()),
         ]
+        command.extend(
+            [
+                "--expected-usb-serial",
+                self.expected_usb_serial,
+                "--expected-dev-id",
+                hex(self.expected_dev_id),
+            ]
+        )
         try:
             process = self.popen_factory(
                 command,
@@ -533,38 +464,33 @@ class TelemetryBroker:
         definitions: dict[str, MetricDefinition] | None = None,
         monotonic=time.monotonic,
         collector_interval_seconds: float = 1.0,
-        wake_min_interval_seconds: float | None = None,
         acquisition_wait_seconds: float = 20.0,
-        auto_retuner=None,
-        auto_retune_enabled: bool = True,
-        auto_retune_trigger: int = 3,
-        auto_retune_cooldown_seconds: float = 30.0,
         passive_powertrain_reader=None,
         active_drive_supervisor=None,
         active_drive_enabled: bool = False,
+        interface_reconciler=None,
+        insights=None,
+        history_interval_seconds: float = 5.0,
     ):
-        self.acquirer = acquirer or VoltageAcquirer()
+        if acquirer is None:
+            raise ValueError(
+                "telemetry broker requires an explicit serial-role-aware acquirer"
+            )
+        self.acquirer = acquirer
         self.definitions = definitions or METRICS
         self.monotonic = monotonic
         self.collector_interval_seconds = collector_interval_seconds
-        self.wake_min_interval_seconds = wake_min_interval_seconds
         self.acquisition_wait_seconds = acquisition_wait_seconds
-        if auto_retune_trigger < 1:
-            raise ValueError("auto-retune trigger must be at least one")
-        if auto_retune_cooldown_seconds < 0:
-            raise ValueError("auto-retune cooldown cannot be negative")
-        self.auto_retune_enabled = auto_retune_enabled
-        self.auto_retune_trigger = auto_retune_trigger
-        self.auto_retune_cooldown_seconds = auto_retune_cooldown_seconds
-        self.auto_retuner = auto_retuner or PassiveAutoRetuner(
-            channel=getattr(self.acquirer, "channel", "can0"),
-            probe_seconds=getattr(self.acquirer, "probe_seconds", 0.75),
-        )
+        if history_interval_seconds <= 0:
+            raise ValueError("history interval must be positive")
         self.passive_powertrain_reader = passive_powertrain_reader
         self.active_drive_supervisor = active_drive_supervisor
         self.active_drive_enabled = bool(
             active_drive_enabled and active_drive_supervisor is not None
         )
+        self.interface_reconciler = interface_reconciler
+        self.insights = insights
+        self.history_interval_seconds = history_interval_seconds
 
         self._lock = threading.RLock()
         # Prevent the passive collector from racing a client-triggered active
@@ -575,10 +501,11 @@ class TelemetryBroker:
         self._last_attempt: dict[tuple[str, str], float] = {}
         self._inflight: dict[tuple[str, str], _Inflight] = {}
         self._interface_status: dict[str, object] = {
-            "channel": getattr(self.acquirer, "channel", "can0"),
+            "channel": getattr(self.acquirer, "channel", "c-can-unresolved"),
             "adapter_present": None,
             "up": None,
             "bitrate": None,
+            "fd_enabled": None,
             "listen_only": None,
             "controller_state": None,
             "topology": {
@@ -594,6 +521,23 @@ class TelemetryBroker:
         self._collector_last_cycle_at: str | None = None
         self._collector_thread: threading.Thread | None = None
         self._collector_stop = threading.Event()
+        self._history_thread: threading.Thread | None = None
+        self._history_stop = threading.Event()
+        self._insights_closed = False
+        self._history_sequence = 0
+        self._history_recorder: dict[str, object] = {
+            "enabled": insights is not None,
+            "state": "stopped" if insights is not None else "disabled",
+            "interval_seconds": history_interval_seconds,
+            "snapshots_stored": 0,
+            "last_stored_at": None,
+            "last_error": None,
+        }
+        self._interface_reconcile: dict[str, object] = {
+            "enabled": interface_reconciler is not None,
+            "ready": None,
+            "detail": "waiting for serial-aware passive interface reconciliation",
+        }
         self._passive_engine_evidence = "unknown"
         self._passive_stop_evidence_streak = 0
         self._passive_unknown_evidence_streak = 0
@@ -630,20 +574,6 @@ class TelemetryBroker:
             ),
             "observed_at": None,
         }
-        self._auto_retune_last_attempt_monotonic: float | None = None
-        self._auto_retune: dict[str, object] = {
-            "enabled": self.auto_retune_enabled,
-            "state": "monitoring" if self.auto_retune_enabled else "disabled",
-            "detail": (
-                "waiting for repeated passive wrong-rate evidence"
-                if self.auto_retune_enabled
-                else "disabled by broker configuration"
-            ),
-            "wrong_rate_streak": 0,
-            "trigger_after": self.auto_retune_trigger,
-            "cooldown_seconds": self.auto_retune_cooldown_seconds,
-            "last_attempt": None,
-        }
 
     def list_metrics(self) -> dict[str, object]:
         return {
@@ -668,6 +598,60 @@ class TelemetryBroker:
                 for name in sorted(self.definitions)
             },
         }
+
+    def history_response(self) -> dict[str, object]:
+        """Return bounded SQLite-derived history without touching CAN."""
+        if self.insights is None:
+            return {
+                "available": False,
+                "reason": "history_disabled",
+                "detail": "telemetry history is disabled by broker configuration",
+            }
+        try:
+            return self.insights.history_response()
+        except Exception as exc:
+            return {
+                "available": False,
+                "reason": "history_unavailable",
+                "detail": f"history query failed: {type(exc).__name__}: {exc}",
+            }
+
+    def health_response(self) -> dict[str, object]:
+        """Return explainable, history-relative advisory assessments only."""
+        if self.insights is None:
+            return {
+                "available": False,
+                "reason": "early_warning_disabled",
+                "detail": "early-warning evaluation is disabled by broker configuration",
+            }
+        try:
+            return self.insights.health_response()
+        except Exception as exc:
+            return {
+                "available": False,
+                "reason": "early_warning_unavailable",
+                "detail": (
+                    "early-warning evaluation failed: "
+                    f"{type(exc).__name__}: {exc}"
+                ),
+            }
+
+    def dtc_response(self) -> dict[str, object]:
+        """Return the saved DTC cache; this method cannot initiate a scan."""
+        if self.insights is None:
+            return {
+                "available": False,
+                "reason": "dtc_cache_disabled",
+                "detail": "saved DTC cache access is disabled by broker configuration",
+            }
+        try:
+            return self.insights.dtc_response()
+        except Exception as exc:
+            return {
+                "available": False,
+                "reason": "dtc_cache_unavailable",
+                "detail": f"saved DTC cache read failed: {type(exc).__name__}: {exc}",
+            }
 
     def _serialize(
         self, result: AcquisitionResult, definition: MetricDefinition
@@ -1097,7 +1081,7 @@ class TelemetryBroker:
             try:
                 can_operation_state.begin_inhibit(
                     ACTIVE_DRIVE_RESTORATION_INHIBIT,
-                    channel=getattr(self.acquirer, "channel", "can0"),
+                    channel="*",
                     reason=(
                         "broker could not verify active-drive listen-only "
                         f"restoration: {detail}"
@@ -1115,10 +1099,13 @@ class TelemetryBroker:
             snapshot = self.acquirer.status_snapshot()
         except Exception as exc:
             snapshot = {
-                "channel": getattr(self.acquirer, "channel", "can0"),
+                "channel": getattr(
+                    self.acquirer, "channel", "c-can-unresolved"
+                ),
                 "adapter_present": None,
                 "up": None,
                 "bitrate": None,
+                "fd_enabled": None,
                 "listen_only": None,
                 "controller_state": None,
                 "topology": {
@@ -1156,21 +1143,15 @@ class TelemetryBroker:
                 "interval_seconds": self.collector_interval_seconds,
                 "failure_detail": self._collector_failure_detail,
             }
-            auto_retune = json.loads(json.dumps(self._auto_retune))
+            history_recorder = json.loads(
+                json.dumps(self._history_recorder)
+            )
             active_drive = json.loads(json.dumps(self._active_drive))
-            last_retune = self._auto_retune_last_attempt_monotonic
+            interface_reconcile = json.loads(
+                json.dumps(self._interface_reconcile)
+            )
             vehicle_state = json.loads(json.dumps(self._vehicle_state))
             vehicle_observed = self._vehicle_state_observed_monotonic
-        cooldown_remaining = 0.0
-        if last_retune is not None:
-            cooldown_remaining = max(
-                0.0,
-                self.auto_retune_cooldown_seconds
-                - (self.monotonic() - last_retune),
-            )
-        auto_retune["cooldown_remaining_seconds"] = round(
-            cooldown_remaining, 1
-        )
         vehicle_state["age_ms"] = (
             round(max(0.0, self.monotonic() - vehicle_observed) * 1000)
             if vehicle_observed is not None
@@ -1241,6 +1222,36 @@ class TelemetryBroker:
             # synchronously waiting for the child.
             interface["listen_only"] = False
             interface["mode"] = "armed_diagnostic"
+            role_snapshot = interface.get("role_interfaces")
+            role_snapshot = (
+                role_snapshot if isinstance(role_snapshot, dict) else None
+            )
+            role_payloads = (
+                role_snapshot.get("roles")
+                if isinstance(role_snapshot, dict)
+                else None
+            )
+            ccan_role = (
+                role_payloads.get("c-can")
+                if isinstance(role_payloads, dict)
+                else None
+            )
+            if (
+                isinstance(ccan_role, dict)
+                and ccan_role.get("channel") == interface.get("channel")
+            ):
+                actual = ccan_role.get("actual")
+                if isinstance(actual, dict):
+                    actual["listen_only"] = False
+                    actual["mode"] = "armed_diagnostic"
+                ccan_role["passive_ready"] = False
+                ccan_role["operating_mode"] = "armed_diagnostic"
+                ccan_role["topology_usable"] = bool(topology.get("usable"))
+                ccan_role["reason"] = (
+                    "broker active-drive owner has the resolved C-CAN channel "
+                    "armed for reviewed diagnostics"
+                )
+                role_snapshot["ready"] = False
         else:
             interface["mode"] = (
                 "listen_only"
@@ -1250,6 +1261,7 @@ class TelemetryBroker:
         active_permitted = bool(
             interface.get("adapter_present")
             and interface.get("up")
+            and interface.get("fd_enabled") is False
             and interface.get("listen_only")
             and interface.get("controller_state") == "ERROR-ACTIVE"
             and topology.get("usable")
@@ -1289,8 +1301,9 @@ class TelemetryBroker:
             "current_owner": current_owner,
             "active_acquisition_permitted": active_permitted,
             "collector": collector,
+            "history_recorder": history_recorder,
             "active_drive": active_drive,
-            "auto_retune": auto_retune,
+            "interface_reconcile": interface_reconcile,
             "vehicle_state": vehicle_state,
             "inflight": inflight,
             "last_acquisition_errors": last_errors,
@@ -1399,27 +1412,15 @@ class TelemetryBroker:
                 ),
             }
         elif result.available:
-            wake_assisted = result.acquisition == "wake_assisted"
             state = {
                 "state": "awake",
                 "running": None,
                 "confidence": "observed",
-                "basis": (
-                    "broker_wake_activity"
-                    if wake_assisted
-                    else "passive_bus_activity"
-                ),
+                "basis": "passive_bus_activity",
                 "detail": (
                     f"{result.bus or 'vehicle bus'} traffic is present; "
-                    + (
-                        "the broker just performed the approved wake, so this "
-                        "activity is not evidence that the engine is running"
-                        if wake_assisted
-                        else (
-                            "running versus ignition-on versus a temporary "
-                            "wake is not yet distinguished"
-                        )
-                    )
+                    "running versus ignition-on versus a temporary wake is "
+                    "not yet distinguished"
                 ),
             }
         elif result.reason == "bus_asleep":
@@ -1471,15 +1472,6 @@ class TelemetryBroker:
                 else self.monotonic()
             )
 
-    def _limit_for(self, definition: MetricDefinition, mode: str) -> float:
-        if mode == "wake_if_asleep":
-            return (
-                self.wake_min_interval_seconds
-                if self.wake_min_interval_seconds is not None
-                else definition.wake_min_interval_seconds
-            )
-        return definition.passive_min_interval_seconds
-
     def acquire(self, metric: str, mode: str) -> AcquisitionResult:
         definition = self.definitions.get(metric)
         if definition is None:
@@ -1503,7 +1495,7 @@ class TelemetryBroker:
             entry = self._inflight.get(key)
             if entry is None:
                 now = self.monotonic()
-                minimum = self._limit_for(definition, mode)
+                minimum = definition.passive_min_interval_seconds
                 previous = self._last_attempt.get(key)
                 if previous is not None and now - previous < minimum:
                     remaining = max(0.0, minimum - (now - previous))
@@ -1595,149 +1587,59 @@ class TelemetryBroker:
                 target=self._collector_loop,
                 name="van-telemetry-passive",
                 # Active-drive cleanup must finish before process exit; a
-                # daemon thread could be discarded while can0 is still armed.
+                # daemon thread could be discarded while C-CAN is still armed.
                 daemon=False,
             )
             self._collector_thread = thread
             thread.start()
-
-    def _set_auto_retune_state(
-        self,
-        state: str,
-        detail: str,
-        *,
-        streak: int | None = None,
-        last_attempt: dict[str, object] | None = None,
-    ) -> None:
-        with self._lock:
-            self._auto_retune["state"] = state
-            self._auto_retune["detail"] = detail
-            if streak is not None:
-                self._auto_retune["wrong_rate_streak"] = streak
-            if last_attempt is not None:
-                self._auto_retune["last_attempt"] = last_attempt
-
-    def _consider_auto_retune(self, result: AcquisitionResult) -> None:
-        if not self.auto_retune_enabled:
-            return
-        with self._lock:
-            streak = int(self._auto_retune["wrong_rate_streak"])
-            interface = json.loads(json.dumps(self._interface_status))
-
-        if result.available:
-            self._set_auto_retune_state(
-                "monitoring",
-                "current bitrate passively identifies an approved voltage bus",
-                streak=0,
-            )
-            return
-
-        wrong_rate = (
-            result.reason == "wrong_bus" and result.bus == "wrong-rate"
-        )
-        degraded_after_wrong_rate = (
-            streak > 0
-            and result.reason == "source_unavailable"
-            and (
-                "ERROR-WARNING" in result.detail
-                or "ERROR-PASSIVE" in result.detail
-            )
-        )
-        if not wrong_rate and not degraded_after_wrong_rate:
-            if result.reason in ("can_busy", "adapter_absent"):
-                self._set_auto_retune_state(
-                    "blocked", result.detail, streak=0
+            if self.insights is not None and self._history_thread is None:
+                self._history_stop.clear()
+                history_thread = threading.Thread(
+                    target=self._history_loop,
+                    name="van-telemetry-history",
+                    daemon=False,
                 )
-            elif result.reason == "source_unavailable" and (
-                "down" in result.detail
-                or "controller" in result.detail
-            ):
-                self._set_auto_retune_state(
-                    "blocked", result.detail, streak=0
-                )
-            elif result.reason == "bus_asleep":
-                self._set_auto_retune_state(
-                    "waiting",
-                    "bus is silent; passive auto-retune will not guess a "
-                    "physical leg without wrong-rate evidence",
-                    streak=0,
-                )
-            else:
-                self._set_auto_retune_state(
-                    "monitoring",
-                    "no qualifying wrong-rate evidence; interface left unchanged",
-                    streak=0,
-                )
-            return
+                self._history_thread = history_thread
+                self._history_recorder["state"] = "starting"
+                history_thread.start()
 
-        streak += 1
-        if streak < self.auto_retune_trigger:
-            evidence = (
-                "passive wrong-rate evidence"
-                if wrong_rate
-                else "wrong-rate followed by a degraded listen-only controller"
-            )
-            self._set_auto_retune_state(
-                "evidence_accumulating",
-                f"{evidence} {streak}/"
-                f"{self.auto_retune_trigger}; waiting before any interface change",
-                streak=streak,
-            )
-            return
-
-        inhibits = interface.get("active_inhibits") or []
-        if inhibits:
-            self._set_auto_retune_state(
-                "blocked",
-                "auto-retune inhibited by " + ",".join(map(str, inhibits)),
-                streak=streak,
-            )
-            return
-
-        now = self.monotonic()
+    def _history_loop(self) -> None:
+        """Record broker cache independently of a long active-drive owner."""
         with self._lock:
-            previous = self._auto_retune_last_attempt_monotonic
-        if (
-            previous is not None
-            and now - previous < self.auto_retune_cooldown_seconds
-        ):
-            remaining = self.auto_retune_cooldown_seconds - (now - previous)
-            self._set_auto_retune_state(
-                "cooldown",
-                f"previous retune attempt is cooling down; retry in "
-                f"{remaining:.1f} seconds",
-                streak=streak,
-            )
-            return
-
-        bitrate = interface.get("bitrate")
-        if bitrate not in (125000, 500000):
-            self._set_auto_retune_state(
-                "blocked",
-                f"cannot auto-retune from unsupported or unreadable bitrate "
-                f"{bitrate}",
-                streak=streak,
-            )
-            return
-
-        self._set_auto_retune_state(
-            "switching",
-            f"fresh helper recheck pending from {bitrate} bit/s",
-            streak=streak,
-        )
-        with self._lock:
-            self._auto_retune_last_attempt_monotonic = now
-        with self._source_lock:
-            attempt = self.auto_retuner.attempt(int(bitrate))
-        self._refresh_interface_status()
-        attempt_state = str(attempt.get("state", "failed"))
-        detail = str(attempt.get("detail", "auto-retune returned no detail"))
-        self._set_auto_retune_state(
-            attempt_state,
-            detail,
-            streak=0 if attempt_state in ("switched", "no_change") else streak,
-            last_attempt=attempt,
-        )
+            self._history_recorder["state"] = "running"
+        try:
+            while not self._history_stop.is_set():
+                captured_at = datetime.now(timezone.utc)
+                with self._lock:
+                    self._history_sequence += 1
+                    sequence = self._history_sequence
+                try:
+                    result = self.insights.ingest_snapshot(
+                        self.snapshot_response(),
+                        captured_at=captured_at,
+                        ingest_key=f"broker:{self._started_at}:{sequence}",
+                    )
+                except Exception as exc:
+                    with self._lock:
+                        self._history_recorder["state"] = "degraded"
+                        self._history_recorder["last_error"] = (
+                            f"{type(exc).__name__}: {exc}"
+                        )
+                else:
+                    with self._lock:
+                        self._history_recorder["state"] = "running"
+                        self._history_recorder["last_error"] = None
+                        if not getattr(result, "duplicate", False):
+                            self._history_recorder["snapshots_stored"] = int(
+                                self._history_recorder["snapshots_stored"]
+                            ) + 1
+                        self._history_recorder["last_stored_at"] = getattr(
+                            result, "captured_at", captured_at.isoformat()
+                        )
+                self._history_stop.wait(self.history_interval_seconds)
+        finally:
+            with self._lock:
+                self._history_recorder["state"] = "stopped"
 
     def _collect_passive_powertrain(
         self, bus_result: AcquisitionResult
@@ -1897,9 +1799,22 @@ class TelemetryBroker:
             self._collector_state = "running"
         try:
             while not self._collector_stop.is_set():
+                if self.interface_reconciler is not None:
+                    try:
+                        reconcile = self.interface_reconciler.reconcile_if_needed()
+                    except Exception as exc:
+                        reconcile = {
+                            "enabled": True,
+                            "ready": False,
+                            "detail": (
+                                "serial-aware passive reconciliation failed "
+                                f"closed: {type(exc).__name__}: {exc}"
+                            ),
+                        }
+                    with self._lock:
+                        self._interface_reconcile = reconcile
                 result = self.acquire("battery.voltage", "passive")
                 self._collect_passive_powertrain(result)
-                self._consider_auto_retune(result)
                 self._run_active_drive_if_ready()
                 with self._lock:
                     self._collector_cycles += 1
@@ -1929,13 +1844,22 @@ class TelemetryBroker:
 
     def stop_collector(self, timeout: float = 10.0) -> None:
         self._collector_stop.set()
+        self._history_stop.set()
         if self.active_drive_supervisor is not None:
             self.active_drive_supervisor.stop()
         with self._lock:
             thread = self._collector_thread
+            history_thread = self._history_thread
+        # Active-drive restoration has priority, and the two joins together
+        # must stay inside the caller's one shutdown budget.
+        deadline = time.monotonic() + max(0.0, float(timeout))
         if thread is not None:
-            thread.join(timeout)
+            thread.join(max(0.0, deadline - time.monotonic()))
+        if history_thread is not None:
+            history_thread.join(max(0.0, deadline - time.monotonic()))
         with self._lock:
+            if history_thread is None or not history_thread.is_alive():
+                self._history_thread = None
             if thread is not None and thread.is_alive():
                 # Retain the non-daemon handle so a caller can inspect or retry
                 # shutdown; losing it would make an armed child cleanup
@@ -1946,6 +1870,24 @@ class TelemetryBroker:
                 if self._collector_state != "failed":
                     self._collector_state = "stopped"
 
+    def close(self) -> None:
+        """Release offline storage after all background threads stop."""
+        self.stop_collector()
+        with self._lock:
+            history_alive = bool(
+                self._history_thread is not None
+                and self._history_thread.is_alive()
+            )
+            should_close = bool(
+                self.insights is not None
+                and not self._insights_closed
+                and not history_alive
+            )
+            if should_close:
+                self._insights_closed = True
+        if should_close:
+            self.insights.close()
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -1954,18 +1896,41 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("command", choices=("serve",))
     parser.add_argument("--socket", default=DEFAULT_SOCKET)
     parser.add_argument("--socket-mode", default="0660")
-    parser.add_argument("--channel", default="can0")
+    parser.add_argument(
+        "--can-interface-mode",
+        choices=("dual-usbcanfd",),
+        required=True,
+        help=(
+            "required safety gate: select independent serial/dev_id role "
+            "routing for the two installed dual-channel adapters; each healthy "
+            "bus remains usable when another role is unavailable, and "
+            "fixed-channel mode is retired"
+        ),
+    )
     parser.add_argument("--collector-interval", type=float, default=1.0)
+    parser.add_argument(
+        "--history-db",
+        default=str(DEFAULT_HISTORY_DB),
+        help="SQLite telemetry history (offline/cache-only)",
+    )
+    parser.add_argument(
+        "--history-interval",
+        type=float,
+        default=5.0,
+        help="seconds between cache snapshots stored in SQLite (default: 5)",
+    )
+    parser.add_argument(
+        "--dtc-cache",
+        default=str(DEFAULT_DTC_CACHE),
+        help="atomic saved-DTC JSON cache exposed read-only to the dashboard",
+    )
+    parser.add_argument(
+        "--no-history",
+        action="store_true",
+        help="disable SQLite history and early-warning evaluation",
+    )
     parser.add_argument("--probe-seconds", type=float, default=0.75)
     parser.add_argument("--read-timeout", type=float, default=2.0)
-    parser.add_argument("--wake-min-interval", type=float, default=900.0)
-    parser.add_argument(
-        "--no-auto-retune",
-        action="store_true",
-        help="never retune between approved CAN bitrates after wrong-rate evidence",
-    )
-    parser.add_argument("--auto-retune-trigger", type=int, default=3)
-    parser.add_argument("--auto-retune-cooldown", type=float, default=30.0)
     parser.add_argument("--no-collector", action="store_true")
     parser.add_argument(
         "--no-active-drive",
@@ -1977,15 +1942,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    if args.collector_interval <= 0 or args.probe_seconds <= 0:
-        raise SystemExit("collector/probe intervals must be positive")
     if (
-        args.read_timeout <= 0
-        or args.wake_min_interval < 0
-        or args.auto_retune_trigger < 1
-        or args.auto_retune_cooldown < 0
+        args.collector_interval <= 0
+        or args.probe_seconds <= 0
+        or args.history_interval <= 0
     ):
-        raise SystemExit("read/wake intervals are invalid")
+        raise SystemExit("collector/probe/history intervals must be positive")
+    if args.read_timeout <= 0:
+        raise SystemExit("read timeout must be positive")
     try:
         socket_mode = int(args.socket_mode, 8)
     except ValueError:
@@ -1994,39 +1958,58 @@ def main(argv=None) -> int:
         raise SystemExit("refusing a world-accessible broker Unix socket")
 
     from projects.vehicle_data.api import serve_unix
-    from projects.vehicle_data.ccan_powertrain import CcanPowertrainReader
+    from projects.vehicle_data.can_interfaces import PassiveInterfaceManager
+    from projects.vehicle_data.can_runtime import (
+        PassiveRoleReconciler,
+        RoleAwareActiveDriveSupervisor,
+        RoleAwareCcanPowertrainReader,
+        RoleAwareVoltageAcquirer,
+    )
+    from projects.vehicle_data.early_warning import EarlyWarningEvaluator
+    from projects.vehicle_data.historian import TelemetryHistorian
+    from projects.vehicle_data.insights import TelemetryInsights
 
-    acquirer = VoltageAcquirer(
-        channel=args.channel,
+    broker_holder: dict[str, TelemetryBroker] = {}
+    interface_manager = PassiveInterfaceManager()
+    interface_reconciler = PassiveRoleReconciler(interface_manager)
+    acquirer = RoleAwareVoltageAcquirer(
+        interface_manager,
         probe_seconds=args.probe_seconds,
         read_timeout=args.read_timeout,
     )
-    broker_holder: dict[str, TelemetryBroker] = {}
-    active_drive_enabled = (
-        not args.no_active_drive and args.channel == ACTIVE_DRIVE_CHANNEL
+    passive_powertrain_reader = RoleAwareCcanPowertrainReader(
+        interface_manager,
+        probe_seconds=min(args.probe_seconds, 0.25),
+        read_timeout=min(args.read_timeout, 0.5),
     )
+    active_drive_enabled = not args.no_active_drive
     active_supervisor = None
     if active_drive_enabled:
-        active_supervisor = ActiveDriveSupervisor(
-            channel=args.channel,
+        active_supervisor = RoleAwareActiveDriveSupervisor(
+            interface_manager,
             event_handler=lambda event: broker_holder[
                 "broker"
             ].handle_active_drive_event(event),
+            supervisor_factory=ActiveDriveSupervisor,
+        )
+
+    insights = None
+    if not args.no_history:
+        historian = TelemetryHistorian(args.history_db)
+        insights = TelemetryInsights(
+            historian,
+            warning_evaluator=EarlyWarningEvaluator(historian),
+            dtc_cache_path=args.dtc_cache,
         )
     broker = TelemetryBroker(
         acquirer=acquirer,
         collector_interval_seconds=args.collector_interval,
-        wake_min_interval_seconds=args.wake_min_interval,
-        auto_retune_enabled=not args.no_auto_retune,
-        auto_retune_trigger=args.auto_retune_trigger,
-        auto_retune_cooldown_seconds=args.auto_retune_cooldown,
-        passive_powertrain_reader=CcanPowertrainReader(
-            channel=args.channel,
-            probe_seconds=min(args.probe_seconds, 0.25),
-            read_timeout=min(args.read_timeout, 0.5),
-        ),
+        passive_powertrain_reader=passive_powertrain_reader,
         active_drive_supervisor=active_supervisor,
         active_drive_enabled=active_drive_enabled,
+        interface_reconciler=interface_reconciler,
+        insights=insights,
+        history_interval_seconds=args.history_interval,
     )
     broker_holder["broker"] = broker
     if not args.no_collector:
@@ -2036,7 +2019,7 @@ def main(argv=None) -> int:
             serve_unix(broker, args.socket, mode=socket_mode)
         finally:
             termination.begin_cleanup()
-            broker.stop_collector()
+            broker.close()
     return 0
 
 

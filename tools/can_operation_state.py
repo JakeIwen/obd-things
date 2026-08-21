@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manage fail-closed topology and external-operation gates for unattended CAN wake."""
+"""Manage fail-closed topology and external-operation gates for CAN tools."""
 
 from __future__ import annotations
 
@@ -28,24 +28,28 @@ def build_parser() -> argparse.ArgumentParser:
     topology_set.add_argument(
         "bus", choices=("c-can", "b-can", "can-ch", "unknown")
     )
-    topology_set.add_argument("--channel", default="can0")
+    topology_set.add_argument("--channel", required=True)
     topology_set.add_argument("--pair", default="")
     topology_set.add_argument("--source", required=True)
     topology_set.add_argument("--note", default="")
 
     topology_show = subparsers.add_parser("topology-show")
-    topology_show.add_argument("--channel", default="can0")
+    topology_show.add_argument("--channel", required=True)
 
     inhibit_begin = subparsers.add_parser("inhibit-begin")
     inhibit_begin.add_argument("name")
-    inhibit_begin.add_argument("--channel", default="can0")
+    inhibit_begin.add_argument(
+        "--channel",
+        default="*",
+        help="resolved canN to inhibit, or '*' (default) for an external/global campaign",
+    )
     inhibit_begin.add_argument("--reason", required=True)
 
     inhibit_end = subparsers.add_parser("inhibit-end")
     inhibit_end.add_argument("name")
 
     status = subparsers.add_parser("status")
-    status.add_argument("--channel", default="can0")
+    status.add_argument("--channel", required=True)
     return parser
 
 

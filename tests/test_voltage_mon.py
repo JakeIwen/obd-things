@@ -41,7 +41,7 @@ class SharedAcquireTests(unittest.TestCase):
         self.assertEqual(volts, 12.7)
         self.assertIn("passive C-CAN", status)
         self.assertIn("quality=verified", status)
-        acquire.assert_called_once_with("wake_if_asleep")
+        acquire.assert_called_once_with("passive")
 
     def test_shared_failure_is_returned_without_fallback_can_action(self):
         result = failure(
@@ -60,30 +60,13 @@ class SharedAcquireTests(unittest.TestCase):
                 (None, "active acquisition inhibited by alfaobd"),
             )
 
-    def test_canch_result_maps_to_existing_edge_notice_status(self):
-        result = failure(
-            metric="battery.voltage",
-            unit="V",
-            reason="wrong_bus",
-            detail="CAN-CH is connected",
-            bus="can-ch",
-        )
-        with mock.patch.object(
-            voltage_mon._VOLTAGE_ACQUIRER, "acquire", return_value=result
-        ), mock.patch.object(
-            voltage_mon, "BROKER_SOCKET", SimpleNamespace(exists=lambda: False)
-        ):
-            self.assertEqual(
-                voltage_mon.acquire(), (None, voltage_mon.CAN_CH_STATUS)
-            )
-
     def test_running_broker_is_authoritative(self):
         payload = {
             "available": True,
             "value": 12.55,
-            "bus": "b-can",
-            "acquisition": "wake_assisted",
-            "source": "bcan.broadcast.0x46c",
+            "bus": "c-can",
+            "acquisition": "passive",
+            "source": "ccan.broadcast.0x41a",
             "quality": "verified",
             "detail": "broker result",
         }
@@ -106,9 +89,14 @@ class SharedAcquireTests(unittest.TestCase):
             volts, status = voltage_mon.acquire()
 
         self.assertEqual(volts, 12.55)
-        self.assertIn("wake-assisted B-CAN", status)
+        self.assertIn("passive C-CAN", status)
         client_class.assert_called_once_with(
             str(broker_path), timeout=30.0
+        )
+        client.request.assert_called_once_with(
+            "POST",
+            "/v1/acquisitions/battery.voltage",
+            {"mode": "passive"},
         )
         direct.assert_not_called()
 
@@ -134,41 +122,6 @@ class SharedAcquireTests(unittest.TestCase):
         self.assertIsNone(volts)
         self.assertIn("direct CAN fallback withheld", status)
         direct.assert_not_called()
-
-
-class GreyNoticeTests(unittest.TestCase):
-    def test_first_grey_detection_sends_notice_and_persists_edge(self):
-        state = {"low": False, "last_alert": None}
-        with (
-            mock.patch.object(voltage_mon, "_load_state", return_value=state),
-            mock.patch.object(voltage_mon, "_save_state") as save,
-            mock.patch.object(voltage_mon, "notify") as notify,
-        ):
-            handled = voltage_mon.handle_grey_adapter(
-                voltage_mon.CAN_CH_STATUS, allow_send=True
-            )
-
-        self.assertTrue(handled)
-        notify.assert_called_once()
-        self.assertEqual(notify.call_args.kwargs["title"], "Van CAN monitor")
-        self.assertTrue(state["grey_connected"])
-        save.assert_called_once_with(state)
-
-    def test_repeated_grey_detection_does_not_spam_ntfy(self):
-        state = {"low": False, "last_alert": None, "grey_connected": True}
-        with (
-            mock.patch.object(voltage_mon, "_load_state", return_value=state),
-            mock.patch.object(voltage_mon, "_save_state") as save,
-            mock.patch.object(voltage_mon, "notify") as notify,
-        ):
-            handled = voltage_mon.handle_grey_adapter(
-                voltage_mon.CAN_CH_STATUS, allow_send=True
-            )
-
-        self.assertTrue(handled)
-        notify.assert_not_called()
-        save.assert_called_once_with(state)
-
 
 if __name__ == "__main__":
     unittest.main()

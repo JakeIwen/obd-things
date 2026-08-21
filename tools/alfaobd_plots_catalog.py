@@ -34,11 +34,10 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from lib import diagnostic_safety  # noqa: E402
+from lib import can_runtime_route, diagnostic_safety  # noqa: E402
 from lib.modules import MODULES  # noqa: E402
 from tools.alfaobd_singleton_campaign import (  # noqa: E402
     ACTIVE_DIAGNOSTIC_IDS,
-    BLOCKED_SERVICES,
     BLOCKING_DIALOG_TEXT,
     CAMPAIGN_ID_RE,
     PACKAGE,
@@ -1160,16 +1159,11 @@ def _write_catalog_report(
     _write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
-def _assert_blocked_services_inactive(
-    runner: CommandRunner,
-    *,
-    context: str,
-) -> None:
-    for service in BLOCKED_SERVICES:
-        if _service_active(runner, service):
-            raise CampaignError(
-                f"{service} is active {context}; stop it before AlfaOBD navigation"
-            )
+def _revalidate_can_role(ownership, *, context: str) -> None:
+    try:
+        ownership.revalidate()
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise CampaignError(f"CAN role ownership changed {context}: {exc}") from exc
 
 
 def run_inventory(
@@ -1180,15 +1174,14 @@ def run_inventory(
     conditions: str,
 ) -> Path:
     with _ui_supervisor_lock():
-        _assert_blocked_services_inactive(runner, context="at campaign preflight")
         module = MODULES[plan.module_key]
         try:
-            channel_handle = diagnostic_safety.acquire_channel_observer_lock(
-                module.channel
+            ownership = can_runtime_route.acquire_passive_bus_route(
+                module.bus
             )
-        except diagnostic_safety.ChannelLockError as exc:
+        except (OSError, RuntimeError, ValueError) as exc:
             raise CampaignError(str(exc)) from exc
-        try:
+        with ownership:
             with diagnostic_safety.interrupt_on_termination() as guard:
                 return _run_inventory_locked(
                     plan,
@@ -1196,10 +1189,9 @@ def run_inventory(
                     runner,
                     out_root,
                     conditions,
+                    ownership,
                     termination_guard=guard,
                 )
-        finally:
-            diagnostic_safety.release_channel_lock(channel_handle)
 
 
 def _run_inventory_locked(
@@ -1208,8 +1200,10 @@ def _run_inventory_locked(
     runner: CommandRunner,
     out_root: Path,
     conditions: str,
+    route_ownership,
     termination_guard: object | None = None,
 ) -> Path:
+    _revalidate_can_role(route_ownership, context="at campaign preflight")
     _disk_guard(out_root, plan.min_free_bytes)
     xml_text, nodes, scan_state, screenshot = _audit_page(plan, adb)
     if scan_state != "stopped":
@@ -1255,9 +1249,9 @@ def _run_inventory_locked(
     validation_errors: list[str] = []
     failure: BaseException | None = None
     try:
-        _assert_blocked_services_inactive(
-            runner,
-            context="immediately before the selector input",
+        _revalidate_can_role(
+            route_ownership,
+            context="immediately before selector input",
         )
         fresh_xml, fresh_nodes, fresh_scan_state, fresh_screenshot = _audit_page(
             plan,
@@ -1336,8 +1330,8 @@ def _run_inventory_locked(
             adb,
             writer,
             artifact_dir,
-            before_input=lambda: _assert_blocked_services_inactive(
-                runner,
+            before_input=lambda: _revalidate_can_role(
+                route_ownership,
                 context="before a selector swipe",
             ),
         )

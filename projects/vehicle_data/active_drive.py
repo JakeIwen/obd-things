@@ -24,6 +24,7 @@ import json
 import math
 import os
 import pathlib
+import re
 import signal
 import socket
 import struct
@@ -37,6 +38,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from lib import can_operation_state, canbus, diagnostic_safety
+from lib.can_role_resolver import SysfsCanRoleResolver
 from lib.modules import MODULES
 from projects.vehicle_data import (
     ccan_powertrain,
@@ -45,7 +47,6 @@ from projects.vehicle_data import (
 )
 
 
-CHANNEL = "can0"
 BITRATE = 500000
 PAIR = "6/14"
 RUNNING_RPM = 400.0
@@ -115,15 +116,55 @@ class SystemBackend:
         self,
         channel: str,
         *,
+        expected_usb_serial: str,
+        expected_dev_id: int,
+        role_resolver: SysfsCanRoleResolver | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ):
+        if not expected_usb_serial:
+            raise ValueError("active-drive USB serial is required")
+        if (
+            not isinstance(expected_dev_id, int)
+            or isinstance(expected_dev_id, bool)
+            or expected_dev_id < 0
+        ):
+            raise ValueError(
+                "active-drive dev_id must be a non-negative integer"
+            )
         self.channel = channel
+        self.expected_usb_serial = expected_usb_serial
+        self.expected_dev_id = expected_dev_id
+        self.role_resolver = role_resolver or SysfsCanRoleResolver()
         self.monotonic = monotonic
         self.sleep = sleep
 
     def interface_state(self):
         return canbus.interface_state(self.channel)
+
+    def identity_matches(self) -> bool:
+        if (
+            not isinstance(self.expected_usb_serial, str)
+            or not self.expected_usb_serial
+            or not isinstance(self.expected_dev_id, int)
+            or isinstance(self.expected_dev_id, bool)
+            or self.expected_dev_id < 0
+        ):
+            return False
+        inventory, _issues = self.role_resolver.inventory(drivers=("gs_usb",))
+        matches = [
+            item
+            for item in inventory
+            if item.driver == "gs_usb"
+            and item.usb_vid == "1d50"
+            and item.usb_pid == "606f"
+            and item.usb_serial == self.expected_usb_serial
+            and item.dev_id == self.expected_dev_id
+        ]
+        return bool(
+            len(matches) == 1
+            and matches[0].channel == self.channel
+        )
 
     def topology(self):
         return can_operation_state.load_topology(self.channel)
@@ -144,6 +185,8 @@ class SystemBackend:
         )
 
     def arm(self, initial: canbus.InterfaceState) -> bool:
+        if not self.identity_matches():
+            return False
         restart_ms = initial.restart_ms if initial.restart_ms is not None else 0
         if not canbus.ip_up(
             self.channel,
@@ -158,12 +201,17 @@ class SystemBackend:
             state.present
             and state.up
             and state.bitrate == BITRATE
+            and state.fd_enabled is False
             and not state.listen_only
             and state.controller_state == "ERROR-ACTIVE"
             and state.restart_ms == restart_ms
         )
 
     def restore(self, initial: canbus.InterfaceState) -> bool:
+        # A hub reset may reuse the same canN for another adapter channel.
+        # Never apply the old C-CAN state to a new physical identity.
+        if not self.identity_matches():
+            return False
         return bool(
             canbus.restore_interface_state(initial, noninteractive=True)
             and initial.same_configuration(self.interface_state())
@@ -192,9 +240,10 @@ def _safe_passive_state(state: object) -> bool:
         and state.present
         and state.up
         and state.bitrate == BITRATE
+        and state.fd_enabled is False
         and state.listen_only
         and state.controller_state == "ERROR-ACTIVE"
-        and state.restart_ms is not None
+        and state.restart_ms == 0
     )
 
 
@@ -204,11 +253,18 @@ def _safe_active_state(state: object, initial: canbus.InterfaceState) -> bool:
         and state.present
         and state.up
         and state.bitrate == BITRATE
+        and state.fd_enabled is False
         and not state.listen_only
         and state.controller_state == "ERROR-ACTIVE"
         and state.restart_ms
         == (initial.restart_ms if initial.restart_ms is not None else 0)
     )
+
+
+def _backend_identity_matches(backend: object) -> bool:
+    """Keep legacy injected test backends compatible; live backend always checks."""
+    checker = getattr(backend, "identity_matches", None)
+    return bool(checker()) if callable(checker) else True
 
 
 def _running_snapshot(snapshot: object) -> bool:
@@ -246,12 +302,17 @@ def _topology_failure(topology: object) -> SessionOutcome | None:
 
 
 def _preflight_under_lock(backend: SystemBackend) -> tuple[canbus.InterfaceState | None, SessionOutcome | None]:
+    if not _backend_identity_matches(backend):
+        return None, SessionOutcome(
+            "adapter_unhealthy",
+            "resolved C-CAN USB identity is absent or no longer matches this canN",
+        )
     initial = backend.interface_state()
     if not _safe_passive_state(initial):
         return None, SessionOutcome(
             "adapter_unhealthy",
-            "can0 must already be UP, 500 kbit/s, listen-only, ERROR-ACTIVE, "
-            "and expose readable restart timing",
+            f"{backend.channel} must already be UP, 500 kbit/s classical CAN (FD off), "
+            "listen-only, ERROR-ACTIVE, and expose readable restart timing",
         )
     topology_failure = _topology_failure(backend.topology())
     if topology_failure is not None:
@@ -297,10 +358,8 @@ class RfHubPressurePoller:
         monotonic: Callable[[], float] = time.monotonic,
     ):
         self.module = MODULES["rf_hub"]
-        if channel != self.module.channel:
-            raise ValueError(
-                f"RF Hub pressure polling is restricted to {self.module.channel!r}"
-            )
+        if not isinstance(channel, str) or not re.fullmatch(r"can[0-9]+", channel):
+            raise ValueError("RF Hub pressure polling requires a SocketCAN canN channel")
         if isinstance(timeout, (bool, str, bytes, bytearray)):
             raise ValueError("timeout must be a positive finite number")
         try:
@@ -559,6 +618,11 @@ def _active_gate(
     backend: SystemBackend,
     initial: canbus.InterfaceState,
 ) -> SessionOutcome | None:
+    if not _backend_identity_matches(backend):
+        return SessionOutcome(
+            "adapter_unhealthy",
+            "resolved C-CAN USB identity changed or disappeared",
+        )
     if not _safe_active_state(backend.interface_state(), initial):
         return SessionOutcome(
             "adapter_unhealthy",
@@ -683,6 +747,7 @@ def run_active_session(
                 lock_handle,
                 snapshot,
                 purpose=transmit_permit.PCM_GENERATOR_DUTY,
+                channel=backend.channel,
                 monotonic=backend.monotonic,
             )
             pcm_result = pcm_poller.poll(pcm_permit)
@@ -713,6 +778,7 @@ def run_active_session(
                     lock_handle,
                     snapshot,
                     purpose=transmit_permit.PCM_CRANKSHAFT_TORQUE,
+                    channel=backend.channel,
                     monotonic=backend.monotonic,
                 )
                 torque_result = pcm_poller.poll_crankshaft_torque(
@@ -759,6 +825,7 @@ def run_active_session(
                 lock_handle,
                 snapshot,
                 purpose=transmit_permit.RF_HUB_PRESSURE,
+                channel=backend.channel,
                 monotonic=backend.monotonic,
             )
             pressure = tpms_poller.poll_next(pressure_permit)
@@ -836,7 +903,7 @@ def run_active_session(
                 try:
                     can_operation_state.begin_inhibit(
                         RESTORATION_INHIBIT,
-                        channel=backend.channel,
+                        channel="*",
                         reason=outcome.detail,
                     )
                 except BaseException as exc:
@@ -914,15 +981,31 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Guarded engine-running C-CAN telemetry owner."
     )
-    parser.add_argument("--channel", choices=(CHANNEL,), default=CHANNEL)
+    parser.add_argument(
+        "--channel",
+        required=True,
+        help="broker-resolved C-CAN SocketCAN netdev",
+    )
+    parser.add_argument("--expected-usb-serial", required=True)
+    parser.add_argument(
+        "--expected-dev-id",
+        type=lambda value: int(value, 0),
+        required=True,
+    )
     parser.add_argument("--expected-parent-pid", type=int, required=True)
     return parser
 
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    if args.channel != CHANNEL:
-        raise SystemExit("active-drive helper is restricted to registered channel can0")
+    if not re.fullmatch(r"can[0-9]+", args.channel):
+        raise SystemExit(
+            "active-drive helper requires a resolved kernel canN channel"
+        )
+    if not args.expected_usb_serial or args.expected_dev_id < 0:
+        raise SystemExit(
+            "active-drive helper requires a valid USB serial and dev_id"
+        )
     try:
         _set_parent_death_signal(args.expected_parent_pid)
     except Exception as exc:
@@ -930,7 +1013,11 @@ def main(argv=None) -> int:
             f"active-drive helper refused parent handshake: {exc}"
         ) from None
     sink = JsonEventSink()
-    backend = SystemBackend(args.channel)
+    backend = SystemBackend(
+        args.channel,
+        expected_usb_serial=args.expected_usb_serial,
+        expected_dev_id=args.expected_dev_id,
+    )
     with diagnostic_safety.interrupt_on_termination() as termination:
         outcome = run_active_session(
             backend,

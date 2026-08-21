@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """Persistent, passive B-CAN awake-interval recorder.
 
-This daemon never configures SocketCAN and never transmits.  Its systemd unit
-establishes the passive 125 kbit/s baseline before starting it.  The daemon
-takes a shared CAN observer lock for each identity probe, retains that same
-lock without a gap while recording a verified awake interval, and releases it
-while the bus is asleep so a guarded voltage monitor may briefly own an active
-wake.  It automatically re-arms after 0x46C has been absent long enough for
-the awake interval to be considered complete.
+This daemon never configures SocketCAN and never transmits. The telemetry
+reconciler establishes the exact serial-resolved B-CAN role in passive
+125-kbit/s state. The daemon holds shared logical-role and resolved-channel
+ownership for each identity probe and without a gap through a verified awake
+interval. Other independently locked bus roles remain available concurrently;
+the voltage monitor is passive. It begins a new interval after 0x46C returns.
 
 An awake interval is deliberately broader than a drive: a fob wake or other
 body-network activity may also be retained.  That bias avoids missing the
@@ -33,12 +32,12 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from lib import can_operation_state, canbus, diagnostic_safety  # noqa: E402
+from lib import can_operation_state, can_runtime_route, canbus, diagnostic_safety  # noqa: E402
 from lib.modules import MODULES  # noqa: E402
 from tools import passive_drive_capture as capture  # noqa: E402
 
 
-CHANNEL = "can0"
+CHANNEL: str | None = None
 BITRATE = canbus.BITRATE_BCAN
 PAIR = "3/11"
 TRACKED_ID = 0x46C
@@ -56,7 +55,7 @@ DEFAULT_OUT_ROOT = (
 DEFAULT_REQUIRED_MOUNT = Path("/mnt/EXFAT512")
 DEFAULT_STATE_PATH = REPO / "tmp" / "ecu_mapping" / "bcan-drive-recorder-state.json"
 DEFAULT_CONDITIONS = (
-    "PCAN on labeled B-CAN DLC pins 3/11; passive 125 kbit/s; ordinary vehicle use; "
+    "serial-resolved B-CAN role on DLC pins 3/11; passive 125 kbit/s; ordinary vehicle use; "
     "every verified B-CAN awake interval retained"
 )
 TOPOLOGY_SOURCE = "bcan_auto_recorder_passive_signature"
@@ -102,6 +101,8 @@ def query_interface(
     *,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
 ) -> capture.InterfaceState:
+    if CHANNEL is None:
+        raise BcanRecorderError("B-CAN runtime role has not been resolved")
     try:
         result = runner(
             ["ip", "-details", "-statistics", "link", "show", CHANNEL],
@@ -116,8 +117,24 @@ def query_interface(
         ) from exc
     if result.returncode != 0:
         raise BcanRecorderError(f"{CHANNEL} is missing or unreadable")
-    state = capture.parse_interface_state(result.stdout)
+    state = capture.parse_interface_state(result.stdout, channel=CHANNEL)
     errors = []
+    exact = canbus.interface_state(CHANNEL)
+    if (
+        not isinstance(exact, canbus.InterfaceState)
+        or exact.channel != CHANNEL
+        or not exact.present
+        or not exact.up
+        or exact.bitrate != BITRATE
+        or exact.fd_enabled is not False
+        or not exact.listen_only
+        or exact.controller_state != "ERROR-ACTIVE"
+        or exact.restart_ms != 0
+    ):
+        errors.append(
+            "stable interface state is not exact classical FD-off/listen-only/"
+            "ERROR-ACTIVE/restart-ms 0"
+        )
     if not state.up:
         errors.append("interface is not UP")
     if state.bitrate != BITRATE:
@@ -180,6 +197,8 @@ def probe_bcan(
     *,
     probe: Callable[..., tuple[set[int], int]] = canbus.probe_ids,
 ) -> tuple[frozenset[int], int]:
+    if CHANNEL is None:
+        raise BcanRecorderError("B-CAN runtime role has not been resolved")
     query_interface()
     try:
         ids, rx_error_delta = probe(CHANNEL, probe_seconds)
@@ -218,13 +237,23 @@ def record_one_interval(
     confirmed_signatures: frozenset[int],
     observer_handle,
 ) -> Path:
+    if CHANNEL is None:
+        raise BcanRecorderError("B-CAN runtime role has not been resolved")
     if len(confirmed_signatures) < MIN_SIGNATURE_HITS:
         raise BcanStartRace("B-CAN identity witness disappeared before recording")
+    route_ownership = (
+        observer_handle
+        if isinstance(observer_handle, can_runtime_route.PassiveBusOwnership)
+        else None
+    )
+    lock_handle = (
+        route_ownership.channel_lock if route_ownership is not None else observer_handle
+    )
     if (
-        getattr(observer_handle, "closed", True)
-        or not getattr(observer_handle, "_diagnostic_lock_held", False)
-        or getattr(observer_handle, "_diagnostic_lock_channel", None) != CHANNEL
-        or getattr(observer_handle, "_diagnostic_lock_mode", None) != "observer"
+        getattr(lock_handle, "closed", True)
+        or not getattr(lock_handle, "_diagnostic_lock_held", False)
+        or getattr(lock_handle, "_diagnostic_lock_channel", None) != CHANNEL
+        or getattr(lock_handle, "_diagnostic_lock_mode", None) != "observer"
     ):
         raise BcanRecorderError("shared CAN observer lock is not held")
     mount_device = capture.require_writable_mount(
@@ -297,7 +326,12 @@ def record_one_interval(
         stop_after_id_absence_seconds=args.silence_seconds,
         required_start_id=TRACKED_ID,
         required_start_id_timeout_seconds=args.start_timeout_seconds,
-        safety_check=query_interface,
+        safety_check=lambda: (
+            route_ownership.revalidate()
+            if route_ownership is not None
+            else None
+        )
+        or query_interface(),
         mount_check=lambda: capture.require_writable_mount(
             args.out_root,
             args.require_mount,
@@ -306,6 +340,8 @@ def record_one_interval(
         zstd=shutil.which("zstd") or "zstd",
         candump=shutil.which("candump") or "candump",
         candump_extra_args=("-D",),
+        channel=CHANNEL,
+        bitrate=BITRATE,
     )
     try:
         with capture.campaign_file_lock(run_dir):
@@ -322,14 +358,24 @@ def run_daemon(
     policy: capture.DiskPolicy,
     *,
     sleep: Callable[[float], None] = time.sleep,
-    acquire_observer: Callable[[str], object] = (
-        diagnostic_safety.acquire_channel_observer_lock
+    acquire_observer: Callable[[str | None], object] = (
+        lambda _channel: can_runtime_route.acquire_passive_bus_route(
+            "b-can",
+            asserted_pair=PAIR,
+        )
     ),
-    release_lock: Callable[[object], None] = diagnostic_safety.release_channel_lock,
+    release_lock: Callable[[object], None] = (
+        lambda handle: (
+            handle.release()
+            if isinstance(handle, can_runtime_route.PassiveBusOwnership)
+            else diagnostic_safety.release_channel_lock(handle)
+        )
+    ),
     probe: Callable[[float], tuple[frozenset[int], int]] = probe_bcan,
     topology_recorder: Callable[[frozenset[int]], object] = record_bcan_topology,
     interval_recorder: Callable[..., Path] = record_one_interval,
 ) -> int:
+    global CHANNEL
     capture.require_writable_mount(args.out_root, args.require_mount)
     validate_dependencies(args.out_root, policy)
     last_detail: tuple[object, ...] | None = None
@@ -347,7 +393,15 @@ def run_daemon(
         try:
             try:
                 observer_handle = acquire_observer(CHANNEL)
-            except diagnostic_safety.ChannelLockError as exc:
+                if isinstance(observer_handle, can_runtime_route.PassiveBusOwnership):
+                    CHANNEL = observer_handle.route.channel
+                    lock_capability = observer_handle.channel_lock
+                else:
+                    lock_capability = observer_handle
+            except (
+                diagnostic_safety.ChannelLockError,
+                can_runtime_route.RuntimeRouteError,
+            ) as exc:
                 detail = str(exc)
                 state_key = (detail,)
             else:
@@ -524,7 +578,8 @@ def plan(args: argparse.Namespace, policy: capture.DiskPolicy) -> dict[str, obje
             "maximum_rx_error_delta": canbus.RX_ERR_ABORT - 1,
         },
         "interface_requirement": {
-            "channel": CHANNEL,
+            "logical_role": "b-can",
+            "channel": "resolved at execution by USB serial/dev_id",
             "bitrate": BITRATE,
             "listen_only": True,
             "controller_state": "ERROR-ACTIVE",
@@ -557,11 +612,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not args.execute:
             print(json.dumps(plan(args, policy), indent=2, sort_keys=True))
             return 0
+        route = can_runtime_route.resolve_bus_route("b-can")
+        if route.pair != PAIR or route.bitrate != BITRATE:
+            raise BcanRecorderError("resolved B-CAN role metadata does not match recorder policy")
         return run_daemon(args, policy)
     except (
         BcanRecorderError,
         capture.CaptureError,
         diagnostic_safety.ChannelLockError,
+        can_runtime_route.RuntimeRouteError,
         OSError,
         ValueError,
     ) as exc:

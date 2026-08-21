@@ -4,13 +4,13 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
+from lib.modules import Module, bind_channel
 from live_data import live_data
 
 
-MODULE = SimpleNamespace(
+MODULE = Module(
     key="test_ecu",
     name="Test ECU",
-    channel="can9",
     bus="c-can",
     bitrate=500000,
     addressing_mode="normal_29bits",
@@ -44,6 +44,15 @@ NO_SESSION_LIVE_ARGS = [
 ]
 
 
+def owned_route(*, release_result=True):
+    ownership = mock.Mock()
+    ownership.route = SimpleNamespace(
+        module=bind_channel(MODULE, "can9"), channel="can9"
+    )
+    ownership.release.return_value = release_result
+    return ownership
+
+
 class LiveDataLinkTests(unittest.TestCase):
     def test_shared_bounded_request_requires_exact_session_and_did_echo(self):
         sock = mock.Mock()
@@ -57,7 +66,6 @@ class LiveDataLinkTests(unittest.TestCase):
             mock.patch.object(live_data.uds, "request", side_effect=responses) as request,
             mock.patch.object(live_data.time, "sleep"),
             mock.patch.object(live_data.time, "monotonic", return_value=0.0),
-            mock.patch.object(live_data.uds, "bring_up_can") as bring_up,
         ):
             link = live_data.Link(MODULE, request_rate=5.0, max_requests=3)
             data = link.read_did(0xF187)
@@ -67,7 +75,6 @@ class LiveDataLinkTests(unittest.TestCase):
         self.assertEqual(request.call_args_list[0].args[1], bytes.fromhex("10 03"))
         self.assertEqual(request.call_args_list[1].args[1], bytes.fromhex("22 F1 87"))
         self.assertEqual(drain.call_count, 2)
-        bring_up.assert_not_called()
 
     def test_no_session_link_sends_only_did_reads_without_tester_present(self):
         sock = mock.Mock()
@@ -114,14 +121,12 @@ class LiveDataLinkTests(unittest.TestCase):
                 "request",
                 return_value=(bytes.fromhex("50 02"), "UNEXPECTED"),
             ),
-            mock.patch.object(live_data.uds, "bring_up_can") as bring_up,
         ):
             link = live_data.Link(MODULE)
             with self.assertRaisesRegex(live_data.LinkError, "exact 50 03"):
                 link.read_did(0xF187)
 
         sock.close.assert_called_once_with()
-        bring_up.assert_not_called()
 
     def test_wrong_did_echo_drops_link_instead_of_misassociating(self):
         sock = mock.Mock()
@@ -208,29 +213,27 @@ class LiveDataCliSafetyTests(unittest.TestCase):
     def test_service_or_drive_capture_preflight_error_prevents_lock(self):
         with (
             mock.patch.object(
-                live_data, "preflight", return_value=["tpms-logger is active", "drive capture active"]
+                live_data.can_runtime_route,
+                "acquire_armed_module_route",
+                side_effect=RuntimeError("global capture is active"),
             ),
-            mock.patch.object(live_data.diagnostic_safety, "acquire_channel_lock") as lock,
             contextlib.redirect_stdout(io.StringIO()),
         ):
-            with self.assertRaisesRegex(SystemExit, "tpms-logger.*drive capture"):
+            with self.assertRaisesRegex(SystemExit, "global capture is active"):
                 live_data.run(MODULE, METRICS, argv=LIVE_ARGS)
-        lock.assert_not_called()
 
     def test_no_session_execute_does_not_require_session_change_confirmations(self):
         link = mock.Mock(request_attempts=0)
-        lock_handle = object()
+        ownership = owned_route()
         with (
             mock.patch.object(live_data, "preflight", return_value=[]),
             mock.patch.object(
-                live_data.diagnostic_safety,
-                "acquire_channel_lock",
-                return_value=lock_handle,
+                live_data.can_runtime_route,
+                "acquire_armed_module_route",
+                return_value=ownership,
             ),
-            mock.patch.object(live_data.diagnostic_safety, "release_channel_lock") as release,
             mock.patch.object(live_data, "Link", return_value=link) as link_type,
             mock.patch.object(live_data, "render", side_effect=KeyboardInterrupt),
-            mock.patch.object(live_data.canbus, "restore_passive", return_value=True),
             mock.patch.object(live_data.sys.stdout, "write"),
             mock.patch.object(live_data.sys.stdout, "flush"),
             mock.patch("builtins.print"),
@@ -245,7 +248,7 @@ class LiveDataCliSafetyTests(unittest.TestCase):
         self.assertEqual(result, 130)
         self.assertIsNone(link_type.call_args.kwargs["session"])
         link.drop.assert_called_once_with()
-        release.assert_called_once_with(lock_handle)
+        ownership.release.assert_called_once_with()
 
     def test_explicit_session_override_retains_session_change_gates(self):
         with (
@@ -264,16 +267,16 @@ class LiveDataCliSafetyTests(unittest.TestCase):
 
     def test_keyboard_interrupt_closes_restores_and_releases(self):
         link = mock.Mock(request_attempts=0)
-        lock_handle = object()
+        ownership = owned_route()
         with (
             mock.patch.object(live_data, "preflight", return_value=[]),
             mock.patch.object(
-                live_data.diagnostic_safety, "acquire_channel_lock", return_value=lock_handle
+                live_data.can_runtime_route,
+                "acquire_armed_module_route",
+                return_value=ownership,
             ),
-            mock.patch.object(live_data.diagnostic_safety, "release_channel_lock") as release,
             mock.patch.object(live_data, "Link", return_value=link),
             mock.patch.object(live_data, "render", side_effect=KeyboardInterrupt),
-            mock.patch.object(live_data.canbus, "restore_passive", return_value=True) as restore,
             mock.patch.object(live_data.sys.stdout, "write"),
             mock.patch.object(live_data.sys.stdout, "flush"),
             mock.patch("builtins.print"),
@@ -282,20 +285,20 @@ class LiveDataCliSafetyTests(unittest.TestCase):
 
         self.assertEqual(result, 130)
         link.drop.assert_called_once_with()
-        restore.assert_called_once_with("can9", 500000)
-        release.assert_called_once_with(lock_handle)
+        ownership.release.assert_called_once_with()
 
     def test_restore_failure_is_not_reported_as_success(self):
         link = mock.Mock(request_attempts=0)
+        ownership = owned_route(release_result=False)
         with (
             mock.patch.object(live_data, "preflight", return_value=[]),
             mock.patch.object(
-                live_data.diagnostic_safety, "acquire_channel_lock", return_value=object()
+                live_data.can_runtime_route,
+                "acquire_armed_module_route",
+                return_value=ownership,
             ),
-            mock.patch.object(live_data.diagnostic_safety, "release_channel_lock"),
             mock.patch.object(live_data, "Link", return_value=link),
             mock.patch.object(live_data, "render", side_effect=KeyboardInterrupt),
-            mock.patch.object(live_data.canbus, "restore_passive", return_value=False),
             mock.patch.object(live_data.sys.stdout, "write"),
             mock.patch.object(live_data.sys.stdout, "flush"),
             mock.patch("builtins.print"),
@@ -306,17 +309,18 @@ class LiveDataCliSafetyTests(unittest.TestCase):
     def test_deadline_clamps_refresh_sleep_to_remaining_duration(self):
         link = mock.Mock(request_attempts=0)
         monotonic_values = iter((0.0, 0.0, 0.0, 0.1, 0.2, 1.0))
+        ownership = owned_route()
         with (
             mock.patch.object(live_data, "preflight", return_value=[]),
             mock.patch.object(
-                live_data.diagnostic_safety, "acquire_channel_lock", return_value=object()
+                live_data.can_runtime_route,
+                "acquire_armed_module_route",
+                return_value=ownership,
             ),
-            mock.patch.object(live_data.diagnostic_safety, "release_channel_lock"),
             mock.patch.object(live_data, "Link", return_value=link),
             mock.patch.object(live_data, "render"),
             mock.patch.object(live_data.time, "monotonic", side_effect=lambda: next(monotonic_values)),
             mock.patch.object(live_data.time, "sleep") as sleep,
-            mock.patch.object(live_data.canbus, "restore_passive", return_value=True),
             mock.patch.object(live_data.sys.stdout, "write"),
             mock.patch.object(live_data.sys.stdout, "flush"),
             mock.patch("builtins.print"),
@@ -352,30 +356,24 @@ class LiveDataCliSafetyTests(unittest.TestCase):
         def render_once(*_args):
             link.request_attempts = 1000
 
-        def restore(*_args):
+        def release_route():
             signal_now(sig.SIGHUP)
             return True
 
-        def release(*_args):
-            signal_now(sig.SIGTERM)
+        ownership = owned_route()
+        ownership.release.side_effect = release_route
 
         with (
             mock.patch.object(live_data, "preflight", return_value=[]),
             mock.patch.object(
-                live_data.diagnostic_safety,
-                "acquire_channel_lock",
-                return_value=mock.sentinel.lock,
+                live_data.can_runtime_route,
+                "acquire_armed_module_route",
+                return_value=ownership,
             ),
-            mock.patch.object(
-                live_data.diagnostic_safety,
-                "release_channel_lock",
-                side_effect=release,
-            ) as unlock,
             mock.patch.object(live_data.diagnostic_safety.signal, "signal", side_effect=fake_signal),
             mock.patch.object(live_data, "Link", return_value=link),
             mock.patch.object(live_data, "render", side_effect=render_once),
             mock.patch.object(live_data.time, "sleep"),
-            mock.patch.object(live_data.canbus, "restore_passive", side_effect=restore) as passive,
             mock.patch.object(live_data.sys.stdout, "write"),
             mock.patch.object(live_data.sys.stdout, "flush"),
             mock.patch("builtins.print"),
@@ -383,8 +381,7 @@ class LiveDataCliSafetyTests(unittest.TestCase):
             result = live_data.run(MODULE, METRICS, argv=LIVE_ARGS)
 
         self.assertEqual(result, 130)
-        passive.assert_called_once_with("can9", 500000)
-        unlock.assert_called_once_with(mock.sentinel.lock)
+        ownership.release.assert_called_once_with()
 
 
 if __name__ == "__main__":

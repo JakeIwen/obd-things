@@ -1,7 +1,6 @@
 [Unit]
 Description=Allowlisted van telemetry CAN broker
-After=local-fs.target sys-subsystem-net-devices-can0.device
-BindsTo=sys-subsystem-net-devices-can0.device
+After=local-fs.target
 Wants=van-telemetry-web.service
 
 [Service]
@@ -11,11 +10,13 @@ Group=pi
 WorkingDirectory=/home/pi/dev/obd-things
 RuntimeDirectory=van-telemetry
 RuntimeDirectoryMode=0750
+StateDirectory=van-telemetry
+StateDirectoryMode=0750
 UMask=0007
-ExecStart=/usr/bin/python3 /home/pi/dev/obd-things/projects/vehicle_data/broker.py serve --socket /run/van-telemetry/api.sock
+ExecStart=/usr/bin/python3 /home/pi/dev/obd-things/projects/vehicle_data/broker.py serve --socket /run/van-telemetry/api.sock --can-interface-mode dual-usbcanfd --history-db /var/lib/van-telemetry/history.sqlite3 --history-interval 5 --dtc-cache /home/pi/dev/obd-things/tmp/vehicle_data/dtc-cache.json
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=15
 
 [Install]
-WantedBy=sys-subsystem-net-devices-can0.device
+WantedBy=multi-user.target

@@ -1,8 +1,17 @@
-# Promaster ACC Radar Calibration — PCAN / SocketCAN Handoff
+# Promaster ACC Radar Calibration — historical PCAN / SocketCAN Handoff
 
 > **NOTE (2026-06-13):** This is the *original* investigation handoff — good background and UDS
 > reference, but it predates everything we verified. For current verified state, repo layout,
 > findings, gotchas, and open work, read **`AGENT_HANDOFF.md`** first.
+
+> **HARDWARE WARNING (2026-08-20):** every `peak_usb`, `can0`, raw `ip link`,
+> `isotpsend`, and cable setup below is a historical record of the original
+> single-PCAN rig. It must not be followed on the permanent dual-USBCANFD
+> installation: current `canN` names are ephemeral, the old bring-up script was
+> removed. The only maintained radar executable is the root-integrated,
+> scoped-role `radar_acc_live.py`; none of the commands below maps to it. Preserve
+> the UDS findings, but use the root README and `docs/bus-map.md` for current
+> routing and ownership. The radar fault was resolved; do not rerun alignment.
 
 > You are Claude running on a Raspberry Pi with a **PEAK PCAN-USB** interface wired to a
 > 2022 Ram Promaster's OBD-II port. Your job: stand up reliable raw CAN + ISO-TP UDS comms
@@ -24,7 +33,7 @@ Vehicle VIN `3C6LRVDG4NE######` (MY2022 confirmed).
 
 ---
 
-## 2. Hardware / physical connection
+## 2. Historical hardware / physical connection
 - **PEAK PCAN-USB** adapter → **OBD-II-to-DB9 cable** → van OBD-II port.
 - The DB9 should follow **CiA-303 / PEAK pinout: pin 7 = CAN-H, pin 2 = CAN-L, pin 3 = GND**.
   The OBD-to-DB9 cable must map **OBD pin 6 → CAN-H (DB9 pin7)** and **OBD pin 14 → CAN-L
@@ -35,7 +44,10 @@ Vehicle VIN `3C6LRVDG4NE######` (MY2022 confirmed).
 
 ---
 
-## 3. Bring up SocketCAN (PEAK uses the in-kernel `peak_usb` driver)
+## 3. Non-executable historical PEAK SocketCAN bring-up
+
+This command record cannot be used as a current recipe; it predates the
+permanent role map and the supporting single-adapter script has been removed.
 ```bash
 # PEAK PCAN-USB is supported by the mainline kernel; usually no extra install needed.
 dmesg | grep -i peak              # confirm peak_usb bound, "can0" created
@@ -128,7 +140,7 @@ vehicle centerline at 120 cm to actually converge. The owner does NOT yet have t
 
 ---
 
-## 8. Suggested work order on the Pi
+## 8. Superseded original work order — do not execute
 1. Bring up `can0` @ 500k; `candump` to confirm live bus (van running).
 2. Manual `isotpsend/recv` smoke test of `22 F1A5` → expect `62F1A5 0039501620`.
 3. Build a Python tool with **`python-can` + `isotp`** (or `udsoncan`) using:
@@ -168,4 +180,3 @@ is actuation.
   start returns `0x33`, a seed/key unlock (proprietary FCA algo) would be required — flag it,
   don't brute force.
 ```
-

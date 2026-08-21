@@ -12,7 +12,10 @@ of distinct CAN identifiers rather than the number of frames in the capture.  In
 changed-byte mask, bit 0 represents payload byte 0, bit 1 represents byte 1, and so on.  A
 byte is marked when its value or presence differs from that identifier's first frame.
 
-JSON reports also retain per-byte minimums, maximums, and presence counts.  This makes a
+JSON reports keep ``interface`` as part of each stream identity, in addition to the
+11/29-bit namespace and numeric CAN ID.  This prevents a combined multi-bus capture from
+silently merging the same numeric identifier observed on two physical buses.  Reports also
+retain per-byte minimums, maximums, and presence counts.  This makes a
 constant value that changes between two captures detectable, but those statistics can reveal
 payload content (including fragments of diagnostic identity data).  Keep reports under ``tmp/``
 and review/redact selected evidence before promoting it into tracked findings.
@@ -66,6 +69,7 @@ class Frame:
 
 @dataclass
 class IdStats:
+    interface: str
     can_id: int
     id_bits: int
     count: int = 0
@@ -128,6 +132,7 @@ class IdStats:
             if presence_count == self.count and minimum is not None and minimum == maximum:
                 constant_byte_mask |= 1 << index
         return {
+            "interface": self.interface,
             "can_id": self.can_id,
             "can_id_hex": _format_can_id(self.can_id, self.id_bits),
             "id_bits": self.id_bits,
@@ -199,7 +204,7 @@ def summarize_lines(lines: Iterable[str], source: str = "<stream>") -> dict[str,
     last_timestamp: float | None = None
     interface_counts: Counter[str] = Counter()
     format_counts: Counter[int] = Counter()
-    identifiers: dict[tuple[int, int], IdStats] = {}
+    identifiers: dict[tuple[str, int, int], IdStats] = {}
 
     for line in lines:
         total_lines += 1
@@ -225,20 +230,24 @@ def summarize_lines(lines: Iterable[str], source: str = "<stream>") -> dict[str,
         interface_counts[frame.interface] += 1
         format_counts[frame.id_bits] += 1
 
-        key = (frame.can_id, frame.id_bits)
+        key = (frame.interface, frame.id_bits, frame.can_id)
         stats = identifiers.get(key)
         if stats is None:
-            stats = IdStats(can_id=frame.can_id, id_bits=frame.id_bits)
+            stats = IdStats(
+                interface=frame.interface,
+                can_id=frame.can_id,
+                id_bits=frame.id_bits,
+            )
             identifiers[key] = stats
         stats.add(frame)
 
     duration = _duration(first_timestamp, last_timestamp)
     id_rows = [
         identifiers[key].as_dict()
-        for key in sorted(identifiers, key=lambda item: (item[0], item[1]))
+        for key in sorted(identifiers, key=lambda item: (item[0], item[1], item[2]))
     ]
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "payload_statistics_warning": (
             "Per-byte minimum/maximum values can reveal raw payload content. Keep this report "
             "under tmp/ and redact reviewed evidence before promotion."
@@ -386,14 +395,15 @@ def print_human(summary: dict[str, object], output: TextIO | None = None) -> Non
     ) or "none"
     print(f"Interfaces: {interface_text}", file=output)
     print(
-        "\nID          bits       count  first timestamp      last timestamp  "
+        "\ninterface  ID          bits       count  first timestamp      last timestamp  "
         "DLCs       changed-byte mask",
         file=output,
     )
     for row in summary["ids"]:
         dlcs = ",".join(str(dlc) for dlc in row["dlcs"])
         print(
-            f"{row['can_id_hex']:<11} {row['id_bits']:>4} {row['count']:>11}  "
+            f"{row['interface']:<10} {row['can_id_hex']:<11} "
+            f"{row['id_bits']:>4} {row['count']:>11}  "
             f"{row['first_timestamp']:>16.6f}  {row['last_timestamp']:>16.6f}  "
             f"{dlcs:<10} {row['changed_byte_mask_hex']}",
             file=output,

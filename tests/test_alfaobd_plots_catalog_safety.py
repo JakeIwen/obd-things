@@ -175,7 +175,19 @@ def _plan():
 
 @contextlib.contextmanager
 def _patched_inventory_runtime():
-    lock_handle = object()
+    class Ownership:
+        route = mock.Mock(channel="can7", role="c-can")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def revalidate(self):
+            return None
+
+    ownership = Ownership()
     with contextlib.ExitStack() as stack:
         stack.enter_context(
             mock.patch.object(
@@ -193,13 +205,10 @@ def _patched_inventory_runtime():
         )
         stack.enter_context(
             mock.patch.object(
-                plots.diagnostic_safety,
-                "acquire_channel_observer_lock",
-                return_value=lock_handle,
+                plots.can_runtime_route,
+                "acquire_passive_bus_route",
+                return_value=ownership,
             )
-        )
-        stack.enter_context(
-            mock.patch.object(plots.diagnostic_safety, "release_channel_lock")
         )
         yield
 

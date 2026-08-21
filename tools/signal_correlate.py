@@ -38,9 +38,9 @@ import datetime
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, REPO)
-from lib import canbus, diagnostic_safety, uds
+from lib import can_runtime_route, diagnostic_safety, uds
 from lib.modules import get
-from tools.ecu_discover import preflight
+from tools.ecu_discover import prearm_conflict_errors, preflight
 
 try:
     import numpy as np
@@ -126,14 +126,20 @@ def capture(
         raise CaptureError("live capture requires parked, pair, and conditions assertions")
     if not confirmed_session_change or not confirmed_no_active_routine:
         raise CaptureError("live capture requires explicit session-state confirmations")
+    try:
+        ownership = can_runtime_route.acquire_armed_module_route(
+            module,
+            asserted_pair=pair,
+            prearm_check=prearm_conflict_errors,
+        )
+        module = ownership.route.module
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise CaptureError(f"stable runtime route/arm failed: {exc}") from None
     errors = preflight(module.channel, module.bitrate)
     if errors:
-        raise CaptureError("; ".join(errors))
-
-    try:
-        lock = diagnostic_safety.acquire_channel_lock(module.channel)
-    except (OSError, RuntimeError, ValueError) as exc:
-        raise CaptureError(f"refusing to capture: {exc}") from None
+        restored = ownership.release()
+        suffix = "" if restored else "; passive restoration failed"
+        raise CaptureError("; ".join(errors) + suffix)
 
     samples = []
     started_wall = time.time()
@@ -270,13 +276,13 @@ def capture(
                     stop_reason = "failed"
             finally:
                 try:
-                    restored_passive = bool(canbus.restore_passive(module.channel, module.bitrate))
+                    restored_passive = ownership.release()
                 except Exception as exc:
                     if fatal_error is None:
                         fatal_error = f"passive restore failed: {type(exc).__name__}: {exc}"
                         stop_reason = "failed"
                 finally:
-                    diagnostic_safety.release_channel_lock(lock)
+                    pass
 
     if termination.received_signal is not None:
         interrupted = True

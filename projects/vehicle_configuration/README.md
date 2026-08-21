@@ -105,7 +105,7 @@ Link to these sources instead of copying their evolving details here:
 - Verified grey-adapter/CAN-CH routing:
   [`2026-07-25 CAN-CH live verification`](../ecu_mapping/findings/promaster_2022/2026-07-25_canch_live_verification.md)
 - Guarded autonomous voltage-monitor behavior:
-  [`projects/tpms/README.md`](../tpms/README.md#infrastructure-now-running)
+  [`projects/tpms/README.md`](../tpms/README.md#tpms-logger-and-telemetry-ownership)
 
 ## Data layout
 

@@ -88,8 +88,26 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(standard["byte_maximums"], [0x01, 0xFF, 0x03])
         self.assertEqual(standard["byte_presence_counts"], [2, 2, 2])
         self.assertEqual(standard["constant_byte_mask"], 0b101)
-        self.assertEqual(summary["schema_version"], 2)
+        self.assertEqual(standard["interface"], "can0")
+        self.assertEqual(summary["schema_version"], 3)
         self.assertIn("payload content", summary["payload_statistics_warning"])
+
+    def test_same_numeric_id_on_two_interfaces_is_never_merged(self):
+        summary = can_capture_summary.summarize_lines(
+            [
+                "(1.0) can0 123#01\n",
+                "(2.0) can1 123#FF\n",
+                "(3.0) can0 123#02\n",
+            ]
+        )
+
+        self.assertEqual(len(summary["ids"]), 2)
+        by_interface = {row["interface"]: row for row in summary["ids"]}
+        self.assertEqual(by_interface["can0"]["count"], 2)
+        self.assertEqual(by_interface["can0"]["byte_minimums"], [1])
+        self.assertEqual(by_interface["can0"]["byte_maximums"], [2])
+        self.assertEqual(by_interface["can1"]["count"], 1)
+        self.assertEqual(by_interface["can1"]["byte_minimums"], [0xFF])
 
     def test_dlc_change_marks_byte_presence_change(self):
         summary = can_capture_summary.summarize_lines(

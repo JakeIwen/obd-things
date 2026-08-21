@@ -39,7 +39,7 @@ from __future__ import annotations
 import argparse
 from collections import deque
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
 from functools import lru_cache
 import hashlib
@@ -186,7 +186,9 @@ class CanFrame:
     id_bits: int
     payload: bytes
     raw_line_sequence: int | None = None
-    channel: str = DEFAULT_MODULE.channel
+    # ``None`` is permitted only for synthetic/in-memory analysis.  Parsed
+    # evidence always preserves the interface name carried by candump.
+    channel: str | None = None
 
     @property
     def dlc(self) -> int:
@@ -301,7 +303,7 @@ class FieldSpec:
 
 @dataclass(frozen=True, order=True)
 class CandidateKey:
-    channel: str
+    channel: str | None
     can_id: int
     id_bits: int
     dlc: int
@@ -316,7 +318,9 @@ class StreamFieldSelector:
     id_bits: int
     dlc: int
     field: FieldSpec
-    channel: str = DEFAULT_MODULE.channel
+    # Parsers initially create an unbound selector; the CLI binds it to the
+    # explicitly declared historical capture channel before analysis.
+    channel: str | None = None
 
     def __post_init__(self) -> None:
         if self.id_bits not in (11, 29):
@@ -338,11 +342,17 @@ class StreamFieldSelector:
             raise CorrelateError(
                 f"selector field {self.field.label} exceeds DLC {self.dlc}"
             )
-        if not isinstance(self.channel, str) or not self.channel:
-            raise CorrelateError("selector channel must be nonempty")
+        if self.channel is not None and (
+            not isinstance(self.channel, str)
+            or not self.channel
+            or any(character.isspace() for character in self.channel)
+        ):
+            raise CorrelateError(
+                "selector channel must be None or a nonempty interface name"
+            )
 
     @property
-    def stream_key(self) -> tuple[str, int, int, int]:
+    def stream_key(self) -> tuple[str | None, int, int, int]:
         return (self.channel, self.can_id, self.id_bits, self.dlc)
 
     def as_dict(self) -> dict[str, object]:
@@ -663,7 +673,7 @@ def _timestamp_to_us(value: bytes | str, *, context: str) -> int:
 def parse_candump_frame(
     line: bytes,
     *,
-    expected_channel: str = DEFAULT_MODULE.channel,
+    expected_channel: str | None = None,
 ) -> CanFrame | None:
     """Parse one classic-CAN candump line; return ``None`` for a blank line."""
     if not line.strip():
@@ -694,9 +704,9 @@ def parse_candump_frame(
         interface = match.group("interface").decode("ascii")
     except UnicodeDecodeError as exc:
         raise CorrelateError("candump interface is not ASCII") from exc
-    if interface != expected_channel:
+    if expected_channel is not None and interface != expected_channel:
         raise CorrelateError(
-            f"candump interface must be the pinned module channel "
+            f"candump interface must match the declared capture channel "
             f"{expected_channel!r}"
         )
     can_id_text = match.group("can_id")
@@ -726,6 +736,26 @@ def _parse_hex_did(value: str) -> int:
     if not re.fullmatch(r"[0-9A-Fa-f]{1,4}", text):
         raise argparse.ArgumentTypeError("DID must be one to four hexadecimal digits")
     return int(text, 16)
+
+
+def _validate_capture_channel(value: str) -> str:
+    """Validate an interface name recorded in offline capture provenance."""
+    if (
+        not isinstance(value, str)
+        or not value
+        or any(character.isspace() for character in value)
+    ):
+        raise CorrelateError(
+            "capture channel must be a nonempty interface name without whitespace"
+        )
+    return value
+
+
+def _parse_capture_channel(value: str) -> str:
+    try:
+        return _validate_capture_channel(value)
+    except CorrelateError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def _parse_reference_field(value: str) -> FieldSpec | None:
@@ -875,8 +905,10 @@ def iter_reference_samples(
     did: int,
     decoder: ReferenceDecoder,
     stats: StreamStats,
+    capture_channel: str,
     module: Module = DEFAULT_MODULE,
 ) -> Iterator[ReferenceSample]:
+    _validate_capture_channel(capture_channel)
     previous_timestamp: int | None = None
     previous_raw_sequence: int | None = None
     selected_count = 0
@@ -982,6 +1014,12 @@ def iter_reference_samples(
                 raise CorrelateError(
                     f"{path}:{line_number}: selected row has invalid timestamp_source"
                 )
+            row_channel = row.get("channel")
+            if row_channel != capture_channel:
+                raise CorrelateError(
+                    f"{path}:{line_number}: selected row channel does not match "
+                    f"declared capture channel {capture_channel!r}"
+                )
             if previous_timestamp is not None and timestamp_value < previous_timestamp:
                 raise CorrelateError(
                     "selected reference rows are not chronological"
@@ -1065,7 +1103,7 @@ def iter_reference_samples(
                 raw_line_sequence=raw_sequence,
                 expected_can_id=expected_can_id,
                 expected_id_bits=expected_id_bits,
-                expected_channel=module.channel,
+                expected_channel=row_channel,
                 expected_can_data=expected_can_data,
             )
 
@@ -1083,8 +1121,10 @@ def iter_candump_frames(
     *,
     stats: list[StreamStats],
     decompressor: Decompressor,
-    expected_channel: str = DEFAULT_MODULE.channel,
+    expected_channel: str | None = None,
 ) -> Iterator[CanFrame]:
+    if expected_channel is not None:
+        _validate_capture_channel(expected_channel)
     previous_timestamp: int | None = None
     raw_line_sequence = 0
     total_decompressed_bytes = 0
@@ -2603,10 +2643,46 @@ def run_analysis(
     did: int,
     reference_field: str,
     config: AnalysisConfig,
+    capture_channel: str,
     module: Module = DEFAULT_MODULE,
     decompressor: Decompressor | None = None,
     allow_van_compute_staging: bool = False,
 ) -> dict[str, object]:
+    _validate_capture_channel(capture_channel)
+    if config.fixed_formula is not None:
+        selector = config.fixed_formula.candidate
+        if selector.channel not in (None, capture_channel):
+            raise CorrelateError(
+                "fixed formula selector channel does not match the declared "
+                "capture channel"
+            )
+        config = replace(
+            config,
+            fixed_formula=replace(
+                config.fixed_formula,
+                candidate=replace(selector, channel=capture_channel),
+            ),
+        )
+    if config.regime_analysis is not None:
+        regime = config.regime_analysis
+        selectors = (regime.speed, regime.rpm, regime.throttle)
+        if any(
+            selector.channel not in (None, capture_channel)
+            for selector in selectors
+        ):
+            raise CorrelateError(
+                "regime selector channel does not match the declared capture "
+                "channel"
+            )
+        config = replace(
+            config,
+            regime_analysis=replace(
+                regime,
+                speed=replace(regime.speed, channel=capture_channel),
+                rpm=replace(regime.rpm, channel=capture_channel),
+                throttle=replace(regime.throttle, channel=capture_channel),
+            ),
+        )
     _validate_inputs(
         wire,
         captures,
@@ -2630,13 +2706,14 @@ def run_analysis(
             did=did,
             decoder=decoder,
             stats=reference_stats,
+            capture_channel=capture_channel,
             module=module,
         ),
         iter_candump_frames(
             captures,
             stats=capture_stats,
             decompressor=decompressor,
-            expected_channel=module.channel,
+            expected_channel=capture_channel,
         ),
         config=config,
     )
@@ -2685,7 +2762,8 @@ def run_analysis(
             "maximum_candidate_staleness_ms": config.radius_us / 1000.0,
             "staleness_definition": (
                 "absolute candidate-frame delta from the exact "
-                "PCAN-observed diagnostic response timestamp"
+                "kernel/candump-observed diagnostic response timestamp on the "
+                "declared capture channel"
             ),
             "minimum_samples": config.minimum_samples,
             "minimum_coverage_ratio": config.minimum_coverage_ratio,
@@ -2768,11 +2846,11 @@ def run_analysis(
                 "key": module.key,
                 "name": module.name,
                 "bus": module.bus,
-                "channel": module.channel,
                 "txid_hex": f"{module.txid:08X}",
                 "rxid_hex": f"{module.rxid:08X}",
                 "addressing_mode": module.addressing_mode,
             },
+            "capture_channel": capture_channel,
             "did": f"{did:04X}",
             "requested_field": reference_field,
             "resolved_field": decoder.resolved.as_dict(),
@@ -2814,7 +2892,8 @@ def run_analysis(
                     else correlator.reference_interval_maximum_us / 1000.0
                 ),
                 "reference_timestamp_source": (
-                    "exact PCAN-observed diagnostic wire response"
+                    "exact kernel/candump-observed diagnostic wire response on "
+                    "the declared capture channel"
                 ),
                 "csv_sample_holding_used": False,
             },
@@ -2885,7 +2964,8 @@ def run_analysis(
                         "cannot by itself prove physical signal identity"
                     ),
                     "reference_timestamp_source": (
-                        "exact PCAN-observed diagnostic wire response"
+                        "exact kernel/candump-observed diagnostic wire response on "
+                        "the declared capture channel"
                     ),
                     "candidate_timestamp_source": (
                         "nearest eligible passive CAN frame within the "
@@ -2920,7 +3000,8 @@ def run_analysis(
                         "identity but cannot prove actual torque semantics"
                     ),
                     "reference_timestamp_source": (
-                        "exact PCAN-observed diagnostic wire response"
+                        "exact kernel/candump-observed diagnostic wire response on "
+                        "the declared capture channel"
                     ),
                     "classifier_delta_basis": (
                         "rate between consecutive exact reference timestamps; "
@@ -2958,6 +3039,16 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         type=Path,
         help="completed <module>_wire.jsonl reference stream",
+    )
+    parser.add_argument(
+        "--capture-channel",
+        required=True,
+        type=_parse_capture_channel,
+        help=(
+            "SocketCAN interface name recorded in both the candump input and "
+            "wire rows (for example can0); this is historical capture "
+            "metadata, not a current module binding"
+        ),
     )
     parser.add_argument(
         "--did",
@@ -3201,7 +3292,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 selector.id_bits,
                 selector.dlc,
                 selector.field,
-                channel=module.channel,
+                channel=args.capture_channel,
             )
 
         fixed_formula_values = (
@@ -3337,6 +3428,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             did=args.did,
             reference_field=args.reference_field,
             config=config,
+            capture_channel=args.capture_channel,
             module=MODULES[args.module],
             allow_van_compute_staging=args.allow_van_compute_result,
         )

@@ -173,6 +173,144 @@ select {
   color: #b9cbc2;
 }
 
+.warning-panel,
+.history-panel,
+.dtc-panel {
+  grid-column: 1 / -1;
+}
+
+.summary-list,
+.dtc-groups {
+  display: grid;
+  gap: .65rem;
+}
+
+.summary-card,
+.dtc-group,
+.trend-card {
+  min-width: 0;
+  padding: .85rem;
+  border: 1px solid #315447;
+  border-radius: .6rem;
+  background: rgba(5, 16, 13, .48);
+}
+
+.summary-card[data-state="warning"],
+.summary-card[data-state="watch"] {
+  border-color: #8a7045;
+  background: rgba(74, 54, 24, .28);
+}
+
+.summary-card h3,
+.dtc-group h3,
+.trend-card h3 {
+  overflow-wrap: anywhere;
+}
+
+.summary-card p,
+.dtc-group p,
+.trend-card p {
+  margin: .25rem 0 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.trend-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: .65rem;
+  margin-top: 1rem;
+}
+
+.trend-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: .4rem;
+  margin: .65rem 0 0;
+}
+
+.trend-stats dt {
+  font-size: .6rem;
+}
+
+.trend-stats dd {
+  margin: .2rem 0 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.sparkline {
+  display: flex;
+  align-items: end;
+  gap: 2px;
+  height: 2.6rem;
+  margin-top: .65rem;
+}
+
+.sparkline span {
+  flex: 1;
+  min-width: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--accent);
+  opacity: .78;
+}
+
+.dtc-list {
+  display: grid;
+  gap: .45rem;
+  margin: .65rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dtc-list li {
+  display: grid;
+  grid-template-columns: minmax(5rem, auto) minmax(0, 1fr);
+  gap: .65rem;
+  padding-top: .45rem;
+  border-top: 1px solid rgba(75, 116, 101, .45);
+}
+
+.dtc-code {
+  color: var(--accent-soft);
+  font: 700 .78rem/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.dtc-detail {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.role-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .55rem;
+  margin-top: 1rem;
+}
+
+.role-card {
+  min-width: 0;
+  padding: .7rem;
+  border: 1px solid #315447;
+  border-radius: .5rem;
+  background: rgba(5, 16, 13, .42);
+}
+
+.role-card[data-state="unavailable"] {
+  border-color: #76594b;
+}
+
+.role-card h3,
+.role-card p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.role-card p {
+  margin-top: .25rem;
+  color: var(--muted);
+  font-size: .72rem;
+}
+
 .drive-heading h2 { margin-bottom: .7rem; }
 
 .drive-hero-grid {
@@ -517,6 +655,7 @@ body[data-profile="parked"] .battery-panel {
   .charging-tile {
     grid-template-columns: 1fr;
   }
+  .trend-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .drive-primary .drive-value { font-size: clamp(3.2rem, 14vw, 5.6rem); }
 }
 
@@ -524,8 +663,9 @@ body[data-profile="parked"] .battery-panel {
   main { width: min(100% - 1rem, 82rem); gap: .65rem; }
   .panel { padding: 1rem; }
   .state-panel { grid-template-columns: 1fr; }
-  .detail-grid, .compact-grid, .metric-grid { grid-template-columns: 1fr; }
+  .detail-grid, .compact-grid, .metric-grid, .role-grid { grid-template-columns: 1fr; }
   .charging-meta { grid-template-columns: 1fr; }
+  .trend-grid, .trend-stats { grid-template-columns: 1fr; }
   .charging-meta div:last-child { grid-column: auto; }
   .battery-panel { grid-template-columns: 1fr; gap: 1rem; }
   .badge { justify-self: start; }

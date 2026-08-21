@@ -27,6 +27,7 @@ def wire_row(
         "raw_line_sequence": raw_line_sequence,
         "timestamp_epoch_us": timestamp_us,
         "timestamp_source": "candump_kernel",
+        "channel": "can0",
         "can_id": f"{can_id:X}",
         "direction": "cluster_to_tester",
         "can_data_hex": can_data.hex(" ").upper(),
@@ -164,6 +165,7 @@ class NearestCorrelationTests(unittest.TestCase):
                 captures=[fixture.capture],
                 did=0x1000,
                 reference_field="auto",
+                capture_channel="can0",
                 config=correlate.AnalysisConfig(
                     match_mode="nearest",
                     radius_us=50_000,
@@ -187,6 +189,26 @@ class NearestCorrelationTests(unittest.TestCase):
         self.assertEqual(report["reference"]["module"]["key"], "cluster")
         self.assertEqual(
             report["reference"]["module"]["rxid_hex"], "18DAF160"
+        )
+        self.assertEqual(
+            report["analysis"]["staleness_definition"],
+            "absolute candidate-frame delta from the exact "
+            "kernel/candump-observed diagnostic response timestamp on the "
+            "declared capture channel",
+        )
+        self.assertEqual(
+            report["reference"]["observed_polling_cadence"][
+                "reference_timestamp_source"
+            ],
+            "exact kernel/candump-observed diagnostic wire response on the "
+            "declared capture channel",
+        )
+        self.assertNotIn("PCAN-observed", json.dumps(report))
+        self.assertIn(
+            "decompressed_stream_sha256", report["reference"]["source"]
+        )
+        self.assertIn(
+            "decompressed_stream_sha256", report["capture"]["sources"][0]
         )
         self.assertFalse(
             report["capture"]["provenance_limits"][
@@ -731,6 +753,7 @@ class WindowCorrelationTests(unittest.TestCase):
                 captures=[fixture.capture],
                 did=0x1000,
                 reference_field="auto",
+                capture_channel="can0",
                 config=correlate.AnalysisConfig(
                     radius_us=50_000,
                     minimum_samples=3,
@@ -821,7 +844,7 @@ class EvidenceValidationTests(unittest.TestCase):
             "sff:101:8=bits:big:0:12:unsigned"
         )
 
-        self.assertEqual(selector.stream_key, ("can0", 0x101, 11, 8))
+        self.assertEqual(selector.stream_key, (None, 0x101, 11, 8))
         self.assertEqual(
             selector.field.geometry,
             correlate.SignalField(0, 12, "big"),
@@ -1033,6 +1056,7 @@ class EvidenceValidationTests(unittest.TestCase):
                         did=0x1000,
                         decoder=correlate.ReferenceDecoder("auto"),
                         stats=stats,
+                        capture_channel="can0",
                     )
                 )
 
@@ -1052,6 +1076,7 @@ class EvidenceValidationTests(unittest.TestCase):
                         did=0x1000,
                         decoder=correlate.ReferenceDecoder("auto"),
                         stats=correlate.StreamStats(str(path), "none"),
+                        capture_channel="can0",
                     )
                 )
 
@@ -1074,6 +1099,7 @@ class EvidenceValidationTests(unittest.TestCase):
                     did=0x04FE,
                     decoder=correlate.ReferenceDecoder("byte:0"),
                     stats=correlate.StreamStats(str(path), "none"),
+                    capture_channel="can0",
                     module=correlate.MODULES["tcm"],
                 )
             )
@@ -1090,6 +1116,7 @@ class EvidenceValidationTests(unittest.TestCase):
                         did=0x04FE,
                         decoder=correlate.ReferenceDecoder("byte:0"),
                         stats=correlate.StreamStats(str(path), "none"),
+                        capture_channel="can0",
                         module=correlate.MODULES["tcm"],
                     )
                 )
@@ -1114,6 +1141,7 @@ class EvidenceValidationTests(unittest.TestCase):
                         did=0x1000,
                         decoder=correlate.ReferenceDecoder("auto"),
                         stats=correlate.StreamStats(str(path), "none"),
+                        capture_channel="can0",
                     )
                 )
 
@@ -1128,6 +1156,7 @@ class EvidenceValidationTests(unittest.TestCase):
                         did=0x1000,
                         decoder=correlate.ReferenceDecoder("auto"),
                         stats=correlate.StreamStats(str(path), "none"),
+                        capture_channel="can0",
                     )
                 )
 
@@ -1152,6 +1181,7 @@ class EvidenceValidationTests(unittest.TestCase):
                         did=0x1000,
                         decoder=correlate.ReferenceDecoder("auto"),
                         stats=correlate.StreamStats(str(path), "none"),
+                        capture_channel="can0",
                     )
                 )
 
@@ -1184,6 +1214,7 @@ class EvidenceValidationTests(unittest.TestCase):
                     captures=[fixture.capture],
                     did=0x1000,
                     reference_field="auto",
+                    capture_channel="can0",
                     config=correlate.AnalysisConfig(minimum_samples=2),
                 )
 
@@ -1213,6 +1244,7 @@ class EvidenceValidationTests(unittest.TestCase):
                 captures=[first, second],
                 did=0x1000,
                 reference_field="auto",
+                capture_channel="can0",
                 config=correlate.AnalysisConfig(
                     minimum_samples=3,
                     minimum_distinct_values=3,
@@ -1233,6 +1265,7 @@ class EvidenceValidationTests(unittest.TestCase):
                     captures=[first],
                     did=0x1000,
                     reference_field="auto",
+                    capture_channel="can0",
                     config=correlate.AnalysisConfig(
                         minimum_samples=3,
                         minimum_distinct_values=3,
@@ -1442,7 +1475,7 @@ class EvidenceValidationTests(unittest.TestCase):
                 raw_line_sequence=10 + index,
                 expected_can_id=correlate.CLUSTER_MODULE.rxid,
                 expected_id_bits=29,
-                expected_channel=correlate.CLUSTER_MODULE.channel,
+                expected_channel="can0",
                 expected_can_data=b"\x04\x62\x10\x00\x01",
             )
             for index in (1, 2)
@@ -1495,6 +1528,7 @@ class EvidenceValidationTests(unittest.TestCase):
                             did=0x1000,
                             decoder=correlate.ReferenceDecoder("auto"),
                             stats=correlate.StreamStats(str(path), "none"),
+                            capture_channel="can0",
                         )
                     )
             with mock.patch.object(correlate, "MAX_WIRE_STREAM_BYTES", 1):
@@ -1507,6 +1541,7 @@ class EvidenceValidationTests(unittest.TestCase):
                             did=0x1000,
                             decoder=correlate.ReferenceDecoder("auto"),
                             stats=correlate.StreamStats(str(path), "none"),
+                            capture_channel="can0",
                         )
                     )
 
@@ -1518,7 +1553,9 @@ class EvidenceValidationTests(unittest.TestCase):
 
     def test_candump_interface_and_identifier_width_are_pinned(self):
         with self.assertRaisesRegex(correlate.CorrelateError, "interface"):
-            correlate.parse_candump_frame(b"(1.000000) can1 123#01\n")
+            correlate.parse_candump_frame(
+                b"(1.000000) can1 123#01\n", expected_channel="can0"
+            )
         with self.assertRaisesRegex(
             correlate.CorrelateError, "exactly three SFF or eight EFF"
         ):
@@ -1575,6 +1612,7 @@ class EvidenceValidationTests(unittest.TestCase):
                         captures=[fixture.capture],
                         did=0x1000,
                         reference_field="auto",
+                        capture_channel="can0",
                         config=correlate.AnalysisConfig(minimum_samples=2),
                     )
 
@@ -1613,6 +1651,7 @@ class EvidenceValidationTests(unittest.TestCase):
                 captures=[compressed],
                 did=0x1000,
                 reference_field="auto",
+                capture_channel="can0",
                 config=correlate.AnalysisConfig(minimum_samples=3),
                 decompressor=fake,
             )
@@ -1633,6 +1672,8 @@ class CliTests(unittest.TestCase):
                 [
                     "--wire",
                     "missing-wire.jsonl",
+                    "--capture-channel",
+                    "can0",
                     "--did",
                     "1000",
                     "--fixed-formula-field",
@@ -1671,6 +1712,8 @@ class CliTests(unittest.TestCase):
             argv = [
                 "--wire",
                 str(fixture.wire),
+                "--capture-channel",
+                "can0",
                 "--did",
                 "1000",
                 "--minimum-samples",

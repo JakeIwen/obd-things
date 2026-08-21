@@ -50,6 +50,12 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
             return self._json(200, self.broker.status_response())
         if path == "/v1/snapshot":
             return self._json(200, self.broker.snapshot_response())
+        if path == "/v1/history":
+            return self._json(200, self.broker.history_response())
+        if path == "/v1/health":
+            return self._json(200, self.broker.health_response())
+        if path == "/v1/diagnostics/dtcs":
+            return self._json(200, self.broker.dtc_response())
         if path == "/v1/metrics":
             return self._json(200, self.broker.list_metrics())
         prefix = "/v1/metrics/"
@@ -123,17 +129,14 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
             if (
                 not isinstance(payload, dict)
                 or set(payload) != {"mode"}
-                or payload.get("mode") not in ("passive", "wake_if_asleep")
+                or payload.get("mode") != "passive"
             ):
                 return self._json(
                     400,
                     {
                         "available": False,
                         "reason": "invalid_request",
-                        "detail": (
-                            "body must contain only mode=passive or "
-                            "wake_if_asleep"
-                        ),
+                        "detail": "body must contain only mode=passive",
                     },
                 )
             result = self.broker.acquire(metric, payload["mode"])

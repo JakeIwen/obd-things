@@ -36,70 +36,44 @@ from projects.vehicle_data.web import (
 )
 
 
+TEST_CHANNEL = "can7"
+
+
 def interface(
     *,
     bitrate=500000,
     listen_only=True,
     state="ERROR-ACTIVE",
     up=True,
+    restart_ms=0,
+    fd_enabled=False,
 ):
     return canbus.InterfaceState(
-        channel="can0",
+        channel=TEST_CHANNEL,
         present=True,
         up=up,
         bitrate=bitrate,
         listen_only=listen_only,
         controller_state=state,
-        restart_ms=100,
+        restart_ms=restart_ms,
+        fd_enabled=fd_enabled,
     )
 
 
 class FakeLocks:
     def __init__(self):
         self.observer_count = 0
-        self.exclusive_count = 0
-        self.handle = object()
 
     @contextlib.contextmanager
     def observer(self, _channel):
         self.observer_count += 1
         yield object()
 
-    @contextlib.contextmanager
-    def exclusive(self, _channel):
-        self.exclusive_count += 1
-        yield self.handle
-
-
-class FlakyExclusiveLocks(FakeLocks):
-    def __init__(self, failures):
-        super().__init__()
-        self.failures = failures
-
-    @contextlib.contextmanager
-    def exclusive(self, _channel):
-        self.exclusive_count += 1
-        if self.failures:
-            self.failures -= 1
-            raise diagnostic_safety.ChannelLockError("temporary observer")
-        yield self.handle
-
-
 class FakeBackend:
     def __init__(self, buses=("c-can",), states=None):
         self.buses = list(buses)
         self.states = list(states or (interface(),))
         self.read_count = 0
-        self.wake_count = 0
-        self.recorded = []
-        self.topology = SimpleNamespace(
-            bus="c-can",
-            pair="6/14",
-            source="test",
-            usable=True,
-            reason="",
-        )
-        self.inhibits = ()
 
     def interface_state(self, _channel):
         if len(self.states) > 1:
@@ -126,24 +100,17 @@ class FakeBackend:
             detail="fake approved broadcast",
         )
 
-    def load_topology(self, _channel):
-        return self.topology
-
-    def active_inhibits(self, _channel):
-        return self.inhibits
-
-    def record_topology(self, _channel, bus):
-        self.recorded.append(bus)
-
-    def wake(self, bus, _channel, lock_handle, restore_state):
-        self.wake_count += 1
-        self.last_wake = (bus, lock_handle, restore_state)
-        return True
-
-
 class SourceTests(unittest.TestCase):
+    def test_runtime_resolved_channel_is_required(self):
+        for channel in (None, "c-can", "vcan0", "can", "can-1", ""):
+            with self.subTest(channel=channel):
+                with self.assertRaisesRegex(ValueError, "runtime-resolved"):
+                    VoltageAcquirer(channel=channel)
+
     def test_default_delivery_cadence_fits_measured_freshness_phase(self):
-        broker_args = build_parser().parse_args(["serve"])
+        broker_args = build_parser().parse_args(
+            ["serve", "--can-interface-mode", "dual-usbcanfd"]
+        )
         web_args = build_web_parser().parse_args([])
 
         self.assertEqual(broker_args.collector_interval, 1.0)
@@ -215,6 +182,10 @@ class SourceTests(unittest.TestCase):
             },
         )
         sources = METRICS["battery.voltage"].sources
+        self.assertEqual(
+            METRICS["battery.voltage"].allowed_acquisition_modes,
+            ("passive",),
+        )
         self.assertEqual(
             {source.name for source in sources},
             {
@@ -326,6 +297,7 @@ class SourceTests(unittest.TestCase):
         backend = FakeBackend()
         locks = FakeLocks()
         result = VoltageAcquirer(
+            channel="can7",
             backend=backend,
             locks=locks,
             monotonic=lambda: 10.0,
@@ -334,131 +306,62 @@ class SourceTests(unittest.TestCase):
         self.assertTrue(result.available)
         self.assertEqual(result.acquisition, "passive")
         self.assertEqual(locks.observer_count, 1)
-        self.assertEqual(locks.exclusive_count, 0)
-        self.assertEqual(backend.wake_count, 0)
 
-    def test_armed_interface_fails_before_probe_read_or_wake(self):
+    def test_armed_interface_fails_before_probe_or_read(self):
         backend = FakeBackend(states=(interface(listen_only=False),))
         result = VoltageAcquirer(
-            backend=backend, locks=FakeLocks()
-        ).acquire("wake_if_asleep")
+            channel="can7", backend=backend, locks=FakeLocks()
+        ).acquire("passive")
 
         self.assertFalse(result.available)
         self.assertEqual(result.reason, "can_busy")
         self.assertEqual(backend.read_count, 0)
-        self.assertEqual(backend.wake_count, 0)
 
-    def test_canch_never_wakes(self):
+    def test_canch_has_no_approved_passive_voltage_source(self):
         backend = FakeBackend(buses=("can-ch",))
         result = VoltageAcquirer(
-            backend=backend, locks=FakeLocks()
-        ).acquire("wake_if_asleep")
+            channel="can7", backend=backend, locks=FakeLocks()
+        ).acquire("passive")
 
         self.assertFalse(result.available)
         self.assertEqual(result.bus, "can-ch")
-        self.assertEqual(backend.wake_count, 0)
+        self.assertEqual(backend.read_count, 0)
 
-    def test_silent_bus_requires_same_boot_topology(self):
-        backend = FakeBackend(buses=("silent", "silent"))
-        backend.topology = SimpleNamespace(
-            bus="unknown",
-            pair=None,
-            source=None,
-            usable=False,
-            reason="boot id mismatch",
-        )
-        result = VoltageAcquirer(
-            backend=backend, locks=FakeLocks()
-        ).acquire("wake_if_asleep")
-
-        self.assertEqual(result.reason, "unrecognized_bus")
-        self.assertEqual(backend.wake_count, 0)
-
-    def test_inhibit_blocks_silent_wake(self):
-        backend = FakeBackend(buses=("silent", "silent"))
-        backend.inhibits = ({"name": "alfaobd"},)
-        result = VoltageAcquirer(
-            backend=backend, locks=FakeLocks()
-        ).acquire("wake_if_asleep")
-
-        self.assertEqual(result.reason, "can_busy")
-        self.assertIn("alfaobd", result.detail)
-        self.assertEqual(backend.wake_count, 0)
-
-    def test_wake_is_rechecked_and_exact_interface_is_restored(self):
-        backend = FakeBackend(
-            buses=("silent", "silent", "silent", "c-can"),
-            states=(interface(), interface(), interface()),
-        )
-        locks = FakeLocks()
-        result = VoltageAcquirer(
-            backend=backend, locks=locks, monotonic=lambda: 10.0
-        ).acquire("wake_if_asleep")
-
-        self.assertTrue(result.available)
-        self.assertEqual(result.acquisition, "wake_assisted")
-        self.assertEqual(backend.wake_count, 1)
-        self.assertEqual(
-            backend.last_wake, ("c-can", locks.handle, interface())
-        )
-
-    def test_wake_waits_boundedly_for_short_observer_probe(self):
-        backend = FakeBackend(
-            buses=("silent", "silent", "silent", "c-can"),
-            states=(interface(), interface(), interface()),
-        )
-        locks = FlakyExclusiveLocks(failures=2)
-        sleeps = []
-
-        result = VoltageAcquirer(
-            backend=backend,
-            locks=locks,
-            exclusive_lock_attempts=3,
-            lock_retry_seconds=0.25,
-            sleep=sleeps.append,
-            monotonic=lambda: 10.0,
-        ).acquire("wake_if_asleep")
-
-        self.assertTrue(result.available)
-        self.assertEqual(locks.exclusive_count, 3)
-        self.assertEqual(sleeps, [0.25, 0.25])
-        self.assertEqual(backend.wake_count, 1)
-
-    def test_wake_lock_retry_remains_bounded_behind_long_observer(self):
+    def test_silent_bus_returns_passive_sleep_evidence(self):
         backend = FakeBackend(buses=("silent",))
-        locks = FlakyExclusiveLocks(failures=10)
-        sleeps = []
-
         result = VoltageAcquirer(
+            channel="can7", backend=backend, locks=FakeLocks()
+        ).acquire("passive")
+
+        self.assertEqual(result.reason, "bus_asleep")
+        self.assertEqual(backend.read_count, 0)
+
+    def test_nonpassive_mode_is_rejected_without_backend_access(self):
+        backend = mock.Mock()
+        result = VoltageAcquirer(
+            channel=TEST_CHANNEL,
             backend=backend,
-            locks=locks,
-            exclusive_lock_attempts=3,
-            lock_retry_seconds=0.25,
-            sleep=sleeps.append,
-        ).acquire("wake_if_asleep")
-
+            locks=FakeLocks(),
+        ).acquire("transmit")
         self.assertFalse(result.available)
-        self.assertEqual(result.reason, "can_busy")
-        self.assertEqual(locks.exclusive_count, 3)
-        self.assertEqual(sleeps, [0.25, 0.25])
-        self.assertEqual(backend.wake_count, 0)
+        self.assertEqual(result.reason, "unsupported_mode")
+        backend.interface_state.assert_not_called()
 
-    def test_post_wake_state_change_overrides_success(self):
-        backend = FakeBackend(
-            buses=("silent", "silent", "silent", "c-can"),
-            states=(
-                interface(),
-                interface(),
-                interface(),
-                interface(listen_only=False),
-            ),
-        )
-        result = VoltageAcquirer(
-            backend=backend, locks=FakeLocks()
-        ).acquire("wake_if_asleep")
-
-        self.assertFalse(result.available)
-        self.assertEqual(result.reason, "restoration_failed")
+    def test_passive_read_requires_fd_off_and_restart_ms_zero(self):
+        for state in (
+            interface(restart_ms=100),
+            interface(fd_enabled=True),
+        ):
+            with self.subTest(state=state):
+                backend = FakeBackend(states=(state,))
+                result = VoltageAcquirer(
+                    channel=TEST_CHANNEL,
+                    backend=backend,
+                    locks=FakeLocks(),
+                ).acquire("passive")
+                self.assertFalse(result.available)
+                self.assertEqual(result.reason, "source_unavailable")
+                self.assertEqual(backend.read_count, 0)
 
 
 class ReplaySocket:
@@ -558,7 +461,7 @@ class FakeClock:
 
 
 class FakeAcquirer:
-    channel = "can0"
+    channel = "can7"
 
     def __init__(self, *, block=None, result=None):
         self.calls = []
@@ -585,10 +488,11 @@ class FakeAcquirer:
 
     def status_snapshot(self):
         return {
-            "channel": "can0",
+            "channel": "can7",
             "adapter_present": True,
             "up": True,
             "bitrate": 125000,
+            "fd_enabled": False,
             "listen_only": True,
             "controller_state": "ERROR-ACTIVE",
             "topology": {
@@ -598,27 +502,38 @@ class FakeAcquirer:
             },
             "active_inhibits": [],
         }
-
-
-class FakeAutoRetuner:
-    def __init__(self, result=None):
-        self.calls = []
-        self.result = result or {
-            "state": "switched",
-            "reason": "bus_identified",
-            "detail": "passively switched to b-can at 125000 bit/s",
-            "from_bitrate": 500000,
-            "to_bitrate": 125000,
-            "bus": "b-can",
-            "completed_at": "2026-07-26T00:00:00+00:00",
-        }
-
-    def attempt(self, expected_bitrate):
-        self.calls.append(expected_bitrate)
-        return dict(self.result)
-
-
 class BrokerTests(unittest.TestCase):
+    def test_broker_requires_explicit_role_aware_acquirer(self):
+        with self.assertRaisesRegex(ValueError, "serial-role-aware"):
+            TelemetryBroker()
+
+    def test_history_defaults_to_five_second_storage_cadence(self):
+        broker = TelemetryBroker(acquirer=FakeAcquirer())
+
+        self.assertEqual(broker.history_interval_seconds, 5.0)
+        self.assertEqual(
+            broker.status_response()["history_recorder"]["interval_seconds"],
+            5.0,
+        )
+
+    def test_close_releases_insights_once_and_not_under_a_live_history_thread(self):
+        insights = mock.Mock()
+        broker = TelemetryBroker(acquirer=FakeAcquirer(), insights=insights)
+
+        broker.close()
+        broker.close()
+
+        insights.close.assert_called_once_with()
+
+        still_running = TelemetryBroker(
+            acquirer=FakeAcquirer(), insights=mock.Mock()
+        )
+        still_running._history_thread = mock.Mock()
+        still_running._history_thread.is_alive.return_value = True
+        with mock.patch.object(still_running, "stop_collector"):
+            still_running.close()
+        still_running.insights.close.assert_not_called()
+
     def test_cache_get_never_calls_acquirer(self):
         acquirer = FakeAcquirer()
         broker = TelemetryBroker(acquirer=acquirer, monotonic=FakeClock())
@@ -689,30 +604,6 @@ class BrokerTests(unittest.TestCase):
         self.assertFalse(state["running"])
         self.assertEqual(state["confidence"], "inferred")
         self.assertIn("unplugged", state["detail"])
-
-    def test_wake_assisted_read_is_not_reported_as_running_evidence(self):
-        wake_result = success(
-            metric="battery.voltage",
-            unit="V",
-            value=12.5,
-            source="ccan.broadcast.0x41a",
-            bus="c-can",
-            acquisition="wake_assisted",
-            quality="verified",
-            observed_monotonic=100.0,
-        )
-        broker = TelemetryBroker(
-            acquirer=FakeAcquirer(result=wake_result),
-            monotonic=FakeClock(),
-        )
-
-        broker.acquire("battery.voltage", "wake_if_asleep")
-        state = broker.status_response()["vehicle_state"]
-
-        self.assertEqual(state["state"], "awake")
-        self.assertIsNone(state["running"])
-        self.assertEqual(state["basis"], "broker_wake_activity")
-        self.assertIn("not evidence", state["detail"])
 
     def test_wrong_rate_activity_never_claims_running_state(self):
         wrong_rate = failure(
@@ -983,23 +874,40 @@ class BrokerTests(unittest.TestCase):
             stale_replaced["basis"], "ccan_0x2ef_ignition_gate"
         )
 
-    def test_main_disables_active_drive_on_unsupported_channel(self):
+    def test_main_fails_closed_without_explicit_dual_interface_mode(self):
+        with self.assertRaises(SystemExit):
+            broker_module.build_parser().parse_args(["serve"])
+
+        with self.assertRaises(SystemExit):
+            broker_module.build_parser().parse_args(
+                ["serve", "--can-interface-mode", "legacy"]
+            )
+
+    def test_main_uses_only_role_aware_runtime(self):
         termination = mock.Mock()
         broker = mock.Mock()
+        manager = mock.Mock()
         with (
-            mock.patch.object(broker_module, "VoltageAcquirer"),
-            mock.patch.object(
-                broker_module, "ActiveDriveSupervisor"
-            ) as supervisor,
+            mock.patch(
+                "projects.vehicle_data.can_interfaces.PassiveInterfaceManager",
+                return_value=manager,
+            ),
+            mock.patch(
+                "projects.vehicle_data.can_runtime.PassiveRoleReconciler"
+            ) as reconciler,
+            mock.patch(
+                "projects.vehicle_data.can_runtime.RoleAwareVoltageAcquirer"
+            ) as role_acquirer,
+            mock.patch(
+                "projects.vehicle_data.can_runtime.RoleAwareCcanPowertrainReader"
+            ) as role_reader,
+            mock.patch(
+                "projects.vehicle_data.can_runtime.RoleAwareActiveDriveSupervisor"
+            ) as role_supervisor,
             mock.patch.object(
                 broker_module, "TelemetryBroker", return_value=broker
             ) as broker_factory,
-            mock.patch(
-                "projects.vehicle_data.ccan_powertrain.CcanPowertrainReader"
-            ) as passive_reader,
-            mock.patch(
-                "projects.vehicle_data.api.serve_unix"
-            ) as serve_unix,
+            mock.patch("projects.vehicle_data.api.serve_unix") as serve_unix,
             mock.patch.object(
                 broker_module.diagnostic_safety,
                 "interrupt_on_termination",
@@ -1007,25 +915,28 @@ class BrokerTests(unittest.TestCase):
             ),
         ):
             result = broker_module.main(
-                ["serve", "--channel", "can1", "--no-collector"]
+                [
+                    "serve",
+                    "--can-interface-mode",
+                    "dual-usbcanfd",
+                    "--no-collector",
+                    "--no-history",
+                ]
             )
 
         self.assertEqual(result, 0)
-        supervisor.assert_not_called()
-        passive_reader.assert_called_once()
-        self.assertEqual(
-            passive_reader.call_args.kwargs["channel"], "can1"
-        )
-        self.assertIsNone(
-            broker_factory.call_args.kwargs["active_drive_supervisor"]
-        )
-        self.assertFalse(
-            broker_factory.call_args.kwargs["active_drive_enabled"]
-        )
+        reconciler.assert_called_once_with(manager)
+        role_acquirer.assert_called_once()
+        role_reader.assert_called_once()
+        role_supervisor.assert_called_once()
+        kwargs = broker_factory.call_args.kwargs
+        self.assertIs(kwargs["interface_reconciler"], reconciler.return_value)
+        self.assertIs(kwargs["active_drive_supervisor"], role_supervisor.return_value)
+        self.assertTrue(kwargs["active_drive_enabled"])
+        self.assertNotIn("auto_retune_enabled", kwargs)
         broker.start_collector.assert_not_called()
         serve_unix.assert_called_once()
-        termination.begin_cleanup.assert_called_once()
-        broker.stop_collector.assert_called_once()
+        broker.close.assert_called_once()
 
     def test_ignition_presence_publisher_rejects_false_without_changing_state(self):
         broker = TelemetryBroker(
@@ -1100,7 +1011,7 @@ class BrokerTests(unittest.TestCase):
             metric="battery.voltage",
             unit="V",
             reason="can_busy",
-            detail="another participating CAN operation owns can0",
+            detail="another participating CAN operation owns can7",
         )
 
         status = broker.status_response()
@@ -1110,172 +1021,7 @@ class BrokerTests(unittest.TestCase):
             "participating_or_external_can_user",
         )
 
-    def test_auto_retune_requires_repeated_wrong_rate_then_reports_switch(self):
-        acquirer = FakeAcquirer()
-        retuner = FakeAutoRetuner()
-        broker = TelemetryBroker(
-            acquirer=acquirer,
-            monotonic=FakeClock(),
-            auto_retuner=retuner,
-            auto_retune_trigger=3,
-        )
-        broker._interface_status = {
-            **acquirer.status_snapshot(),
-            "bitrate": 500000,
-            "topology": {
-                "bus": "c-can",
-                "usable": True,
-                "reason": "",
-            },
-        }
-        wrong_rate = failure(
-            metric="battery.voltage",
-            unit="V",
-            reason="wrong_bus",
-            detail="passive bus identification returned wrong-rate",
-            bus="wrong-rate",
-            acquisition="passive",
-        )
-
-        broker._consider_auto_retune(wrong_rate)
-        broker._consider_auto_retune(wrong_rate)
-        self.assertEqual(retuner.calls, [])
-        broker._consider_auto_retune(wrong_rate)
-
-        status = broker.status_response()["auto_retune"]
-        self.assertEqual(retuner.calls, [500000])
-        self.assertEqual(status["state"], "switched")
-        self.assertEqual(status["wrong_rate_streak"], 0)
-        self.assertEqual(status["last_attempt"]["bus"], "b-can")
-
-    def test_auto_retune_reports_external_inhibit_without_calling_helper(self):
-        acquirer = FakeAcquirer()
-        retuner = FakeAutoRetuner()
-        broker = TelemetryBroker(
-            acquirer=acquirer,
-            monotonic=FakeClock(),
-            auto_retuner=retuner,
-            auto_retune_trigger=1,
-        )
-        broker._interface_status = {
-            **acquirer.status_snapshot(),
-            "bitrate": 500000,
-            "active_inhibits": ["alfaobd"],
-        }
-        wrong_rate = failure(
-            metric="battery.voltage",
-            unit="V",
-            reason="wrong_bus",
-            detail="passive bus identification returned wrong-rate",
-            bus="wrong-rate",
-        )
-
-        broker._consider_auto_retune(wrong_rate)
-
-        status = broker.status_response()["auto_retune"]
-        self.assertEqual(retuner.calls, [])
-        self.assertEqual(status["state"], "blocked")
-        self.assertIn("alfaobd", status["detail"])
-
-    def test_auto_retune_continues_streak_if_wrong_rate_degrades_controller(self):
-        acquirer = FakeAcquirer()
-        retuner = FakeAutoRetuner()
-        broker = TelemetryBroker(
-            acquirer=acquirer,
-            monotonic=FakeClock(),
-            auto_retuner=retuner,
-            auto_retune_trigger=3,
-        )
-        broker._interface_status = {
-            **acquirer.status_snapshot(),
-            "bitrate": 500000,
-            "controller_state": "ERROR-PASSIVE",
-        }
-        wrong_rate = failure(
-            metric="battery.voltage",
-            unit="V",
-            reason="wrong_bus",
-            detail="passive bus identification returned wrong-rate",
-            bus="wrong-rate",
-        )
-        degraded = failure(
-            metric="battery.voltage",
-            unit="V",
-            reason="source_unavailable",
-            detail="can0 controller is ERROR-PASSIVE; left unchanged",
-        )
-
-        broker._consider_auto_retune(wrong_rate)
-        broker._consider_auto_retune(degraded)
-        broker._consider_auto_retune(degraded)
-
-        self.assertEqual(retuner.calls, [500000])
-        self.assertEqual(
-            broker.status_response()["auto_retune"]["state"], "switched"
-        )
-
-    def test_auto_retune_cooldown_reports_why_retry_is_deferred(self):
-        clock = FakeClock()
-        acquirer = FakeAcquirer()
-        retuner = FakeAutoRetuner(
-            {
-                "state": "failed",
-                "reason": "alternate_not_identified",
-                "detail": "alternate passive probe returned unknown",
-                "from_bitrate": 500000,
-                "to_bitrate": 125000,
-                "bus": "unknown",
-                "completed_at": "2026-07-26T00:00:00+00:00",
-            }
-        )
-        broker = TelemetryBroker(
-            acquirer=acquirer,
-            monotonic=clock,
-            auto_retuner=retuner,
-            auto_retune_trigger=1,
-            auto_retune_cooldown_seconds=30,
-        )
-        broker._interface_status = {
-            **acquirer.status_snapshot(),
-            "bitrate": 500000,
-        }
-        wrong_rate = failure(
-            metric="battery.voltage",
-            unit="V",
-            reason="wrong_bus",
-            detail="passive bus identification returned wrong-rate",
-            bus="wrong-rate",
-        )
-
-        broker._consider_auto_retune(wrong_rate)
-        broker._consider_auto_retune(wrong_rate)
-
-        status = broker.status_response()["auto_retune"]
-        self.assertEqual(retuner.calls, [500000])
-        self.assertEqual(status["state"], "cooldown")
-        self.assertIn("retry in 30.0 seconds", status["detail"])
-        self.assertEqual(status["cooldown_remaining_seconds"], 30.0)
-
-    def test_auto_retune_reports_armed_interface_as_blocked(self):
-        broker = TelemetryBroker(
-            acquirer=FakeAcquirer(),
-            monotonic=FakeClock(),
-            auto_retuner=FakeAutoRetuner(),
-        )
-        broker._consider_auto_retune(
-            failure(
-                metric="battery.voltage",
-                unit="V",
-                reason="can_busy",
-                detail="can0 is armed; refusing to touch another CAN operation",
-            )
-        )
-
-        status = broker.status_response()["auto_retune"]
-        self.assertEqual(status["state"], "blocked")
-        self.assertIn("armed", status["detail"])
-
-    def test_concurrent_identical_requests_are_coalesced(self):
+    def test_concurrent_passive_requests_are_coalesced(self):
         release = threading.Event()
         acquirer = FakeAcquirer(block=release)
         broker = TelemetryBroker(
@@ -1286,12 +1032,12 @@ class BrokerTests(unittest.TestCase):
         results = []
         first = threading.Thread(
             target=lambda: results.append(
-                broker.acquire("battery.voltage", "wake_if_asleep")
+                broker.acquire("battery.voltage", "passive")
             )
         )
         second = threading.Thread(
             target=lambda: results.append(
-                broker.acquire("battery.voltage", "wake_if_asleep")
+                broker.acquire("battery.voltage", "passive")
             )
         )
         first.start()
@@ -1302,42 +1048,8 @@ class BrokerTests(unittest.TestCase):
         first.join()
         second.join()
 
-        self.assertEqual(acquirer.calls, ["wake_if_asleep"])
+        self.assertEqual(acquirer.calls, ["passive"])
         self.assertEqual(sum(result.coalesced for result in results), 1)
-
-    def test_passive_collector_and_active_request_share_one_source_lane(self):
-        release = threading.Event()
-        acquirer = FakeAcquirer(block=release)
-        broker = TelemetryBroker(
-            acquirer=acquirer,
-            monotonic=FakeClock(),
-            acquisition_wait_seconds=2.0,
-        )
-        results = []
-        active = threading.Thread(
-            target=lambda: results.append(
-                broker.acquire("battery.voltage", "wake_if_asleep")
-            )
-        )
-        passive = threading.Thread(
-            target=lambda: results.append(
-                broker.acquire("battery.voltage", "passive")
-            )
-        )
-        active.start()
-        while not acquirer.calls:
-            time.sleep(0.005)
-        passive.start()
-        time.sleep(0.05)
-        self.assertEqual(acquirer.calls, ["wake_if_asleep"])
-        release.set()
-        active.join()
-        passive.join()
-
-        self.assertEqual(
-            acquirer.calls, ["wake_if_asleep", "passive"]
-        )
-        self.assertTrue(all(result.available for result in results))
 
     def test_passive_ccan_cycle_caches_allowlisted_engine_health(self):
         class Reader:
@@ -1497,6 +1209,15 @@ class ApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertTrue(payload["available"])
+        self.assertEqual(self.acquirer.calls, ["passive"])
+
+        status, payload = self.client.request(
+            "POST",
+            "/v1/acquisitions/battery.voltage",
+            {"mode": "transmit"},
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["reason"], "invalid_request")
         self.assertEqual(self.acquirer.calls, ["passive"])
 
         status, payload = self.client.request(
@@ -1665,10 +1386,19 @@ class WebTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(raw)["reason"], "stale")
 
+        for path, reason in (
+            ("/v1/history", "history_disabled"),
+            ("/v1/health", "early_warning_disabled"),
+            ("/v1/diagnostics/dtcs", "dtc_cache_disabled"),
+        ):
+            status, raw = self.request("GET", path)
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(raw)["reason"], reason)
+
         status, raw = self.request(
             "POST",
             "/v1/acquisitions/battery.voltage",
-            {"mode": "wake_if_asleep"},
+            {"mode": "passive"},
         )
         self.assertEqual(status, 403)
         self.assertEqual(
@@ -1689,6 +1419,33 @@ class WebTests(unittest.TestCase):
         )
         self.assertEqual(status, 404)
         self.assertEqual(json.loads(raw)["reason"], "not_found")
+
+        status, raw = self.request(
+            "POST", "/v1/diagnostics/dtcs", {"scan": True}
+        )
+        self.assertEqual(status, 404)
+        self.assertEqual(json.loads(raw)["reason"], "not_found")
+
+    def test_enabled_web_proxy_allows_only_passive_acquisition(self):
+        self.web.allow_acquisitions = True
+
+        status, raw = self.request(
+            "POST",
+            "/v1/acquisitions/battery.voltage",
+            {"mode": "transmit"},
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(raw)["reason"], "invalid_request")
+        self.assertEqual(self.acquirer.calls, [])
+
+        status, raw = self.request(
+            "POST",
+            "/v1/acquisitions/battery.voltage",
+            {"mode": "passive"},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(raw)["available"])
+        self.assertEqual(self.acquirer.calls, ["passive"])
 
     def test_snapshot_delivery_metadata_orders_http_and_stream_payloads(self):
         status, raw = self.request("GET", "/v1/snapshot")
@@ -1770,8 +1527,10 @@ class WebTests(unittest.TestCase):
         self.assertIn(b"TRANSMISSION OIL", body)
         self.assertIn(b"CRANK TORQUE", body)
         self.assertIn(b"Tire pressure", body)
+        self.assertIn(b"Read voltage now", body)
+        self.assertNotIn(b"Wake if asleep", body)
         self.assertIn(b"Only fresh, driver-qualified values", body)
-        self.assertIn(b"Automatic bus switch", body)
+        self.assertNotIn(b"Automatic bus switch", body)
         self.assertIn(b"Customize this device", body)
         self.assertIn(b"Loading metric catalog", body)
         self.assertNotIn(b"Not yet allowlisted", body)
@@ -1796,6 +1555,8 @@ class WebTests(unittest.TestCase):
         self.assertIn(b"diagnostics only", app)
         self.assertIn(b"vehicle.ignition_on", app)
         self.assertIn(b"MAX_STREAM_DELIVERY_AGE_MS", app)
+        self.assertIn(b'JSON.stringify({mode: "passive"})', app)
+        self.assertNotIn(b"Wake requests", app)
         self.assertIn(b"queued_stream_event", app)
         self.assertIn(b'cache: "no-store"', app)
         self.assertIn(b'eventStream.close()', app)
@@ -2745,7 +2506,7 @@ class InterfaceStateTests(unittest.TestCase):
         self.assertEqual(state.restart_ms, 100)
 
     def test_exact_restore_sets_restart_timing_and_verifies_snapshot(self):
-        original = interface()
+        original = interface(restart_ms=100)
         with (
             mock.patch("lib.canbus.ip_up", return_value=True) as ip_up,
             mock.patch(
@@ -2754,12 +2515,12 @@ class InterfaceStateTests(unittest.TestCase):
         ):
             self.assertTrue(canbus.restore_interface_state(original))
         ip_up.assert_called_once_with(
-            "can0",
+            TEST_CHANNEL,
             500000,
             listen_only=True,
             restart_ms=100,
         )
-        snapshot.assert_called_once_with("can0")
+        snapshot.assert_called_once_with(TEST_CHANNEL)
 
 
 if __name__ == "__main__":

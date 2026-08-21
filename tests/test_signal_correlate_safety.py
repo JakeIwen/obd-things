@@ -7,19 +7,28 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
+from lib.modules import Module, bind_channel
 from tools import signal_correlate
 
 
-MODULE = SimpleNamespace(
+MODULE = Module(
     key="test_ecu",
     name="Test ECU",
-    channel="can9",
     bus="c-can",
     bitrate=500000,
     addressing_mode="normal_29bits",
     txid=0x18DA10F1,
     rxid=0x18DAF110,
 )
+
+
+def owned_route():
+    ownership = mock.Mock()
+    ownership.route = SimpleNamespace(
+        module=bind_channel(MODULE, "can9"), channel="can9"
+    )
+    ownership.release.return_value = True
+    return ownership
 
 
 class SignalCorrelateCliSafetyTests(unittest.TestCase):
@@ -54,11 +63,13 @@ class SignalCorrelateCliSafetyTests(unittest.TestCase):
     def test_preflight_service_or_capture_error_prevents_socket_open(self):
         with (
             mock.patch.object(
-                signal_correlate, "preflight", return_value=["promaster-drive-capture is active"]
+                signal_correlate.can_runtime_route,
+                "acquire_armed_module_route",
+                side_effect=RuntimeError("global capture is active"),
             ),
             mock.patch.object(signal_correlate.uds, "open_module_socket") as open_socket,
         ):
-            with self.assertRaisesRegex(signal_correlate.CaptureError, "drive-capture"):
+            with self.assertRaisesRegex(signal_correlate.CaptureError, "global capture"):
                 signal_correlate.capture(
                     MODULE,
                     [0xF187],
@@ -113,16 +124,18 @@ class SignalCorrelateLiveSafetyTests(unittest.TestCase):
                 return bytes.fromhex("62 F1 87 31"), "POSITIVE"
             raise AssertionError(payload)
 
+        ownership = owned_route()
+
         with (
             mock.patch.object(signal_correlate, "preflight", return_value=[]),
             mock.patch.object(
-                signal_correlate.diagnostic_safety, "acquire_channel_lock", return_value=object()
+                signal_correlate.can_runtime_route,
+                "acquire_armed_module_route",
+                return_value=ownership,
             ),
-            mock.patch.object(signal_correlate.diagnostic_safety, "release_channel_lock") as release,
             mock.patch.object(signal_correlate.uds, "open_module_socket", return_value=sock),
             mock.patch.object(signal_correlate.uds, "drain"),
             mock.patch.object(signal_correlate.uds, "request", side_effect=request),
-            mock.patch.object(signal_correlate.canbus, "restore_passive", return_value=True) as restore,
             mock.patch.object(signal_correlate, "_dump"),
             mock.patch.object(signal_correlate.time, "sleep"),
             mock.patch("builtins.print"),
@@ -146,17 +159,18 @@ class SignalCorrelateLiveSafetyTests(unittest.TestCase):
         self.assertEqual(report["samples"][0]["data"]["F187"], "31")
         self.assertEqual(report["status"], "complete")
         sock.close.assert_called_once_with()
-        restore.assert_called_once_with("can9", 500000)
-        release.assert_called_once()
+        ownership.release.assert_called_once_with()
 
     def test_bad_session_echo_aborts_reads_but_still_restores(self):
         sock = mock.Mock()
+        ownership = owned_route()
         with (
             mock.patch.object(signal_correlate, "preflight", return_value=[]),
             mock.patch.object(
-                signal_correlate.diagnostic_safety, "acquire_channel_lock", return_value=object()
+                signal_correlate.can_runtime_route,
+                "acquire_armed_module_route",
+                return_value=ownership,
             ),
-            mock.patch.object(signal_correlate.diagnostic_safety, "release_channel_lock"),
             mock.patch.object(signal_correlate.uds, "open_module_socket", return_value=sock),
             mock.patch.object(signal_correlate.uds, "drain"),
             mock.patch.object(
@@ -164,7 +178,6 @@ class SignalCorrelateLiveSafetyTests(unittest.TestCase):
                 "request",
                 return_value=(bytes.fromhex("50 02"), "UNEXPECTED"),
             ) as request,
-            mock.patch.object(signal_correlate.canbus, "restore_passive", return_value=True) as restore,
             mock.patch.object(signal_correlate, "_dump"),
             mock.patch("builtins.print"),
         ):
@@ -184,7 +197,7 @@ class SignalCorrelateLiveSafetyTests(unittest.TestCase):
         self.assertEqual(request.call_count, 1)
         self.assertEqual(report["status"], "failed")
         self.assertIn("exact 50 03", report["fatal_error"])
-        restore.assert_called_once_with("can9", 500000)
+        ownership.release.assert_called_once_with()
 
     def test_atomic_checkpoint_replaces_complete_json(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -217,25 +230,20 @@ class SignalCorrelateLiveSafetyTests(unittest.TestCase):
 
         sock.close.side_effect = lambda: signal_now(sig.SIGTERM)
 
-        def restore(*_args):
+        def release_route():
             signal_now(sig.SIGHUP)
             return True
 
-        def release(*_args):
-            signal_now(sig.SIGTERM)
+        ownership = owned_route()
+        ownership.release.side_effect = release_route
 
         with (
             mock.patch.object(signal_correlate, "preflight", return_value=[]),
             mock.patch.object(
-                signal_correlate.diagnostic_safety,
-                "acquire_channel_lock",
-                return_value=mock.sentinel.lock,
+                signal_correlate.can_runtime_route,
+                "acquire_armed_module_route",
+                return_value=ownership,
             ),
-            mock.patch.object(
-                signal_correlate.diagnostic_safety,
-                "release_channel_lock",
-                side_effect=release,
-            ) as unlock,
             mock.patch.object(
                 signal_correlate.diagnostic_safety.signal,
                 "signal",
@@ -248,7 +256,6 @@ class SignalCorrelateLiveSafetyTests(unittest.TestCase):
                 "request",
                 return_value=(bytes.fromhex("50 03"), "POSITIVE"),
             ),
-            mock.patch.object(signal_correlate.canbus, "restore_passive", side_effect=restore) as passive,
             mock.patch.object(signal_correlate, "_dump"),
             mock.patch("builtins.print"),
         ):
@@ -267,8 +274,7 @@ class SignalCorrelateLiveSafetyTests(unittest.TestCase):
 
         self.assertEqual(report["status"], "interrupted")
         self.assertTrue(report["interrupted"])
-        passive.assert_called_once_with("can9", 500000)
-        unlock.assert_called_once_with(mock.sentinel.lock)
+        ownership.release.assert_called_once_with()
 
 
 if __name__ == "__main__":

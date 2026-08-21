@@ -19,13 +19,16 @@ SPEC.loader.exec_module(capture)
 
 
 PASSIVE_DETAILS = """\
-4: can0: <NOARP,UP,LOWER_UP,ECHO> mtu 16 qdisc fq_codel state UP mode DEFAULT
+4: can7: <NOARP,UP,LOWER_UP,ECHO> mtu 16 qdisc fq_codel state UP mode DEFAULT
     link/can
     can <LISTEN-ONLY> state ERROR-ACTIVE (berr-counter tx 0 rx 0) restart-ms 0
           bitrate 500000 sample-point 0.875
     RX:  bytes packets errors dropped  missed   mcast
             4096      64      0       0       0       0
 """
+
+TEST_CHANNEL = "can7"
+TEST_BITRATE = 500_000
 
 
 class Result:
@@ -128,7 +131,7 @@ class RecordingChunk:
 def interface_state_with_counters(dropped, missed):
     state = capture.InterfaceState(
         up=True,
-        bitrate=capture.BITRATE,
+        bitrate=TEST_BITRATE,
         listen_only=True,
         controller_state="ERROR-ACTIVE",
         rx_dropped=dropped,
@@ -141,14 +144,27 @@ def interface_state_with_counters(dropped, missed):
 
 class PassiveDriveCaptureTests(unittest.TestCase):
     def test_interface_parser_requires_all_passive_fields(self):
-        state = capture.parse_interface_state(PASSIVE_DETAILS)
+        state = capture.parse_interface_state(
+            PASSIVE_DETAILS,
+            channel=TEST_CHANNEL,
+        )
         self.assertTrue(state.up)
         self.assertTrue(state.listen_only)
         self.assertEqual(state.bitrate, 500000)
         self.assertEqual(state.controller_state, "ERROR-ACTIVE")
 
-        armed = capture.parse_interface_state(PASSIVE_DETAILS.replace("<LISTEN-ONLY>", ""))
+        armed = capture.parse_interface_state(
+            PASSIVE_DETAILS.replace("<LISTEN-ONLY>", ""),
+            channel=TEST_CHANNEL,
+        )
         self.assertFalse(armed.listen_only)
+
+        dynamic = capture.parse_interface_state(
+            PASSIVE_DETAILS.replace("can7", "can3"),
+            channel="can3",
+        )
+        self.assertTrue(dynamic.up)
+        self.assertEqual(dynamic.bitrate, 500000)
 
     def test_candump_parser_and_priority_selection(self):
         line = b"(1784704278.475609) can0 18DA10F1#0322100000000000\n"
@@ -192,6 +208,13 @@ class PassiveDriveCaptureTests(unittest.TestCase):
         policy = capture.validate_args(args)
         self.assertEqual(policy.soft_free_bytes, 30 * 1024**3)
         self.assertEqual(policy.hard_free_bytes, 25 * 1024**3)
+        plan = capture.plan(args, policy)
+        self.assertEqual(plan["interface_requirement"]["logical_role"], "c-can")
+        self.assertEqual(
+            plan["interface_requirement"]["channel"],
+            "resolved at execution by USB serial/dev_id",
+        )
+        self.assertNotIn("blocked_services", plan)
 
     def test_disk_policy_has_two_stage_degradation(self):
         policy = capture.DiskPolicy(soft_free_bytes=300, hard_free_bytes=200)
@@ -216,6 +239,8 @@ class PassiveDriveCaptureTests(unittest.TestCase):
         state, free = capture.preflight(
             Path("/unused"),
             capture.DiskPolicy(300, 200),
+            channel=TEST_CHANNEL,
+            bitrate=TEST_BITRATE,
             runner=runner,
             which=lambda name: f"/usr/bin/{name}",
             disk_free=lambda _path: 1000,
@@ -225,23 +250,21 @@ class PassiveDriveCaptureTests(unittest.TestCase):
         self.assertEqual(free, 1000)
         self.assertEqual(
             [command[-1] for command in commands if command[0] == "systemctl"],
-            ["tpms-logger", "tpms-drivesniff"],
+            [],
         )
 
-    def test_preflight_rejects_armed_interface_and_active_logger(self):
+    def test_preflight_rejects_armed_interface_without_global_service_query(self):
         def runner(command, **_kwargs):
             if command[0] == "ip":
                 return Result(stdout=PASSIVE_DETAILS.replace("<LISTEN-ONLY>", ""))
-            if command[-1] == "tpms-logger":
-                return Result(returncode=0, stdout="active\n")
-            return Result(returncode=3, stdout="inactive\n")
+            raise AssertionError(f"unrelated service query: {command}")
 
-        with self.assertRaisesRegex(
-            capture.CaptureError, "(?s)not LISTEN-ONLY.*tpms-logger is active"
-        ):
+        with self.assertRaisesRegex(capture.CaptureError, "not LISTEN-ONLY"):
             capture.preflight(
                 Path("/unused"),
                 capture.DiskPolicy(300, 200),
+                channel=TEST_CHANNEL,
+                bitrate=TEST_BITRATE,
                 runner=runner,
                 which=lambda name: f"/usr/bin/{name}",
                 disk_free=lambda _path: 1000,
@@ -258,6 +281,8 @@ class PassiveDriveCaptureTests(unittest.TestCase):
             capture.preflight(
                 Path("/unused"),
                 capture.DiskPolicy(300, 200),
+                channel=TEST_CHANNEL,
+                bitrate=TEST_BITRATE,
                 runner=runner,
                 which=lambda name: f"/usr/bin/{name}",
                 disk_free=lambda _path: 1000,
@@ -370,16 +395,18 @@ class PassiveDriveCaptureTests(unittest.TestCase):
             with capture.campaign_file_lock(run_dir):
                 pass
 
-    def test_runtime_service_query_error_fails_closed(self):
+    def test_runtime_safety_check_does_not_query_unrelated_services(self):
         def runner(command, **_kwargs):
             if command[0] == "ip":
                 return Result(stdout=PASSIVE_DETAILS)
-            if command[-1] == "tpms-logger":
-                return Result(returncode=1, stderr="Failed to connect to bus")
-            return Result(returncode=3, stdout="inactive\n")
+            raise AssertionError(f"unrelated service query: {command}")
 
-        with self.assertRaisesRegex(capture.CaptureError, "cannot establish"):
-            capture.runtime_safety_check(runner=runner)
+        state = capture.runtime_safety_check(
+            channel=TEST_CHANNEL,
+            bitrate=TEST_BITRATE,
+            runner=runner,
+        )
+        self.assertTrue(state.listen_only)
 
     def test_required_mount_must_contain_output_and_be_writable(self):
         class Stat:
@@ -438,6 +465,72 @@ class PassiveDriveCaptureTests(unittest.TestCase):
         with self.assertRaisesRegex(capture.CaptureError, "--require-mount"):
             capture.validate_args(args)
 
+    def test_execute_holds_role_lease_and_uses_its_resolved_channel(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            args = capture.build_parser().parse_args(
+                [
+                    "--bus",
+                    "can-ch",
+                    "--out-root",
+                    str(root / "captures"),
+                    "--require-mount",
+                    str(root),
+                    "--campaign",
+                    "role-test",
+                    "--priority-profile",
+                    "none",
+                    "--execute",
+                    "--confirm-passive",
+                    "--conditions",
+                    "passive role integration test",
+                ]
+            )
+            policy = capture.validate_args(args)
+            route = mock.Mock(
+                role="can-ch",
+                channel="can7",
+                bitrate=500_000,
+                pair="12/13",
+                topology_fingerprint="stable-generation",
+            )
+            ownership = mock.Mock(route=route)
+            state = interface_state_with_counters(0, 0)
+            recorder = mock.Mock()
+            recorder.run.return_value = 0
+
+            with (
+                mock.patch.object(
+                    capture.can_runtime_route,
+                    "acquire_passive_bus_route",
+                    return_value=ownership,
+                ) as acquire,
+                mock.patch.object(
+                    capture,
+                    "require_writable_mount",
+                    return_value="/dev/fake",
+                ),
+                mock.patch.object(
+                    capture,
+                    "preflight",
+                    return_value=(state, 1000),
+                ) as preflight,
+                mock.patch.object(capture, "read_rmem_max", return_value=capture.RECEIVE_BUFFER),
+                mock.patch.object(capture.shutil, "which", side_effect=lambda name: f"/usr/bin/{name}"),
+                mock.patch.object(capture, "Recorder", return_value=recorder) as recorder_class,
+            ):
+                self.assertEqual(capture.execute(args, policy), 0)
+
+            acquire.assert_called_once_with("can-ch")
+            ownership.revalidate.assert_called_once_with()
+            ownership.release.assert_called_once_with()
+            self.assertEqual(preflight.call_count, 2)
+            for call in preflight.call_args_list:
+                self.assertEqual(call.kwargs["channel"], "can7")
+                self.assertEqual(call.kwargs["bitrate"], 500_000)
+            self.assertEqual(recorder_class.call_args.kwargs["channel"], "can7")
+            self.assertEqual(recorder_class.call_args.kwargs["bitrate"], 500_000)
+
     def test_atomic_metadata_and_manifest_writes(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -476,6 +569,8 @@ class PassiveDriveCaptureTests(unittest.TestCase):
                 rotation_seconds=600,
                 duration_seconds=1,
                 policy=capture.DiskPolicy(300, 200),
+                channel=TEST_CHANNEL,
+                bitrate=TEST_BITRATE,
             )
             process = FakeProcess(ignore_terminate=True)
             clock = [0.0]
@@ -525,6 +620,8 @@ class PassiveDriveCaptureTests(unittest.TestCase):
                 rotation_seconds=600,
                 duration_seconds=1,
                 policy=capture.DiskPolicy(300, 200),
+                channel=TEST_CHANNEL,
+                bitrate=TEST_BITRATE,
             )
             process = FakeProcess(ignore_terminate=True)
             clock = [0.0]
@@ -572,6 +669,8 @@ class PassiveDriveCaptureTests(unittest.TestCase):
                 rotation_seconds=600,
                 duration_seconds=60,
                 policy=capture.DiskPolicy(300, 200),
+                channel=TEST_CHANNEL,
+                bitrate=TEST_BITRATE,
                 popen=lambda *_args, **_kwargs: process,
                 disk_free=lambda _path: 1000,
                 safety_check=lambda: interface_state_with_counters(0, 0),
@@ -622,6 +721,8 @@ class PassiveDriveCaptureTests(unittest.TestCase):
                     rotation_seconds=600,
                     duration_seconds=1,
                     policy=capture.DiskPolicy(300, 200),
+                    channel=TEST_CHANNEL,
+                    bitrate=TEST_BITRATE,
                     popen=lambda *_args, **_kwargs: process,
                     disk_free=lambda _path: 1000,
                     safety_check=safety_check,
@@ -666,6 +767,8 @@ class PassiveDriveCaptureTests(unittest.TestCase):
                 rotation_seconds=600,
                 duration_seconds=100,
                 policy=capture.DiskPolicy(300, 200),
+                channel=TEST_CHANNEL,
+                bitrate=TEST_BITRATE,
                 popen=lambda *_args, **_kwargs: process,
                 disk_free=lambda _path: next(free_values),
                 safety_check=lambda: baseline,
@@ -730,6 +833,8 @@ class PassiveDriveCaptureTests(unittest.TestCase):
                 rotation_seconds=600,
                 duration_seconds=100,
                 policy=capture.DiskPolicy(300, 200),
+                channel=TEST_CHANNEL,
+                bitrate=TEST_BITRATE,
                 popen=lambda *_args, **_kwargs: process,
                 disk_free=lambda _path: 1000,
                 safety_check=lambda: baseline,
@@ -791,6 +896,8 @@ class PassiveDriveCaptureTests(unittest.TestCase):
                 rotation_seconds=600,
                 duration_seconds=100,
                 policy=capture.DiskPolicy(300, 200),
+                channel=TEST_CHANNEL,
+                bitrate=TEST_BITRATE,
                 stop_after_id=0x2EF,
                 stop_after_id_absence_seconds=2,
                 popen=lambda *_args, **_kwargs: process,
@@ -840,6 +947,8 @@ class PassiveDriveCaptureTests(unittest.TestCase):
                 rotation_seconds=600,
                 duration_seconds=100,
                 policy=capture.DiskPolicy(300, 200),
+                channel=TEST_CHANNEL,
+                bitrate=TEST_BITRATE,
                 required_start_id=0x2EF,
                 required_start_id_timeout_seconds=2,
                 popen=lambda *_args, **_kwargs: process,
@@ -857,7 +966,7 @@ class PassiveDriveCaptureTests(unittest.TestCase):
                     "-d",
                     "-r",
                     str(capture.RECEIVE_BUFFER),
-                    "can0",
+                    TEST_CHANNEL,
                 ],
             )
             RecordingChunk.writes = []
@@ -904,6 +1013,8 @@ class PassiveDriveCaptureTests(unittest.TestCase):
                 rotation_seconds=600,
                 duration_seconds=2,
                 policy=capture.DiskPolicy(300, 200),
+                channel=TEST_CHANNEL,
+                bitrate=TEST_BITRATE,
                 popen=lambda *_args, **_kwargs: process,
                 disk_free=lambda _path: next(free_values),
                 safety_check=lambda: baseline,
@@ -984,6 +1095,8 @@ class PassiveDriveCaptureTests(unittest.TestCase):
                 rotation_seconds=10,
                 duration_seconds=1000,
                 policy=capture.DiskPolicy(300, 200),
+                channel=TEST_CHANNEL,
+                bitrate=TEST_BITRATE,
                 popen=lambda *_args, **_kwargs: process,
                 disk_free=lambda _path: 1000,
                 safety_check=lambda: baseline,
