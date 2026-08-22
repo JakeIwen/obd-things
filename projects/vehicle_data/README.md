@@ -156,7 +156,10 @@ alternator temperature. The observed scale is not clamped: exact-vehicle data
 reached approximately 100.008%, and the public range deliberately permits that
 small overshoot. The metric expires after four seconds. Sustained high duty can
 mean high commanded charging effort, but duty alone does not establish a
-thermal-danger threshold.
+thermal-danger threshold. The routinely used house-battery DC-DC charger is a
+normal substantial alternator load and may drive this metric high. No default
+warning uses generator duty as its primary signal; it is only optional,
+explanatory corroboration for a separately persistent low-voltage deviation.
 
 `engine.crankshaft_torque` is the PCM's diagnostic current-engine-torque
 value from DID `06DA`, decoded as signed `i16be x 0.04 Nm` and converted to
@@ -694,6 +697,26 @@ historian is writing. The temporary commissioning override was removed, so the
 normal service has active-drive enabled; because the vehicle remained asleep,
 the helper stayed idle and TX remained zero. This run validates the passive
 reconciler, web path, and historian, not an active diagnostic/polling interval.
+
+Stationary active-drive commissioning completed later on 2026-08-21. The
+engine-running interval remained armed for 146.66 seconds and added 438 C-CAN
+TX packets (2.99/s), matching the fixed two-PCM-plus-one-rotating-TPMS
+scheduler. Twenty-nine consecutive historian snapshots each retained fresh
+generator duty, PCM current torque, all four TPMS pressures, RPM, oil pressure,
+coolant temperature, transmission-oil temperature, and zero vehicle speed.
+Generator duty ranged 26.782–91.168%; the high initial value coincided with the
+owner's routine house-battery DC-DC charger being enabled, and duty fell after
+the owner switched that load off a few seconds into the run. This was an
+intentional normal-load transition, not warning evidence. RPM ranged
+748–1,506 and oil pressure 30.168–34.809 psi; the four pressure reads were
+58.1/56.1/76.8/77.2 psi (FL/FR/RR/RL). B-CAN and CAN CH remained independently
+listen-only and healthy with zero TX throughout. After engine-off, the helper
+and exclusive owner cleared, C-CAN returned to classical 500 kbit/s, FD off,
+listen-only, `restart-ms 0`, ERROR-ACTIVE, and its TX counter stopped at 438.
+No CAN error, drop, bus-off, USB event, service warning, restoration inhibit,
+or restart was observed. This validates the deployed dual-USBCANFD active
+arm/read/restore path under stationary idle; loaded driving behavior remains a
+separate evidence question.
 
 A 2026-08-21 historian repair made nested logical-role status authoritative
 during broker startup and stopped treating a pre-reconciliation kernel

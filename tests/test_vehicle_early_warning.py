@@ -270,6 +270,11 @@ class EarlyWarningTests(unittest.TestCase):
             by_metric["tire.pressure.fl"].regime_dimensions,
             ("motion",),
         )
+        self.assertNotIn("generator.field_duty", by_metric)
+        self.assertEqual(
+            by_metric["battery.voltage"].required_corroborators,
+            0,
+        )
         config = HistorianConfig(rollup_seconds=5)
         with TelemetryHistorian(self.path, config=config) as historian:
             at = self.start

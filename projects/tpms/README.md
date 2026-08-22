@@ -226,11 +226,15 @@ campaign status and
   your own shell — use `pkill -x candump` or exact PIDs.
 - **Current integration state (live host validation 2026-08-21):**
   `van-telemetry.service` is installed, enabled, and active on the resolved
-  three-role topology. Its normal active-drive feature is enabled, but the
-  vehicle was asleep during commissioning, so the helper remained idle and CAN
-  TX stayed at zero; four-pressure polling was not exercised in that validation.
-  The coordinated broker remains the supported engine-running coexistence path
-  for passive powertrain, PCM electrical, and TPMS pressures on C-CAN.
+  three-role topology. A later 146.66-second stationary engine-running
+  commissioning interval kept all four pressure DIDs fresh at
+  58.1/56.1/76.8/77.2 psi (FL/FR/RR/RL) while PCM and passive powertrain
+  telemetry continued. B-CAN and CAN CH stayed listen-only with zero TX, and
+  engine-off restored C-CAN exactly to passive state without an error or
+  inhibit. The coordinated broker is therefore the validated engine-running
+  coexistence path for passive powertrain, PCM electrical, and TPMS pressures
+  on C-CAN; loaded-driving behavior remains separately untested on this
+  hardware.
   `tpms-logger.service` remains disabled/inactive and unvalidated as a
   broker-absence safety net, not an operator arming command.
 
@@ -300,12 +304,12 @@ C150x fault sets, so 60 s still catches it) to cut bus intervention ~6×, or
 
 ## Next steps
 
-1. On the next ordinary engine-running drive, confirm the deployed broker's
-   active helper and four-pressure path only if recurrence data is still useful;
-   the asleep-vehicle commissioning did not exercise them. The objective is
-   already achieved: physical RL, sensor ID `7004C287`, is the isolated dropout
-   channel. The standalone logger remains disabled/inactive and should not be
-   started merely for that confirmation.
+1. The deployed broker's active helper and four-pressure path passed stationary
+   engine-running commissioning on 2026-08-21. Use an ordinary drive for
+   recurrence data only if it is still useful; the objective is already
+   achieved: physical RL, sensor ID `7004C287`, is the isolated dropout channel.
+   The standalone logger remains disabled/inactive and should not be started
+   merely for another confirmation.
 2. Find the 2024 Discount Tire invoice/work order and later replacement invoices. Brand/SKU and
    recorded wheel positions may identify which current sensor bodies are aftermarket; IDs alone
    cannot, because a programmable replacement may clone an OEM ID stored in the RF Hub. Confirm
