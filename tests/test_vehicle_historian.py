@@ -727,6 +727,40 @@ class HistorianTripAndQueryTests(unittest.TestCase):
             self.assertEqual(baseline.bucket_count, 1)
             self.assertEqual(baseline.sample_count, 1)
 
+    def test_completed_trip_comparison_tolerates_new_metric_without_samples(self):
+        config = HistorianConfig(
+            trip_idle_timeout_seconds=1,
+            rollup_seconds=5,
+        )
+        with TelemetryHistorian(self.path, config=config) as historian:
+            historian.ingest_snapshot(
+                snapshot(
+                    self.start,
+                    self.definitions,
+                    self.active_values(self.start),
+                ),
+                captured_at=self.start,
+            )
+            ended = self.start + timedelta(seconds=2)
+            historian.ingest_snapshot(
+                snapshot(
+                    ended,
+                    self.definitions,
+                    self.inactive_values(),
+                    running=False,
+                ),
+                captured_at=ended,
+            )
+
+            comparison = historian.trip_comparison(
+                ("engine.crankshaft_power",)
+            )
+
+            metric = comparison["metrics"]["engine.crankshaft_power"]
+            self.assertIsNone(metric["current_trip"])
+            self.assertIsNone(metric["prior_trips"])
+            self.assertIsNone(metric["current_minus_prior_median"])
+
 
 class HistorianMaintenanceTests(unittest.TestCase):
     def setUp(self):

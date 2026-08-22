@@ -4534,7 +4534,11 @@ class TelemetryHistorian:
             """,
             args,
         ).fetchone()
-        if row is None or row["sample_count"] == 0:
+        # SQLite aggregate queries return one row of NULLs for an empty input.
+        # A newly registered history metric can therefore have no samples in
+        # an otherwise completed prior trip; treat that as absent rather than
+        # attempting timestamp arithmetic on NULL.
+        if row is None or not row["sample_count"]:
             return None
         if row["rollup_parts"] and row["raw_parts"]:
             aggregate_basis = "minute_rollups_plus_raw_tail"
