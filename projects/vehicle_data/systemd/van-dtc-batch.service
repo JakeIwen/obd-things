@@ -1,0 +1,20 @@
+[Unit]
+Description=Guarded parked fixed-payload DTC batch worker
+After=van-telemetry.service
+Requires=van-telemetry.service
+PartOf=van-telemetry.service
+
+[Service]
+Type=oneshot
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/dev/obd-things
+UMask=0077
+ExecStart=/usr/bin/python3 /home/pi/dev/obd-things/tools/dtc_batch_request.py
+TimeoutStartSec=infinity
+TimeoutStopSec=30
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/pi/dev/obd-things/tmp /run/van-telemetry
+RestrictAddressFamilies=AF_UNIX AF_CAN AF_NETLINK

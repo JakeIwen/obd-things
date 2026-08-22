@@ -5,6 +5,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from projects.vehicle_data.early_warning import (
+    DEFAULT_ABSOLUTE_WARNING_RULES,
+    DEFAULT_EVALUATION_RULES,
     DEFAULT_WARNING_RULES,
     CorroborationRule,
     EarlyWarningEvaluator,
@@ -256,7 +258,8 @@ class EarlyWarningTests(unittest.TestCase):
             "tire.pressure.rr",
         }
         self.assertEqual({rule.metric for rule in DEFAULT_WARNING_RULES}, expected)
-        self.assertEqual(len(default_rule_catalog()), len(DEFAULT_WARNING_RULES))
+        self.assertEqual(len(default_rule_catalog()), len(DEFAULT_EVALUATION_RULES))
+        self.assertEqual(len(DEFAULT_ABSOLUTE_WARNING_RULES), 1)
         by_metric = {rule.metric: rule for rule in DEFAULT_WARNING_RULES}
         self.assertEqual(
             by_metric["engine.oil_pressure"].regime_dimensions,
@@ -286,7 +289,7 @@ class EarlyWarningTests(unittest.TestCase):
             oil = next(
                 item
                 for item in report["assessments"]
-                if item["metric"] == "engine.oil_pressure"
+                if item["rule"] == "engine_oil_pressure_relative_low"
             )
             self.assertEqual(oil["state"], "insufficient_history")
             tire = next(

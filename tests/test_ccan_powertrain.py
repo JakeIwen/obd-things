@@ -40,6 +40,69 @@ def frame(can_id, data):
 
 
 class DecodeTests(unittest.TestCase):
+    def test_temperature_gate_uses_exact_delta_window_and_quarantines_bad_level(self):
+        gate = ccan_powertrain.TransmissionTemperaturePlausibilityGate()
+
+        self.assertIsNone(gate.evaluate(60.0, 0.0))
+        # Exactly 10 C is not "more than" the OEM-context limit.
+        self.assertIsNone(gate.evaluate(70.0, 0.5))
+        # Exactly one second is not "less than" the OEM-context window.
+        self.assertIsNone(gate.evaluate(90.0, 1.5))
+
+        gate = ccan_powertrain.TransmissionTemperaturePlausibilityGate()
+        self.assertIsNone(gate.evaluate(60.0, 10.0))
+        first = gate.evaluate(71.0, 10.5)
+        self.assertIsNotNone(first)
+        self.assertTrue(gate.quarantined)
+        repeated = gate.evaluate(71.0, 10.8)
+        self.assertIsNotNone(repeated)
+        self.assertIn("remains quarantined", repeated.detail)
+        # The repeated bad level did not poison the last-good baseline.
+        self.assertIsNone(gate.evaluate(60.0, 10.9))
+        self.assertFalse(gate.quarantined)
+
+    def test_raw_temperature_rejection_keeps_1f7_sibling_metrics(self):
+        gate = ccan_powertrain.TransmissionTemperaturePlausibilityGate()
+        self.assertIsNone(gate.evaluate(57.0, 0.0))
+        fake = FakeSocket(
+            [frame(0x1F7, bytes.fromhex("00 2D 10 20 05 B6 00 00"))]
+        )
+        ticks = count(start=0.10, step=0.01)
+
+        snapshot = ccan_powertrain.read_broadcast_snapshot(
+            TEST_CHANNEL,
+            timeout=0.5,
+            socket_factory=lambda *_args: fake,
+            monotonic=lambda: next(ticks),
+            temperature_gate=gate,
+        )
+
+        metrics = {item.metric for item in snapshot.observations}
+        self.assertEqual(
+            metrics,
+            {"transmission.output_speed", "transmission.turbine_speed"},
+        )
+        self.assertEqual(len(snapshot.quality_events), 1)
+        self.assertEqual(snapshot.quality_events[0].delta_c, 12.0)
+        self.assertEqual(snapshot.quality_events[0].rejection_count, 1)
+
+        recovered = FakeSocket(
+            [frame(0x1F7, bytes.fromhex("00 2D 10 00 05 B6 00 00"))]
+        )
+        later_ticks = count(start=0.30, step=0.01)
+        recovered_snapshot = ccan_powertrain.read_broadcast_snapshot(
+            TEST_CHANNEL,
+            timeout=0.5,
+            socket_factory=lambda *_args: recovered,
+            monotonic=lambda: next(later_ticks),
+            temperature_gate=gate,
+        )
+        recovered_metrics = {
+            item.metric for item in recovered_snapshot.observations
+        }
+        self.assertIn("transmission.oil_temperature", recovered_metrics)
+        self.assertFalse(gate.quarantined)
+
     def test_fixed_decodes(self):
         battery = ccan_powertrain.decode_frame(0x41A, b"\xbe")
         self.assertEqual(battery.metric, "battery.voltage")

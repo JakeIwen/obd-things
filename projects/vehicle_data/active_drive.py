@@ -138,6 +138,11 @@ class SystemBackend:
         self.role_resolver = role_resolver or SysfsCanRoleResolver()
         self.monotonic = monotonic
         self.sleep = sleep
+        # Preserve raw 0x1F7 temperature state across every bounded broadcast
+        # snapshot in this one armed ownership interval.
+        self.temperature_gate = (
+            ccan_powertrain.TransmissionTemperaturePlausibilityGate()
+        )
 
     def interface_state(self):
         return canbus.interface_state(self.channel)
@@ -182,6 +187,7 @@ class SystemBackend:
             include_battery=True,
             required_rpm_samples=REQUIRED_RPM_SAMPLES,
             monotonic=self.monotonic,
+            temperature_gate=self.temperature_gate,
         )
 
     def arm(self, initial: canbus.InterfaceState) -> bool:
@@ -605,6 +611,29 @@ def _emit_observation(sink: JsonEventSink, observation: ccan_powertrain.PassiveO
     )
 
 
+def _emit_quality_event(
+    sink: JsonEventSink,
+    event: ccan_powertrain.DataQualityEvent,
+) -> None:
+    """Report bounded acquisition evidence without failing the CAN session."""
+
+    sink.emit(
+        "quality_event",
+        metric=event.metric,
+        source=event.source,
+        bus="c-can",
+        quality="observed_alfa_scale",
+        reason=event.reason,
+        detail=event.detail,
+        previous_value_c=event.previous_value_c,
+        rejected_value_c=event.rejected_value_c,
+        delta_c=event.delta_c,
+        elapsed_seconds=event.elapsed_seconds,
+        rejection_count=event.rejection_count,
+        interface_mode="armed_diagnostic",
+    )
+
+
 def _pcm_outcome(result: object) -> SessionOutcome | None:
     if getattr(result, "available", False):
         return None
@@ -689,6 +718,8 @@ def run_active_session(
             return outcome
 
         first_active = backend.broadcast_snapshot(PASSIVE_GATE_SECONDS)
+        for quality_event in getattr(first_active, "quality_events", ()):
+            _emit_quality_event(sink, quality_event)
         if not _running_snapshot(first_active):
             outcome = SessionOutcome(
                 "engine_not_running",
@@ -733,6 +764,8 @@ def run_active_session(
                     "0x0FC became zero, sub-threshold, missing, or stale",
                 )
                 break
+            for quality_event in getattr(snapshot, "quality_events", ()):
+                _emit_quality_event(sink, quality_event)
             for observation in snapshot.observations:
                 _emit_observation(sink, observation)
 

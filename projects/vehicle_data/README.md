@@ -37,8 +37,19 @@ dual-channel adapters, and the role-aware broker was deployed and passively
 live-validated on 2026-08-21. Item 1 (USB hub/power-path changes) remains
 deliberately tabled; this work neither diagnosed nor modified the hub.
 
-1. **Hub/power work — tabled.** No USB reset, power-cycle, topology change, or
-   service workaround is included here.
+1. **Hub/power replacement — tabled; transient observation implemented.** No
+   USB reset, power-cycle, topology change, or service workaround is included.
+   A receive-only kernel kobject-uevent observer retains sub-snapshot CAN
+   adapter/ancestor-hub removal edges in a bounded queue. Events are deduped by
+   boot/uevent identity, committed to SQLite before acknowledgement, and held
+   behind an event-level advisory-consumption checkpoint until their episode
+   persistence commits. Only explicitly consumed removal IDs are acknowledged;
+   timestamp races and failed advisory passes replay on the next snapshot. One
+   branch incident resolves only after fresh exact serial-role health is
+   re-established. Prior-process incidents survive a broker restart until
+   authoritative healthy exact-role evidence retires them. It never resets,
+   rebinds, or configures hardware. See
+   [`docs/usb-can-incident-monitor.md`](../../docs/usb-can-incident-monitor.md).
 2. **Stable interface roles — implemented.** `lib/vehicle_can_roles.py` defines
    the exact USB serial plus `dev_id` map for C-CAN, B-CAN, CAN CH, and the
    unused spare. `lib/can_role_resolver.py` resolves it, while
@@ -70,16 +81,24 @@ deliberately tabled; this work neither diagnosed nor modified the hub.
    per-wheel TPMS decline. They require persistence plus 30 comparable minute
    buckets from at least three prior trips. Output includes median/MAD,
    threshold, regime, provenance, persistence, and corroborators; there is no
-   opaque score or claim of diagnosis.
-7. **DTC history/dashboard — implemented as an offline, parked workflow.**
+   opaque score or claim of diagnosis. Advisory episodes and transitions are
+   persisted on ingest, including an independently gated absolute oil-pressure
+   rule pinned to passive `0x41D` pressure plus `0x0FC` RPM, and CAN-infrastructure
+   health. The warning panel exposes persisted outbox failures rather than only
+   configured enablement. The tracked service explicitly enables
+   delivery through the host's queue-aware ntfy helper; generator duty alone
+   is never a warning.
+7. **DTC history/dashboard — guarded parked batch implemented.**
    Strict UDS `19` parsing, SQLite recurrence/status history, saved-report
    import, and a compact cache cover all 16 registry modules without treating
-   timeout/unavailable as “no codes.” The dashboard has a cache-only GET and
-   deliberately has no scan or clear POST. `tools/dtc_scan.py` defaults to an
-   offline sequential `19 02 FF` plan and report import; it never opens a CAN
-   socket. Guarded one-module live reads remain in `tools/dtc_inventory.py`,
-   which now supports `--resolve-runtime` and holds both the logical-role and
-   resolved-channel locks around its existing parked execution gates.
+   timeout/unavailable as “no codes.” `tools/dtc_batch.py` groups 15 supported
+   registered modules into three role-owned arm/restore windows and sends only
+   fixed physical `19 02 FF`, at no more than one request per second, after
+   fresh ignition-on/engine-off/speed-zero and exact identity/state gates. PCM
+   remains explicitly unsupported. The LAN dashboard stays cache-only; the
+   Tailscale listener can queue this one fixed job only after a five-minute,
+   one-use token is created locally with `tools/dtc_web_arm.py`. There is no
+   DTC-clear, arbitrary-payload, module-address, or session-control path.
 
 The tracked `dual-usbcanfd` systemd unit and
 `/var/lib/van-telemetry` SQLite state directory are deployed. Passive
@@ -109,6 +128,30 @@ Every available observation includes value, unit, source, bus, acquisition
 class, quality, wall-clock timestamp, age, and staleness. Failures use a stable
 reason such as `adapter_absent`, `wrong_bus`, `bus_asleep`, `can_busy`,
 `rate_limited`, or `restoration_failed`.
+
+Raw `0x1F7` transmission-oil temperature has an additional stateful admission
+gate before snapshot medians, broker cache, and historian samples. A change
+greater than 10 °C within less than 1.0 second is rejected using raw-frame
+monotonic timestamps. Gate state survives passive collector snapshots and the
+active-drive helper's bounded snapshots. A rejected level stays quarantined
+while uninterrupted frames remain more than 10 °C from the last good value;
+returning to the last-good neighborhood clears it, while an observation gap of
+at least one second starts a new evidence window. Rejection keeps the last good
+temperature and does not discard `transmission.output_speed` or
+`transmission.turbine_speed` decoded from that same `0x1F7` frame.
+
+The broker latches repeated rejections into one bounded incident and exposes
+active plus recent incidents in status. The historian upserts those stable
+incident IDs, including rejection count and raw delta/window evidence, in a
+separate data-quality table. A later admitted temperature resolves the incident.
+If the broker restarts while an incident is active, the historian keeps that
+evidence open only until the replacement process publishes its first
+authoritative admitted sample for the same metric/source; process identity
+prevents an empty startup snapshot from claiming recovery. Gate state updates
+are atomic even though each normal passive/active reader has a single owner.
+These records are explicitly ineligible for the advisory outbox: they never
+send a notification, create an inhibit, reset hardware, reconfigure SocketCAN,
+or change CAN traffic.
 
 The initial drive-publisher vocabulary is intentionally narrow:
 
@@ -173,6 +216,14 @@ reason and disables only torque for the remainder of that engine-running
 epoch. Generator duty, TPMS, passive powertrain telemetry, and broker-owned
 raw recording continue. Safety-gate, lock, topology, adapter, and restoration
 failures still stop the complete armed interval.
+
+`engine.crankshaft_power` is an ECU-estimated crankshaft calculation from the
+fresh PCM `06DA` torque and qualified passive `0x0FC` RPM pair:
+`hp = lb-ft × rpm / 5252.113`. It is recomputed only when the matching torque
+sample arrives, requires no more than 1.5 seconds of input skew, and inherits
+the older input's timestamp so it cannot appear fresh after either dependency
+expires. Negative overrun is preserved. This is not measured wheel horsepower
+or a dynamometer result.
 
 The raw rows preserve the original cluster evidence without presenting
 unverified speed, gear, or temperature conversions as facts. The separately
@@ -554,10 +605,13 @@ The deadline is only an admission bound; it is never used as the observation
 timestamp. Existing broadcast battery sources are not publisher-enabled,
 preventing a local logger from masquerading as the in-process voltage reader.
 
-There is no raw-frame, arbitrary-DID, diagnostic-session, live-DTC-scan,
-DTC-clear, reset, calibration, configuration, or PROXI endpoint. The DTC GET
-reads only the atomic JSON cache written by an offline/local import workflow.
-It cannot open SocketCAN. History and health likewise read only SQLite.
+The broker Unix API has no raw-frame, arbitrary-DID, diagnostic-session,
+live-DTC-scan, DTC-clear, reset, calibration, configuration, or PROXI endpoint.
+Its DTC GET reads only the atomic JSON cache and cannot open SocketCAN. History
+and health likewise read only SQLite. The optional Tailscale web job boundary
+is separate: it can place only one locally armed, closed-schema request for the
+non-networked fixed batch worker and expose bounded status/cancel operations.
+The ordinary LAN listener does not expose those actions.
 
 `/v1/snapshot` is the preferred dashboard endpoint. Its shape is:
 
@@ -602,7 +656,7 @@ GET endpoints on page synchronization and then no more often than once per
 minute. This prevents the compact but substantially larger diagnostic cache
 from being duplicated into every live telemetry event.
 
-The current offline DTC cache was seeded from the 19 existing inventory
+The saved DTC cache was originally seeded from the 19 existing inventory
 reports. It contains dated evidence, not a current scan: 11 modules have a
 successful saved result, PCM is explicitly unavailable after its generic
 request timeout, and the four CAN-CH modules are explicitly never scanned by
@@ -620,7 +674,24 @@ python3 tools/dtc_scan.py --resolve-runtime
 dashboard cache without any CAN I/O. There is intentionally no `--execute` in
 this multi-module planning/import tool. Runtime route annotation is per bus: a
 missing role is marked unresolved without suppressing plan rows for independently
-resolved roles. The one-module reader is also dry-run by default:
+resolved roles.
+
+The reviewed multi-module live worker is also dry-run by default:
+
+```bash
+python3 tools/dtc_batch.py --json
+```
+
+Its exact execution, restoration, report-import, cancellation, and one-use web
+authorization contracts are documented in
+[`docs/dtc-batch-worker.md`](../../docs/dtc-batch-worker.md). The Tailscale UI
+does not run CAN inside an HTTP thread: it writes a mode-0600 fixed request
+under `/run`, and `van-dtc-batch.path` starts the separate non-networked
+oneshot worker. Create the required five-minute token locally with
+`python3 tools/dtc_web_arm.py`; the token is consumed before queueing.
+
+The one-module reader remains useful for an explicitly scoped investigation
+and is dry-run by default:
 
 ```bash
 python3 tools/dtc_inventory.py <module-key>

@@ -17,7 +17,8 @@ class DtcDashboardContractTests(unittest.TestCase):
         self.assertIn("Newest module evidence", html)
         self.assertNotIn("Last completed scan", html)
         self.assertIn("not live", html)
-        self.assertIn("cannot trigger a scan or clear a code", html)
+        self.assertIn("DIAGNOSTICS · CACHED ONLY", html)
+        self.assertIn("locally armed fixed scan", html)
 
     @unittest.skipUnless(shutil.which("node"), "node is required for DTC UI test")
     def test_compact_dtc_states_render_without_claiming_live_or_clear(self):

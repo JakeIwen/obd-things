@@ -55,6 +55,29 @@ ACTIVE_DRIVE_SOURCES = frozenset(
 ACTIVE_DRIVE_OPTIONAL_METRICS = frozenset(
     {"engine.crankshaft_torque"}
 )
+DERIVED_POWER_METRIC = "engine.crankshaft_power"
+DERIVED_POWER_SOURCE = "derived.pcm_06da_x_ccan_0x0fc"
+DERIVED_POWER_INPUT_MAX_SKEW_SECONDS = 1.5
+LBFT_RPM_PER_HORSEPOWER = 5252.113122
+TRANSMISSION_OIL_TEMPERATURE_METRIC = "transmission.oil_temperature"
+MAX_TRANSMISSION_TEMPERATURE_DELTA_F = 18.0
+TRANSMISSION_TEMPERATURE_DELTA_WINDOW_SECONDS = 1.0
+MAX_RECENT_DATA_QUALITY_EVENTS = 32
+USB_REMOVAL_EVENT_KINDS = frozenset(
+    (
+        "usb_parent_hub_removed",
+        "usb_can_adapter_removed",
+        "usb_can_netdev_removed",
+    )
+)
+USB_NONREMOVAL_EVENT_KINDS = frozenset(
+    (
+        "usb_parent_hub_added",
+        "usb_can_adapter_added",
+        "usb_can_netdev_added",
+        "usb_can_recovered",
+    )
+)
 ACTIVE_DRIVE_FAILURE_REASONS = frozenset(
     {
         "adapter_unhealthy",
@@ -471,6 +494,7 @@ class TelemetryBroker:
         interface_reconciler=None,
         insights=None,
         history_interval_seconds: float = 5.0,
+        usb_can_monitor=None,
     ):
         if acquirer is None:
             raise ValueError(
@@ -491,6 +515,7 @@ class TelemetryBroker:
         self.interface_reconciler = interface_reconciler
         self.insights = insights
         self.history_interval_seconds = history_interval_seconds
+        self.usb_can_monitor = usb_can_monitor
 
         self._lock = threading.RLock()
         # Prevent the passive collector from racing a client-triggered active
@@ -562,6 +587,9 @@ class TelemetryBroker:
             "restoration_failed": False,
         }
         self._started_at = datetime.now(timezone.utc).isoformat()
+        self._data_quality_sequence = 0
+        self._active_data_quality: dict[str, dict[str, object]] = {}
+        self._recent_data_quality: list[dict[str, object]] = []
         self._vehicle_state_observed_monotonic: float | None = None
         self._vehicle_state: dict[str, object] = {
             "state": "unknown",
@@ -732,6 +760,246 @@ class TelemetryBroker:
             None,
         )
 
+    def _plausibility_error(
+        self,
+        metric: str,
+        result: AcquisitionResult,
+    ) -> str | None:
+        """Reject physically impossible time derivatives before cache/history."""
+
+        if metric != TRANSMISSION_OIL_TEMPERATURE_METRIC:
+            return None
+        if (
+            result.source != "ccan.broadcast.0x1f7"
+            or result.unit != "°F"
+            or result.quality != "observed_alfa_scale"
+            or result.observed_monotonic is None
+            or not isinstance(result.value, (int, float))
+            or isinstance(result.value, bool)
+        ):
+            return None
+        with self._lock:
+            previous = self._cache.get(metric)
+        if (
+            previous is None
+            or not previous.available
+            or previous.source != result.source
+            or previous.unit != result.unit
+            or previous.quality != result.quality
+            or previous.observed_monotonic is None
+            or not isinstance(previous.value, (int, float))
+            or isinstance(previous.value, bool)
+        ):
+            return None
+        elapsed = result.observed_monotonic - previous.observed_monotonic
+        delta_f = abs(float(result.value) - float(previous.value))
+        if elapsed < 0:
+            return (
+                "transmission-oil temperature arrived with an older "
+                "monotonic observation timestamp"
+            )
+        if elapsed == 0:
+            return (
+                "transmission-oil temperature changed without a newer "
+                "monotonic observation timestamp"
+                if delta_f > 0
+                else None
+            )
+        # OEM P0711 plausibility evidence is a delta criterion, not a general
+        # rate limit: more than 10 °C within *less than* one second.  A large
+        # legitimate warm-up/cool-down delta over a longer sampling gap is not
+        # rejected here.
+        if elapsed >= TRANSMISSION_TEMPERATURE_DELTA_WINDOW_SECONDS:
+            return None
+        if delta_f <= MAX_TRANSMISSION_TEMPERATURE_DELTA_F:
+            return None
+        delta_c = delta_f * 5.0 / 9.0
+        return (
+            f"transmission-oil temperature changed {delta_f:.3f} °F "
+            f"({delta_c:.3f} °C) in {elapsed:.3f}s, exceeding the OEM-context "
+            "10 °C delta within less than one second"
+        )
+
+    @staticmethod
+    def _data_quality_key(metric: str, source: str, reason: str) -> str:
+        return f"{metric}|{source}|{reason}"
+
+    def _record_data_quality_rejection(
+        self,
+        *,
+        metric: str,
+        source: str,
+        reason: str,
+        detail: str,
+        interface_mode: str,
+        rejection_count: int = 1,
+        evidence: dict[str, float] | None = None,
+    ) -> None:
+        """Latch and deduplicate acquisition-quality evidence in memory.
+
+        The last good metric stays cached.  This path never changes interface
+        state, creates an inhibit, or feeds the advisory notification outbox.
+        """
+
+        definition = self.definitions.get(metric)
+        if definition is None:
+            raise ValueError("data-quality event metric is not registered")
+        source_definition = self._source_for(definition, source)
+        if source_definition is None:
+            raise ValueError("data-quality event source is not registered")
+        if reason != "implausible_transition":
+            raise ValueError("data-quality event reason is not allowlisted")
+        if not isinstance(detail, str) or not detail or len(detail) > 4000:
+            raise ValueError("data-quality event detail must be bounded text")
+        if (
+            not isinstance(rejection_count, int)
+            or isinstance(rejection_count, bool)
+            or not 1 <= rejection_count <= 10000
+        ):
+            raise ValueError("data-quality rejection count is out of bounds")
+        if interface_mode not in ("listen_only", "armed_diagnostic"):
+            raise ValueError("data-quality event interface mode is invalid")
+
+        now = datetime.now(timezone.utc).isoformat()
+        key = self._data_quality_key(metric, source, reason)
+        with self._lock:
+            incident = self._active_data_quality.get(key)
+            if incident is None:
+                self._data_quality_sequence += 1
+                incident = {
+                    "incident_id": (
+                        f"{self._started_at}:{self._data_quality_sequence}"
+                    ),
+                    "producer_instance": self._started_at,
+                    "metric": metric,
+                    "source": source,
+                    "bus": source_definition.bus,
+                    "quality": source_definition.quality,
+                    "reason": reason,
+                    "status": "active",
+                    "first_seen_at": now,
+                    "last_seen_at": now,
+                    "resolved_at": None,
+                    "resolution_reason": None,
+                    "rejection_count": rejection_count,
+                    "detail": detail,
+                    "interface_mode": interface_mode,
+                    "evidence": dict(evidence or {}),
+                    "notification_eligible": False,
+                }
+                self._active_data_quality[key] = incident
+                self._recent_data_quality.append(incident)
+                del self._recent_data_quality[:-MAX_RECENT_DATA_QUALITY_EVENTS]
+            else:
+                incident["last_seen_at"] = now
+                incident["rejection_count"] = int(
+                    incident.get("rejection_count", 0)
+                ) + rejection_count
+                incident["detail"] = detail
+                incident["interface_mode"] = interface_mode
+                incident["evidence"] = dict(evidence or {})
+            self._last_error[metric] = failure(
+                metric=metric,
+                unit=definition.unit,
+                reason=reason,
+                detail=detail,
+                bus=source_definition.bus,
+                acquisition=source_definition.acquisition_class,
+                interface_mode=interface_mode,
+            )
+
+    def _resolve_data_quality(self, metric: str, source: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            keys = [
+                key
+                for key, incident in self._active_data_quality.items()
+                if incident.get("metric") == metric
+                and incident.get("source") == source
+            ]
+            for key in keys:
+                incident = self._active_data_quality.pop(key)
+                incident["status"] = "resolved"
+                incident["resolved_at"] = now
+                incident["resolution_reason"] = "authoritative_good_sample"
+            last_error = self._last_error.get(metric)
+            if (
+                keys
+                and last_error is not None
+                and last_error.reason == "implausible_transition"
+            ):
+                self._last_error.pop(metric, None)
+
+    def _handle_data_quality_event(self, event: dict[str, object]) -> None:
+        if event.get("interface_mode") != "armed_diagnostic":
+            raise ValueError(
+                "active data-quality event must report armed_diagnostic mode"
+            )
+        if event.get("metric") != TRANSMISSION_OIL_TEMPERATURE_METRIC:
+            raise ValueError("active data-quality metric is not allowlisted")
+        if event.get("source") != "ccan.broadcast.0x1f7":
+            raise ValueError("active data-quality source is not allowlisted")
+        if event.get("bus") != "c-can":
+            raise ValueError("active data-quality bus is not allowlisted")
+        if event.get("quality") != "observed_alfa_scale":
+            raise ValueError("active data-quality evidence tier is invalid")
+        reason = event.get("reason")
+        detail = event.get("detail")
+        rejection_count = event.get("rejection_count")
+        if reason != "implausible_transition":
+            raise ValueError("active data-quality reason is not allowlisted")
+        if not isinstance(detail, str) or not detail:
+            raise ValueError("active data-quality detail must be nonempty text")
+        if (
+            not isinstance(rejection_count, int)
+            or isinstance(rejection_count, bool)
+        ):
+            raise ValueError("active data-quality rejection count must be an integer")
+        numbers: dict[str, float] = {}
+        for field_name in (
+            "previous_value_c",
+            "rejected_value_c",
+            "delta_c",
+            "elapsed_seconds",
+        ):
+            value = event.get(field_name)
+            if (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(float(value))
+            ):
+                raise ValueError(
+                    f"active data-quality {field_name} must be finite"
+                )
+            numbers[field_name] = float(value)
+        if numbers["delta_c"] <= 10.0:
+            raise ValueError(
+                "active temperature rejection must exceed the 10 C criterion"
+            )
+        if not 0.0 < numbers["elapsed_seconds"] < 1.0:
+            raise ValueError(
+                "active temperature rejection must occur within less than one second"
+            )
+        calculated_delta = abs(
+            numbers["rejected_value_c"] - numbers["previous_value_c"]
+        )
+        if not math.isclose(
+            calculated_delta,
+            numbers["delta_c"],
+            rel_tol=0.0,
+            abs_tol=1e-6,
+        ):
+            raise ValueError("active temperature rejection delta is inconsistent")
+        self._record_data_quality_rejection(
+            metric=TRANSMISSION_OIL_TEMPERATURE_METRIC,
+            source="ccan.broadcast.0x1f7",
+            reason=reason,
+            detail=detail,
+            interface_mode="armed_diagnostic",
+            rejection_count=rejection_count,
+            evidence=numbers,
+        )
+
     def _validate_acquirer_result(
         self,
         metric: str,
@@ -852,11 +1120,42 @@ class TelemetryBroker:
             detail="received from an allowlisted local observation publisher",
         )
         with self._lock:
-            self._cache[metric] = result
-            # Publisher success does not prove that a prior in-process CAN
-            # acquisition failure (for example can_busy or restoration_failed)
-            # has recovered. Keep that diagnostic until the acquirer itself
-            # completes successfully.
+            plausibility_error = self._plausibility_error(metric, result)
+            if plausibility_error is not None:
+                rejected = failure(
+                    metric=metric,
+                    unit=definition.unit,
+                    reason="implausible_transition",
+                    detail=plausibility_error,
+                    bus=source_definition.bus,
+                    acquisition=source_definition.acquisition_class,
+                    interface_mode=result.interface_mode,
+                )
+                self._record_data_quality_rejection(
+                    metric=metric,
+                    source=source_definition.name,
+                    reason="implausible_transition",
+                    detail=plausibility_error,
+                    interface_mode=result.interface_mode or "listen_only",
+                )
+            else:
+                self._cache[metric] = result
+                # Publisher success does not prove that a prior in-process CAN
+                # acquisition failure (for example can_busy or restoration_failed)
+                # has recovered. Keep that diagnostic until the acquirer itself
+                # completes successfully.
+                if (
+                    self._last_error.get(metric) is not None
+                    and self._last_error[metric].reason
+                    == "implausible_transition"
+                ):
+                    # This rejection is produced by this same publisher admission
+                    # path, so a later plausible sample does prove its recovery.
+                    self._last_error.pop(metric, None)
+                if metric == TRANSMISSION_OIL_TEMPERATURE_METRIC:
+                    self._resolve_data_quality(metric, source_definition.name)
+        if plausibility_error is not None:
+            return rejected
         self._update_vehicle_state(result)
         return result
 
@@ -894,9 +1193,176 @@ class TelemetryBroker:
             interface_mode="armed_diagnostic",
         )
         with self._lock:
-            self._cache[metric] = result
-            self._last_error.pop(metric, None)
+            plausibility_error = self._plausibility_error(metric, result)
+            if plausibility_error is not None:
+                rejected = failure(
+                    metric=metric,
+                    unit=definition.unit,
+                    reason="implausible_transition",
+                    detail=plausibility_error,
+                    bus=source.bus,
+                    acquisition=source.acquisition_class,
+                    interface_mode="armed_diagnostic",
+                )
+                self._record_data_quality_rejection(
+                    metric=metric,
+                    source=source.name,
+                    reason="implausible_transition",
+                    detail=plausibility_error,
+                    interface_mode="armed_diagnostic",
+                )
+            else:
+                self._cache[metric] = result
+                self._last_error.pop(metric, None)
+                if metric == TRANSMISSION_OIL_TEMPERATURE_METRIC:
+                    self._resolve_data_quality(metric, source.name)
+        if plausibility_error is not None:
+            return
         self._update_vehicle_state(result)
+        if metric == "engine.crankshaft_torque":
+            self._refresh_derived_power()
+
+    def _refresh_derived_power(self) -> None:
+        """Derive ECU-estimated crankshaft horsepower from exact fresh inputs."""
+
+        definition = self.definitions.get(DERIVED_POWER_METRIC)
+        if definition is None:
+            return
+        source = self._source_for(definition, DERIVED_POWER_SOURCE)
+        if source is None:
+            raise ValueError("derived crankshaft-power source is not registered")
+        with self._lock:
+            rpm = self._cache.get("engine.rpm")
+            torque = self._cache.get("engine.crankshaft_torque")
+            had_power = DERIVED_POWER_METRIC in self._cache
+
+        reason = None
+        detail = None
+        if rpm is None or torque is None:
+            reason = "source_unavailable"
+            detail = "fresh RPM and current crankshaft torque are both required"
+        elif not rpm.available or not torque.available:
+            reason = "source_unavailable"
+            detail = "one or more derived-power inputs are unavailable"
+        elif (
+            rpm.source != "ccan.broadcast.0x0fc"
+            or rpm.unit != "rpm"
+            or rpm.quality != "observed_alfa_scale"
+            or torque.source != "pcm.did.06da"
+            or torque.unit != "lb-ft"
+            or torque.quality != "observed_alfa_scale"
+        ):
+            reason = "invalid_source_result"
+            detail = "derived power inputs do not match the exact approved sources"
+        elif (
+            rpm.interface_mode != "armed_diagnostic"
+            or torque.interface_mode != "armed_diagnostic"
+        ):
+            reason = "source_unavailable"
+            detail = "derived power requires one coordinated armed observation interval"
+        elif rpm.observed_monotonic is None or torque.observed_monotonic is None:
+            reason = "source_unavailable"
+            detail = "derived power inputs lack monotonic observation timestamps"
+        elif not (
+            isinstance(rpm.value, (int, float))
+            and not isinstance(rpm.value, bool)
+            and isinstance(torque.value, (int, float))
+            and not isinstance(torque.value, bool)
+        ):
+            reason = "invalid_source_result"
+            detail = "derived power inputs must be finite numeric observations"
+        else:
+            now = self.monotonic()
+            rpm_age = max(0.0, now - rpm.observed_monotonic)
+            torque_age = max(0.0, now - torque.observed_monotonic)
+            skew = abs(rpm.observed_monotonic - torque.observed_monotonic)
+            torque_stale_after = self.definitions[
+                "engine.crankshaft_torque"
+            ].stale_after_seconds
+            if (
+                rpm_age > self.definitions["engine.rpm"].stale_after_seconds
+                or torque_age > torque_stale_after
+            ):
+                reason = "source_unavailable"
+                detail = "derived power input is older than its registered freshness limit"
+            elif skew > DERIVED_POWER_INPUT_MAX_SKEW_SECONDS:
+                reason = "source_unavailable"
+                detail = (
+                    f"RPM/torque observation skew {skew:.3f}s exceeds "
+                    f"{DERIVED_POWER_INPUT_MAX_SKEW_SECONDS:.3f}s"
+                )
+            else:
+                value = (
+                    float(torque.value)
+                    * float(rpm.value)
+                    / LBFT_RPM_PER_HORSEPOWER
+                )
+                value_error = self._value_error(definition, value)
+                if value_error is not None:
+                    reason = "invalid_source_result"
+                    detail = value_error
+                else:
+                    # Derived freshness is constrained by the oldest input.
+                    # Select wall and monotonic timestamps from that same input
+                    # so an NTP adjustment cannot create mismatched provenance.
+                    oldest_input = (
+                        rpm
+                        if rpm.observed_monotonic
+                        <= torque.observed_monotonic
+                        else torque
+                    )
+                    result = success(
+                        metric=definition.name,
+                        unit=definition.unit,
+                        value=value,
+                        source=source.name,
+                        bus=source.bus,
+                        acquisition=source.acquisition_class,
+                        quality=source.quality,
+                        observed_monotonic=oldest_input.observed_monotonic,
+                        observed_at=oldest_input.observed_at,
+                        detail=(
+                            "ECU-estimated crankshaft power from current PCM "
+                            f"torque and passive RPM; input skew {skew:.3f}s; "
+                            "not measured wheel horsepower"
+                        ),
+                        interface_mode="armed_diagnostic",
+                    )
+                    with self._lock:
+                        self._cache[definition.name] = result
+                        self._last_error.pop(definition.name, None)
+                    return
+
+        # A torque-triggered attempt with both inputs present must expose a
+        # concrete pairing/freshness/source error even if this is the first
+        # power result of the epoch.  Stay silent only while an input has not
+        # arrived at all.
+        if not had_power and (rpm is None or torque is None):
+            return
+        self._invalidate_derived_power(
+            reason or "source_unavailable",
+            detail or "derived power inputs are unavailable",
+        )
+
+    def _invalidate_derived_power(self, reason: str, detail: str) -> None:
+        definition = self.definitions.get(DERIVED_POWER_METRIC)
+        if definition is None:
+            return
+        source = self._source_for(definition, DERIVED_POWER_SOURCE)
+        if source is None:
+            return
+        result = failure(
+            metric=definition.name,
+            unit=definition.unit,
+            reason=reason,
+            detail=detail,
+            bus=source.bus,
+            acquisition=source.acquisition_class,
+            interface_mode="armed_diagnostic",
+        )
+        with self._lock:
+            self._cache.pop(definition.name, None)
+            self._last_error[definition.name] = result
 
     def _record_active_failure(
         self,
@@ -914,6 +1380,7 @@ class TelemetryBroker:
             for metric in (
                 "generator.field_duty",
                 "engine.crankshaft_torque",
+                DERIVED_POWER_METRIC,
             ):
                 definition = self.definitions.get(metric)
                 if definition is None:
@@ -988,6 +1455,8 @@ class TelemetryBroker:
         with self._lock:
             self._cache.pop(definition.name, None)
             self._last_error[definition.name] = result
+        if metric == "engine.crankshaft_torque":
+            self._invalidate_derived_power(reason, detail)
 
     def handle_active_drive_event(self, event: dict[str, object]) -> None:
         """Validate one trusted helper-pipe event; never expose this as an API."""
@@ -999,6 +1468,9 @@ class TelemetryBroker:
             return
         if event_type == "metric_failure":
             self._record_active_metric_failure(event)
+            return
+        if event_type == "quality_event":
+            self._handle_data_quality_event(event)
             return
         if event_type not in ("status", "failure", "final"):
             raise ValueError("unsupported active-drive event type")
@@ -1115,6 +1587,14 @@ class TelemetryBroker:
                 },
                 "active_inhibits": ["status-unavailable"],
             }
+        if self.usb_can_monitor is not None:
+            try:
+                self.usb_can_monitor.reconcile(snapshot)
+            except Exception:
+                # USB incident evidence must never interfere with the normal
+                # role-status path.  The monitor reports its own degraded
+                # state and the next read-only role snapshot retries recovery.
+                pass
         with self._lock:
             self._interface_status = snapshot
 
@@ -1147,11 +1627,72 @@ class TelemetryBroker:
                 json.dumps(self._history_recorder)
             )
             active_drive = json.loads(json.dumps(self._active_drive))
+            accepted_temperature = self._cache.get(
+                TRANSMISSION_OIL_TEMPERATURE_METRIC
+            )
+            temperature_quality_active = any(
+                incident.get("metric") == TRANSMISSION_OIL_TEMPERATURE_METRIC
+                and incident.get("source") == "ccan.broadcast.0x1f7"
+                for incident in self._active_data_quality.values()
+            )
+            authoritative_good = []
+            if (
+                accepted_temperature is not None
+                and accepted_temperature.available
+                and accepted_temperature.source == "ccan.broadcast.0x1f7"
+                and not temperature_quality_active
+            ):
+                authoritative_good.append(
+                    {
+                        "metric": TRANSMISSION_OIL_TEMPERATURE_METRIC,
+                        "source": "ccan.broadcast.0x1f7",
+                        "observed_at": (
+                            accepted_temperature.observed_at.isoformat()
+                            if accepted_temperature.observed_at is not None
+                            else None
+                        ),
+                    }
+                )
+            data_quality = {
+                "producer_instance": self._started_at,
+                "active_count": len(self._active_data_quality),
+                "active": json.loads(
+                    json.dumps(list(self._active_data_quality.values()))
+                ),
+                "recent": json.loads(
+                    json.dumps(self._recent_data_quality)
+                ),
+                "authoritative_good": authoritative_good,
+                "notification_delivery": "disabled_by_design",
+                "detail": (
+                    "Raw sample rejections are data-quality evidence, not "
+                    "vehicle-health advisories, and are never notified."
+                ),
+            }
             interface_reconcile = json.loads(
                 json.dumps(self._interface_reconcile)
             )
             vehicle_state = json.loads(json.dumps(self._vehicle_state))
             vehicle_observed = self._vehicle_state_observed_monotonic
+        if self.usb_can_monitor is None:
+            usb_can_monitor = {
+                "enabled": False,
+                "state": "disabled",
+                "receive_only": True,
+                "hardware_actions": False,
+                "detail": "kernel USB/CAN incident monitoring is disabled",
+            }
+        else:
+            try:
+                usb_can_monitor = self.usb_can_monitor.status_snapshot()
+            except Exception as exc:
+                usb_can_monitor = {
+                    "enabled": True,
+                    "state": "degraded",
+                    "receive_only": True,
+                    "hardware_actions": False,
+                    "last_error": f"monitor status failed: {type(exc).__name__}: {exc}",
+                }
         vehicle_state["age_ms"] = (
             round(max(0.0, self.monotonic() - vehicle_observed) * 1000)
             if vehicle_observed is not None
@@ -1302,6 +1843,8 @@ class TelemetryBroker:
             "active_acquisition_permitted": active_permitted,
             "collector": collector,
             "history_recorder": history_recorder,
+            "usb_can_monitor": usb_can_monitor,
+            "data_quality": data_quality,
             "active_drive": active_drive,
             "interface_reconcile": interface_reconcile,
             "vehicle_state": vehicle_state,
@@ -1577,6 +2120,7 @@ class TelemetryBroker:
         return result
 
     def start_collector(self) -> None:
+        self.start_usb_monitor()
         with self._lock:
             if self._collector_thread is not None:
                 return
@@ -1603,6 +2147,18 @@ class TelemetryBroker:
                 self._history_recorder["state"] = "starting"
                 history_thread.start()
 
+    def start_usb_monitor(self) -> None:
+        """Start only the receive-only kernel observer, when configured."""
+
+        if self.usb_can_monitor is None:
+            return
+        try:
+            self.usb_can_monitor.start()
+        except Exception:
+            # The broker remains useful when kernel event observation is not
+            # available.  Monitor status carries the degraded reason.
+            pass
+
     def _history_loop(self) -> None:
         """Record broker cache independently of a long active-drive owner."""
         with self._lock:
@@ -1613,9 +2169,14 @@ class TelemetryBroker:
                 with self._lock:
                     self._history_sequence += 1
                     sequence = self._history_sequence
+                monitor_batch = None
                 try:
+                    history_snapshot = self.snapshot_response()
+                    if self.usb_can_monitor is not None:
+                        monitor_batch = self.usb_can_monitor.persistence_batch()
+                        history_snapshot["_usb_can_monitor"] = monitor_batch
                     result = self.insights.ingest_snapshot(
-                        self.snapshot_response(),
+                        history_snapshot,
                         captured_at=captured_at,
                         ingest_key=f"broker:{self._started_at}:{sequence}",
                     )
@@ -1626,9 +2187,53 @@ class TelemetryBroker:
                             f"{type(exc).__name__}: {exc}"
                         )
                 else:
+                    checkpoint_complete = (
+                        getattr(result, "advisory_checkpoint_complete", None)
+                        is True
+                    )
+                    if (
+                        checkpoint_complete
+                        and self.usb_can_monitor is not None
+                        and isinstance(monitor_batch, dict)
+                    ):
+                        consumed_removals = set(
+                            getattr(
+                                result,
+                                "advisory_consumed_event_ids",
+                                (),
+                            )
+                        )
+                        event_ids = [
+                            event.get("event_id")
+                            for event in monitor_batch.get("events", [])
+                            if isinstance(event, dict)
+                            and isinstance(event.get("event_id"), str)
+                            and (
+                                event.get("kind")
+                                in USB_NONREMOVAL_EVENT_KINDS
+                                or (
+                                    event.get("kind")
+                                    in USB_REMOVAL_EVENT_KINDS
+                                    and event.get("event_id")
+                                    in consumed_removals
+                                )
+                            )
+                        ]
+                        if event_ids:
+                            self.usb_can_monitor.acknowledge_events(event_ids)
                     with self._lock:
-                        self._history_recorder["state"] = "running"
-                        self._history_recorder["last_error"] = None
+                        self._history_recorder["state"] = (
+                            "running" if checkpoint_complete else "degraded"
+                        )
+                        self._history_recorder["last_error"] = (
+                            None
+                            if checkpoint_complete
+                            else getattr(
+                                result,
+                                "advisory_checkpoint_error",
+                                "advisory checkpoint incomplete",
+                            )
+                        )
                         if not getattr(result, "duplicate", False):
                             self._history_recorder["snapshots_stored"] = int(
                                 self._history_recorder["snapshots_stored"]
@@ -1660,6 +2265,27 @@ class TelemetryBroker:
             self._passive_stop_evidence_streak = 0
             self._passive_unknown_evidence_streak += 1
             return 0
+        drainer = getattr(
+            self.passive_powertrain_reader,
+            "drain_quality_events",
+            None,
+        )
+        quality_events = drainer() if callable(drainer) else ()
+        for event in quality_events:
+            self._record_data_quality_rejection(
+                metric=event.metric,
+                source=event.source,
+                reason=event.reason,
+                detail=event.detail,
+                interface_mode="listen_only",
+                rejection_count=event.rejection_count,
+                evidence={
+                    "previous_value_c": event.previous_value_c,
+                    "rejected_value_c": event.rejected_value_c,
+                    "delta_c": event.delta_c,
+                    "elapsed_seconds": event.elapsed_seconds,
+                },
+            )
         accepted = 0
         rpm_evidence = None
         for observation in observations:
@@ -1873,6 +2499,8 @@ class TelemetryBroker:
     def close(self) -> None:
         """Release offline storage after all background threads stop."""
         self.stop_collector()
+        if self.usb_can_monitor is not None:
+            self.usb_can_monitor.close()
         with self._lock:
             history_alive = bool(
                 self._history_thread is not None
@@ -1929,6 +2557,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="disable SQLite history and early-warning evaluation",
     )
+    parser.add_argument(
+        "--enable-advisory-notifications",
+        action="store_true",
+        help=(
+            "deliver persisted warning episodes through the queue-aware "
+            "host ntfy helper (requires --advisory-ntfy-topic)"
+        ),
+    )
+    parser.add_argument(
+        "--advisory-ntfy-topic",
+        help="fixed ntfy topic used only when advisory delivery is enabled",
+    )
     parser.add_argument("--probe-seconds", type=float, default=0.75)
     parser.add_argument("--read-timeout", type=float, default=2.0)
     parser.add_argument("--no-collector", action="store_true")
@@ -1950,6 +2590,16 @@ def main(argv=None) -> int:
         raise SystemExit("collector/probe/history intervals must be positive")
     if args.read_timeout <= 0:
         raise SystemExit("read timeout must be positive")
+    if args.enable_advisory_notifications and not args.advisory_ntfy_topic:
+        raise SystemExit(
+            "--enable-advisory-notifications requires --advisory-ntfy-topic"
+        )
+    if args.advisory_ntfy_topic and not args.enable_advisory_notifications:
+        raise SystemExit(
+            "--advisory-ntfy-topic requires --enable-advisory-notifications"
+        )
+    if args.no_history and args.enable_advisory_notifications:
+        raise SystemExit("advisory notifications require history to be enabled")
     try:
         socket_mode = int(args.socket_mode, 8)
     except ValueError:
@@ -1968,6 +2618,8 @@ def main(argv=None) -> int:
     from projects.vehicle_data.early_warning import EarlyWarningEvaluator
     from projects.vehicle_data.historian import TelemetryHistorian
     from projects.vehicle_data.insights import TelemetryInsights
+    from projects.vehicle_data.notifications import NtfyAdvisoryNotificationSink
+    from projects.vehicle_data.usb_can_monitor import UsbCanIncidentMonitor
 
     broker_holder: dict[str, TelemetryBroker] = {}
     interface_manager = PassiveInterfaceManager()
@@ -1982,6 +2634,7 @@ def main(argv=None) -> int:
         probe_seconds=min(args.probe_seconds, 0.25),
         read_timeout=min(args.read_timeout, 0.5),
     )
+    usb_can_monitor = UsbCanIncidentMonitor()
     active_drive_enabled = not args.no_active_drive
     active_supervisor = None
     if active_drive_enabled:
@@ -1996,9 +2649,16 @@ def main(argv=None) -> int:
     insights = None
     if not args.no_history:
         historian = TelemetryHistorian(args.history_db)
+        notification_sink = (
+            NtfyAdvisoryNotificationSink(args.advisory_ntfy_topic)
+            if args.enable_advisory_notifications
+            else None
+        )
         insights = TelemetryInsights(
             historian,
             warning_evaluator=EarlyWarningEvaluator(historian),
+            notification_sink=notification_sink,
+            enable_notification_delivery=args.enable_advisory_notifications,
             dtc_cache_path=args.dtc_cache,
         )
     broker = TelemetryBroker(
@@ -2010,8 +2670,10 @@ def main(argv=None) -> int:
         interface_reconciler=interface_reconciler,
         insights=insights,
         history_interval_seconds=args.history_interval,
+        usb_can_monitor=usb_can_monitor,
     )
     broker_holder["broker"] = broker
+    broker.start_usb_monitor()
     if not args.no_collector:
         broker.start_collector()
     with diagnostic_safety.interrupt_on_termination() as termination:

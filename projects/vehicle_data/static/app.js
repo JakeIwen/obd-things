@@ -3,6 +3,10 @@
 const byId = (id) => document.getElementById(id);
 const profileManager = window.VanDashboardProfiles;
 let acquisitionEnabled = false;
+let dtcJobsEnabled = false;
+let dtcJobPollTimer = null;
+let dtcLastJobState = null;
+let dtcCancelRequested = false;
 let settings = profileManager.loadSettings();
 let lastSnapshot = {
   status: {},
@@ -478,6 +482,9 @@ function metricStatus(definition, metric, state) {
   if (!definition) return "Mapping pending";
   if (!state.available) {
     return humanize(metric?.reason || "no cached sample");
+  }
+  if (metric?.last_acquisition_error?.reason === "implausible_transition") {
+    return `SUSPECT SAMPLE REJECTED · showing last good · ${formatAge(metric.age_ms)} old`;
   }
   if (state.stale) return `STALE · ${formatAge(metric.age_ms)} old`;
   if (!state.driverQualified) {
@@ -1410,7 +1417,28 @@ function renderHistory(history) {
 
 function renderEarlyWarnings(health) {
   const summary = health && typeof health === "object" ? health : {};
-  const active = Array.isArray(summary.active) ? summary.active : [];
+  const qualitySummary = summary.data_quality &&
+    typeof summary.data_quality === "object"
+    ? summary.data_quality
+    : {};
+  const activeQuality = Array.isArray(qualitySummary.active)
+    ? qualitySummary.active
+    : [];
+  const recentQuality = Array.isArray(qualitySummary.recent)
+    ? qualitySummary.recent
+    : [];
+  const persistedEpisodes = Array.isArray(summary.episodes?.active)
+    ? summary.episodes.active
+    : [];
+  const active = persistedEpisodes.length
+    ? persistedEpisodes.map((episode) => ({
+      ...(episode.latest_assessment || {}),
+      episode_id: episode.id,
+      episode_opened_at: episode.opened_at,
+      acknowledged: episode.acknowledged,
+      evidence_state: episode.evidence_state,
+    }))
+    : (Array.isArray(summary.active) ? summary.active : []);
   const assessments = Array.isArray(summary.assessments)
     ? summary.assessments
     : [];
@@ -1424,17 +1452,38 @@ function renderEarlyWarnings(health) {
   const allNormal = assessments.length > 0 && assessments.every(
     (assessment) => assessment?.state === "normal",
   );
+  const delivery = summary.notification_delivery &&
+    typeof summary.notification_delivery === "object"
+    ? summary.notification_delivery
+    : {};
+  const outbox = summary.episodes?.notification_outbox &&
+    typeof summary.episodes.notification_outbox === "object"
+    ? summary.episodes.notification_outbox
+    : {};
+  const pendingDelivery = numeric(outbox.pending) || 0;
+  const failedDelivery = numeric(outbox.failed) || 0;
+  const deliveryError = delivery.enabled === true && delivery.last_error
+    ? String(delivery.last_error)
+    : null;
+  const advisoryBadge = unavailable
+    ? "UNAVAILABLE"
+    : (active.length
+      ? `${active.length} TO REVIEW` +
+        (activeQuality.length ? ` · ${activeQuality.length} SAMPLE FILTER` : "")
+      : (activeQuality.length
+        ? `${activeQuality.length} SAMPLE FILTER ACTIVE`
+      : (training
+        ? "TRAINING"
+        : (allNormal
+          ? "NO PERSISTENT CHANGES"
+          : (dataUnavailable ? "DATA UNAVAILABLE" : "NO ASSESSMENTS")))));
   text(
     "warning-state",
-    unavailable
-      ? "UNAVAILABLE"
-      : (active.length
-        ? `${active.length} TO REVIEW`
-        : (training
-          ? "TRAINING"
-          : (allNormal
-            ? "NO PERSISTENT CHANGES"
-            : (dataUnavailable ? "DATA UNAVAILABLE" : "NO ASSESSMENTS")))),
+    failedDelivery || deliveryError
+      ? `DELIVERY ERROR · ${advisoryBadge}`
+      : (pendingDelivery
+        ? `${pendingDelivery} DELIVERY PENDING · ${advisoryBadge}`
+        : advisoryBadge),
   );
   const list = byId("warning-list");
   list.replaceChildren();
@@ -1461,6 +1510,9 @@ function renderEarlyWarnings(health) {
       assessment.signed_deviation ?? assessment.deviation?.signed_from_median,
     );
     evidence.textContent = [
+      assessment.episode_id == null ? null : `Episode ${assessment.episode_id}`,
+      assessment.episode_opened_at ? `open since ${formatTimestamp(assessment.episode_opened_at)}` : null,
+      assessment.acknowledged ? "acknowledged" : null,
       assessment.regime ? `Regime ${humanize(assessment.regime)}` : null,
       numeric(baseline.median) == null ? null : `baseline median ${baseline.median}`,
       numeric(baseline.mad) == null ? null : `MAD ${baseline.mad}`,
@@ -1473,7 +1525,38 @@ function renderEarlyWarnings(health) {
     if (evidence.textContent) article.append(evidence);
     list.append(article);
   });
-  if (!shown.length) {
+  const qualityShown = activeQuality.length
+    ? activeQuality
+    : recentQuality.filter((event) => event?.status === "resolved").slice(0, 3);
+  qualityShown.forEach((event) => {
+    const article = document.createElement("article");
+    article.className = "summary-card";
+    article.dataset.state = event?.status === "active" ? "watch" : "normal";
+    const heading = document.createElement("h3");
+    heading.textContent = event?.status === "active"
+      ? "Telemetry sample filter active"
+      : "Telemetry sample filter recovered";
+    const reason = document.createElement("p");
+    reason.textContent = event?.detail || (
+      "A raw transmission-temperature sample failed its OEM-context plausibility gate."
+    );
+    const evidence = document.createElement("p");
+    evidence.textContent = [
+      event?.metric || null,
+      event?.rejection_count == null
+        ? null
+        : `${event.rejection_count} raw rejection(s)`,
+      event?.last_seen_at ? `last seen ${formatTimestamp(event.last_seen_at)}` : null,
+      event?.status === "resolved" && event?.resolved_at
+        ? `recovered ${formatTimestamp(event.resolved_at)}`
+        : null,
+      "last good value retained",
+      "data quality only — never notified",
+    ].filter(Boolean).join(" · ");
+    article.append(heading, reason, evidence);
+    list.append(article);
+  });
+  if (!shown.length && !qualityShown.length) {
     const empty = document.createElement("p");
     empty.className = "muted";
     empty.textContent = unavailable
@@ -1483,9 +1566,21 @@ function renderEarlyWarnings(health) {
   }
   text(
     "warning-note",
-    summary.detail || (
-      "Warnings require persistent, like-for-like deviations and show their baseline evidence. They are not a diagnosis or an opaque health score."
-    ),
+    [
+      summary.detail || (
+        "Warnings require persistent, like-for-like deviations and show their baseline evidence. They are not a diagnosis or an opaque health score."
+      ),
+      delivery.enabled
+        ? (
+          `Durable warning delivery is enabled through the queued ntfy sink. ` +
+          `Persisted outbox: ${pendingDelivery} pending · ${failedDelivery} failed.` +
+          (deliveryError ? ` Latest delivery error: ${deliveryError}.` : "")
+        )
+        : "External warning delivery is disabled.",
+      qualitySummary.detail || (
+        "Raw plausibility rejections are recorded separately as data quality and never generate notifications."
+      ),
+    ].join(" "),
   );
 }
 
@@ -1725,7 +1820,11 @@ function renderDtcs(dtcs) {
     } else if (!newestEvidence) {
       empty.textContent = (
         "No saved DTC inventory is available. Run the parked local scanner; " +
-        "this page cannot start it."
+        (
+          dtcJobsEnabled
+            ? "the guarded controls below can queue it after local arming."
+            : "this cache-only listener cannot start it."
+        )
       );
     } else if (allAuthoritativeZero) {
       empty.textContent = (
@@ -1741,7 +1840,9 @@ function renderDtcs(dtcs) {
   }
   const noteParts = [
     summary.detail || (
-      "Cached ReadDTCInformation only; this page cannot scan or clear DTCs."
+      dtcJobsEnabled
+        ? "Cached ReadDTCInformation; guarded parked scan queue enabled. DTC clearing is unavailable."
+        : "Cached ReadDTCInformation only; this listener cannot scan or clear DTCs."
     ),
     (
       "Current and pending describe each module's dated successful " +
@@ -1755,6 +1856,104 @@ function renderDtcs(dtcs) {
     "dtc-note",
     noteParts.filter(Boolean).join(" "),
   );
+}
+
+function dtcJobIsActive(state) {
+  return ["queued", "starting", "created", "running"].includes(state);
+}
+
+function updateDtcJobButtons() {
+  const confirmed = byId("dtc-park-confirm").checked;
+  const token = byId("dtc-arm-token").value.trim();
+  byId("dtc-scan-start").disabled = !(
+    dtcJobsEnabled && confirmed && token.length >= 32 &&
+    !dtcJobIsActive(dtcLastJobState) && dtcLastJobState !== "restoration_failed"
+  );
+  byId("dtc-scan-cancel").disabled = !(
+    dtcJobsEnabled && dtcJobIsActive(dtcLastJobState) && !dtcCancelRequested
+  );
+}
+
+function renderDtcJob(payload) {
+  const job = payload?.job || {};
+  const state = payload?.state || job.state || "idle";
+  dtcLastJobState = state;
+  dtcCancelRequested = job.cancel_requested === true;
+  const progress = job.progress || {};
+  const parts = [humanize(state)];
+  if (progress.requestable != null) {
+    parts.push(
+      `${progress.queried || 0}/${progress.requestable} queried`,
+      `${progress.imported || 0} imported`,
+    );
+  }
+  if (job.current_bus || job.current_module) {
+    parts.push([job.current_bus, job.current_module].filter(Boolean).join(" / "));
+  }
+  if (job.cancel_requested) parts.push("cancellation requested");
+  if (job.restoration_failure) parts.push("RESTORATION UNVERIFIED — inspect before retry");
+  if (job.failure) parts.push(job.failure);
+  text("dtc-job-status", parts.join(" · "));
+  updateDtcJobButtons();
+  if (dtcJobIsActive(state)) {
+    if (dtcJobPollTimer == null) {
+      dtcJobPollTimer = window.setTimeout(fetchDtcJobStatus, 2000);
+    }
+  } else {
+    if (dtcJobPollTimer != null) window.clearTimeout(dtcJobPollTimer);
+    dtcJobPollTimer = null;
+    if (state === "completed") {
+      supplementalRequestStartedEpochMs = null;
+      void fetchSupplemental();
+    }
+  }
+}
+
+async function fetchDtcJobStatus() {
+  if (dtcJobPollTimer != null) window.clearTimeout(dtcJobPollTimer);
+  dtcJobPollTimer = null;
+  if (!dtcJobsEnabled || document.visibilityState === "hidden") return;
+  try {
+    const response = await fetch(
+      `/v1/diagnostics/dtc-jobs/current?fresh=${Date.now()}`,
+      {cache: "no-store"},
+    );
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
+    renderDtcJob(payload);
+  } catch (error) {
+    text("dtc-job-status", `DTC job status unavailable: ${error}`);
+    if (dtcJobsEnabled) {
+      dtcJobPollTimer = window.setTimeout(fetchDtcJobStatus, 5000);
+    }
+  }
+}
+
+function configureDtcJobs(web) {
+  const enabled = web?.dtc_jobs_enabled === true;
+  if (enabled === dtcJobsEnabled) {
+    if (enabled && dtcJobIsActive(dtcLastJobState) && dtcJobPollTimer == null) {
+      void fetchDtcJobStatus();
+    }
+    return;
+  }
+  dtcJobsEnabled = enabled;
+  text(
+    "dtc-eyebrow",
+    enabled
+      ? "DIAGNOSTICS · LOCALLY ARMED PARKED SCAN"
+      : "DIAGNOSTICS · CACHED ONLY",
+  );
+  byId("dtc-scan-controls").hidden = !enabled;
+  if (!enabled) {
+    dtcLastJobState = null;
+    dtcCancelRequested = false;
+    if (dtcJobPollTimer != null) window.clearTimeout(dtcJobPollTimer);
+    dtcJobPollTimer = null;
+  } else {
+    void fetchDtcJobStatus();
+  }
+  updateDtcJobButtons();
 }
 
 function renderCatalog(catalog) {
@@ -1796,6 +1995,7 @@ function render(snapshot) {
   if (Object.hasOwn(web, "active_acquisition_enabled")) {
     acquisitionEnabled = Boolean(web.active_acquisition_enabled);
   }
+  configureDtcJobs(web);
   byId("acquire").disabled = !acquisitionEnabled;
   text(
     "control-note",
@@ -2073,6 +2273,56 @@ byId("acquire").addEventListener("click", async () => {
     text("battery-detail", result.detail || humanize(result.reason));
   }
   await resyncSnapshot("acquisition");
+});
+
+byId("dtc-arm-token").addEventListener("input", updateDtcJobButtons);
+byId("dtc-park-confirm").addEventListener("change", updateDtcJobButtons);
+
+byId("dtc-scan-start").addEventListener("click", async () => {
+  if (!dtcJobsEnabled || byId("dtc-scan-start").disabled) return;
+  if (!window.confirm(
+    "Start the fixed read-only DTC batch now? Confirm Park, ignition ON, engine OFF, and stationary."
+  )) return;
+  const token = byId("dtc-arm-token").value.trim();
+  byId("dtc-scan-start").disabled = true;
+  try {
+    const response = await fetch("/v1/diagnostics/dtc-jobs", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        token,
+        confirm_parked: true,
+        confirm_park_gear: true,
+        confirm_ignition_on_engine_off: true,
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
+    byId("dtc-arm-token").value = "";
+    renderDtcJob(payload);
+  } catch (error) {
+    text("dtc-job-status", `DTC scan was not queued: ${error}`);
+    updateDtcJobButtons();
+  }
+});
+
+byId("dtc-scan-cancel").addEventListener("click", async () => {
+  if (!dtcJobsEnabled || byId("dtc-scan-cancel").disabled) return;
+  try {
+    const response = await fetch(
+      "/v1/diagnostics/dtc-jobs/current/cancel",
+      {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({action: "cancel"}),
+      },
+    );
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
+    renderDtcJob(payload);
+  } catch (error) {
+    text("dtc-job-status", `Cancellation was not accepted: ${error}`);
+  }
 });
 
 document.addEventListener("visibilitychange", () => {

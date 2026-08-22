@@ -573,6 +573,23 @@ body:not([data-profile="diagnostics"]) .metric-card.diagnostic-only {
 .catalog-item p { margin: .3rem 0; line-height: 1.4; overflow-wrap: anywhere; }
 
 .button-row { display: flex; flex-wrap: wrap; gap: .65rem; }
+#dtc-scan-controls > label {
+  display: block;
+  margin: .8rem 0;
+  color: #c9d9d1;
+}
+#dtc-arm-token {
+  display: block;
+  width: min(100%, 34rem);
+  margin-top: .35rem;
+  padding: .65rem .75rem;
+  color: var(--text);
+  background: rgba(4, 11, 8, .72);
+  border: 1px solid #456657;
+  border-radius: .4rem;
+  font: inherit;
+}
+#dtc-park-confirm { accent-color: var(--accent); }
 button {
   padding: .72rem 1rem;
   color: #07110d;

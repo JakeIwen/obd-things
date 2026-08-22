@@ -555,6 +555,13 @@ class RoleAwareCcanPowertrainReader:
         self.manager = manager
         self.probe_seconds = probe_seconds
         self.read_timeout = read_timeout
+        # This object intentionally outlives each short SocketCAN snapshot so
+        # the raw 0x1F7 plausibility comparison cannot reset at a collector
+        # cycle boundary.
+        self.temperature_gate = (
+            ccan_powertrain.TransmissionTemperaturePlausibilityGate()
+        )
+        self._quality_events: list[ccan_powertrain.DataQualityEvent] = []
 
     def read(self) -> tuple[ccan_powertrain.PassiveObservation, ...]:
         try:
@@ -567,12 +574,24 @@ class RoleAwareCcanPowertrainReader:
                     != C_CAN_ROLE
                 ):
                     return ()
-                return ccan_powertrain.read_snapshot(
+                snapshot = ccan_powertrain.read_broadcast_snapshot(
                     lease.channel,
                     timeout=self.read_timeout,
+                    temperature_gate=self.temperature_gate,
                 )
+                self._quality_events.extend(snapshot.quality_events)
+                return snapshot.observations
         except (PassiveInterfaceUnavailable, OSError, RuntimeError, ValueError):
             return ()
+
+    def drain_quality_events(
+        self,
+    ) -> tuple[ccan_powertrain.DataQualityEvent, ...]:
+        """Return each raw rejection exactly once to the broker."""
+
+        events = tuple(self._quality_events)
+        self._quality_events.clear()
+        return events
 
 
 class RoleAwareActiveDriveSupervisor:

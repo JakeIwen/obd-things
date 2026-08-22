@@ -8,6 +8,7 @@ diagnostic request or clear a code.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 import json
 import os
@@ -15,11 +16,14 @@ from pathlib import Path
 import re
 import threading
 import time
-from typing import Mapping, Sequence
+from typing import Mapping, Protocol, Sequence
 
 from lib.modules import MODULES
 from projects.vehicle_data.api import MAX_RESPONSE_BYTES
-from projects.vehicle_data.early_warning import EarlyWarningEvaluator
+from projects.vehicle_data.early_warning import (
+    EarlyWarningEvaluator,
+    InfrastructureHealthEvaluator,
+)
 from projects.vehicle_data.historian import TelemetryHistorian
 
 
@@ -27,6 +31,7 @@ DEFAULT_HISTORY_METRICS = (
     "battery.voltage",
     "engine.oil_pressure",
     "engine.coolant_temperature",
+    "engine.crankshaft_power",
     "transmission.oil_temperature",
     "generator.field_duty",
     "tire.pressure.fl",
@@ -37,6 +42,14 @@ DEFAULT_HISTORY_METRICS = (
 MAX_DTC_CACHE_BYTES = MAX_RESPONSE_BYTES
 MAINTENANCE_CHECK_INTERVAL_SECONDS = 60 * 60
 DTC_CACHE_SCHEMA_VERSION = 2
+MAX_DELIVERY_ERROR_CHARS = 1000
+USB_REMOVAL_KINDS = frozenset(
+    (
+        "usb_parent_hub_removed",
+        "usb_can_adapter_removed",
+        "usb_can_netdev_removed",
+    )
+)
 DTC_GROUPS = (
     "current",
     "pending",
@@ -557,6 +570,124 @@ def _validate_dtc_cache(payload: object) -> dict[str, object]:
     return payload
 
 
+class AdvisoryNotificationSink(Protocol):
+    """Optional delivery boundary; no external sink is implemented here."""
+
+    enabled: bool
+
+    def deliver(self, payload: Mapping[str, object]) -> None: ...
+
+
+class DisabledAdvisoryNotificationSink:
+    """Safe default which cannot perform an external notification."""
+
+    enabled = False
+
+    def deliver(self, payload: Mapping[str, object]) -> None:
+        raise RuntimeError("advisory notification delivery is disabled")
+
+
+class AdvisoryNotificationDispatcher:
+    """Drain persisted, deduplicated outbox rows only when explicitly enabled."""
+
+    def __init__(
+        self,
+        historian: TelemetryHistorian,
+        *,
+        sink: AdvisoryNotificationSink | None = None,
+        enabled: bool = False,
+    ) -> None:
+        self.historian = historian
+        self.sink = sink or DisabledAdvisoryNotificationSink()
+        self.enabled = bool(enabled and self.sink.enabled)
+        self._lock = threading.Lock()
+        self._dispatch_lock = threading.Lock()
+        self._status: dict[str, object] = {
+            "enabled": self.enabled,
+            "sink": type(self.sink).__name__,
+            "last_attempt_at": None,
+            "last_delivered": 0,
+            "last_failed": 0,
+            "last_error": None,
+        }
+
+    def status(self) -> dict[str, object]:
+        with self._lock:
+            return json.loads(json.dumps(self._status))
+
+    def dispatch(
+        self,
+        *,
+        at: datetime | None = None,
+        limit: int = 10,
+    ) -> dict[str, object]:
+        # Serialize the complete claim-by-query/deliver/mark cycle.  Without
+        # this boundary, two callers can fetch the same pending row and both
+        # invoke an external sink before either marks it delivered.
+        with self._dispatch_lock:
+            return self._dispatch_once(at=at, limit=limit)
+
+    @staticmethod
+    def _delivery_error(exc: Exception) -> str:
+        detail = f"{type(exc).__name__}: {exc}"
+        if len(detail) > MAX_DELIVERY_ERROR_CHARS:
+            detail = detail[: MAX_DELIVERY_ERROR_CHARS - 1] + "…"
+        return detail
+
+    def _dispatch_once(
+        self,
+        *,
+        at: datetime | None = None,
+        limit: int = 10,
+    ) -> dict[str, object]:
+        moment = at or datetime.now(timezone.utc)
+        attempted_at = moment.astimezone(timezone.utc).isoformat()
+        if not self.enabled:
+            with self._lock:
+                self._status.update(
+                    {
+                        "last_attempt_at": attempted_at,
+                        "last_delivered": 0,
+                        "last_failed": 0,
+                        "last_error": "delivery_disabled",
+                    }
+                )
+            return self.status()
+        delivered = 0
+        failed = 0
+        last_error = None
+        for item in self.historian.pending_advisory_notifications(
+            at=moment,
+            limit=limit,
+        ):
+            try:
+                self.sink.deliver(item["payload"])
+            except Exception as exc:
+                failed += 1
+                last_error = self._delivery_error(exc)
+                self.historian.mark_advisory_notification_failed(
+                    int(item["id"]),
+                    error=last_error,
+                    attempted_at=moment,
+                )
+            else:
+                delivered += 1
+                self.historian.mark_advisory_notification_delivered(
+                    int(item["id"]),
+                    delivered_at=moment,
+                )
+        with self._lock:
+            self._status.update(
+                {
+                    "last_attempt_at": attempted_at,
+                    "last_delivered": delivered,
+                    "last_failed": failed,
+                    "last_error": last_error,
+                }
+            )
+        return self.status()
+
+
 class TelemetryInsights:
     """Thread-safe facade for the broker's slower cache-only data products."""
 
@@ -565,6 +696,9 @@ class TelemetryInsights:
         historian: TelemetryHistorian,
         *,
         warning_evaluator: EarlyWarningEvaluator | None = None,
+        infrastructure_evaluator: InfrastructureHealthEvaluator | None = None,
+        notification_sink: AdvisoryNotificationSink | None = None,
+        enable_notification_delivery: bool = False,
         dtc_cache_path: str | Path,
         history_metrics: Sequence[str] = DEFAULT_HISTORY_METRICS,
         maintenance_check_interval_seconds: float = (
@@ -574,6 +708,14 @@ class TelemetryInsights:
         self.historian = historian
         self.warning_evaluator = warning_evaluator or EarlyWarningEvaluator(
             historian
+        )
+        self.infrastructure_evaluator = (
+            infrastructure_evaluator or InfrastructureHealthEvaluator(historian)
+        )
+        self.notification_dispatcher = AdvisoryNotificationDispatcher(
+            historian,
+            sink=notification_sink,
+            enabled=enable_notification_delivery,
         )
         self.dtc_cache_path = Path(dtc_cache_path)
         self.history_metrics = tuple(dict.fromkeys(history_metrics))
@@ -587,6 +729,13 @@ class TelemetryInsights:
         self._maintenance_hook: dict[str, object] = {
             "interval_seconds": maintenance_check_interval_seconds,
             "last_checked_at": None,
+            "last_result": None,
+            "last_error": None,
+        }
+        self._advisory_lock = threading.Lock()
+        self._advisory_hook: dict[str, object] = {
+            "mode": "on_ingest",
+            "last_evaluated_at": None,
             "last_result": None,
             "last_error": None,
         }
@@ -609,8 +758,146 @@ class TelemetryInsights:
             captured_at=captured_at,
             ingest_key=ingest_key,
         )
+        checkpoint_complete = False
+        consumed_event_ids: tuple[str, ...] = ()
+        checkpoint_error: str | None = "duplicate_snapshot_not_evaluated"
+        monitor = snapshot.get("_usb_can_monitor")
+        monitor = monitor if isinstance(monitor, Mapping) else {}
+        monitor_events = monitor.get("events", [])
+        monitor_events = monitor_events if isinstance(monitor_events, list) else []
+        monitor_removal_event_ids = tuple(
+            event.get("event_id")
+            for event in monitor_events
+            if isinstance(event, Mapping)
+            and event.get("kind") in USB_REMOVAL_KINDS
+            and isinstance(event.get("event_id"), str)
+        )
+        if not result.duplicate:
+            (
+                checkpoint_complete,
+                consumed_event_ids,
+                checkpoint_error,
+            ) = self._evaluate_and_persist_advisories(
+                result.snapshot_id,
+                captured_at=captured_at,
+                monitor_removal_event_ids=monitor_removal_event_ids,
+            )
         self._maybe_run_maintenance(captured_at=captured_at)
-        return result
+        try:
+            return replace(
+                result,
+                advisory_checkpoint_complete=checkpoint_complete,
+                advisory_consumed_event_ids=consumed_event_ids,
+                advisory_checkpoint_error=checkpoint_error,
+            )
+        except TypeError:
+            # Lightweight injected historian results used by offline callers
+            # may not be dataclasses.  Preserve their shape while exposing the
+            # same explicit acknowledgement contract.
+            result.advisory_checkpoint_complete = checkpoint_complete
+            result.advisory_consumed_event_ids = consumed_event_ids
+            result.advisory_checkpoint_error = checkpoint_error
+            return result
+
+    def _evaluate_and_persist_advisories(
+        self,
+        snapshot_id: int,
+        *,
+        captured_at: datetime,
+        monitor_removal_event_ids: tuple[str, ...] = (),
+    ) -> tuple[bool, tuple[str, ...], str | None]:
+        evaluated_at = captured_at.astimezone(timezone.utc).isoformat()
+        try:
+            vehicle = self.warning_evaluator.evaluate(at=captured_at)
+            infrastructure = self.infrastructure_evaluator.evaluate(
+                snapshot_id,
+                at=captured_at,
+            )
+            assessments = [
+                *vehicle.get("assessments", []),
+                *infrastructure.get("assessments", []),
+            ]
+            authoritative_rule_keys = tuple(
+                assessment.get("rule")
+                for assessment in assessments
+                if isinstance(assessment, Mapping)
+            )
+            persistence = self.historian.record_advisory_assessments(
+                assessments,
+                evaluated_at=captured_at,
+                authoritative_rule_keys=authoritative_rule_keys,
+            )
+            persistence_result = persistence.as_dict()
+            usb_event_ids: tuple[str, ...] = ()
+            for assessment in infrastructure.get("assessments", []):
+                if (
+                    isinstance(assessment, Mapping)
+                    and assessment.get("rule")
+                    == "usb_can_transient_disconnect"
+                ):
+                    current = assessment.get("current")
+                    current = current if isinstance(current, Mapping) else {}
+                    values = current.get("event_ids", [])
+                    if isinstance(values, list):
+                        usb_event_ids = tuple(
+                            value for value in values if isinstance(value, str)
+                        )
+                    break
+            self.historian.mark_usb_can_advisory_events_consumed(
+                usb_event_ids,
+                consumed_at=captured_at,
+                snapshot_id=snapshot_id,
+            )
+            consumed_event_ids = (
+                self.historian.usb_can_advisory_consumed_event_ids(
+                    monitor_removal_event_ids
+                )
+            )
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            with self._advisory_lock:
+                self._advisory_hook.update(
+                    {
+                        "last_evaluated_at": evaluated_at,
+                        "last_result": None,
+                        "last_error": error,
+                    }
+                )
+            return False, (), error
+        else:
+            delivery_error = None
+            try:
+                delivery = self.notification_dispatcher.dispatch(at=captured_at)
+            except Exception as exc:
+                # Advisory persistence and USB event consumption are already
+                # durable.  A delivery-boundary failure remains represented by
+                # the outbox and must not make the broker retain/replay the
+                # kernel event queue.
+                delivery_error = (
+                    f"notification dispatch failed: {type(exc).__name__}: {exc}"
+                )
+                delivery = {
+                    "enabled": self.notification_dispatcher.enabled,
+                    "last_error": delivery_error,
+                }
+            with self._advisory_lock:
+                self._advisory_hook.update(
+                    {
+                        "last_evaluated_at": evaluated_at,
+                        "last_result": {
+                            "vehicle_assessments": len(
+                                vehicle.get("assessments", [])
+                            ),
+                            "infrastructure_assessments": len(
+                                infrastructure.get("assessments", [])
+                            ),
+                            "persistence": persistence_result,
+                            "delivery": delivery,
+                        },
+                        "last_error": delivery_error,
+                    }
+                )
+            return True, consumed_event_ids, None
 
     def _maybe_run_maintenance(self, *, captured_at: datetime) -> None:
         """Run the historian's daily-gated maintenance at most once per hour."""
@@ -716,12 +1003,58 @@ class TelemetryInsights:
 
     def health_response(self) -> dict[str, object]:
         summary = self.warning_evaluator.evaluate()
+        try:
+            summary["episodes"] = self.historian.advisory_summary()
+        except (AttributeError, RuntimeError, ValueError) as exc:
+            summary["episodes"] = _unavailable(
+                "advisory_history",
+                f"persisted advisory history is unavailable: {exc}",
+            )
+        try:
+            summary["data_quality"] = self.historian.data_quality_summary()
+        except (AttributeError, RuntimeError, ValueError) as exc:
+            summary["data_quality"] = _unavailable(
+                "data_quality_history",
+                f"persisted data-quality history is unavailable: {exc}",
+            )
+        try:
+            summary["usb_can_incidents"] = (
+                self.historian.usb_can_incident_summary()
+            )
+        except (AttributeError, RuntimeError, ValueError) as exc:
+            summary["usb_can_incidents"] = _unavailable(
+                "usb_can_incident_history",
+                f"persisted USB CAN incident history is unavailable: {exc}",
+            )
+        with self._advisory_lock:
+            summary["evaluation_hook"] = json.loads(
+                json.dumps(self._advisory_hook)
+            )
+        summary["notification_delivery"] = self.notification_dispatcher.status()
         summary["available"] = True
         summary["detail"] = (
             "History-relative advisory evidence only; this is not a diagnosis "
             "or an opaque health score."
         )
         return summary
+
+    def acknowledge_episode(
+        self,
+        episode_id: int,
+        *,
+        note: str | None = None,
+    ) -> dict[str, object]:
+        """Backend-only acknowledgement; no web route is exposed here."""
+
+        return self.historian.acknowledge_advisory_episode(
+            episode_id,
+            note=note,
+        )
+
+    def dispatch_notifications(self) -> dict[str, object]:
+        """Explicit dispatcher hook; disabled by default in every deployment."""
+
+        return self.notification_dispatcher.dispatch()
 
     def dtc_response(self) -> dict[str, object]:
         """Read one bounded atomic cache; never perform diagnostic I/O."""
@@ -779,7 +1112,10 @@ class TelemetryInsights:
 
 
 __all__ = (
+    "AdvisoryNotificationDispatcher",
+    "AdvisoryNotificationSink",
     "DEFAULT_HISTORY_METRICS",
+    "DisabledAdvisoryNotificationSink",
     "DTC_CACHE_SCHEMA_VERSION",
     "DtcCacheValidationError",
     "MAINTENANCE_CHECK_INTERVAL_SECONDS",

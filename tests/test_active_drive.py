@@ -5,6 +5,7 @@ import subprocess
 import sys
 import threading
 import unittest
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest import mock
 
@@ -12,6 +13,7 @@ from lib import canbus, diagnostic_safety
 from lib.modules import MODULES
 from projects.vehicle_data import active_drive, ccan_powertrain, pcm_electrical
 from projects.vehicle_data.broker import ActiveDriveSupervisor, TelemetryBroker
+from projects.vehicle_data.models import success
 
 
 TEST_CHANNEL = "can7"
@@ -1312,6 +1314,12 @@ class BrokerActiveDriveTests(unittest.TestCase):
         self.assertTrue(torque["available"])
         self.assertEqual(torque["value"], 177.6)
         self.assertEqual(torque["interface_mode"], "armed_diagnostic")
+        power = broker.metric_response("engine.crankshaft_power")
+        self.assertTrue(power["available"])
+        self.assertAlmostEqual(power["value"], 177.6 * 751.0 / 5252.113122)
+        self.assertEqual(power["unit"], "hp")
+        self.assertEqual(power["acquisition"], "derived_time_aligned")
+        self.assertEqual(power["interface_mode"], "armed_diagnostic")
         self.assertTrue(speed["available"])
         self.assertEqual(speed["interface_mode"], "armed_diagnostic")
         self.assertEqual(
@@ -1324,6 +1332,9 @@ class BrokerActiveDriveTests(unittest.TestCase):
         )
         self.assertTrue(
             broker.metric_response("engine.crankshaft_torque")["stale"]
+        )
+        self.assertTrue(
+            broker.metric_response("engine.crankshaft_power")["stale"]
         )
 
         broker.handle_active_drive_event(
@@ -1345,6 +1356,10 @@ class BrokerActiveDriveTests(unittest.TestCase):
         )
         self.assertEqual(
             broker.metric_response("engine.crankshaft_torque")["reason"],
+            "engine_not_running",
+        )
+        self.assertEqual(
+            broker.metric_response("engine.crankshaft_power")["reason"],
             "engine_not_running",
         )
         self.assertTrue(broker.metric_response("vehicle.speed")["available"])
@@ -1382,9 +1397,135 @@ class BrokerActiveDriveTests(unittest.TestCase):
             torque["interface_mode"],
             "armed_diagnostic",
         )
+        power = broker.metric_response("engine.crankshaft_power")
+        self.assertFalse(power["available"])
+        self.assertEqual(power["reason"], "session_required")
         active = broker.status_response()["active_drive"]
         self.assertEqual(active["state"], "armed_diagnostic")
         self.assertEqual(active["reason"], "running_gate_satisfied")
+
+    def test_derived_power_requires_time_aligned_exact_inputs_and_keeps_overrun(self):
+        broker, clock = self.make_broker()
+
+        def observation(metric, value, unit, source):
+            broker.handle_active_drive_event(
+                {
+                    "type": "observation",
+                    "metric": metric,
+                    "value": value,
+                    "unit": unit,
+                    "source": source,
+                    "bus": "c-can",
+                    "quality": "observed_alfa_scale",
+                    "interface_mode": "armed_diagnostic",
+                }
+            )
+
+        observation("engine.rpm", 2000.0, "rpm", "ccan.broadcast.0x0fc")
+        observation(
+            "engine.crankshaft_torque",
+            100.0,
+            "lb-ft",
+            "pcm.did.06da",
+        )
+        self.assertAlmostEqual(
+            broker.metric_response("engine.crankshaft_power")["value"],
+            100.0 * 2000.0 / 5252.113122,
+        )
+
+        prior_power = broker.metric_response("engine.crankshaft_power")["value"]
+        clock.value += 1.0
+        observation("engine.rpm", 4000.0, "rpm", "ccan.broadcast.0x0fc")
+        # A new-cycle RPM must not be multiplied by the previous cycle's
+        # torque while the new torque request is still in flight.
+        self.assertEqual(
+            broker.metric_response("engine.crankshaft_power")["value"],
+            prior_power,
+        )
+
+        clock.value += 0.1
+        observation(
+            "engine.crankshaft_torque",
+            -25.0,
+            "lb-ft",
+            "pcm.did.06da",
+        )
+        overrun = broker.metric_response("engine.crankshaft_power")
+        self.assertTrue(overrun["available"])
+        self.assertLess(overrun["value"], 0.0)
+        self.assertAlmostEqual(
+            overrun["value"],
+            -25.0 * 4000.0 / 5252.113122,
+        )
+
+    def test_derived_power_rejects_over_limit_input_skew_on_first_pair(self):
+        broker, clock = self.make_broker()
+
+        def observation(metric, value, unit, source):
+            broker.handle_active_drive_event(
+                {
+                    "type": "observation",
+                    "metric": metric,
+                    "value": value,
+                    "unit": unit,
+                    "source": source,
+                    "bus": "c-can",
+                    "quality": "observed_alfa_scale",
+                    "interface_mode": "armed_diagnostic",
+                }
+            )
+
+        observation("engine.rpm", 2000.0, "rpm", "ccan.broadcast.0x0fc")
+        clock.value += 1.501
+        observation(
+            "engine.crankshaft_torque",
+            100.0,
+            "lb-ft",
+            "pcm.did.06da",
+        )
+        power = broker.metric_response("engine.crankshaft_power")
+        self.assertFalse(power["available"])
+        self.assertEqual(power["reason"], "source_unavailable")
+        self.assertIn("skew", power["detail"])
+
+    def test_derived_power_uses_oldest_input_for_freshness_and_wall_time(self):
+        broker, clock = self.make_broker()
+        rpm_wall = datetime(2026, 8, 21, 18, 0, tzinfo=timezone.utc)
+        torque_wall = rpm_wall - timedelta(hours=1)
+        with broker._lock:
+            broker._cache["engine.rpm"] = success(
+                metric="engine.rpm",
+                unit="rpm",
+                value=2000.0,
+                source="ccan.broadcast.0x0fc",
+                bus="c-can",
+                acquisition="passive_broadcast",
+                quality="observed_alfa_scale",
+                observed_monotonic=clock.value,
+                observed_at=rpm_wall,
+                interface_mode="armed_diagnostic",
+            )
+            broker._cache["engine.crankshaft_torque"] = success(
+                metric="engine.crankshaft_torque",
+                unit="lb-ft",
+                value=100.0,
+                source="pcm.did.06da",
+                bus="c-can",
+                acquisition="physical_read_data_by_identifier",
+                quality="observed_alfa_scale",
+                observed_monotonic=clock.value + 1.5,
+                observed_at=torque_wall,
+                interface_mode="armed_diagnostic",
+            )
+        clock.value += 1.5
+        broker._refresh_derived_power()
+        power = broker.metric_response("engine.crankshaft_power")
+        self.assertTrue(power["available"])
+        self.assertEqual(power["observed_at"], rpm_wall.isoformat())
+        self.assertEqual(power["age_ms"], 1500)
+
+        clock.value += 2.501
+        self.assertTrue(broker.metric_response("engine.crankshaft_power")["stale"])
 
     def test_armed_status_is_honest_and_blocks_other_active_acquisition(self):
         broker, _clock = self.make_broker()

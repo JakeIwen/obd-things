@@ -299,6 +299,36 @@ CRANKSHAFT_TORQUE = MetricDefinition(
 )
 
 
+ESTIMATED_CRANKSHAFT_POWER = MetricDefinition(
+    name="engine.crankshaft_power",
+    unit="hp",
+    value_type="number",
+    stale_after_seconds=4.0,
+    passive_min_interval_seconds=0.0,
+    minimum=-1000.0,
+    maximum=1000.0,
+    sources=(
+        SourceDefinition(
+            name="derived.pcm_06da_x_ccan_0x0fc",
+            bus="c-can",
+            bitrate=500000,
+            acquisition_class="derived_time_aligned",
+            quality="observed_alfa_scale",
+            provenance=(
+                "projects/ecu_mapping/findings/promaster_2022/"
+                "2026-07-27_pcm_plots_loaded_drive_mapping.md; derived only "
+                "from fresh PCM DID 06DA current crankshaft torque and "
+                "qualified passive 0x0FC engine RPM using hp=lb-ft*rpm/5252.113"
+            ),
+            side_effects=(
+                "none beyond the already-required guarded 06DA observation; "
+                "derived ECU-estimated crankshaft power, not measured wheel power"
+            ),
+        ),
+    ),
+)
+
+
 def _transmission_speed_metric(name: str, field: str) -> MetricDefinition:
     return MetricDefinition(
         name=name,
@@ -489,6 +519,7 @@ METRICS = {
         VEHICLE_SPEED,
         TARGET_CRANKSHAFT_TORQUE,
         CRANKSHAFT_TORQUE,
+        ESTIMATED_CRANKSHAFT_POWER,
         TRANSMISSION_OUTPUT_SPEED,
         TRANSMISSION_OIL_TEMPERATURE,
         TRANSMISSION_TURBINE_SPEED,

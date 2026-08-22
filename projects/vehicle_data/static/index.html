@@ -110,11 +110,11 @@
           <p id="engine-torque-status" class="drive-status">Loading metric catalog…</p>
         </article>
         <article class="drive-tile health-tile" id="engine-power-card">
-          <p class="eyebrow">CRANK POWER</p>
+          <p class="eyebrow">ECU-EST. CRANK POWER</p>
           <p class="drive-value health-value">
             <span id="engine-power">—</span><span id="engine-power-unit" class="drive-unit"></span>
           </p>
-          <p id="engine-power-status" class="drive-status">Loading metric catalog…</p>
+          <p id="engine-power-status" class="drive-status">Derived estimate; not wheel horsepower.</p>
         </article>
       </div>
       <p id="engine-health-note" class="muted panel-note">
@@ -312,7 +312,7 @@
     <section class="panel dtc-panel" data-widget="dtcs" aria-labelledby="dtcs-heading">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">DIAGNOSTICS · CACHED ONLY</p>
+          <p id="dtc-eyebrow" class="eyebrow">DIAGNOSTICS · CACHED ONLY</p>
           <h2 id="dtcs-heading">Diagnostic trouble codes</h2>
         </div>
         <span id="dtc-state" class="badge">NEVER SCANNED</span>
@@ -322,10 +322,33 @@
         <div><dt>Module coverage</dt><dd id="dtc-module-coverage">—</dd></div>
       </dl>
       <div id="dtc-groups" class="dtc-groups"></div>
+      <details id="dtc-scan-controls" class="dtc-group" hidden>
+        <summary>Run a guarded parked DTC scan</summary>
+        <p class="muted">
+          This sends one fixed physical <code>19 02 FF</code> read to each of
+          15 supported registered modules. It never clears codes; PCM remains
+          unsupported. First run <code>python3 tools/dtc_web_arm.py</code> on
+          vanpi and enter the one-use token below.
+        </p>
+        <label>
+          One-use local token
+          <input id="dtc-arm-token" type="password" autocomplete="off" spellcheck="false">
+        </label>
+        <label>
+          <input id="dtc-park-confirm" type="checkbox">
+          I confirm the van is stationary, selector in Park, ignition ON, and engine OFF.
+        </label>
+        <div class="button-row">
+          <button id="dtc-scan-start" type="button" disabled>Scan registered modules</button>
+          <button id="dtc-scan-cancel" type="button" class="secondary" disabled>Cancel scan</button>
+        </div>
+        <p id="dtc-job-status" class="drive-status">No DTC batch is running.</p>
+      </details>
       <p id="dtc-note" class="muted panel-note">
         This page displays dated ReadDTCInformation results. Current and
         pending mean when that DTC was last observed, not live vehicle state.
-        It cannot trigger a scan or clear a code.
+        The LAN listener remains cache-only. The Tailscale listener can queue
+        only the locally armed fixed scan above and cannot clear a code.
       </p>
     </section>
 

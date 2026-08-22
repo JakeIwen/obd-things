@@ -244,10 +244,13 @@ Temperature Sensor:
 - is integral to the transmission internal wire harness.
 
 The P0711 rationality monitor rejects a measured change greater than 10 °C in
-less than one second. That is a useful future telemetry plausibility gate:
-an isolated jump of that size should be marked suspect rather than rendered as
-real fluid heating. The source's parenthetical Fahrenheit value for that
-10 °C delta is internally inconsistent, so it is intentionally not reused.
+less than one second. Telemetry now applies that exact strict delta/window test
+to individual raw `0x1F7` frames before median aggregation. Its state survives
+bounded snapshot calls; a rejected level is quarantined without replacing the
+last-good temperature, while both sibling shaft-speed fields remain available.
+The source's parenthetical Fahrenheit value for that 10 °C delta is internally
+inconsistent, so it is intentionally not reused. The resulting incident is
+stored as non-notifying data-quality evidence, not an over-temperature warning.
 
 The OEM procedures provide operating windows but do **not** reveal the
 calibrated over-temperature threshold:

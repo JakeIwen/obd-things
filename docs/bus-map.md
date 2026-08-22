@@ -202,6 +202,18 @@ the installed unmatched subtype. [Evidence](../projects/ecu_mapping/findings/pro
 | `0x1F7` | bytes4–5 BE u16 | `raw / 2 rpm` | **transmission turbine/input speed**, exact-linked to TCM DID `2102` and its labeled Alfa gauge | ignition ON / running | **observed Alfa scale; receive-only telemetry allowlisted**. Initial 248-sample fit R² 0.99999024; independent blind whole-leg recovery used 2,014 samples, full coverage, rank 4, R² 0.99996705, and the expected approximately `×2` raw relationship; [loaded evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-27_tcm_plots_loaded_drive_mapping.md), [blind benchmark](../projects/ecu_mapping/findings/promaster_2022/2026-07-28_signal_field_engine_benchmark.md) |
 | signature set | — | — | C-CAN identity guard: `0x100 101 103 104 10F 110 116 0EA 0EE 0FA 0FE` (+ `2EF 41A`) | high-rate, ignition-on & in parked wakes | used by `classify_bus()` |
 
+Telemetry applies the exact-vehicle P0711 rationality criterion to each raw
+`0x1F7` byte-3 temperature before snapshot aggregation: a change greater than
+10 °C within less than 1.0 second is excluded. The comparison state survives
+bounded snapshot boundaries, and the rejected level cannot become the next
+baseline while uninterrupted raw frames keep it quarantined. The last good
+temperature remains cached; output- and turbine-speed fields from the same
+frame remain usable. A one-second-or-longer observation gap begins a new
+evidence window because the strict OEM timing criterion can no longer place the
+change. Rejections are persisted separately as non-notifying data-quality
+incidents; they are not temperature samples, overheat warnings, CAN inhibits,
+or permission for any transmission.
+
 During the controlled brake hold, the already-known `0x41A` voltage byte fell from `0xA0` to
 `0x9E/0x9C` and recovered after release. That is a secondary voltage/load effect consistent with
 the brake lamps, not a second meaning for the voltage byte. Cadence-driven changes in `0x412` and

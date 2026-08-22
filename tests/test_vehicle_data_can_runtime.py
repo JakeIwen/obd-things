@@ -443,22 +443,32 @@ class RoleAwareSourceTests(unittest.TestCase):
     def test_powertrain_reader_uses_resolved_channel(self):
         reader = RoleAwareCcanPowertrainReader(self.manager)
         observations = (SimpleNamespace(metric="engine.rpm"),)
+        quality_event = SimpleNamespace(reason="implausible_transition")
         with (
             mock.patch.object(canbus, "identify_bus", return_value="c-can") as identify,
             mock.patch.object(
                 __import__(
                     "projects.vehicle_data.ccan_powertrain",
-                    fromlist=["read_snapshot"],
+                    fromlist=["read_broadcast_snapshot"],
                 ),
-                "read_snapshot",
-                return_value=observations,
+                "read_broadcast_snapshot",
+                return_value=SimpleNamespace(
+                    observations=observations,
+                    quality_events=(quality_event,),
+                ),
             ) as read,
         ):
             result = reader.read()
 
         self.assertEqual(result, observations)
+        self.assertEqual(reader.drain_quality_events(), (quality_event,))
+        self.assertEqual(reader.drain_quality_events(), ())
         identify.assert_called_once_with("can7", probe=0.25)
-        read.assert_called_once_with("can7", timeout=0.5)
+        read.assert_called_once_with(
+            "can7",
+            timeout=0.5,
+            temperature_gate=reader.temperature_gate,
+        )
 
     def test_active_supervisor_binds_dynamic_channel_and_usb_identity(self):
         resolution = FakeResolution("c-can", "can7", 500000)

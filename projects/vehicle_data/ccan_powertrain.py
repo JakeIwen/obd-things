@@ -12,8 +12,10 @@ module only implements those fixed decodes.
 from __future__ import annotations
 
 import errno
+import math
 import socket
 import struct
+import threading
 import time
 from dataclasses import dataclass
 from typing import Callable
@@ -56,6 +58,10 @@ ACTIVE_FILTER_IDS = FILTER_IDS + (SYSTEM_VOLTAGE_ID,)
 KPA_TO_PSI = 0.14503773773020923
 KMH_TO_MPH = 0.621371192237334
 NM_TO_LB_FT = 0.7375621492772656
+TRANSMISSION_TEMPERATURE_MAX_DELTA_C = 10.0
+TRANSMISSION_TEMPERATURE_DELTA_WINDOW_SECONDS = 1.0
+TRANSMISSION_TEMPERATURE_METRIC = "transmission.oil_temperature"
+TRANSMISSION_TEMPERATURE_SOURCE = "ccan.broadcast.0x1f7"
 
 
 @dataclass(frozen=True)
@@ -69,6 +75,143 @@ class PassiveObservation:
 
 
 @dataclass(frozen=True)
+class DataQualityEvent:
+    """Bounded evidence that one raw value was excluded from telemetry.
+
+    These events describe acquisition quality only.  They are deliberately
+    separate from vehicle-health advisories and never authorize CAN traffic.
+    """
+
+    metric: str
+    source: str
+    reason: str
+    detail: str
+    previous_value_c: float
+    rejected_value_c: float
+    delta_c: float
+    elapsed_seconds: float
+    rejection_count: int = 1
+
+    def coalesced_with(self, newer: "DataQualityEvent") -> "DataQualityEvent":
+        if (
+            newer.metric != self.metric
+            or newer.source != self.source
+            or newer.reason != self.reason
+        ):
+            raise ValueError("cannot coalesce unlike data-quality events")
+        return DataQualityEvent(
+            metric=newer.metric,
+            source=newer.source,
+            reason=newer.reason,
+            detail=newer.detail,
+            previous_value_c=newer.previous_value_c,
+            rejected_value_c=newer.rejected_value_c,
+            delta_c=newer.delta_c,
+            elapsed_seconds=newer.elapsed_seconds,
+            rejection_count=self.rejection_count + newer.rejection_count,
+        )
+
+
+class TransmissionTemperaturePlausibilityGate:
+    """Stateful raw-frame implementation of the OEM P0711 delta criterion.
+
+    A jump greater than 10 degrees C in less than one second is rejected.  A
+    rejected level never becomes the comparison baseline: while raw frames
+    continue without a one-second observation gap, values still more than 10
+    degrees C from the last good level remain quarantined.  Returning to the
+    last-good neighborhood clears the quarantine.  A gap of at least one
+    second begins a new evidence window because the strict OEM criterion can
+    no longer establish when a change occurred.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._last_good_c: float | None = None
+        self._last_seen_monotonic: float | None = None
+        self._quarantined = False
+
+    @property
+    def quarantined(self) -> bool:
+        with self._lock:
+            return self._quarantined
+
+    def evaluate(
+        self,
+        value_c: float,
+        observed_monotonic: float,
+    ) -> DataQualityEvent | None:
+        # The normal passive and active owners call this serially, but keeping
+        # the full state transition atomic also makes accidental shared-reader
+        # use deterministic rather than corrupting the last-good baseline.
+        with self._lock:
+            return self._evaluate_unlocked(value_c, observed_monotonic)
+
+    def _evaluate_unlocked(
+        self,
+        value_c: float,
+        observed_monotonic: float,
+    ) -> DataQualityEvent | None:
+        if not math.isfinite(value_c) or not math.isfinite(observed_monotonic):
+            raise ValueError("transmission temperature and timestamp must be finite")
+        value_c = float(value_c)
+        observed_monotonic = float(observed_monotonic)
+        previous_c = self._last_good_c
+        previous_seen = self._last_seen_monotonic
+        if previous_c is None or previous_seen is None:
+            self._last_good_c = value_c
+            self._last_seen_monotonic = observed_monotonic
+            self._quarantined = False
+            return None
+
+        elapsed = observed_monotonic - previous_seen
+        delta_c = abs(value_c - previous_c)
+        if elapsed <= 0:
+            return DataQualityEvent(
+                metric=TRANSMISSION_TEMPERATURE_METRIC,
+                source=TRANSMISSION_TEMPERATURE_SOURCE,
+                reason="implausible_transition",
+                detail=(
+                    "raw 0x1F7 transmission-oil temperature arrived without "
+                    "a newer monotonic frame timestamp; last good retained"
+                ),
+                previous_value_c=previous_c,
+                rejected_value_c=value_c,
+                delta_c=delta_c,
+                elapsed_seconds=elapsed,
+            )
+
+        self._last_seen_monotonic = observed_monotonic
+        if elapsed >= TRANSMISSION_TEMPERATURE_DELTA_WINDOW_SECONDS:
+            self._last_good_c = value_c
+            self._quarantined = False
+            return None
+        if delta_c <= TRANSMISSION_TEMPERATURE_MAX_DELTA_C:
+            self._last_good_c = value_c
+            self._quarantined = False
+            return None
+
+        was_quarantined = self._quarantined
+        self._quarantined = True
+        qualifier = " remains quarantined" if was_quarantined else " was rejected"
+        return DataQualityEvent(
+            metric=TRANSMISSION_TEMPERATURE_METRIC,
+            source=TRANSMISSION_TEMPERATURE_SOURCE,
+            reason="implausible_transition",
+            detail=(
+                f"raw 0x1F7 transmission-oil temperature{qualifier}: "
+                f"{value_c:.3f} degrees C differs from last good "
+                f"{previous_c:.3f} degrees C by {delta_c:.3f} degrees C in "
+                f"{elapsed:.3f}s; OEM-context limit is more than 10 degrees C "
+                "within less than one second"
+            ),
+            previous_value_c=previous_c,
+            rejected_value_c=value_c,
+            delta_c=delta_c,
+            elapsed_seconds=elapsed,
+        )
+
+
+@dataclass(frozen=True)
 class BroadcastSnapshot:
     """One bounded raw-broadcast sample collected without changing CAN state."""
 
@@ -76,6 +219,7 @@ class BroadcastSnapshot:
     rpm_samples: tuple[float, ...]
     frame_count: int
     completed_monotonic: float | None = None
+    quality_events: tuple[DataQualityEvent, ...] = ()
 
 
 def decode_frame_observations(
@@ -257,6 +401,7 @@ def read_broadcast_snapshot(
     required_rpm_samples: int = 1,
     socket_factory: Callable[..., socket.socket] = socket.socket,
     monotonic: Callable[[], float] = time.monotonic,
+    temperature_gate: TransmissionTemperaturePlausibilityGate | None = None,
 ) -> BroadcastSnapshot:
     """Read a short filtered snapshot without changing interface state.
 
@@ -275,6 +420,7 @@ def read_broadcast_snapshot(
         raise ValueError("required_rpm_samples must be a positive integer")
     sock = socket_factory(AF_CAN, socket.SOCK_RAW, CAN_RAW)
     samples: dict[str, list[PassiveObservation]] = {}
+    quality_events: dict[tuple[str, str, str], DataQualityEvent] = {}
     rpm_samples: list[float] = []
     frame_count = 0
     try:
@@ -308,10 +454,36 @@ def read_broadcast_snapshot(
             if can_id & FRAME_TYPE_FLAGS:
                 continue
             frame_count += 1
+            frame_observed_monotonic = monotonic()
             observations = decode_frame_observations(
                 can_id & SFF_MASK, raw_data[: min(dlc, 8)]
             )
             for observation in observations:
+                if (
+                    temperature_gate is not None
+                    and observation.metric == TRANSMISSION_TEMPERATURE_METRIC
+                    and observation.source == TRANSMISSION_TEMPERATURE_SOURCE
+                ):
+                    value_c = (float(observation.value) - 32.0) * 5.0 / 9.0
+                    rejection = temperature_gate.evaluate(
+                        value_c,
+                        frame_observed_monotonic,
+                    )
+                    if rejection is not None:
+                        key = (
+                            rejection.metric,
+                            rejection.source,
+                            rejection.reason,
+                        )
+                        previous_event = quality_events.get(key)
+                        quality_events[key] = (
+                            rejection
+                            if previous_event is None
+                            else previous_event.coalesced_with(rejection)
+                        )
+                        # The two shaft-speed observations from this same 0x1F7
+                        # frame remain valid and continue through aggregation.
+                        continue
                 samples.setdefault(observation.metric, []).append(observation)
                 if observation.metric == "engine.rpm":
                     rpm_samples.append(float(observation.value))
@@ -341,6 +513,7 @@ def read_broadcast_snapshot(
         rpm_samples=tuple(rpm_samples),
         frame_count=frame_count,
         completed_monotonic=monotonic(),
+        quality_events=tuple(quality_events.values()),
     )
 
 

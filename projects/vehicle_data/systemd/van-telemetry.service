@@ -1,7 +1,7 @@
 [Unit]
 Description=Allowlisted van telemetry CAN broker
 After=local-fs.target
-Wants=van-telemetry-web.service
+Wants=van-telemetry-web.service van-telemetry-web-tailscale.service van-dtc-batch.path
 
 [Service]
 Type=simple
@@ -13,7 +13,7 @@ RuntimeDirectoryMode=0750
 StateDirectory=van-telemetry
 StateDirectoryMode=0750
 UMask=0007
-ExecStart=/usr/bin/python3 /home/pi/dev/obd-things/projects/vehicle_data/broker.py serve --socket /run/van-telemetry/api.sock --can-interface-mode dual-usbcanfd --history-db /var/lib/van-telemetry/history.sqlite3 --history-interval 5 --dtc-cache /home/pi/dev/obd-things/tmp/vehicle_data/dtc-cache.json
+ExecStart=/usr/bin/python3 /home/pi/dev/obd-things/projects/vehicle_data/broker.py serve --socket /run/van-telemetry/api.sock --can-interface-mode dual-usbcanfd --history-db /var/lib/van-telemetry/history.sqlite3 --history-interval 5 --dtc-cache /home/pi/dev/obd-things/tmp/vehicle_data/dtc-cache.json --enable-advisory-notifications --advisory-ntfy-topic van-telemetry
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=15

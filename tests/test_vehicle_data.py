@@ -161,6 +161,7 @@ class SourceTests(unittest.TestCase):
             {
                 "battery.voltage",
                 "engine.coolant_temperature",
+                "engine.crankshaft_power",
                 "engine.crankshaft_torque",
                 "generator.field_duty",
                 "engine.oil_pressure",
@@ -267,6 +268,18 @@ class SourceTests(unittest.TestCase):
             "observed_alfa_scale",
         )
         self.assertFalse(torque.sources[0].publisher_allowed)
+        power = METRICS["engine.crankshaft_power"]
+        self.assertEqual(power.unit, "hp")
+        self.assertEqual(power.stale_after_seconds, 4.0)
+        self.assertEqual(
+            power.sources[0].name,
+            "derived.pcm_06da_x_ccan_0x0fc",
+        )
+        self.assertEqual(
+            power.sources[0].acquisition_class,
+            "derived_time_aligned",
+        )
+        self.assertFalse(power.sources[0].publisher_allowed)
         self.assertEqual(METRICS["transmission.output_speed"].unit, "rpm")
         self.assertEqual(
             METRICS["transmission.oil_temperature"].unit,
@@ -823,6 +836,75 @@ class BrokerTests(unittest.TestCase):
             stale_state["basis"], "stale_ccan_0x2ef_ignition_gate"
         )
 
+    def test_transmission_temperature_rejects_impossible_rate_before_cache(self):
+        clock = FakeClock()
+        broker = TelemetryBroker(acquirer=FakeAcquirer(), monotonic=clock)
+        common = {
+            "metric": "transmission.oil_temperature",
+            "unit": "°F",
+            "source": "ccan.broadcast.0x1f7",
+            "bus": "c-can",
+            "quality": "observed_alfa_scale",
+        }
+
+        first = broker.publish_observation(value=100.0, **common)
+        clock.value += 0.5
+        rejected = broker.publish_observation(value=119.0, **common)
+
+        self.assertTrue(first.available)
+        self.assertFalse(rejected.available)
+        self.assertEqual(rejected.reason, "implausible_transition")
+        self.assertIn("10 °C delta", rejected.detail)
+        retained = broker.metric_response("transmission.oil_temperature")
+        self.assertEqual(retained["value"], 100.0)
+        self.assertEqual(
+            retained["last_acquisition_error"]["reason"],
+            "implausible_transition",
+        )
+
+        clock.value += 0.5
+        recovered = broker.publish_observation(value=117.0, **common)
+        self.assertTrue(recovered.available)
+        self.assertNotIn(
+            "last_acquisition_error",
+            broker.metric_response("transmission.oil_temperature"),
+        )
+
+        clock.value += 6.0
+        new_window = broker.publish_observation(value=200.0, **common)
+        self.assertTrue(new_window.available)
+
+        clock.value -= 1.0
+        out_of_order = broker.publish_observation(value=201.0, **common)
+        self.assertFalse(out_of_order.available)
+        self.assertEqual(out_of_order.reason, "implausible_transition")
+        self.assertEqual(
+            broker.metric_response("transmission.oil_temperature")["value"],
+            200.0,
+        )
+
+        # An older duplicate value is not permitted to move cache time
+        # backwards even though its numeric value is unchanged.
+        older_duplicate = broker.publish_observation(value=200.0, **common)
+        self.assertFalse(older_duplicate.available)
+        self.assertEqual(
+            older_duplicate.reason,
+            "implausible_transition",
+        )
+
+        # The OEM-context criterion is strictly less than one second; it is
+        # not a general rate limiter for large deltas over ordinary cadence.
+        exact_window = TelemetryBroker(
+            acquirer=FakeAcquirer(), monotonic=FakeClock()
+        )
+        self.assertTrue(
+            exact_window.publish_observation(value=100.0, **common).available
+        )
+        exact_window.monotonic.value += 1.0
+        self.assertTrue(
+            exact_window.publish_observation(value=119.0, **common).available
+        )
+
     def test_positive_ignition_preserves_fresh_rpm_running_state(self):
         clock = FakeClock()
         broker = TelemetryBroker(
@@ -904,6 +986,9 @@ class BrokerTests(unittest.TestCase):
             mock.patch(
                 "projects.vehicle_data.can_runtime.RoleAwareActiveDriveSupervisor"
             ) as role_supervisor,
+            mock.patch(
+                "projects.vehicle_data.usb_can_monitor.UsbCanIncidentMonitor"
+            ) as usb_monitor,
             mock.patch.object(
                 broker_module, "TelemetryBroker", return_value=broker
             ) as broker_factory,
@@ -932,8 +1017,10 @@ class BrokerTests(unittest.TestCase):
         kwargs = broker_factory.call_args.kwargs
         self.assertIs(kwargs["interface_reconciler"], reconciler.return_value)
         self.assertIs(kwargs["active_drive_supervisor"], role_supervisor.return_value)
+        self.assertIs(kwargs["usb_can_monitor"], usb_monitor.return_value)
         self.assertTrue(kwargs["active_drive_enabled"])
         self.assertNotIn("auto_retune_enabled", kwargs)
+        broker.start_usb_monitor.assert_called_once_with()
         broker.start_collector.assert_not_called()
         serve_unix.assert_called_once()
         broker.close.assert_called_once()
@@ -1355,11 +1442,11 @@ class WebTests(unittest.TestCase):
         self.api_thread.join()
         self.tmp.cleanup()
 
-    def request(self, method, path, body=None):
+    def request(self, method, path, body=None, headers=None):
         connection = http.client.HTTPConnection(
             "127.0.0.1", self.web.server_port, timeout=2
         )
-        headers = {}
+        headers = dict(headers or {})
         if body is not None:
             body = json.dumps(body)
             headers["Content-Type"] = "application/json"
@@ -1368,6 +1455,77 @@ class WebTests(unittest.TestCase):
         raw = response.read()
         connection.close()
         return response.status, raw
+
+    def test_dtc_job_routes_are_listener_gated_origin_checked_and_closed_schema(self):
+        status, raw = self.request("GET", "/v1/diagnostics/dtc-jobs/current")
+        self.assertEqual(status, 403)
+        self.assertEqual(json.loads(raw)["reason"], "dtc_jobs_disabled")
+
+        class FakeController:
+            def __init__(self):
+                self.started = []
+                self.cancelled = 0
+
+            def status(self):
+                return {"available": True, "state": "idle", "job": None}
+
+            def start(self, token):
+                self.started.append(token)
+                return {"available": True, "state": "queued", "job": {"job_id": "dtc-web-test"}}
+
+            def cancel(self):
+                self.cancelled += 1
+                return {"available": True, "state": "running", "job": {"cancel_requested": True}}
+
+        controller = FakeController()
+        self.web.dtc_controller = controller
+        origin = f"http://127.0.0.1:{self.web.server_port}"
+        self.web.dtc_trusted_origin = origin
+
+        status, raw = self.request("GET", "/v1/diagnostics/dtc-jobs/current")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw)["state"], "idle")
+
+        request = {
+            "token": "x" * 43,
+            "confirm_parked": True,
+            "confirm_park_gear": True,
+            "confirm_ignition_on_engine_off": True,
+        }
+        status, raw = self.request(
+            "POST", "/v1/diagnostics/dtc-jobs", request
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(json.loads(raw)["reason"], "origin_rejected")
+        self.assertFalse(controller.started)
+
+        status, raw = self.request(
+            "POST",
+            "/v1/diagnostics/dtc-jobs",
+            {**request, "clear": False},
+            headers={"Origin": origin},
+        )
+        self.assertEqual(status, 409)
+        self.assertFalse(controller.started)
+
+        status, raw = self.request(
+            "POST",
+            "/v1/diagnostics/dtc-jobs",
+            request,
+            headers={"Origin": origin},
+        )
+        self.assertEqual(status, 202)
+        self.assertEqual(controller.started, ["x" * 43])
+        self.assertEqual(json.loads(raw)["state"], "queued")
+
+        status, raw = self.request(
+            "POST",
+            "/v1/diagnostics/dtc-jobs/current/cancel",
+            {"action": "cancel"},
+            headers={"Origin": origin},
+        )
+        self.assertEqual(status, 202)
+        self.assertEqual(controller.cancelled, 1)
 
     def test_web_gets_are_cache_only_and_posts_default_closed(self):
         status, raw = self.request("GET", "/v1/snapshot")
@@ -1564,6 +1722,13 @@ class WebTests(unittest.TestCase):
         self.assertIn(b'"pageshow"', app)
         self.assertIn(b"ALFA SCALE means", app)
         self.assertIn(b"ENGINE_HEALTH_METRICS", app)
+        self.assertIn(b"ECU-EST. CRANK POWER", body)
+        self.assertIn(b"SUSPECT SAMPLE REJECTED", app)
+        self.assertIn(b"summary.episodes?.active", app)
+        self.assertIn(b"outbox.pending", app)
+        self.assertIn(b"outbox.failed", app)
+        self.assertIn(b"delivery.last_error", app)
+        self.assertIn(b"DELIVERY ERROR", app)
         self.assertIn(b"renderOilPressureReference", app)
         self.assertIn("65–80 psi".encode(), app)
         self.assertIn(b"Mapping pending", app)
