@@ -95,7 +95,9 @@ deduplication, bounded queue overflow accounting, delayed healthy resolution,
 SQLite atomicity, advisory open/resolve behavior, and acknowledgement only
 after successful historian ingest.
 
-Adding the code does not update the installed systemd unit or restart the live
-broker.  A future deployment should use the ordinary reviewed telemetry unit
-restart procedure and then validate only status/history output; no USB reset or
-CAN transmission is required.
+Deployment completed on 2026-08-21 through the ordinary reviewed telemetry
+restart. The live monitor opened its receive-only netlink socket, learned both
+installed board serials and five relevant ancestor hubs, and reported
+`state=running`, zero pending/dropped/active events, and no error. SQLite
+`quick_check` remained `ok`; no USB reset, link mutation, CAN transmission, or
+test notification was used to validate it.

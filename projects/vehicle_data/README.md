@@ -762,12 +762,15 @@ unconnected spare was `can3` and remained down. TX and error counters were
 zero. Those netdev names are the observed commissioning snapshot only and must
 still be re-resolved from serial plus `dev_id` after any USB/hub change.
 
-The cache-only telemetry web path is active over the configured LAN/Tailscale
-access, `/api/telemetry-summary` reports the service running, and the SQLite
-historian is writing. The temporary commissioning override was removed, so the
-normal service has active-drive enabled; because the vehicle remained asleep,
-the helper stayed idle and TX remained zero. This run validates the passive
-reconciler, web path, and historian, not an active diagnostic/polling interval.
+The telemetry web path is active over the configured LAN/Tailscale access,
+`/api/telemetry-summary` reports the service running, and the SQLite historian
+is writing. LAN remains cache-only. The Tailscale listener advertises the
+locally armed fixed DTC job boundary; `van-dtc-batch.path` is active and its
+oneshot worker is inactive until an exact request is queued. The temporary
+commissioning override was removed, so the normal service has active-drive
+enabled; because the vehicle remained asleep, the helper stayed idle and TX
+remained zero during this passive deployment check. This run validates the
+passive reconciler, web path, and historian, not a DTC batch.
 
 Stationary active-drive commissioning completed later on 2026-08-21. The
 engine-running interval remained armed for 146.66 seconds and added 438 C-CAN
@@ -797,6 +800,20 @@ deleting the two original startup samples or earlier gap history. After two
 history cycles, coverage reported `current`, active interface gaps were empty,
 SQLite `quick_check` returned `ok`, all three logical roles remained healthy,
 and CAN TX/error counters remained zero.
+
+The 2026-08-21 advisory/diagnostic deployment added the receive-only USB
+kobject monitor, persisted warning episodes and data-quality events, queued
+ntfy delivery, ECU-estimated crankshaft power, the raw `0x1F7` plausibility
+gate, and the fixed DTC worker boundary. Post-restart validation found and
+fixed one empty-aggregate history query exposed by the newly registered power
+metric. The final `/v1/history` response is current with ten bounded trends and
+one prior stationary trip; `/v1/health` reports no active episode, no USB or
+data-quality incident, zero pending/failed notification rows, and the ntfy sink
+enabled without error. The USB monitor is running with both expected serials,
+five learned ancestor hubs, and no observed event. All three vehicle roles
+remain listen-only/ERROR-ACTIVE with zero errors; TX counters remain
+438/0/0, unchanged from stationary commissioning. No DTC request or test
+notification was sent during deployment.
 
 The installed role-aware `van-drive-recorder.service` and
 `tpms-logger.service` copies match their tracked units but remain

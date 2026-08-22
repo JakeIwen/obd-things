@@ -1,8 +1,9 @@
 # Guarded multi-module DTC batch worker
 
 `tools/dtc_batch.py` is the live-capable companion to the deliberately
-offline-only `tools/dtc_scan.py`. The batch worker was implemented and tested
-offline on 2026-08-21; it has not yet been exercised against the vehicle.
+offline-only `tools/dtc_scan.py`. The batch worker and its systemd/Tailscale
+supervision boundary were installed and tested offline on 2026-08-21; no live
+DTC batch has yet been sent to the vehicle.
 
 ## Fixed scope
 
