@@ -104,6 +104,37 @@ def snapshot(at, definitions, values, *, interface="healthy", running=True):
     }
 
 
+def role_aware_interface(*, roles):
+    return {
+        "channel": "can0",
+        "adapter_present": True,
+        "up": True,
+        "bitrate": 500000,
+        "listen_only": True,
+        "controller_state": "ERROR-ACTIVE",
+        "topology": {"bus": "c-can", "usable": True},
+        "role_interfaces": {"ready": bool(roles), "issues": [], "roles": roles},
+    }
+
+
+def role_status(role, channel, bitrate, *, passive_required=True):
+    return {
+        "resolution": "resolved",
+        "channel": channel,
+        "expected": {
+            "usb_serial": f"serial-{role}",
+            "passive_required": passive_required,
+        },
+        "actual": {
+            "up": passive_required,
+            "bitrate": bitrate,
+            "listen_only": passive_required,
+            "controller_state": "ERROR-ACTIVE" if passive_required else "STOPPED",
+        },
+        "passive_ready": passive_required,
+    }
+
+
 class HistorianIngestTests(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
@@ -257,6 +288,261 @@ class HistorianIngestTests(unittest.TestCase):
             self.assertEqual(row["topology_usable"], 1)
             self.assertEqual(row["health"], "healthy")
             self.assertEqual(row["reason"], "armed_diagnostic")
+            self.assertFalse(historian.list_gaps("interface", active_only=True))
+
+    def test_pre_reconcile_channel_never_becomes_a_durable_role(self):
+        before = snapshot(self.start, self.definitions, self.values(self.start))
+        before["status"]["interface"] = role_aware_interface(roles={})
+        before["status"]["interface"]["topology"] = {
+            "bus": "unknown",
+            "usable": False,
+        }
+
+        roles = {
+            "c-can": role_status("c-can", "can0", 500000),
+            "b-can": role_status("b-can", "can1", 125000),
+            "can-ch": role_status("can-ch", "can2", 500000),
+            "spare": role_status(
+                "spare", "can3", None, passive_required=False
+            ),
+        }
+        after_at = self.start + timedelta(seconds=1)
+        after = snapshot(after_at, self.definitions, self.values(after_at))
+        after["status"]["interface"] = role_aware_interface(roles=roles)
+        unresolved_at = self.start + timedelta(seconds=2)
+        unresolved = snapshot(
+            unresolved_at,
+            self.definitions,
+            self.values(unresolved_at),
+        )
+        unresolved["status"]["interface"] = {
+            "channel": "can8",
+            "adapter_present": True,
+            "up": True,
+            "bitrate": 500000,
+            "listen_only": True,
+            "controller_state": "ERROR-ACTIVE",
+            "topology": {"bus": "unknown", "usable": False},
+        }
+        recovered_at = self.start + timedelta(seconds=3)
+        recovered = snapshot(
+            recovered_at,
+            self.definitions,
+            self.values(recovered_at),
+        )
+        recovered["status"]["interface"] = role_aware_interface(roles=roles)
+
+        with TelemetryHistorian(self.path) as historian:
+            historian.ingest_snapshot(
+                before,
+                captured_at=self.start,
+                ingest_key="pre-reconcile",
+            )
+            stored_roles = {
+                row[0]
+                for row in historian._conn.execute(
+                    "SELECT DISTINCT role FROM interface_samples"
+                )
+            }
+            self.assertEqual(stored_roles, set())
+            active = historian.list_gaps("interface", active_only=True)
+            self.assertEqual([gap["key"] for gap in active], ["interface-status"])
+
+            historian.ingest_snapshot(
+                after,
+                captured_at=after_at,
+                ingest_key="roles-ready",
+            )
+            stored_roles = {
+                row[0]
+                for row in historian._conn.execute(
+                    "SELECT DISTINCT role FROM interface_samples"
+                )
+            }
+            self.assertEqual(stored_roles, {"c-can", "b-can", "can-ch"})
+
+            historian.ingest_snapshot(
+                unresolved,
+                captured_at=unresolved_at,
+                ingest_key="roles-temporarily-unresolved",
+            )
+            active = {
+                gap["key"]
+                for gap in historian.list_gaps("interface", active_only=True)
+            }
+            self.assertEqual(
+                active,
+                {"interface-status", "c-can", "b-can", "can-ch"},
+            )
+            historian.ingest_snapshot(
+                recovered,
+                captured_at=recovered_at,
+                ingest_key="roles-recovered",
+            )
+            self.assertFalse(historian.list_gaps("interface", active_only=True))
+            self.assertEqual(
+                historian.dashboard_summary(now=recovered_at)["coverage"]["status"],
+                "current",
+            )
+
+    def test_malformed_role_snapshot_never_falls_back_to_channel(self):
+        variants = (None, [], {}, {"roles": None})
+        for index, role_snapshot in enumerate(variants):
+            with self.subTest(role_snapshot=role_snapshot):
+                payload = snapshot(
+                    self.start,
+                    self.definitions,
+                    self.values(self.start),
+                )
+                payload["status"]["interface"]["channel"] = "can9"
+                payload["status"]["interface"]["topology"] = {
+                    "bus": "c-can",
+                    "usable": True,
+                }
+                payload["status"]["interface"][
+                    "role_interfaces"
+                ] = role_snapshot
+                with TelemetryHistorian(":memory:") as historian:
+                    historian.ingest_snapshot(
+                        payload,
+                        captured_at=self.start,
+                        ingest_key=f"malformed-{index}",
+                    )
+                    self.assertEqual(
+                        historian._conn.execute(
+                            "SELECT count(*) FROM interface_samples"
+                        ).fetchone()[0],
+                        0,
+                    )
+                    active = historian.list_gaps("interface", active_only=True)
+                    self.assertEqual(
+                        [gap["key"] for gap in active],
+                        ["interface-status"],
+                    )
+
+    def test_interfaces_map_uses_logical_payload_role_and_does_not_mask_nested(self):
+        first = snapshot(self.start, self.definitions, self.values(self.start))
+        flat = first["status"].pop("interface")
+        first["status"]["interfaces"] = {"can9": flat}
+
+        roles = {
+            "c-can": role_status("c-can", "can0", 500000),
+            "b-can": role_status("b-can", "can1", 125000),
+            "can-ch": role_status("can-ch", "can2", 500000),
+        }
+        next_at = self.start + timedelta(seconds=1)
+        following = snapshot(next_at, self.definitions, self.values(next_at))
+        following["status"]["interfaces"] = {}
+        following["status"]["interface"] = role_aware_interface(roles=roles)
+
+        with TelemetryHistorian(self.path) as historian:
+            historian.ingest_snapshot(first, captured_at=self.start)
+            self.assertEqual(
+                {
+                    row[0]
+                    for row in historian._conn.execute(
+                        "SELECT DISTINCT role FROM interface_samples"
+                    )
+                },
+                {"c-can"},
+            )
+            historian.ingest_snapshot(following, captured_at=next_at)
+            self.assertEqual(
+                {
+                    row[0]
+                    for row in historian._conn.execute(
+                        "SELECT DISTINCT role FROM interface_samples"
+                    )
+                },
+                {"c-can", "b-can", "can-ch"},
+            )
+            self.assertFalse(historian.list_gaps("interface", active_only=True))
+
+    def test_existing_channel_keyed_gap_is_closed_without_deleting_evidence(self):
+        roles = {
+            "c-can": role_status("c-can", "can0", 500000),
+            "b-can": role_status("b-can", "can1", 125000),
+            "can-ch": role_status("can-ch", "can2", 500000),
+        }
+        first = snapshot(self.start, self.definitions, self.values(self.start))
+        first["status"]["interface"] = role_aware_interface(roles=roles)
+        next_at = self.start + timedelta(seconds=1)
+        following = snapshot(next_at, self.definitions, self.values(next_at))
+        following["status"]["interface"] = role_aware_interface(roles=roles)
+        final_at = self.start + timedelta(seconds=2)
+        final = snapshot(final_at, self.definitions, self.values(final_at))
+        final["status"]["interface"] = role_aware_interface(roles=roles)
+
+        with TelemetryHistorian(self.path) as historian:
+            result = historian.ingest_snapshot(
+                first,
+                captured_at=self.start,
+                ingest_key="before-upgrade",
+            )
+            historian._conn.execute(
+                """
+                INSERT INTO interface_samples(
+                    snapshot_id,role,captured_us,channel,usb_serial,bus,
+                    adapter_present,up,bitrate,listen_only,controller_state,
+                    topology_usable,health,reason
+                )
+                SELECT snapshot_id,'can0',captured_us,'can0',usb_serial,'unknown',
+                    adapter_present,up,bitrate,listen_only,controller_state,
+                    0,'unhealthy','topology_unusable'
+                FROM interface_samples
+                WHERE snapshot_id=? AND role='c-can'
+                """,
+                (result.snapshot_id,),
+            )
+            historian._update_gap(
+                table="interface_gaps",
+                key_column="role",
+                key="can0",
+                gap=("missing", "interface_role_absent"),
+                captured_us=int(self.start.timestamp() * 1_000_000),
+                snapshot_id=result.snapshot_id,
+            )
+            historian._update_gap(
+                table="interface_gaps",
+                key_column="role",
+                key="can4",
+                gap=("missing", "interface_role_absent"),
+                captured_us=int(self.start.timestamp() * 1_000_000),
+                snapshot_id=result.snapshot_id,
+            )
+            historian._conn.commit()
+
+            historian.ingest_snapshot(
+                following,
+                captured_at=next_at,
+                ingest_key="after-upgrade",
+            )
+            historian.ingest_snapshot(
+                final,
+                captured_at=final_at,
+                ingest_key="after-upgrade-again",
+            )
+
+            self.assertEqual(
+                historian._conn.execute(
+                    "SELECT count(*) FROM interface_samples WHERE role='can0'"
+                ).fetchone()[0],
+                1,
+            )
+            old_gaps = historian._conn.execute(
+                "SELECT role,ended_at FROM interface_gaps WHERE role IN ('can0','can4')"
+            ).fetchall()
+            self.assertEqual(
+                {row["role"]: row["ended_at"] for row in old_gaps},
+                {"can0": next_at.isoformat(), "can4": next_at.isoformat()},
+            )
+            self.assertNotIn(
+                "can0",
+                {
+                    gap["key"]
+                    for gap in historian.list_gaps("interface", active_only=True)
+                },
+            )
             self.assertFalse(historian.list_gaps("interface", active_only=True))
 
     def test_duplicate_is_idempotent_and_invalid_source_rolls_back(self):

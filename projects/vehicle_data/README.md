@@ -695,6 +695,15 @@ normal service has active-drive enabled; because the vehicle remained asleep,
 the helper stayed idle and TX remained zero. This run validates the passive
 reconciler, web path, and historian, not an active diagnostic/polling interval.
 
+A 2026-08-21 historian repair made nested logical-role status authoritative
+during broker startup and stopped treating a pre-reconciliation kernel
+`canN` name as a durable interface role. On the first post-restart ingest it
+closed the existing false `can0/interface_role_absent` interval without
+deleting the two original startup samples or earlier gap history. After two
+history cycles, coverage reported `current`, active interface gaps were empty,
+SQLite `quick_check` returned `ok`, all three logical roles remained healthy,
+and CAN TX/error counters remained zero.
+
 The installed role-aware `van-drive-recorder.service` and
 `tpms-logger.service` copies match their tracked units but remain
 disabled/inactive and were not live-validated. Replacements for

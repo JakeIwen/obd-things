@@ -50,6 +50,16 @@ class OutOfOrderSnapshotError(HistorianError, ValueError):
     """A new snapshot predates already segmented history."""
 
 
+def _is_placeholder_interface_role(value: object) -> bool:
+    """Return whether a stored role is really an ephemeral/placeholder key."""
+
+    if not isinstance(value, str):
+        return False
+    return value in ("default", "unknown") or (
+        value.startswith("can") and value[3:].isdigit()
+    )
+
+
 @dataclass(frozen=True)
 class HistorianConfig:
     """Deterministic segmentation and aggregation settings."""
@@ -1207,30 +1217,50 @@ class TelemetryHistorian:
         )
 
     @staticmethod
-    def _interface_payloads(snapshot: Mapping[str, object]) -> dict[str, Mapping[str, object]]:
+    def _interface_payloads(
+        snapshot: Mapping[str, object],
+    ) -> dict[str, Mapping[str, object]]:
         status = snapshot.get("status")
         if not isinstance(status, Mapping):
             return {}
         multiple = status.get("interfaces")
         if isinstance(multiple, Mapping):
-            return {
-                str(role): payload
-                for role, payload in multiple.items()
-                if isinstance(payload, Mapping)
-            }
+            normalized_multiple: dict[str, Mapping[str, object]] = {}
+            for key, payload in multiple.items():
+                if not isinstance(payload, Mapping):
+                    continue
+                role = key
+                if _is_placeholder_interface_role(role):
+                    topology = payload.get("topology")
+                    topology = topology if isinstance(topology, Mapping) else {}
+                    role = topology.get("bus") or payload.get("role")
+                if (
+                    not isinstance(role, str)
+                    or not role
+                    or _is_placeholder_interface_role(role)
+                ):
+                    continue
+                normalized_multiple[role] = payload
+            if normalized_multiple:
+                return normalized_multiple
         single = status.get("interface")
         if not isinstance(single, Mapping):
             return {}
         role_snapshot = single.get("role_interfaces")
-        role_payloads = (
-            role_snapshot.get("roles")
-            if isinstance(role_snapshot, Mapping)
-            else None
-        )
-        if isinstance(role_payloads, Mapping):
+        if "role_interfaces" in single:
+            if not isinstance(role_snapshot, Mapping):
+                return {}
+            role_payloads = role_snapshot.get("roles")
+            if not isinstance(role_payloads, Mapping):
+                return {}
             normalized: dict[str, Mapping[str, object]] = {}
             for role, payload in role_payloads.items():
-                if not isinstance(role, str) or not isinstance(payload, Mapping):
+                if (
+                    not isinstance(role, str)
+                    or not role
+                    or _is_placeholder_interface_role(role)
+                    or not isinstance(payload, Mapping)
+                ):
                     continue
                 expected = payload.get("expected")
                 expected = expected if isinstance(expected, Mapping) else {}
@@ -1256,20 +1286,72 @@ class TelemetryHistorian:
                         "usable": topology_usable,
                     },
                 }
-            if normalized:
-                return normalized
+            # Presence of the role-aware shape is authoritative even before
+            # reconciliation has populated a usable vehicle role.  Falling
+            # through here used to promote its transient top-level ``canN``
+            # channel to a durable historian role.
+            return normalized
         topology = single.get("topology")
         bus = topology.get("bus") if isinstance(topology, Mapping) else None
         role = (
             bus
-            if isinstance(bus, str) and bus not in ("", "unknown")
+            if (
+                isinstance(bus, str)
+                and bool(bus)
+                and not _is_placeholder_interface_role(bus)
+            )
             else single.get("role")
         )
-        if not isinstance(role, str) or not role:
-            role = single.get("channel")
-        if not isinstance(role, str) or not role:
-            role = "default"
+        if (
+            not isinstance(role, str)
+            or not role
+            or _is_placeholder_interface_role(role)
+        ):
+            return {}
         return {role: single}
+
+    def _retire_placeholder_interface_roles(
+        self,
+        *,
+        captured_us: int,
+        snapshot_id: int,
+    ) -> set[str]:
+        """Close legacy channel-keyed gaps and return durable seen roles.
+
+        Early role-aware startup snapshots could be stored under an ephemeral
+        ``canN`` key before reconciliation supplied the logical roles.  Keep
+        those rows as provenance, but never use them to create an endless
+        ``interface_role_absent`` interval.  Including open gaps in the repair
+        set also heals databases whose old raw samples were already pruned.
+        """
+
+        previously_seen = {
+            row[0]
+            for row in self._conn.execute(
+                "SELECT DISTINCT role FROM interface_samples"
+            )
+        }
+        open_gap_roles = {
+            row[0]
+            for row in self._conn.execute(
+                "SELECT role FROM interface_gaps WHERE ended_us IS NULL"
+            )
+        }
+        placeholders = {
+            role
+            for role in previously_seen | open_gap_roles
+            if _is_placeholder_interface_role(role)
+        }
+        for role in sorted(placeholders):
+            self._update_gap(
+                table="interface_gaps",
+                key_column="role",
+                key=role,
+                gap=None,
+                captured_us=captured_us,
+                snapshot_id=snapshot_id,
+            )
+        return previously_seen - placeholders
 
     @staticmethod
     def _interface_health(payload: Mapping[str, object]) -> tuple[str, str]:
@@ -1306,6 +1388,10 @@ class TelemetryHistorian:
         snapshot_id: int,
     ) -> None:
         interfaces = self._interface_payloads(snapshot)
+        previously_seen = self._retire_placeholder_interface_roles(
+            captured_us=captured_us,
+            snapshot_id=snapshot_id,
+        )
         if not interfaces:
             self._update_gap(
                 table="interface_gaps",
@@ -1315,10 +1401,6 @@ class TelemetryHistorian:
                 captured_us=captured_us,
                 snapshot_id=snapshot_id,
             )
-            previously_seen = {
-                row[0]
-                for row in self._conn.execute("SELECT DISTINCT role FROM interface_samples")
-            }
             for role in previously_seen:
                 self._update_gap(
                     table="interface_gaps",
@@ -1337,10 +1419,6 @@ class TelemetryHistorian:
             captured_us=captured_us,
             snapshot_id=snapshot_id,
         )
-        previously_seen = {
-            row[0]
-            for row in self._conn.execute("SELECT DISTINCT role FROM interface_samples")
-        }
         for role in sorted(previously_seen - set(interfaces)):
             self._update_gap(
                 table="interface_gaps",
