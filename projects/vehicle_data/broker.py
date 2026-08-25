@@ -531,6 +531,7 @@ class TelemetryBroker:
             "up": None,
             "bitrate": None,
             "fd_enabled": None,
+            "one_shot": None,
             "listen_only": None,
             "controller_state": None,
             "topology": {
@@ -568,6 +569,8 @@ class TelemetryBroker:
         self._passive_unknown_evidence_streak = 0
         self._active_drive_blocked_reason: str | None = None
         self._active_drive_restoration_latched = False
+        self._wake_authorization_deadline: float | None = None
+        self._wake_authorization_owner: int | None = None
         self._active_drive: dict[str, object] = {
             "enabled": self.active_drive_enabled,
             "state": "idle" if self.active_drive_enabled else "disabled",
@@ -1578,6 +1581,7 @@ class TelemetryBroker:
                 "up": None,
                 "bitrate": None,
                 "fd_enabled": None,
+                "one_shot": None,
                 "listen_only": None,
                 "controller_state": None,
                 "topology": {
@@ -1803,6 +1807,7 @@ class TelemetryBroker:
             interface.get("adapter_present")
             and interface.get("up")
             and interface.get("fd_enabled") is False
+            and interface.get("one_shot") is False
             and interface.get("listen_only")
             and interface.get("controller_state") == "ERROR-ACTIVE"
             and topology.get("usable")
@@ -2015,6 +2020,80 @@ class TelemetryBroker:
                 else self.monotonic()
             )
 
+    def _wake_state_conflicts(self, *, require_fresh: bool) -> tuple[str, ...]:
+        now = self.monotonic()
+        with self._lock:
+            active_drive = dict(self._active_drive)
+            vehicle_state = dict(self._vehicle_state)
+            restoration_latched = self._active_drive_restoration_latched
+            collector_state = self._collector_state
+            vehicle_observed = self._vehicle_state_observed_monotonic
+        conflicts: list[str] = []
+        if collector_state != "running":
+            conflicts.append("passive collector is not running")
+        freshness_limit = max(3.0, self.collector_interval_seconds * 3.0)
+        if require_fresh and (
+            vehicle_observed is None or now - vehicle_observed > freshness_limit
+        ):
+            conflicts.append("passive vehicle-state evidence is missing or stale")
+        if restoration_latched or active_drive.get("restoration_failed"):
+            conflicts.append("active-drive passive restoration is latched failed")
+        active_state = active_drive.get("state")
+        active_mode = active_drive.get("interface_mode")
+        if active_state not in ("idle", "disabled"):
+            conflicts.append("broker active-drive state is not idle or disabled")
+        if active_mode != "listen_only":
+            conflicts.append("broker active-drive interface mode is not listen-only")
+        if active_drive.get("helper_pid") is not None:
+            conflicts.append("broker active-drive helper is still present")
+        if (
+            vehicle_state.get("running") is True
+            or vehicle_state.get("state") in ("running", "ignition_on")
+        ):
+            conflicts.append(
+                "broker has verified running or ignition-on vehicle evidence"
+            )
+        elif vehicle_state.get("state") not in ("asleep", "awake", "parked"):
+            conflicts.append("broker vehicle state is not safe for a parked wake")
+        return tuple(conflicts)
+
+    def _begin_wake_authorization(self) -> tuple[str, ...]:
+        conflicts = self._wake_state_conflicts(require_fresh=True)
+        if conflicts:
+            return conflicts
+        with self._lock:
+            # The passive-first fixed transaction is bounded below twelve
+            # seconds (two passive probes, one final role probe, 1.5 s burst,
+            # signature/0x46C validation, and exact restoration).  The
+            # deadline is established once and is never extended by callbacks.
+            self._wake_authorization_owner = threading.get_ident()
+            self._wake_authorization_deadline = self.monotonic() + 12.0
+        return ()
+
+    def _end_wake_authorization(self) -> None:
+        with self._lock:
+            if self._wake_authorization_owner == threading.get_ident():
+                self._wake_authorization_owner = None
+                self._wake_authorization_deadline = None
+
+    def wake_prearm_conflicts(self) -> tuple[str, ...]:
+        """Return broker state which forbids a fixed parked wake.
+
+        This callback is re-run by ``lib.can_wake`` while it owns the exact
+        role/channel, immediately before link mutation and again before TX.
+        Cross-process observers and active owners are enforced separately by
+        the exclusive role/channel locks.
+        """
+
+        with self._lock:
+            owner = self._wake_authorization_owner
+            deadline = self._wake_authorization_deadline
+        if owner != threading.get_ident() or deadline is None:
+            return ("bounded broker wake authorization is not active",)
+        if self.monotonic() > deadline:
+            return ("bounded broker wake authorization expired",)
+        return self._wake_state_conflicts(require_fresh=False)
+
     def acquire(self, metric: str, mode: str) -> AcquisitionResult:
         definition = self.definitions.get(metric)
         if definition is None:
@@ -2038,7 +2117,11 @@ class TelemetryBroker:
             entry = self._inflight.get(key)
             if entry is None:
                 now = self.monotonic()
-                minimum = definition.passive_min_interval_seconds
+                minimum = (
+                    definition.wake_min_interval_seconds
+                    if mode == "wake_if_asleep"
+                    else definition.passive_min_interval_seconds
+                )
                 previous = self._last_attempt.get(key)
                 if previous is not None and now - previous < minimum:
                     remaining = max(0.0, minimum - (now - previous))
@@ -2076,7 +2159,26 @@ class TelemetryBroker:
         try:
             try:
                 with self._source_lock:
-                    result = self.acquirer.acquire(mode)
+                    wake_authorized = False
+                    if mode == "wake_if_asleep":
+                        conflicts = self._begin_wake_authorization()
+                        if conflicts:
+                            result = failure(
+                                metric=metric,
+                                unit=definition.unit,
+                                reason="can_busy",
+                                detail="; ".join(conflicts),
+                                bus="b-can",
+                                acquisition=mode,
+                            )
+                        else:
+                            wake_authorized = True
+                    try:
+                        if result is None:
+                            result = self.acquirer.acquire(mode)
+                    finally:
+                        if wake_authorized:
+                            self._end_wake_authorization()
             except Exception as exc:
                 result = failure(
                     metric=metric,
@@ -2628,6 +2730,9 @@ def main(argv=None) -> int:
         interface_manager,
         probe_seconds=args.probe_seconds,
         read_timeout=args.read_timeout,
+        wake_prearm_check=lambda: broker_holder[
+            "broker"
+        ].wake_prearm_conflicts(),
     )
     passive_powertrain_reader = RoleAwareCcanPowertrainReader(
         interface_manager,

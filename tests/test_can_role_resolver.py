@@ -100,6 +100,7 @@ def interface(
     controller_state: str | None = "ERROR-ACTIVE",
     restart_ms: int | None = 0,
     fd_enabled: bool | None = False,
+    one_shot: bool | None = False,
 ) -> canbus.InterfaceState:
     return canbus.InterfaceState(
         channel=channel,
@@ -110,6 +111,7 @@ def interface(
         controller_state=controller_state,
         restart_ms=restart_ms,
         fd_enabled=fd_enabled,
+        one_shot=one_shot,
     )
 
 

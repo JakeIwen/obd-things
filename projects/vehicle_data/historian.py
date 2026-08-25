@@ -463,6 +463,26 @@ class TelemetryHistorian:
             ON metric_samples(captured_us);
         CREATE INDEX IF NOT EXISTS metric_samples_observation
             ON metric_samples(metric, source, observed_us, captured_us);
+        -- Advisory evaluation asks for the newest fresh row for every rule.
+        -- Cached observations are still ingested after they become stale so
+        -- coverage gaps remain explicit; without this partial index, each
+        -- lookup walks every newer stale copy before reaching the last fresh
+        -- row.  That cost grows with parked time and used to monopolize one Pi
+        -- core during each five-second historian checkpoint.
+        CREATE INDEX IF NOT EXISTS metric_samples_fresh_latest
+            ON metric_samples(metric, captured_us DESC)
+            WHERE freshness='fresh';
+        -- Rollups count each source observation once even when several broker
+        -- snapshots retain it.  Cover the complete observation identity plus
+        -- capture ordering so the correlated earlier-row check is an exact
+        -- bounded lookup rather than a scan through every cached duplicate.
+        CREATE INDEX IF NOT EXISTS metric_samples_rollup_dedup
+            ON metric_samples(
+                metric, source, unit, quality, provenance, observed_us,
+                captured_us
+            )
+            WHERE freshness='fresh' AND value_kind='number'
+              AND observed_us IS NOT NULL;
 
         CREATE TABLE IF NOT EXISTS metric_gaps (
             id INTEGER PRIMARY KEY,

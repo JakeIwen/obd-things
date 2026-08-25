@@ -1415,6 +1415,15 @@ function renderHistory(history) {
   );
 }
 
+const WARNING_CARD_STATES = new Set(["watch", "warning"]);
+
+function selectWarningCards(active, assessments) {
+  if (active.length) return active;
+  return assessments.filter(
+    (assessment) => WARNING_CARD_STATES.has(assessment?.state),
+  ).slice(0, 8);
+}
+
 function renderEarlyWarnings(health) {
   const summary = health && typeof health === "object" ? health : {};
   const qualitySummary = summary.data_quality &&
@@ -1487,11 +1496,7 @@ function renderEarlyWarnings(health) {
   );
   const list = byId("warning-list");
   list.replaceChildren();
-  const shown = active.length
-    ? active
-    : assessments.filter(
-      (assessment) => assessment?.state !== "normal",
-    ).slice(0, 8);
+  const shown = selectWarningCards(active, assessments);
   shown.forEach((assessment) => {
     const article = document.createElement("article");
     article.className = "summary-card";

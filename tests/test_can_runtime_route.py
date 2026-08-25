@@ -15,6 +15,7 @@ def interface(
     bitrate=500_000,
     listen_only=True,
     fd_enabled=False,
+    one_shot=False,
     restart_ms=0,
     up=True,
     controller_state="ERROR-ACTIVE",
@@ -28,6 +29,7 @@ def interface(
         controller_state=controller_state,
         restart_ms=restart_ms,
         fd_enabled=fd_enabled,
+        one_shot=one_shot,
     )
 
 
@@ -439,6 +441,133 @@ class RuntimeRouteTests(unittest.TestCase):
             )
             ownership.release()
         self.assertEqual({call.args[0] for call in ip_up.call_args_list}, {"can2"})
+
+    @staticmethod
+    def topology_record(bus="b-can", pair="3/11"):
+        return SimpleNamespace(
+            usable=True,
+            bus=bus,
+            pair=pair,
+            reason="",
+        )
+
+    def test_bus_wake_route_uses_fixed_restart_and_exactly_restores(self):
+        initial = interface("can2", bitrate=125_000)
+        armed = interface(
+            "can2", bitrate=125_000, listen_only=False, restart_ms=0
+        )
+        events = []
+        acquire_patch, release_patch = self.lock_patches(events)
+        with (
+            acquire_patch,
+            release_patch,
+            mock.patch.object(
+                route.can_operation_state,
+                "active_inhibits",
+                return_value=(),
+            ),
+            mock.patch.object(
+                route.can_operation_state,
+                "load_topology",
+                return_value=self.topology_record(),
+            ),
+            mock.patch.object(route.canbus, "identify_bus", return_value="silent"),
+            mock.patch.object(
+                route.canbus,
+                "interface_state",
+                side_effect=(initial, initial, initial, armed, initial),
+            ),
+            mock.patch.object(route.canbus, "ip_up", return_value=True) as ip_up,
+            mock.patch.object(
+                route.canbus, "restore_interface_state", return_value=True
+            ) as restore,
+        ):
+            ownership = route.acquire_armed_bus_route(
+                "b-can",
+                asserted_pair="3/11",
+                prearm_check=lambda: (),
+                manager=SequenceManager(make_topology()),
+                wake_probe_policy="silent",
+            )
+            self.assertTrue(ownership.release())
+
+        ip_up.assert_called_once_with(
+            "can2",
+            125_000,
+            listen_only=False,
+            restart_ms=0,
+            one_shot=False,
+            noninteractive=True,
+        )
+        restore.assert_called_once_with(initial, noninteractive=True)
+
+    def test_late_prearm_refusal_does_not_mutate_or_restore_passive_link(self):
+        initial = interface("can2", bitrate=125_000)
+        callback = mock.Mock(side_effect=((), ("wake marker cleared",)))
+        events = []
+        acquire_patch, release_patch = self.lock_patches(events)
+        with (
+            acquire_patch,
+            release_patch,
+            mock.patch.object(route.can_operation_state, "active_inhibits", return_value=()),
+            mock.patch.object(
+                route.can_operation_state,
+                "load_topology",
+                return_value=self.topology_record(),
+            ),
+            mock.patch.object(route.canbus, "identify_bus", return_value="silent"),
+            mock.patch.object(
+                route.canbus, "interface_state", side_effect=(initial, initial)
+            ),
+            mock.patch.object(route.canbus, "ip_up") as ip_up,
+            mock.patch.object(route.canbus, "restore_interface_state") as restore,
+        ):
+            with self.assertRaisesRegex(route.RuntimeRouteError, "marker cleared"):
+                route.acquire_armed_bus_route(
+                    "b-can",
+                    asserted_pair="3/11",
+                    prearm_check=callback,
+                    manager=SequenceManager(make_topology()),
+                    wake_probe_policy="silent",
+                )
+
+        ip_up.assert_not_called()
+        restore.assert_not_called()
+
+    def test_final_identity_state_race_rejects_before_link_mutation(self):
+        initial = interface("can2", bitrate=125_000)
+        changed = interface("can2", bitrate=125_000, restart_ms=100)
+        events = []
+        acquire_patch, release_patch = self.lock_patches(events)
+        with (
+            acquire_patch,
+            release_patch,
+            mock.patch.object(route.can_operation_state, "active_inhibits", return_value=()),
+            mock.patch.object(
+                route.can_operation_state,
+                "load_topology",
+                return_value=self.topology_record(),
+            ),
+            mock.patch.object(route.canbus, "identify_bus", return_value="silent"),
+            mock.patch.object(
+                route.canbus,
+                "interface_state",
+                side_effect=(initial, initial, changed),
+            ),
+            mock.patch.object(route.canbus, "ip_up") as ip_up,
+            mock.patch.object(route.canbus, "restore_interface_state") as restore,
+        ):
+            with self.assertRaisesRegex(route.RuntimeRouteError, "immediately before"):
+                route.acquire_armed_bus_route(
+                    "b-can",
+                    asserted_pair="3/11",
+                    prearm_check=lambda: (),
+                    manager=SequenceManager(make_topology()),
+                    wake_probe_policy="silent",
+                )
+
+        ip_up.assert_not_called()
+        restore.assert_not_called()
 
 
 if __name__ == "__main__":

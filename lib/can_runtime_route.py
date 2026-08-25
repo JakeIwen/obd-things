@@ -85,6 +85,74 @@ class PassiveBusOwnership:
 
 
 @dataclass
+class ActiveBusOwnership:
+    """Exclusive logical-role plus resolved-channel ownership capability.
+
+    This is the bus-scoped counterpart to :class:`ActiveModuleOwnership` for
+    reviewed operations, such as network-management wake traffic, which are a
+    property of one physical bus rather than an arbitrary diagnostic module.
+    The capability never guesses a module or a Linux ``canN`` identity.
+    """
+
+    route: RuntimeBusRoute
+    role_lock: object
+    channel_lock: object
+    manager: object
+    initial_state: canbus.InterfaceState | None = None
+    armed: bool = False
+    _closed: bool = False
+
+    def restore(self) -> bool:
+        """Exactly restore the verified passive starting state under both locks."""
+
+        if not self.armed:
+            return True
+        restored = False
+        try:
+            revalidate_bus_route(self.route, manager=self.manager)
+            if self.initial_state is None:
+                raise RuntimeRouteError("active ownership has no captured starting state")
+            restored = bool(
+                canbus.restore_interface_state(
+                    self.initial_state,
+                    noninteractive=True,
+                )
+            )
+            if restored:
+                revalidate_bus_route(self.route, manager=self.manager)
+                restored = _is_exact_passive_state(
+                    canbus.interface_state(self.route.channel),
+                    self.route.channel,
+                    self.route.bitrate,
+                )
+        except BaseException:
+            restored = False
+        if restored:
+            self.armed = False
+            return True
+        _latch_restoration_failure(self.route)
+        return False
+
+    def release(self) -> bool:
+        if self._closed:
+            return not self.armed
+        restored = self.restore()
+        self._closed = True
+        diagnostic_safety.release_channel_lock(self.channel_lock)
+        diagnostic_safety.release_channel_lock(self.role_lock)
+        return restored
+
+    def __enter__(self) -> "ActiveBusOwnership":
+        return self
+
+    def __exit__(self, _exc_type, _exc, _tb) -> None:
+        if not self.release():
+            raise canbus.PassiveRestoreError(
+                f"could not verify {self.route.role}/{self.route.channel} passive restoration"
+            )
+
+
+@dataclass
 class ActiveModuleOwnership:
     """Exclusive logical-role plus resolved-channel ownership capability."""
 
@@ -269,7 +337,7 @@ def acquire_passive_bus_route(
         )
         ownership.revalidate()
         return ownership
-    except Exception:
+    except BaseException:
         if channel_lock is not None:
             diagnostic_safety.release_channel_lock(channel_lock)
         if role_lock is not None:
@@ -333,6 +401,35 @@ def acquire_active_module_route(
         raise
 
 
+def acquire_active_bus_route(
+    bus: str,
+    *,
+    manager=None,
+) -> ActiveBusOwnership:
+    """Resolve and exclusively own one logical bus and its current netdev."""
+
+    manager = _manager_or_default(manager)
+    route = resolve_bus_route(bus, manager=manager)
+    role_lock = None
+    channel_lock = None
+    try:
+        role_lock = diagnostic_safety.acquire_channel_lock(f"can-role-{route.role}")
+        channel_lock = diagnostic_safety.acquire_channel_lock(route.channel)
+        revalidate_bus_route(route, manager=manager)
+        return ActiveBusOwnership(
+            route,
+            role_lock,
+            channel_lock,
+            manager,
+        )
+    except BaseException:
+        if channel_lock is not None:
+            diagnostic_safety.release_channel_lock(channel_lock)
+        if role_lock is not None:
+            diagnostic_safety.release_channel_lock(role_lock)
+        raise
+
+
 def _is_exact_passive_state(
     state: canbus.InterfaceState,
     channel: str,
@@ -345,6 +442,7 @@ def _is_exact_passive_state(
         and state.up
         and state.bitrate == bitrate
         and state.fd_enabled is False
+        and state.one_shot is False
         and state.listen_only
         and state.controller_state == "ERROR-ACTIVE"
         and state.restart_ms == 0
@@ -355,6 +453,8 @@ def _is_exact_armed_state(
     state: canbus.InterfaceState,
     channel: str,
     bitrate: int,
+    restart_ms: int = 0,
+    one_shot: bool = False,
 ) -> bool:
     return bool(
         isinstance(state, canbus.InterfaceState)
@@ -363,13 +463,16 @@ def _is_exact_armed_state(
         and state.up
         and state.bitrate == bitrate
         and state.fd_enabled is False
+        and state.one_shot is one_shot
         and not state.listen_only
         and state.controller_state == "ERROR-ACTIVE"
-        and state.restart_ms == 0
+        and state.restart_ms == restart_ms
     )
 
 
-def _latch_restoration_failure(route: RuntimeModuleRoute) -> None:
+def _latch_restoration_failure(
+    route: RuntimeModuleRoute | RuntimeBusRoute,
+) -> None:
     try:
         can_operation_state.begin_inhibit(
             "runtime-route-restoration-failed",
@@ -384,6 +487,155 @@ def _latch_restoration_failure(route: RuntimeModuleRoute) -> None:
         # Restoration has already failed.  The caller still receives a loud
         # failure even if durable inhibit publication is unavailable.
         pass
+
+
+def acquire_armed_bus_route(
+    bus: str,
+    *,
+    asserted_pair: str,
+    prearm_check,
+    manager=None,
+    one_shot: bool = False,
+    wake_probe_policy: str | None = None,
+    passive_prearm_check=None,
+) -> ActiveBusOwnership:
+    """Own, verify, and arm one resolved bus from an exact passive baseline.
+
+    This low-level capability deliberately requires both the physical-pair
+    assertion and a caller-specific contention/state callback.  Higher-level
+    reviewed profiles hide every physical detail from their consumers. The
+    installed ``gs_usb`` controllers do not support automatic bus-off restart,
+    so this capability always arms with explicit ``restart-ms 0``. ``one_shot``
+    is an internal reviewed-profile setting and must be a real boolean.
+    """
+
+    if type(one_shot) is not bool:
+        raise TypeError("one_shot must be boolean")
+    if wake_probe_policy not in (None, "silent", "role_or_silent"):
+        raise ValueError("invalid wake probe policy")
+    if passive_prearm_check is not None and not callable(passive_prearm_check):
+        raise TypeError("passive_prearm_check must be callable or None")
+    ownership = acquire_active_bus_route(bus, manager=manager)
+    route = ownership.route
+    mutation_attempted = False
+    try:
+        if not isinstance(asserted_pair, str) or asserted_pair.strip() != route.pair:
+            raise RuntimeRouteError(
+                f"resolved {route.role} requires physical pair {route.pair}; "
+                f"asserted pair was {asserted_pair!r}"
+            )
+        inhibits = can_operation_state.active_inhibits(route.channel)
+        if inhibits:
+            names = ",".join(str(item.get("name", "invalid")) for item in inhibits)
+            raise RuntimeRouteError(f"active CAN operation is inhibited by {names}")
+        if not callable(prearm_check):
+            raise TypeError("prearm_check must be callable")
+        conflicts = tuple(prearm_check())
+        if conflicts:
+            raise RuntimeRouteError("; ".join(str(item) for item in conflicts))
+        topology = can_operation_state.load_topology(route.channel)
+        if (
+            not topology.usable
+            or topology.bus != route.role
+            or topology.pair != route.pair
+        ):
+            raise RuntimeRouteError(
+                f"same-boot topology for {route.channel} does not prove "
+                f"{route.role} on pair {route.pair}: {topology.reason or topology.bus}"
+            )
+        initial = canbus.interface_state(route.channel)
+        if not _is_exact_passive_state(initial, route.channel, route.bitrate):
+            raise RuntimeRouteError(
+                f"{route.role}/{route.channel} must start UP, classical FD-off, "
+                "listen-only, ERROR-ACTIVE, restart-ms 0 at the role bitrate"
+            )
+        ownership.initial_state = initial
+        if wake_probe_policy is not None:
+            observed_bus = canbus.identify_bus(route.channel, probe=0.5)
+            revalidate_bus_route(route, manager=ownership.manager)
+            checked = canbus.interface_state(route.channel)
+            if not initial.same_configuration(checked):
+                raise RuntimeRouteError(
+                    f"{route.role}/{route.channel} changed during the final passive wake probe"
+                )
+            if wake_probe_policy == "silent" and observed_bus == route.role:
+                raise RuntimeRouteError(
+                    f"{route.role}/{route.channel} became awake before wake arming"
+                )
+            allowed = (
+                ("silent",)
+                if wake_probe_policy == "silent"
+                else ("silent", route.role)
+            )
+            if observed_bus not in allowed:
+                raise RuntimeRouteError(
+                    f"{route.role}/{route.channel} wake probe returned {observed_bus}"
+                )
+        if passive_prearm_check is not None:
+            conflicts = tuple(passive_prearm_check(route))
+            if conflicts:
+                raise RuntimeRouteError("; ".join(str(item) for item in conflicts))
+        inhibits = can_operation_state.active_inhibits(route.channel)
+        if inhibits:
+            names = ",".join(str(item.get("name", "invalid")) for item in inhibits)
+            raise RuntimeRouteError(f"active CAN operation is inhibited by {names}")
+        conflicts = tuple(prearm_check())
+        if conflicts:
+            raise RuntimeRouteError("; ".join(str(item) for item in conflicts))
+        revalidate_bus_route(route, manager=ownership.manager)
+        checked = canbus.interface_state(route.channel)
+        if not initial.same_configuration(checked):
+            raise RuntimeRouteError(
+                f"{route.role}/{route.channel} changed immediately before wake arming"
+            )
+        mutation_attempted = True
+        if not canbus.ip_up(
+            route.channel,
+            route.bitrate,
+            listen_only=False,
+            restart_ms=0,
+            one_shot=one_shot,
+            noninteractive=True,
+        ):
+            raise RuntimeRouteError(f"failed to arm {route.role}/{route.channel}")
+        ownership.armed = True
+        revalidate_bus_route(route, manager=ownership.manager)
+        if not _is_exact_armed_state(
+            canbus.interface_state(route.channel),
+            route.channel,
+            route.bitrate,
+            0,
+            one_shot,
+        ):
+            raise RuntimeRouteError(
+                f"could not prove {route.role}/{route.channel} exact classical armed state"
+            )
+        topology = can_operation_state.load_topology(route.channel)
+        if (
+            not topology.usable
+            or topology.bus != route.role
+            or topology.pair != route.pair
+        ):
+            raise RuntimeRouteError(
+                f"same-boot topology changed while arming {route.role}/{route.channel}"
+            )
+        inhibits = can_operation_state.active_inhibits(route.channel)
+        if inhibits:
+            names = ",".join(str(item.get("name", "invalid")) for item in inhibits)
+            raise RuntimeRouteError(f"active CAN operation is inhibited by {names}")
+        conflicts = tuple(prearm_check())
+        if conflicts:
+            raise RuntimeRouteError("; ".join(str(item) for item in conflicts))
+        return ownership
+    except BaseException:
+        if mutation_attempted:
+            ownership.armed = True
+        restored = ownership.release()
+        if not restored:
+            raise canbus.PassiveRestoreError(
+                f"failed to restore {route.role}/{route.channel} after arm failure"
+            )
+        raise
 
 
 def acquire_armed_module_route(

@@ -59,7 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
     acquire.add_argument("metric", choices=ACQUIRE_METRICS)
     acquire.add_argument(
         "--mode",
-        choices=("passive",),
+        choices=("passive", "wake_if_asleep"),
         default="passive",
     )
     publish = sub.add_parser(

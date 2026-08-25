@@ -65,6 +65,8 @@ class PassiveRestoreTests(unittest.TestCase):
                         "off",
                         "listen-only",
                         "on",
+                        "one-shot",
+                        "off",
                         "restart-ms",
                         "0",
                     ],
@@ -78,6 +80,7 @@ class PassiveRestoreTests(unittest.TestCase):
             canbus.subprocess, "run", return_value=ip_details()
         ):
             self.assertIs(canbus.interface_state("can0").fd_enabled, False)
+            self.assertIs(canbus.interface_state("can0").one_shot, False)
 
         fd_details = PASSIVE_DETAILS.replace("mtu 16", "mtu 72").replace(
             "<LISTEN-ONLY>", "<FD,LISTEN-ONLY>"
@@ -86,6 +89,14 @@ class PassiveRestoreTests(unittest.TestCase):
             canbus.subprocess, "run", return_value=ip_details(fd_details)
         ):
             self.assertIs(canbus.interface_state("can0").fd_enabled, True)
+
+        one_shot_details = PASSIVE_DETAILS.replace(
+            "<LISTEN-ONLY>", "<LISTEN-ONLY,ONE-SHOT>"
+        )
+        with mock.patch.object(
+            canbus.subprocess, "run", return_value=ip_details(one_shot_details)
+        ):
+            self.assertIs(canbus.interface_state("can0").one_shot, True)
 
     def test_exact_restore_rejects_fd_enabled_or_unproved_initial_state(self):
         baseline = dict(

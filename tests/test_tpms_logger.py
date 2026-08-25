@@ -678,7 +678,7 @@ class TpmsInterfaceCoordinationTests(unittest.TestCase):
     def test_under_lock_recheck_refuses_to_arm_after_gate_loss(self):
         module = SimpleNamespace(channel="can9", bitrate=500000)
         passive = canbus.InterfaceState(
-            "can9", True, True, 500000, True, "ERROR-ACTIVE", 0, False
+            "can9", True, True, 500000, True, "ERROR-ACTIVE", 0, False, False
         )
         telemetry = mock.Mock()
         for name, broker_absent, topology, inhibits, bus, running in (
@@ -729,7 +729,7 @@ class TpmsInterfaceCoordinationTests(unittest.TestCase):
     def test_under_lock_recheck_yields_if_broker_appears_during_rpm_gate(self):
         module = SimpleNamespace(channel="can9", bitrate=500000)
         passive = canbus.InterfaceState(
-            "can9", True, True, 500000, True, "ERROR-ACTIVE", 0, False
+            "can9", True, True, 500000, True, "ERROR-ACTIVE", 0, False, False
         )
         with (
             mock.patch.object(

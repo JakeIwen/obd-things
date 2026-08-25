@@ -240,9 +240,9 @@ also seen on ordinary C-CAN, so bitrate or one shared identifier cannot identify
 | `18DA28F1/F128`, `18DA30F1/F130`, `18DA31F1/F131`, `18DAC0F1/F1C0` | physical AlfaOBD exchanges with installed ABS, EPS, HALF, and ORC. Any captured member is decisive CAN-CH evidence. | verified |
 
 A silent 500-kbit/s interface cannot be distinguished passively between C-CAN and CAN-CH. Do not
-probe, wake, or switch bitrate merely to identify grey. The unattended voltage monitor can use only
-an explicit same-boot physical-topology record when the bus is silent. Recorded CAN-CH reports grey
-and exits; missing, stale, malformed, or unknown topology fails closed.
+probe, wake, or switch bitrate merely to identify grey. Current live code routes by the permanent
+USB serial/`dev_id` role map and verifies the matching same-boot role/pair record under ownership;
+signatures and bitrate are secondary validation, never routing authority. CAN-CH has no wake profile.
 
 ---
 
@@ -261,14 +261,14 @@ and exits; missing, stale, malformed, or unknown topology fails closed.
 ## Wake / sleep semantics (load-bearing — read before parked work)
 
 - **CAN-CH wake is intentionally unmapped.** Never reuse the C-CAN RFH poke or B-CAN `0x7FF`
-  burst on pins 12/13. `voltage_mon.py` treats passively identified or explicitly recorded
-  same-boot CAN-CH as a notify-and-exit topology.
-- **B-CAN wake:** a **key-fob UNLOCK wakes it (~95 s window)**; **a door-open does NOT** (capture = 0 frames). Ignition/engine wakes it too. A historical guarded `bcan_voltage.py --wake` test TX-woke silent B-CAN with a `0x7FF` burst. Verified 2026-06-26; captures in `tmp/captures/bcan/events/wake_from_*`. The fixed-channel CLI is not a current dual-hardware runbook.
+  burst on pins 12/13.
+- **B-CAN wake:** a **key-fob UNLOCK wakes it (~95 s window)**; **a door-open does NOT** (capture = 0 frames). Ignition/engine wakes it too. A guarded test TX-woke silent B-CAN with 75 standard `0x7FF` DLC-0 attempts at 20 ms spacing. Verified 2026-06-26; captures in `tmp/captures/bcan/events/wake_from_*`. The current `lib/can_wake.py` `b-can` profile preserves that exact bounded method only after permanent-role, pair, same-boot topology, lock, inhibit, silence, and passive-state gates. It requires a post-wake B-CAN signature plus sane verified `0x46C` voltage before returning, and the scheduled monitor publishes that sample only after exact passive restoration. The first permanent-role run on 2026-08-24 sent exactly 75 B-CAN frames, returned 12.32 V, restored ERROR-ACTIVE/listen-only with zero errors, and was followed by temporary C-CAN broadcast/`0x41A` activity. No accessory-rail/dashcam effect was checked. B-CAN remains preferable because it avoids the explicit RFH accessory wake, but its actual energy advantage is not quantified and cross-network activity means it must not be assumed to affect only one ECU branch.
 - **C-CAN wake — the Pi CAN wake it, but only with an *addressed* poke (verified 2026-07-08, twice):**
   - A raw `0x7FF` broadcast burst @500k does **NOT** wake a parked C-CAN (verified 2026-07-07 — ~490 frames drew only a lone 0x200). Selective wake: junk broadcast frames aren't a wake reason.
   - But **a single addressed UDS read to `rf_hub`** (KL30-powered / always-awake RKE receiver) **wakes the full C-CAN broadcast schedule**: confirmed-asleep bus (0 frames/3 s) → one `22` read → ~17.5k frames/15 s incl. **`0x41A` @10 Hz (~12.8 V)** → re-sleeps **~30 s** after traffic stops (shorter than B-CAN's ~95 s). A diag exchange with an awake KL30 module is what triggers the gateway's network-management wake.
   - **Consequence:** the physical wake method can obtain parked voltage from the C-CAN tap (wake-poke RF Hub → passive `0x41A` read); it also explains why the former single-adapter B-CAN-vs-C-CAN conflict was unnecessary. This is evidence about vehicle behavior, not authorization to wake a permanent role.
-  - **Historical implementation evidence:** `ccan_voltage.py --wake` was live-tested 2026-07-08 (one `22 F190` read to RF Hub → raw `0x41A=B0`, correctly decoded as **12.80 V**). That wake mode was removed. Current `ccan_voltage.py`, `bcan_voltage.py`, and the scheduled monitor resolve one exact role and read only an already-awake, exact passive classical-CAN interface under shared role/channel locks. The broker and in-process fallback both reject wake-assisted mode; a sleeping bus is an expected unavailable sample.
+  - **Historical implementation evidence:** `ccan_voltage.py --wake` was live-tested 2026-07-08 (one `22 F190` read to RF Hub → raw `0x41A=B0`, correctly decoded as **12.80 V**). The fixed-channel CLI remains retired. On the permanent `gs_usb` role, ordinary automatic retransmission of that first sleeping-bus request produced a valid response but left the controller ERROR-WARNING, and link down/up did not clear its transmit error state; the global restoration inhibit correctly latched and exact Board A USB reset recovered both roles. The maintained `c-can` profile therefore uses controller ONE-SHOT plus a short fixed series of physical RFH `22 FEFF` SingleFrames. `FEFF` is the compact DID explicitly recorded positive after the saved engine window ended; its four data bytes make `62 FEFF <4 bytes>` the largest response that still fits one ISO-TP SingleFrame. The payload is never logged. This wake needs neither a multi-frame VIN response nor FlowControl. Once C-CAN signatures appear, the same exclusive owner switches ONE-SHOT off and performs one normally acknowledged `22 FEFF` validation read. Fresh `0x2EF` ignition presence or `0x0FC >= 400 rpm` refuses every send. COP ALERT's separate supervisor is its intended consumer and restores passive state between fixed 15-second parked refreshes.
+  - **Permanent-role validation (2026-08-24):** from a passively proven silent C-CAN, ten ONE-SHOT `22 FEFF` attempts produced full C-CAN signatures; the under-lock switch to normal retry then returned the exact positive `62 FEFF` SingleFrame. The complete transaction added eleven TX packets, returned listen-only/ONE-SHOT-off/`restart-ms 0`/ERROR-ACTIVE, left every CAN error counter at zero, and created no inhibit. The temporary validation marker was separate from the dashboard marker, so no COP lights or notifications were triggered.
   - **Historical low-level implementation (2026-07-09):** `lib/canbus.py`
     formerly included `detect_bus()`, `tx_wake_burst()`, `poke_wake()`, and
     `wake()`. Those fixed-channel wake helpers were removed during the
@@ -278,6 +278,20 @@ and exits; missing, stale, malformed, or unknown topology fails closed.
     and revalidate the exact logical role/channel, and no maintained voltage or
     recorder path uses these signatures to transmit or hunt among ephemeral
     `canN` devices.
+- **Current shared implementation:** both fixed profiles take the logical-role lock and freshly
+  resolved-channel lock exclusively, revalidate USB identity and the same-boot role/pair record,
+  require an exact classical-CAN passive baseline, honor all same-boot inhibits and caller state
+  gates, arm with explicit `restart-ms 0` and the profile's fixed ONE-SHOT policy, validate their
+  role-specific wake evidence, then restore and verify the captured listen-only, ONE-SHOT-off,
+  `restart-ms 0` state before returning. A failed or
+  unprovable restore latches a wildcard same-boot inhibit. Passive observers or active-drive
+  ownership win contention; wake returns `can_busy` and never stops them. No public caller supplies
+  a `canN`, bitrate, pair, identifier, payload, burst count, cadence, or restoration setting.
+  The installed `gs_usb` controllers reject automatic bus-off restart but support ONE-SHOT; both
+  facts were live-confirmed on the unconnected spare. B-CAN keeps ONE-SHOT off because its verified
+  burst is promptly acknowledged. C-CAN fixes ONE-SHOT on to prevent sleeping-RFH retransmission
+  from accumulating an unrecoverable warning state. Ordinary active diagnostics and every passive
+  baseline explicitly set ONE-SHOT off.
 - **TX side effect (GOTCHA):** the rf_hub wake-poke also wakes the BCM → **switched accessory rails power up** (dash USB / dashcam boots), following the ~30–60 s awake window. Verified 2026-07-08. Owner has OK'd unprompted parked TX; just account for the side effect when reading evidence (an unexplained parked dashcam boot may be our own diag traffic — or a free bus-wake detector). tpms-logger is zero-TX in idle by design.
 - **Remote-unlock status:** BCM diagnostic actuation is power-mode gated (`7F..22` key-off even with bus awake); recommended path is a spare-fob relay, not CAN. Full detail in memory `bcan-bringup` / the B-CAN section above.
 

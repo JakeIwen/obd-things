@@ -9,7 +9,9 @@ The implementation has two trust zones:
 
 - `broker.py` owns CAN access and serves a Unix-domain HTTP API. Its GET
   endpoints only read cache. An allowlisted acquisition POST can invoke only
-  the serial-role-aware battery reader, whose installed runtime is receive-only;
+  the serial-role-aware battery reader: normal collection is receive-only,
+  while the local-only `wake_if_asleep` mode may use the fixed B-CAN wake
+  profile under the parked-state and cooldown gates described below;
   a separate strict observation POST may only populate
   an exact metric/source tuple already approved for a local logger. While the
   engine is proven running, the broker may supervise `active_drive.py`, a
@@ -25,6 +27,24 @@ The implementation has two trust zones:
   after the broker's status proves the reviewed active-drive helper owns the
   armed interface, then binds `candump` to that reported channel and rechecks
   the immutable USB identity when dual-adapter identity metadata is present.
+- `cop_can_wake.py` is the separately managed replacement for the dashboard's
+  retired direct CAN path. The dashboard only maintains
+  `/run/van-dashboard/cop-alert.active`; the supervisor requires that marker
+  to remain stable, independently pauses on `/home/pi/hooks/ignition_is_on`,
+  and requires fresh broker evidence that active-drive is idle and the engine
+  is stopped, or the narrowly defined awake/running-unknown state produced by
+  a prior parked poke. It then asks the fixed logical `c-can` wake profile for
+  one physical RF Hub `22 FEFF` transaction. Exact serial/`dev_id` role ownership,
+  pair/rate/classical-CAN checks, fresh `0x2EF`/`0x0FC` rejection gates,
+  operation inhibits, and passive restoration remain inside the shared wake
+  core. A successful poke is fully restored before the fixed 15-second wait;
+  the dashboard never imports SocketCAN or learns a `canN` name.
+  A marker newly created by an explicit button action has only a 250 ms
+  debounce. A marker already present when the supervisor process starts keeps
+  a separate three-second restart grace. Pre-transmit safety contention retries
+  after 500 ms without touching CAN; a wake/validation failure retains the
+  conservative five-second retry. Every meaningful state transition is emitted
+  as one structured `cop-can-wake-state` journal record.
 
 The code does not install or enable itself. The units under `systemd/` retain
 safe loopback defaults and must be reviewed against the target host. The
@@ -561,12 +581,17 @@ installed unit currently remains disabled/inactive. Output is under
 `/mnt/EXFAT512/obd-things/tmp/captures/ccan/broker-drive/`, and the small
 operational state is `tmp/vehicle_data/drive-recorder-state.json`.
 
-The deployed role-aware battery acquirer supports passive mode only. The former
-wake-acquisition mode and its single-adapter implementation have been removed;
-there is no broker bitrate-switch path. The reconciler records each resolved
-role's topology after verified passive setup, while active C-CAN work still
-requires the same-boot role, physical pair, USB identity, and current interface
-health gates.
+The role-aware battery acquirer supports ordinary passive mode plus one bounded
+local `wake_if_asleep` transaction. It first tries the permanent C-CAN role and
+then B-CAN passively. Only a silent exact B-CAN role may use the fixed 75-frame
+`0x7FF` wake; publication requires B-CAN signatures, sane verified `0x46C`, and
+completed exact passive restoration. The broker establishes a nonextendable
+12-second authorization from fresh collector/parked state and enforces a
+15-minute wake-attempt cooldown. Active-drive, observers, inhibits, unhealthy
+or stale broker state, and restoration faults win. There is no bitrate hunt,
+cross-role fallback, or caller-selected channel/payload. The reconciler records
+each resolved role's topology after verified passive setup, and every wake
+rechecks that same-boot role/pair record under exclusive ownership.
 
 The Unix HTTP transport itself is serialized so active CAN cleanup remains on
 the process main thread, where the existing termination-signal guard is valid.
@@ -588,6 +613,7 @@ GET  /v1/health
 GET  /v1/diagnostics/dtcs
 POST /v1/acquisitions/battery.voltage
      {"mode":"passive"}
+     {"mode":"wake_if_asleep"}  # local Unix API only; fixed B-CAN profile
 POST /v1/observations/<allowlisted-metric>
      {"value":...,"unit":"...","source":"...","bus":"...","quality":"..."}
 ```
@@ -604,6 +630,11 @@ fresh after the publisher has already timed out behind another acquisition.
 The deadline is only an admission bound; it is never used as the observation
 timestamp. Existing broadcast battery sources are not publisher-enabled,
 preventing a local logger from masquerading as the in-process voltage reader.
+The Unix acquisition handler accepts `wake_if_asleep` only for
+`battery.voltage`. `web.py` continues to accept/proxy only `mode=passive`, even
+when its otherwise-disabled acquisition proxy is explicitly enabled. The
+dashboard/manual voltage-check wrapper passes `--passive-only`, so it cannot
+indirectly select the wake mode through `voltage_mon.py`.
 
 The broker Unix API has no raw-frame, arbitrary-DID, diagnostic-session,
 live-DTC-scan, DTC-clear, reset, calibration, configuration, or PROXI endpoint.
@@ -815,14 +846,34 @@ remain listen-only/ERROR-ACTIVE with zero errors; TX counters remain
 438/0/0, unchanged from stationary commissioning. No DTC request or test
 notification was sent during deployment.
 
-The installed role-aware `van-drive-recorder.service` and
-`tpms-logger.service` copies match their tracked units but remain
-disabled/inactive and were not live-validated. Replacements for
-`promaster-bcan-recorder.service`, `promaster-mapping-drive.service`,
-`tpms-drivesniff.service`, and the external `can-three-bus-capture.service` are
-also installed and disabled/inactive. The old B-CAN recorder unit/enablement is
-retired; none of these campaign services should be inferred to have run during
-broker commissioning.
+A 2026-08-24 historian performance repair retained the five-second raw
+snapshot, rollup, advisory, persistence, and notification cadence while adding
+two partial SQLite indexes for the actual hot queries. One serves newest-fresh
+metric lookup without walking every newer stale cache copy; the other covers
+the complete observation identity used to deduplicate rollups. Before the
+repair, a parked 25-second sample measured the broker at 42.48% average CPU
+with repeated 80–99% one-core bursts and 63.82 KiB/s writes. After additive
+index migration and restart, the same sample measured 9.59% average CPU, a
+30% maximum one-second sample, 20.62 KiB/s writes, and zero I/O delay. Both web
+listeners returned HTTP 200, historian state remained running without error,
+SQLite `quick_check` returned `ok`, and query plans selected the new indexes.
+No CAN acquisition behavior, evidence rule, sampling interval, or notification
+latency was relaxed.
+
+The same 2026-08-24 UI review narrowed **Changes worth watching** cards to
+current `watch`/`warning` assessments or persisted open episodes. A rule that
+is merely unavailable or still training remains represented by the panel badge
+and explanatory note, but a never-started `0/N` persistence counter no longer
+looks like an emerging vehicle change. An already-open episode remains visible
+if its newest evidence becomes unavailable, preserving the fail-inconclusive
+rather than fail-resolved advisory contract.
+
+The installed role-aware `van-drive-recorder.service` is enabled and active,
+waiting receive-only for broker-owned active-drive intervals. `tpms-logger`,
+`promaster-bcan-recorder`, `promaster-mapping-drive`, `tpms-drivesniff`, and the
+manual `can-three-bus-capture` service remain disabled/inactive. The old B-CAN
+recorder unit/enablement is retired; none of those disabled campaign services
+should be inferred to have run during broker commissioning.
 
 The broker CLI now requires the explicit safety gate
 `--can-interface-mode dual-usbcanfd`; there is no legacy choice or `--channel`
@@ -835,8 +886,8 @@ role/status check and confirm that all four exact identities resolve once, with 
 roles on their documented rates and the spare unconnected. Also verify the
 `pi` service account's noninteractive sudo policy for the literal resolved
 channels: the reconciler needs `ip link set dev <canN> down`, the fixed
-classical-CAN `type can bitrate {125000|500000} fd off listen-only on
-restart-ms 0` form, and `ip link set dev <canN> up`; the active C-CAN owner also
+classical-CAN `type can bitrate {125000|500000} fd off listen-only on one-shot
+off restart-ms 0` form, and `ip link set dev <canN> up`; the active C-CAN owner also
 needs its reviewed listen-only-off arm and exact-state restoration forms.
 Use `sudo -n -l -- <literal command>` to inspect authorization without running
 the link command. If any role is missing/ambiguous, the physical pair differs,
@@ -854,11 +905,48 @@ service.
 
 The separate machine-local `van-dashboard.service` was cleaned on 2026-08-20:
 its external `van_dashboard.py` no longer contains the fixed-`can0` raw monitor
-or COP ALERT RF-Hub wake. COP ALERT remains a non-CAN exterior-light and
-notification feature, with its lights paused by the existing ignition-monitor
-marker, but it no longer keeps the dashcam or vehicle network awake. The
-dashboard's remaining vehicle-data integration is the cache-only telemetry
-HTTP endpoint; it does not open SocketCAN or own a bus role.
+or direct COP ALERT RF-Hub wake. That boundary remains in force. COP ALERT's
+exterior-light/notification manager owns only its runtime marker and continues
+to pause lights from the ignition-monitor marker; the dashboard's remaining
+vehicle-data integration is the cache-only telemetry HTTP endpoint.
+
+The role-aware replacement is the tracked
+`van-cop-can-wake.service`. It observes the marker from a separate process and
+can perform only the fixed C-CAN RF Hub wake described above. The CLI is
+plan-only without both `--execute` and `--confirm-fixed-c-can-wake`. On
+2026-08-24 the unit was installed, enabled, and started with COP off and both
+markers absent. It reported `idle`, its wake count remained zero, all three
+vehicle roles stayed passive, and every CAN TX/error counter stayed zero. The
+shared C-CAN transaction was then live-validated with a separate temporary
+marker, leaving the dashboard's COP state, lights, and notifications untouched:
+ten ONE-SHOT `22 FEFF` frames woke a silent C-CAN, one normally acknowledged
+validation read returned the exact positive DID echo, and the owner restored
+listen-only/ONE-SHOT-off/`restart-ms 0`/ERROR-ACTIVE with zero errors or
+inhibits. The installed supervisor uses that same transaction when its real COP
+marker is active; its channel-free state is
+`/run/van-cop-can-wake/status.json`.
+
+That status file is the read-only dashboard integration contract. It is a
+private, atomic, bounded JSON object and exposes no channel or transmission
+parameters. Current state is one of `starting`, `idle`, `arming_delay`,
+`paused_ignition`, `blocked`, `waking`, `active_waiting`, `stopping`, or
+`stopped`. `marker_active` remains requested intent; `transaction_in_progress`,
+`wake_count`, `last_attempt_at`, and `last_success_at` report execution.
+`next_attempt_at` reports a scheduled retry/refresh. The persistent
+`last_blocked_at`, `last_blocked_reason`, and `last_blocked_detail` survive
+marker removal, so turning COP off no longer destroys the reason an attempted
+activation did not transmit. The dashboard must sanitize and proxy only these
+fields; it must never write this file or invoke CAN directly.
+
+This behavior was corrected after the first real button trial on 2026-08-25.
+The dashboard posted ON/OFF at `00:47:29/32` and again at `00:47:33/39`.
+The first interval ended at the old three-second marker threshold; the second
+could perform only one preflight check before disarm. No CAN attempt occurred
+(`wake_count=0`, `last_attempt_at=null`, C-CAN TX zero), and the old idle branch
+then erased the transient block reason. The explicit-activation debounce, fast
+pre-TX retry, persistent block fields, and transition journal above are the
+direct remediation. A service restart with COP off was subsequently verified
+to remain idle and leave C-CAN TX at zero.
 
 ### Historical pre-migration deployment record
 
@@ -1021,16 +1109,17 @@ override.
 
 ## Existing voltage monitor
 
-`projects/battery/voltage_mon.py` uses the broker when its Unix socket exists.
-If the socket exists but is invalid or unreachable, the monitor fails closed
-instead of bypassing the intended owner. Read-only `crontab -l` on 2026-08-20
-showed `projects/battery/voltage_mon.sh` still scheduled every two hours from
-10:00 through 22:00; this migration did not alter it. With the broker absent,
-the in-process fallback uses the same serial-resolved passive C-CAN role lease.
-Both paths hold shared role/channel locks, require the exact passive classical
-state, and never reconfigure or transmit. A sleeping bus is an expected
-unavailable sample; wake-assisted acquisition is removed from the scheduled
-multi-role path.
+`projects/battery/voltage_mon.py` uses only the authoritative broker. If its
+Unix socket is absent, invalid, or unreachable, the monitor fails closed and
+never creates an independent active owner. Read-only `crontab -l` on 2026-08-20
+showed `projects/battery/voltage_mon.sh` scheduled every two hours from 10:00
+through 22:00; that coarse cadence remains outside the broker's 15-minute
+minimum. Scheduled/default runs request `wake_if_asleep`; already-awake C-CAN
+or B-CAN is still read passively first. `--passive-only` is the web/manual-safe
+path and never wakes. Sampling and CSV history continue when ntfy is absent or
+unreachable, but notification state is left unchanged so an undelivered low or
+recovery edge is not consumed. `--no-notify` likewise samples/logs without
+mutating alert state.
 
 ## Validation
 
@@ -1048,3 +1137,21 @@ live-CAN validated on 2026-08-21. The vehicle was asleep, so active-drive and
 the disabled companion services were not exercised. Service health and passive
 validation are not evidence of a successful active acquisition; inspect metric
 provenance and quality on every available observation.
+
+The 2026-08-24 wake deployment added hardware-specific active validation. The
+scheduled path first exposed that these `gs_usb` controllers reject automatic
+bus-off restart; that failed arm sent zero frames and restored B-CAN exactly.
+With explicit `restart-ms 0`, the same broker/cron path sent the fixed 75-frame
+B-CAN burst, returned verified `0x46C=12.32 V`, and restored passive with zero
+errors. A first C-CAN F190 experiment proved why PEAK-era automatic retry could
+not be copied: it returned a response but left this controller ERROR-WARNING,
+causing the restoration latch to block all active work. Exact Board A USB reset
+recovered C-CAN/B-CAN, all roles were revalidated, and only then was the latch
+retired. The final maintained C profile uses ONE-SHOT `22 FEFF` wake frames,
+switches to normal retry only after C-CAN signatures appear, validates one exact
+positive response, and restores ONE-SHOT off. A fully sleeping test completed
+with eleven TX packets and zero errors/inhibits. These failures and recoveries
+are part of the canonical hardware evidence, not successful-run noise to omit.
+The final portable regression run after those hardware-driven changes passed
+1,028 tests with 4 skips and 686 subtests (`van_compute` job
+`20260825T042433Z-66ac7ba5`); focused local wake/route/COP tests also passed.

@@ -409,6 +409,7 @@ def _safe_passive_state(state, channel, bitrate):
         and state.up
         and state.bitrate == bitrate
         and state.fd_enabled is False
+        and state.one_shot is False
         and state.listen_only
         and state.controller_state == "ERROR-ACTIVE"
         and state.restart_ms == 0
@@ -423,6 +424,7 @@ def _safe_armed_state(state, channel, bitrate, restart_ms):
         and state.up
         and state.bitrate == bitrate
         and state.fd_enabled is False
+        and state.one_shot is False
         and not state.listen_only
         and state.controller_state == "ERROR-ACTIVE"
         and state.restart_ms == restart_ms

@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
-"""Scheduled passive battery monitor using the serial-resolved C-CAN role.
+"""Scheduled battery monitor using the broker's fixed B-CAN wake profile.
 
-Acquisition delegates to a running ``projects/vehicle_data`` broker when
-present.  Otherwise it uses the same read-only role manager in-process.  Both
-paths resolve the installed adapter by USB serial plus controller ``dev_id``,
-hold shared logical-role and current-channel locks, require the exact passive
-classical-CAN state, and never reconfigure or transmit.  A silent/asleep bus is
-therefore an expected unavailable sample; this scheduled monitor does not wake
-vehicle modules merely to obtain a voltage reading.
+The local Unix broker first checks the permanent C-CAN and B-CAN roles
+passively. Only when no already-awake voltage is available may it run the
+fixed, role-owned B-CAN wake, validate 0x46C, restore the exact passive
+baseline, and publish the sample. There is no direct active CAN fallback when
+the authoritative broker is absent or unhealthy.
 
 Alerts go to ntfy (free push, no account): edge-triggered when it first drops below WARN_V, a
 throttled re-alert while it stays low, and one 'recovered' note on the way back up. Every message
 is datestamped. NTFY_VOLTAGE_URL sets the topic (defined in ~/secrets/.bash_variables, kept out of git).
 
-CONNECTIVITY GATE: before opening a passive CAN socket it checks the ntfy host is reachable -- if not,
-it skips. --no-notify bypasses the gate so the passive classification/read path can be tested offline.
+Connectivity gates notification delivery only. Sampling and CSV history
+continue while ntfy is unreachable, and the alert edge remains pending.
 
     python3 projects/battery/voltage_mon.py             # one run (pushes ntfy if low)
     python3 projects/battery/voltage_mon.py --no-notify  # one run, never pushes (test the read path)
+    python3 projects/battery/voltage_mon.py --no-notify --passive-only
+                                                        # cache/web-safe; never wakes
 
 cron (installed alongside):
     0 10-22/2 * * *  timeout 90 python3 .../voltage_mon.py >> .../voltage_mon.log 2>&1
@@ -37,8 +37,6 @@ sys.path.insert(0, HERE)
 import bcan_voltage as bv            # sibling module owns CSV path/root and append helper
 from projects.vehicle_data.api import TelemetryClient
 from projects.vehicle_data.broker import DEFAULT_SOCKET
-from projects.vehicle_data.can_interfaces import PassiveInterfaceManager
-from projects.vehicle_data.can_runtime import RoleAwareVoltageAcquirer
 
 NTFY_VOLTAGE_URL = os.environ.get("NTFY_VOLTAGE_URL", "")  # topic in ~/secrets/.bash_variables (sourced by .bashrc + cron BASH_ENV); never hardcode
 WARN_V    = 12.0                 # alert below this resting voltage (tune to taste)
@@ -99,7 +97,6 @@ def maybe_alert(volts, allow_send):
 
 
 BROKER_SOCKET = pathlib.Path(DEFAULT_SOCKET)
-_VOLTAGE_ACQUIRER = RoleAwareVoltageAcquirer(PassiveInterfaceManager())
 
 
 def _monitor_result(
@@ -114,11 +111,8 @@ def _monitor_result(
 ):
     if not available:
         return None, detail
-    if acquisition != "passive":
-        return None, (
-            "telemetry acquisition returned a non-passive result; "
-            "scheduled voltage monitoring withheld it"
-        )
+    if acquisition not in ("passive", "wake_assisted"):
+        return None, "telemetry acquisition returned an unapproved acquisition class"
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None, "telemetry acquisition returned an invalid voltage value"
     bus_label = {"c-can": "C-CAN", "b-can": "B-CAN"}.get(
@@ -126,13 +120,13 @@ def _monitor_result(
     )
     return (
         value,
-        f"{detail} [passive {bus_label}; source={source}; "
+        f"{detail} [{acquisition.replace('_', '-')} {bus_label}; source={source}; "
         f"quality={quality}]",
     )
 
 
-def acquire():
-    """Use an authoritative running broker, otherwise its shared acquirer in-process."""
+def acquire(*, passive_only=False):
+    """Use only the authoritative local broker for wake-capable acquisition."""
     if BROKER_SOCKET.exists():
         if not BROKER_SOCKET.is_socket():
             return None, (
@@ -145,7 +139,7 @@ def acquire():
             ).request(
                 "POST",
                 "/v1/acquisitions/battery.voltage",
-                {"mode": "passive"},
+                {"mode": "passive" if passive_only else "wake_if_asleep"},
             )
         except (OSError, RuntimeError, json.JSONDecodeError) as exc:
             return None, (
@@ -167,22 +161,14 @@ def acquire():
             detail=detail,
         )
 
-    result = _VOLTAGE_ACQUIRER.acquire("passive")
-    return _monitor_result(
-        available=result.available,
-        value=result.value,
-        bus=result.bus,
-        acquisition=result.acquisition,
-        source=result.source,
-        quality=result.quality,
-        detail=result.detail,
+    return None, (
+        f"telemetry broker socket {BROKER_SOCKET} is absent; "
+        "direct CAN fallback withheld"
     )
 
 
 def have_connectivity(url=NTFY_VOLTAGE_URL, timeout=6):
-    """True if the ntfy host is reachable (DNS + TCP connect). No point taking a passive sample
-    if we can't deliver the alert anyway. Probes the actual NTFY_VOLTAGE_URL host, so a custom/self-hosted
-    topic is tracked too."""
+    """True if the configured ntfy host is currently reachable."""
     try:
         u = urllib.parse.urlparse(url)
         host, port = u.hostname, (u.port or (443 if u.scheme == "https" else 80))
@@ -204,23 +190,26 @@ def main():
         log("another voltage_mon instance is running; skipping this tick")
         return
 
-    # Config gate: without a topic there's nothing to deliver to (fail loud, not as "no internet").
+    notification_reachable = True
     if allow_send and not NTFY_VOLTAGE_URL:
-        log("NTFY_VOLTAGE_URL unset (define it in ~/secrets/.bash_variables) -- skipping notify path")
-        return
+        notification_reachable = False
+        log("NTFY_VOLTAGE_URL unset -- sampling continues; notification withheld")
+    elif allow_send and not have_connectivity():
+        notification_reachable = False
+        log("no internet (ntfy host unreachable) -- sampling continues; notification withheld")
 
-    # Gate on connectivity before opening a passive CAN observer.
-    if allow_send and not have_connectivity():
-        log("no internet (ntfy host unreachable) -- skipping passive CAN read")
-        return
-
-    volts, status = acquire()
+    volts, status = acquire(passive_only="--passive-only" in sys.argv)
     bv.append_csv(bv.CSV_PATH, volts if volts is not None else "", status)
     if volts is None:
         log(f"voltage read FAILED: {status}")
         sys.exit(1)
     log(f"battery {volts:.2f} V  (status={status})")
-    maybe_alert(volts, allow_send)
+    if not allow_send:
+        log("notification disabled; alert state left unchanged")
+    elif not notification_reachable:
+        log("battery alert state retained until ntfy is reachable")
+    else:
+        maybe_alert(volts, True)
     sys.exit(2 if volts < WARN_V else 0)
 
 

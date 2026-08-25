@@ -1,0 +1,24 @@
+[Unit]
+Description=Guarded COP ALERT C-CAN wake supervisor
+After=local-fs.target van-dashboard.service van-telemetry.service
+Wants=van-telemetry.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/dev/obd-things
+RuntimeDirectory=van-cop-can-wake
+RuntimeDirectoryMode=0750
+UMask=0027
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=/usr/bin/test -r /home/pi/dev/obd-things/lib/can_wake.py
+ExecStart=/usr/bin/python3 /home/pi/dev/obd-things/projects/vehicle_data/cop_can_wake.py --execute --confirm-fixed-c-can-wake
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

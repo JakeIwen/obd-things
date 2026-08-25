@@ -13,6 +13,7 @@ class FakeAcquirer:
             "adapter_present": True,
             "up": True,
             "fd_enabled": False,
+            "one_shot": False,
             "listen_only": True,
             "controller_state": "ERROR-ACTIVE",
             "topology": {"bus": "c-can", "usable": True},

@@ -160,6 +160,7 @@ class PassiveInterfaceManager:
                 "up": None,
                 "bitrate": None,
                 "fd_enabled": None,
+                "one_shot": None,
                 "listen_only": None,
                 "controller_state": None,
                 "restart_ms": None,
@@ -169,6 +170,7 @@ class PassiveInterfaceManager:
             "up": state.up,
             "bitrate": state.bitrate,
             "fd_enabled": state.fd_enabled,
+            "one_shot": state.one_shot,
             "listen_only": state.listen_only,
             "controller_state": state.controller_state,
             "restart_ms": state.restart_ms,
@@ -254,6 +256,11 @@ class PassiveInterfaceManager:
                 detail=(
                     f"{channel} does not prove classical CAN with FD disabled"
                 ),
+            )
+        elif state.one_shot is not False:
+            payload.update(
+                reason="one_shot_not_disabled",
+                detail=f"{channel} does not prove one-shot retransmission is disabled",
             )
         elif not state.listen_only:
             payload.update(

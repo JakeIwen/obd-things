@@ -58,6 +58,8 @@ Mobile Hot Spot router is required" (no rationale). Better-supported reading now
   radar-side compute/auth step.
 - **Therefore the "needs a Stellantis server to commit" worry is probably wrong.** Our raw-`0x0251` Pi
   path has real odds. The realistic remaining blocker is **local**: does `0251` need a `27` security
-  unlock to commit? (`27 05` returns a seed; we lack the key algorithm.) If so, **sniff AlfaOBD** (PCAN
-  listen-only) doing its routine on the radar to capture the `27` seed→key exchange (per-ECU-family;
-  almost certainly the same unlock `0251` needs), then replicate. Cloud-free, no wiTECH, no dealer.
+  unlock to commit? (`27 05` returns a seed; we lack the key algorithm.) The historical contingency
+  was to passively record AlfaOBD doing its routine and capture the `27` seed→key exchange. Any future
+  trace would require the reviewed role-aware passive recorder on exact C-CAN, not a saved netdev or
+  adapter-specific workflow. The repair ultimately needed no unlock; do not revisit this contingency
+  for the resolved fault.

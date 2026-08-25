@@ -43,6 +43,9 @@ class InterfaceState:
     # means the readback could not prove either mode and must fail closed in
     # code which may transmit or restore an interface.
     fd_enabled: bool | None = None
+    # ONE-SHOT disables the controller's automatic retransmission. ``None``
+    # means the link readback could not prove whether it is enabled.
+    one_shot: bool | None = None
 
     def same_configuration(self, other):
         """Whether two snapshots prove the same safety-relevant link configuration."""
@@ -56,6 +59,7 @@ class InterfaceState:
             and self.controller_state == other.controller_state
             and self.restart_ms == other.restart_ms
             and self.fd_enabled == other.fd_enabled
+            and self.one_shot == other.one_shot
         )
 
 
@@ -72,7 +76,9 @@ def interface_state(channel):
         text=True,
     )
     if result.returncode != 0:
-        return InterfaceState(channel, False, False, None, False, None, None, None)
+        return InterfaceState(
+            channel, False, False, None, False, None, None, None, None
+        )
     out = result.stdout
     link_flags = re.search(r"^\s*\d+:\s+[^\n]*<([^>\n]*)>", out, re.MULTILINE)
     flags = set(link_flags.group(1).split(",")) if link_flags else set()
@@ -95,6 +101,11 @@ def interface_state(channel):
         if mtu == CAN_FD_MTU or "FD" in can_options
         else False if mtu == CLASSICAL_CAN_MTU else None
     )
+    one_shot = (
+        True
+        if "ONE-SHOT" in can_options
+        else False if state_match is not None else None
+    )
     return InterfaceState(
         channel=channel,
         present=True,
@@ -106,17 +117,28 @@ def interface_state(channel):
         controller_state=state_match.group(1) if state_match else None,
         restart_ms=int(restart_match.group(1)) if restart_match else None,
         fd_enabled=fd_enabled,
+        one_shot=one_shot,
     )
 
 
-def ip_up(channel, bitrate, listen_only, restart_ms=None, *, noninteractive=False):
+def ip_up(
+    channel,
+    bitrate,
+    listen_only,
+    restart_ms=None,
+    *,
+    one_shot=False,
+    noninteractive=False,
+):
     """Down then bring up ``channel`` as classical CAN at ``bitrate``.
 
     CAN FD is explicitly disabled and listen-only is set explicitly both ways
     because controller modes may otherwise remain sticky across link changes.
-    ``restart_ms>0`` enables bounded bus-off recovery. ``noninteractive`` adds
-    ``sudo -n`` for service helpers. Returns True only when command submission
-    succeeds; transmitting callers must also verify a fresh state readback.
+    ``restart_ms>0`` requests bus-off recovery where supported. ``one_shot`` is
+    always emitted explicitly so the controller mode cannot leak between a
+    wake profile and ordinary diagnostics. ``noninteractive`` adds ``sudo -n``
+    for service helpers. Returns True only when command submission succeeds;
+    transmitting callers must also verify a fresh state readback.
     """
     if subprocess.run(["ip", "link", "show", channel], capture_output=True).returncode != 0:
         return False
@@ -136,6 +158,8 @@ def ip_up(channel, bitrate, listen_only, restart_ms=None, *, noninteractive=Fals
         "off",
         "listen-only",
         "on" if listen_only else "off",
+        "one-shot",
+        "on" if one_shot else "off",
     ]
     cmd += ["restart-ms", str(0 if restart_ms is None else restart_ms)]
     r = subprocess.run(cmd, capture_output=True)
@@ -243,6 +267,7 @@ def restore_interface_state(state, *, noninteractive=False):
     kwargs = {
         "listen_only": state.listen_only,
         "restart_ms": state.restart_ms if state.restart_ms is not None else 0,
+        "one_shot": state.one_shot if state.one_shot is not None else False,
     }
     if noninteractive:
         kwargs["noninteractive"] = True

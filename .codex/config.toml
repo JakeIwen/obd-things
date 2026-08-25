@@ -4,7 +4,7 @@ web_search = "live"
 command = "/home/pi/dev/obd-things/tmp/venvs/obd-research/bin/ddgs"
 args = ["mcp"]
 enabled = true
-startup_timeout_sec = 30
+startup_timeout_sec = 60
 tool_timeout_sec = 120
 default_tools_approval_mode = "auto"
 
@@ -12,10 +12,8 @@ default_tools_approval_mode = "auto"
 approval_mode = "approve"
 
 [mcp_servers.playwright]
-command = "npx"
+command = "/home/pi/dev/obd-things/tmp/mcp/playwright/node_modules/.bin/playwright-mcp"
 args = [
-  "-y",
-  "@playwright/mcp@0.0.78",
   "--headless",
   "--isolated",
   "--executable-path",
@@ -24,7 +22,7 @@ args = [
   "/home/pi/dev/obd-things/tmp/playwright",
 ]
 enabled = true
-startup_timeout_sec = 30
+startup_timeout_sec = 60
 tool_timeout_sec = 120
 default_tools_approval_mode = "writes"
 

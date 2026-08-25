@@ -126,17 +126,29 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
                 },
             )
         if request_kind == "acquisition":
+            allowed_mode = (
+                isinstance(payload, dict)
+                and set(payload) == {"mode"}
+                and (
+                    payload.get("mode") == "passive"
+                    or (
+                        metric == "battery.voltage"
+                        and payload.get("mode") == "wake_if_asleep"
+                    )
+                )
+            )
             if (
-                not isinstance(payload, dict)
-                or set(payload) != {"mode"}
-                or payload.get("mode") != "passive"
+                not allowed_mode
             ):
                 return self._json(
                     400,
                     {
                         "available": False,
                         "reason": "invalid_request",
-                        "detail": "body must contain only mode=passive",
+                        "detail": (
+                            "body must contain one approved local acquisition "
+                            "mode; wake_if_asleep is restricted to battery.voltage"
+                        ),
                     },
                 )
             result = self.broker.acquire(metric, payload["mode"])

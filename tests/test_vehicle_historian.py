@@ -165,6 +165,62 @@ class HistorianIngestTests(unittest.TestCase):
             ),
         }
 
+    def test_hot_history_queries_have_targeted_partial_indexes(self):
+        with TelemetryHistorian(self.path) as historian:
+            indexes = {
+                row["name"]: row["sql"]
+                for row in historian._conn.execute(
+                    "SELECT name,sql FROM sqlite_master "
+                    "WHERE type='index' AND name LIKE 'metric_samples_%'"
+                )
+            }
+            self.assertIn("metric_samples_fresh_latest", indexes)
+            self.assertIn(
+                "WHERE freshness='fresh'",
+                indexes["metric_samples_fresh_latest"],
+            )
+            self.assertIn("metric_samples_rollup_dedup", indexes)
+            self.assertIn(
+                "observed_us IS NOT NULL",
+                indexes["metric_samples_rollup_dedup"],
+            )
+
+            latest_plan = " ".join(
+                row[3]
+                for row in historian._conn.execute(
+                    "EXPLAIN QUERY PLAN SELECT * FROM metric_samples "
+                    "WHERE metric=? AND captured_us<=? "
+                    "AND freshness='fresh' "
+                    "ORDER BY captured_us DESC LIMIT 1",
+                    ("engine.oil_pressure", 1),
+                )
+            )
+            self.assertIn("metric_samples_fresh_latest", latest_plan)
+
+            dedup_plan = " ".join(
+                row[3]
+                for row in historian._conn.execute(
+                    "EXPLAIN QUERY PLAN SELECT 1 FROM metric_samples AS earlier "
+                    "WHERE earlier.metric=? AND earlier.source=? "
+                    "AND earlier.unit=? AND earlier.quality=? "
+                    "AND earlier.provenance=? AND earlier.observed_us=? "
+                    "AND earlier.freshness='fresh' "
+                    "AND earlier.value_kind='number' "
+                    "AND earlier.observed_us IS NOT NULL "
+                    "AND earlier.captured_us<? LIMIT 1",
+                    (
+                        "engine.oil_pressure",
+                        "test.engine.oil_pressure",
+                        "psi",
+                        "verified",
+                        "finding for engine.oil_pressure",
+                        1,
+                        2,
+                    ),
+                )
+            )
+            self.assertIn("metric_samples_rollup_dedup", dedup_plan)
+
     def test_preserves_provenance_and_separates_missing_stale_and_interface_gaps(self):
         with TelemetryHistorian(self.path) as historian:
             first = historian.ingest_snapshot(

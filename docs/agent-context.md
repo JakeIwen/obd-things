@@ -51,11 +51,33 @@ service, cron, network, and vehicle state before acting.
 - Parked C-CAN diagnostic TX can wake the BCM, briefly power switched accessories, and boot the dashcam.
   The user approved low-frequency parked TX without a separate prompt, but it is still an observer and
   battery effect. Avoid gratuitous traffic. See `docs/bus-map.md` for verified wake behavior.
-- On 2026-08-20 the separate machine-local `van-dashboard.service` was cleaned of its fixed-`can0`
-  raw monitor and COP ALERT RF-Hub wake path. COP ALERT remains a non-CAN exterior-light and
-  notification feature; the existing ignition-monitor marker pauses its lights while driving. It no
-  longer keeps the dashcam or vehicle network awake. The dashboard may display cache-only telemetry
-  over HTTP, but it does not open a CAN socket, inspect a CAN interface, or request vehicle wake.
+- The separate machine-local `van-dashboard.service` remains CAN-free: it may display cache-only
+  telemetry over HTTP, publish the existing COP ALERT marker, and observe the independent ignition
+  marker, but it must never open a CAN socket, inspect an interface, or select a netdev. The role-aware
+  `van-cop-can-wake.service` is the only maintained bridge from the COP marker to CAN. It uses the
+  fixed one-shot C-CAN RF-Hub `22 FEFF` wake profile, requires fresh broker/vehicle/USB safety state, pauses
+  for the ignition marker or running evidence, and restores the exact passive role before every
+  fixed-cadence wait. A disabled, blocked, or unavailable wake service leaves the exterior-light
+  and notification behavior intact but does not keep the dashcam/accessory network awake.
+  Explicit marker creation uses a short 250 ms debounce; only a marker already present at process
+  start receives the three-second restart grace. Pre-transmit safety contention retries after
+  500 ms. Structured journal transitions and persistent `last_blocked_*` status fields preserve
+  the reason for a failed activation even after the dashboard removes the marker.
+- `lib/can_wake.py` owns the two reviewed network-wake profiles. Scheduled parked voltage uses only
+  the fixed B-CAN `0x7FF` burst followed by verified `0x46C` voltage; COP ALERT uses only the fixed
+  addressed C-CAN RF-Hub read because its accessory-rail side effect is the intended behavior.
+  Consumers pass `b-can` or `c-can`, never a channel, rate, pair, identifier, payload, cadence, or
+  restore policy. There is no CAN-CH profile, and one role's wake method is never substituted for
+  another. Both paths resolve USB serial plus `dev_id`, hold the exact role/channel exclusively,
+  honor same-boot inhibits and other owners, and return success only after verified passive
+  restoration. Passive signatures and bitrate are corroborating state checks, never routing
+  authority.
+- The installed `gs_usb` firmware supports ONE-SHOT but rejects automatic bus-off restart. A
+  sleeping-bus F190 request with ordinary retransmission returned data yet left C-CAN
+  ERROR-WARNING across link down/up; the restoration latch and an exact Board A USB reset were
+  required. Do not reintroduce that PEAK-era retry policy. The maintained C wake uses ONE-SHOT
+  `22 FEFF` only until C-CAN signatures appear, then switches to normal retry for one acknowledged
+  validation read and restores ONE-SHOT off.
 - Standing owner authorization: Codex may run already-reviewed, physically addressed, non-mutating
   data reads without requesting separate conversational approval each time. This covers UDS `19`,
   `1A`, `22`, result-only `31 03`, and controller-defined read-only AlfaOBD observations, provided no

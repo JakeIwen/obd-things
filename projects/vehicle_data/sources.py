@@ -15,7 +15,7 @@ from projects.vehicle_data.models import AcquisitionResult, failure, success
 
 METRIC = "battery.voltage"
 UNIT = "V"
-BITRATE_BY_BUS = {"c-can": 500000, "b-can": 125000, "can-ch": 500000}
+BITRATE_BY_BUS = {"c-can": 500000, "b-can": 125000}
 
 
 @dataclass(frozen=True)
@@ -77,12 +77,18 @@ class SystemVoltageBackend:
 
 
 class VoltageAcquirer:
-    """Read one runtime-resolved SocketCAN channel without changing CAN state."""
+    """Read one already-resolved logical bus without changing CAN state.
+
+    ``expected_bus`` is routing authority supplied by the serial/``dev_id``
+    owner.  Passive signatures are only a secondary identity check; this
+    reader never chooses B-CAN versus C-CAN from bitrate or observed frames.
+    """
 
     def __init__(
         self,
         *,
         channel: str,
+        expected_bus: str,
         backend: VoltageBackend | None = None,
         locks: LockProvider | None = None,
         probe_seconds: float = 0.75,
@@ -97,7 +103,10 @@ class VoltageAcquirer:
             raise ValueError(
                 "voltage acquisition requires a runtime-resolved SocketCAN canN"
             )
+        if expected_bus not in BITRATE_BY_BUS:
+            raise ValueError("expected_bus must be the logical role 'b-can' or 'c-can'")
         self.channel = channel
+        self.expected_bus = expected_bus
         self.backend = backend or SystemVoltageBackend()
         self.locks = locks or SystemLockProvider()
         self.probe_seconds = probe_seconds
@@ -133,10 +142,15 @@ class VoltageAcquirer:
                 "source_unavailable",
                 f"{self.channel} is down or has no readable bitrate; left unchanged",
             )
-        if state.fd_enabled is not False or state.restart_ms != 0:
+        if (
+            state.fd_enabled is not False
+            or state.one_shot is not False
+            or state.restart_ms != 0
+        ):
             return None, self._fail(
                 "source_unavailable",
-                f"{self.channel} is not fixed classical CAN with restart-ms zero",
+                f"{self.channel} is not fixed classical CAN with one-shot off "
+                "and restart-ms zero",
             )
         if not state.listen_only:
             return None, self._fail(
@@ -149,10 +163,13 @@ class VoltageAcquirer:
                 f"{self.channel} controller is "
                 f"{state.controller_state or 'unavailable'}; left unchanged",
             )
-        if state.bitrate not in (125000, 500000):
+        expected_bitrate = BITRATE_BY_BUS[self.expected_bus]
+        if state.bitrate != expected_bitrate:
             return None, self._fail(
                 "wrong_bus",
-                f"{self.channel} is at unsupported bitrate {state.bitrate}",
+                f"resolved {self.expected_bus} requires {expected_bitrate} bit/s "
+                f"but {self.channel} is at {state.bitrate}",
+                bus=self.expected_bus,
             )
         return state, None
 
@@ -163,42 +180,42 @@ class VoltageAcquirer:
         *,
         acquisition: str,
     ) -> AcquisitionResult:
-        expected = BITRATE_BY_BUS.get(bus)
-        if bus == "can-ch":
+        expected = self.expected_bus
+        expected_bitrate = BITRATE_BY_BUS[expected]
+        if bus == "silent":
             return self._fail(
-                "wrong_bus",
-                "CAN-CH/grey is connected; no approved voltage source is mapped",
-                bus=bus,
+                "bus_asleep",
+                f"resolved {expected} produced no passive traffic",
+                bus=expected,
                 acquisition=acquisition,
             )
-        if bus not in ("c-can", "b-can"):
+        if bus != expected:
             reason = {
-                "silent": "bus_asleep",
                 "wrong-rate": "wrong_bus",
                 "unknown": "unrecognized_bus",
-            }.get(bus, "unrecognized_bus")
+            }.get(bus, "wrong_bus")
             return self._fail(
                 reason,
-                f"passive bus identification returned {bus}",
-                bus=bus,
+                f"resolved {expected} secondary signature check returned {bus}",
+                bus=expected,
                 acquisition=acquisition,
             )
-        if state.bitrate != expected:
+        if state.bitrate != expected_bitrate:
             return self._fail(
                 "wrong_bus",
-                f"{bus} requires {expected} bit/s but {self.channel} is "
+                f"{expected} requires {expected_bitrate} bit/s but {self.channel} is "
                 f"{state.bitrate}",
-                bus=bus,
+                bus=expected,
                 acquisition=acquisition,
             )
         decoded = self.backend.read_voltage(
-            bus, self.channel, timeout=self.read_timeout
+            expected, self.channel, timeout=self.read_timeout
         )
         if decoded is None:
             return self._fail(
                 "source_unavailable",
-                f"{bus} was identified but no approved voltage frame arrived",
-                bus=bus,
+                f"{expected} was verified but no approved voltage frame arrived",
+                bus=expected,
                 acquisition=acquisition,
             )
         return success(
@@ -206,7 +223,7 @@ class VoltageAcquirer:
             unit=UNIT,
             value=decoded.value,
             source=decoded.source,
-            bus=bus,
+            bus=expected,
             acquisition=acquisition,
             quality=decoded.quality,
             observed_monotonic=self.monotonic(),

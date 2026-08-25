@@ -30,6 +30,7 @@ class MetricDefinition:
     passive_min_interval_seconds: float
     sources: tuple[SourceDefinition, ...]
     allowed_acquisition_modes: tuple[str, ...] = ()
+    wake_min_interval_seconds: float = 900.0
     minimum: float | None = None
     maximum: float | None = None
 
@@ -62,7 +63,7 @@ BATTERY_VOLTAGE = MetricDefinition(
     value_type="number",
     stale_after_seconds=30.0,
     passive_min_interval_seconds=1.0,
-    allowed_acquisition_modes=("passive",),
+    allowed_acquisition_modes=("passive", "wake_if_asleep"),
     minimum=0.0,
     maximum=32.0,
     sources=(
@@ -73,7 +74,10 @@ BATTERY_VOLTAGE = MetricDefinition(
             acquisition_class="passive_broadcast",
             quality="verified",
             provenance="docs/bus-map.md B-CAN 0x46C low-13-bit /400 decode",
-            side_effects="none while already awake",
+            side_effects=(
+                "none while already awake; wake_if_asleep may send the fixed "
+                "bounded B-CAN network-wake burst before reading 0x46C"
+            ),
         ),
         SourceDefinition(
             name="ccan.broadcast.0x41a",

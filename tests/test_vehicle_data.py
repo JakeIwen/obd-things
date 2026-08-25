@@ -47,6 +47,7 @@ def interface(
     up=True,
     restart_ms=0,
     fd_enabled=False,
+    one_shot=False,
 ):
     return canbus.InterfaceState(
         channel=TEST_CHANNEL,
@@ -57,6 +58,7 @@ def interface(
         controller_state=state,
         restart_ms=restart_ms,
         fd_enabled=fd_enabled,
+        one_shot=one_shot,
     )
 
 
@@ -105,7 +107,7 @@ class SourceTests(unittest.TestCase):
         for channel in (None, "c-can", "vcan0", "can", "can-1", ""):
             with self.subTest(channel=channel):
                 with self.assertRaisesRegex(ValueError, "runtime-resolved"):
-                    VoltageAcquirer(channel=channel)
+                    VoltageAcquirer(channel=channel, expected_bus="c-can")
 
     def test_default_delivery_cadence_fits_measured_freshness_phase(self):
         broker_args = build_parser().parse_args(
@@ -185,7 +187,7 @@ class SourceTests(unittest.TestCase):
         sources = METRICS["battery.voltage"].sources
         self.assertEqual(
             METRICS["battery.voltage"].allowed_acquisition_modes,
-            ("passive",),
+            ("passive", "wake_if_asleep"),
         )
         self.assertEqual(
             {source.name for source in sources},
@@ -311,6 +313,7 @@ class SourceTests(unittest.TestCase):
         locks = FakeLocks()
         result = VoltageAcquirer(
             channel="can7",
+            expected_bus="c-can",
             backend=backend,
             locks=locks,
             monotonic=lambda: 10.0,
@@ -323,27 +326,27 @@ class SourceTests(unittest.TestCase):
     def test_armed_interface_fails_before_probe_or_read(self):
         backend = FakeBackend(states=(interface(listen_only=False),))
         result = VoltageAcquirer(
-            channel="can7", backend=backend, locks=FakeLocks()
+            channel="can7", expected_bus="c-can", backend=backend, locks=FakeLocks()
         ).acquire("passive")
 
         self.assertFalse(result.available)
         self.assertEqual(result.reason, "can_busy")
         self.assertEqual(backend.read_count, 0)
 
-    def test_canch_has_no_approved_passive_voltage_source(self):
+    def test_foreign_signature_cannot_reroute_resolved_voltage_role(self):
         backend = FakeBackend(buses=("can-ch",))
         result = VoltageAcquirer(
-            channel="can7", backend=backend, locks=FakeLocks()
+            channel="can7", expected_bus="c-can", backend=backend, locks=FakeLocks()
         ).acquire("passive")
 
         self.assertFalse(result.available)
-        self.assertEqual(result.bus, "can-ch")
+        self.assertEqual(result.bus, "c-can")
         self.assertEqual(backend.read_count, 0)
 
     def test_silent_bus_returns_passive_sleep_evidence(self):
         backend = FakeBackend(buses=("silent",))
         result = VoltageAcquirer(
-            channel="can7", backend=backend, locks=FakeLocks()
+            channel="can7", expected_bus="c-can", backend=backend, locks=FakeLocks()
         ).acquire("passive")
 
         self.assertEqual(result.reason, "bus_asleep")
@@ -353,6 +356,7 @@ class SourceTests(unittest.TestCase):
         backend = mock.Mock()
         result = VoltageAcquirer(
             channel=TEST_CHANNEL,
+            expected_bus="c-can",
             backend=backend,
             locks=FakeLocks(),
         ).acquire("transmit")
@@ -369,6 +373,7 @@ class SourceTests(unittest.TestCase):
                 backend = FakeBackend(states=(state,))
                 result = VoltageAcquirer(
                     channel=TEST_CHANNEL,
+                    expected_bus="c-can",
                     backend=backend,
                     locks=FakeLocks(),
                 ).acquire("passive")
@@ -506,6 +511,7 @@ class FakeAcquirer:
             "up": True,
             "bitrate": 125000,
             "fd_enabled": False,
+            "one_shot": False,
             "listen_only": True,
             "controller_state": "ERROR-ACTIVE",
             "topology": {
@@ -528,6 +534,61 @@ class BrokerTests(unittest.TestCase):
             broker.status_response()["history_recorder"]["interval_seconds"],
             5.0,
         )
+
+    def test_wake_authorization_is_fresh_strict_and_never_extended(self):
+        clock = FakeClock()
+        broker = TelemetryBroker(acquirer=FakeAcquirer(), monotonic=clock)
+        self.assertIn("collector", "; ".join(broker._begin_wake_authorization()))
+
+        broker._collector_state = "running"
+        broker._vehicle_state = {
+            "state": "asleep",
+            "running": False,
+            "confidence": "inferred",
+            "basis": "passive_bus_silence",
+            "detail": "test",
+            "observed_at": None,
+        }
+        broker._vehicle_state_observed_monotonic = clock.value
+        self.assertEqual(broker._begin_wake_authorization(), ())
+        deadline = broker._wake_authorization_deadline
+
+        clock.value += 11.9
+        self.assertEqual(broker.wake_prearm_conflicts(), ())
+        self.assertEqual(broker._wake_authorization_deadline, deadline)
+        clock.value += 0.2
+        self.assertIn("expired", "; ".join(broker.wake_prearm_conflicts()))
+        broker._end_wake_authorization()
+
+        broker._vehicle_state_observed_monotonic = clock.value
+        broker._active_drive.update(
+            state="idle", interface_mode="armed_diagnostic", helper_pid=None
+        )
+        conflicts = broker._begin_wake_authorization()
+        self.assertIn("not listen-only", "; ".join(conflicts))
+
+    def test_wake_mode_has_independent_fifteen_minute_cooldown(self):
+        clock = FakeClock()
+        acquirer = FakeAcquirer()
+        broker = TelemetryBroker(acquirer=acquirer, monotonic=clock)
+        broker._collector_state = "running"
+        broker._vehicle_state = {
+            "state": "asleep",
+            "running": False,
+            "confidence": "inferred",
+            "basis": "passive_bus_silence",
+            "detail": "test",
+            "observed_at": None,
+        }
+        broker._vehicle_state_observed_monotonic = clock.value
+
+        first = broker.acquire("battery.voltage", "wake_if_asleep")
+        second = broker.acquire("battery.voltage", "wake_if_asleep")
+
+        self.assertTrue(first.available)
+        self.assertEqual(second.reason, "rate_limited")
+        self.assertIn("900.0", second.detail)
+        self.assertEqual(acquirer.calls, ["wake_if_asleep"])
 
     def test_close_releases_insights_once_and_not_under_a_live_history_thread(self):
         insights = mock.Mock()
@@ -1313,6 +1374,29 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertEqual(payload["reason"], "unknown_metric")
 
+    def test_unix_api_accepts_bounded_battery_wake_mode(self):
+        self.broker._collector_state = "running"
+        self.broker._vehicle_state = {
+            "state": "asleep",
+            "running": False,
+            "confidence": "inferred",
+            "basis": "passive_bus_silence",
+            "detail": "test",
+            "observed_at": None,
+        }
+        self.broker._vehicle_state_observed_monotonic = 100.0
+
+        status, payload = self.client.request(
+            "POST",
+            "/v1/acquisitions/battery.voltage",
+            {"mode": "wake_if_asleep"},
+        )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["available"])
+        self.assertEqual(self.acquirer.calls, ["wake_if_asleep"])
+        self.assertIsNone(self.broker._wake_authorization_deadline)
+
     def test_unix_only_observation_post_uses_strict_contract(self):
         status, payload = self.client.publish(
             "battery.voltage",
@@ -1591,6 +1675,15 @@ class WebTests(unittest.TestCase):
             "POST",
             "/v1/acquisitions/battery.voltage",
             {"mode": "transmit"},
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(raw)["reason"], "invalid_request")
+        self.assertEqual(self.acquirer.calls, [])
+
+        status, raw = self.request(
+            "POST",
+            "/v1/acquisitions/battery.voltage",
+            {"mode": "wake_if_asleep"},
         )
         self.assertEqual(status, 400)
         self.assertEqual(json.loads(raw)["reason"], "invalid_request")
@@ -2684,6 +2777,7 @@ class InterfaceStateTests(unittest.TestCase):
             500000,
             listen_only=True,
             restart_ms=100,
+            one_shot=False,
         )
         snapshot.assert_called_once_with(TEST_CHANNEL)
 

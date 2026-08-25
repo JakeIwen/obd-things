@@ -45,6 +45,7 @@ lib/                       GENERIC, module-agnostic plumbing
   can_role_resolver.py       exact serial/dev_id -> ephemeral SocketCAN role resolution
   vehicle_can_roles.py       installed three-bus role/serial/dev_id specifications
   can_runtime_route.py       scoped live arm/restore owner for supported diagnostic CLIs
+  can_wake.py                fixed logical B/C wake profiles with exact passive restoration
   signal_fields.py           dependency-free DBC/cantools Intel/Motorola raw bit geometry
   diagnostic_safety.py       shared/exclusive logical-role and resolved-channel locks
   can_operation_state.py     same-boot physical-topology + external-campaign wake inhibits
@@ -134,9 +135,11 @@ simpler `REPO = dirname(__file__)/..`.
 
 ## Gotchas (these already bit us)
 
-- **`listen-only` is sticky** across `ip link set up`. Every current role configuration must
+- **Controller modes are sticky** across `ip link set up`. Every current role configuration must
   explicitly select classical CAN with FD off, the fixed role bitrate, intended listen-only state,
-  and `restart-ms 0`, then verify a fresh readback. RX working does not prove TX is armed.
+  intended ONE-SHOT state, and `restart-ms 0`, then verify a fresh readback. Ordinary passive and
+  diagnostic paths require ONE-SHOT off; only the fixed C-CAN wake profile enables it. RX working
+  does not prove TX is armed.
 - **Down before re-up:** changing CAN link settings on an already-up interface fails with
   `Device or resource busy`. On the dual installation, only the serial-aware reconciler or a
   reviewed active owner may perform the down/configure/up sequence while holding both role and
@@ -162,16 +165,17 @@ ERROR-ACTIVE. The unconnected spare was `can3` and remained down. TX and error
 counters were zero. These `canN` names record that one commissioning snapshot,
 not durable identities.
 
-The normal service is now running with active-drive enabled, but the vehicle
-was asleep during final validation: the helper remained idle and TX stayed at
-zero. This validates the passive three-role reconciler, not an active diagnostic
-interval. The cache-only web path is active over the configured LAN/Tailscale
-access and the historian is writing. The retired fixed-`can0` systemd drop-in
-and helper were removed from the live host into a recoverable `tmp/` backup.
-Role-aware replacements for the B-CAN recorder, mapping recorder, TPMS drive
-sniffer, and three-bus recorder are installed but disabled/inactive; the
-standalone TPMS logger and broker drive recorder also match their tracked units
-and remain disabled/inactive.
+The normal service is running with active-drive enabled. On 2026-08-24 the
+broker was restarted onto the role-aware wake implementation while the vehicle
+was asleep; the active-drive helper remained idle, the historian and both web
+listeners recovered, and all three vehicle roles remained exact passive with
+zero TX/error counters. The broker-owned `van-drive-recorder.service` is
+enabled and active, waiting receive-only for a reviewed active-drive interval.
+The new `van-cop-can-wake.service` is also installed, enabled, and active; with
+COP off and both markers absent its initial state was `idle` and caused no TX.
+The B-CAN recorder, mapping recorder, TPMS logger/sniffer, and manual three-bus
+capture are installed but disabled/inactive. The retired fixed-`can0` systemd
+drop-in and helper remain removed from the live host.
 
 `Module.bus` is the physical routing source of truth. A current live
 path must resolve that logical bus through the exact serial/`dev_id`, acquire
@@ -187,6 +191,26 @@ role, holds the role and channel exclusively, checks exact-role contention,
 host privilege, and same-boot inhibits, requires an exact passive classical-CAN baseline, arms only for its
 bounded operation, revalidates identity, and restores the captured passive
 state. An unverified restore creates a wildcard same-boot inhibit.
+
+The shared wake path is similarly role-scoped but deliberately narrower:
+`lib/can_wake.py` accepts only logical `b-can` or `c-can` and fixes every
+physical/timing/traffic detail internally. Scheduled parked-voltage monitoring
+uses B-CAN's bounded wake only through the broker's local Unix API, after
+passive-first and fresh parked-state gates. COP ALERT's separate supervisor
+uses the C-CAN RF Hub profile because its accessory-rail/dashcam side effect is
+the intended behavior. Both restore and verify the captured passive baseline
+before returning, and CAN-CH has no wake profile. The telemetry acquisition web
+proxy cannot request a wake. COP's separate dashboard can only publish its
+existing intent marker; the guarded supervisor remains the CAN authority.
+New button markers receive a 250 ms debounce and fast pre-transmit retry;
+only a marker surviving a supervisor restart receives the three-second grace.
+The supervisor journals transitions and retains its last blocked reason in its
+private runtime status for the dashboard to display read-only.
+Both installed profiles were live-validated asleep on 2026-08-24: B-CAN
+returned verified 12.32 V after exactly 75 wake frames; C-CAN used ten
+ONE-SHOT `22 FEFF` wake frames plus one normally acknowledged validation read.
+Each restored classical listen-only, ONE-SHOT off, `restart-ms 0`, and
+ERROR-ACTIVE with zero final error counters and no active inhibit.
 
 The cooperative `tools/three_bus_capture.py` recorder is the all-bus passive
 capture path. Three concurrent workers each hold only their own shared role and

@@ -6,7 +6,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from lib import canbus
+from lib import can_wake, canbus
 from projects.vehicle_data.can_runtime import (
     PassiveRoleReconciler,
     RoleAwareActiveDriveSupervisor,
@@ -25,6 +25,7 @@ def interface(
     listen_only: bool = True,
     controller_state: str = "ERROR-ACTIVE",
     restart_ms: int = 0,
+    one_shot: bool = False,
 ) -> canbus.InterfaceState:
     return canbus.InterfaceState(
         channel=channel,
@@ -35,6 +36,7 @@ def interface(
         controller_state=controller_state,
         restart_ms=restart_ms,
         fd_enabled=False,
+        one_shot=one_shot,
     )
 
 
@@ -112,6 +114,10 @@ class PassiveConfigurationTests(unittest.TestCase):
         self.assertEqual(
             commands[1][commands[1].index("listen-only") + 1],
             "on",
+        )
+        self.assertEqual(
+            commands[1][commands[1].index("one-shot") + 1],
+            "off",
         )
         self.assertEqual(
             commands[1][commands[1].index("restart-ms") + 1],
@@ -387,6 +393,7 @@ class RoleAwareSourceTests(unittest.TestCase):
         self.assertIs(result, expected)
         factory.assert_called_once_with(
             channel="can7",
+            expected_bus="c-can",
             probe_seconds=0.75,
             read_timeout=2.0,
         )
@@ -438,7 +445,68 @@ class RoleAwareSourceTests(unittest.TestCase):
 
         self.assertFalse(result.available)
         self.assertEqual(result.reason, "unsupported_mode")
-        self.assertIn("passive acquisition only", result.detail)
+        self.assertIn("passive or wake_if_asleep", result.detail)
+
+    def test_wake_mode_is_passive_first_then_fixed_b_can_only(self):
+        ccan = mock.Mock()
+        ccan.acquire.return_value = SimpleNamespace(
+            available=False, reason="bus_asleep"
+        )
+        bcan = mock.Mock()
+        bcan.acquire.return_value = SimpleNamespace(
+            available=False, reason="bus_asleep"
+        )
+        factory = mock.Mock(side_effect=(ccan, bcan))
+        wake = mock.Mock(
+            return_value=can_wake.WakeResult(
+                role="b-can",
+                source="bcan.network_wake.0x7ff",
+                detail="fixed wake validated",
+                voltage=12.45,
+            )
+        )
+        prearm = mock.Mock(return_value=())
+        source = RoleAwareVoltageAcquirer(
+            self.manager,
+            delegate_factory=factory,
+            wake_once=wake,
+            wake_prearm_check=prearm,
+        )
+
+        result = source.acquire("wake_if_asleep")
+
+        self.assertTrue(result.available)
+        self.assertEqual(result.bus, "b-can")
+        self.assertEqual(result.source, "bcan.broadcast.0x46c")
+        self.assertEqual(result.acquisition, "wake_assisted")
+        self.assertEqual(result.value, 12.45)
+        self.assertIn("restoration verified", result.detail)
+        self.assertEqual(
+            [call.kwargs["expected_bus"] for call in factory.call_args_list],
+            ["c-can", "b-can"],
+        )
+        wake.assert_called_once_with(
+            "b-can", prearm_check=prearm, manager=self.manager
+        )
+
+    def test_wake_restoration_failure_is_never_published(self):
+        asleep = mock.Mock()
+        asleep.acquire.return_value = SimpleNamespace(
+            available=False, reason="bus_asleep"
+        )
+        source = RoleAwareVoltageAcquirer(
+            self.manager,
+            delegate_factory=mock.Mock(side_effect=(asleep, asleep)),
+            wake_once=mock.Mock(
+                side_effect=canbus.PassiveRestoreError("restore unverified")
+            ),
+            wake_prearm_check=lambda: (),
+        )
+
+        result = source.acquire("wake_if_asleep")
+
+        self.assertFalse(result.available)
+        self.assertEqual(result.reason, "restoration_failed")
 
     def test_powertrain_reader_uses_resolved_channel(self):
         reader = RoleAwareCcanPowertrainReader(self.manager)

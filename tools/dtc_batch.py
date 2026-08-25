@@ -171,6 +171,8 @@ def _exact_interface_error(channel: str, bitrate: int, *, armed: bool) -> str | 
         return f"{channel} bitrate is {state.bitrate}, expected {bitrate}"
     if state.fd_enabled is not False:
         return f"{channel} does not prove classical CAN with FD off"
+    if state.one_shot is not False:
+        return f"{channel} does not prove one-shot retransmission is off"
     expected_listen_only = not armed
     if state.listen_only is not expected_listen_only:
         expected = "armed" if armed else "listen-only"
@@ -221,11 +223,13 @@ def _exact_sudo_link_permission_errors(
         ("link", "set", channel, "down"),
         (
             "link", "set", channel, "up", "type", "can", "bitrate",
-            str(bitrate), "fd", "off", "listen-only", "off", "restart-ms", "0",
+            str(bitrate), "fd", "off", "listen-only", "off", "one-shot", "off",
+            "restart-ms", "0",
         ),
         (
             "link", "set", channel, "up", "type", "can", "bitrate",
-            str(bitrate), "fd", "off", "listen-only", "on", "restart-ms", "0",
+            str(bitrate), "fd", "off", "listen-only", "on", "one-shot", "off",
+            "restart-ms", "0",
         ),
     )
     errors = []

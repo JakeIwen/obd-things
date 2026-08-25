@@ -1,8 +1,9 @@
 # TPMS / RF Hub diagnosis — 2022 Ram Promaster (VIN 3C6LRVDG4NE######)
 
 Handoff doc. Campaign findings are current through **2026-07-30**; the
-operational-topology update below was made **2026-08-21**. Link path and general
-UDS tooling: see repo `docs/`, `lib/modules.py`, and the radar project docs. The
+operational-topology and wake updates below are current through
+**2026-08-24**. Link path and general UDS tooling: see repo `docs/`,
+`lib/modules.py`, and the radar project docs. The
 RF Hub remains on the SGW-bypass C-CAN tap, now permanently routed as Board A
 CAN1 by USB serial plus `dev_id`. Historical captures below used a PCAN on that
 same physical pair and remain valid evidence, not current interface guidance.
@@ -202,20 +203,30 @@ campaign status and
   `tmp/tpms/rfh_alfaobd_sniff_ccan_resilient.log`.
 - **The voltage-monitor cron is active.** Read-only `crontab -l` on 2026-08-20
   showed `projects/battery/voltage_mon.sh` scheduled every two hours from 10:00
-  through 22:00. It was not changed during this migration. Both its broker path
-  and its in-process fallback now resolve the exact C-CAN role, hold shared
-  role/channel locks, and read only an already-awake passive interface. They do
-  not configure or transmit, so the schedule does not guarantee a sample while
-  the bus is asleep. The historical 2026-07-25
-  single-adapter implementation permitted a sleeping-bus wake only behind the exclusive SocketCAN lock, absence of same-boot
-  external-tool inhibits, an explicit same-boot C-CAN/B-CAN topology record, and an immediate
-  under-lock interface/silence recheck. Armed/down/unhealthy/unknown/CAN-CH states never wake.
-  The deployed multi-role broker is receive-only for voltage and rejects
-  wake-assisted acquisition; do not recreate the old wake path on a current
-  netdev.
-  AlfaOBD controller actions automatically inhibit unattended wake. The
-  permanent topology has dedicated C-CAN and B-CAN roles; no adapter is moved
-  between them. Do not alter the user's cron without explicit permission.
+  through 22:00. The schedule was not changed by the wake restoration. The
+  monitor now asks only the authoritative local broker for
+  `wake_if_asleep`: the broker first tries exact role-owned passive C-CAN and
+  B-CAN voltage reads, then may use the fixed B-CAN wake profile only when the
+  dedicated B-CAN role is verified passive and silent. That profile resolves
+  Board A CAN2 by USB serial/`dev_id`, exclusively owns logical `b-can` and its
+  current netdev, rechecks same-boot pins `3/11` topology and inhibits, sends
+  the fixed bounded `0x7FF` burst, requires B-CAN signatures plus sane verified
+  `0x46C` voltage, and publishes the result only after exact passive
+  restoration. A B-CAN observer or active owner causes `can_busy`; it is never
+  stopped automatically. Broker active-drive/running/ignition evidence also
+  blocks the parked wake.
+
+  There is no direct active fallback when the broker is absent or unhealthy,
+  no bus/rate hunting, and no alternate wake-profile fallback: an already-awake
+  voltage may come from C-CAN or B-CAN, but only B-CAN is ever woken for this
+  metric and CAN-CH has no wake profile. The separate COP ALERT supervisor
+  alone uses the fixed addressed C-CAN RF-Hub wake for its intended
+  accessory/dashcam effect. AlfaOBD controller actions continue to inhibit
+  unattended wake. Notification
+  connectivity no longer suppresses sampling or CSV history; an unsent alert
+  edge remains pending until ntfy is reachable. The permanent roles stay
+  connected concurrently and no adapter moves between buses. Do not alter the
+  user's cron without explicit permission.
 - **Before manual active C-CAN work**, coordinate the exact role/channel lease.
   Cooperative passive observers may coexist; stop `tpms-logger` only if it is
   active and blocks the required exclusive C-CAN lease. B-CAN and CAN-CH work

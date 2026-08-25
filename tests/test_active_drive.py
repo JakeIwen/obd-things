@@ -21,7 +21,7 @@ TEST_SERIAL = "serial-a"
 TEST_DEV_ID = 0
 
 
-def interface(*, listen_only, restart_ms=0, fd_enabled=False):
+def interface(*, listen_only, restart_ms=0, fd_enabled=False, one_shot=False):
     return canbus.InterfaceState(
         channel=TEST_CHANNEL,
         present=True,
@@ -31,6 +31,7 @@ def interface(*, listen_only, restart_ms=0, fd_enabled=False):
         controller_state="ERROR-ACTIVE",
         restart_ms=restart_ms,
         fd_enabled=fd_enabled,
+        one_shot=one_shot,
     )
 
 

@@ -20,20 +20,22 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import re
 import subprocess
+import time
 from typing import Callable
 
-from lib import can_operation_state, canbus, diagnostic_safety
+from lib import can_operation_state, can_wake, canbus, diagnostic_safety
 from lib.can_role_resolver import CanRoleResolutionError
 from projects.vehicle_data import ccan_powertrain
 from projects.vehicle_data.can_interfaces import (
     ALL_CAN_ROLES,
+    B_CAN_ROLE,
     CAN_BUS_ROLES,
     C_CAN_ROLE,
     SPARE_ROLE,
     PassiveInterfaceManager,
     PassiveInterfaceUnavailable,
 )
-from projects.vehicle_data.models import AcquisitionResult, failure
+from projects.vehicle_data.models import AcquisitionResult, failure, success
 from projects.vehicle_data.sources import VoltageAcquirer
 
 
@@ -79,6 +81,8 @@ def configure_classical_listen_only(
             "off",
             "listen-only",
             "on",
+            "one-shot",
+            "off",
             "restart-ms",
             "0",
         ],
@@ -94,6 +98,7 @@ def configure_classical_listen_only(
         and state.up
         and state.bitrate == bitrate
         and state.fd_enabled is False
+        and state.one_shot is False
         and state.listen_only
         and state.controller_state == "ERROR-ACTIVE"
         and state.restart_ms == 0
@@ -266,6 +271,7 @@ class PassiveRoleReconciler:
                     state.up
                     and state.bitrate == spec.bitrate
                     and state.fd_enabled is False
+                    and state.one_shot is False
                     and state.listen_only
                     and state.controller_state == "ERROR-ACTIVE"
                     and state.restart_ms == 0
@@ -328,7 +334,7 @@ class PassiveRoleReconciler:
                     "reconciled" if changed else "failed",
                     channel,
                     (
-                        "configured classical CAN, FD off, listen-only on"
+                        "configured classical CAN, FD off, listen-only on, one-shot off"
                         if changed
                         else "passive configuration or verification failed"
                     ),
@@ -444,7 +450,7 @@ class PassiveRoleReconciler:
 
 
 class RoleAwareVoltageAcquirer:
-    """Use the exact serial-resolved C-CAN role for the broker voltage read."""
+    """Read fixed voltage roles and optionally use the fixed B-CAN wake."""
 
     def __init__(
         self,
@@ -454,12 +460,20 @@ class RoleAwareVoltageAcquirer:
         read_timeout: float = 2.0,
         delegate_factory=VoltageAcquirer,
         inhibit_reader=can_operation_state.active_inhibits,
+        wake_once=can_wake.wake_once,
+        wake_prearm_check=None,
     ) -> None:
         self.manager = manager
         self.probe_seconds = probe_seconds
         self.read_timeout = read_timeout
         self.delegate_factory = delegate_factory
         self.inhibit_reader = inhibit_reader
+        self.wake_once = wake_once
+        self.wake_prearm_check = (
+            wake_prearm_check
+            if wake_prearm_check is not None
+            else lambda: ("broker wake prearm gate is unavailable",)
+        )
         self._last_channel: str | None = None
 
     @property
@@ -471,27 +485,20 @@ class RoleAwareVoltageAcquirer:
         self._last_channel = channel
         return channel
 
-    def _delegate(self, channel: str):
+    def _delegate(self, channel: str, role: str):
         return self.delegate_factory(
             channel=channel,
+            expected_bus=role,
             probe_seconds=self.probe_seconds,
             read_timeout=self.read_timeout,
         )
 
-    def acquire(self, mode: str) -> AcquisitionResult:
-        if mode != "passive":
-            return failure(
-                metric="battery.voltage",
-                unit="V",
-                reason="unsupported_mode",
-                detail="multi-bus role mode supports passive acquisition only",
-                bus=C_CAN_ROLE,
-                acquisition=mode,
-            )
+    def _passive(self, role: str) -> AcquisitionResult:
         try:
-            with self.manager.observe(C_CAN_ROLE) as lease:
-                self._last_channel = lease.channel
-                return self._delegate(lease.channel).acquire("passive")
+            with self.manager.observe(role) as lease:
+                if role == C_CAN_ROLE:
+                    self._last_channel = lease.channel
+                return self._delegate(lease.channel, role).acquire("passive")
         except PassiveInterfaceUnavailable as exc:
             return failure(
                 metric="battery.voltage",
@@ -500,9 +507,99 @@ class RoleAwareVoltageAcquirer:
                     "can_busy" if exc.reason == "can_busy" else "source_unavailable"
                 ),
                 detail=exc.detail,
-                bus=C_CAN_ROLE,
+                bus=role,
                 acquisition="passive",
             )
+
+    def _wake_b_can(self) -> AcquisitionResult:
+        try:
+            wake = self.wake_once(
+                B_CAN_ROLE,
+                prearm_check=self.wake_prearm_check,
+                manager=self.manager,
+            )
+        except can_wake.CanWakeError as exc:
+            if exc.reason == "bus_not_silent":
+                raced = self._passive(B_CAN_ROLE)
+                if raced.available:
+                    return raced
+            return failure(
+                metric="battery.voltage",
+                unit="V",
+                reason=exc.reason,
+                detail=exc.detail,
+                bus=B_CAN_ROLE,
+                acquisition="wake_assisted",
+            )
+        except canbus.PassiveRestoreError as exc:
+            return failure(
+                metric="battery.voltage",
+                unit="V",
+                reason="restoration_failed",
+                detail=str(exc),
+                bus=B_CAN_ROLE,
+                acquisition="wake_assisted",
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            return failure(
+                metric="battery.voltage",
+                unit="V",
+                reason="source_unavailable",
+                detail=f"fixed B-CAN wake failed closed: {exc}",
+                bus=B_CAN_ROLE,
+                acquisition="wake_assisted",
+            )
+        if wake.voltage is None:
+            return failure(
+                metric="battery.voltage",
+                unit="V",
+                reason="invalid_source_result",
+                detail="fixed B-CAN wake returned no verified voltage",
+                bus=B_CAN_ROLE,
+                acquisition="wake_assisted",
+            )
+        return success(
+            metric="battery.voltage",
+            unit="V",
+            value=wake.voltage,
+            source="bcan.broadcast.0x46c",
+            bus=B_CAN_ROLE,
+            acquisition="wake_assisted",
+            quality="verified",
+            observed_monotonic=time.monotonic(),
+            observed_at=datetime.now(timezone.utc),
+            detail=(
+                f"{wake.detail}; exact passive restoration verified before publication"
+            ),
+        )
+
+    def acquire(self, mode: str) -> AcquisitionResult:
+        if mode == "passive":
+            return self._passive(C_CAN_ROLE)
+        if mode != "wake_if_asleep":
+            return failure(
+                metric="battery.voltage",
+                unit="V",
+                reason="unsupported_mode",
+                detail=(
+                    "multi-bus role mode supports only passive or "
+                    "wake_if_asleep acquisition"
+                ),
+                bus=C_CAN_ROLE,
+                acquisition=mode,
+            )
+
+        # Prefer a free already-awake C-CAN sample.  If that exact role is
+        # asleep or independently unavailable, check the dedicated B-CAN role
+        # passively before considering its fixed wake profile.  No result from
+        # one role is ever used to route or reconfigure the other.
+        ccan = self._passive(C_CAN_ROLE)
+        if ccan.available:
+            return ccan
+        bcan = self._passive(B_CAN_ROLE)
+        if bcan.available or bcan.reason != "bus_asleep":
+            return bcan
+        return self._wake_b_can()
 
     def status_snapshot(self) -> dict[str, object]:
         roles = self.manager.status_snapshot()
@@ -527,6 +624,7 @@ class RoleAwareVoltageAcquirer:
             "up": actual.get("up"),
             "bitrate": actual.get("bitrate"),
             "fd_enabled": actual.get("fd_enabled"),
+            "one_shot": actual.get("one_shot"),
             "listen_only": actual.get("listen_only"),
             "controller_state": actual.get("controller_state"),
             "restart_ms": actual.get("restart_ms"),
