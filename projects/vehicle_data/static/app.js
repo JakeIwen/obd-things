@@ -56,6 +56,10 @@ const DRIVE_METRICS = Object.freeze({
     names: ["vehicle.ignition_on", "vehicle.ignition"],
     roles: ["drive_ignition", "ignition"],
   },
+  odometer: {
+    names: ["vehicle.odometer"],
+    roles: ["vehicle_odometer"],
+  },
 });
 const ENGINE_HEALTH_METRICS = Object.freeze({
   oilPressure: {
@@ -467,6 +471,7 @@ function findDefinition(catalog, descriptor) {
 function formatMetricValue(name, value) {
   if (typeof value !== "number" || !Number.isFinite(value)) return String(value);
   if (name === "generator.field_duty") return value.toFixed(3);
+  if (name === "vehicle.odometer") return value.toFixed(1);
   if (name.includes("rpm")) return Math.round(value).toLocaleString();
   if (name.includes("gear")) return String(value);
   if (name.includes("speed") || name.includes("pressure")) return value.toFixed(1);
@@ -655,6 +660,41 @@ function renderDrive(status, catalog, metrics) {
   const speed = renderHeroMetric("speed", catalog, metrics);
   const rpm = renderHeroMetric("rpm", catalog, metrics);
   const gear = renderHeroMetric("gear", catalog, metrics);
+  const odometerDefinition = findDefinition(catalog, DRIVE_METRICS.odometer);
+  const odometerMetric = odometerDefinition
+    ? metrics[odometerDefinition.name]
+    : null;
+  const odometerState = observationState(odometerDefinition, odometerMetric);
+  byId("drive-odometer-card").hidden = false;
+  if (odometerState.available && !odometerState.stale) {
+    text(
+      "drive-odometer",
+      formatMetricValue(odometerDefinition.name, odometerMetric.value),
+    );
+    text(
+      "drive-odometer-unit",
+      odometerMetric.unit || odometerDefinition.unit,
+      "",
+    );
+    setCardState("drive-odometer-card", "candidate");
+    text(
+      "drive-odometer-status",
+      `CANDIDATE · ${formatAge(odometerMetric.age_ms)} old · validation required`,
+    );
+  } else {
+    text("drive-odometer", "—");
+    text("drive-odometer-unit", "", "");
+    setCardState(
+      "drive-odometer-card",
+      odometerState.stale ? "stale" : "unavailable",
+    );
+    text(
+      "drive-odometer-status",
+      odometerDefinition
+        ? `${humanize(odometerMetric?.reason || "not sampled")} · candidate`
+        : "Mapping pending",
+    );
+  }
 
   const ignitionDefinition = findDefinition(catalog, DRIVE_METRICS.ignition);
   const ignitionCard = byId("drive-ignition-card");
@@ -719,11 +759,11 @@ function renderDrive(status, catalog, metrics) {
   text(
     "drive-note",
     ready === 4
-      ? "All drive essentials are fresh and driver-qualified."
+      ? "All core drive essentials are fresh. ODOMETER* remains candidate-quality."
       : (
         `${registered}/4 drive sources are mapped. ` +
         "Only fresh, driver-qualified values are promoted here. " +
-        "Candidate and raw diagnostic DIDs are held out."
+        "ODOMETER* is shown separately as a candidate needing validation."
       ),
   );
 }
@@ -1085,7 +1125,10 @@ function featuredMetricNames(catalog) {
       const definition = findDefinition(catalog, descriptor);
       if (
         definition &&
-        DRIVER_QUALITIES.has(definitionQuality(definition))
+        (
+          DRIVER_QUALITIES.has(definitionQuality(definition)) ||
+          definition.name === "vehicle.odometer"
+        )
       ) {
         names.add(definition.name);
       }

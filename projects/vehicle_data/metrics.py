@@ -436,6 +436,38 @@ GENERATOR_FIELD_DUTY = MetricDefinition(
 )
 
 
+VEHICLE_ODOMETER = MetricDefinition(
+    name="vehicle.odometer",
+    unit="mi",
+    value_type="number",
+    stale_after_seconds=15.0,
+    passive_min_interval_seconds=0.0,
+    minimum=0.0,
+    maximum=2_000_000.0,
+    sources=(
+        SourceDefinition(
+            name="ics.did.2001",
+            bus="b-can",
+            bitrate=125000,
+            acquisition_class="physical_read_data_by_identifier",
+            quality="candidate",
+            provenance=(
+                "projects/ecu_mapping/findings/promaster_2022/"
+                "2026-08-27_three_bus_telemetry_readiness.md; ignition-on "
+                "no-session-change physical 22 2001 returned a u24be value "
+                "consistent with x0.1 km, but decoded 11.140 mi below the "
+                "simultaneous cluster display"
+            ),
+            side_effects=(
+                "engine-running-only physical UDS 22 read during an "
+                "independently owned B-CAN interval; no visible parked "
+                "side effect was observed"
+            ),
+        ),
+    ),
+)
+
+
 def _tire_pressure_metric(position: str, did: str) -> MetricDefinition:
     return MetricDefinition(
         name=f"tire.pressure.{position}",
@@ -528,6 +560,7 @@ METRICS = {
         TRANSMISSION_OIL_TEMPERATURE,
         TRANSMISSION_TURBINE_SPEED,
         GENERATOR_FIELD_DUTY,
+        VEHICLE_ODOMETER,
         TIRE_PRESSURE_FL,
         TIRE_PRESSURE_FR,
         TIRE_PRESSURE_RR,

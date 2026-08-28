@@ -58,6 +58,44 @@ The code does not install or enable itself. The units under `systemd/` retain
 safe loopback defaults and must be reviewed against the target host. The
 current vanpi deployment is recorded below.
 
+## Auxiliary bus development boundary
+
+Ordinary CAN-CH telemetry is passive-only. The owner observed that an AlfaOBD
+ABS connection illuminates multiple IPC warning indicators; the root cause is
+not established, but the visible effect is sufficient to exclude ABS from
+moving-vehicle polling. EPS, HALF, and ORC are likewise outside the auxiliary
+active allowlist because they are steering, ADAS, and restraint controllers.
+Their broadcast signals may still be decoded from synchronized receive-only
+captures.
+
+[`auxiliary_polling.py`](auxiliary_polling.py) is the offline executable policy
+for prospective B-CAN work. It contains only the ICS `2001` odometer candidate,
+fixes a minimum five-second
+per-target interval, requires response-before-next-request sequencing, and
+rejects every CAN-CH module. It has no live CAN import or execution mode. A
+2026-08-28 parked ignition-on/engine-off check returned exact no-session-change
+positive responses from both endpoints, and the owner observed no IPC, radio,
+or center-stack side effect. The simultaneous dash odometer was 53,203 mi,
+however, while ICS `2001` decoded to 53,191.860 mi—a material 11.140 mi deficit.
+ICS is exposed as candidate-quality `vehicle.odometer` with an explicit
+dashboard asterisk and unresolved offset/update relationship. The low-value
+Uconnect temperature candidate is omitted. [`bcan_auxiliary.py`](bcan_auxiliary.py)
+is the independently owned implementation: during a broker-qualified
+engine-running epoch it owns only the serial-resolved B-CAN role, arms once,
+and sends the immutable raw single-frame `03 22 20 01` request at five-second
+cadence. It has no module/DID/payload/session/TesterPresent/cadence option and
+cannot emit ISO-TP FlowControl. A timeout, malformed echo, NRC, topology or USB
+change, inhibit, termination, or exception ends only the B-CAN helper and
+requires exact passive restoration. Restoration failure sets a wildcard
+inhibit; other B-CAN failures leave the independent C-CAN telemetry interval
+running but block another auxiliary attempt until engine stop.
+
+Broker status reports this owner separately as `auxiliary_drive`. While it is
+armed, the synchronized recorder treats B-CAN as a broker-owned receive-only
+companion—matching its existing C-CAN behavior—so raw B-CAN request/response
+and broadcast evidence remain captured without a conflicting shared lease.
+CAN-CH remains an ordinary shared passive recorder role.
+
 ## Dual-USBCANFD transition and roadmap status
 
 The 2026-08-20 implementation completed roadmap items 2–7 for the installed two
@@ -565,6 +603,13 @@ while the broker owns the serial-resolved C-CAN channel. The normal C-CAN
 observer lock and the standalone
 `passive_drive_capture.py` entry point intentionally reject an armed interface;
 this narrower companion instead requires one exact broker status:
+
+When `auxiliary_drive` is armed, the same status must prove the exact
+serial-resolved B-CAN helper PID, fixed pins-3/11 topology, 125-kbit/s
+classical-CAN state, and no restoration fault. The recorder then binds B-CAN
+without taking the helper's exclusive role/channel lease. If the helper is
+disabled or has restored cleanly, the recorder retains its original shared
+passive B-CAN lease path.
 
 - active drive enabled and `armed_diagnostic`, with an integer helper PID and
   `current_owner.kind=broker_active_drive`;

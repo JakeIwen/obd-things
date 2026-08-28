@@ -200,6 +200,7 @@ class NoLegacyCanTopologyTests(unittest.TestCase):
             Path("projects/battery/ccan_voltage.py"),
             Path("projects/tpms/tpms_logger.py"),
             Path("projects/vehicle_data/active_drive.py"),
+            Path("projects/vehicle_data/bcan_auxiliary.py"),
             Path("projects/vehicle_data/can_runtime.py"),
             Path("projects/vehicle_data/sources.py"),
         }

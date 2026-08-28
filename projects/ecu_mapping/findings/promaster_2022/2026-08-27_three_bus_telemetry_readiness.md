@@ -11,8 +11,17 @@ reads are still almost entirely identity data.
 
 The broker-owned drive recorder was therefore extended and deployed to retain
 all three raw buses on every qualified future drive. Active polling remains
-limited to reviewed C-CAN targets until one B-CAN or CAN-CH candidate passes
-the same label, scaling, session, variation, and restoration gates.
+limited to reviewed C-CAN targets until a B-CAN candidate passes the same
+label, scaling, session, variation, and restoration gates; CAN-CH is
+passive-only under the revised boundary below.
+
+On 2026-08-28 the owner reported that connecting AlfaOBD to the ABS module
+causes the IPC to illuminate multiple warning indicators. The exact cause is
+unresolved: it could be session behavior, altered/paused normal messaging,
+communication DTCs, or another ABS-specific diagnostic response, and is not by
+itself proof of a security mechanism. The observable vehicle effect is enough
+to change policy. ABS, EPS, HALF, and ORC are now excluded from moving-vehicle
+active telemetry development; ordinary CAN-CH telemetry is passive-only.
 
 The passive/static analysis sent no CAN frame. Saved logs, prior read-only
 inventories, the reconstructed AlfaOBD catalog, the local OEM corpus, and
@@ -63,8 +72,8 @@ AlfaOBD status/wire evidence provides these potentially useful reads:
 
 | module/DID | candidate dashboard use | evidence boundary |
 |---|---|---|
-| ICS or EMCM2 `2001` | odometer (`u24be × 0.1 km`) | label/scale recur exactly across current status sequences; one parked no-session ICS read after a validated B-CAN wake timed out, so support during a fully powered broker-owned running interval remains unproven |
-| Uconnect `1823` | infotainment ECU temperature | label association exact; `raw − 40 °C` has only one observed point and remains candidate-only |
+| ICS or EMCM2 `2001` | ECU-local odometer/lifetime candidate (`u24be × 0.1 km`) | label/scale recur across current status sequences and ICS returned `62 20 01 0D 0F E8` while fully powered, but its 53,191.860 mi decode was 11.140 mi below the simultaneous 53,203 mi dash display; direct `vehicle.odometer` identity is rejected pending an offset/update relationship |
+| Uconnect `1823` | infotainment ECU temperature | label association exact; Uconnect returned `62 18 23 49` in the ignition-on/default-session support check below and the owner observed no visible side effect; `raw − 40 °C` now spans two observed values but still lacks independent temperature ground truth and remains candidate-only |
 | ICS `0300` | dimmer percentage/group | five displayed values match `0.5%/LSB`; remaining positions unresolved |
 | Uconnect `180C` | volume/EQ group | exact association, but low vehicle-health value |
 | EMCM2 `2A00/2A01` | knob/button events | controlled and exact, but event controls belong in passive/event UI rather than a one-hertz telemetry poller |
@@ -111,11 +120,13 @@ select the intended field when the decoder emits multiple values.
 
 This is strong installed-variant vendor-derived candidate evidence, not a live
 support or physical-scale proof. No `0880-0888` request was sent during this
-static pass. A bounded current-van support read with ignition on, engine off is
-the next gate; a later synchronized drive must establish variation, wheel
-ordering, sign, zero points, and plausibility before dashboard promotion.
+static pass. Following the owner's ABS warning-light observation, the prepared
+active support pass is withdrawn. These DIDs remain offline correlation
+references only; CAN-CH fields should be mapped from passive captures and
+controlled physical references without connecting a diagnostic session.
 
-The exact no-session support pass is prepared and dry-run validated:
+The former exact no-session support pass was dry-run validated but is retained
+below only as withdrawn provenance; do not execute it:
 
 ```bash
 python3 tools/did_sweep.py abs_canch \
@@ -126,11 +137,8 @@ python3 tools/did_sweep.py abs_canch \
   --conditions "parked; ignition ON; engine OFF; exact installed ABS candidate support pass"
 ```
 
-Dry run selects exactly eleven physical `22` reads at at most two requests per
-second and sends no `10` or `3E`. Live use adds only
-`--execute --confirm-parked`. CAN-CH has no reviewed wake profile, so the owner
-must first place the parked vehicle in ignition-on, engine-off state; C-CAN or
-B-CAN wake traffic must never be substituted.
+Dry run selected exactly eleven physical `22` reads and sent no `10` or `3E`.
+The new passive-only CAN-CH policy supersedes the planned live follow-up.
 
 Static provenance:
 
@@ -159,9 +167,72 @@ whether the fully powered ICS answers the same no-session read with ignition or
 engine running. That one-request drive-state check remains warranted; adding a
 session change to make the value respond is not warranted for routine telemetry.
 
+### B-CAN ignition-on no-session support check
+
+At 2026-08-28T19:27Z, with the van parked, ignition on, and engine off, broker
+status independently reported fresh qualified C-CAN `0x0FC` at 0 rpm. The
+serial-resolved B-CAN role was Board A CAN2 on DLC pins 3/11, 125 kbit/s
+classical CAN, listen-only, `restart-ms 0`, ONE-SHOT off, ERROR-ACTIVE, with no
+operation inhibit. The broker and automatic three-bus recorder remained active;
+the standalone TPMS and legacy B-CAN recorders were disabled/inactive.
+
+Two separately armed one-request `did_sweep.py` runs then produced exact
+positive responses:
+
+| module | physical request | exact response | candidate decode |
+|---|---|---|---|
+| Uconnect `0x87` | `22 18 23` | `62 18 23 49` in 8 ms | 33 °C / 91.4 °F using `raw − 40 °C` |
+| ICS `0x85` | `22 20 01` | `62 20 01 0D 0F E8` in 7 ms | 85,604.0 km / 53,191.860 mi using `u24be × 0.1 km` |
+
+Neither run sent DiagnosticSessionControl, TesterPresent, a retry, a wake
+burst, or CAN-CH traffic. Each closed its transport and independently restored
+the exact passive B-CAN state before the next run. The B-CAN TX counter rose by
+exactly two packets across the campaign, all three vehicle roles ended
+listen-only and ERROR-ACTIVE with zero error/drop counters, no inhibit was set,
+and the telemetry/recorder services retained zero restarts. At 2026-08-28T19:30Z
+the owner reported no warning light, radio interruption, center-stack anomaly,
+or other visible effect. This establishes no-session-change support and the
+parked owner-observation gate for both fixed reads while ignition is on. It does
+not establish their suitability while the network is asleep, the Uconnect
+temperature's absolute scale, or odometer variation.
+
+The owner's simultaneous instrument-cluster reference was 53,203 mi. ICS
+`2001` decoded to 53,191.859540 mi, a 11.140460 mi / 17.928832 km deficit—about
+179.3 raw tenths-of-a-kilometre counts. That is far beyond display rounding and
+rejects direct publication as `vehicle.odometer`. Plausible unresolved models
+include a delayed/key-cycle-synchronized ICS copy, a fixed or changing module
+offset, or a differently defined lifetime counter. A repeat after a key cycle
+and another after known distance accumulation can distinguish those models;
+the formula remains a candidate decode of the ICS-local value, not the van's
+authoritative mileage.
+
+The owner elected to omit Uconnect `1823` from development because its
+infotainment-board temperature has low vehicle-health value and unresolved
+absolute scaling. It remains historical evidence only.
+
+### Fixed B-CAN helper implementation
+
+The promoted implementation exposes the ICS value as candidate-quality
+`vehicle.odometer`, displayed as `ODOMETER*` with the 11.140-mile discrepancy
+disclosed. `projects/vehicle_data/bcan_auxiliary.py` has one raw-CAN transmit
+body, `18DA85F1#03222001`, and accepts only the exact single-frame
+`62 20 01` echo with three data bytes (plus an optional zero CAN-padding byte).
+It cannot select another ECU, DID, payload, cadence, session, TesterPresent, or
+functional address and cannot send FlowControl.
+
+The broker starts it only beside a qualified engine-running C-CAN epoch, but
+supervises and restores B-CAN independently. Its five-second cadence is
+response-before-next-request serialized. Non-restoration failures suppress the
+candidate for the rest of that engine epoch without stopping C-CAN metrics;
+unverified restoration sets a persistent wildcard inhibit. Broker status
+attributes the armed B-CAN role to `auxiliary_drive`, and the synchronized raw
+recorder consumes that exact ownership evidence instead of taking a conflicting
+passive B-CAN lease. This preserves three-bus capture of the request/response
+traffic needed to resolve the counter relationship.
+
 ## Polling admission plan
 
-A B-CAN or CAN-CH poll target enters the broker only after all of the following:
+A B-CAN poll target enters the broker only after all of the following:
 
 1. exact installed ECU/subtype and physical endpoint;
 2. one fixed physical `22 DID`, with no session-control or TesterPresent
@@ -172,6 +243,10 @@ A B-CAN or CAN-CH poll target enters the broker only after all of the following:
 6. per-role exclusive scheduling, response-before-next-request serialization,
    independent failure containment, and exact passive restoration; and
 7. raw three-bus coverage proving request/response provenance and no drops.
+
+CAN-CH has no ordinary active-poll admission path. Its ABS/EPS/HALF/ORC
+traffic remains available to the synchronized raw recorder for passive field
+mapping.
 
 The next high-value evidence campaign is a read-only AlfaOBD Plots catalog for
 the exact installed EPS and ABS profiles, followed by a synchronized drive with

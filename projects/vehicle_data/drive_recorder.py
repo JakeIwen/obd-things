@@ -146,6 +146,17 @@ def broker_armed_ready(
     expected = ccan.get("expected") if isinstance(ccan, dict) else None
     usb_serial = expected.get("usb_serial") if isinstance(expected, dict) else None
     dev_id = expected.get("dev_id") if isinstance(expected, dict) else None
+    auxiliary = status.get("auxiliary_drive")
+    auxiliary_ready = bool(
+        not isinstance(auxiliary, dict)
+        or auxiliary.get("enabled") is not True
+        or auxiliary.get("state") == "armed_diagnostic"
+        or (
+            auxiliary.get("state")
+            in ("idle", "blocked_until_engine_stop", "restoration_failed")
+            and auxiliary.get("interface_mode") == "listen_only"
+        )
+    )
     return bool(
         active.get("enabled") is True
         and active.get("state") == "armed_diagnostic"
@@ -177,6 +188,7 @@ def broker_armed_ready(
         and not inhibits
         and vehicle.get("running") is True
         and vehicle.get("basis") == "qualified_ccan_0x0fc_engine_speed"
+        and auxiliary_ready
     )
 
 
@@ -237,9 +249,8 @@ def broker_secondary_route(
     dev_id = expected.get("dev_id")
     bitrate = expected.get("bitrate")
     pair = expected.get("pair")
-    valid = bool(
+    common_valid = bool(
         payload.get("resolution") == "resolved"
-        and payload.get("passive_ready") is True
         and payload.get("safe") is True
         and isinstance(channel, str)
         and re.fullmatch(r"can[0-9]+", channel)
@@ -258,13 +269,31 @@ def broker_secondary_route(
         and actual.get("bitrate") == bitrate
         and actual.get("fd_enabled") is False
         and actual.get("one_shot") is False
-        and actual.get("listen_only") is True
         and actual.get("controller_state") == "ERROR-ACTIVE"
         and actual.get("restart_ms") == 0
     )
-    if not valid:
+    auxiliary = status.get("auxiliary_drive")
+    armed_bcan = bool(
+        role == "b-can"
+        and isinstance(auxiliary, dict)
+        and auxiliary.get("enabled") is True
+        and auxiliary.get("state") == "armed_diagnostic"
+        and auxiliary.get("reason") == "running_gate_satisfied"
+        and auxiliary.get("interface_mode") == "armed_diagnostic"
+        and auxiliary.get("restoration_failed") is False
+        and isinstance(auxiliary.get("helper_pid"), int)
+        and not isinstance(auxiliary.get("helper_pid"), bool)
+        and payload.get("operating_mode") == "armed_diagnostic"
+        and payload.get("passive_ready") is False
+        and actual.get("listen_only") is False
+    )
+    passive = bool(
+        payload.get("passive_ready") is True
+        and actual.get("listen_only") is True
+    )
+    if not common_valid or not (armed_bcan or passive):
         raise BrokerOwnershipLost(
-            f"broker does not prove an exact passive {role} route"
+            f"broker does not prove an exact passive or auxiliary-owned {role} route"
         )
     return CaptureRoute(
         role=role,
@@ -273,7 +302,11 @@ def broker_secondary_route(
         dev_id=dev_id,
         bitrate=bitrate,
         pair=pair,
-        ownership="shared_passive_observer",
+        ownership=(
+            "broker_auxiliary_drive_companion"
+            if armed_bcan
+            else "shared_passive_observer"
+        ),
     )
 
 
@@ -456,6 +489,51 @@ class InitialArmedSafetyCheck(CoordinatedSafetyCheck):
         return interface
 
 
+class AuxiliaryBcanSafetyCheck:
+    """Accept passive B-CAN or the broker's exact armed auxiliary owner."""
+
+    def __init__(
+        self,
+        client: TelemetryClient,
+        route: CaptureRoute,
+        *,
+        require_initial_armed: bool = False,
+        interface_reader: Callable[[], capture.InterfaceState] | None = None,
+    ) -> None:
+        if route.role != "b-can":
+            raise ValueError("auxiliary safety check requires a B-CAN route")
+        self.client = client
+        self.route = route
+        self.require_initial_armed = require_initial_armed
+        self.initial_gate_passed = False
+        self.interface_reader = interface_reader or (
+            lambda: query_interface(
+                channel=route.channel,
+                bitrate=route.bitrate,
+                expected_usb_serial=route.usb_serial,
+                expected_dev_id=route.dev_id,
+                role="b-can",
+            )
+        )
+
+    def __call__(self) -> capture.InterfaceState:
+        interface = self.interface_reader()
+        if interface.listen_only:
+            if self.require_initial_armed and not self.initial_gate_passed:
+                raise BrokerOwnershipLost(
+                    "B-CAN auxiliary ownership disappeared during recorder startup"
+                )
+            return interface
+        status = read_broker_status(self.client)
+        current = broker_secondary_route(status, "b-can")
+        if current != self.route or current.ownership != "broker_auxiliary_drive_companion":
+            raise BrokerOwnershipLost(
+                "armed B-CAN interface is not owned by the reviewed broker auxiliary helper"
+            )
+        self.initial_gate_passed = True
+        return interface
+
+
 def priority_ids() -> frozenset[int]:
     parser = capture.build_parser()
     args = parser.parse_args(["--out-root", "/tmp/plan"])
@@ -557,9 +635,21 @@ def record_one_interval(
     )
     with ExitStack() as lease_stack:
         leases: dict[str, PassiveInterfaceLease] = {}
-        secondary_checks: dict[str, PassiveLeaseSafetyCheck] = {}
+        secondary_checks: dict[str, Callable[[], capture.InterfaceState]] = {}
         secondary_interfaces: dict[str, capture.InterfaceState] = {}
+        secondary_routes: dict[str, CaptureRoute] = {}
         for role in SECONDARY_ROLES:
+            expected_route = expected_secondary[role]
+            if expected_route.ownership == "broker_auxiliary_drive_companion":
+                check = AuxiliaryBcanSafetyCheck(
+                    client,
+                    expected_route,
+                    require_initial_armed=True,
+                )
+                secondary_interfaces[role] = check()
+                secondary_checks[role] = check
+                secondary_routes[role] = expected_route
+                continue
             try:
                 lease = lease_stack.enter_context(interface_manager.observe(role))
             except Exception as exc:
@@ -575,6 +665,7 @@ def record_one_interval(
             secondary_interfaces[role] = check()
             leases[role] = lease
             secondary_checks[role] = check
+            secondary_routes[role] = actual_route
 
         refreshed_status = read_broker_status(client)
         if not broker_armed_ready(refreshed_status, expected_channel=channel):
@@ -582,9 +673,7 @@ def record_one_interval(
                 "broker ownership disappeared during raw capture preflight"
             )
         for role in SECONDARY_ROLES:
-            if broker_secondary_route(refreshed_status, role) != route_from_lease(
-                leases[role]
-            ):
+            if broker_secondary_route(refreshed_status, role) != secondary_routes[role]:
                 raise BrokerOwnershipLost(
                     f"broker {role} route changed during raw capture preflight"
                 )
@@ -609,7 +698,7 @@ def record_one_interval(
                 pair=PAIR,
                 ownership="broker_active_drive_companion",
             ),
-            **{role: route_from_lease(leases[role]) for role in SECONDARY_ROLES},
+            **secondary_routes,
         }
         metadata = {
             "type": "run_metadata",
@@ -692,7 +781,7 @@ def record_one_interval(
                     secondary_errors[role] = exc
 
         for role in SECONDARY_ROLES:
-            lease = leases[role]
+            route = secondary_routes[role]
             secondary_recorders[role] = capture.Recorder(
                 role_dirs[role],
                 frozenset(),
@@ -709,8 +798,8 @@ def record_one_interval(
                 external_stop_requested=stop_secondaries.is_set,
                 started_callback=secondary_started[role].set,
                 install_signal_handlers=False,
-                channel=lease.channel,
-                bitrate=lease.bitrate,
+                channel=route.channel,
+                bitrate=route.bitrate,
             )
             thread = threading.Thread(
                 name=f"broker-drive-recorder-{role}",

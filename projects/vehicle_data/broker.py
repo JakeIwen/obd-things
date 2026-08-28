@@ -32,8 +32,11 @@ DEFAULT_SOCKET = "/run/van-telemetry/api.sock"
 DEFAULT_HISTORY_DB = REPO / "tmp" / "vehicle_data" / "history.sqlite3"
 DEFAULT_DTC_CACHE = REPO / "tmp" / "vehicle_data" / "dtc-cache.json"
 ACTIVE_DRIVE_HELPER = REPO / "projects" / "vehicle_data" / "active_drive.py"
+BCAN_AUXILIARY_HELPER = REPO / "projects" / "vehicle_data" / "bcan_auxiliary.py"
 MAX_ACTIVE_EVENT_BYTES = 64 * 1024
 ACTIVE_DRIVE_RESTORATION_INHIBIT = "vehicle-data-restoration-failed"
+AUXILIARY_DRIVE_RESTORATION_INHIBIT = "vehicle-data-bcan-restoration-failed"
+AUXILIARY_ODOMETER_METRIC = "vehicle.odometer"
 ACTIVE_DRIVE_SOURCES = frozenset(
     {
         "ccan.broadcast.0x0fc",
@@ -50,6 +53,7 @@ ACTIVE_DRIVE_SOURCES = frozenset(
         "rf_hub.did.31d1",
         "rf_hub.did.31d2",
         "rf_hub.did.31d3",
+        "ics.did.2001",
     }
 )
 ACTIVE_DRIVE_OPTIONAL_METRICS = frozenset(
@@ -110,6 +114,7 @@ class ActiveDriveSupervisor:
         shutdown_timeout_seconds: float = 10.0,
         event_silence_timeout_seconds: float = 10.0,
         queue_poll_seconds: float = 0.1,
+        helper_path: pathlib.Path = ACTIVE_DRIVE_HELPER,
     ):
         self.channel = channel
         self.event_handler = event_handler
@@ -119,6 +124,7 @@ class ActiveDriveSupervisor:
         self.queue_poll_seconds = queue_poll_seconds
         self.expected_usb_serial = expected_usb_serial
         self.expected_dev_id = expected_dev_id
+        self.helper_path = pathlib.Path(helper_path)
         if (
             not isinstance(self.expected_usb_serial, str)
             or not self.expected_usb_serial
@@ -203,7 +209,7 @@ class ActiveDriveSupervisor:
     def run(self, stop_event: threading.Event) -> dict[str, object]:
         command = [
             sys.executable,
-            str(ACTIVE_DRIVE_HELPER),
+            str(self.helper_path),
             "--channel",
             self.channel,
             "--expected-parent-pid",
@@ -467,6 +473,16 @@ class ActiveDriveSupervisor:
         )
 
 
+class AuxiliaryDriveSupervisor(ActiveDriveSupervisor):
+    """Supervise the fixed B-CAN auxiliary helper with the same pipe contract."""
+
+    def __init__(self, **kwargs):
+        super().__init__(
+            helper_path=BCAN_AUXILIARY_HELPER,
+            **kwargs,
+        )
+
+
 @dataclass
 class _Inflight:
     event: threading.Event = field(default_factory=threading.Event)
@@ -491,6 +507,8 @@ class TelemetryBroker:
         passive_powertrain_reader=None,
         active_drive_supervisor=None,
         active_drive_enabled: bool = False,
+        auxiliary_drive_supervisor=None,
+        auxiliary_drive_enabled: bool = False,
         interface_reconciler=None,
         insights=None,
         history_interval_seconds: float = 5.0,
@@ -511,6 +529,10 @@ class TelemetryBroker:
         self.active_drive_supervisor = active_drive_supervisor
         self.active_drive_enabled = bool(
             active_drive_enabled and active_drive_supervisor is not None
+        )
+        self.auxiliary_drive_supervisor = auxiliary_drive_supervisor
+        self.auxiliary_drive_enabled = bool(
+            auxiliary_drive_enabled and auxiliary_drive_supervisor is not None
         )
         self.interface_reconciler = interface_reconciler
         self.insights = insights
@@ -569,6 +591,8 @@ class TelemetryBroker:
         self._passive_unknown_evidence_streak = 0
         self._active_drive_blocked_reason: str | None = None
         self._active_drive_restoration_latched = False
+        self._auxiliary_drive_blocked_reason: str | None = None
+        self._auxiliary_drive_restoration_latched = False
         self._wake_authorization_deadline: float | None = None
         self._wake_authorization_owner: int | None = None
         self._active_drive: dict[str, object] = {
@@ -588,6 +612,26 @@ class TelemetryBroker:
             "helper_pid": None,
             "last_event_at": None,
             "restoration_failed": False,
+        }
+        self._auxiliary_drive: dict[str, object] = {
+            "enabled": self.auxiliary_drive_enabled,
+            "state": "idle" if self.auxiliary_drive_enabled else "disabled",
+            "reason": (
+                "engine_not_running"
+                if self.auxiliary_drive_enabled
+                else "disabled_by_configuration"
+            ),
+            "detail": (
+                "waiting for the qualified broker engine-running epoch"
+                if self.auxiliary_drive_enabled
+                else "B-CAN auxiliary collection is disabled"
+            ),
+            "interface_mode": "listen_only",
+            "helper_pid": None,
+            "last_event_at": None,
+            "restoration_failed": False,
+            "metric": AUXILIARY_ODOMETER_METRIC,
+            "quality": "candidate",
         }
         self._started_at = datetime.now(timezone.utc).isoformat()
         self._data_quality_sequence = 0
@@ -1569,6 +1613,114 @@ class TelemetryBroker:
                         f"be recorded: {type(exc).__name__}: {exc}"
                     )
 
+    def _record_auxiliary_failure(
+        self,
+        reason: str,
+        detail: str,
+        *,
+        interface_mode: str = "listen_only",
+    ) -> None:
+        if reason not in ACTIVE_DRIVE_FAILURE_REASONS:
+            reason = "helper_failed"
+        definition = self.definitions.get(AUXILIARY_ODOMETER_METRIC)
+        if definition is None:
+            return
+        source = definition.sources[0]
+        result = failure(
+            metric=definition.name,
+            unit=definition.unit,
+            reason=reason,
+            detail=detail,
+            bus=source.bus,
+            acquisition=source.acquisition_class,
+            interface_mode=interface_mode,
+        )
+        with self._lock:
+            self._cache.pop(definition.name, None)
+            self._last_error[definition.name] = result
+
+    def handle_auxiliary_drive_event(self, event: dict[str, object]) -> None:
+        """Validate one event from the fixed B-CAN helper."""
+        event_type = event.get("type")
+        if event_type == "observation":
+            if (
+                event.get("metric") != AUXILIARY_ODOMETER_METRIC
+                or event.get("source") != "ics.did.2001"
+                or event.get("bus") != "b-can"
+                or event.get("quality") != "candidate"
+                or event.get("interface_mode") != "armed_diagnostic"
+            ):
+                raise ValueError("B-CAN auxiliary observation is outside its fixed profile")
+            self._store_active_observation(event)
+            return
+        if event_type not in ("status", "failure", "final"):
+            raise ValueError("unsupported B-CAN auxiliary event type")
+        reason = event.get("reason")
+        detail = event.get("detail")
+        if not isinstance(reason, str) or not isinstance(detail, str):
+            raise ValueError("B-CAN auxiliary reason/detail is invalid")
+        interface_mode = event.get("interface_mode", "listen_only")
+        if interface_mode not in ("listen_only", "armed_diagnostic", "unknown"):
+            raise ValueError("invalid B-CAN auxiliary interface mode")
+        state = event.get("state")
+        if not isinstance(state, str):
+            raise ValueError("B-CAN auxiliary state must be a string")
+        if event_type == "status" and (
+            state != "armed_diagnostic"
+            or reason != "running_gate_satisfied"
+            or interface_mode != "armed_diagnostic"
+        ):
+            raise ValueError("B-CAN auxiliary armed status is inconsistent")
+        if event_type in ("failure", "final") and reason not in ACTIVE_DRIVE_FAILURE_REASONS:
+            raise ValueError("B-CAN auxiliary failure reason is not allowlisted")
+        if event_type == "final":
+            restored = event.get("restored")
+            if restored is not None and type(restored) is not bool:
+                raise ValueError("B-CAN auxiliary restored must be boolean or null")
+            if state not in ("idle", "restoration_failed"):
+                raise ValueError("B-CAN auxiliary final state is invalid")
+            if restored is True and interface_mode != "listen_only":
+                raise ValueError("restored B-CAN final must report listen_only")
+            if restored is False and (
+                state != "restoration_failed"
+                or reason != "restoration_failed"
+                or interface_mode != "armed_diagnostic"
+            ):
+                raise ValueError("failed B-CAN restoration final is inconsistent")
+        with self._lock:
+            self._auxiliary_drive.update(
+                {
+                    "state": state,
+                    "reason": reason,
+                    "detail": detail,
+                    "interface_mode": interface_mode,
+                    "last_event_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            pid = event.get("pid")
+            if isinstance(pid, int) and not isinstance(pid, bool):
+                self._auxiliary_drive["helper_pid"] = pid
+            if event_type == "final":
+                self._auxiliary_drive["helper_pid"] = None
+        if event_type in ("failure", "final"):
+            self._record_auxiliary_failure(reason, detail, interface_mode=interface_mode)
+        if reason == "restoration_failed" or event.get("restored") is False:
+            with self._lock:
+                self._auxiliary_drive_restoration_latched = True
+                self._auxiliary_drive["restoration_failed"] = True
+            try:
+                can_operation_state.begin_inhibit(
+                    AUXILIARY_DRIVE_RESTORATION_INHIBIT,
+                    channel="*",
+                    reason=f"broker could not verify B-CAN restoration: {detail}",
+                )
+            except Exception as exc:
+                with self._lock:
+                    self._auxiliary_drive["detail"] = (
+                        f"{detail}; persistent B-CAN restoration inhibit could "
+                        f"not be recorded: {type(exc).__name__}: {exc}"
+                    )
+
     def _refresh_interface_status(self) -> None:
         try:
             snapshot = self.acquirer.status_snapshot()
@@ -1631,6 +1783,7 @@ class TelemetryBroker:
                 json.dumps(self._history_recorder)
             )
             active_drive = json.loads(json.dumps(self._active_drive))
+            auxiliary_drive = json.loads(json.dumps(self._auxiliary_drive))
             accepted_temperature = self._cache.get(
                 TRANSMISSION_OIL_TEMPERATURE_METRIC
             )
@@ -1760,6 +1913,14 @@ class TelemetryBroker:
         active_drive_reserved = active_drive_owns or active_drive.get(
             "state"
         ) == "starting"
+        auxiliary_drive_owns = (
+            auxiliary_drive.get("interface_mode") == "armed_diagnostic"
+            and auxiliary_drive.get("state")
+            not in ("idle", "disabled", "restoration_failed")
+        )
+        auxiliary_drive_reserved = auxiliary_drive_owns or auxiliary_drive.get(
+            "state"
+        ) == "starting"
         if active_drive_owns:
             # The last normal status probe predates the child-owned interval.
             # Overlay the helper's verified mode so status never calls an armed
@@ -1803,6 +1964,24 @@ class TelemetryBroker:
                 if interface.get("listen_only") is True
                 else "armed_or_unknown"
             )
+        if auxiliary_drive_owns:
+            role_snapshot = interface.get("role_interfaces")
+            role_snapshot = role_snapshot if isinstance(role_snapshot, dict) else None
+            role_payloads = role_snapshot.get("roles") if isinstance(role_snapshot, dict) else None
+            bcan_role = role_payloads.get("b-can") if isinstance(role_payloads, dict) else None
+            if isinstance(bcan_role, dict):
+                actual = bcan_role.get("actual")
+                if isinstance(actual, dict):
+                    actual["listen_only"] = False
+                    actual["mode"] = "armed_diagnostic"
+                bcan_role["passive_ready"] = False
+                bcan_role["operating_mode"] = "armed_diagnostic"
+                bcan_role["reason"] = (
+                    "broker auxiliary-drive owner has the resolved B-CAN "
+                    "channel armed for fixed ICS polling"
+                )
+                if role_snapshot is not None:
+                    role_snapshot["ready"] = False
         active_permitted = bool(
             interface.get("adapter_present")
             and interface.get("up")
@@ -1816,12 +1995,25 @@ class TelemetryBroker:
             and not inflight
             and busy_error is None
             and not active_drive_reserved
+            and not auxiliary_drive_reserved
             and not active_drive.get("restoration_failed")
+            and not auxiliary_drive.get("restoration_failed")
         )
         if active_drive_reserved:
             current_owner = {
                 "kind": "broker_active_drive",
                 "detail": active_drive.get("detail"),
+                "roles": (
+                    ["c-can", "b-can"]
+                    if auxiliary_drive_reserved
+                    else ["c-can"]
+                ),
+            }
+        elif auxiliary_drive_reserved:
+            current_owner = {
+                "kind": "broker_auxiliary_drive",
+                "detail": auxiliary_drive.get("detail"),
+                "roles": ["b-can"],
             }
         elif inhibits:
             current_owner = {
@@ -1851,6 +2043,7 @@ class TelemetryBroker:
             "usb_can_monitor": usb_can_monitor,
             "data_quality": data_quality,
             "active_drive": active_drive,
+            "auxiliary_drive": auxiliary_drive,
             "interface_reconcile": interface_reconcile,
             "vehicle_state": vehicle_state,
             "inflight": inflight,
@@ -2024,8 +2217,10 @@ class TelemetryBroker:
         now = self.monotonic()
         with self._lock:
             active_drive = dict(self._active_drive)
+            auxiliary_drive = dict(self._auxiliary_drive)
             vehicle_state = dict(self._vehicle_state)
             restoration_latched = self._active_drive_restoration_latched
+            auxiliary_restoration_latched = self._auxiliary_drive_restoration_latched
             collector_state = self._collector_state
             vehicle_observed = self._vehicle_state_observed_monotonic
         conflicts: list[str] = []
@@ -2038,6 +2233,8 @@ class TelemetryBroker:
             conflicts.append("passive vehicle-state evidence is missing or stale")
         if restoration_latched or active_drive.get("restoration_failed"):
             conflicts.append("active-drive passive restoration is latched failed")
+        if auxiliary_restoration_latched or auxiliary_drive.get("restoration_failed"):
+            conflicts.append("B-CAN auxiliary passive restoration is latched failed")
         active_state = active_drive.get("state")
         active_mode = active_drive.get("interface_mode")
         if active_state not in ("idle", "disabled"):
@@ -2046,6 +2243,12 @@ class TelemetryBroker:
             conflicts.append("broker active-drive interface mode is not listen-only")
         if active_drive.get("helper_pid") is not None:
             conflicts.append("broker active-drive helper is still present")
+        if auxiliary_drive.get("state") not in ("idle", "disabled"):
+            conflicts.append("broker B-CAN auxiliary state is not idle or disabled")
+        if auxiliary_drive.get("interface_mode") != "listen_only":
+            conflicts.append("broker B-CAN auxiliary mode is not listen-only")
+        if auxiliary_drive.get("helper_pid") is not None:
+            conflicts.append("broker B-CAN auxiliary helper is still present")
         if (
             vehicle_state.get("running") is True
             or vehicle_state.get("state") in ("running", "ignition_on")
@@ -2447,6 +2650,8 @@ class TelemetryBroker:
                 and epoch_ended
             ):
                 self._active_drive_blocked_reason = None
+            if self._auxiliary_drive_blocked_reason is not None and epoch_ended:
+                self._auxiliary_drive_blocked_reason = None
             with self._lock:
                 self._active_drive.update(
                     {
@@ -2461,6 +2666,15 @@ class TelemetryBroker:
                         "interface_mode": "listen_only",
                     }
                 )
+                if self.auxiliary_drive_enabled:
+                    self._auxiliary_drive.update(
+                        {
+                            "state": "idle",
+                            "reason": "engine_not_running",
+                            "detail": "waiting for the qualified broker engine-running epoch",
+                            "interface_mode": "listen_only",
+                        }
+                    )
             self._record_active_failure(
                 "engine_not_running",
                 "qualified passive engine-running evidence is absent",
@@ -2494,7 +2708,106 @@ class TelemetryBroker:
                     "last_event_at": datetime.now(timezone.utc).isoformat(),
                 }
             )
-        outcome = self.active_drive_supervisor.run(self._collector_stop)
+        auxiliary_stop = threading.Event()
+        auxiliary_thread = None
+        if (
+            self.auxiliary_drive_enabled
+            and self.auxiliary_drive_supervisor is not None
+            and not self._auxiliary_drive_restoration_latched
+            and self._auxiliary_drive_blocked_reason is None
+        ):
+            with self._lock:
+                self._auxiliary_drive.update(
+                    {
+                        "state": "starting",
+                        "reason": "running_gate_satisfied",
+                        "detail": "starting the independent B-CAN auxiliary helper",
+                        "interface_mode": "listen_only",
+                        "last_event_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+
+            def supervise_auxiliary() -> None:
+                outcome = self.auxiliary_drive_supervisor.run(auxiliary_stop)
+                try:
+                    self.handle_auxiliary_drive_event(outcome)
+                except (KeyError, TypeError, ValueError) as exc:
+                    outcome = {
+                        "type": "final",
+                        "state": "restoration_failed",
+                        "reason": "restoration_failed",
+                        "detail": (
+                            "B-CAN auxiliary final event rejected: "
+                            f"{exc}; passive restoration is unverified"
+                        ),
+                        "restored": False,
+                        "interface_mode": "armed_diagnostic",
+                    }
+                    self.handle_auxiliary_drive_event(outcome)
+                reason = str(outcome.get("reason", "helper_failed"))
+                if outcome.get("restored") is True or reason in {
+                    "malformed_response",
+                    "response_rejected",
+                    "response_timeout",
+                    "session_required",
+                }:
+                    self._auxiliary_drive_blocked_reason = reason
+                if reason == "restoration_failed" or outcome.get("restored") is False:
+                    self._auxiliary_drive_restoration_latched = True
+
+            auxiliary_thread = threading.Thread(
+                target=supervise_auxiliary,
+                name="van-telemetry-bcan-auxiliary",
+                daemon=True,
+            )
+            auxiliary_thread.start()
+        elif self.auxiliary_drive_enabled:
+            with self._lock:
+                self._auxiliary_drive.update(
+                    {
+                        "state": (
+                            "restoration_failed"
+                            if self._auxiliary_drive_restoration_latched
+                            else "blocked_until_engine_stop"
+                        ),
+                        "reason": (
+                            "restoration_failed"
+                            if self._auxiliary_drive_restoration_latched
+                            else self._auxiliary_drive_blocked_reason
+                            or "helper_failed"
+                        ),
+                        "detail": (
+                            "B-CAN auxiliary polling remains disabled until "
+                            "the restoration fault is repaired"
+                            if self._auxiliary_drive_restoration_latched
+                            else "B-CAN auxiliary polling remains disabled until engine stop"
+                        ),
+                        "interface_mode": "listen_only",
+                    }
+                )
+
+        try:
+            outcome = self.active_drive_supervisor.run(self._collector_stop)
+        finally:
+            auxiliary_stop.set()
+            if self.auxiliary_drive_supervisor is not None:
+                self.auxiliary_drive_supervisor.stop()
+            if auxiliary_thread is not None:
+                auxiliary_thread.join(15.0)
+                if auxiliary_thread.is_alive():
+                    self.handle_auxiliary_drive_event(
+                        {
+                            "type": "final",
+                            "state": "restoration_failed",
+                            "reason": "restoration_failed",
+                            "detail": (
+                                "B-CAN auxiliary supervisor did not complete bounded "
+                                "cleanup after the C-CAN running epoch ended"
+                            ),
+                            "restored": False,
+                            "interface_mode": "armed_diagnostic",
+                        }
+                    )
         try:
             self.handle_active_drive_event(outcome)
         except (KeyError, TypeError, ValueError) as exc:
@@ -2566,6 +2879,8 @@ class TelemetryBroker:
         finally:
             if self.active_drive_supervisor is not None:
                 self.active_drive_supervisor.stop()
+            if self.auxiliary_drive_supervisor is not None:
+                self.auxiliary_drive_supervisor.stop()
             with self._lock:
                 if self._collector_state != "failed":
                     self._collector_state = "stopped"
@@ -2575,6 +2890,8 @@ class TelemetryBroker:
         self._history_stop.set()
         if self.active_drive_supervisor is not None:
             self.active_drive_supervisor.stop()
+        if self.auxiliary_drive_supervisor is not None:
+            self.auxiliary_drive_supervisor.stop()
         with self._lock:
             thread = self._collector_thread
             history_thread = self._history_thread
@@ -2679,6 +2996,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="disable the coordinated engine-running diagnostic collector",
     )
+    parser.add_argument(
+        "--no-auxiliary-drive",
+        action="store_true",
+        help="disable the fixed engine-running B-CAN ICS odometer candidate",
+    )
     return parser
 
 
@@ -2714,6 +3036,7 @@ def main(argv=None) -> int:
     from projects.vehicle_data.can_runtime import (
         PassiveRoleReconciler,
         RoleAwareActiveDriveSupervisor,
+        RoleAwareAuxiliaryDriveSupervisor,
         RoleAwareCcanPowertrainReader,
         RoleAwareVoltageAcquirer,
     )
@@ -2742,6 +3065,8 @@ def main(argv=None) -> int:
     usb_can_monitor = UsbCanIncidentMonitor()
     active_drive_enabled = not args.no_active_drive
     active_supervisor = None
+    auxiliary_supervisor = None
+    auxiliary_drive_enabled = active_drive_enabled and not args.no_auxiliary_drive
     if active_drive_enabled:
         active_supervisor = RoleAwareActiveDriveSupervisor(
             interface_manager,
@@ -2749,6 +3074,14 @@ def main(argv=None) -> int:
                 "broker"
             ].handle_active_drive_event(event),
             supervisor_factory=ActiveDriveSupervisor,
+        )
+    if auxiliary_drive_enabled:
+        auxiliary_supervisor = RoleAwareAuxiliaryDriveSupervisor(
+            interface_manager,
+            event_handler=lambda event: broker_holder[
+                "broker"
+            ].handle_auxiliary_drive_event(event),
+            supervisor_factory=AuxiliaryDriveSupervisor,
         )
 
     insights = None
@@ -2772,6 +3105,8 @@ def main(argv=None) -> int:
         passive_powertrain_reader=passive_powertrain_reader,
         active_drive_supervisor=active_supervisor,
         active_drive_enabled=active_drive_enabled,
+        auxiliary_drive_supervisor=auxiliary_supervisor,
+        auxiliary_drive_enabled=auxiliary_drive_enabled,
         interface_reconciler=interface_reconciler,
         insights=insights,
         history_interval_seconds=args.history_interval,

@@ -47,10 +47,17 @@ the exact eleven-entry AlfaOBD Plots request array: `1002`, `1004`, and
 `0880-0888` cover speed, voltage, four wheel speeds, pressure, steering angle,
 yaw, and lateral/longitudinal acceleration. These are installed-variant
 vendor-derived candidates, not live-verified DIDs; the finding preserves the
-candidate formulas and requires one ignition-on support pass plus a controlled
-drive before dashboard promotion. The enabled broker-owned recorder now
+candidate formulas for offline work. The owner subsequently reported that an
+AlfaOBD ABS connection illuminates multiple IPC warnings, so the prepared ABS
+support pass was withdrawn and ordinary CAN-CH telemetry is now passive-only.
+The enabled broker-owned recorder now
 requires separate synchronized raw C-CAN, B-CAN, and CAN-CH streams on every
-future qualified drive.
+future qualified drive. A later parked no-session check admitted only ICS
+`2001` to implementation: it is exposed as starred candidate-quality
+`vehicle.odometer` because its first live decode was 11.140 mi below the dash.
+The independent fixed B-CAN helper and recorder-companion path preserve raw
+evidence for resolving that relationship; Uconnect temperature was omitted by
+owner direction.
 
 The current owner-priority C-CAN roadmap—oil pressure, coolant/oil temperature,
 torque and derived power, OEM operating context, and the targeted PCM/TCM

@@ -136,6 +136,7 @@ class SourceTests(unittest.TestCase):
                     "transmission.oil_temperature",
                     "transmission.turbine_speed",
                     "vehicle.ignition_on",
+                    "vehicle.odometer",
                     "vehicle.speed",
                 )
             )
@@ -177,6 +178,7 @@ class SourceTests(unittest.TestCase):
                 "tire.pressure.rl",
                 "tire.pressure.rr",
                 "vehicle.ignition_on",
+                "vehicle.odometer",
                 "vehicle.speed",
                 "diagnostics.cluster.did.0107.raw",
                 "diagnostics.cluster.did.1000.raw",
@@ -258,6 +260,12 @@ class SourceTests(unittest.TestCase):
         )
         self.assertEqual(METRICS["engine.rpm"].unit, "rpm")
         self.assertEqual(METRICS["vehicle.speed"].unit, "mph")
+        odometer = METRICS["vehicle.odometer"]
+        self.assertEqual(odometer.unit, "mi")
+        self.assertEqual(odometer.sources[0].name, "ics.did.2001")
+        self.assertEqual(odometer.sources[0].bus, "b-can")
+        self.assertEqual(odometer.sources[0].quality, "candidate")
+        self.assertFalse(odometer.sources[0].publisher_allowed)
         self.assertEqual(
             METRICS["engine.target_crankshaft_torque"].unit, "lb-ft"
         )
@@ -534,6 +542,68 @@ class BrokerTests(unittest.TestCase):
             broker.status_response()["history_recorder"]["interval_seconds"],
             5.0,
         )
+
+    def test_auxiliary_event_stores_candidate_odometer_and_exposes_status(self):
+        broker = TelemetryBroker(
+            acquirer=FakeAcquirer(),
+            monotonic=FakeClock(),
+            auxiliary_drive_supervisor=mock.Mock(),
+            auxiliary_drive_enabled=True,
+        )
+        broker.handle_auxiliary_drive_event(
+            {
+                "type": "status",
+                "state": "armed_diagnostic",
+                "reason": "running_gate_satisfied",
+                "detail": "fixed test owner",
+                "interface_mode": "armed_diagnostic",
+                "pid": 1234,
+            }
+        )
+        broker.handle_auxiliary_drive_event(
+            {
+                "type": "observation",
+                "metric": "vehicle.odometer",
+                "value": 53191.86,
+                "unit": "mi",
+                "source": "ics.did.2001",
+                "bus": "b-can",
+                "quality": "candidate",
+                "detail": "known-offset candidate",
+                "interface_mode": "armed_diagnostic",
+            }
+        )
+
+        metric = broker.metric_response("vehicle.odometer")
+        self.assertTrue(metric["available"])
+        self.assertEqual(metric["quality"], "candidate")
+        self.assertEqual(metric["interface_mode"], "armed_diagnostic")
+        status = broker.status_response()["auxiliary_drive"]
+        self.assertEqual(status["state"], "armed_diagnostic")
+        self.assertEqual(status["helper_pid"], 1234)
+
+    def test_auxiliary_event_rejects_uconnect_or_verified_claim(self):
+        broker = TelemetryBroker(acquirer=FakeAcquirer())
+        event = {
+            "type": "observation",
+            "metric": "vehicle.odometer",
+            "value": 53191.86,
+            "unit": "mi",
+            "source": "ics.did.2001",
+            "bus": "b-can",
+            "quality": "verified",
+            "detail": "invalid claim",
+            "interface_mode": "armed_diagnostic",
+        }
+        with self.assertRaisesRegex(ValueError, "fixed profile"):
+            broker.handle_auxiliary_drive_event(event)
+        event.update(
+            metric="infotainment.ecu_temperature",
+            source="uconnect.did.1823",
+            quality="candidate",
+        )
+        with self.assertRaisesRegex(ValueError, "fixed profile"):
+            broker.handle_auxiliary_drive_event(event)
 
     def test_wake_authorization_is_fresh_strict_and_never_extended(self):
         clock = FakeClock()
@@ -1048,6 +1118,9 @@ class BrokerTests(unittest.TestCase):
                 "projects.vehicle_data.can_runtime.RoleAwareActiveDriveSupervisor"
             ) as role_supervisor,
             mock.patch(
+                "projects.vehicle_data.can_runtime.RoleAwareAuxiliaryDriveSupervisor"
+            ) as auxiliary_supervisor,
+            mock.patch(
                 "projects.vehicle_data.usb_can_monitor.UsbCanIncidentMonitor"
             ) as usb_monitor,
             mock.patch.object(
@@ -1075,11 +1148,17 @@ class BrokerTests(unittest.TestCase):
         role_acquirer.assert_called_once()
         role_reader.assert_called_once()
         role_supervisor.assert_called_once()
+        auxiliary_supervisor.assert_called_once()
         kwargs = broker_factory.call_args.kwargs
         self.assertIs(kwargs["interface_reconciler"], reconciler.return_value)
         self.assertIs(kwargs["active_drive_supervisor"], role_supervisor.return_value)
+        self.assertIs(
+            kwargs["auxiliary_drive_supervisor"],
+            auxiliary_supervisor.return_value,
+        )
         self.assertIs(kwargs["usb_can_monitor"], usb_monitor.return_value)
         self.assertTrue(kwargs["active_drive_enabled"])
+        self.assertTrue(kwargs["auxiliary_drive_enabled"])
         self.assertNotIn("auto_retune_enabled", kwargs)
         broker.start_usb_monitor.assert_called_once_with()
         broker.start_collector.assert_not_called()

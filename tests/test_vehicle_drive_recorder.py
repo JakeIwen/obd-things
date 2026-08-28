@@ -106,6 +106,24 @@ def ready_status():
     }
 
 
+def auxiliary_ready_status():
+    status = ready_status()
+    status["auxiliary_drive"] = {
+        "enabled": True,
+        "state": "armed_diagnostic",
+        "reason": "running_gate_satisfied",
+        "interface_mode": "armed_diagnostic",
+        "restoration_failed": False,
+        "helper_pid": 2345,
+    }
+    bcan = status["interface"]["role_interfaces"]["roles"]["b-can"]
+    bcan["passive_ready"] = False
+    bcan["operating_mode"] = "armed_diagnostic"
+    bcan["actual"]["listen_only"] = False
+    status["current_owner"]["roles"] = ["c-can", "b-can"]
+    return status
+
+
 def interface(*, listen_only, bitrate=500000):
     return capture.InterfaceState(
         up=True,
@@ -153,9 +171,43 @@ class DriveRecorderTests(unittest.TestCase):
             "actual"
         ]["listen_only"] = False
         with self.assertRaisesRegex(
-            drive_recorder.BrokerOwnershipLost, "exact passive b-can"
+            drive_recorder.BrokerOwnershipLost, "passive or auxiliary-owned b-can"
         ):
             drive_recorder.broker_secondary_route(status, "b-can")
+
+    def test_bcan_route_accepts_only_exact_broker_auxiliary_owner(self):
+        status = auxiliary_ready_status()
+        self.assertTrue(drive_recorder.broker_armed_ready(status))
+        route = drive_recorder.broker_secondary_route(status, "b-can")
+        self.assertEqual(route.ownership, "broker_auxiliary_drive_companion")
+        self.assertEqual(route.channel, TEST_B_CHANNEL)
+
+        status["auxiliary_drive"]["helper_pid"] = None
+        with self.assertRaisesRegex(
+            drive_recorder.BrokerOwnershipLost, "auxiliary-owned"
+        ):
+            drive_recorder.broker_secondary_route(status, "b-can")
+
+    def test_auxiliary_safety_accepts_broker_owned_armed_then_passive(self):
+        status = auxiliary_ready_status()
+        client = mock.Mock()
+        client.request.return_value = (200, status)
+        route = drive_recorder.broker_secondary_route(status, "b-can")
+        states = iter(
+            (
+                interface(listen_only=False, bitrate=125000),
+                interface(listen_only=True, bitrate=125000),
+            )
+        )
+        check = drive_recorder.AuxiliaryBcanSafetyCheck(
+            client,
+            route,
+            require_initial_armed=True,
+            interface_reader=lambda: next(states),
+        )
+
+        self.assertFalse(check().listen_only)
+        self.assertTrue(check().listen_only)
 
     def test_interface_query_rejects_reused_channel_usb_identity(self):
         resolver = mock.Mock()

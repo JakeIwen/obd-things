@@ -775,11 +775,49 @@ class RoleAwareActiveDriveSupervisor:
             )
 
 
+class RoleAwareAuxiliaryDriveSupervisor(RoleAwareActiveDriveSupervisor):
+    """Hold logical B-CAN ownership around the fixed auxiliary helper."""
+
+    @property
+    def channel(self) -> str:
+        try:
+            return self.manager.channel_for_bus(B_CAN_ROLE)
+        except (CanRoleResolutionError, OSError, RuntimeError, ValueError):
+            return "b-can-unresolved"
+
+    def run(self, stop_event) -> dict[str, object]:
+        try:
+            with diagnostic_safety.channel_lock(_role_lock(B_CAN_ROLE)):
+                topology = self.manager.topology()
+                resolution = topology.resolution(B_CAN_ROLE)
+                channel = resolution.require_channel()
+                spec = resolution.spec
+                delegate = self.supervisor_factory(
+                    channel=channel,
+                    event_handler=self.event_handler,
+                    expected_usb_serial=spec.usb_serial,
+                    expected_dev_id=spec.dev_id,
+                )
+                self._delegate = delegate
+                try:
+                    return delegate.run(stop_event)
+                finally:
+                    self._delegate = None
+        except diagnostic_safety.ChannelLockError as exc:
+            return self._failure("can_busy", str(exc))
+        except (CanRoleResolutionError, KeyError, OSError, RuntimeError, ValueError) as exc:
+            return self._failure(
+                "adapter_unhealthy",
+                f"could not resolve stable B-CAN auxiliary ownership: {exc}",
+            )
+
+
 __all__ = (
     "PassiveRoleReconciler",
     "ReconcileOutcome",
     "RoleAwareCcanPowertrainReader",
     "RoleAwareActiveDriveSupervisor",
+    "RoleAwareAuxiliaryDriveSupervisor",
     "RoleAwareVoltageAcquirer",
     "configure_classical_listen_only",
     "keep_interface_down",

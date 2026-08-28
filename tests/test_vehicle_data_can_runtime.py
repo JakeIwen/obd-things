@@ -10,6 +10,7 @@ from lib import can_wake, canbus, diagnostic_safety
 from projects.vehicle_data.can_runtime import (
     PassiveRoleReconciler,
     RoleAwareActiveDriveSupervisor,
+    RoleAwareAuxiliaryDriveSupervisor,
     RoleAwareCcanPowertrainReader,
     RoleAwareVoltageAcquirer,
     configure_classical_listen_only,
@@ -591,6 +592,33 @@ class RoleAwareSourceTests(unittest.TestCase):
         self.assertTrue(result["restored"])
         factory.assert_called_once_with(
             channel="can7",
+            event_handler=supervisor.event_handler,
+            expected_usb_serial="test-serial",
+            expected_dev_id=0,
+        )
+        delegate.run.assert_called_once()
+
+    def test_auxiliary_supervisor_binds_dynamic_bcan_identity(self):
+        resolution = FakeResolution("b-can", "can8", 125000)
+        self.manager._topology = FakeTopology({"b-can": resolution})
+        delegate = mock.Mock()
+        delegate.run.return_value = {"type": "final", "restored": True}
+        factory = mock.Mock(return_value=delegate)
+        supervisor = RoleAwareAuxiliaryDriveSupervisor(
+            self.manager,
+            event_handler=mock.Mock(),
+            supervisor_factory=factory,
+        )
+
+        with mock.patch(
+            "projects.vehicle_data.can_runtime.diagnostic_safety.channel_lock",
+            side_effect=lambda _name: contextlib.nullcontext(object()),
+        ):
+            result = supervisor.run(object())
+
+        self.assertTrue(result["restored"])
+        factory.assert_called_once_with(
+            channel="can8",
             event_handler=supervisor.event_handler,
             expected_usb_serial="test-serial",
             expected_dev_id=0,

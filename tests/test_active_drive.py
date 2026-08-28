@@ -1667,6 +1667,66 @@ class BrokerActiveDriveTests(unittest.TestCase):
         self.assertTrue(broker._active_drive_restoration_latched)
         begin_inhibit.assert_called_once()
 
+    def test_bcan_auxiliary_runs_concurrently_and_stops_with_ccan_epoch(self):
+        auxiliary_started = threading.Event()
+
+        class AuxiliarySupervisor:
+            def __init__(self):
+                self.calls = 0
+                self.stop_calls = 0
+
+            def run(self, stop_event):
+                self.calls += 1
+                auxiliary_started.set()
+                self.assert_stop_event = stop_event
+                stop_event.wait(1.0)
+                return {
+                    "type": "final",
+                    "state": "idle",
+                    "reason": "engine_not_running",
+                    "detail": "parent running epoch ended",
+                    "interface_mode": "listen_only",
+                    "restored": True,
+                }
+
+            def stop(self):
+                self.stop_calls += 1
+
+        class ActiveSupervisor:
+            def run(self, _stop):
+                self.assertTrue(auxiliary_started.wait(1.0))
+                return {
+                    "type": "final",
+                    "state": "idle",
+                    "reason": "engine_not_running",
+                    "detail": "RPM stopped",
+                    "interface_mode": "listen_only",
+                    "restored": True,
+                }
+
+        auxiliary = AuxiliarySupervisor()
+        active = ActiveSupervisor()
+        # Bind unittest assertions used by the small fake supervisors.
+        active.assertTrue = self.assertTrue
+        broker = TelemetryBroker(
+            acquirer=self.Acquirer(),
+            monotonic=self.Clock(),
+            active_drive_supervisor=active,
+            active_drive_enabled=True,
+            auxiliary_drive_supervisor=auxiliary,
+            auxiliary_drive_enabled=True,
+        )
+        broker._passive_engine_evidence = "running"
+
+        broker._run_active_drive_if_ready()
+
+        self.assertEqual(auxiliary.calls, 1)
+        self.assertGreaterEqual(auxiliary.stop_calls, 1)
+        status = broker.status_response()["auxiliary_drive"]
+        self.assertEqual(status["state"], "idle")
+        self.assertEqual(status["reason"], "engine_not_running")
+        self.assertFalse(status["restoration_failed"])
+
     def test_restoration_failure_latches_further_active_collection(self):
         class Supervisor:
             def __init__(self):
