@@ -14,9 +14,11 @@ all three raw buses on every qualified future drive. Active polling remains
 limited to reviewed C-CAN targets until one B-CAN or CAN-CH candidate passes
 the same label, scaling, session, variation, and restoration gates.
 
-No CAN frame was transmitted for this analysis. Saved logs, prior read-only
+The passive/static analysis sent no CAN frame. Saved logs, prior read-only
 inventories, the reconstructed AlfaOBD catalog, the local OEM corpus, and
-read-only live service/interface status were used.
+read-only live service/interface status were used. The separately documented
+bounded B-CAN odometer support check later sent the fixed wake plus exactly one
+physical read and restored passive state.
 
 ## Synchronized passive evidence
 
@@ -112,6 +114,23 @@ support or physical-scale proof. No `0880-0888` request was sent during this
 static pass. A bounded current-van support read with ignition on, engine off is
 the next gate; a later synchronized drive must establish variation, wheel
 ordering, sign, zero points, and plausibility before dashboard promotion.
+
+The exact no-session support pass is prepared and dry-run validated:
+
+```bash
+python3 tools/did_sweep.py abs_canch \
+  --did 1002 --did 1004 \
+  --did 0880 --did 0881 --did 0882 --did 0883 \
+  --did 0884 --did 0885 --did 0886 --did 0887 --did 0888 \
+  --pair 12/13 \
+  --conditions "parked; ignition ON; engine OFF; exact installed ABS candidate support pass"
+```
+
+Dry run selects exactly eleven physical `22` reads at at most two requests per
+second and sends no `10` or `3E`. Live use adds only
+`--execute --confirm-parked`. CAN-CH has no reviewed wake profile, so the owner
+must first place the parked vehicle in ignition-on, engine-off state; C-CAN or
+B-CAN wake traffic must never be substituted.
 
 Static provenance:
 

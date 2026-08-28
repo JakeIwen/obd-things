@@ -515,8 +515,8 @@
       ]
     },
     {
-      "name": "alfaobd-jadx-class-la",
-      "description": "Decompile only AlfaOBD's bounded CAN-CH request-array holder class.",
+      "name": "alfaobd-jadx-class-ha",
+      "description": "Decompile only AlfaOBD's bounded HALF/ORC request-array holder class.",
       "profile": "apk-analyze",
       "source_paths": [],
       "minimum_inputs": 1,
@@ -524,13 +524,13 @@
       "argv": [
         "--no-res",
         "--single-class",
-        "com.AlfaOBD.AlfaOBD.la",
+        "com.AlfaOBD.AlfaOBD.ha",
         "--single-class-output",
-        "{result:la.java}",
+        "{result:ha.java}",
         "{input:0}"
       ],
       "outputs": [
-        "la.java"
+        "ha.java"
       ]
     },
     {
