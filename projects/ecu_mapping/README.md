@@ -40,6 +40,18 @@ ambiguity, and rejects incompatible legacy throttle-blade and vehicle-speed scal
 recovers shifter/GSM lifecycle-layout candidates while bounding ABS, EPS, and ORC results to
 identity continuity.
 
+The permanent three-tap data and active-poll readiness analysis is recorded in
+[`2026-08-27 three-bus telemetry readiness`](findings/promaster_2022/2026-08-27_three_bus_telemetry_readiness.md).
+Its bounded, owner-authorized APK work joins the current ABS `F1A5` subtype to
+the exact eleven-entry AlfaOBD Plots request array: `1002`, `1004`, and
+`0880-0888` cover speed, voltage, four wheel speeds, pressure, steering angle,
+yaw, and lateral/longitudinal acceleration. These are installed-variant
+vendor-derived candidates, not live-verified DIDs; the finding preserves the
+candidate formulas and requires one ignition-on support pass plus a controlled
+drive before dashboard promotion. The enabled broker-owned recorder now
+requires separate synchronized raw C-CAN, B-CAN, and CAN-CH streams on every
+future qualified drive.
+
 The current owner-priority C-CAN roadmap—oil pressure, coolant/oil temperature,
 torque and derived power, OEM operating context, and the targeted PCM/TCM
 acquisition order—is recorded in
