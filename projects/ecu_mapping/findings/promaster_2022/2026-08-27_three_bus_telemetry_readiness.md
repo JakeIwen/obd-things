@@ -230,6 +230,13 @@ recorder consumes that exact ownership evidence instead of taking a conflicting
 passive B-CAN lease. This preserves three-bus capture of the request/response
 traffic needed to resolve the counter relationship.
 
+Commit `d14d90a` was pushed and deployed while the vehicle was asleep on
+2026-08-28. Broker status exposed the enabled-but-idle auxiliary owner and the
+candidate metric catalog; both broker and recorder remained healthy, every
+role stayed exact passive/error-free, and the LAN dashboard served the starred
+card. No deployment-time CAN frame was sent, so the production raw transport
+and armed-B-CAN recorder companion remain pending live engine-running evidence.
+
 ## Polling admission plan
 
 A B-CAN poll target enters the broker only after all of the following:

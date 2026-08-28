@@ -844,6 +844,19 @@ restricts clients.
 
 ## Current vanpi deployment
 
+Deployment update, 2026-08-28: commit `d14d90a` installed the fixed B-CAN ICS
+helper, starred candidate odometer card, broker auxiliary supervision, and
+armed-B-CAN recorder companion. `van-telemetry` and `van-drive-recorder` were
+restarted while the vehicle was asleep; both are active/enabled with zero
+restarts. Broker status reports `auxiliary_drive.enabled=true`, idle,
+listen-only, no helper PID or restoration fault, and the catalog exposes only
+candidate-quality `vehicle.odometer` from `ics.did.2001`. All three vehicle
+roles read back classical, listen-only, ERROR-ACTIVE, `restart-ms 0`, with zero
+errors/drops and no operation inhibit. The LAN listener served the new
+`ODOMETER*` card and discrepancy disclosure. No new CAN frame was transmitted
+during deployment; the raw-CAN production helper and recorder-companion path
+still require their first qualified engine-running validation.
+
 Deployment update, 2026-08-21: the tracked role-aware
 `van-telemetry.service` is installed, enabled from `multi-user.target`, and
 active. Passive commissioning resolved C-CAN as `can0` at 500 kbit/s, B-CAN as
@@ -1220,10 +1233,10 @@ recorder admission, initial-ignition timeout, and persistent-candump command
 construction.
 
 The role-aware broker is deployed and its passive three-bus reconciliation was
-live-CAN validated on 2026-08-21. The vehicle was asleep, so active-drive and
-the disabled companion services were not exercised. Service health and passive
-validation are not evidence of a successful active acquisition; inspect metric
-provenance and quality on every available observation.
+live-CAN validated on 2026-08-21. The B-CAN auxiliary implementation was
+deployed asleep on 2026-08-28 and therefore remained idle. Service health and
+passive validation are not evidence of a successful active acquisition;
+inspect metric provenance and quality on every available observation.
 
 The 2026-08-24 wake deployment added hardware-specific active validation. The
 scheduled path first exposed that these `gs_usb` controllers reject automatic
