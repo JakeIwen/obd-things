@@ -23,7 +23,7 @@ import subprocess
 import time
 from typing import Callable
 
-from lib import can_operation_state, can_wake, canbus, diagnostic_safety
+from lib import can_handoff, can_operation_state, can_wake, canbus, diagnostic_safety
 from lib.can_role_resolver import CanRoleResolutionError
 from projects.vehicle_data import ccan_powertrain
 from projects.vehicle_data.can_interfaces import (
@@ -495,10 +495,20 @@ class RoleAwareVoltageAcquirer:
 
     def _passive(self, role: str) -> AcquisitionResult:
         try:
-            with self.manager.observe(role) as lease:
-                if role == C_CAN_ROLE:
-                    self._last_channel = lease.channel
-                return self._delegate(lease.channel, role).acquire("passive")
+            with can_handoff.passive_turn(role):
+                with self.manager.observe(role) as lease:
+                    if role == C_CAN_ROLE:
+                        self._last_channel = lease.channel
+                    return self._delegate(lease.channel, role).acquire("passive")
+        except diagnostic_safety.ChannelLockError:
+            return failure(
+                metric="battery.voltage",
+                unit="V",
+                reason="can_busy",
+                detail=f"{role} passive sample yielded to a reserved active handoff",
+                bus=role,
+                acquisition="passive",
+            )
         except PassiveInterfaceUnavailable as exc:
             return failure(
                 metric="battery.voltage",
@@ -523,10 +533,11 @@ class RoleAwareVoltageAcquirer:
                 raced = self._passive(B_CAN_ROLE)
                 if raced.available:
                     return raced
+            reason = "can_busy" if exc.reason == "handoff_busy" else exc.reason
             return failure(
                 metric="battery.voltage",
                 unit="V",
-                reason=exc.reason,
+                reason=reason,
                 detail=exc.detail,
                 bus=B_CAN_ROLE,
                 acquisition="wake_assisted",
@@ -663,23 +674,30 @@ class RoleAwareCcanPowertrainReader:
 
     def read(self) -> tuple[ccan_powertrain.PassiveObservation, ...]:
         try:
-            with self.manager.observe(C_CAN_ROLE) as lease:
-                if (
-                    canbus.identify_bus(
+            with can_handoff.passive_turn(C_CAN_ROLE):
+                with self.manager.observe(C_CAN_ROLE) as lease:
+                    if (
+                        canbus.identify_bus(
+                            lease.channel,
+                            probe=self.probe_seconds,
+                        )
+                        != C_CAN_ROLE
+                    ):
+                        return ()
+                    snapshot = ccan_powertrain.read_broadcast_snapshot(
                         lease.channel,
-                        probe=self.probe_seconds,
+                        timeout=self.read_timeout,
+                        temperature_gate=self.temperature_gate,
                     )
-                    != C_CAN_ROLE
-                ):
-                    return ()
-                snapshot = ccan_powertrain.read_broadcast_snapshot(
-                    lease.channel,
-                    timeout=self.read_timeout,
-                    temperature_gate=self.temperature_gate,
-                )
-                self._quality_events.extend(snapshot.quality_events)
-                return snapshot.observations
-        except (PassiveInterfaceUnavailable, OSError, RuntimeError, ValueError):
+                    self._quality_events.extend(snapshot.quality_events)
+                    return snapshot.observations
+        except (
+            diagnostic_safety.ChannelLockError,
+            PassiveInterfaceUnavailable,
+            OSError,
+            RuntimeError,
+            ValueError,
+        ):
             return ()
 
     def drain_quality_events(

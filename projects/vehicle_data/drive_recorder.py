@@ -1,23 +1,28 @@
 #!/usr/bin/env python3
 """Receive-only raw recorder coordinated with the broker's active-drive owner.
 
-This daemon never configures SocketCAN, acquires a diagnostic lock, or sends a
-CAN frame.  It waits until the telemetry broker proves that its reviewed
-active-drive helper owns the serial-resolved C-CAN channel, then attaches an independent receive socket
-through ``candump`` and writes loss-accounted zstd chunks to the required
-external mount.
+This daemon never configures SocketCAN or sends a CAN frame.  It waits until
+the telemetry broker proves that its reviewed active-drive helper owns the
+serial-resolved C-CAN channel, attaches an independent receive socket to that
+broker-owned route, and takes shared passive observer leases for the separately
+resolved B-CAN and CAN-CH routes.  All three write distinct loss-accounted zstd
+streams to the required external mount.
 
 The normal observer lock cannot be acquired during this interval: the broker
 correctly holds the exclusive channel lock for its fixed PCM/RF-Hub requests.
 Instead, this companion requires the broker's machine-readable ownership state
-before accepting an armed interface.  It may continue receiving after the
-broker restores listen-only mode so the same raw session reaches ignition loss.
-Any armed state without the broker owner fails the capture.
+before accepting the armed C-CAN interface.  B-CAN and CAN-CH retain their
+ordinary shared role/channel leases for the complete interval.  It may continue
+receiving after the broker restores C-CAN listen-only mode so the same raw
+session reaches ignition loss.  Any armed state without the broker owner, any
+secondary-role identity/loss failure, or a missing secondary awake signature
+fails the complete three-bus evidence set.
 """
 
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import dataclasses
 import datetime as dt
 import json
@@ -27,6 +32,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from typing import Callable, Sequence
 
@@ -38,25 +44,35 @@ if str(REPO) not in sys.path:
 from projects.vehicle_data.api import TelemetryClient  # noqa: E402
 from projects.vehicle_data.broker import DEFAULT_SOCKET  # noqa: E402
 from lib.can_role_resolver import SysfsCanRoleResolver  # noqa: E402
+from projects.vehicle_data.can_interfaces import (  # noqa: E402
+    PassiveInterfaceLease,
+    PassiveInterfaceManager,
+)
 from tools import passive_drive_capture as capture  # noqa: E402
 
 
 BITRATE = 500_000
 IGNITION_ID = 0x2EF
 PAIR = "6/14"
+SECONDARY_ROLES = ("b-can", "can-ch")
+SECONDARY_START_IDS = {"b-can": 0x46C, "can-ch": 0x0DA}
+SECONDARY_START_TIMEOUT_SECONDS = 5.0
+SECONDARY_START_WAIT_SECONDS = 8.0
+SECONDARY_JOIN_TIMEOUT_SECONDS = 150.0
 DEFAULT_OUT_ROOT = (
     Path("/mnt/EXFAT512")
     / "obd-things"
     / "tmp"
     / "captures"
-    / "ccan"
+    / "three_bus_drive"
     / "broker-drive"
 )
 DEFAULT_REQUIRED_MOUNT = Path("/mnt/EXFAT512")
 DEFAULT_STATE_PATH = REPO / "tmp" / "vehicle_data" / "drive-recorder-state.json"
 DEFAULT_CONDITIONS = (
     "ordinary driving; broker-owned fixed PCM 01A1/06DA and RF Hub polling; "
-    "serial-resolved receive-only C-CAN companion; no external diagnostic client"
+    "serial-resolved synchronized C-CAN, B-CAN, and CAN-CH receive-only companions; "
+    "no external diagnostic client"
 )
 WAIT_SECONDS = 1.0
 STATUS_TIMEOUT_SECONDS = 2.0
@@ -68,6 +84,20 @@ class DriveRecorderError(RuntimeError):
 
 class BrokerOwnershipLost(DriveRecorderError):
     """The active-drive epoch ended during a bounded recorder start race."""
+
+
+@dataclasses.dataclass(frozen=True)
+class CaptureRoute:
+    role: str
+    channel: str
+    usb_serial: str
+    dev_id: int
+    bitrate: int
+    pair: str
+    ownership: str
+
+    def as_dict(self) -> dict[str, object]:
+        return dataclasses.asdict(self)
 
 
 def utc_now() -> str:
@@ -177,18 +207,103 @@ def broker_c_can_route(
     return channel, serial, dev_id
 
 
+def _broker_role_payload(
+    status: dict[str, object], role: str
+) -> dict[str, object]:
+    interface = status.get("interface")
+    role_snapshot = (
+        interface.get("role_interfaces") if isinstance(interface, dict) else None
+    )
+    roles = role_snapshot.get("roles") if isinstance(role_snapshot, dict) else None
+    payload = roles.get(role) if isinstance(roles, dict) else None
+    if not isinstance(payload, dict):
+        raise BrokerOwnershipLost(f"broker status omits the {role} route")
+    return payload
+
+
+def broker_secondary_route(
+    status: dict[str, object], role: str
+) -> CaptureRoute:
+    """Return one broker-proven exact passive secondary role."""
+    if role not in SECONDARY_ROLES:
+        raise ValueError(f"unsupported secondary recorder role {role!r}")
+    payload = _broker_role_payload(status, role)
+    expected = payload.get("expected")
+    actual = payload.get("actual")
+    if not isinstance(expected, dict) or not isinstance(actual, dict):
+        raise BrokerOwnershipLost(f"broker {role} route evidence is incomplete")
+    channel = payload.get("channel")
+    serial = expected.get("usb_serial")
+    dev_id = expected.get("dev_id")
+    bitrate = expected.get("bitrate")
+    pair = expected.get("pair")
+    valid = bool(
+        payload.get("resolution") == "resolved"
+        and payload.get("passive_ready") is True
+        and payload.get("safe") is True
+        and isinstance(channel, str)
+        and re.fullmatch(r"can[0-9]+", channel)
+        and isinstance(serial, str)
+        and serial
+        and isinstance(dev_id, int)
+        and not isinstance(dev_id, bool)
+        and dev_id >= 0
+        and isinstance(bitrate, int)
+        and not isinstance(bitrate, bool)
+        and bitrate > 0
+        and isinstance(pair, str)
+        and pair
+        and actual.get("present") is True
+        and actual.get("up") is True
+        and actual.get("bitrate") == bitrate
+        and actual.get("fd_enabled") is False
+        and actual.get("one_shot") is False
+        and actual.get("listen_only") is True
+        and actual.get("controller_state") == "ERROR-ACTIVE"
+        and actual.get("restart_ms") == 0
+    )
+    if not valid:
+        raise BrokerOwnershipLost(
+            f"broker does not prove an exact passive {role} route"
+        )
+    return CaptureRoute(
+        role=role,
+        channel=channel,
+        usb_serial=serial,
+        dev_id=dev_id,
+        bitrate=bitrate,
+        pair=pair,
+        ownership="shared_passive_observer",
+    )
+
+
+def route_from_lease(lease: PassiveInterfaceLease) -> CaptureRoute:
+    return CaptureRoute(
+        role=lease.role,
+        channel=lease.channel,
+        usb_serial=lease.usb_serial,
+        dev_id=lease.dev_id,
+        bitrate=lease.bitrate,
+        pair=lease.pair,
+        ownership="shared_passive_observer",
+    )
+
+
 def query_interface(
     *,
     channel: str,
+    bitrate: int = BITRATE,
+    require_listen_only: bool | None = None,
+    role: str = "c-can",
     expected_usb_serial: str | None = None,
     expected_dev_id: int | None = None,
     role_resolver: SysfsCanRoleResolver | None = None,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
 ) -> capture.InterfaceState:
     if not isinstance(channel, str) or not re.fullmatch(r"can[0-9]+", channel):
-        raise DriveRecorderError("C-CAN route is not a resolved kernel canN")
+        raise DriveRecorderError(f"{role} route is not a resolved kernel canN")
     if (expected_usb_serial is None) != (expected_dev_id is None):
-        raise DriveRecorderError("C-CAN USB identity is incomplete")
+        raise DriveRecorderError(f"{role} USB identity is incomplete")
     if expected_usb_serial is not None:
         resolver = role_resolver or SysfsCanRoleResolver()
         inventory, _issues = resolver.inventory(drivers=("gs_usb",))
@@ -205,7 +320,7 @@ def query_interface(
             and matches[0].channel == channel
         ):
             raise DriveRecorderError(
-                f"{channel} no longer matches the broker-proven C-CAN USB identity"
+                f"{channel} no longer matches the broker-proven {role} USB identity"
             )
     try:
         result = runner(
@@ -225,8 +340,12 @@ def query_interface(
     errors = []
     if not state.up:
         errors.append("interface is not UP")
-    if state.bitrate != BITRATE:
-        errors.append(f"bitrate is {state.bitrate}, expected {BITRATE}")
+    if state.bitrate != bitrate:
+        errors.append(f"bitrate is {state.bitrate}, expected {bitrate}")
+    if require_listen_only is True and not state.listen_only:
+        errors.append("interface is not LISTEN-ONLY")
+    if require_listen_only is False and state.listen_only:
+        errors.append("interface is unexpectedly LISTEN-ONLY")
     if state.controller_state != "ERROR-ACTIVE":
         errors.append(
             f"controller is {state.controller_state}, expected ERROR-ACTIVE"
@@ -238,6 +357,33 @@ def query_interface(
             f"{channel} receive gate failed: " + "; ".join(errors)
         )
     return state
+
+
+class PassiveLeaseSafetyCheck:
+    """Revalidate one held B-CAN/CAN-CH observer lease and loss counters."""
+
+    def __init__(
+        self,
+        manager: PassiveInterfaceManager,
+        lease: PassiveInterfaceLease,
+    ) -> None:
+        self.manager = manager
+        self.lease = lease
+
+    def __call__(self) -> capture.InterfaceState:
+        with self.manager.observe(self.lease.role) as checked:
+            if route_from_lease(checked) != route_from_lease(self.lease):
+                raise DriveRecorderError(
+                    f"{self.lease.role} changed while validating capture ownership"
+                )
+        return query_interface(
+            channel=self.lease.channel,
+            bitrate=self.lease.bitrate,
+            require_listen_only=True,
+            role=self.lease.role,
+            expected_usb_serial=self.lease.usb_serial,
+            expected_dev_id=self.lease.dev_id,
+        )
 
 
 class CoordinatedSafetyCheck:
@@ -371,13 +517,20 @@ def record_one_interval(
     policy: capture.DiskPolicy,
     initial_status: dict[str, object],
     client: TelemetryClient,
+    *,
+    interface_manager: PassiveInterfaceManager | None = None,
 ) -> Path:
-    """Start one raw session without changing or locking the CAN interface."""
+    """Start one synchronized three-role session without configuring CAN."""
     if not broker_armed_ready(initial_status):
         raise BrokerOwnershipLost(
             "broker ownership disappeared before raw capture setup"
         )
     channel, usb_serial, dev_id = broker_c_can_route(initial_status)
+    interface_manager = interface_manager or PassiveInterfaceManager()
+    expected_secondary = {
+        role: broker_secondary_route(initial_status, role)
+        for role in SECONDARY_ROLES
+    }
     mount_device = capture.require_writable_mount(
         args.out_root,
         args.require_mount,
@@ -393,101 +546,283 @@ def record_one_interval(
         policy,
         initial_safety_check,
     )
+    if policy.action(free) != "full":
+        raise DriveRecorderError(
+            "three-bus capture requires full-stream storage above the soft floor"
+        )
     capture.require_writable_mount(
         args.out_root,
         args.require_mount,
         expected_device=mount_device,
     )
-    if not broker_armed_ready(
-        read_broker_status(client), expected_channel=channel
-    ):
-        raise BrokerOwnershipLost(
-            "broker ownership disappeared during raw capture preflight"
+    with ExitStack() as lease_stack:
+        leases: dict[str, PassiveInterfaceLease] = {}
+        secondary_checks: dict[str, PassiveLeaseSafetyCheck] = {}
+        secondary_interfaces: dict[str, capture.InterfaceState] = {}
+        for role in SECONDARY_ROLES:
+            try:
+                lease = lease_stack.enter_context(interface_manager.observe(role))
+            except Exception as exc:
+                raise BrokerOwnershipLost(
+                    f"cannot acquire required passive {role} recorder route: {exc}"
+                ) from exc
+            actual_route = route_from_lease(lease)
+            if actual_route != expected_secondary[role]:
+                raise BrokerOwnershipLost(
+                    f"{role} route changed after broker admission"
+                )
+            check = PassiveLeaseSafetyCheck(interface_manager, lease)
+            secondary_interfaces[role] = check()
+            leases[role] = lease
+            secondary_checks[role] = check
+
+        refreshed_status = read_broker_status(client)
+        if not broker_armed_ready(refreshed_status, expected_channel=channel):
+            raise BrokerOwnershipLost(
+                "broker ownership disappeared during raw capture preflight"
+            )
+        for role in SECONDARY_ROLES:
+            if broker_secondary_route(refreshed_status, role) != route_from_lease(
+                leases[role]
+            ):
+                raise BrokerOwnershipLost(
+                    f"broker {role} route changed during raw capture preflight"
+                )
+
+        args.out_root.mkdir(parents=True, exist_ok=True)
+        run_id = campaign_id()
+        run_dir = args.out_root / run_id
+        if run_dir.exists():
+            raise DriveRecorderError(f"campaign directory already exists: {run_dir}")
+        run_dir.mkdir()
+        role_dirs = {role: run_dir / role for role in ("c-can", *SECONDARY_ROLES)}
+        for role_dir in role_dirs.values():
+            role_dir.mkdir()
+        selected_ids = priority_ids()
+        routes = {
+            "c-can": CaptureRoute(
+                role="c-can",
+                channel=channel,
+                usb_serial=usb_serial,
+                dev_id=dev_id,
+                bitrate=BITRATE,
+                pair=PAIR,
+                ownership="broker_active_drive_companion",
+            ),
+            **{role: route_from_lease(leases[role]) for role in SECONDARY_ROLES},
+        }
+        metadata = {
+            "type": "run_metadata",
+            "created_utc": utc_now(),
+            "campaign": run_id,
+            "conditions": args.conditions.strip(),
+            "interaction": "synchronized_three_bus_receive_only_companion",
+            "roles_required": ["c-can", *SECONDARY_ROLES],
+            "routes": {role: route.as_dict() for role, route in routes.items()},
+            "initial_interfaces": {
+                "c-can": dataclasses.asdict(interface),
+                **{
+                    role: dataclasses.asdict(secondary_interfaces[role])
+                    for role in SECONDARY_ROLES
+                },
+            },
+            "initial_broker_status": initial_status,
+            "capture_started_mid_running_epoch": True,
+            "required_mount": str(args.require_mount.resolve()),
+            "free_bytes_at_preflight": free,
+            "rotation_seconds": args.rotation_seconds,
+            "duration_seconds": args.duration_seconds,
+            "c_can_stop_after_id": f"0x{IGNITION_ID:X}",
+            "c_can_stop_after_id_absence_seconds": args.ignition_absence_seconds,
+            "secondary_required_start_ids": {
+                role: f"0x{SECONDARY_START_IDS[role]:X}"
+                for role in SECONDARY_ROLES
+            },
+            "secondary_required_start_timeout_seconds": (
+                SECONDARY_START_TIMEOUT_SECONDS
+            ),
+            "c_can_priority_profile": "ccan-correlation",
+            "c_can_priority_ids": [
+                f"0x{value:X}" for value in sorted(selected_ids)
+            ],
+            "secondary_priority_streams": False,
+            "soft_free_bytes": policy.soft_free_bytes,
+            "hard_free_bytes": policy.hard_free_bytes,
+            "net_core_rmem_max": capture.read_rmem_max(),
+            "does_not": [
+                "configure or restore CAN",
+                "acquire exclusive B-CAN or CAN-CH ownership",
+                "transmit CAN",
+                "control the telemetry broker",
+            ],
+        }
+        capture.atomic_write_json(run_dir / "run.json", metadata)
+        write_state(
+            args.state_path,
+            status="recording",
+            campaign=run_id,
+            capture_dir=str(run_dir),
+            roles_recording=["c-can", *SECONDARY_ROLES],
+            c_can_interface_mode=(
+                "listen_only" if interface.listen_only else "armed_diagnostic"
+            ),
         )
 
-    args.out_root.mkdir(parents=True, exist_ok=True)
-    run_id = campaign_id()
-    run_dir = args.out_root / run_id
-    if run_dir.exists():
-        raise DriveRecorderError(f"campaign directory already exists: {run_dir}")
-    run_dir.mkdir()
-    selected_ids = priority_ids()
-    metadata = {
-        "type": "run_metadata",
-        "created_utc": utc_now(),
-        "campaign": run_id,
-        "conditions": args.conditions.strip(),
-        "interaction": "receive_only_broker_armed_companion",
-        "channel": channel,
-        "usb_serial": usb_serial,
-        "dev_id": dev_id,
-        "bitrate": BITRATE,
-        "initial_interface": dataclasses.asdict(interface),
-        "initial_broker_status": initial_status,
-        "capture_started_mid_running_epoch": True,
-        "required_mount": str(args.require_mount.resolve()),
-        "free_bytes_at_preflight": free,
-        "rotation_seconds": args.rotation_seconds,
-        "duration_seconds": args.duration_seconds,
-        "stop_after_id": f"0x{IGNITION_ID:X}",
-        "stop_after_id_absence_seconds": args.ignition_absence_seconds,
-        "priority_profile": "ccan-correlation",
-        "priority_ids": [f"0x{value:X}" for value in sorted(selected_ids)],
-        "soft_free_bytes": policy.soft_free_bytes,
-        "hard_free_bytes": policy.hard_free_bytes,
-        "net_core_rmem_max": capture.read_rmem_max(),
-        "does_not": [
-            "configure or restore CAN",
-            "acquire or release a CAN channel lock",
-            "transmit CAN",
-            "control the telemetry broker",
-        ],
-    }
-    capture.atomic_write_json(run_dir / "run.json", metadata)
-    write_state(
-        args.state_path,
-        status="recording",
-        campaign=run_id,
-        capture_dir=str(run_dir),
-        interface_mode=(
-            "listen_only" if interface.listen_only else "armed_diagnostic"
-        ),
-    )
-    recorder_safety_check = InitialArmedSafetyCheck(
-        client,
-        channel=channel,
-        expected_usb_serial=usb_serial,
-        expected_dev_id=dev_id,
-    )
-    recorder = capture.Recorder(
-        run_dir,
-        selected_ids,
-        args.rotation_seconds,
-        args.duration_seconds,
-        policy,
-        stop_after_id=IGNITION_ID,
-        stop_after_id_absence_seconds=args.ignition_absence_seconds,
-        required_start_id=IGNITION_ID,
-        required_start_id_timeout_seconds=5.0,
-        safety_check=recorder_safety_check,
-        mount_check=lambda: capture.require_writable_mount(
+        mount_check = lambda: capture.require_writable_mount(
             args.out_root,
             args.require_mount,
             expected_device=mount_device,
-        ),
-        zstd=shutil.which("zstd") or "zstd",
-        candump=shutil.which("candump") or "candump",
-        candump_extra_args=("-D",),
-        channel=channel,
-    )
-    try:
-        with capture.campaign_file_lock(run_dir):
-            recorder.run()
-    except capture.CaptureError as exc:
-        if "required start CAN ID" in str(exc):
-            raise BrokerOwnershipLost(str(exc)) from exc
-        raise
-    return run_dir
+        )
+        zstd = shutil.which("zstd") or "zstd"
+        candump = shutil.which("candump") or "candump"
+        stop_secondaries = threading.Event()
+        secondary_started = {
+            role: threading.Event() for role in SECONDARY_ROLES
+        }
+        secondary_errors: dict[str, BaseException] = {}
+        secondary_error_lock = threading.Lock()
+        secondary_recorders: dict[str, capture.Recorder] = {}
+        secondary_threads: dict[str, threading.Thread] = {}
+
+        def run_secondary(role: str) -> None:
+            try:
+                secondary_recorders[role].run()
+            except BaseException as exc:
+                with secondary_error_lock:
+                    secondary_errors[role] = exc
+
+        for role in SECONDARY_ROLES:
+            lease = leases[role]
+            secondary_recorders[role] = capture.Recorder(
+                role_dirs[role],
+                frozenset(),
+                args.rotation_seconds,
+                args.duration_seconds,
+                policy,
+                required_start_id=SECONDARY_START_IDS[role],
+                required_start_id_timeout_seconds=SECONDARY_START_TIMEOUT_SECONDS,
+                safety_check=secondary_checks[role],
+                mount_check=mount_check,
+                zstd=zstd,
+                candump=candump,
+                candump_extra_args=("-D",),
+                external_stop_requested=stop_secondaries.is_set,
+                started_callback=secondary_started[role].set,
+                install_signal_handlers=False,
+                channel=lease.channel,
+                bitrate=lease.bitrate,
+            )
+            thread = threading.Thread(
+                name=f"broker-drive-recorder-{role}",
+                target=run_secondary,
+                args=(role,),
+            )
+            secondary_threads[role] = thread
+
+        def secondary_health_check() -> None:
+            with secondary_error_lock:
+                failures = dict(secondary_errors)
+            if failures:
+                detail = "; ".join(
+                    f"{role}: {type(exc).__name__}: {exc}"
+                    for role, exc in sorted(failures.items())
+                )
+                raise DriveRecorderError(
+                    "required secondary recorder failed: " + detail
+                )
+            stopped = [
+                role
+                for role, thread in secondary_threads.items()
+                if not thread.is_alive() and not stop_secondaries.is_set()
+            ]
+            if stopped:
+                raise DriveRecorderError(
+                    "required secondary recorder stopped unexpectedly: "
+                    + ", ".join(sorted(stopped))
+                )
+
+        c_can_recorder = capture.Recorder(
+            role_dirs["c-can"],
+            selected_ids,
+            args.rotation_seconds,
+            args.duration_seconds,
+            policy,
+            stop_after_id=IGNITION_ID,
+            stop_after_id_absence_seconds=args.ignition_absence_seconds,
+            required_start_id=IGNITION_ID,
+            required_start_id_timeout_seconds=5.0,
+            safety_check=InitialArmedSafetyCheck(
+                client,
+                channel=channel,
+                expected_usb_serial=usb_serial,
+                expected_dev_id=dev_id,
+            ),
+            mount_check=mount_check,
+            zstd=zstd,
+            candump=candump,
+            candump_extra_args=("-D",),
+            health_check=secondary_health_check,
+            channel=channel,
+            bitrate=BITRATE,
+        )
+
+        main_error: BaseException | None = None
+        try:
+            with capture.campaign_file_lock(run_dir):
+                for thread in secondary_threads.values():
+                    thread.start()
+                deadline = time.monotonic() + SECONDARY_START_WAIT_SECONDS
+                for role in SECONDARY_ROLES:
+                    remaining = max(0.0, deadline - time.monotonic())
+                    if not secondary_started[role].wait(remaining):
+                        secondary_health_check()
+                        raise DriveRecorderError(
+                            f"required {role} recorder did not start within "
+                            f"{SECONDARY_START_WAIT_SECONDS:.1f} seconds"
+                        )
+                secondary_health_check()
+                c_can_recorder.run()
+        except BaseException as exc:
+            main_error = exc
+        finally:
+            stop_secondaries.set()
+            for thread in secondary_threads.values():
+                if thread.ident is not None:
+                    thread.join(SECONDARY_JOIN_TIMEOUT_SECONDS)
+
+        alive = [
+            role for role, thread in secondary_threads.items() if thread.is_alive()
+        ]
+        if alive:
+            raise DriveRecorderError(
+                "secondary recorder cleanup timed out: " + ", ".join(alive)
+            )
+        if main_error is not None:
+            if isinstance(main_error, capture.CaptureError) and (
+                "required start CAN ID" in str(main_error)
+            ):
+                raise BrokerOwnershipLost(str(main_error)) from main_error
+            raise main_error
+        secondary_health_check()
+        capture.atomic_write_json(
+            run_dir / "capture-set.json",
+            {
+                "type": "synchronized_three_bus_capture_set",
+                "completed_utc": utc_now(),
+                "campaign": run_id,
+                "complete": True,
+                "roles": {
+                    role: {
+                        "route": routes[role].as_dict(),
+                        "capture_dir": str(role_dirs[role]),
+                        "checkpoint": str(role_dirs[role] / "checkpoint.json"),
+                        "manifest": str(role_dirs[role] / "manifest.jsonl"),
+                    }
+                    for role in ("c-can", *SECONDARY_ROLES)
+                },
+            },
+        )
+        return run_dir
 
 
 def run_daemon(
@@ -652,10 +987,15 @@ def validate_args(args: argparse.Namespace) -> capture.DiskPolicy:
 def plan(args: argparse.Namespace, policy: capture.DiskPolicy) -> dict[str, object]:
     return {
         "mode": "execute" if args.execute else "plan_only",
-        "interaction": "receive_only_broker_armed_companion",
+        "interaction": "synchronized_three_bus_receive_only_companion",
         "trigger": "broker active_drive state=armed_diagnostic",
-        "channel": "broker-resolved c-can",
-        "bitrate": BITRATE,
+        "roles": ["c-can", *SECONDARY_ROLES],
+        "routing": {
+            "c-can": "broker-owned serial-resolved active-drive channel",
+            "b-can": "shared serial-resolved passive observer lease",
+            "can-ch": "shared serial-resolved passive observer lease",
+        },
+        "bitrates": {"c-can": BITRATE, "b-can": 125000, "can-ch": 500000},
         "output_root": str(args.out_root),
         "required_mount": str(args.require_mount),
         "state_path": str(args.state_path),
@@ -663,11 +1003,14 @@ def plan(args: argparse.Namespace, policy: capture.DiskPolicy) -> dict[str, obje
         "duration_seconds": args.duration_seconds,
         "stop_after_id": f"0x{IGNITION_ID:X}",
         "stop_after_id_absence_seconds": args.ignition_absence_seconds,
+        "secondary_required_start_ids": {
+            role: f"0x{SECONDARY_START_IDS[role]:X}" for role in SECONDARY_ROLES
+        },
         "soft_free_bytes": policy.soft_free_bytes,
         "hard_free_bytes": policy.hard_free_bytes,
         "does_not": [
             "configure or restore CAN",
-            "acquire or release a CAN channel lock",
+            "acquire exclusive B-CAN or CAN-CH ownership",
             "transmit CAN",
             "control the telemetry broker",
         ],

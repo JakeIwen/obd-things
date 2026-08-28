@@ -63,6 +63,16 @@ service, cron, network, and vehicle state before acting.
   start receives the three-second restart grace. Pre-transmit safety contention retries after
   500 ms. Structured journal transitions and persistent `last_blocked_*` status fields preserve
   the reason for a failed activation even after the dashboard removes the marker.
+  Broker C-CAN voltage/powertrain reads now pass through a reader gate before taking a shared
+  per-role fairness turn; the fixed wake closes that gate, waits at most 1.25 seconds for in-flight
+  readers to drain, and reserves the turn exclusively before taking the still-authoritative
+  exclusive role/channel locks. This prevents new broker observers from overtaking a waiting COP
+  refresh while allowing the current observer to finish. The handoff is scheduling only and never
+  authorizes CAN.
+  The 15-second COP cadence is measured attempt-start to attempt-start rather than after completion.
+  Its outer broker-state gate accepts at most five-second-old evidence, matching the registered
+  ignition/RPM freshness window; the wake core still checks live C-CAN ignition/RPM witnesses at
+  every send boundary.
 - `lib/can_wake.py` owns the two reviewed network-wake profiles. Scheduled parked voltage uses only
   the fixed B-CAN `0x7FF` burst followed by verified `0x46C` voltage; COP ALERT uses only the fixed
   addressed C-CAN RF-Hub read because its accessory-rail side effect is the intended behavior.

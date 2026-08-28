@@ -53,12 +53,15 @@ PREEXISTING_MARKER_DELAY_SECONDS = 3.0
 BROKER_TIMEOUT_SECONDS = 0.75
 
 ALLOWED_ACTIVE_DRIVE_STATES = frozenset(("idle", "disabled"))
-# Admission requires a sample from at most roughly one normal collector cycle.
+# Admission never accepts state older than the registered five-second
+# ignition/RPM freshness window.  A live three-role collector cycle can leave
+# the vehicle-state sample about 4.1 seconds old while it services the other
+# passive roles, so a shorter threshold phase-locks into false stale failures.
 # Once the exact C-CAN role is exclusively owned, the collector cannot refresh
 # that role; a separate nonextendable allowance covers the bounded wake,
 # one-shot-to-normal re-arm, validation, and passive restoration. The wake core
 # independently checks fresh 0x2EF/0x0FC witnesses at every send boundary.
-MAX_BROKER_START_STATE_AGE_MS = 1_500
+MAX_BROKER_START_STATE_AGE_MS = 5_000
 MAX_BROKER_TRANSACTION_STATE_AGE_MS = 12_000
 STATUS_TEXT_LIMIT = 500
 SOCKETCAN_NAME = re.compile(r"\bcan[0-9]+\b")
@@ -329,6 +332,7 @@ class CopCanWakeSupervisor:
         self.next_attempt_state: str | None = None
         self.wake_count = 0
         self.last_attempt_at: str | None = None
+        self.last_transaction_seconds: float | None = None
         self.last_success_at: str | None = None
         self.last_reason: str | None = None
         self.last_detail: str | None = None
@@ -438,9 +442,11 @@ class CopCanWakeSupervisor:
             "preexisting_marker_delay_seconds": PREEXISTING_MARKER_DELAY_SECONDS,
             "safety_retry_seconds": SAFETY_RETRY_SECONDS,
             "fixed_success_cadence_seconds": SUCCESS_CADENCE_SECONDS,
+            "success_cadence_basis": "attempt_start",
             "next_attempt_at": self.next_attempt_at,
             "wake_count": self.wake_count,
             "last_attempt_at": self.last_attempt_at,
+            "last_transaction_seconds": self.last_transaction_seconds,
             "last_success_at": self.last_success_at,
             "last_reason": self.last_reason,
             "last_detail": self.last_detail,
@@ -542,6 +548,7 @@ class CopCanWakeSupervisor:
             return IDLE_POLL_SECONDS
 
         self._clear_attempt_schedule(now)
+        attempt_started = self._monotonic_value()
         self.last_attempt_at = utc_now(self.wall_clock)
         self.last_reason = None
         self.last_detail = "bounded C-CAN wake transaction is in progress"
@@ -554,19 +561,32 @@ class CopCanWakeSupervisor:
             )
         except self.wake_error_type as exc:
             completed = self._monotonic_value()
+            self.last_transaction_seconds = round(
+                max(0.0, completed - attempt_started),
+                3,
+            )
+            reason = str(getattr(exc, "reason", "wake_failed"))
             self._record_block(
-                str(getattr(exc, "reason", "wake_failed")),
+                reason,
                 str(getattr(exc, "detail", exc)),
             )
             self._schedule_attempt(
                 completed,
-                FAILED_RETRY_SECONDS,
+                (
+                    SAFETY_RETRY_SECONDS
+                    if reason == "handoff_busy"
+                    else FAILED_RETRY_SECONDS
+                ),
                 "blocked",
             )
             self._publish("blocked")
             return IDLE_POLL_SECONDS
 
         completed = self._monotonic_value()
+        self.last_transaction_seconds = round(
+            max(0.0, completed - attempt_started),
+            3,
+        )
         self.wake_count += 1
         self.last_success_at = utc_now(self.wall_clock)
         self.last_reason = None
@@ -575,7 +595,10 @@ class CopCanWakeSupervisor:
         )
         self._schedule_attempt(
             completed,
-            SUCCESS_CADENCE_SECONDS,
+            max(
+                0.0,
+                SUCCESS_CADENCE_SECONDS - self.last_transaction_seconds,
+            ),
             "active_waiting",
         )
         self._publish("active_waiting")

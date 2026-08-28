@@ -116,6 +116,10 @@ class BrokerGateTests(unittest.TestCase):
     def test_exact_fresh_stopped_state_is_accepted(self):
         self.assertEqual(cop.broker_safety_conflicts(safe_status()), ())
         self.assertEqual(
+            cop.broker_safety_conflicts(safe_status(age_ms=4_500)),
+            (),
+        )
+        self.assertEqual(
             cop.broker_safety_conflicts(
                 safe_status(state="ignition_on", running=False)
             ),
@@ -293,6 +297,49 @@ class SupervisorTests(unittest.TestCase):
         self.clock.advance(cop.SUCCESS_CADENCE_SECONDS)
         supervisor.tick()
         self.assertEqual(calls, ["c-can", "c-can"])
+
+    def test_success_cadence_is_measured_from_attempt_start(self):
+        calls = []
+
+        def wake_once(_role, *, prearm_check):
+            calls.append(self.clock.value)
+            self.assertEqual(prearm_check(), ())
+            self.clock.advance(7.0)
+            return SimpleNamespace(detail="restored")
+
+        supervisor = self.supervisor(wake_once)
+        self.arm_marker(supervisor)
+        attempt_started = self.clock.value
+        supervisor.tick()
+
+        self.assertEqual(calls, [attempt_started])
+        self.assertEqual(supervisor.last_transaction_seconds, 7.0)
+        self.assertAlmostEqual(
+            supervisor.next_attempt_monotonic,
+            attempt_started + cop.SUCCESS_CADENCE_SECONDS,
+        )
+
+    def test_handoff_contention_retries_fast_but_role_contention_stays_slow(self):
+        for reason, expected_delay in (
+            ("handoff_busy", cop.SAFETY_RETRY_SECONDS),
+            ("can_busy", cop.FAILED_RETRY_SECONDS),
+        ):
+            with self.subTest(reason=reason):
+                self.marker.unlink(missing_ok=True)
+                supervisor = self.supervisor(
+                    lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                        FakeWakeError(reason, f"{reason} fixture")
+                    )
+                )
+                self.arm_marker(supervisor)
+                before = self.clock.value
+                supervisor.tick()
+                self.assertEqual(supervisor.last_blocked_reason, reason)
+                self.assertAlmostEqual(
+                    supervisor.next_attempt_monotonic,
+                    before + expected_delay,
+                )
+                self.marker.unlink(missing_ok=True)
 
     def test_marker_removed_in_prearm_callback_blocks_send(self):
         callback_conflicts = []

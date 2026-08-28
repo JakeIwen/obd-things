@@ -930,6 +930,54 @@ class PassiveDriveCaptureTests(unittest.TestCase):
             self.assertEqual(capture_end["tracked_id_absence_seconds"], 2)
             self.assertEqual(checkpoint["status"], "complete")
 
+    def test_external_stop_cleanly_finalizes_without_installing_signal_handlers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            process = FakeProcess(exit_on_signal=True, descriptor=101)
+            clock = [0.0]
+            selector = FakeSelector(
+                process.stdout.fileno(),
+                [False],
+                on_select=lambda _timeout: clock.__setitem__(0, clock[0] + 1),
+            )
+            baseline = interface_state_with_counters(0, 0)
+            started = mock.Mock()
+            recorder = capture.Recorder(
+                run_dir,
+                frozenset(),
+                rotation_seconds=600,
+                duration_seconds=100,
+                policy=capture.DiskPolicy(300, 200),
+                channel=TEST_CHANNEL,
+                bitrate=TEST_BITRATE,
+                popen=lambda *_args, **_kwargs: process,
+                disk_free=lambda _path: 1000,
+                safety_check=lambda: baseline,
+                mount_check=lambda: None,
+                external_stop_requested=lambda: clock[0] >= 1,
+                started_callback=started,
+                install_signal_handlers=False,
+            )
+            RecordingChunk.writes = []
+            with mock.patch.object(capture, "Chunk", RecordingChunk), mock.patch.object(
+                capture.selectors, "DefaultSelector", return_value=selector
+            ), mock.patch.object(capture.os, "set_blocking"), mock.patch.object(
+                capture.os, "read", side_effect=BlockingIOError
+            ), mock.patch.object(
+                capture.signal, "signal"
+            ) as install_signal, mock.patch.object(
+                capture.time, "monotonic", side_effect=lambda: clock[0]
+            ):
+                self.assertEqual(recorder.run(), 0)
+
+            started.assert_called_once_with()
+            install_signal.assert_not_called()
+            checkpoint = json.loads((run_dir / "checkpoint.json").read_text())
+            self.assertEqual(checkpoint["status"], "complete")
+            self.assertEqual(checkpoint["reason"], "external_stop")
+            self.assertTrue(checkpoint["success"])
+            self.assertFalse(checkpoint["duration_complete"])
+
     def test_required_start_id_timeout_fails_bounded_and_records_command(self):
         with tempfile.TemporaryDirectory() as temporary:
             run_dir = Path(temporary)

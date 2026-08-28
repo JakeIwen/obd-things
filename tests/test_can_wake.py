@@ -1,4 +1,4 @@
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from types import SimpleNamespace
 import socket
 import struct
@@ -80,6 +80,14 @@ class CanWakeTests(unittest.TestCase):
         def guard_context():
             yield Guard()
 
+        @contextmanager
+        def handoff_context(_role):
+            events.append("handoff_enter")
+            try:
+                yield object()
+            finally:
+                events.append("handoff_exit")
+
         expected = can_wake.WakeResult(
             role="b-can", source="bcan.network_wake.0x7ff", detail="ok", voltage=12.5
         )
@@ -95,6 +103,11 @@ class CanWakeTests(unittest.TestCase):
                 return_value=ownership,
             ) as acquire,
             mock.patch.object(
+                can_wake.can_handoff,
+                "active_turn",
+                side_effect=handoff_context,
+            ),
+            mock.patch.object(
                 can_wake._WakeSession,
                 "trigger",
                 side_effect=lambda _self=None: events.append("trigger") or expected,
@@ -106,7 +119,16 @@ class CanWakeTests(unittest.TestCase):
             )
 
         self.assertIs(result, expected)
-        self.assertEqual(events, ["trigger", "begin_cleanup", "release"])
+        self.assertEqual(
+            events,
+            [
+                "handoff_enter",
+                "trigger",
+                "begin_cleanup",
+                "release",
+                "handoff_exit",
+            ],
+        )
         acquire.assert_called_once()
         kwargs = acquire.call_args.kwargs
         self.assertEqual(acquire.call_args.args, ("b-can",))
@@ -131,9 +153,36 @@ class CanWakeTests(unittest.TestCase):
             mock.patch.object(
                 can_wake._WakeSession, "trigger", return_value=expected
             ),
+            mock.patch.object(
+                can_wake.can_handoff,
+                "active_turn",
+                side_effect=lambda _role: nullcontext(object()),
+            ),
             self.assertRaises(canbus.PassiveRestoreError),
         ):
             can_wake.wake_once("b-can", prearm_check=lambda: ())
+
+    def test_busy_fairness_handoff_fails_before_role_ownership(self):
+        handoff = mock.MagicMock()
+        handoff.__enter__.side_effect = can_wake.diagnostic_safety.ChannelLockError(
+            "shared turn held"
+        )
+        with (
+            mock.patch.object(
+                can_wake.can_handoff,
+                "active_turn",
+                return_value=handoff,
+            ),
+            mock.patch.object(
+                can_wake.can_runtime_route,
+                "acquire_armed_bus_route",
+            ) as acquire,
+            self.assertRaises(can_wake.CanWakeError) as raised,
+        ):
+            can_wake.wake_once("c-can", prearm_check=lambda: ())
+
+        self.assertEqual(raised.exception.reason, "handoff_busy")
+        acquire.assert_not_called()
 
     def test_c_profile_rejects_ignition_and_running_witnesses(self):
         route = SimpleNamespace(channel="can7")

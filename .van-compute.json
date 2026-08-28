@@ -496,6 +496,82 @@
       ]
     },
     {
+      "name": "alfaobd-jadx-class-z2",
+      "description": "Decompile only AlfaOBD's bounded z2 request-table dispatcher class.",
+      "profile": "apk-analyze",
+      "source_paths": [],
+      "minimum_inputs": 1,
+      "maximum_inputs": 1,
+      "argv": [
+        "--no-res",
+        "--single-class",
+        "com.AlfaOBD.AlfaOBD.z2",
+        "--single-class-output",
+        "{result:z2.java}",
+        "{input:0}"
+      ],
+      "outputs": [
+        "z2.java"
+      ]
+    },
+    {
+      "name": "alfaobd-jadx-class-la",
+      "description": "Decompile only AlfaOBD's bounded CAN-CH request-array holder class.",
+      "profile": "apk-analyze",
+      "source_paths": [],
+      "minimum_inputs": 1,
+      "maximum_inputs": 1,
+      "argv": [
+        "--no-res",
+        "--single-class",
+        "com.AlfaOBD.AlfaOBD.la",
+        "--single-class-output",
+        "{result:la.java}",
+        "{input:0}"
+      ],
+      "outputs": [
+        "la.java"
+      ]
+    },
+    {
+      "name": "alfaobd-jadx-class-aa",
+      "description": "Decompile only AlfaOBD's bounded ABS/CAN request-array holder class.",
+      "profile": "apk-analyze",
+      "source_paths": [],
+      "minimum_inputs": 1,
+      "maximum_inputs": 1,
+      "argv": [
+        "--no-res",
+        "--single-class",
+        "com.AlfaOBD.AlfaOBD.aa",
+        "--single-class-output",
+        "{result:aa.java}",
+        "{input:0}"
+      ],
+      "outputs": [
+        "aa.java"
+      ]
+    },
+    {
+      "name": "alfaobd-jadx-class-z1",
+      "description": "Decompile only AlfaOBD's bounded Plots response-dispatcher class.",
+      "profile": "apk-analyze",
+      "source_paths": [],
+      "minimum_inputs": 1,
+      "maximum_inputs": 1,
+      "argv": [
+        "--no-res",
+        "--single-class",
+        "n0.z1",
+        "--single-class-output",
+        "{result:z1.java}",
+        "{input:0}"
+      ],
+      "outputs": [
+        "z1.java"
+      ]
+    },
+    {
       "name": "alfaobd-java-array-inventory",
       "description": "Inventory literal byte arrays in one owner-supplied JADX Java source file.",
       "profile": "python-script",
@@ -598,6 +674,28 @@
       "outputs": [
         "tcm_wire.jsonl",
         "tcm_wire.summary.json"
+      ]
+    },
+    {
+      "name": "can-event-window",
+      "description": "Extract a bounded exact frame window from 1-16 saved candump logs; offline only.",
+      "profile": "can-log-batch",
+      "source_paths": [
+        "tools/__init__.py",
+        "tools/can_capture_summary.py",
+        "tools/can_event_window.py"
+      ],
+      "minimum_inputs": 1,
+      "maximum_inputs": 16,
+      "argv": [
+        "{source:tools/can_event_window.py}",
+        "{inputs}",
+        "{arguments}",
+        "--output",
+        "{result:window.json}"
+      ],
+      "outputs": [
+        "window.json"
       ]
     },
     {

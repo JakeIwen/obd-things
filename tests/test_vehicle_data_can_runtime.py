@@ -6,7 +6,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from lib import can_wake, canbus
+from lib import can_wake, canbus, diagnostic_safety
 from projects.vehicle_data.can_runtime import (
     PassiveRoleReconciler,
     RoleAwareActiveDriveSupervisor,
@@ -438,6 +438,23 @@ class RoleAwareSourceTests(unittest.TestCase):
         self.assertTrue(status["topology"]["usable"])
         self.assertFalse(status["role_interfaces"]["ready"])
 
+    def test_voltage_observer_yields_to_reserved_active_handoff(self):
+        factory = mock.Mock()
+        source = RoleAwareVoltageAcquirer(
+            self.manager,
+            delegate_factory=factory,
+        )
+        with mock.patch(
+            "projects.vehicle_data.can_runtime.can_handoff.passive_turn",
+            side_effect=diagnostic_safety.ChannelLockError("active turn reserved"),
+        ):
+            result = source.acquire("passive")
+
+        self.assertFalse(result.available)
+        self.assertEqual(result.reason, "can_busy")
+        self.assertIn("reserved active handoff", result.detail)
+        factory.assert_not_called()
+
     def test_role_mode_rejects_nonpassive_acquisition(self):
         source = RoleAwareVoltageAcquirer(self.manager)
 
@@ -537,6 +554,21 @@ class RoleAwareSourceTests(unittest.TestCase):
             timeout=0.5,
             temperature_gate=reader.temperature_gate,
         )
+
+    def test_powertrain_observer_yields_to_reserved_active_handoff(self):
+        reader = RoleAwareCcanPowertrainReader(self.manager)
+        with (
+            mock.patch(
+                "projects.vehicle_data.can_runtime.can_handoff.passive_turn",
+                side_effect=diagnostic_safety.ChannelLockError(
+                    "active turn reserved"
+                ),
+            ),
+            mock.patch.object(canbus, "identify_bus") as identify,
+        ):
+            self.assertEqual(reader.read(), ())
+
+        identify.assert_not_called()
 
     def test_active_supervisor_binds_dynamic_channel_and_usb_identity(self):
         resolution = FakeResolution("c-can", "can7", 500000)

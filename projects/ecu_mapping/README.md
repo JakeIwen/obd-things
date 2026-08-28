@@ -1213,6 +1213,17 @@ verify the `/4` rpm scale or authorize public telemetry promotion.
   evidence-producing step for unlock labels; do not guess them from menu order
   or command timing. See
   [`2026-07-21_alfaobd_apk_catalog.md`](findings/promaster_2022/2026-07-21_alfaobd_apk_catalog.md).
+  **Application-message update (2026-08-26):** a separate passive three-bus
+  campaign mapped the fob-result C-CAN `0x1EF` action bodies for lock-all,
+  front-unlock, and rear/cargo-unlock, plus the `0..15` counter and
+  CRC-8/SAE-J1850. Front unlock was independently repeated with a different
+  counter/checksum. This path avoids the parked UDS power-mode gate, but replay
+  was then live-verified: one separately authorized counter-current,
+  CRC-correct front-unlock frame unlocked the front doors without a fob press,
+  and exact passive restoration completed with zero errors/inhibits. The
+  purpose-built composite remains front-unlock-only and plan-only by default.
+  See
+  [`2026-08-26_rfh_lock_unlock_can.md`](findings/promaster_2022/2026-08-26_rfh_lock_unlock_can.md).
 - **RFH (0xC7)** full ID block + TPMS; pair with labeled `RFH_FGA_Info.log` (current faults
   `U0001/B1040/C1502-FR/C1501-FL`) for the TPMS project. See `../tpms/`.
 - **PCM (0x10)** is independently live-verified at `18DA10F1 -> 18DAF110`: fixed-DLC-8 padded
@@ -1231,11 +1242,36 @@ verify the `/4` rpm scale or authorize public telemetry promotion.
    `4000-40FF` namespace is bounded. Do not repeat either scan without a new experimental question.
    The AlfaOBD engine-off success has eliminated engine-running state as a requirement; a direct
    unpadded repeat is not useful unless testing framing itself.
-2. **Unlock:** the APK catalog confirms that the current BCM profile offers separate front/rear
-   door-lock relay actions, but not which captured `2F` DID implements each. Correlate one deliberate
-   AlfaOBD action at a time with Debug Data plus a role-aware passive C-CAN
-   capture, then verify the result before any replay. Do not use the adjacent
-   PROXI/configuration menu entries.
+2. **Unlock:** the narrow C-CAN `0x1EF` front-unlock proof is complete. Keep
+   `rke_front_unlock.py` plan-only by default and fixed to front-unlock; any
+   production/dashboard integration needs a separate threat-model and owner
+   decision, must retain fixed RF-Hub wake ownership, valid sequential
+   counter/CRC synchronization, one-frame send, parked/ignition/engine/recovery
+   gates, physical/B-CAN verification, and exact passive restoration. Do not
+   expose caller-selected payloads or generalize the wake session into an
+   arbitrary post-wake transmit API. The AlfaOBD `2F` work is now fallback-only.
+   The production service is named **Vonstar**:
+   `van-dashboard -> /run/vonstar/api.sock -> vonstar.service`. It exposes only
+   `lock_all`, `unlock_front`, and `unlock_cargo`, plus one aggregate
+   `POST /v1/access-state` read. The read uses at most one fixed C-CAN wake,
+   one no-retry BCM `0130` request in that same session, and returns every
+   supported lock/door field and the bounded raw observations. B-CAN `0x5E2`
+   byte1 is now verified exact-vehicle front/cargo-domain feedback after three
+   independent repeat cycles plus a failed-lock control; the former
+   `0x46C`/`0x5B2` lock interpretations were withdrawn. Driver ajar is
+   exposed as a one-trial candidate; other individual door lock/ajar fields
+   remain explicit `null` until mapped. Two independently authorized
+   silent-start aggregate reads have now reproduced three identical locked
+   `0x5E2` samples, exact positive BCM `0130`, zero B-CAN/CAN-CH TX, and clean
+   passive restoration. All
+   operations have request-id idempotency, a three-second cooldown, no
+   automatic retry, and an audit log. On 2026-08-27 `vonstar.service` was
+   installed/enabled/started and the port-8788 dashboard was restarted with its
+   private client and three confirmed controls. Deployment added zero CAN TX;
+   both services stayed active with zero restarts, and all roles remained exact
+   passive/error-free with no inhibit. Front unlock and aggregate state read are
+   live-validated. Lock-all and cargo-unlock remain controlled-capture-mapped,
+   not independently replay-validated; their exposed status metadata says so.
 3. **BCM structural decode completed:** all 75 definitions are represented in the offline report;
    55 DIDs have positive trace evidence and 20 are negative. Continue with controlled scaling/name
    validation, not another live sweep of the same requests.

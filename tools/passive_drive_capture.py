@@ -734,6 +734,10 @@ class Recorder:
         zstd: str = "zstd",
         candump: str = "candump",
         candump_extra_args: Sequence[str] = (),
+        external_stop_requested: Callable[[], bool] | None = None,
+        health_check: Callable[[], None] | None = None,
+        started_callback: Callable[[], None] | None = None,
+        install_signal_handlers: bool = True,
         channel: str,
         bitrate: int,
     ) -> None:
@@ -788,6 +792,10 @@ class Recorder:
         self.zstd = zstd
         self.candump = candump
         self.candump_extra_args = tuple(candump_extra_args)
+        self.external_stop_requested = external_stop_requested
+        self.health_check = health_check
+        self.started_callback = started_callback
+        self.install_signal_handlers = install_signal_handlers
         self.manifest = run_dir / "manifest.jsonl"
         self.checkpoint = run_dir / "checkpoint.json"
         self.stop_requested = False
@@ -1034,10 +1042,14 @@ class Recorder:
             if first_error is not None:
                 raise first_error
 
-        old_handlers = {
-            signum: signal.signal(signum, request_stop)
-            for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
-        }
+        old_handlers = (
+            {
+                signum: signal.signal(signum, request_stop)
+                for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+            }
+            if self.install_signal_handlers
+            else {}
+        )
         try:
             candump_command = self._candump_command()
             process = self.popen(
@@ -1071,8 +1083,12 @@ class Recorder:
                     "free_bytes": free,
                 },
             )
+            if self.started_callback is not None:
+                self.started_callback()
 
             while True:
+                if self.health_check is not None:
+                    self.health_check()
                 harvest_chunks(wait=False)
                 for key, _ in selector.select(timeout=1.0):
                     try:
@@ -1092,6 +1108,12 @@ class Recorder:
                         f"candump exited unexpectedly with status {process.returncode}"
                     )
                 now = time.monotonic()
+                if (
+                    self.external_stop_requested is not None
+                    and self.external_stop_requested()
+                ):
+                    reason = "external_stop"
+                    break
                 if self.stop_requested:
                     signal_time = (
                         stop_requested_at

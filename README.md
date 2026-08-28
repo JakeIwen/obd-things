@@ -46,6 +46,7 @@ lib/                       GENERIC, module-agnostic plumbing
   vehicle_can_roles.py       installed three-bus role/serial/dev_id specifications
   can_runtime_route.py       scoped live arm/restore owner for supported diagnostic CLIs
   can_wake.py                fixed logical B/C wake profiles with exact passive restoration
+  can_handoff.py             cooperative per-role fairness ahead of authoritative CAN locks
   signal_fields.py           dependency-free DBC/cantools Intel/Motorola raw bit geometry
   diagnostic_safety.py       shared/exclusive logical-role and resolved-channel locks
   can_operation_state.py     same-boot physical-topology + external-campaign wake inhibits
@@ -60,6 +61,7 @@ tools/                     GENERIC, module-agnostic CLI tools (take a module key
   dtc_batch.py               guarded fixed 19 02 FF batch for 15 reviewed modules
   dtc_web_arm.py             one-use local authorization for the Tailscale DTC UI
   can_capture_summary.py     interface-preserving offline candump/.zst summary (`--snapshot` bounds growing logs)
+  can_event_window.py        bounded exact saved-log frame windows + optional CRC-8/SAE-J1850 audit
   three_bus_capture.py       cooperative receive-only three-role chunks -> tmp/captures/three_bus_drive/
   alfaobd_dat.py             offline AlfaOBD .dat cache inventory/baseline comparison
   can_operation_state.py     explicit topology/inhibit status CLI; performs no CAN I/O
@@ -74,6 +76,7 @@ projects/                  per-target investigations and durable findings
   radar/                     2022 Promaster ACC radar (Bosch DASM / MRR1evo14F) — see its README
     radar_acc_live.py          maintained dry-run-first scoped viewer + offline historical CSV follow
     docs/ findings/            radar narrative docs, decoded data + promoted (tracked) captures
+  ecu_mapping/vonstar_service.py private fixed-action Unix API for deployed Vonstar controls
 tmp/                       gitignored — ALL machine-written data lands here, never in git:
   captures/                  role-aware passive/drive-recorder raw CAN logs
   discovery/                 bounded ECU-address discovery reports
@@ -170,9 +173,19 @@ broker was restarted onto the role-aware wake implementation while the vehicle
 was asleep; the active-drive helper remained idle, the historian and both web
 listeners recovered, and all three vehicle roles remained exact passive with
 zero TX/error counters. The broker-owned `van-drive-recorder.service` is
-enabled and active, waiting receive-only for a reviewed active-drive interval.
+enabled and active. As of 2026-08-27 it waits receive-only for a reviewed
+active-drive interval, then records separate synchronized C-CAN, B-CAN, and
+CAN-CH compressed streams; its asleep deployment restart opened no CAN socket
+and caused no link or TX change. The next real drive is still required to
+validate the new three-role capture path end to end.
 The new `van-cop-can-wake.service` is also installed, enabled, and active; with
 COP off and both markers absent its initial state was `idle` and caused no TX.
+`vonstar.service` is installed, enabled, and active as the private serialized
+vehicle-access API at `/run/vonstar/api.sock`; the port-8788 dashboard is its
+only web-facing client. Its 2026-08-27 deployment/restart added zero CAN TX and
+left every vehicle role exact passive/error-free with no inhibit. Starting the
+service is idle; only an explicit action or aggregate state request can touch
+CAN.
 The B-CAN recorder, mapping recorder, TPMS logger/sniffer, and manual three-bus
 capture are installed but disabled/inactive. The retired fixed-`can0` systemd
 drop-in and helper remain removed from the live host.
@@ -206,6 +219,17 @@ New button markers receive a 250 ms debounce and fast pre-transmit retry;
 only a marker surviving a supervisor restart receives the three-second grace.
 The supervisor journals transitions and retains its last blocked reason in its
 private runtime status for the dashboard to display read-only.
+Broker receive-side C-CAN work and fixed wake traffic also coordinate through
+`lib/can_handoff.py`: passive samples pass through a reader gate and take a
+shared scheduling turn; a wake closes that gate, waits a bounded 1.25 seconds
+for in-flight readers to drain, and reserves the turn exclusively before taking
+the unchanged exclusive role/channel locks. The handoff grants no CAN authority
+and cannot bypass identity, parked, inhibit, health, or restoration gates.
+Successful wake cadence is measured from attempt start, so transaction duration
+is no longer added to the 15-second refresh interval. The corroborating broker
+state may be at most five seconds old, matching the registered ignition/RPM
+freshness window and covering one measured multi-role collector cycle; live
+ignition/RPM evidence is still rechecked by the wake core at every send boundary.
 Both installed profiles were live-validated asleep on 2026-08-24: B-CAN
 returned verified 12.32 V after exactly 75 wake frames; C-CAN used ten
 ONE-SHOT `22 FEFF` wake frames plus one normally acknowledged validation read.

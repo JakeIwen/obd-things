@@ -1,5 +1,5 @@
 [Unit]
-Description=Receive-only raw recorder for broker-owned C-CAN drive intervals
+Description=Synchronized three-bus raw recorder for broker-owned drive intervals
 After=local-fs.target van-telemetry.service
 Wants=van-telemetry.service
 RequiresMountsFor=/mnt/EXFAT512

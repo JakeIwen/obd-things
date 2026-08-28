@@ -1,6 +1,8 @@
 import argparse
+import contextlib
 from pathlib import Path
 from types import SimpleNamespace
+import tempfile
 import unittest
 from unittest import mock
 
@@ -10,6 +12,10 @@ from tools import passive_drive_capture as capture
 
 TEST_CHANNEL = "can7"
 TEST_SERIAL = "serial-a"
+TEST_B_CHANNEL = "can8"
+TEST_B_SERIAL = "serial-a"
+TEST_H_CHANNEL = "can9"
+TEST_H_SERIAL = "serial-b"
 
 
 def ready_status():
@@ -45,7 +51,51 @@ def ready_status():
                             "usb_serial": TEST_SERIAL,
                             "dev_id": 0,
                         },
-                    }
+                    },
+                    "b-can": {
+                        "resolution": "resolved",
+                        "channel": TEST_B_CHANNEL,
+                        "passive_ready": True,
+                        "safe": True,
+                        "expected": {
+                            "usb_serial": TEST_B_SERIAL,
+                            "dev_id": 1,
+                            "bitrate": 125000,
+                            "pair": "3/11",
+                        },
+                        "actual": {
+                            "present": True,
+                            "up": True,
+                            "bitrate": 125000,
+                            "fd_enabled": False,
+                            "one_shot": False,
+                            "listen_only": True,
+                            "controller_state": "ERROR-ACTIVE",
+                            "restart_ms": 0,
+                        },
+                    },
+                    "can-ch": {
+                        "resolution": "resolved",
+                        "channel": TEST_H_CHANNEL,
+                        "passive_ready": True,
+                        "safe": True,
+                        "expected": {
+                            "usb_serial": TEST_H_SERIAL,
+                            "dev_id": 0,
+                            "bitrate": 500000,
+                            "pair": "12/13",
+                        },
+                        "actual": {
+                            "present": True,
+                            "up": True,
+                            "bitrate": 500000,
+                            "fd_enabled": False,
+                            "one_shot": False,
+                            "listen_only": True,
+                            "controller_state": "ERROR-ACTIVE",
+                            "restart_ms": 0,
+                        },
+                    },
                 }
             },
         },
@@ -56,10 +106,10 @@ def ready_status():
     }
 
 
-def interface(*, listen_only):
+def interface(*, listen_only, bitrate=500000):
     return capture.InterfaceState(
         up=True,
-        bitrate=500000,
+        bitrate=bitrate,
         listen_only=listen_only,
         controller_state="ERROR-ACTIVE",
         rx_dropped=0,
@@ -91,6 +141,21 @@ class DriveRecorderTests(unittest.TestCase):
             drive_recorder.broker_c_can_route(status),
             (TEST_CHANNEL, TEST_SERIAL, 0),
         )
+
+    def test_secondary_routes_require_exact_passive_broker_evidence(self):
+        status = ready_status()
+        route = drive_recorder.broker_secondary_route(status, "b-can")
+        self.assertEqual(route.channel, TEST_B_CHANNEL)
+        self.assertEqual(route.bitrate, 125000)
+        self.assertEqual(route.pair, "3/11")
+
+        status["interface"]["role_interfaces"]["roles"]["b-can"][
+            "actual"
+        ]["listen_only"] = False
+        with self.assertRaisesRegex(
+            drive_recorder.BrokerOwnershipLost, "exact passive b-can"
+        ):
+            drive_recorder.broker_secondary_route(status, "b-can")
 
     def test_interface_query_rejects_reused_channel_usb_identity(self):
         resolver = mock.Mock()
@@ -242,10 +307,11 @@ class DriveRecorderTests(unittest.TestCase):
         plan = drive_recorder.plan(args, policy)
         self.assertEqual(
             plan["interaction"],
-            "receive_only_broker_armed_companion",
+            "synchronized_three_bus_receive_only_companion",
         )
         self.assertIn("transmit CAN", plan["does_not"])
         self.assertEqual(plan["stop_after_id"], "0x2EF")
+        self.assertEqual(plan["roles"], ["c-can", "b-can", "can-ch"])
 
     def test_dependency_gate_accepts_armed_receive_state(self):
         state, free = drive_recorder.validate_dependencies(
@@ -258,6 +324,144 @@ class DriveRecorderTests(unittest.TestCase):
         )
         self.assertFalse(state.listen_only)
         self.assertEqual(free, 1000)
+
+    def test_interval_binds_recorder_to_resolved_channel_and_bitrate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = SimpleNamespace(
+                out_root=root,
+                require_mount=root,
+                state_path=root / "state.json",
+                conditions="receive-only fixture",
+                rotation_seconds=600,
+                duration_seconds=3600,
+                ignition_absence_seconds=20.0,
+            )
+            calls = []
+
+            class FakeRecorder:
+                def __init__(self, run_dir, *args, **kwargs):
+                    self.run_dir = run_dir
+                    self.kwargs = kwargs
+                    calls.append(self)
+
+                def run(self):
+                    callback = self.kwargs.get("started_callback")
+                    if callback is not None:
+                        callback()
+                        stop = self.kwargs["external_stop_requested"]
+                        while not stop():
+                            drive_recorder.time.sleep(0.001)
+                    return 0
+
+            client = mock.Mock()
+            manager = mock.Mock()
+            leases = {
+                "b-can": drive_recorder.PassiveInterfaceLease(
+                    role="b-can",
+                    channel=TEST_B_CHANNEL,
+                    usb_serial=TEST_B_SERIAL,
+                    dev_id=1,
+                    bitrate=125000,
+                    pair="3/11",
+                    topology_generation="test-generation",
+                ),
+                "can-ch": drive_recorder.PassiveInterfaceLease(
+                    role="can-ch",
+                    channel=TEST_H_CHANNEL,
+                    usb_serial=TEST_H_SERIAL,
+                    dev_id=0,
+                    bitrate=500000,
+                    pair="12/13",
+                    topology_generation="test-generation",
+                ),
+            }
+            manager.observe.side_effect = lambda role: contextlib.nullcontext(
+                leases[role]
+            )
+            with (
+                mock.patch.object(
+                    drive_recorder.capture,
+                    "require_writable_mount",
+                    return_value=Path("/dev/mock"),
+                ),
+                mock.patch.object(
+                    drive_recorder,
+                    "validate_dependencies",
+                    return_value=(interface(listen_only=False), 1000),
+                ),
+                mock.patch.object(
+                    drive_recorder,
+                    "read_broker_status",
+                    return_value=ready_status(),
+                ),
+                mock.patch.object(
+                    drive_recorder,
+                    "campaign_id",
+                    return_value="drive-test",
+                ),
+                mock.patch.object(
+                    drive_recorder,
+                    "priority_ids",
+                    return_value=frozenset((0x2EF,)),
+                ),
+                mock.patch.object(drive_recorder, "write_state"),
+                mock.patch.object(
+                    drive_recorder.capture,
+                    "read_rmem_max",
+                    return_value=capture.RECEIVE_BUFFER,
+                ),
+                mock.patch.object(
+                    drive_recorder.capture,
+                    "Recorder",
+                    side_effect=FakeRecorder,
+                ) as recorder_class,
+                mock.patch.object(
+                    drive_recorder,
+                    "PassiveLeaseSafetyCheck",
+                    side_effect=lambda _manager, lease: (
+                        lambda: interface(
+                            listen_only=True, bitrate=lease.bitrate
+                        )
+                    ),
+                ),
+                mock.patch.object(
+                    drive_recorder.capture,
+                    "campaign_file_lock",
+                    return_value=contextlib.nullcontext(),
+                ),
+                mock.patch.object(
+                    drive_recorder.shutil,
+                    "which",
+                    side_effect=lambda name: f"/usr/bin/{name}",
+                ),
+            ):
+                result = drive_recorder.record_one_interval(
+                    args,
+                    capture.DiskPolicy(300, 200),
+                    ready_status(),
+                    client,
+                    interface_manager=manager,
+                )
+
+        self.assertEqual(result.name, "drive-test")
+        self.assertEqual(recorder_class.call_count, 3)
+        by_role = {item.run_dir.name: item for item in calls}
+        self.assertEqual(set(by_role), {"c-can", "b-can", "can-ch"})
+        self.assertEqual(by_role["c-can"].kwargs["channel"], TEST_CHANNEL)
+        self.assertEqual(
+            by_role["c-can"].kwargs["bitrate"], drive_recorder.BITRATE
+        )
+        self.assertEqual(by_role["b-can"].kwargs["channel"], TEST_B_CHANNEL)
+        self.assertEqual(by_role["b-can"].kwargs["bitrate"], 125000)
+        self.assertEqual(by_role["can-ch"].kwargs["channel"], TEST_H_CHANNEL)
+        self.assertEqual(by_role["can-ch"].kwargs["bitrate"], 500000)
+        self.assertEqual(
+            by_role["b-can"].kwargs["required_start_id"], 0x46C
+        )
+        self.assertEqual(
+            by_role["can-ch"].kwargs["required_start_id"], 0x0DA
+        )
 
 
 if __name__ == "__main__":

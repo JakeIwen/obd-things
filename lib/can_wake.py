@@ -20,7 +20,13 @@ import threading
 import time
 from typing import Callable, Iterable
 
-from lib import can_operation_state, can_runtime_route, canbus, diagnostic_safety
+from lib import (
+    can_handoff,
+    can_operation_state,
+    can_runtime_route,
+    canbus,
+    diagnostic_safety,
+)
 
 
 CAN_EFF_FLAG = 0x80000000
@@ -671,11 +677,25 @@ def wake_once(
 ) -> WakeResult:
     """Run one fixed logical wake and return only after exact restoration."""
 
+    profile = _profile(role)
     with _termination_guard() as termination:
         session = None
+        handoff = None
+        handoff_acquired = False
         try:
+            handoff = can_handoff.active_turn(profile.role)
+            try:
+                handoff.__enter__()
+                handoff_acquired = True
+            except diagnostic_safety.ChannelLockError as exc:
+                raise CanWakeError(
+                    "handoff_busy",
+                    f"{profile.role} fairness handoff is serving an in-flight "
+                    "passive observer",
+                    role=profile.role,
+                ) from exc
             session = _open_wake_session(
-                role,
+                profile.role,
                 prearm_check=prearm_check,
                 manager=manager,
             )
@@ -683,8 +703,12 @@ def wake_once(
         finally:
             # Repeated INT/TERM/HUP cannot cut through exact passive restore.
             termination.begin_cleanup()
-            if session is not None:
-                session.close()
+            try:
+                if session is not None:
+                    session.close()
+            finally:
+                if handoff_acquired and handoff is not None:
+                    handoff.__exit__(None, None, None)
 
 
 __all__ = (

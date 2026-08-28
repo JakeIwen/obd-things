@@ -21,12 +21,13 @@ The implementation has two trust zones:
   rejects all acquisition requests unless deliberately started with
   `--allow-acquisitions`; neither the tracked nor live systemd service enables
   that flag.
-- `drive_recorder.py` is a receive-only companion to the broker-owned active
-  interval. It opens no diagnostic transport, takes no channel lock, never
-  configures the resolved C-CAN interface, and never transmits. It records only
-  after the broker's status proves the reviewed active-drive helper owns the
-  armed interface, then binds `candump` to that reported channel and rechecks
-  the immutable USB identity when dual-adapter identity metadata is present.
+- `drive_recorder.py` is a synchronized three-bus receive-only companion to the
+  broker-owned active interval. It opens no diagnostic transport, never
+  configures an interface, and never transmits. It records only after the
+  broker proves the reviewed active-drive helper owns armed C-CAN, then binds a
+  separate `candump` to that route while holding shared passive role/channel
+  leases for freshly resolved B-CAN and CAN-CH. Each bus has its own compressed
+  files, immutable USB identity, loss accounting, and required awake witness.
 - `cop_can_wake.py` is the separately managed replacement for the dashboard's
   retired direct CAN path. The dashboard only maintains
   `/run/van-dashboard/cop-alert.active`; the supervisor requires that marker
@@ -45,6 +46,13 @@ The implementation has two trust zones:
   after 500 ms without touching CAN; a wake/validation failure retains the
   conservative five-second retry. Every meaningful state transition is emitted
   as one structured `cop-can-wake-state` journal record.
+  Broker passive voltage and powertrain readers pass through a reader gate and
+  hold a shared C-CAN scheduling turn outside their normal shared role/channel
+  lease. The wake closes that gate, waits at most 1.25 seconds for an in-flight
+  reader to finish, and reserves the turn exclusively before taking the
+  unchanged exclusive role/channel locks. A new broker observer therefore
+  cannot overtake the waiting wake. This handoff is fairness only: it conveys
+  no identity, interface-mutation, or transmission capability.
 
 The code does not install or enable itself. The units under `systemd/` retain
 safe loopback defaults and must be reviewed against the target host. The
@@ -552,8 +560,9 @@ reported blocker until a separate design and owner authorization exist.
 
 ### Broker-coordinated raw drive recording
 
-`drive_recorder.py` preserves full-bus evidence while the broker owns the
-serial-resolved C-CAN channel. The normal observer lock and the standalone
+`drive_recorder.py` preserves synchronized C-CAN, B-CAN, and CAN-CH evidence
+while the broker owns the serial-resolved C-CAN channel. The normal C-CAN
+observer lock and the standalone
 `passive_drive_capture.py` entry point intentionally reject an armed interface;
 this narrower companion instead requires one exact broker status:
 
@@ -563,22 +572,28 @@ this narrower companion instead requires one exact broker status:
   topology, no operation inhibit, and the broker-reported healthy 500-kbit/s
   ERROR-ACTIVE `canN`, rechecked against the expected USB serial and `dev_id`;
 - an initial `0x2EF` frame within five seconds of opening the receive socket.
+- exact passive B-CAN and CAN-CH broker routes followed by freshly acquired
+  shared role/channel leases; B-CAN must produce `0x46C` and CAN-CH its unique
+  `0x0DA` signature within five seconds.
 
-It then reuses the loss-accounted recorder with `candump -D`, a 16 MiB socket
-receive buffer, ten-minute zstd chunks, full and priority streams, and the
-existing 30/25 GiB free-space floors. `-D` keeps the receive process attached
+It then runs three loss-accounted recorders with `candump -D`, 16 MiB socket
+receive buffers, ten-minute zstd chunks, a C-CAN priority stream, and full
+streams for every role above the existing 30/25 GiB free-space floors. `-D`
+keeps each receive process attached
 across the broker's expected end-of-interval interface down/up restoration.
 The recorder accepts an armed interface only while the exact broker owner is
 present, but may continue after verified listen-only restoration so the raw
-session includes the key-off tail. Twenty seconds without `0x2EF` cleanly ends
-and verifies the campaign.
+session includes the key-off tail. Twenty seconds without C-CAN `0x2EF`
+cleanly ends all three recorders. A complete `capture-set.json` is written only
+after every role finalizes successfully; one missing role, identity change,
+drop, or recorder failure makes the campaign explicitly incomplete.
 
 The daemon loops after a successful finalization: while parked it opens no CAN
 socket and waits for the next broker-owned running interval, then creates a new
 timestamped campaign automatically. Consequently the installed service does
 not need manual re-arming between ordinary drive legs when enabled. Its
-installed unit currently remains disabled/inactive. Output is under
-`/mnt/EXFAT512/obd-things/tmp/captures/ccan/broker-drive/`, and the small
+installed unit is enabled and active. New output is under
+`/mnt/EXFAT512/obd-things/tmp/captures/three_bus_drive/broker-drive/`, and the small
 operational state is `tmp/vehicle_data/drive-recorder-state.json`.
 
 The role-aware battery acquirer supports ordinary passive mode plus one bounded
@@ -937,6 +952,13 @@ parameters. Current state is one of `starting`, `idle`, `arming_delay`,
 marker removal, so turning COP off no longer destroys the reason an attempted
 activation did not transmit. The dashboard must sanitize and proxy only these
 fields; it must never write this file or invoke CAN directly.
+`last_transaction_seconds` reports the most recent bounded attempt duration;
+`success_cadence_basis=attempt_start` means the next successful refresh is due
+15 seconds from the prior attempt start, not 15 seconds after its restoration.
+The outer broker-state gate uses the registered five-second ignition/RPM
+freshness window. This covers the measured roughly 4.1-second gap between
+vehicle-state updates in a full multi-role collector cycle without weakening
+the wake core's fresh 0x2EF/0x0FC checks at every send boundary.
 
 This behavior was corrected after the first real button trial on 2026-08-25.
 The dashboard posted ON/OFF at `00:47:29/32` and again at `00:47:33/39`.
@@ -947,6 +969,26 @@ then erased the transient block reason. The explicit-activation debounce, fast
 pre-TX retry, persistent block fields, and transition journal above are the
 direct remediation. A service restart with COP off was subsequently verified
 to remain idle and leave C-CAN TX at zero.
+
+A longer live run on 2026-08-25 then exposed unfair scheduling: the broker's
+two receive-side C-CAN leases repeatedly coincided with each 15-second COP due
+time. Successful transactions themselves took about seven seconds, and the old
+completion-based schedule added another 15; shared-lock collisions and
+five-second generic retries extended some success intervals to 33 seconds. The
+per-role shared/exclusive scheduling handoff and attempt-start cadence described
+above directly address both causes while preserving every authoritative lock
+and fail-closed gate.
+
+The first deployment replaced role-lock `can_busy`/five-second retries with
+roughly 500 ms scheduling retries and brought successive success intervals down
+to 15.522, 15.998, 16.561, 15.472, and 15.501 seconds. The final
+writer-preference gate removed even that probabilistic retry: four consecutive
+live attempts started 15.004, 15.003, and 15.005 seconds apart, completed
+successfully 14.805, 14.774, and 14.903 seconds apart, and recorded no blocked
+transition. No post-deployment authoritative role-lock collision occurred.
+C-CAN returned after every attempt as classical listen-only, ONE-SHOT off,
+`restart-ms 0`, ERROR-ACTIVE, with zero errors and no inhibit. The broker
+collector remained running.
 
 ### Historical pre-migration deployment record
 
@@ -1152,6 +1194,11 @@ switches to normal retry only after C-CAN signatures appear, validates one exact
 positive response, and restores ONE-SHOT off. A fully sleeping test completed
 with eleven TX packets and zero errors/inhibits. These failures and recoveries
 are part of the canonical hardware evidence, not successful-run noise to omit.
-The final portable regression run after those hardware-driven changes passed
-1,028 tests with 4 skips and 686 subtests (`van_compute` job
-`20260825T042433Z-66ac7ba5`); focused local wake/route/COP tests also passed.
+The latest portable regression run, including the scheduling handoff,
+attempt-start cadence, and the drive-recorder constructor regression test,
+passed 1,043 tests with 4 skips and 692 subtests (`van_compute` job
+`20260825T211110Z-3a6a1c3c`); focused local wake/handoff/route/COP tests also
+passed. The enabled `van-drive-recorder` service was reset and restarted after
+that constructor fix and reached its expected
+`waiting for reviewed broker active-drive ownership` state without opening a
+CAN capture.

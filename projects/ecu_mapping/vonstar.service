@@ -1,0 +1,27 @@
+[Unit]
+Description=Vonstar fixed van access controller and state reader
+After=local-fs.target van-telemetry.service
+Wants=van-telemetry.service
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/dev/obd-things
+RuntimeDirectory=vonstar
+RuntimeDirectoryMode=0750
+StateDirectory=vonstar
+StateDirectoryMode=0750
+UMask=0007
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=/usr/bin/test -r /home/pi/dev/obd-things/projects/ecu_mapping/vonstar_service.py
+ExecStartPre=/usr/bin/test -r /home/pi/dev/obd-things/projects/ecu_mapping/rke_front_unlock.py
+ExecStartPre=/usr/bin/test -r /home/pi/dev/obd-things/lib/can_handoff.py
+ExecStartPre=/usr/bin/test -r /home/pi/dev/obd-things/lib/can_wake.py
+ExecStart=/usr/bin/python3 /home/pi/dev/obd-things/projects/ecu_mapping/vonstar_service.py --socket /run/vonstar/api.sock --state-dir /var/lib/vonstar --execute --confirm-three-fixed-actions --confirm-access-state-wake
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
