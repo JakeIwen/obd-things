@@ -853,6 +853,18 @@ restricts clients.
 
 ## Current vanpi deployment
 
+Deployment update, 2026-08-31 01:22 MDT: commit `bc8c583` bounded the drive
+recorder's broker-status recovery and is pushed to `origin/master`. The failed
+unit's 46-restart start-limit was cleared after the broker reported the van
+asleep, no current active owner, both helpers idle/listen-only, and all three
+roles exact passive. The recorder is active with zero restarts and reports
+`waiting for reviewed broker active-drive ownership`; it has no `candump`
+child while parked. C-CAN/B-CAN/CAN-CH stayed listen-only, ERROR-ACTIVE, and
+error-free with unchanged TX counts 36,802/2,485/0, so recovery sent no CAN
+frame. Focused remote validation passed 23 tests; broader recorder validation
+passed 39 tests and seven subtests. The bounded branch still awaits natural
+exercise during a future broker-owned drive interval.
+
 Deployment update, 2026-08-28: commit `d14d90a` installed the fixed B-CAN ICS
 helper, starred candidate odometer card, broker auxiliary supervision, and
 armed-B-CAN recorder companion. `van-telemetry` and `van-drive-recorder` were
