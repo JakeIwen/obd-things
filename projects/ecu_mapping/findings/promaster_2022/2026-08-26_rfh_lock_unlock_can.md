@@ -302,7 +302,11 @@ quality `verified` and always includes `driver`, `passenger`,
 Passenger/rear `ajar` remain unmapped; sliding `ajar` is `null` with
 `hardware_bypass_forced_closed`, `reported_closed=true`, and
 `physical_state_observable=false`. Driver `ajar` uses the BCM `0130` inverted
-`0x04` mask with quality `candidate_one_controlled_trial`. The raw DID response, fixed-ID
+`0x04` mask with quality `candidate_one_controlled_trial`; when that DID is
+available, driver `reported_closed` is its inverse and
+`physical_state_observable=true`. Every door object always carries nullable
+`reported_closed` and `physical_state_observable` fields so strict dashboard
+decoders can distinguish unknown from omitted. The raw DID response, fixed-ID
 summaries, sample errors, wake/request counts, and limitations are returned in
 the same document so future decoder improvements do not need a new wake
 endpoint. The implementation is live-validated under the conditions in the

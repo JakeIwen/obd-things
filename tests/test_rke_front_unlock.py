@@ -132,7 +132,16 @@ class RkeFrontUnlockTests(unittest.TestCase):
         )
         self.assertEqual(sample["request_count"], 1)
         self.assertEqual(sample["data_hex"], "8C")
-        self.assertFalse(rke._decode_doors(sample)["driver"]["ajar"])
+        doors = rke._decode_doors(sample)
+        self.assertFalse(doors["driver"]["ajar"])
+        self.assertTrue(doors["driver"]["reported_closed"])
+        self.assertTrue(doors["driver"]["physical_state_observable"])
+        self.assertIsNone(doors["passenger"]["reported_closed"])
+        self.assertIsNone(doors["passenger"]["physical_state_observable"])
+        self.assertTrue(doors["sliding"]["reported_closed"])
+        self.assertFalse(doors["sliding"]["physical_state_observable"])
+        self.assertIsNone(doors["rear"]["reported_closed"])
+        self.assertIsNone(doors["rear"]["physical_state_observable"])
 
     def test_access_state_uses_one_wake_and_returns_every_door(self):
         wake = mock.Mock(role="c-can", source="test", detail="woke")
@@ -193,6 +202,8 @@ class RkeFrontUnlockTests(unittest.TestCase):
         self.assertEqual(result["lock_domains"]["state"], "locked")
         self.assertEqual(set(result["doors"]), {"driver", "passenger", "sliding", "rear"})
         self.assertTrue(result["doors"]["driver"]["ajar"])
+        self.assertFalse(result["doors"]["driver"]["reported_closed"])
+        self.assertTrue(result["doors"]["driver"]["physical_state_observable"])
         self.assertFalse(result["doors"]["sliding"]["physical_state_observable"])
         self.assertEqual(
             result["doors"]["sliding"]["ajar_quality"],

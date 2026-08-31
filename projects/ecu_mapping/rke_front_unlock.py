@@ -349,6 +349,8 @@ def _decode_doors(bcm_door_inputs: dict[str, object]) -> dict[str, dict[str, obj
     unmapped = {
         "locked": None,
         "ajar": None,
+        "reported_closed": None,
+        "physical_state_observable": None,
         "lock_quality": "unmapped_individual_door",
         "ajar_quality": "unmapped_individual_door",
     }
@@ -371,9 +373,12 @@ def _decode_doors(bcm_door_inputs: dict[str, object]) -> dict[str, dict[str, obj
     except ValueError:
         value = None
     if value is not None:
+        driver_ajar = not bool(value & 0x04)
         doors["driver"].update(
             {
-                "ajar": not bool(value & 0x04),
+                "ajar": driver_ajar,
+                "reported_closed": not driver_ajar,
+                "physical_state_observable": True,
                 "ajar_quality": "candidate_one_controlled_trial",
                 "ajar_source": "bcm.did.0130.mask.0x04_inverted",
             }
