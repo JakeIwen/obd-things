@@ -215,6 +215,60 @@ class BcanAuxiliaryTests(unittest.TestCase):
         self.assertEqual(events[-1]["type"], "final")
         self.assertTrue(events[-1]["restored"])
 
+    def test_startup_signature_retry_is_bounded_and_signature_only(self):
+        backend = FakeBackend()
+        backend.identify_bus = mock.Mock(
+            side_effect=("unknown", "unknown", "b-can")
+        )
+        backend.sleep = mock.Mock()
+
+        blocked = bcan_auxiliary._startup_gate(
+            backend,
+            interface(True),
+            active=False,
+        )
+
+        self.assertIsNone(blocked)
+        self.assertEqual(backend.identify_bus.call_count, 3)
+        self.assertEqual(backend.sleep.call_count, 2)
+        backend.sleep.assert_called_with(
+            bcan_auxiliary.STARTUP_SIGNATURE_RETRY_SECONDS
+        )
+
+        unhealthy = FakeBackend()
+        unhealthy.identity_matches = mock.Mock(return_value=False)
+        unhealthy.identify_bus = mock.Mock()
+        unhealthy.sleep = mock.Mock()
+        blocked = bcan_auxiliary._startup_gate(
+            unhealthy,
+            interface(True),
+            active=False,
+        )
+        self.assertEqual(blocked.reason, "adapter_unhealthy")
+        unhealthy.identify_bus.assert_not_called()
+        unhealthy.sleep.assert_not_called()
+
+    def test_startup_signature_retry_exhaustion_remains_wrong_bus(self):
+        backend = FakeBackend()
+        backend.identify_bus = mock.Mock(return_value="unknown")
+        backend.sleep = mock.Mock()
+
+        blocked = bcan_auxiliary._startup_gate(
+            backend,
+            interface(True),
+            active=False,
+        )
+
+        self.assertEqual(blocked.reason, "wrong_bus")
+        self.assertEqual(
+            backend.identify_bus.call_count,
+            bcan_auxiliary.STARTUP_SIGNATURE_ATTEMPTS,
+        )
+        self.assertEqual(
+            backend.sleep.call_count,
+            bcan_auxiliary.STARTUP_SIGNATURE_ATTEMPTS - 1,
+        )
+
     def test_cli_exposes_no_did_payload_session_or_cadence_option(self):
         destinations = {action.dest for action in bcan_auxiliary.build_parser()._actions}
         self.assertEqual(

@@ -34,6 +34,7 @@ DEFAULT_DTC_CACHE = REPO / "tmp" / "vehicle_data" / "dtc-cache.json"
 ACTIVE_DRIVE_HELPER = REPO / "projects" / "vehicle_data" / "active_drive.py"
 BCAN_AUXILIARY_HELPER = REPO / "projects" / "vehicle_data" / "bcan_auxiliary.py"
 MAX_ACTIVE_EVENT_BYTES = 64 * 1024
+SUPPLEMENTAL_REFRESH_INTERVAL_SECONDS = 60.0
 ACTIVE_DRIVE_RESTORATION_INHIBIT = "vehicle-data-restoration-failed"
 AUXILIARY_DRIVE_RESTORATION_INHIBIT = "vehicle-data-bcan-restoration-failed"
 AUXILIARY_ODOMETER_METRIC = "vehicle.odometer"
@@ -573,6 +574,20 @@ class TelemetryBroker:
         self._history_stop = threading.Event()
         self._insights_closed = False
         self._history_sequence = 0
+        self._supplemental_last_refresh_monotonic: float | None = None
+        self._supplemental_cache: dict[str, dict[str, object]] = {
+            "history": self._initial_supplemental_payload("history"),
+            "health": self._initial_supplemental_payload("health"),
+            "dtcs": self._initial_supplemental_payload("dtcs"),
+        }
+        self._supplemental_cache_status: dict[str, object] = {
+            "enabled": insights is not None,
+            "state": "starting" if insights is not None else "disabled",
+            "refresh_interval_seconds": SUPPLEMENTAL_REFRESH_INTERVAL_SECONDS,
+            "last_refreshed_at": None,
+            "last_refresh_duration_ms": None,
+            "last_error": None,
+        }
         self._history_recorder: dict[str, object] = {
             "enabled": insights is not None,
             "state": "stopped" if insights is not None else "disabled",
@@ -590,8 +605,10 @@ class TelemetryBroker:
         self._passive_stop_evidence_streak = 0
         self._passive_unknown_evidence_streak = 0
         self._active_drive_blocked_reason: str | None = None
+        self._active_drive_blocked_detail: str | None = None
         self._active_drive_restoration_latched = False
         self._auxiliary_drive_blocked_reason: str | None = None
+        self._auxiliary_drive_blocked_detail: str | None = None
         self._auxiliary_drive_restoration_latched = False
         self._wake_authorization_deadline: float | None = None
         self._wake_authorization_owner: int | None = None
@@ -727,6 +744,87 @@ class TelemetryBroker:
                 "reason": "dtc_cache_unavailable",
                 "detail": f"saved DTC cache read failed: {type(exc).__name__}: {exc}",
             }
+
+    def _initial_supplemental_payload(self, kind: str) -> dict[str, object]:
+        if self.insights is not None:
+            return {
+                "available": False,
+                "reason": f"{kind}_cache_starting",
+                "detail": (
+                    "the background supplemental cache has not completed "
+                    "its first refresh"
+                ),
+            }
+        reasons = {
+            "history": "history_disabled",
+            "health": "early_warning_disabled",
+            "dtcs": "dtc_cache_disabled",
+        }
+        details = {
+            "history": "telemetry history is disabled by broker configuration",
+            "health": "early-warning evaluation is disabled by broker configuration",
+            "dtcs": "saved DTC cache access is disabled by broker configuration",
+        }
+        return {
+            "available": False,
+            "reason": reasons[kind],
+            "detail": details[kind],
+        }
+
+    def _cached_supplemental_response(self, kind: str) -> dict[str, object]:
+        """Return one memory-only product; never query SQLite or the DTC file."""
+
+        with self._lock:
+            payload = json.loads(json.dumps(self._supplemental_cache[kind]))
+            cache_status = json.loads(
+                json.dumps(self._supplemental_cache_status)
+            )
+        payload["broker_cache"] = cache_status
+        return payload
+
+    def cached_history_response(self) -> dict[str, object]:
+        return self._cached_supplemental_response("history")
+
+    def cached_health_response(self) -> dict[str, object]:
+        return self._cached_supplemental_response("health")
+
+    def cached_dtc_response(self) -> dict[str, object]:
+        return self._cached_supplemental_response("dtcs")
+
+    def _refresh_supplemental_cache(self) -> None:
+        """Refresh expensive products off the serialized Unix request path."""
+
+        if self.insights is None:
+            return
+        started = self.monotonic()
+        refreshed_at = datetime.now(timezone.utc).isoformat()
+        loaders = {
+            "history": self.history_response,
+            "health": self.health_response,
+            "dtcs": self.dtc_response,
+        }
+        refreshed: dict[str, dict[str, object]] = {}
+        errors: dict[str, str] = {}
+        for kind, loader in loaders.items():
+            try:
+                payload = loader()
+                if not isinstance(payload, dict):
+                    raise TypeError("supplemental response was not an object")
+                refreshed[kind] = json.loads(json.dumps(payload))
+            except Exception as exc:
+                errors[kind] = f"{type(exc).__name__}: {exc}"
+        duration_ms = max(0.0, self.monotonic() - started) * 1000.0
+        with self._lock:
+            self._supplemental_cache.update(refreshed)
+            self._supplemental_last_refresh_monotonic = self.monotonic()
+            self._supplemental_cache_status.update(
+                {
+                    "state": "ready" if not errors else "degraded",
+                    "last_refreshed_at": refreshed_at,
+                    "last_refresh_duration_ms": round(duration_ms, 3),
+                    "last_error": errors or None,
+                }
+            )
 
     def _serialize(
         self, result: AcquisitionResult, definition: MetricDefinition
@@ -1782,6 +1880,9 @@ class TelemetryBroker:
             history_recorder = json.loads(
                 json.dumps(self._history_recorder)
             )
+            supplemental_cache = json.loads(
+                json.dumps(self._supplemental_cache_status)
+            )
             active_drive = json.loads(json.dumps(self._active_drive))
             auxiliary_drive = json.loads(json.dumps(self._auxiliary_drive))
             accepted_temperature = self._cache.get(
@@ -2040,6 +2141,7 @@ class TelemetryBroker:
             "active_acquisition_permitted": active_permitted,
             "collector": collector,
             "history_recorder": history_recorder,
+            "supplemental_cache": supplemental_cache,
             "usb_can_monitor": usb_can_monitor,
             "data_quality": data_quality,
             "active_drive": active_drive,
@@ -2107,16 +2209,23 @@ class TelemetryBroker:
             with self._lock:
                 current_basis = self._vehicle_state.get("basis")
                 current_observed = self._vehicle_state_observed_monotonic
-            ignition_stale_after = self.definitions.get(
-                "vehicle.ignition_on"
+            authoritative_metric = {
+                "qualified_ccan_0x0fc_engine_speed": "engine.rpm",
+                "ccan_0x2ef_ignition_gate": "vehicle.ignition_on",
+            }.get(str(current_basis))
+            authoritative_definition = self.definitions.get(
+                authoritative_metric or ""
             )
             if (
-                current_basis == "ccan_0x2ef_ignition_gate"
+                authoritative_metric is not None
                 and current_observed is not None
-                and ignition_stale_after is not None
+                and authoritative_definition is not None
                 and self.monotonic() - current_observed
-                <= ignition_stale_after.stale_after_seconds
+                <= authoritative_definition.stale_after_seconds
             ):
+                # Generic voltage/bus activity cannot downgrade a fresher
+                # verified RPM or ignition conclusion. Once that stronger
+                # evidence expires, this observation may establish Awake.
                 return
         if (
             result.available
@@ -2265,10 +2374,11 @@ class TelemetryBroker:
         if conflicts:
             return conflicts
         with self._lock:
-            # The passive-first fixed transaction is bounded below twelve
-            # seconds (two passive probes, one final role probe, 1.5 s burst,
-            # signature/0x46C validation, and exact restoration).  The
-            # deadline is established once and is never extended by callbacks.
+            # Passive C-CAN/B-CAN probes occur before this authorization.  The
+            # fixed wake portion remains bounded below twelve seconds (one
+            # final role probe, 1.5 s burst, signature/0x46C validation, and
+            # exact restoration).  The deadline is established once and is
+            # never extended by callbacks.
             self._wake_authorization_owner = threading.get_ident()
             self._wake_authorization_deadline = self.monotonic() + 12.0
         return ()
@@ -2362,26 +2472,7 @@ class TelemetryBroker:
         try:
             try:
                 with self._source_lock:
-                    wake_authorized = False
-                    if mode == "wake_if_asleep":
-                        conflicts = self._begin_wake_authorization()
-                        if conflicts:
-                            result = failure(
-                                metric=metric,
-                                unit=definition.unit,
-                                reason="can_busy",
-                                detail="; ".join(conflicts),
-                                bus="b-can",
-                                acquisition=mode,
-                            )
-                        else:
-                            wake_authorized = True
-                    try:
-                        if result is None:
-                            result = self.acquirer.acquire(mode)
-                    finally:
-                        if wake_authorized:
-                            self._end_wake_authorization()
+                    result = self.acquirer.acquire(mode)
             except Exception as exc:
                 result = failure(
                     metric=metric,
@@ -2426,6 +2517,10 @@ class TelemetryBroker:
 
     def start_collector(self) -> None:
         self.start_usb_monitor()
+        # Prime expensive read-only products before the Unix listener starts.
+        # Later refreshes run in the history thread, never in a request handler.
+        if self.insights is not None:
+            self._refresh_supplemental_cache()
         with self._lock:
             if self._collector_thread is not None:
                 return
@@ -2546,6 +2641,14 @@ class TelemetryBroker:
                         self._history_recorder["last_stored_at"] = getattr(
                             result, "captured_at", captured_at.isoformat()
                         )
+                with self._lock:
+                    supplemental_last = self._supplemental_last_refresh_monotonic
+                if (
+                    supplemental_last is None
+                    or self.monotonic() - supplemental_last
+                    >= SUPPLEMENTAL_REFRESH_INTERVAL_SECONDS
+                ):
+                    self._refresh_supplemental_cache()
                 self._history_stop.wait(self.history_interval_seconds)
         finally:
             with self._lock:
@@ -2650,8 +2753,10 @@ class TelemetryBroker:
                 and epoch_ended
             ):
                 self._active_drive_blocked_reason = None
+                self._active_drive_blocked_detail = None
             if self._auxiliary_drive_blocked_reason is not None and epoch_ended:
                 self._auxiliary_drive_blocked_reason = None
+                self._auxiliary_drive_blocked_detail = None
             with self._lock:
                 self._active_drive.update(
                     {
@@ -2681,21 +2786,25 @@ class TelemetryBroker:
             )
             return
         if self._active_drive_blocked_reason is not None:
+            blocked_detail = self._active_drive_blocked_detail or (
+                "the prior active-drive helper ended without retained detail"
+            )
+            display_detail = (
+                f"{blocked_detail}; active-drive polling remains disabled until "
+                "qualified passive evidence observes the engine stop"
+            )
             with self._lock:
                 self._active_drive.update(
                     {
                         "state": "blocked_until_engine_stop",
                         "reason": self._active_drive_blocked_reason,
-                        "detail": (
-                            "active-drive polling remains disabled until "
-                            "qualified passive evidence observes the engine stop"
-                        ),
+                        "detail": display_detail,
                         "interface_mode": "listen_only",
                     }
                 )
             self._record_active_failure(
                 self._active_drive_blocked_reason,
-                "active-drive polling remains disabled until the engine stops",
+                display_detail,
             )
             return
         with self._lock:
@@ -2751,7 +2860,12 @@ class TelemetryBroker:
                     "response_timeout",
                     "session_required",
                 }:
-                    self._auxiliary_drive_blocked_reason = reason
+                    with self._lock:
+                        self._auxiliary_drive_blocked_reason = reason
+                        self._auxiliary_drive_blocked_detail = str(
+                            outcome.get("detail")
+                            or "B-CAN auxiliary helper ended without detail"
+                        )
                 if reason == "restoration_failed" or outcome.get("restored") is False:
                     self._auxiliary_drive_restoration_latched = True
 
@@ -2762,6 +2876,9 @@ class TelemetryBroker:
             )
             auxiliary_thread.start()
         elif self.auxiliary_drive_enabled:
+            auxiliary_detail = self._auxiliary_drive_blocked_detail or (
+                "the prior B-CAN auxiliary helper ended without retained detail"
+            )
             with self._lock:
                 self._auxiliary_drive.update(
                     {
@@ -2780,7 +2897,10 @@ class TelemetryBroker:
                             "B-CAN auxiliary polling remains disabled until "
                             "the restoration fault is repaired"
                             if self._auxiliary_drive_restoration_latched
-                            else "B-CAN auxiliary polling remains disabled until engine stop"
+                            else (
+                                f"{auxiliary_detail}; B-CAN auxiliary polling "
+                                "remains disabled until engine stop"
+                            )
                         ),
                         "interface_mode": "listen_only",
                     }
@@ -2830,7 +2950,12 @@ class TelemetryBroker:
             "response_timeout",
             "session_required",
         }:
-            self._active_drive_blocked_reason = reason
+            with self._lock:
+                self._active_drive_blocked_reason = reason
+                self._active_drive_blocked_detail = str(
+                    outcome.get("detail")
+                    or "active-drive helper ended without detail"
+                )
         if reason == "restoration_failed" or outcome.get("restored") is False:
             self._active_drive_restoration_latched = True
         self._refresh_interface_status()
@@ -3053,6 +3178,12 @@ def main(argv=None) -> int:
         interface_manager,
         probe_seconds=args.probe_seconds,
         read_timeout=args.read_timeout,
+        wake_authorization_begin=lambda: broker_holder[
+            "broker"
+        ]._begin_wake_authorization(),
+        wake_authorization_end=lambda: broker_holder[
+            "broker"
+        ]._end_wake_authorization(),
         wake_prearm_check=lambda: broker_holder[
             "broker"
         ].wake_prearm_conflicts(),

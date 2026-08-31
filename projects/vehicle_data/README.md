@@ -756,6 +756,24 @@ GET endpoints on page synchronization and then no more often than once per
 minute. This prevents the compact but substantially larger diagnostic cache
 from being duplicated into every live telemetry event.
 
+Those dedicated GETs are also memory-only at the serialized Unix API. The
+broker primes their cache before opening its listener, refreshes it once per
+minute from the existing history thread, and exposes refresh state in
+`status.supplemental_cache`. SQLite history/health queries and DTC-file reads
+therefore cannot queue ahead of live snapshots. This boundary was added after
+two simultaneous dashboard clients caused repeat 5–10 second snapshot 503
+bursts whenever their history/health/DTC refreshes overlapped; the browser's
+five-second freshness fail-safe correctly rendered `Unknown`, but the source
+telemetry had remained fresh throughout.
+
+Vehicle-state evidence is ordered by authority as well as recency. Fresh
+verified `0x0FC` RPM or `0x2EF` ignition evidence cannot be downgraded by a
+later generic battery/bus-activity observation. Generic activity may establish
+`Awake` only after the stronger metric's registered freshness window expires.
+This prevents an otherwise healthy running state from oscillating through the
+weaker activity state between collector operations; it does not extend any
+freshness limit.
+
 The saved DTC cache was originally seeded from the 19 existing inventory
 reports. It contains dated evidence, not a current scan: 11 modules have a
 successful saved result, PCM is explicitly unavailable after its generic
@@ -763,6 +781,16 @@ request timeout, and the four CAN-CH modules are explicitly never scanned by
 the repository reader. Status `0x40` means test-not-completed-only and is shown
 separately rather than counted as a fault. Generate or inspect an offline plan
 without CAN access using:
+
+The cache-only response enriches each returned record with a reporting-module-
+scoped description from `dtc_descriptions.py`. Most current entries are short,
+reviewed titles from the local exact-vehicle 2022 OEM service corpus; RF Hub
+entries use the stronger vehicle-specific TPMS findings where appropriate.
+When an exact component meaning has not been reviewed, the UI says so and
+shows only the standardized failure subtype (for example, “signal stuck
+high”). It never guesses from a code used by a different ECU. These titles
+explain code definitions only: they are not diagnoses, live scans, or proof
+that a saved condition is still present.
 
 ```bash
 python3 tools/dtc_scan.py --resolve-runtime
@@ -851,6 +879,39 @@ This opt-in does not add authentication. Bind to one intended interface address
 and keep the service cache-only; avoid a wildcard bind unless another layer
 restricts clients.
 
+The responsive layout treats up to 1024 CSS pixels as tablet portrait: the
+masthead and split panels stack, drive/engine tiles use two balanced columns,
+and long status badges wrap rather than widening the page. A separate
+1024–1312 pixel tablet-landscape band uses a balanced three-column drive layout
+with the primary speed tile spanning two columns. Wider layouts keep all five
+drive essentials on one row, while the six engine-health cards use two rows of
+three instead of leaving a lone sixth card and a large empty remainder.
+
+The browser renderer is deliberately framework-free and incremental. Live SSE
+updates change existing text/attributes only when their displayed value has
+changed. Additional-metric card nodes are reused until the catalog shape
+changes; profile visibility, role cards, and the metric catalog are keyed by
+stable structure signatures. DTCs, history, and warnings render only when
+their minute-level supplemental payload arrives, not on every live snapshot.
+The one-second freshness watchdog still advances and invalidates stale state,
+but skips its duplicate render when a healthy SSE update already advanced the
+same interval.
+
+Active-drive host-latency handling keeps the 250 ms RPM-evidence permit
+boundary strict without turning ordinary scheduler delay into an epoch-wide
+failure. If that exact evidence snapshot ages out before permit issuance, or
+the issued permit expires when the fixed transport consumes it immediately
+before `send()`, the helper sends nothing, preserves its exclusive owner,
+waits for the normal one-hertz boundary, and collects wholly new running
+evidence. The latter has its own exception/result type so it cannot conceal a
+wrong purpose, channel, process, lock, or clock failure. Lost locks,
+invalid/foreign clocks, bad snapshots, post-consume transport/response faults,
+and restoration faults remain fatal. The B-CAN companion separately retries
+only missing startup signature evidence for six bounded attempts; identity,
+topology, controller, inhibit, and later in-session signature failures still
+fail immediately. Broker blocked-state status retains the helper's original
+terminal detail instead of replacing it with only the recovery condition.
+
 ## Current vanpi deployment
 
 Deployment update, 2026-08-31 01:22 MDT: commit `bc8c583` bounded the drive
@@ -864,6 +925,64 @@ error-free with unchanged TX counts 36,802/2,485/0, so recovery sent no CAN
 frame. Focused remote validation passed 23 tests; broader recorder validation
 passed 39 tests and seven subtests. The bounded branch still awaits natural
 exercise during a future broker-owned drive interval.
+
+Deployment update, 2026-08-31 01:20 MDT: the incremental vanilla-JS renderer
+is live directly from the static source tree; no broker/service/CAN restart was
+required. In Playwright Firefox at an 800x1280 tablet viewport, an exact
+eight-second idle window fell from 2,200 DOM mutation records and 1,672/1,672
+added/removed nodes to 83 records and 27/27 nodes: about 96% fewer mutations
+and 98% fewer node replacements. The corrected page retained all seven
+additional metric cards, the three-card Overview count, and zero JavaScript
+errors. Both 800x1280 portrait and 1280x800 landscape had document width equal
+to viewport width with no horizontal overflow. Remote focused validation
+passed 178 tests and 77 subtests. Five-second vehicle-state freshness,
+three-second stream-stall resync, and all CAN-side behavior are unchanged.
+
+Deployment update, 2026-08-30 23:18 MDT: the vehicle-state precedence and
+supplemental-cache repair are live. Both restart gates observed the van asleep,
+helpers idle/listen-only with no PID or restoration fault, and all three roles
+exact passive. The broker primed history/health/DTC products in 1.09 seconds
+before serving, then completed its first scheduled minute refresh while every
+five-second probe snapshot returned HTTP 200. A deliberately excessive
+15-way burst returned 125/125 HTTP 200 responses: 50 snapshots and 25 each for
+history, health, and DTCs. Snapshot maximum latency was 2.32 seconds under that
+burst and there were no 503s after increasing the bounded Unix accept backlog;
+ordinary dashboard concurrency is substantially lower. Broker, LAN, and
+Tailscale services are active with zero restarts, collector/historian are
+advancing without error, and the supplemental cache is `ready` without error.
+C-CAN/B-CAN/CAN-CH remain listen-only, ERROR-ACTIVE, and error-free. TX counts
+were unchanged at 36,802/2,485/0, so deployment transmitted nothing. Remote
+focused validation passed 210 tests and 77 subtests with only the already-known
+stale dashboard-copy assertion excluded.
+
+Deployment update, 2026-08-30 20:58 MDT: the consume-time permit-expiry
+repair and module-scoped DTC descriptions are live. The restart gate observed
+zero RPM, cleared/idle C-CAN and B-CAN helpers, exact passive interfaces, and
+no restoration fault; residual post-key-off traffic still classified the van
+as awake. After restart, broker plus LAN/Tailscale listeners are active with
+zero restarts, both helpers remain idle/listen-only without a PID or fault,
+and the collector and five-second historian are advancing without error. All
+three vehicle roles remain classical CAN, listen-only, `restart-ms 0`, and
+ERROR-ACTIVE with zero error/drop counters. TX packet counts were unchanged at
+23,779/2,480/0 for C-CAN/B-CAN/CAN-CH, so deployment transmitted nothing. Both
+web endpoints return the new cache-only DTC catalog: 53 of 55 displayed
+module/code pairs have reviewed meanings; the two unresolved pairs disclose
+only their standardized failure subtype. Remote focused validation passed 94
+tests and 56 subtests. The no-TX consume-expiry retry still requires its first
+engine-running live validation.
+
+Deployment update, 2026-08-30: the host-latency/helper-detail repair and tablet
+layout are live. Deployment occurred with the vehicle passively confirmed
+asleep; the broker, LAN/Tailscale listeners, and three-role recorder are active
+with zero restarts. C-CAN, B-CAN, and CAN-CH remain exact classical CAN,
+listen-only, `restart-ms 0`, and ERROR-ACTIVE; restart TX deltas were exactly
+`0/0/0` and current RX/TX error counters are zero. Both active helpers are idle
+with no PID or restoration fault, the recorder is waiting, and SQLite
+maintenance completed before both web endpoints returned HTTP 200. The focused
+helper suite passed 76 tests and 52 subtests; the broad portable suite passed
+1,093 tests and 710 subtests with four skips and only the known stale dashboard
+copy assertion deliberately deselected. A later engine-running/top-of-hour
+interval is still required to live-validate the new no-TX skipped-cycle path.
 
 Deployment update, 2026-08-28: commit `d14d90a` installed the fixed B-CAN ICS
 helper, starred candidate odometer card, broker auxiliary supervision, and

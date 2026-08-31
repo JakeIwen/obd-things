@@ -453,6 +453,166 @@ class ActiveSessionTests(unittest.TestCase):
         self.assertIn("tire.pressure.fl", observations)
         self.assertNotIn("engine.crankshaft_torque", observations)
 
+    def test_stale_evidence_skips_one_cycle_without_weakening_other_failures(self):
+        backend = FakeBackend(
+            snapshots=[
+                snapshot((750.0, 752.0, 751.0), rpm_observation()),
+                snapshot((750.0, 751.0, 752.0), rpm_observation()),
+                snapshot((751.0, 752.0, 753.0), rpm_observation()),
+                snapshot((754.0, 755.0, 756.0), rpm_observation()),
+                snapshot((0.0, 0.0, 0.0), rpm_observation(0.0)),
+            ]
+        )
+        stale = active_drive.transmit_permit.StaleTransmitEvidenceError(
+            "injected host-latency expiry"
+        )
+        with mock.patch.object(
+            active_drive.transmit_permit,
+            "issue",
+            side_effect=(stale, object(), object(), object()),
+        ) as issue:
+            outcome, _emitted, _inhibit = self.run_session(backend)
+
+        self.assertEqual(outcome.reason, "engine_not_running")
+        self.assertTrue(outcome.restored)
+        self.assertEqual(issue.call_count, 4)
+        self.assertEqual(backend.pcm.poll_count, 2)
+        self.assertEqual(backend.tpms.poll_count, 1)
+
+        fatal_backend = FakeBackend(
+            snapshots=[
+                snapshot((750.0, 752.0, 751.0), rpm_observation()),
+                snapshot((750.0, 751.0, 752.0), rpm_observation()),
+                snapshot((751.0, 752.0, 753.0), rpm_observation()),
+            ]
+        )
+        with mock.patch.object(
+            active_drive.transmit_permit,
+            "issue",
+            side_effect=active_drive.transmit_permit.TransmitPermitError(
+                "exclusive lock was lost"
+            ),
+        ):
+            fatal, _emitted, _inhibit = self.run_session(fatal_backend)
+
+        self.assertEqual(fatal.reason, "helper_failed")
+        self.assertIn("exclusive lock was lost", fatal.detail)
+        self.assertEqual(fatal_backend.pcm.poll_count, 0)
+        self.assertEqual(fatal_backend.tpms.poll_count, 0)
+
+    def test_consume_time_expiry_skips_each_request_boundary(self):
+        running_snapshots = lambda: [
+            snapshot((750.0, 752.0, 751.0), rpm_observation()),
+            snapshot((750.0, 751.0, 752.0), rpm_observation()),
+            snapshot((751.0, 752.0, 753.0), rpm_observation()),
+            snapshot((0.0, 0.0, 0.0), rpm_observation(0.0)),
+        ]
+        expired_generator = SimpleNamespace(
+            available=False,
+            metric="generator.field_duty",
+            value=None,
+            unit="%",
+            source="pcm.did.01a1",
+            bus="c-can",
+            quality="observed_alfa_scale",
+            reason="transmit_permit_expired",
+            detail="fixed PCM request was skipped before send",
+        )
+        generator_backend = FakeBackend(
+            snapshots=running_snapshots(),
+            pcm=FakePcmPoller(result=expired_generator),
+        )
+        generator_outcome, _events, _inhibit = self.run_session(
+            generator_backend
+        )
+        self.assertEqual(generator_outcome.reason, "engine_not_running")
+        self.assertEqual(generator_backend.pcm.poll_count, 1)
+        self.assertEqual(generator_backend.tpms.poll_count, 0)
+        self.assertTrue(generator_outcome.restored)
+
+        expired_torque = SimpleNamespace(
+            available=False,
+            metric="engine.crankshaft_torque",
+            value=None,
+            unit="lb-ft",
+            source="pcm.did.06da",
+            bus="c-can",
+            quality="observed_alfa_scale",
+            reason="transmit_permit_expired",
+            detail="fixed PCM request was skipped before send",
+        )
+        torque_backend = FakeBackend(
+            snapshots=running_snapshots(),
+            pcm=FakePcmPoller(torque_result=expired_torque),
+        )
+        torque_outcome, torque_events, _inhibit = self.run_session(
+            torque_backend
+        )
+        self.assertEqual(torque_outcome.reason, "engine_not_running")
+        self.assertEqual(torque_backend.pcm.poll_count, 2)
+        self.assertEqual(torque_backend.tpms.poll_count, 0)
+        self.assertFalse(
+            any(event["type"] == "metric_failure" for event in torque_events)
+        )
+        self.assertTrue(torque_outcome.restored)
+
+        expired_pressure = active_drive.PressureResult(
+            False,
+            "tire.pressure.fl",
+            reason="transmit_permit_expired",
+            detail="fixed RF Hub request was skipped before send",
+        )
+        tpms = FakeTpmsPoller()
+        tpms.poll_next = mock.Mock(return_value=expired_pressure)
+        pressure_backend = FakeBackend(
+            snapshots=running_snapshots(),
+            tpms=tpms,
+        )
+        pressure_outcome, _events, _inhibit = self.run_session(
+            pressure_backend
+        )
+        self.assertEqual(pressure_outcome.reason, "engine_not_running")
+        self.assertEqual(pressure_backend.pcm.poll_count, 2)
+        tpms.poll_next.assert_called_once()
+        self.assertTrue(pressure_outcome.restored)
+
+    def test_only_ordinary_evidence_age_uses_nonfatal_stale_subclass(self):
+        clock = SimpleNamespace(value=10.0)
+        evidence = snapshot(
+            (750.0, 751.0, 752.0),
+            completed_monotonic=10.0,
+        )
+        clock.value += active_drive.transmit_permit.PERMIT_TTL_SECONDS
+        with self.assertRaises(
+            active_drive.transmit_permit.StaleTransmitEvidenceError
+        ):
+            active_drive.transmit_permit.issue(
+                FakeDiagnosticLock(),
+                evidence,
+                purpose=active_drive.transmit_permit.PCM_GENERATOR_DUTY,
+                channel=TEST_CHANNEL,
+                monotonic=lambda: clock.value,
+            )
+
+        future = snapshot(
+            (750.0, 751.0, 752.0),
+            completed_monotonic=11.0,
+        )
+        with self.assertRaises(
+            active_drive.transmit_permit.TransmitPermitError
+        ) as raised:
+            active_drive.transmit_permit.issue(
+                FakeDiagnosticLock(),
+                future,
+                purpose=active_drive.transmit_permit.PCM_GENERATOR_DUTY,
+                channel=TEST_CHANNEL,
+                monotonic=lambda: 10.0,
+            )
+        self.assertNotIsInstance(
+            raised.exception,
+            active_drive.transmit_permit.StaleTransmitEvidenceError,
+        )
+
     def test_ignition_only_stale_rpm_sleep_wrong_topology_and_inhibit_never_arm(self):
         running = snapshot((750.0, 751.0, 752.0), rpm_observation())
         cases = (
@@ -1058,7 +1218,8 @@ class PressureWireTests(unittest.TestCase):
             response,
             permit=stale,
         )
-        self.assertEqual(stale_result.reason, "response_rejected")
+        self.assertEqual(stale_result.reason, "transmit_permit_expired")
+        self.assertIn("skipped before send", stale_result.detail)
         self.assertEqual(stale_socket.sent, [])
 
         with self.assertRaises(
@@ -1825,6 +1986,45 @@ class BrokerActiveDriveTests(unittest.TestCase):
         broker._passive_engine_evidence = "running"
         broker._run_active_drive_if_ready()
         self.assertEqual(supervisor.calls, 2)
+
+    def test_blocked_state_retains_original_terminal_detail(self):
+        class Supervisor:
+            def __init__(self):
+                self.calls = 0
+
+            def run(self, _stop):
+                self.calls += 1
+                return {
+                    "type": "final",
+                    "state": "idle",
+                    "reason": "helper_failed",
+                    "detail": (
+                        "StaleTransmitEvidenceError: RPM evidence aged past "
+                        "its freshness window"
+                    ),
+                    "interface_mode": "listen_only",
+                    "restored": True,
+                }
+
+        supervisor = Supervisor()
+        broker = TelemetryBroker(
+            acquirer=self.Acquirer(),
+            monotonic=self.Clock(),
+            active_drive_supervisor=supervisor,
+            active_drive_enabled=True,
+        )
+        broker._passive_engine_evidence = "running"
+        broker._run_active_drive_if_ready()
+        broker._passive_engine_evidence = "running"
+        broker._run_active_drive_if_ready()
+
+        self.assertEqual(supervisor.calls, 1)
+        active = broker.status_response()["active_drive"]
+        self.assertEqual(active["state"], "blocked_until_engine_stop")
+        self.assertIn("StaleTransmitEvidenceError", active["detail"])
+        generator = broker.metric_response("generator.field_duty")
+        self.assertEqual(generator["reason"], "helper_failed")
+        self.assertIn("StaleTransmitEvidenceError", generator["detail"])
 
     def test_supervisor_missing_final_is_unverified_restoration_failure(self):
         class Process:

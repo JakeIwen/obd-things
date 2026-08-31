@@ -445,6 +445,13 @@ class RfHubPressurePoller:
                 purpose=transmit_permit.RF_HUB_PRESSURE,
                 channel=self.channel,
             )
+        except transmit_permit.ExpiredTransmitPermitError as exc:
+            return PressureResult(
+                False,
+                metric,
+                reason="transmit_permit_expired",
+                detail=f"fixed RF Hub request was skipped before send: {exc}",
+            )
         except transmit_permit.TransmitPermitError as exc:
             return PressureResult(
                 False,
@@ -675,6 +682,20 @@ def _active_gate(
     return None
 
 
+def _wait_for_next_cycle(
+    backend: SystemBackend,
+    next_cycle: float,
+    cycle_started: float,
+) -> float:
+    """Preserve the one-hertz cadence after a completed or safely skipped cycle."""
+
+    scheduled = max(next_cycle + POLL_INTERVAL_SECONDS, cycle_started)
+    remaining = scheduled - backend.monotonic()
+    if remaining > 0:
+        backend.sleep(remaining)
+    return scheduled
+
+
 def run_active_session(
     backend: SystemBackend,
     sink: JsonEventSink,
@@ -779,14 +800,28 @@ def run_active_session(
             if gate_failure is not None:
                 outcome = gate_failure
                 break
-            pcm_permit = transmit_permit.issue(
-                lock_handle,
-                snapshot,
-                purpose=transmit_permit.PCM_GENERATOR_DUTY,
-                channel=backend.channel,
-                monotonic=backend.monotonic,
-            )
+            try:
+                pcm_permit = transmit_permit.issue(
+                    lock_handle,
+                    snapshot,
+                    purpose=transmit_permit.PCM_GENERATOR_DUTY,
+                    channel=backend.channel,
+                    monotonic=backend.monotonic,
+                )
+            except transmit_permit.StaleTransmitEvidenceError:
+                # Host latency may age the 250 ms evidence window after a
+                # successful snapshot.  Send nothing, preserve ownership, and
+                # acquire a wholly new snapshot on the next scheduled cycle.
+                next_cycle = _wait_for_next_cycle(
+                    backend, next_cycle, cycle_started
+                )
+                continue
             pcm_result = pcm_poller.poll(pcm_permit)
+            if getattr(pcm_result, "reason", None) == "transmit_permit_expired":
+                next_cycle = _wait_for_next_cycle(
+                    backend, next_cycle, cycle_started
+                )
+                continue
             failed = _pcm_outcome(pcm_result)
             if failed is not None:
                 outcome = failed
@@ -810,16 +845,30 @@ def run_active_session(
                 if gate_failure is not None:
                     outcome = gate_failure
                     break
-                torque_permit = transmit_permit.issue(
-                    lock_handle,
-                    snapshot,
-                    purpose=transmit_permit.PCM_CRANKSHAFT_TORQUE,
-                    channel=backend.channel,
-                    monotonic=backend.monotonic,
-                )
+                try:
+                    torque_permit = transmit_permit.issue(
+                        lock_handle,
+                        snapshot,
+                        purpose=transmit_permit.PCM_CRANKSHAFT_TORQUE,
+                        channel=backend.channel,
+                        monotonic=backend.monotonic,
+                    )
+                except transmit_permit.StaleTransmitEvidenceError:
+                    next_cycle = _wait_for_next_cycle(
+                        backend, next_cycle, cycle_started
+                    )
+                    continue
                 torque_result = pcm_poller.poll_crankshaft_torque(
                     torque_permit
                 )
+                if (
+                    getattr(torque_result, "reason", None)
+                    == "transmit_permit_expired"
+                ):
+                    next_cycle = _wait_for_next_cycle(
+                        backend, next_cycle, cycle_started
+                    )
+                    continue
                 failed = _pcm_outcome(torque_result)
                 if failed is not None:
                     # Torque is useful but not an ownership or capture safety
@@ -857,14 +906,25 @@ def run_active_session(
             if gate_failure is not None:
                 outcome = gate_failure
                 break
-            pressure_permit = transmit_permit.issue(
-                lock_handle,
-                snapshot,
-                purpose=transmit_permit.RF_HUB_PRESSURE,
-                channel=backend.channel,
-                monotonic=backend.monotonic,
-            )
+            try:
+                pressure_permit = transmit_permit.issue(
+                    lock_handle,
+                    snapshot,
+                    purpose=transmit_permit.RF_HUB_PRESSURE,
+                    channel=backend.channel,
+                    monotonic=backend.monotonic,
+                )
+            except transmit_permit.StaleTransmitEvidenceError:
+                next_cycle = _wait_for_next_cycle(
+                    backend, next_cycle, cycle_started
+                )
+                continue
             pressure = tpms_poller.poll_next(pressure_permit)
+            if pressure.reason == "transmit_permit_expired":
+                next_cycle = _wait_for_next_cycle(
+                    backend, next_cycle, cycle_started
+                )
+                continue
             if pressure.available:
                 sink.emit(
                     "observation",
@@ -884,10 +944,9 @@ def run_active_session(
                 )
                 break
 
-            next_cycle = max(next_cycle + POLL_INTERVAL_SECONDS, cycle_started)
-            remaining = next_cycle - backend.monotonic()
-            if remaining > 0:
-                backend.sleep(remaining)
+            next_cycle = _wait_for_next_cycle(
+                backend, next_cycle, cycle_started
+            )
         return outcome
     except KeyboardInterrupt:
         outcome = SessionOutcome(

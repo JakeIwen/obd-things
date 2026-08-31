@@ -97,6 +97,8 @@ function record(overrides) {
     observation_state: "observed_in_latest_success",
     module_availability: "available",
     last_seen_at: "2025-01-02T00:00:00Z",
+    description: "Example reviewed DTC meaning",
+    description_reviewed: true,
     ...overrides,
   };
 }
@@ -181,6 +183,11 @@ const mixed = {
     other: 0,
   },
   groups_truncated: true,
+  description_catalog: {
+    reviewed_records: 3,
+    returned_records: 3,
+    detail: "A DTC title is not a diagnosis.",
+  },
   coverage: {
     total_modules: 4,
     available_modules: 2,
@@ -310,6 +317,8 @@ process.stdout.write(JSON.stringify(output));
         self.assertIn(
             "Compact cache: showing 3 of 6 saved records.", result["mixed"]["note"]
         )
+        self.assertIn("Example reviewed DTC meaning", result["mixed"]["tree"])
+        self.assertIn("A DTC title is not a diagnosis.", result["mixed"]["note"])
 
         self.assertIn("NO DTCs IN AUTHORITATIVE RESULTS", result["authoritative"]["state"])
         self.assertIn("No DTCs", result["authoritative"]["tree"])

@@ -41,6 +41,24 @@ class TransmitPermitError(RuntimeError):
     """A fixed active-drive transmission was not safely authorized."""
 
 
+class StaleTransmitEvidenceError(TransmitPermitError):
+    """The qualified RPM snapshot aged out before a permit could be issued.
+
+    This is the one permit failure an active owner may handle by sending
+    nothing and collecting a new broadcast snapshot.
+    """
+
+
+class ExpiredTransmitPermitError(TransmitPermitError):
+    """A valid issued permit expired at consume time before any CAN send.
+
+    The fixed transports consume the permit immediately before ``send()``.
+    This exact failure therefore proves no request was transmitted and may be
+    handled like stale issuance: skip the cycle and collect fresh evidence.
+    Every other consume-time failure remains fatal.
+    """
+
+
 class _TransmitPermit:
     """Opaque mutable capability; construct through :func:`issue` only."""
 
@@ -143,13 +161,13 @@ def _validate_running_snapshot(snapshot: object, *, now: float) -> float:
             "transmit permit requires timestamped fresh RPM evidence"
         ) from None
     evidence_age = now - completed_at
-    if (
-        not math.isfinite(completed_at)
-        or evidence_age < 0
-        or evidence_age >= PERMIT_TTL_SECONDS
-    ):
+    if not math.isfinite(completed_at) or evidence_age < 0:
         raise TransmitPermitError(
-            "transmit permit RPM evidence was stale or from another clock"
+            "transmit permit RPM evidence was from another clock"
+        )
+    if evidence_age >= PERMIT_TTL_SECONDS:
+        raise StaleTransmitEvidenceError(
+            "transmit permit RPM evidence was stale: aged past its freshness window"
         )
     return completed_at
 
@@ -225,7 +243,11 @@ def consume(permit: object, *, purpose: str, channel: str) -> None:
                 "active-drive transmit permit lost its exclusive C-CAN lock"
             ) from exc
         now = _monotonic_value(permit._monotonic)
-        if now < permit._issued_at or now >= permit._expires_at:
+        if now < permit._issued_at:
             raise TransmitPermitError(
+                "active-drive transmit permit clock moved backwards"
+            )
+        if now >= permit._expires_at:
+            raise ExpiredTransmitPermitError(
                 "active-drive transmit permit expired before the fixed request"
             )

@@ -637,6 +637,28 @@ class BrokerTests(unittest.TestCase):
         conflicts = broker._begin_wake_authorization()
         self.assertIn("not listen-only", "; ".join(conflicts))
 
+    def test_wake_mode_can_return_passive_result_while_engine_is_running(self):
+        clock = FakeClock()
+        acquirer = FakeAcquirer()
+        broker = TelemetryBroker(acquirer=acquirer, monotonic=clock)
+        broker._collector_state = "running"
+        broker._vehicle_state = {
+            "state": "running",
+            "running": True,
+            "confidence": "verified",
+            "basis": "qualified_ccan_0x0fc_engine_speed",
+            "detail": "test",
+            "observed_at": None,
+        }
+        broker._vehicle_state_observed_monotonic = clock.value
+
+        result = broker.acquire("battery.voltage", "wake_if_asleep")
+
+        self.assertTrue(result.available)
+        self.assertEqual(acquirer.calls, ["wake_if_asleep"])
+        self.assertIsNone(broker._wake_authorization_owner)
+        self.assertIsNone(broker._wake_authorization_deadline)
+
     def test_wake_mode_has_independent_fifteen_minute_cooldown(self):
         clock = FakeClock()
         acquirer = FakeAcquirer()
@@ -726,6 +748,123 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(state["basis"], "passive_bus_activity")
         self.assertEqual(state["age_ms"], 0)
         self.assertIn("not yet distinguished", state["detail"])
+
+    def test_generic_activity_cannot_downgrade_fresh_rpm_state(self):
+        clock = FakeClock()
+        broker = TelemetryBroker(
+            acquirer=FakeAcquirer(), monotonic=clock
+        )
+        rpm = broker.publish_observation(
+            "engine.rpm",
+            value=751.0,
+            unit="rpm",
+            source="ccan.broadcast.0x0fc",
+            bus="c-can",
+            quality="observed_alfa_scale",
+        )
+        battery = success(
+            metric="battery.voltage",
+            unit="V",
+            value=13.9,
+            source="ccan.broadcast.0x41a",
+            bus="c-can",
+            acquisition="passive",
+            quality="verified",
+            observed_monotonic=clock.value,
+        )
+
+        self.assertTrue(rpm.available)
+        broker._update_vehicle_state(battery)
+        state = broker.status_response()["vehicle_state"]
+        self.assertEqual(state["state"], "running")
+        self.assertIs(state["running"], True)
+        self.assertEqual(
+            state["basis"], "qualified_ccan_0x0fc_engine_speed"
+        )
+
+        clock.value += METRICS["engine.rpm"].stale_after_seconds + 0.001
+        broker._update_vehicle_state(battery)
+        replaced = broker.status_response()["vehicle_state"]
+        self.assertEqual(replaced["state"], "awake")
+        self.assertIsNone(replaced["running"])
+        self.assertEqual(replaced["basis"], "passive_bus_activity")
+
+    def test_supplemental_cache_refreshes_off_request_path(self):
+        insights = mock.Mock()
+        insights.history_response.return_value = {
+            "available": True,
+            "product": "history",
+        }
+        insights.health_response.return_value = {
+            "available": True,
+            "product": "health",
+        }
+        insights.dtc_response.return_value = {
+            "available": True,
+            "product": "dtcs",
+        }
+        broker = TelemetryBroker(
+            acquirer=FakeAcquirer(),
+            monotonic=FakeClock(),
+            insights=insights,
+        )
+
+        self.assertEqual(
+            broker.cached_history_response()["reason"],
+            "history_cache_starting",
+        )
+        insights.history_response.assert_not_called()
+
+        broker._refresh_supplemental_cache()
+
+        self.assertEqual(
+            broker.cached_history_response()["product"], "history"
+        )
+        self.assertEqual(
+            broker.cached_health_response()["product"], "health"
+        )
+        self.assertEqual(broker.cached_dtc_response()["product"], "dtcs")
+        cache = broker.status_response()["supplemental_cache"]
+        self.assertEqual(cache["state"], "ready")
+        self.assertIsNone(cache["last_error"])
+        insights.history_response.assert_called_once_with()
+        insights.health_response.assert_called_once_with()
+        insights.dtc_response.assert_called_once_with()
+
+    def test_blocked_supplemental_refresh_cannot_block_live_snapshot(self):
+        entered = threading.Event()
+        release = threading.Event()
+        insights = mock.Mock()
+
+        def slow_history():
+            entered.set()
+            self.assertTrue(release.wait(2.0))
+            return {"available": True, "product": "history"}
+
+        insights.history_response.side_effect = slow_history
+        insights.health_response.return_value = {"available": True}
+        insights.dtc_response.return_value = {"available": True}
+        broker = TelemetryBroker(
+            acquirer=FakeAcquirer(), insights=insights
+        )
+        refresh = threading.Thread(target=broker._refresh_supplemental_cache)
+        refresh.start()
+        self.assertTrue(entered.wait(1.0))
+
+        started = time.monotonic()
+        snapshot = broker.snapshot_response()
+        cached = broker.cached_history_response()
+        elapsed = time.monotonic() - started
+
+        self.assertIn("status", snapshot)
+        self.assertEqual(cached["reason"], "history_cache_starting")
+        self.assertLess(elapsed, 0.2)
+        release.set()
+        refresh.join(2.0)
+        self.assertFalse(refresh.is_alive())
+        self.assertEqual(
+            broker.cached_history_response()["product"], "history"
+        )
 
     def test_passive_silence_reports_inferred_asleep_with_caveat(self):
         asleep = failure(
@@ -1412,6 +1551,7 @@ class ApiTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_get_is_cache_only_and_post_is_allowlisted(self):
+        self.assertEqual(self.server.request_queue_size, 64)
         status, snapshot = self.client.request("GET", "/v1/snapshot")
         self.assertEqual(status, 200)
         self.assertEqual(
@@ -1452,6 +1592,38 @@ class ApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 404)
         self.assertEqual(payload["reason"], "unknown_metric")
+
+    def test_supplemental_gets_use_memory_cache_not_direct_loaders(self):
+        self.broker._supplemental_cache.update(
+            {
+                "history": {"available": True, "product": "history"},
+                "health": {"available": True, "product": "health"},
+                "dtcs": {"available": True, "product": "dtcs"},
+            }
+        )
+        self.broker.history_response = mock.Mock(
+            side_effect=AssertionError("direct history loader reached")
+        )
+        self.broker.health_response = mock.Mock(
+            side_effect=AssertionError("direct health loader reached")
+        )
+        self.broker.dtc_response = mock.Mock(
+            side_effect=AssertionError("direct DTC loader reached")
+        )
+
+        for path, product in (
+            ("/v1/history", "history"),
+            ("/v1/health", "health"),
+            ("/v1/diagnostics/dtcs", "dtcs"),
+        ):
+            status, payload = self.client.request("GET", path)
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["product"], product)
+            self.assertIn("broker_cache", payload)
+
+        self.broker.history_response.assert_not_called()
+        self.broker.health_response.assert_not_called()
+        self.broker.dtc_response.assert_not_called()
 
     def test_unix_api_accepts_bounded_battery_wake_mode(self):
         self.broker._collector_state = "running"

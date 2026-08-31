@@ -30,6 +30,11 @@ let latestHttpResponseSequence = 0;
 let lastAcceptedMonotonicMs = null;
 let ageCursorMonotonicMs = null;
 const retiredInstances = new Set();
+let lastProfileRenderKey = null;
+let lastRoleGridSignature = null;
+let lastCatalogSignature = null;
+let additionalMetricStructureKey = null;
+const additionalMetricNodes = new Map();
 
 const DRIVER_QUALITIES = new Set(["verified", "observed_alfa_scale"]);
 const MAX_STATE_FALLBACK_AGE_MS = 5000;
@@ -146,7 +151,14 @@ const TIRE_METRICS = Object.freeze({
 });
 
 function text(id, value, fallback = "—") {
-  byId(id).textContent = value == null || value === "" ? fallback : String(value);
+  const element = byId(id);
+  const next = value == null || value === "" ? fallback : String(value);
+  if (element.textContent !== next) element.textContent = next;
+}
+
+function elementText(element, value, fallback = "—") {
+  const next = value == null || value === "" ? fallback : String(value);
+  if (element.textContent !== next) element.textContent = next;
 }
 
 function humanize(value) {
@@ -480,7 +492,8 @@ function formatMetricValue(name, value) {
 }
 
 function setCardState(id, state) {
-  byId(id).dataset.state = state;
+  const card = byId(id);
+  if (card.dataset.state !== state) card.dataset.state = state;
 }
 
 function metricStatus(definition, metric, state) {
@@ -524,6 +537,16 @@ function setProfile() {
     settings,
     lastSnapshot.status?.vehicle_state,
   );
+  const renderKey = JSON.stringify({
+    selected: settings.selected,
+    customWidgets: settings.customWidgets,
+    id: effective.id,
+    title: effective.title,
+    reason: effective.reason,
+    widgets: effective.widgets,
+  });
+  if (renderKey === lastProfileRenderKey) return;
+  lastProfileRenderKey = renderKey;
   const visible = new Set(effective.widgets);
   document.querySelectorAll("[data-widget]").forEach((panel) => {
     panel.hidden = !visible.has(panel.dataset.widget);
@@ -1083,34 +1106,50 @@ function renderBattery(metrics) {
   }
 }
 
-function metricCard(definition, metric) {
+function buildMetricCard(definition) {
   const article = document.createElement("article");
   article.className = "metric-card";
-  const state = observationState(definition, metric);
-  article.dataset.state = state.stale
-    ? "stale"
-    : (state.available ? state.quality : "unavailable");
-  if (!state.driverQualified) article.classList.add("diagnostic-only");
   const label = document.createElement("p");
   label.className = "eyebrow";
   label.textContent = definition.name;
   const badge = document.createElement("span");
   badge.className = "metric-quality";
-  badge.textContent = state.stale
-    ? "STALE"
-    : displayQuality(state.quality);
   const value = document.createElement("p");
   value.className = "metric-value";
-  value.textContent = metric?.available
-    ? `${formatMetricValue(definition.name, metric.value)} ${metric.unit || definition.unit}`
-    : humanize(metric?.reason || "not sampled");
   const meta = document.createElement("p");
   meta.className = "muted";
-  meta.textContent = metric?.available
-    ? `${displayQuality(state.quality)} · ${formatAge(metric.age_ms)} old`
-    : metric?.detail || "No cached observation.";
   article.append(label, badge, value, meta);
-  return article;
+  return {article, badge, value, meta};
+}
+
+function updateMetricCard(nodes, definition, metric) {
+  const state = observationState(definition, metric);
+  const cardState = state.stale
+    ? "stale"
+    : (state.available ? state.quality : "unavailable");
+  if (nodes.article.dataset.state !== cardState) {
+    nodes.article.dataset.state = cardState;
+  }
+  const diagnosticOnly = !state.driverQualified;
+  if (nodes.article.classList.contains("diagnostic-only") !== diagnosticOnly) {
+    nodes.article.classList.toggle("diagnostic-only", diagnosticOnly);
+    // Profile summaries count driver-facing cards, so recompute only when a
+    // card crosses that visibility boundary.
+    lastProfileRenderKey = null;
+  }
+  elementText(nodes.badge, state.stale ? "STALE" : displayQuality(state.quality));
+  elementText(
+    nodes.value,
+    metric?.available
+      ? `${formatMetricValue(definition.name, metric.value)} ${metric.unit || definition.unit}`
+      : humanize(metric?.reason || "not sampled"),
+  );
+  elementText(
+    nodes.meta,
+    metric?.available
+      ? `${displayQuality(state.quality)} · ${formatAge(metric.age_ms)} old`
+      : metric?.detail || "No cached observation.",
+  );
 }
 
 function featuredMetricNames(catalog) {
@@ -1138,13 +1177,28 @@ function featuredMetricNames(catalog) {
 
 function renderAdditionalMetrics(catalog, metrics) {
   const grid = byId("metric-grid");
-  grid.replaceChildren();
   const featured = featuredMetricNames(catalog);
   const additional = catalog.filter(
     (definition) => !featured.has(definition.name),
   );
+  const structureKey = additional.map(
+    (definition) => definition.name,
+  ).join("\n");
+  if (structureKey !== additionalMetricStructureKey) {
+    additionalMetricStructureKey = structureKey;
+    additionalMetricNodes.clear();
+    grid.replaceChildren();
+    additional.forEach((definition) => {
+      const nodes = buildMetricCard(definition);
+      additionalMetricNodes.set(definition.name, nodes);
+      grid.append(nodes.article);
+    });
+    // The visible metric count depends on the newly built card set.
+    lastProfileRenderKey = null;
+  }
   additional.forEach((definition) => {
-    grid.append(metricCard(definition, metrics[definition.name]));
+    const nodes = additionalMetricNodes.get(definition.name);
+    if (nodes) updateMetricCard(nodes, definition, metrics[definition.name]);
   });
 }
 
@@ -1277,6 +1331,9 @@ function renderInterface(status) {
   const roles = roleSnapshot.roles && typeof roleSnapshot.roles === "object"
     ? roleSnapshot.roles
     : {};
+  const roleSignature = JSON.stringify(roles);
+  if (roleSignature === lastRoleGridSignature) return;
+  lastRoleGridSignature = roleSignature;
   const roleGrid = byId("interface-roles");
   roleGrid.replaceChildren();
   Object.entries(roles).forEach(([role, payload]) => {
@@ -1841,12 +1898,22 @@ function renderDtcs(dtcs) {
         entry.raw_dtc || entry.raw_code ||
         entry.module_key || entry.module || "—"
       );
+      const body = document.createElement("span");
+      body.className = "dtc-body";
+      const meaningText = entry.label || entry.description;
+      if (meaningText) {
+        const meaning = document.createElement("span");
+        meaning.className = entry.description_reviewed === false
+          ? "dtc-meaning dtc-meaning-unreviewed"
+          : "dtc-meaning";
+        meaning.textContent = meaningText;
+        body.append(meaning);
+      }
       const detail = document.createElement("span");
       detail.className = "dtc-detail";
       detail.textContent = [
         entry.module_name || entry.module_key || entry.module,
         entry.logical_bus || entry.bus,
-        entry.label || entry.description,
         Array.isArray(entry.status_flags)
           ? entry.status_flags.join(", ")
           : entry.status_text || entry.status,
@@ -1854,7 +1921,8 @@ function renderDtcs(dtcs) {
         dtcObservationLabel(entry),
         entry.last_seen_at ? `last ${formatTimestamp(entry.last_seen_at)}` : null,
       ].filter(Boolean).join(" · ");
-      item.append(code, detail);
+      body.append(detail);
+      item.append(code, body);
       list.append(item);
     });
     section.append(heading, list);
@@ -1898,6 +1966,15 @@ function renderDtcs(dtcs) {
     ),
     groupsTruncated
       ? `Compact cache: showing ${returnedRecords} of ${records} saved records.`
+      : null,
+    summary.description_catalog?.detail,
+    summary.description_catalog?.returned_records != null
+      ? (
+        `${summary.description_catalog.reviewed_records || 0}/` +
+        `${summary.description_catalog.returned_records} displayed records have ` +
+        "a reviewed module-specific meaning; other rows show only the " +
+        "standardized failure subtype."
+      )
       : null,
   ];
   text(
@@ -2005,6 +2082,9 @@ function configureDtcJobs(web) {
 }
 
 function renderCatalog(catalog) {
+  const catalogSignature = JSON.stringify(catalog);
+  if (catalogSignature === lastCatalogSignature) return;
+  lastCatalogSignature = catalogSignature;
   const list = byId("catalog-list");
   list.replaceChildren();
   catalog.forEach((definition) => {
@@ -2060,9 +2140,6 @@ function render(snapshot) {
   renderAdditionalMetrics(catalog, metrics);
   renderInterface(status);
   renderCollector(status);
-  renderEarlyWarnings(supplemental.earlyWarnings);
-  renderHistory(supplemental.history);
-  renderDtcs(supplemental.dtcs);
   renderCatalog(catalog);
   const collector = status.collector || {};
   text(
@@ -2126,13 +2203,23 @@ function invalidateDisplayedFreshness(reason) {
 }
 
 function freshnessTick() {
-  advanceDisplayedAges();
+  const nowMonotonicMs = performance.now();
+  if (
+    lastAcceptedMonotonicMs == null ||
+    nowMonotonicMs - lastAcceptedMonotonicMs >= FRESHNESS_TICK_MS
+  ) {
+    // A healthy stream already ages and renders the accepted snapshot. The
+    // watchdog renders only when delivery has not advanced since the last
+    // one-second window, preserving stale-state expiry without a duplicate
+    // full pass on every normal SSE cycle.
+    advanceDisplayedAges();
+  }
   if (
     document.visibilityState !== "hidden" &&
     streamAccepting &&
     eventStream &&
     lastAcceptedMonotonicMs != null &&
-    performance.now() - lastAcceptedMonotonicMs > STREAM_STALL_RESYNC_MS
+    nowMonotonicMs - lastAcceptedMonotonicMs > STREAM_STALL_RESYNC_MS
   ) {
     resyncSnapshot("stream_stall");
   }

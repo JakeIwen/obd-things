@@ -529,6 +529,12 @@ class PcmElectricalPoller:
                 purpose=purpose,
                 channel=self.channel,
             )
+        except transmit_permit.ExpiredTransmitPermitError as exc:
+            return _failure(
+                profile,
+                "transmit_permit_expired",
+                f"fixed PCM request was skipped before send: {exc}",
+            )
         except transmit_permit.TransmitPermitError as exc:
             return _failure(
                 profile,

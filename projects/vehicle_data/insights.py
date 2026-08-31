@@ -20,6 +20,7 @@ from typing import Mapping, Protocol, Sequence
 
 from lib.modules import MODULES
 from projects.vehicle_data.api import MAX_RESPONSE_BYTES
+from projects.vehicle_data.dtc_descriptions import describe_dtc
 from projects.vehicle_data.early_warning import (
     EarlyWarningEvaluator,
     InfrastructureHealthEvaluator,
@@ -1094,6 +1095,31 @@ class TelemetryInsights:
                 )
             payload["available"] = True
             payload["acquisition"] = "cache_only"
+            described = 0
+            description_total = 0
+            for entries in payload["groups"].values():
+                for record in entries:
+                    description = describe_dtc(
+                        record.get("module_key"),
+                        record.get("fca_display"),
+                    )
+                    record.update(description)
+                    description_total += 1
+                    if description["description_reviewed"]:
+                        described += 1
+            payload["description_catalog"] = {
+                "scope": "reporting_module_and_fca_display_code",
+                "reviewed_records": described,
+                "returned_records": description_total,
+                "sources": (
+                    "Reviewed short titles from the local 2022 ProMaster OEM "
+                    "service information and repository-verified vehicle findings"
+                ),
+                "detail": (
+                    "A DTC title explains the code definition; it is not a diagnosis "
+                    "or proof of current vehicle state."
+                ),
+            }
             payload.setdefault(
                 "detail",
                 "Saved ReadDTCInformation results only; this endpoint cannot scan or clear.",

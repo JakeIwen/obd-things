@@ -17,9 +17,13 @@
 
 [hidden] { display: none !important; }
 
+html, body { max-width: 100%; }
+
 body {
   margin: 0;
   min-height: 100vh;
+  overflow-x: hidden;
+  overflow-x: clip;
   background:
     radial-gradient(circle at 88% 6%, rgba(38, 111, 83, .35), transparent 30rem),
     radial-gradient(circle at 5% 72%, rgba(29, 71, 59, .25), transparent 34rem),
@@ -47,6 +51,12 @@ main {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: 1rem;
+}
+
+main > *,
+.masthead > *,
+.section-heading > * {
+  min-width: 0;
 }
 
 .masthead {
@@ -126,7 +136,7 @@ select {
 
 .engine-health-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: .75rem;
 }
 
@@ -275,6 +285,22 @@ select {
   font: 700 .78rem/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+.dtc-body {
+  min-width: 0;
+  display: grid;
+  gap: .18rem;
+}
+
+.dtc-meaning {
+  color: var(--text);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.dtc-meaning-unreviewed {
+  color: #d8c59d;
+}
+
 .dtc-detail {
   color: var(--muted);
   overflow-wrap: anywhere;
@@ -315,7 +341,7 @@ select {
 
 .drive-hero-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.75fr) repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1.5fr) repeat(4, minmax(0, 1fr));
   gap: .75rem;
 }
 
@@ -480,12 +506,15 @@ select {
 }
 
 .badge {
+  max-width: 100%;
   border: 1px solid #4e7867;
   border-radius: 999px;
   padding: .45rem .7rem;
   color: var(--accent-soft);
-  font: 700 .72rem/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font: 700 .72rem/1.25 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   letter-spacing: .08em;
+  overflow-wrap: anywhere;
+  text-align: center;
 }
 
 .panel-note {
@@ -511,6 +540,7 @@ dd {
 
 .section-heading {
   display: flex;
+  flex-wrap: wrap;
   align-items: start;
   justify-content: space-between;
   gap: 1rem;
@@ -661,22 +691,28 @@ body[data-profile="parked"] .battery-panel {
   background: linear-gradient(135deg, rgba(51, 43, 29, .92), rgba(20, 28, 23, .9));
 }
 
-@media (max-width: 48rem) {
-  main { padding-top: 1.25rem; }
+@media (max-width: 64rem) {
+  main {
+    width: min(100% - 1rem, 82rem);
+    padding-top: 1.25rem;
+    gap: .75rem;
+  }
   .masthead { align-items: stretch; flex-direction: column; gap: 1rem; }
   .profile-picker { width: 100%; }
   .panel, .state-panel, .battery-panel, .tires-panel { grid-column: 1 / -1; }
   .drive-hero-grid, .engine-health-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .drive-primary { grid-column: span 2; }
   .charging-tile {
     grid-template-columns: 1fr;
   }
   .trend-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .drive-primary .drive-value { font-size: clamp(3.2rem, 14vw, 5.6rem); }
+  .widget-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .drive-primary .drive-value { font-size: clamp(3.2rem, 12vw, 5.6rem); }
 }
 
-@media (max-width: 34rem) {
+@media (max-width: 40rem) {
   main { width: min(100% - 1rem, 82rem); gap: .65rem; }
   .panel { padding: 1rem; }
   .state-panel { grid-template-columns: 1fr; }
@@ -687,17 +723,35 @@ body[data-profile="parked"] .battery-panel {
   .battery-panel { grid-template-columns: 1fr; gap: 1rem; }
   .badge { justify-self: start; }
   .widget-options { grid-template-columns: 1fr; }
+  .drive-hero-grid, .engine-health-grid { grid-template-columns: 1fr; }
+  .drive-primary { grid-column: auto; }
   .drive-panel { padding: .75rem; }
   .drive-tile { padding: .75rem; }
   .drive-value { font-size: clamp(1.8rem, 13vw, 3rem); }
   .drive-primary .drive-value { font-size: clamp(2.8rem, 18vw, 4.5rem); }
   .drive-status { font-size: .6rem; }
+  .dtc-list li { grid-template-columns: 1fr; }
+  .metric-quality {
+    position: static;
+    max-width: none;
+    margin-bottom: .45rem;
+    text-align: left;
+  }
 }
 
-@media (min-width: 48.001rem) and (max-width: 68rem) {
-  .engine-health-grid {
+@media (min-width: 64.001rem) and (max-width: 82rem) {
+  main {
+    width: min(100% - 1rem, 82rem);
+    padding-top: 1.5rem;
+    gap: .75rem;
+  }
+  .panel { padding: 1.15rem; }
+  .masthead { gap: 1.25rem; }
+  .profile-picker { width: min(19rem, 100%); }
+  .drive-hero-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+  .drive-primary { grid-column: span 2; }
 }
 
 @media (prefers-reduced-motion: reduce) {

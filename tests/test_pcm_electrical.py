@@ -371,7 +371,8 @@ class PcmElectricalWireTests(unittest.TestCase):
         )
         stale_result = stale.poll(stale_permit)
         stale.close()
-        self.assertEqual(stale_result.reason, "response_rejected")
+        self.assertEqual(stale_result.reason, "transmit_permit_expired")
+        self.assertIn("skipped before send", stale_result.detail)
         self.assertEqual(stale_socket.sent, [])
 
     def test_reused_or_released_lock_permit_never_sends_again(self):

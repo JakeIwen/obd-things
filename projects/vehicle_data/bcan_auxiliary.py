@@ -43,6 +43,8 @@ PAIR = "3/11"
 POLL_INTERVAL_SECONDS = 5.0
 INITIAL_POLL_DELAY_SECONDS = 2.0
 REQUEST_TIMEOUT_SECONDS = 0.75
+STARTUP_SIGNATURE_ATTEMPTS = 6
+STARTUP_SIGNATURE_RETRY_SECONDS = 0.5
 RESTORATION_INHIBIT = "vehicle-data-bcan-restoration-failed"
 METRIC = "vehicle.odometer"
 SOURCE = "ics.did.2001"
@@ -356,7 +358,12 @@ def _topology_failure(topology: object) -> SessionOutcome | None:
     return None
 
 
-def _gate(backend: SystemBackend, initial: canbus.InterfaceState, *, active: bool) -> SessionOutcome | None:
+def _gate(
+    backend: SystemBackend,
+    initial: canbus.InterfaceState,
+    *,
+    active: bool,
+) -> SessionOutcome | None:
     if not backend.identity_matches():
         return SessionOutcome("adapter_unhealthy", "resolved B-CAN USB identity changed or disappeared")
     state = backend.interface_state()
@@ -374,7 +381,40 @@ def _gate(backend: SystemBackend, initial: canbus.InterfaceState, *, active: boo
     return None
 
 
-def run_active_session(backend: SystemBackend, sink: JsonEventSink, *, termination_guard=None) -> SessionOutcome:
+def _startup_gate(
+    backend: SystemBackend,
+    initial: canbus.InterfaceState,
+    *,
+    active: bool,
+) -> SessionOutcome | None:
+    """Retry only transient B-CAN signature absence during helper startup.
+
+    USB identity, topology, controller state, and operation-inhibit failures
+    remain immediate.  A running helper still uses the single strict
+    :func:`_gate`; this grace cannot conceal a later bus/identity change.
+    """
+
+    signature_detail = (
+        "awake traffic did not match the verified B-CAN signature"
+    )
+    blocked = None
+    for attempt in range(STARTUP_SIGNATURE_ATTEMPTS):
+        blocked = _gate(backend, initial, active=active)
+        if blocked is None:
+            return None
+        if blocked.reason != "wrong_bus" or blocked.detail != signature_detail:
+            return blocked
+        if attempt + 1 < STARTUP_SIGNATURE_ATTEMPTS:
+            backend.sleep(STARTUP_SIGNATURE_RETRY_SECONDS)
+    return blocked
+
+
+def run_active_session(
+    backend: SystemBackend,
+    sink: JsonEventSink,
+    *,
+    termination_guard=None,
+) -> SessionOutcome:
     lock_handle = None
     initial = None
     mutation_attempted = False
@@ -391,7 +431,7 @@ def run_active_session(backend: SystemBackend, sink: JsonEventSink, *, terminati
             )
             return outcome
         initial = backend.interface_state()
-        blocked = _gate(backend, initial, active=False)
+        blocked = _startup_gate(backend, initial, active=False)
         if blocked is not None:
             outcome = blocked
             return outcome
@@ -399,7 +439,7 @@ def run_active_session(backend: SystemBackend, sink: JsonEventSink, *, terminati
         if not backend.arm(initial):
             outcome = SessionOutcome("adapter_unhealthy", "could not arm and verify the B-CAN interface")
             return outcome
-        blocked = _gate(backend, initial, active=True)
+        blocked = _startup_gate(backend, initial, active=True)
         if blocked is not None:
             outcome = blocked
             return outcome

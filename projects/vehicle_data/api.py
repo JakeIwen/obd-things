@@ -51,11 +51,11 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
         if path == "/v1/snapshot":
             return self._json(200, self.broker.snapshot_response())
         if path == "/v1/history":
-            return self._json(200, self.broker.history_response())
+            return self._json(200, self.broker.cached_history_response())
         if path == "/v1/health":
-            return self._json(200, self.broker.health_response())
+            return self._json(200, self.broker.cached_health_response())
         if path == "/v1/diagnostics/dtcs":
-            return self._json(200, self.broker.dtc_response())
+            return self._json(200, self.broker.cached_dtc_response())
         if path == "/v1/metrics":
             return self._json(200, self.broker.list_metrics())
         prefix = "/v1/metrics/"
@@ -236,6 +236,12 @@ class UnixHTTPServer(socketserver.UnixStreamServer):
     execute on the process main thread. The web proxy remains threaded, but this
     privileged local server deliberately handles one bounded request at a time.
     """
+
+    # The web tier is threaded and several dashboard tabs can refresh their
+    # memory-only products together. Keep a bounded accept backlog large enough
+    # for those short requests; observation deadlines still reject stale local
+    # publications after queueing, and request execution remains serialized.
+    request_queue_size = 64
 
     def __init__(self, path: str, broker):
         self.broker = broker

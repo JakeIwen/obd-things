@@ -335,7 +335,15 @@ class VehicleInsightsTests(unittest.TestCase):
         groups["current"] = [record]
         payload = compact_dtc_cache(rows=rows, groups=groups)
         self.cache.write_text(json.dumps(payload))
-        self.assertTrue(self.insights.dtc_response()["available"])
+        response = self.insights.dtc_response()
+        self.assertTrue(response["available"])
+        described = response["groups"]["current"][0]
+        self.assertIn("description", described)
+        self.assertIn("description_source", described)
+        self.assertFalse(described["description_reviewed"])
+        self.assertEqual(
+            response["description_catalog"]["returned_records"], 1
+        )
 
         payload["groups"]["current"][0]["observation_state"] = "unknown"
         self.cache.write_text(json.dumps(payload))
