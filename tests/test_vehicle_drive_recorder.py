@@ -1,5 +1,6 @@
 import argparse
 import contextlib
+import errno
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
@@ -313,6 +314,135 @@ class DriveRecorderTests(unittest.TestCase):
         ):
             check()
 
+    def test_armed_status_retry_recovers_transient_eagain(self):
+        client = mock.Mock()
+        client.request.side_effect = (
+            BlockingIOError(errno.EAGAIN, "temporarily unavailable"),
+            (200, ready_status()),
+        )
+        clock = [10.0]
+        sleeps = []
+
+        def advance(seconds):
+            sleeps.append(seconds)
+            clock[0] += seconds
+
+        check = drive_recorder.CoordinatedSafetyCheck(
+            client,
+            channel=TEST_CHANNEL,
+            interface_reader=lambda: interface(listen_only=False),
+            status_sleep=advance,
+            status_monotonic=lambda: clock[0],
+        )
+
+        self.assertFalse(check().listen_only)
+        self.assertEqual(client.request.call_count, 2)
+        self.assertEqual(sleeps, [0.05])
+
+    def test_status_retry_classifies_only_observed_transient_errors(self):
+        self.assertTrue(
+            drive_recorder._transient_broker_status_error(TimeoutError("timed out"))
+        )
+        self.assertTrue(
+            drive_recorder._transient_broker_status_error(
+                BlockingIOError(errno.EAGAIN, "temporarily unavailable")
+            )
+        )
+        self.assertFalse(
+            drive_recorder._transient_broker_status_error(
+                ConnectionRefusedError("broker absent")
+            )
+        )
+
+    def test_armed_status_retry_accepts_exact_passive_recovery(self):
+        client = mock.Mock()
+        client.request.side_effect = BlockingIOError(
+            errno.EAGAIN, "temporarily unavailable"
+        )
+        states = iter(
+            (
+                interface(listen_only=False),
+                interface(listen_only=True),
+            )
+        )
+        check = drive_recorder.CoordinatedSafetyCheck(
+            client,
+            channel=TEST_CHANNEL,
+            interface_reader=lambda: next(states),
+            status_sleep=mock.Mock(),
+        )
+
+        self.assertTrue(check().listen_only)
+        self.assertEqual(client.request.call_count, 1)
+
+    def test_armed_status_retry_exhaustion_is_bounded_ownership_loss(self):
+        client = mock.Mock()
+        client.request.side_effect = BlockingIOError(
+            errno.EAGAIN, "temporarily unavailable"
+        )
+        clock = [20.0]
+
+        def advance(seconds):
+            clock[0] += seconds
+
+        check = drive_recorder.CoordinatedSafetyCheck(
+            client,
+            channel=TEST_CHANNEL,
+            interface_reader=lambda: interface(listen_only=False),
+            status_sleep=advance,
+            status_monotonic=lambda: clock[0],
+        )
+
+        with self.assertRaisesRegex(
+            drive_recorder.BrokerOwnershipLost,
+            r"attempts=5.*BlockingIOError",
+        ):
+            check()
+        self.assertEqual(
+            client.request.call_count,
+            drive_recorder.BROKER_STATUS_RETRY_ATTEMPTS,
+        )
+
+    def test_timeout_retries_stop_at_deadline_without_using_all_attempts(self):
+        clock = [30.0]
+        client = mock.Mock()
+
+        def timeout(*_args, **_kwargs):
+            clock[0] += 2.0
+            raise TimeoutError("timed out")
+
+        client.request.side_effect = timeout
+        check = drive_recorder.CoordinatedSafetyCheck(
+            client,
+            channel=TEST_CHANNEL,
+            interface_reader=lambda: interface(listen_only=False),
+            status_sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+            status_monotonic=lambda: clock[0],
+        )
+
+        with self.assertRaisesRegex(
+            drive_recorder.BrokerOwnershipLost,
+            r"attempts=3/5.*elapsed=6\.150s.*TimeoutError",
+        ):
+            check()
+        self.assertEqual(client.request.call_count, 3)
+
+    def test_armed_status_retry_does_not_retry_nontransient_error(self):
+        client = mock.Mock()
+        client.request.side_effect = ConnectionRefusedError("broker absent")
+        check = drive_recorder.CoordinatedSafetyCheck(
+            client,
+            channel=TEST_CHANNEL,
+            interface_reader=lambda: interface(listen_only=False),
+        )
+
+        with self.assertRaisesRegex(
+            drive_recorder.BrokerOwnershipLost,
+            "non-transient.*ConnectionRefusedError",
+        ):
+            check()
+        self.assertEqual(client.request.call_count, 1)
+
     def test_initial_gate_requires_armed_once_then_accepts_restoration(self):
         client = mock.Mock()
         client.request.return_value = (200, ready_status())
@@ -338,6 +468,61 @@ class DriveRecorderTests(unittest.TestCase):
         )
         with self.assertRaises(drive_recorder.BrokerOwnershipLost):
             blocked()
+
+    def test_initial_gate_rejects_passive_recovery_before_first_armed_proof(self):
+        client = mock.Mock()
+        client.request.side_effect = BlockingIOError(
+            errno.EAGAIN, "temporarily unavailable"
+        )
+        states = iter(
+            (
+                interface(listen_only=False),
+                interface(listen_only=True),
+            )
+        )
+        check = drive_recorder.InitialArmedSafetyCheck(
+            client,
+            channel=TEST_CHANNEL,
+            interface_reader=lambda: next(states),
+            status_sleep=mock.Mock(),
+        )
+
+        with self.assertRaisesRegex(
+            drive_recorder.BrokerOwnershipLost,
+            "disappeared during recorder startup",
+        ):
+            check()
+
+    def test_daemon_waits_after_ownership_loss_instead_of_crashing(self):
+        client = mock.Mock()
+        client.request.return_value = (200, ready_status())
+        args = SimpleNamespace(
+            socket="/unused.sock",
+            state_path=Path("/unused-state.json"),
+            out_root=Path("/unused-output"),
+        )
+        sleep = mock.Mock(side_effect=KeyboardInterrupt)
+        with (
+            mock.patch.object(
+                drive_recorder,
+                "record_one_interval",
+                side_effect=drive_recorder.BrokerOwnershipLost(
+                    "bounded broker-status attribution exhausted"
+                ),
+            ) as record,
+            mock.patch.object(drive_recorder, "write_state") as write_state,
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            drive_recorder.run_daemon(
+                args,
+                capture.DiskPolicy(300, 200),
+                client=client,
+                sleep=sleep,
+            )
+
+        record.assert_called_once()
+        sleep.assert_called_once_with(drive_recorder.WAIT_SECONDS)
+        self.assertEqual(write_state.call_args.kwargs["status"], "waiting")
 
     def test_validate_args_requires_explicit_execute_confirmation(self):
         parser = drive_recorder.build_parser()

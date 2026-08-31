@@ -25,6 +25,7 @@ import argparse
 from contextlib import ExitStack
 import dataclasses
 import datetime as dt
+import errno
 import json
 import math
 from pathlib import Path
@@ -76,6 +77,9 @@ DEFAULT_CONDITIONS = (
 )
 WAIT_SECONDS = 1.0
 STATUS_TIMEOUT_SECONDS = 2.0
+BROKER_STATUS_RETRY_ATTEMPTS = 5
+BROKER_STATUS_RETRY_DEADLINE_SECONDS = 5.0
+BROKER_STATUS_RETRY_DELAYS_SECONDS = (0.05, 0.1, 0.25, 0.5)
 
 
 class DriveRecorderError(RuntimeError):
@@ -120,6 +124,75 @@ def read_broker_status(
     if payload.get("service") != "van-telemetry":
         raise DriveRecorderError("broker status did not identify van-telemetry")
     return payload
+
+
+def _transient_broker_status_error(exc: Exception) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    return bool(
+        isinstance(exc, BlockingIOError)
+        and exc.errno in (errno.EAGAIN, errno.EWOULDBLOCK)
+    )
+
+
+def read_broker_status_bounded(
+    client: TelemetryClient,
+    *,
+    initial_interface: capture.InterfaceState,
+    interface_reader: Callable[[], capture.InterfaceState],
+    sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> tuple[dict[str, object] | None, capture.InterfaceState]:
+    """Retry transient status I/O while continuously failing closed.
+
+    A verified passive readback ends the retry successfully because broker
+    attribution is no longer required.  An authoritative non-200/malformed
+    status, an interface-read failure, or bounded retry exhaustion remains an
+    ownership loss.  This helper never opens or configures CAN.
+    """
+
+    started = monotonic()
+    interface = initial_interface
+    last_error: Exception | None = None
+    attempts_used = 0
+    for attempt in range(1, BROKER_STATUS_RETRY_ATTEMPTS + 1):
+        attempts_used = attempt
+        try:
+            return read_broker_status(client), interface
+        except Exception as exc:
+            if not _transient_broker_status_error(exc):
+                raise BrokerOwnershipLost(
+                    "armed broker status failed with a non-transient error: "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
+            last_error = exc
+        try:
+            interface = interface_reader()
+        except Exception as exc:
+            raise BrokerOwnershipLost(
+                "broker status was transiently unavailable and exact interface "
+                f"revalidation failed: {type(exc).__name__}: {exc}"
+            ) from exc
+        if interface.listen_only:
+            return None, interface
+
+        elapsed = max(0.0, monotonic() - started)
+        remaining = BROKER_STATUS_RETRY_DEADLINE_SECONDS - elapsed
+        if attempt >= BROKER_STATUS_RETRY_ATTEMPTS or remaining <= 0:
+            break
+        delay = BROKER_STATUS_RETRY_DELAYS_SECONDS[
+            min(attempt - 1, len(BROKER_STATUS_RETRY_DELAYS_SECONDS) - 1)
+        ]
+        sleep(min(delay, remaining))
+
+    elapsed = max(0.0, monotonic() - started)
+    assert last_error is not None
+    raise BrokerOwnershipLost(
+        "bounded broker-status attribution exhausted while the interface "
+        f"remained armed: attempts={attempts_used}/"
+        f"{BROKER_STATUS_RETRY_ATTEMPTS}, "
+        f"elapsed={elapsed:.3f}s, last={type(last_error).__name__}: {last_error}"
+    ) from last_error
 
 
 def broker_armed_ready(
@@ -430,11 +503,15 @@ class CoordinatedSafetyCheck:
         expected_usb_serial: str | None = None,
         expected_dev_id: int | None = None,
         interface_reader: Callable[[], capture.InterfaceState] | None = None,
+        status_sleep: Callable[[float], None] = time.sleep,
+        status_monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.client = client
         self.channel = channel
         self.expected_usb_serial = expected_usb_serial
         self.expected_dev_id = expected_dev_id
+        self.status_sleep = status_sleep
+        self.status_monotonic = status_monotonic
         self.interface_reader = interface_reader or (
             lambda: query_interface(
                 channel=self.channel,
@@ -447,15 +524,20 @@ class CoordinatedSafetyCheck:
         interface = self.interface_reader()
         if interface.listen_only:
             return interface
-        try:
-            status = read_broker_status(self.client)
-        except Exception as exc:
-            raise DriveRecorderError(
-                "armed interface cannot be attributed to the broker: "
-                f"{type(exc).__name__}: {exc}"
-            ) from exc
+        status, current_interface = read_broker_status_bounded(
+            self.client,
+            initial_interface=interface,
+            interface_reader=self.interface_reader,
+            sleep=self.status_sleep,
+            monotonic=self.status_monotonic,
+        )
+        if status is None:
+            return current_interface
         if not broker_armed_ready(status, expected_channel=self.channel):
-            raise DriveRecorderError(
+            current_interface = self.interface_reader()
+            if current_interface.listen_only:
+                return current_interface
+            raise BrokerOwnershipLost(
                 "armed interface is not owned by the reviewed broker active-drive interval"
             )
         return interface
@@ -472,15 +554,19 @@ class InitialArmedSafetyCheck(CoordinatedSafetyCheck):
         if self.initial_armed_gate_passed:
             return super().__call__()
         interface = self.interface_reader()
-        try:
-            status = read_broker_status(self.client)
-        except Exception as exc:
-            raise BrokerOwnershipLost(
-                "broker status disappeared during the initial armed gate: "
-                f"{type(exc).__name__}: {exc}"
-            ) from exc
-        if interface.listen_only or not broker_armed_ready(
+        status, current_interface = read_broker_status_bounded(
+            self.client,
+            initial_interface=interface,
+            interface_reader=self.interface_reader,
+            sleep=self.status_sleep,
+            monotonic=self.status_monotonic,
+        )
+        if (
+            status is None
+            or current_interface.listen_only
+            or not broker_armed_ready(
             status, expected_channel=self.channel
+            )
         ):
             raise BrokerOwnershipLost(
                 "broker-owned armed mode disappeared during recorder startup"
@@ -499,6 +585,8 @@ class AuxiliaryBcanSafetyCheck:
         *,
         require_initial_armed: bool = False,
         interface_reader: Callable[[], capture.InterfaceState] | None = None,
+        status_sleep: Callable[[float], None] = time.sleep,
+        status_monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         if route.role != "b-can":
             raise ValueError("auxiliary safety check requires a B-CAN route")
@@ -506,6 +594,8 @@ class AuxiliaryBcanSafetyCheck:
         self.route = route
         self.require_initial_armed = require_initial_armed
         self.initial_gate_passed = False
+        self.status_sleep = status_sleep
+        self.status_monotonic = status_monotonic
         self.interface_reader = interface_reader or (
             lambda: query_interface(
                 channel=route.channel,
@@ -524,7 +614,19 @@ class AuxiliaryBcanSafetyCheck:
                     "B-CAN auxiliary ownership disappeared during recorder startup"
                 )
             return interface
-        status = read_broker_status(self.client)
+        status, current_interface = read_broker_status_bounded(
+            self.client,
+            initial_interface=interface,
+            interface_reader=self.interface_reader,
+            sleep=self.status_sleep,
+            monotonic=self.status_monotonic,
+        )
+        if status is None:
+            if self.require_initial_armed and not self.initial_gate_passed:
+                raise BrokerOwnershipLost(
+                    "B-CAN auxiliary ownership disappeared during recorder startup"
+                )
+            return current_interface
         current = broker_secondary_route(status, "b-can")
         if current != self.route or current.ownership != "broker_auxiliary_drive_companion":
             raise BrokerOwnershipLost(

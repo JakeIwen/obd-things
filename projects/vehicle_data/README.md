@@ -633,6 +633,15 @@ cleanly ends all three recorders. A complete `capture-set.json` is written only
 after every role finalizes successfully; one missing role, identity change,
 drop, or recorder failure makes the campaign explicitly incomplete.
 
+An armed recorder status check retries only the observed transient Unix-socket
+conditions (`EAGAIN`/`EWOULDBLOCK` and timeout), for at most five attempts and a
+nominal five-second deadline. Every failed attempt revalidates the exact CAN
+interface. Verified listen-only restoration ends the ownership check cleanly;
+a non-transient error, failed revalidation, or bounded exhaustion ends the
+current capture as broker-ownership loss and returns the daemon to its wait
+loop. It does not open or configure CAN, weaken the initial broker-owned armed
+gate, or exit into a systemd restart loop.
+
 The daemon loops after a successful finalization: while parked it opens no CAN
 socket and waits for the next broker-owned running interval, then creates a new
 timestamped campaign automatically. Consequently the installed service does
