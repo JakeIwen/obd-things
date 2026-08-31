@@ -38,6 +38,9 @@ dash-minus-ICS difference was 11.140460 mi. Their 0.442929 mi difference is
 consistent with accumulated speed-integration error over about 200.7 mi and
 does not show material baseline drift. It remains inappropriate to silently
 calibrate away the offset without identifying why the modules disagree.
+The owner-provided dash endpoints themselves rose from 53,203 to 53,404 mi,
+or 201 mi, versus 200.673 mi from the three C-CAN speed integrals—a 0.327 mi
+difference consistent with whole-mile display rounding and integration error.
 
 ## Capture inventory
 
