@@ -677,6 +677,176 @@
       ]
     },
     {
+      "name": "candump-diagnostic-wire-ics",
+      "description": "Extract exact physical ICS 22/62 exchanges from 1-16 chronological saved B-CAN chunks.",
+      "profile": "can-log-batch",
+      "source_paths": [
+        "lib",
+        "tools/can_timeseries_correlate.py",
+        "tools/candump_diagnostic_wire.py"
+      ],
+      "minimum_inputs": 1,
+      "maximum_inputs": 16,
+      "argv": [
+        "{source:tools/candump_diagnostic_wire.py}",
+        "ics_bcan",
+        "--capture-channel",
+        "can1",
+        "--allow-van-compute-result",
+        "--output",
+        "{result:ics_bcan_wire.jsonl}",
+        "{inputs}"
+      ],
+      "outputs": [
+        "ics_bcan_wire.jsonl",
+        "ics_bcan_wire.summary.json"
+      ]
+    },
+    {
+      "name": "can-timeseries-correlate-ics",
+      "description": "Correlate ICS DID 2001 against 1-16 chronological saved B-CAN chunks.",
+      "profile": "can-log-batch",
+      "source_paths": [
+        "lib",
+        "tools/can_timeseries_correlate.py"
+      ],
+      "minimum_inputs": 2,
+      "maximum_inputs": 17,
+      "argv": [
+        "{source:tools/can_timeseries_correlate.py}",
+        "--module",
+        "ics_bcan",
+        "--wire",
+        "{input:0}",
+        "--capture-channel",
+        "can1",
+        "--did",
+        "2001",
+        "--reference-field",
+        "bits:big:7:24:unsigned",
+        "--match",
+        "nearest",
+        "--radius-ms",
+        "100",
+        "--minimum-samples",
+        "20",
+        "--minimum-coverage",
+        "0.5",
+        "--minimum-distinct",
+        "4",
+        "--top",
+        "100",
+        "{arguments}",
+        "--allow-van-compute-result",
+        "--output",
+        "{result:report.json}",
+        "{inputs:1}"
+      ],
+      "outputs": [
+        "report.json"
+      ]
+    },
+    {
+      "name": "can-cross-bus-speed-canch-unique",
+      "description": "Rank coarse fields on the seven verified CAN-CH-unique high-rate IDs against synchronized C-CAN 0x101 speed.",
+      "profile": "can-log-batch",
+      "source_paths": [
+        "lib/signal_fields.py",
+        "tools/__init__.py",
+        "tools/can_capture_summary.py",
+        "tools/can_cross_bus_speed.py"
+      ],
+      "minimum_inputs": 2,
+      "maximum_inputs": 2,
+      "argv": [
+        "{source:tools/can_cross_bus_speed.py}",
+        "{input:0}",
+        "{input:1}",
+        "--reference-channel",
+        "can0",
+        "--candidate-channel",
+        "can2",
+        "--candidate-id",
+        "0DA",
+        "--candidate-id",
+        "0DC",
+        "--candidate-id",
+        "0F1",
+        "--candidate-id",
+        "106",
+        "--candidate-id",
+        "10E",
+        "--candidate-id",
+        "117",
+        "--candidate-id",
+        "1F6",
+        "--radius-ms",
+        "20",
+        "--minimum-speed-kph",
+        "5",
+        "--minimum-samples",
+        "100",
+        "--minimum-distinct",
+        "8",
+        "--top",
+        "100",
+        "--output",
+        "{result:report.json}"
+      ],
+      "outputs": [
+        "report.json"
+      ]
+    },
+    {
+      "name": "can-cross-bus-speed-canch-0dc-bits",
+      "description": "Targeted 12/13/14/16-bit geometry search on shortlisted CAN-CH ID 0x0DC against synchronized C-CAN 0x101 speed.",
+      "profile": "can-log-batch",
+      "source_paths": [
+        "lib/signal_fields.py",
+        "tools/__init__.py",
+        "tools/can_capture_summary.py",
+        "tools/can_cross_bus_speed.py"
+      ],
+      "minimum_inputs": 2,
+      "maximum_inputs": 2,
+      "argv": [
+        "{source:tools/can_cross_bus_speed.py}",
+        "{input:0}",
+        "{input:1}",
+        "--reference-channel",
+        "can0",
+        "--candidate-channel",
+        "can2",
+        "--candidate-id",
+        "0DC",
+        "--bit-search-id",
+        "0DC",
+        "--bit-search-length",
+        "12",
+        "--bit-search-length",
+        "13",
+        "--bit-search-length",
+        "14",
+        "--bit-search-length",
+        "16",
+        "--radius-ms",
+        "20",
+        "--minimum-speed-kph",
+        "5",
+        "--minimum-samples",
+        "100",
+        "--minimum-distinct",
+        "8",
+        "--top",
+        "100",
+        "--output",
+        "{result:report.json}"
+      ],
+      "outputs": [
+        "report.json"
+      ]
+    },
+    {
       "name": "can-event-window",
       "description": "Extract a bounded exact frame window from 1-16 saved candump logs; offline only.",
       "profile": "can-log-batch",
