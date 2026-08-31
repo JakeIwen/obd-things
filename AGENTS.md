@@ -31,6 +31,26 @@ when that file is absent.
    data, or working outside a single well-documented project. It preserves the cross-project constraints
    and environment facts migrated from Claude's external memory store.
 
+## MacBook-managed `~/scripts` tree
+
+`/home/pi/scripts` (equivalently `~/scripts`) is managed from Jacob's MacBook,
+which pushes updates into that directory on vanpi. Treat the entire tree as
+read-only deployment output on this machine.
+
+- Do not create, edit, delete, format, or copy files under `/home/pi/scripts`,
+  including `python-automation/` and `van-dashboard-preview/`.
+- Read-only inspection is allowed when diagnosing the deployed dashboard.
+- For dashboard changes, give the dashboard agent precise integration
+  instructions or work in the authoritative MacBook source tree after its
+  location is provided; never patch the vanpi deployment copy as the source of
+  truth.
+- Do not install or restart dashboard services based on a locally modified
+  `~/scripts` file. A MacBook-managed deployment or explicit owner-directed
+  emergency procedure must own that change.
+
+Local edits can be overwritten by the next MacBook push and can create a
+misleading split between deployed files and their authoritative source.
+
 ## Data locations (imposed 2026-07-08; do not resurrect `dumps/` directories)
 
 All machine-written output goes under `tmp/`, which is gitignored wholesale. Nothing a tool writes is
