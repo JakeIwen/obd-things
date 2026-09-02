@@ -21,6 +21,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from lib import can_operation_state, diagnostic_safety
+from projects.vehicle_data.engine_off_voltage import EngineOffVoltageCapture
 from projects.vehicle_data.metrics import METRICS, MetricDefinition
 from projects.vehicle_data.models import (
     AcquisitionResult,
@@ -514,6 +515,7 @@ class TelemetryBroker:
         insights=None,
         history_interval_seconds: float = 5.0,
         usb_can_monitor=None,
+        engine_off_voltage_capture=None,
     ):
         if acquirer is None:
             raise ValueError(
@@ -539,6 +541,7 @@ class TelemetryBroker:
         self.insights = insights
         self.history_interval_seconds = history_interval_seconds
         self.usb_can_monitor = usb_can_monitor
+        self.engine_off_voltage_capture = engine_off_voltage_capture
 
         self._lock = threading.RLock()
         # Prevent the passive collector from racing a client-triggered active
@@ -604,6 +607,7 @@ class TelemetryBroker:
         self._passive_engine_evidence = "unknown"
         self._passive_stop_evidence_streak = 0
         self._passive_unknown_evidence_streak = 0
+        self._engine_epoch_running = False
         self._active_drive_blocked_reason: str | None = None
         self._active_drive_blocked_detail: str | None = None
         self._active_drive_restoration_latched = False
@@ -2133,6 +2137,26 @@ class TelemetryBroker:
             }
         else:
             current_owner = None
+        if self.engine_off_voltage_capture is None:
+            engine_off_voltage = {
+                "enabled": False,
+                "state": "disabled",
+                "detail": "engine-off voltage capture is not configured",
+            }
+        else:
+            try:
+                engine_off_voltage = (
+                    self.engine_off_voltage_capture.status_snapshot()
+                )
+            except Exception as exc:
+                engine_off_voltage = {
+                    "enabled": True,
+                    "state": "error",
+                    "last_error": (
+                        "engine-off voltage status failed: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                }
         return {
             "service": "van-telemetry",
             "started_at": self._started_at,
@@ -2146,6 +2170,7 @@ class TelemetryBroker:
             "data_quality": data_quality,
             "active_drive": active_drive,
             "auxiliary_drive": auxiliary_drive,
+            "engine_off_voltage": engine_off_voltage,
             "interface_reconcile": interface_reconcile,
             "vehicle_state": vehicle_state,
             "inflight": inflight,
@@ -2731,6 +2756,75 @@ class TelemetryBroker:
             self._passive_unknown_evidence_streak += 1
         return accepted
 
+    def _engine_off_helpers_are_passive(self) -> bool:
+        with self._lock:
+            active = dict(self._active_drive)
+            auxiliary = dict(self._auxiliary_drive)
+        if (
+            active.get("state") not in ("idle", "disabled")
+            or active.get("interface_mode") != "listen_only"
+            or active.get("helper_pid") is not None
+            or active.get("restoration_failed") is True
+            or self._active_drive_restoration_latched
+        ):
+            return False
+        if not self.auxiliary_drive_enabled:
+            return True
+        return bool(
+            auxiliary.get("state") == "idle"
+            and auxiliary.get("interface_mode") == "listen_only"
+            and auxiliary.get("helper_pid") is None
+            and auxiliary.get("restoration_failed") is not True
+            and not self._auxiliary_drive_restoration_latched
+        )
+
+    def _arm_engine_off_voltage_after_helper(
+        self, outcome: dict[str, object]
+    ) -> None:
+        capture = self.engine_off_voltage_capture
+        if capture is None or outcome.get("reason") != "engine_not_running":
+            return
+        if (
+            outcome.get("restored") is not True
+            or outcome.get("interface_mode") != "listen_only"
+            or not self._engine_off_helpers_are_passive()
+        ):
+            capture.cancel(
+                "engine stopped but exact passive helper restoration was not verified"
+            )
+            return
+        capture.arm(engine_stopped_at=datetime.now(timezone.utc))
+        self._engine_epoch_running = False
+
+    def _update_engine_off_voltage_capture(
+        self, result: AcquisitionResult
+    ) -> None:
+        capture = self.engine_off_voltage_capture
+        if capture is None:
+            return
+        if self._passive_engine_evidence == "running":
+            self._engine_epoch_running = True
+            capture.cancel("engine-running evidence returned before capture completed")
+            return
+        status = capture.status_snapshot()
+        if status.get("state") == "collecting":
+            capture.observe(result)
+            return
+        epoch_ended = self._engine_epoch_running and (
+            (
+                self._passive_engine_evidence == "stopped"
+                and self._passive_stop_evidence_streak >= 2
+            )
+            or (
+                self._passive_engine_evidence == "unknown"
+                and self._passive_unknown_evidence_streak >= 5
+            )
+        )
+        if epoch_ended and self._engine_off_helpers_are_passive():
+            capture.arm(engine_stopped_at=datetime.now(timezone.utc))
+            self._engine_epoch_running = False
+            capture.observe(result)
+
     def _run_active_drive_if_ready(self) -> None:
         if not self.active_drive_enabled or self.active_drive_supervisor is None:
             return
@@ -2958,6 +3052,7 @@ class TelemetryBroker:
                 )
         if reason == "restoration_failed" or outcome.get("restored") is False:
             self._active_drive_restoration_latched = True
+        self._arm_engine_off_voltage_after_helper(outcome)
         self._refresh_interface_status()
 
     def _collector_loop(self) -> None:
@@ -2981,6 +3076,7 @@ class TelemetryBroker:
                         self._interface_reconcile = reconcile
                 result = self.acquire("battery.voltage", "passive")
                 self._collect_passive_powertrain(result)
+                self._update_engine_off_voltage_capture(result)
                 self._run_active_drive_if_ready()
                 with self._lock:
                     self._collector_cycles += 1
@@ -3092,6 +3188,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="seconds between cache snapshots stored in SQLite (default: 5)",
     )
     parser.add_argument(
+        "--engine-off-voltage-state",
+        help=(
+            "atomic engine-off passive-voltage sample; defaults beside the "
+            "history database"
+        ),
+    )
+    parser.add_argument(
         "--dtc-cache",
         default=str(DEFAULT_DTC_CACHE),
         help="atomic saved-DTC JSON cache exposed read-only to the dashboard",
@@ -3194,6 +3297,13 @@ def main(argv=None) -> int:
         read_timeout=min(args.read_timeout, 0.5),
     )
     usb_can_monitor = UsbCanIncidentMonitor()
+    engine_off_voltage_path = pathlib.Path(
+        args.engine_off_voltage_state
+        or pathlib.Path(args.history_db).with_name("engine-off-voltage.json")
+    )
+    engine_off_voltage_capture = EngineOffVoltageCapture(
+        engine_off_voltage_path
+    )
     active_drive_enabled = not args.no_active_drive
     active_supervisor = None
     auxiliary_supervisor = None
@@ -3242,6 +3352,7 @@ def main(argv=None) -> int:
         insights=insights,
         history_interval_seconds=args.history_interval,
         usb_can_monitor=usb_can_monitor,
+        engine_off_voltage_capture=engine_off_voltage_capture,
     )
     broker_holder["broker"] = broker
     broker.start_usb_monitor()

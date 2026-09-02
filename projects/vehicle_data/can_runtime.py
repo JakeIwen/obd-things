@@ -461,6 +461,8 @@ class RoleAwareVoltageAcquirer:
         delegate_factory=VoltageAcquirer,
         inhibit_reader=can_operation_state.active_inhibits,
         wake_once=can_wake.wake_once,
+        wake_authorization_begin=None,
+        wake_authorization_end=None,
         wake_prearm_check=None,
     ) -> None:
         self.manager = manager
@@ -469,6 +471,16 @@ class RoleAwareVoltageAcquirer:
         self.delegate_factory = delegate_factory
         self.inhibit_reader = inhibit_reader
         self.wake_once = wake_once
+        self.wake_authorization_begin = (
+            wake_authorization_begin
+            if wake_authorization_begin is not None
+            else lambda: ()
+        )
+        self.wake_authorization_end = (
+            wake_authorization_end
+            if wake_authorization_end is not None
+            else lambda: None
+        )
         self.wake_prearm_check = (
             wake_prearm_check
             if wake_prearm_check is not None
@@ -522,6 +534,32 @@ class RoleAwareVoltageAcquirer:
             )
 
     def _wake_b_can(self) -> AcquisitionResult:
+        try:
+            conflicts = tuple(self.wake_authorization_begin())
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            return failure(
+                metric="battery.voltage",
+                unit="V",
+                reason="source_unavailable",
+                detail=f"broker wake authorization failed closed: {exc}",
+                bus=B_CAN_ROLE,
+                acquisition="wake_assisted",
+            )
+        if conflicts:
+            return failure(
+                metric="battery.voltage",
+                unit="V",
+                reason="can_busy",
+                detail="; ".join(str(conflict) for conflict in conflicts),
+                bus=B_CAN_ROLE,
+                acquisition="wake_assisted",
+            )
+        try:
+            return self._wake_b_can_authorized()
+        finally:
+            self.wake_authorization_end()
+
+    def _wake_b_can_authorized(self) -> AcquisitionResult:
         try:
             wake = self.wake_once(
                 B_CAN_ROLE,

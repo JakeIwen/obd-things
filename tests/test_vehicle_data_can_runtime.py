@@ -483,11 +483,15 @@ class RoleAwareSourceTests(unittest.TestCase):
                 voltage=12.45,
             )
         )
+        authorize = mock.Mock(return_value=())
+        release = mock.Mock()
         prearm = mock.Mock(return_value=())
         source = RoleAwareVoltageAcquirer(
             self.manager,
             delegate_factory=factory,
             wake_once=wake,
+            wake_authorization_begin=authorize,
+            wake_authorization_end=release,
             wake_prearm_check=prearm,
         )
 
@@ -506,6 +510,66 @@ class RoleAwareSourceTests(unittest.TestCase):
         wake.assert_called_once_with(
             "b-can", prearm_check=prearm, manager=self.manager
         )
+        authorize.assert_called_once_with()
+        release.assert_called_once_with()
+
+    def test_wake_mode_returns_passive_sample_before_requesting_authorization(self):
+        passive = success(
+            metric="battery.voltage",
+            unit="V",
+            value=14.2,
+            source="ccan.broadcast.0x41a",
+            bus="c-can",
+            acquisition="passive",
+            quality="verified",
+            observed_monotonic=100.0,
+        )
+        ccan = mock.Mock()
+        ccan.acquire.return_value = passive
+        authorize = mock.Mock(
+            return_value=("broker has verified running vehicle evidence",)
+        )
+        wake = mock.Mock()
+        source = RoleAwareVoltageAcquirer(
+            self.manager,
+            delegate_factory=mock.Mock(return_value=ccan),
+            wake_once=wake,
+            wake_authorization_begin=authorize,
+        )
+
+        result = source.acquire("wake_if_asleep")
+
+        self.assertIs(result, passive)
+        authorize.assert_not_called()
+        wake.assert_not_called()
+
+    def test_wake_mode_applies_authorization_only_after_both_roles_are_asleep(self):
+        asleep = mock.Mock()
+        asleep.acquire.return_value = SimpleNamespace(
+            available=False, reason="bus_asleep"
+        )
+        authorize = mock.Mock(
+            return_value=("broker vehicle state is not safe for a parked wake",)
+        )
+        release = mock.Mock()
+        wake = mock.Mock()
+        source = RoleAwareVoltageAcquirer(
+            self.manager,
+            delegate_factory=mock.Mock(side_effect=(asleep, asleep)),
+            wake_once=wake,
+            wake_authorization_begin=authorize,
+            wake_authorization_end=release,
+            wake_prearm_check=lambda: (),
+        )
+
+        result = source.acquire("wake_if_asleep")
+
+        self.assertFalse(result.available)
+        self.assertEqual(result.reason, "can_busy")
+        self.assertIn("not safe for a parked wake", result.detail)
+        authorize.assert_called_once_with()
+        release.assert_not_called()
+        wake.assert_not_called()
 
     def test_wake_restoration_failure_is_never_published(self):
         asleep = mock.Mock()

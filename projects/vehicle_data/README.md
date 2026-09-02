@@ -1361,6 +1361,16 @@ unreachable, but notification state is left unchanged so an undelivered low or
 recovery edge is not consumed. `--no-notify` likewise samples/logs without
 mutating alert state.
 
+The broker also retains one explicit engine-off baseline without transmitting.
+After a qualified running epoch ends with exact helper restoration, it observes
+the ordinary passive voltage tail for 30 seconds and atomically saves the newest
+fresh verified sample as `engine-off-voltage.json` beside the configured history
+database. A restarted engine cancels the pending capture. If the bus sleeps
+before a passive sample appears, the event records no replacement and never
+falls back to a wake. `status.engine_off_voltage` exposes the bounded capture
+state; the van dashboard compares the saved sample timestamp with scheduled
+`voltage_mon` history and displays whichever is newer.
+
 ## Validation
 
 Offline tests use fake interfaces, locks, sources, and clocks. They cover

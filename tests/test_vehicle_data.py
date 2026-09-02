@@ -659,6 +659,77 @@ class BrokerTests(unittest.TestCase):
         self.assertIsNone(broker._wake_authorization_owner)
         self.assertIsNone(broker._wake_authorization_deadline)
 
+    def test_engine_off_capture_arms_once_after_qualified_passive_stop(self):
+        capture = mock.Mock()
+        capture.status_snapshot.return_value = {"state": "idle"}
+        broker = TelemetryBroker(
+            acquirer=FakeAcquirer(),
+            engine_off_voltage_capture=capture,
+        )
+        result = FakeAcquirer().acquire("passive")
+
+        broker._passive_engine_evidence = "running"
+        broker._update_engine_off_voltage_capture(result)
+        self.assertTrue(broker._engine_epoch_running)
+        capture.cancel.assert_called_once()
+
+        broker._passive_engine_evidence = "stopped"
+        broker._passive_stop_evidence_streak = 2
+        broker._update_engine_off_voltage_capture(result)
+
+        capture.arm.assert_called_once()
+        capture.observe.assert_called_once_with(result)
+        self.assertFalse(broker._engine_epoch_running)
+
+    def test_engine_off_capture_arms_after_restored_helper_stop(self):
+        capture = mock.Mock()
+        capture.status_snapshot.return_value = {"state": "idle"}
+        broker = TelemetryBroker(
+            acquirer=FakeAcquirer(),
+            active_drive_supervisor=mock.Mock(),
+            active_drive_enabled=True,
+            engine_off_voltage_capture=capture,
+        )
+        broker._active_drive.update(
+            state="idle",
+            reason="engine_not_running",
+            interface_mode="listen_only",
+            helper_pid=None,
+            restoration_failed=False,
+        )
+
+        broker._arm_engine_off_voltage_after_helper(
+            {
+                "reason": "engine_not_running",
+                "restored": True,
+                "interface_mode": "listen_only",
+            }
+        )
+
+        capture.arm.assert_called_once()
+        capture.cancel.assert_not_called()
+
+    def test_engine_off_capture_rejects_unverified_helper_restoration(self):
+        capture = mock.Mock()
+        capture.status_snapshot.return_value = {"state": "idle"}
+        broker = TelemetryBroker(
+            acquirer=FakeAcquirer(),
+            active_drive_supervisor=mock.Mock(),
+            active_drive_enabled=True,
+            engine_off_voltage_capture=capture,
+        )
+
+        broker._arm_engine_off_voltage_after_helper(
+            {
+                "reason": "engine_not_running",
+                "restored": False,
+                "interface_mode": "armed_diagnostic",
+            }
+        )
+
+        capture.arm.assert_not_called()
+        capture.cancel.assert_called_once()
+
     def test_wake_mode_has_independent_fifteen_minute_cooldown(self):
         clock = FakeClock()
         acquirer = FakeAcquirer()
