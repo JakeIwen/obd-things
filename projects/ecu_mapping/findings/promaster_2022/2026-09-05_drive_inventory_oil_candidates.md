@@ -1,5 +1,13 @@
 # New drive evidence and engine-oil candidates — 2026-09-05
 
+Implementation follow-up: the owner authorized all three next items. Commit
+`3cc8c4f` now repairs typed recorder recovery, provides the bounded two-request
+parked support checker, and integrates `engine.vvt_oil_temperature` into the
+guarded running poller, history, and telemetry gauge. It was deployed asleep
+at 02:42 MDT with zero CAN TX change. Live `F45C` and direct no-session `069F`
+validation remain pending an ignition-on/engine-off vehicle window; the
+research evidence below does not claim those checks occurred.
+
 ## Recording inventory
 
 The archive contains 14 new broker-drive intervals since the August 31 recorder

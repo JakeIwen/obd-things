@@ -953,6 +953,24 @@ terminal detail instead of replacing it with only the recovery condition.
 
 ## Current vanpi deployment
 
+Deployment update, 2026-09-05 02:42 MDT: `3cc8c4f` repaired capture-error
+propagation and deployed the fixed optional `069F` profile, broker metric,
+history entry, and explicitly labeled VVT temperature card. Broker and recorder
+are active/enabled with zero restarts; recorder is waiting with no `candump`
+child, collector/historian are advancing, and both web listeners are active.
+All three roles remained exact passive/ERROR-ACTIVE without an inhibit, and
+TX stayed at 38,567/1,246/0. The van was asleep, so this deployment sent no
+CAN frame and does not establish direct no-session `069F` support. The bounded
+`F45C`/`069F` parked checker is prepared but awaits ignition-on/engine-off.
+Focused compute job `20260905T083650Z-daae21e3` passed 132 tests and 76
+subtests, including real capture cleanup and optional temperature cadence /
+failure isolation. A broader pass had 211 successes and seven known
+Pi-sandbox read-only-lock-path failures; it is not a full-suite pass. A real
+Firefox render check showed 204.8 °F for a synthetic fresh VVT sample and a
+dash at 16-second staleness, with no 800-pixel portrait overflow. Those
+synthetic values were confined to the isolated browser and never published to
+the broker or historian.
+
 Deployment update, 2026-08-31 01:22 MDT: commit `bc8c583` bounded the drive
 recorder's broker-status recovery and is pushed to `origin/master`. The failed
 unit's 46-restart start-limit was cleared after the broker reported the van
