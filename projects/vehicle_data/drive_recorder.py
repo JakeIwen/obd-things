@@ -71,7 +71,7 @@ DEFAULT_OUT_ROOT = (
 DEFAULT_REQUIRED_MOUNT = Path("/mnt/EXFAT512")
 DEFAULT_STATE_PATH = REPO / "tmp" / "vehicle_data" / "drive-recorder-state.json"
 DEFAULT_CONDITIONS = (
-    "ordinary driving; broker-owned fixed PCM 01A1/06DA and RF Hub polling; "
+    "ordinary driving; broker-owned fixed PCM 01A1/06DA/069F and RF Hub polling; "
     "serial-resolved synchronized C-CAN, B-CAN, and CAN-CH receive-only companions; "
     "no external diagnostic client"
 )
@@ -86,8 +86,8 @@ class DriveRecorderError(RuntimeError):
     """A broker-ownership, interface, storage, or recorder gate failed."""
 
 
-class BrokerOwnershipLost(DriveRecorderError):
-    """The active-drive epoch ended during a bounded recorder start race."""
+class BrokerOwnershipLost(DriveRecorderError, capture.RecoverableCaptureError):
+    """Broker attribution was lost; recover only after successful capture cleanup."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -918,6 +918,8 @@ def record_one_interval(
                     f"{role}: {type(exc).__name__}: {exc}"
                     for role, exc in sorted(failures.items())
                 )
+                if all(isinstance(exc, BrokerOwnershipLost) for exc in failures.values()):
+                    raise BrokerOwnershipLost("secondary ownership lost: " + detail)
                 raise DriveRecorderError(
                     "required secondary recorder failed: " + detail
                 )
@@ -989,6 +991,9 @@ def record_one_interval(
                 "secondary recorder cleanup timed out: " + ", ".join(alive)
             )
         if main_error is not None:
+            if isinstance(main_error, BrokerOwnershipLost):
+                # A concurrent secondary storage/cleanup failure remains fatal.
+                secondary_health_check()
             if isinstance(main_error, capture.CaptureError) and (
                 "required start CAN ID" in str(main_error)
             ):

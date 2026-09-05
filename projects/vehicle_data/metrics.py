@@ -303,6 +303,36 @@ CRANKSHAFT_TORQUE = MetricDefinition(
 )
 
 
+VVT_OIL_TEMPERATURE = MetricDefinition(
+    name="engine.vvt_oil_temperature",
+    unit="°F",
+    value_type="number",
+    stale_after_seconds=15.0,
+    passive_min_interval_seconds=0.0,
+    minimum=-83.2,
+    maximum=375.8,
+    sources=(
+        SourceDefinition(
+            name="pcm.did.069f",
+            bus="c-can",
+            bitrate=500000,
+            acquisition_class="physical_read_data_by_identifier",
+            quality="observed_alfa_scale",
+            provenance=(
+                "projects/ecu_mapping/findings/promaster_2022/"
+                "2026-07-27_pcm_plots_loaded_drive_mapping.md; "
+                "Alfa-labeled VVT Oil Temperature, u8 - 64 °C, converted to °F; "
+                "sensor/model relationship to sump oil remains unresolved"
+            ),
+            side_effects=(
+                "engine-running-only fixed physical 22 069F in the coordinated "
+                "C-CAN interval; five-second cadence, no session change"
+            ),
+        ),
+    ),
+)
+
+
 ESTIMATED_CRANKSHAFT_POWER = MetricDefinition(
     name="engine.crankshaft_power",
     unit="hp",
@@ -555,6 +585,7 @@ METRICS = {
         VEHICLE_SPEED,
         TARGET_CRANKSHAFT_TORQUE,
         CRANKSHAFT_TORQUE,
+        VVT_OIL_TEMPERATURE,
         ESTIMATED_CRANKSHAFT_POWER,
         TRANSMISSION_OUTPUT_SPEED,
         TRANSMISSION_OIL_TEMPERATURE,

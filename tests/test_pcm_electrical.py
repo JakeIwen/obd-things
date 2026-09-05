@@ -94,10 +94,45 @@ def authorization(
 
 
 class PcmElectricalProfileTests(unittest.TestCase):
-    def test_registry_has_two_immutable_reviewed_profiles(self):
+    def test_vvt_temperature_fixed_wire_scale_and_response_shape(self):
+        for raw, expected_f in ((0, -83.2), (64, 32.0), (119, 131.0), (160, 204.8), (255, 375.8)):
+            with self.subTest(raw=raw):
+                sock = FakeSocket(response_frame(bytes((4, 0x62, 6, 0x9F, raw))))
+                poller = pcm.PcmElectricalPoller(TEST_CHANNEL, socket_factory=lambda *_args: sock)
+                result = poller.poll_vvt_oil_temperature(
+                    authorization(purpose=transmit_permit.PCM_VVT_OIL_TEMPERATURE)
+                )
+                self.assertTrue(result.available, result.detail)
+                self.assertAlmostEqual(result.value, expected_f)
+                self.assertEqual(result.metric, "engine.vvt_oil_temperature")
+                self.assertEqual(result.unit, "°F")
+                self.assertEqual(result.source, "pcm.did.069f")
+                self.assertEqual(sock.sent, [pcm.VVT_OIL_TEMPERATURE_PROFILE.request_frame])
+        for data in ("05 62 06 9F A0 00", "04 62 06 9E A0", "10 08 62 06 9F A0 00 00"):
+            with self.subTest(data=data):
+                result = pcm._decode_wire_response(
+                    pcm.VVT_OIL_TEMPERATURE_PROFILE, response_frame(bytes.fromhex(data))
+                )
+                self.assertFalse(result.available)
+                self.assertEqual(result.reason, "malformed_response")
+
+    def test_vvt_temperature_requires_its_own_permit_and_preserves_nrc(self):
+        sock = FakeSocket(response_frame(bytes.fromhex("03 7F 22 12")))
+        poller = pcm.PcmElectricalPoller(TEST_CHANNEL, socket_factory=lambda *_args: sock)
+        rejected = poller.poll_vvt_oil_temperature(authorization())
+        self.assertFalse(rejected.available)
+        self.assertEqual(sock.sent, [])
+        result = poller.poll_vvt_oil_temperature(
+            authorization(purpose=transmit_permit.PCM_VVT_OIL_TEMPERATURE)
+        )
+        self.assertFalse(result.available)
+        self.assertIn("NRC 12", result.detail)
+        self.assertEqual(len(sock.sent), 1)
+
+    def test_registry_has_three_immutable_reviewed_profiles(self):
         self.assertEqual(
             tuple(pcm.PCM_ELECTRICAL_PROFILES),
-            ("generator.field_duty", "engine.crankshaft_torque"),
+            ("generator.field_duty", "engine.crankshaft_torque", "engine.vvt_oil_temperature"),
         )
         profile = pcm.PCM_ELECTRICAL_PROFILES["generator.field_duty"]
         torque = pcm.PCM_ELECTRICAL_PROFILES["engine.crankshaft_torque"]

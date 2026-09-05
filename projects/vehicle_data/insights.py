@@ -32,6 +32,7 @@ DEFAULT_HISTORY_METRICS = (
     "battery.voltage",
     "engine.oil_pressure",
     "engine.coolant_temperature",
+    "engine.vvt_oil_temperature",
     "engine.crankshaft_power",
     "transmission.oil_temperature",
     "generator.field_duty",

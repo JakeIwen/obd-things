@@ -226,6 +226,7 @@ The initial drive-publisher vocabulary is intentionally narrow:
 | `battery.voltage` | `cluster.did.1004` | number, `V` | `observed_alfa_scale` |
 | `generator.field_duty` | `pcm.did.01a1` | number, `%` | `observed_alfa_scale` |
 | `engine.crankshaft_torque` | `pcm.did.06da` | number, `lb-ft` | `observed_alfa_scale` |
+| `engine.vvt_oil_temperature` | `pcm.did.069f` | number, `°F` | `observed_alfa_scale` |
 | `engine.oil_pressure` | `ccan.broadcast.0x41d` | number, `psi` | `observed_alfa_scale` |
 | `engine.coolant_temperature` | `ccan.broadcast.0x2ed` | number, `°F` | `observed_alfa_scale` |
 | `engine.rpm` | `ccan.broadcast.0x0fc` | number, `rpm` | `observed_alfa_scale` |
@@ -290,6 +291,32 @@ sample arrives, requires no more than 1.5 seconds of input skew, and inherits
 the older input's timestamp so it cannot appear fresh after either dependency
 expires. Negative overrun is preserved. This is not measured wheel horsepower
 or a dynamometer result.
+
+`engine.vvt_oil_temperature` preserves AlfaOBD's exact **VVT Oil Temperature**
+label for PCM `069F`. It decodes one data byte as `raw - 64 °C`, converts to
+°F, and expires after 15 seconds. The coordinated owner polls it no more often
+than once every five seconds, after the normal generator/torque/TPMS cycle.
+Each read has its own fresh transmit permit; a response failure disables only
+this optional metric until the next running epoch. A restored/stopped owner
+invalidates it immediately. The six-card telemetry dashboard uses the explicit
+VVT label and discloses that the sensor/model relationship to sump oil remains
+unresolved. No temperature alert is inferred. History includes the new metric.
+
+`pcm_temperature_support.py` is a separate parked support check, never a
+dashboard endpoint or a running-helper profile. Its default is an inert plan:
+
+```bash
+python3 projects/vehicle_data/pcm_temperature_support.py
+```
+
+Its fixed live sequence sends at most one padded physical `22 F45C` and one
+`22 069F`, at least one second apart, with a 0.75-second response timeout and
+no retry, wake, session control, TesterPresent, or FlowControl. Live use
+requires `--execute --confirm-parked-ignition-on-engine-off`; fresh ignition,
+three zero-RPM samples, and zero road speed are checked under exact role
+ownership before arming and again before each request. Results and exact
+restoration status go under `tmp/inventories/pcm/`. F45C is a standardized
+candidate only and is not added to production polling by this check.
 
 The raw rows preserve the original cluster evidence without presenting
 unverified speed, gear, or temperature conversions as facts. The separately
@@ -534,17 +561,19 @@ passive while it is armed. The design trades one down/up transition at the
 start and end of a running epoch for continuous powertrain, generator, battery,
 and TPMS telemetry; it does not cycle SocketCAN once per poll.
 
-The closed PCM engine-running registry contains exactly two immutable
+The closed PCM engine-running registry contains exactly three immutable
 profiles. Its only possible PCM transmissions are these physical, 29-bit,
 fixed-DLC-8 frames:
 
 ```text
 18DA10F1#032201A100000000
 18DA10F1#032206DA00000000
+18DA10F1#0322069F00000000
 ```
 
 Each response must be a single frame from `18DAF110` with the corresponding
-exact `62 01 A1` or `62 06 DA` echo and exactly two data bytes. A raw CAN
+exact echo: `62 01 A1` and `62 06 DA` each require two data bytes;
+`62 06 9F` requires one. A raw CAN
 socket is used so a malformed multi-frame reply cannot cause an ISO-TP
 FlowControl transmission.
 There is no caller-selectable DID, service, CAN ID, payload, functional
@@ -563,7 +592,7 @@ Those are the only other CAN frames it can construct:
 18DAC7F1#032231D300000000
 ```
 
-All six are physical `ReadDataByIdentifier` requests to endpoints registered
+All seven are physical `ReadDataByIdentifier` requests to endpoints registered
 in `lib/modules.py`; no functional broadcast request exists. The helper stops
 on loss of RPM or C-CAN traffic, topology/inhibit changes, adapter health
 failure, timeout, malformed response, rejection, termination, or exception.
@@ -580,7 +609,7 @@ interface, topology, RPM, permit, or restoration gate.
 
 The transport methods cannot send on control-flow convention alone. Their
 opaque permit is fixed to the currently serial-resolved C-CAN `canN` and its
-live exclusive diagnostic-lock handle, one of the three reviewed transport
+live exclusive diagnostic-lock handle, one of the four reviewed transport
 purposes, the issuing process, and
 the latest snapshot's positive frame count plus three finite RPM samples at or
 above 400. It expires after 250 ms and is consumed by its first attempted use,
@@ -641,6 +670,16 @@ a non-transient error, failed revalidation, or bounded exhaustion ends the
 current capture as broker-ownership loss and returns the daemon to its wait
 loop. It does not open or configure CAN, weaken the initial broker-owned armed
 gate, or exit into a systemd restart loop.
+
+The September 5 follow-up preserves `BrokerOwnershipLost` through the actual
+capture finalization boundary using `RecoverableCaptureError`. The original
+fix lost its type when the generic recorder wrapped it in `CaptureError`.
+Now cleanup completes before the typed failure reaches the daemon's wait loop;
+failed compressor validation, child cleanup, final interface checks, and
+storage loss take precedence and remain fatal. Secondary ownership loss may
+also recover, but concurrent secondary storage/cleanup failure wins. The
+regression exercises the real recorder and daemon boundary, including an
+ownership loss followed by failed compression.
 
 The daemon loops after a successful finalization: while parked it opens no CAN
 socket and waits for the next broker-owned running interval, then creates a new

@@ -25,6 +25,16 @@ The cross-project [`AlfaOBD evidence history`](../../docs/alfaobd-evidence-histo
 canonical chronology of confirmed mis-mappings, incompatible profiles, recording/catalog traps,
 project parser corrections, and the trust rules derived from them.
 
+The [September 5 drive review](findings/promaster_2022/2026-09-05_drive_inventory_oil_candidates.md)
+found 14 new three-bus intervals with about 3.75 hours per role and zero
+reported socket drops. Ten sets completed normally; four retained finalized
+raw streams but exposed an incomplete broker-ownership recovery path. An
+independent frozen-formula test strengthens passive `0x760` as an ICS-local
+distance copy (446 matches, 92.5% coverage, zero p95 raw error). For engine-oil
+temperature, supported `069F` retains its VVT-specific label; standardized
+`F45C` is a newly documented, untested physical-read candidate. No oil gauge
+or polling configuration was changed by that offline review.
+
 The local
 [`legacy FCA Windows/CDA archive triage`](findings/promaster_2022/2026-07-29_legacy_fca_windows_archive.md)
 recovers historical vendor labels for exact current-DID overlaps, including BCM PROXI/EOL records
@@ -481,8 +491,10 @@ bounded passive campaign. The maintained, automatically rearming production
 recorder is instead
 [`projects/vehicle_data/drive_recorder.py`](../vehicle_data/drive_recorder.py),
 tracked as `van-drive-recorder.service`. Its installed copy matches the tracked
-role-aware unit as of 2026-08-21 but remains disabled/inactive; no new
-dual-USBCANFD drive recording was validated during passive broker commissioning.
+role-aware unit and is enabled/active as checked on 2026-09-05. New synchronized
+three-role recordings are documented in the September 5 review above. The
+asleep daemon is waiting for the next qualified interval; four later ownership
+interruptions exposed a typed-error propagation defect still awaiting repair.
 
 This companion is receive-only: it does not take the channel lock, configure
 or restore the serial-resolved C-CAN channel, control the broker, or transmit.

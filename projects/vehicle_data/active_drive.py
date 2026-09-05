@@ -54,6 +54,7 @@ REQUIRED_RPM_SAMPLES = 3
 PASSIVE_GATE_SECONDS = 0.5
 ACTIVE_SNAPSHOT_SECONDS = 0.35
 POLL_INTERVAL_SECONDS = 1.0
+VVT_TEMPERATURE_INTERVAL_SECONDS = 5.0
 REQUEST_TIMEOUT_SECONDS = 0.45
 RESTORATION_INHIBIT = "vehicle-data-restoration-failed"
 
@@ -759,7 +760,8 @@ def run_active_session(
             reason="running_gate_satisfied",
             detail=(
                 "exclusive C-CAN owner is armed; broadcast telemetry, PCM "
-                "generator duty/current torque, and fixed RF Hub pressures "
+                "generator duty/current torque/VVT oil temperature, and fixed "
+                "RF Hub pressures "
                 "share this interval"
             ),
             interface_mode="armed_diagnostic",
@@ -768,6 +770,8 @@ def run_active_session(
 
         next_cycle = backend.monotonic()
         torque_enabled = True
+        vvt_temperature_enabled = True
+        next_vvt_temperature = next_cycle
         while True:
             cycle_started = backend.monotonic()
             gate_failure = _active_gate(backend, initial)
@@ -943,6 +947,63 @@ def run_active_session(
                     pressure.detail,
                 )
                 break
+
+            # Temperature changes slowly. Its fixed five-second read follows
+            # the normal PCM/TPMS cycle and waits for every prior response.
+            if (
+                vvt_temperature_enabled
+                and backend.monotonic() >= next_vvt_temperature
+            ):
+                gate_failure = _active_gate(backend, initial)
+                if gate_failure is not None:
+                    outcome = gate_failure
+                    break
+                try:
+                    temperature_permit = transmit_permit.issue(
+                        lock_handle,
+                        snapshot,
+                        purpose=transmit_permit.PCM_VVT_OIL_TEMPERATURE,
+                        channel=backend.channel,
+                        monotonic=backend.monotonic,
+                    )
+                except transmit_permit.StaleTransmitEvidenceError:
+                    next_cycle = _wait_for_next_cycle(backend, next_cycle, cycle_started)
+                    continue
+                temperature_result = pcm_poller.poll_vvt_oil_temperature(
+                    temperature_permit
+                )
+                if temperature_result.reason == "transmit_permit_expired":
+                    next_cycle = _wait_for_next_cycle(backend, next_cycle, cycle_started)
+                    continue
+                next_vvt_temperature = (
+                    backend.monotonic() + VVT_TEMPERATURE_INTERVAL_SECONDS
+                )
+                failed = _pcm_outcome(temperature_result)
+                if failed is not None:
+                    vvt_temperature_enabled = False
+                    sink.emit(
+                        "metric_failure",
+                        metric=temperature_result.metric,
+                        unit=temperature_result.unit,
+                        source=temperature_result.source,
+                        bus=temperature_result.bus,
+                        quality=temperature_result.quality,
+                        reason=failed.reason,
+                        detail=failed.detail,
+                        interface_mode="armed_diagnostic",
+                    )
+                else:
+                    sink.emit(
+                        "observation",
+                        metric=temperature_result.metric,
+                        value=temperature_result.value,
+                        unit=temperature_result.unit,
+                        source=temperature_result.source,
+                        bus=temperature_result.bus,
+                        quality=temperature_result.quality,
+                        detail=temperature_result.detail,
+                        interface_mode="armed_diagnostic",
+                    )
 
             next_cycle = _wait_for_next_cycle(
                 backend, next_cycle, cycle_started

@@ -79,8 +79,8 @@ const ENGINE_HEALTH_METRICS = Object.freeze({
   },
   oilTemperature: {
     id: "oil-temperature",
-    names: ["engine.oil_temperature", "engine.oil_temp"],
-    roles: ["engine_oil_temperature", "oil_temperature"],
+    names: ["engine.vvt_oil_temperature"],
+    roles: ["engine_vvt_oil_temperature"],
   },
   transmissionOilTemperature: {
     id: "transmission-oil-temperature",

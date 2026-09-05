@@ -100,6 +100,10 @@ class CaptureError(RuntimeError):
     """A fail-closed capture or preflight failure."""
 
 
+class RecoverableCaptureError(CaptureError):
+    """An owner may retry this failure only after capture cleanup succeeds."""
+
+
 @dataclasses.dataclass(frozen=True)
 class InterfaceState:
     up: bool
@@ -1240,7 +1244,7 @@ class Recorder:
                 try:
                     self._stop_process(process, consume)
                 except Exception as exc:
-                    if fatal is None:
+                    if fatal is None or isinstance(fatal, RecoverableCaptureError):
                         fatal = exc
                         reason = "error"
             if storage_available:
@@ -1250,7 +1254,7 @@ class Recorder:
                         baseline_interface, current_interface
                     )
                 except Exception as exc:
-                    if fatal is None:
+                    if fatal is None or isinstance(fatal, RecoverableCaptureError):
                         fatal = exc
                         reason = "error"
             if not storage_available:
@@ -1273,21 +1277,25 @@ class Recorder:
                         consume(b"\n")
                     record = chunk.finish(self._verifier)
                     append_manifest(self.manifest, record)
-                    if not record["complete"] and fatal is None:
+                    if not record["complete"] and (
+                        fatal is None or isinstance(fatal, RecoverableCaptureError)
+                    ):
                         fatal = CaptureError("final zstd chunk failed validation")
                         reason = "error"
                 except Exception as exc:
-                    if fatal is None:
+                    if fatal is None or isinstance(fatal, RecoverableCaptureError):
                         fatal = exc
                         reason = "error"
-                if pending_error is not None and fatal is None:
+                if pending_error is not None and (
+                    fatal is None or isinstance(fatal, RecoverableCaptureError)
+                ):
                     fatal = pending_error
                     reason = "error"
             else:
                 try:
                     harvest_chunks(wait=True)
                 except Exception as exc:
-                    if fatal is None:
+                    if fatal is None or isinstance(fatal, RecoverableCaptureError):
                         fatal = exc
                         reason = "error"
             finalizer.shutdown(wait=True, cancel_futures=False)
@@ -1357,6 +1365,11 @@ class Recorder:
         append_manifest(self.manifest, end_record)
         self._checkpoint({"status": "complete" if fatal is None else "error", **end_record})
         if fatal is not None:
+            # Preserve typed capture failures after successful cleanup. Owners
+            # may recover a specific boundary loss without treating unrelated
+            # storage, transport, or interface errors as recoverable.
+            if isinstance(fatal, CaptureError):
+                raise fatal
             raise CaptureError(str(fatal)) from fatal
         return 0
 

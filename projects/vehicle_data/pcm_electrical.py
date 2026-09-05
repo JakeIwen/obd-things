@@ -2,7 +2,7 @@
 
 This module deliberately is not a general UDS transport.  Its public poller can
 send only the reviewed, physical, 29-bit SocketCAN frames for generator field
-duty and current crankshaft torque.  Both expected responses are single-frame,
+duty, current crankshaft torque, and VVT oil temperature. Responses are single-frame,
 so a raw CAN socket is used instead of an ISO-TP socket: malformed multi-frame
 traffic is rejected without any possibility of transmitting an ISO-TP
 FlowControl frame.
@@ -51,6 +51,8 @@ CRANKSHAFT_TORQUE_REQUEST_DATA = bytes.fromhex(
     "03 22 06 DA 00 00 00 00"
 )
 CRANKSHAFT_TORQUE_POSITIVE_ECHO = bytes.fromhex("62 06 DA")
+VVT_OIL_TEMPERATURE_REQUEST_DATA = bytes.fromhex("03 22 06 9F 00 00 00 00")
+VVT_OIL_TEMPERATURE_POSITIVE_ECHO = bytes.fromhex("62 06 9F")
 NM_TO_LB_FT = 0.7375621492772656
 SESSION_REQUIRED_NRCS = frozenset((0x7E, 0x7F))
 
@@ -150,6 +152,25 @@ _CRANKSHAFT_TORQUE_PROFILE = PcmElectricalProfile(
     maximum=1000.0,
 )
 CRANKSHAFT_TORQUE_PROFILE = _CRANKSHAFT_TORQUE_PROFILE
+_VVT_OIL_TEMPERATURE_PROFILE = PcmElectricalProfile(
+    metric="engine.vvt_oil_temperature",
+    did=0x069F,
+    unit="°F",
+    source="pcm.did.069f",
+    bus="c-can",
+    quality="observed_alfa_scale",
+    acquisition_class="physical_read_data_by_identifier",
+    bitrate=_PCM.bitrate,
+    addressing_mode=_PCM.addressing_mode,
+    request_id=_PCM.txid,
+    response_id=_PCM.rxid,
+    request_data=VVT_OIL_TEMPERATURE_REQUEST_DATA,
+    positive_echo=VVT_OIL_TEMPERATURE_POSITIVE_ECHO,
+    response_data_length=1,
+    minimum=-83.2,
+    maximum=375.8,
+)
+VVT_OIL_TEMPERATURE_PROFILE = _VVT_OIL_TEMPERATURE_PROFILE
 
 # MappingProxyType plus a frozen value makes the reviewed registry immutable at
 # runtime.  No function below accepts a profile name, DID, CAN ID, or payload.
@@ -157,6 +178,7 @@ PCM_ELECTRICAL_PROFILES = MappingProxyType(
     {
         _GENERATOR_FIELD_DUTY_PROFILE.metric: _GENERATOR_FIELD_DUTY_PROFILE,
         _CRANKSHAFT_TORQUE_PROFILE.metric: _CRANKSHAFT_TORQUE_PROFILE,
+        _VVT_OIL_TEMPERATURE_PROFILE.metric: _VVT_OIL_TEMPERATURE_PROFILE,
     }
 )
 
@@ -165,9 +187,10 @@ def _validate_closed_registry() -> None:
     if tuple(PCM_ELECTRICAL_PROFILES) != (
         "generator.field_duty",
         "engine.crankshaft_torque",
+        "engine.vvt_oil_temperature",
     ):
         raise RuntimeError(
-            "PCM engine-running allowlist must contain exactly the two "
+            "PCM engine-running allowlist must contain exactly the three "
             "reviewed metrics"
         )
     expected_module = (
@@ -209,6 +232,14 @@ def _validate_closed_registry() -> None:
         or _CRANKSHAFT_TORQUE_PROFILE.response_data_length != 2
     ):
         raise RuntimeError("Crankshaft torque wire profile changed")
+    if (
+        _VVT_OIL_TEMPERATURE_PROFILE.did != 0x069F
+        or _VVT_OIL_TEMPERATURE_PROFILE.request_data
+        != bytes.fromhex("03 22 06 9F 00 00 00 00")
+        or _VVT_OIL_TEMPERATURE_PROFILE.positive_echo != bytes.fromhex("62 06 9F")
+        or _VVT_OIL_TEMPERATURE_PROFILE.response_data_length != 1
+    ):
+        raise RuntimeError("VVT oil temperature wire profile changed")
 
 
 _validate_closed_registry()
@@ -301,8 +332,8 @@ def _decode_response(
 
     payload = data[1 : payload_length + 1]
     if payload[0] == 0x7F:
-        # A valid UDS negative response is three bytes, so it cannot also have
-        # the five-byte length required by the positive Generator Duty profile.
+        # A valid UDS negative response is three bytes, unlike every reviewed
+        # positive profile; _decode_wire_response handles valid negatives.
         return _failure(
             profile,
             "malformed_response",
@@ -324,6 +355,10 @@ def _decode_response(
         torque_nm = raw_value * 0.04
         value = torque_nm * NM_TO_LB_FT
         decode_detail = "i16be x 0.04 Nm, converted to lb-ft"
+    elif profile is _VVT_OIL_TEMPERATURE_PROFILE:
+        raw_value = payload[3]
+        value = (raw_value - 64) * 1.8 + 32
+        decode_detail = "u8 - 64 °C, converted to °F; VVT oil temperature"
     else:
         raise RuntimeError("unreviewed PCM profile reached the decoder")
     if (
@@ -418,7 +453,7 @@ def _positive_finite_timeout(value: object) -> float:
 
 
 class PcmElectricalPoller:
-    """Reusable owner-scoped transport for two reviewed PCM metrics.
+    """Reusable owner-scoped transport for three reviewed PCM metrics.
 
     ``channel`` exists so a coordinated active-drive owner can pass its already
     identity- and topology-verified interface explicitly. The immutable PCM
@@ -501,6 +536,14 @@ class PcmElectricalPoller:
         return self._poll(
             _CRANKSHAFT_TORQUE_PROFILE,
             transmit_permit.PCM_CRANKSHAFT_TORQUE,
+            permit,
+        )
+
+    def poll_vvt_oil_temperature(self, permit: object) -> PcmElectricalResult:
+        """Consume one VVT permit and send only physical PCM ``22 069F``."""
+        return self._poll(
+            _VVT_OIL_TEMPERATURE_PROFILE,
+            transmit_permit.PCM_VVT_OIL_TEMPERATURE,
             permit,
         )
 

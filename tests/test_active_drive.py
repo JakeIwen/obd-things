@@ -5,6 +5,7 @@ import subprocess
 import sys
 import threading
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest import mock
@@ -127,6 +128,7 @@ class FakePcmPoller:
         self,
         result=None,
         torque_result=None,
+        temperature_result=None,
         exception=None,
         events=None,
     ):
@@ -150,6 +152,12 @@ class FakePcmPoller:
             quality="observed_alfa_scale",
             detail="exact 62 06DA replay",
         )
+        self.temperature_result = temperature_result or pcm_electrical.PcmElectricalResult(
+            available=True, metric="engine.vvt_oil_temperature", value=195.8,
+            unit="°F", source="pcm.did.069f", bus="c-can",
+            quality="observed_alfa_scale", detail="exact 62 069F replay",
+        )
+        self.temperature_poll_count = 0
         self.exception = exception
         self.events = events
         self.poll_count = 0
@@ -173,6 +181,14 @@ class FakePcmPoller:
         if self.exception is not None:
             raise self.exception
         return self.torque_result
+
+    def poll_vvt_oil_temperature(self, permit):
+        self.poll_count += 1
+        self.temperature_poll_count += 1
+        self.permits.append(permit)
+        if self.events is not None:
+            self.events.append("pcm_vvt_temperature_poll")
+        return self.temperature_result
 
     def close(self):
         self.closed = True
@@ -292,6 +308,54 @@ class FakeBackend:
 
 
 class ActiveSessionTests(unittest.TestCase):
+    def test_vvt_temperature_uses_five_second_cadence_after_tpms(self):
+        events = []
+        backend = FakeBackend(
+            snapshots=[snapshot((750.0, 751.0, 752.0), rpm_observation()) for _ in range(13)]
+            + [snapshot((0.0, 0.0, 0.0), rpm_observation(0.0))],
+            events=events,
+        )
+        clock = [100.0]
+        backend.monotonic = lambda: clock[0]
+        backend.sleep = lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+        read = backend.broadcast_snapshot
+        backend.broadcast_snapshot = lambda timeout: replace(
+            read(timeout), completed_monotonic=clock[0]
+        )
+        temperature_times = []
+        poll = backend.pcm.poll_vvt_oil_temperature
+
+        def temperature_poll(permit):
+            temperature_times.append(clock[0])
+            self.assertEqual(events[-1], "tpms_poll")
+            return poll(permit)
+
+        backend.pcm.poll_vvt_oil_temperature = temperature_poll
+        outcome, emitted, _inhibit = self.run_session(backend)
+        self.assertTrue(outcome.restored)
+        self.assertEqual(temperature_times, [100.0, 105.0, 110.0])
+        self.assertEqual(sum(e.get("metric") == "engine.vvt_oil_temperature"
+                             and e["type"] == "observation" for e in emitted), 3)
+
+    def test_vvt_failure_disables_only_temperature_for_the_epoch(self):
+        pcm = FakePcmPoller(temperature_result=pcm_electrical.PcmElectricalResult(
+            metric="engine.vvt_oil_temperature", available=False, unit="°F",
+            source="pcm.did.069f", bus="c-can", quality="observed_alfa_scale",
+            reason="session_required", detail="NRC 7E; no session change",
+        ))
+        backend = FakeBackend(
+            snapshots=[snapshot((750.0, 751.0, 752.0), rpm_observation()) for _ in range(5)]
+            + [snapshot((0.0, 0.0, 0.0), rpm_observation(0.0))], pcm=pcm,
+        )
+        outcome, emitted, _inhibit = self.run_session(backend)
+        self.assertTrue(outcome.restored)
+        self.assertEqual(outcome.reason, "engine_not_running")
+        self.assertEqual(pcm.temperature_poll_count, 1)
+        self.assertEqual(backend.tpms.poll_count, 3)
+        failures = [e for e in emitted if e["type"] == "metric_failure"]
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]["metric"], "engine.vvt_oil_temperature")
+
     def test_absolute_script_entrypoint_imports_from_an_unrelated_working_directory(self):
         result = subprocess.run(
             [
@@ -366,7 +430,7 @@ class ActiveSessionTests(unittest.TestCase):
 
         self.assertEqual(outcome.reason, "engine_not_running")
         self.assertTrue(outcome.restored)
-        self.assertEqual(pcm.poll_count, 2)
+        self.assertEqual(pcm.poll_count, 3)
         self.assertEqual(tpms.poll_count, 1)
         self.assertIsNot(pcm.permits[0], pcm.permits[1])
         self.assertIsNot(pcm.permits[1], tpms.permits[0])
@@ -389,6 +453,7 @@ class ActiveSessionTests(unittest.TestCase):
                 "battery.voltage",
                 "generator.field_duty",
                 "engine.crankshaft_torque",
+                "engine.vvt_oil_temperature",
                 "tire.pressure.fl",
             },
         )
@@ -431,7 +496,7 @@ class ActiveSessionTests(unittest.TestCase):
 
         self.assertEqual(outcome.reason, "engine_not_running")
         self.assertTrue(outcome.restored)
-        self.assertEqual(pcm.poll_count, 2)
+        self.assertEqual(pcm.poll_count, 3)
         self.assertEqual(tpms.poll_count, 1)
         failures = [
             event
@@ -469,14 +534,14 @@ class ActiveSessionTests(unittest.TestCase):
         with mock.patch.object(
             active_drive.transmit_permit,
             "issue",
-            side_effect=(stale, object(), object(), object()),
+            side_effect=(stale, object(), object(), object(), object()),
         ) as issue:
             outcome, _emitted, _inhibit = self.run_session(backend)
 
         self.assertEqual(outcome.reason, "engine_not_running")
         self.assertTrue(outcome.restored)
-        self.assertEqual(issue.call_count, 4)
-        self.assertEqual(backend.pcm.poll_count, 2)
+        self.assertEqual(issue.call_count, 5)
+        self.assertEqual(backend.pcm.poll_count, 3)
         self.assertEqual(backend.tpms.poll_count, 1)
 
         fatal_backend = FakeBackend(
@@ -1255,9 +1320,10 @@ class PressureWireTests(unittest.TestCase):
         self.assertEqual(second.reason, "response_rejected")
         self.assertEqual(len(fake.sent), 1)
 
-    def test_complete_transmit_allowlist_is_exactly_six_fixed_frames(self):
+    def test_complete_transmit_allowlist_is_exactly_seven_fixed_frames(self):
         pcm = pcm_electrical.GENERATOR_FIELD_DUTY_PROFILE
         torque = pcm_electrical.CRANKSHAFT_TORQUE_PROFILE
+        temperature = pcm_electrical.VVT_OIL_TEMPERATURE_PROFILE
         allowed = {
             (
                 pcm.request_id,
@@ -1267,6 +1333,7 @@ class PressureWireTests(unittest.TestCase):
                 torque.request_id,
                 torque.request_data,
             ),
+            (temperature.request_id, temperature.request_data),
             *{
                 (
                     MODULES["rf_hub"].txid,
@@ -1282,6 +1349,7 @@ class PressureWireTests(unittest.TestCase):
             {
                 (0x18DA10F1, bytes.fromhex("03 22 01 A1 00 00 00 00")),
                 (0x18DA10F1, bytes.fromhex("03 22 06 DA 00 00 00 00")),
+                (0x18DA10F1, bytes.fromhex("03 22 06 9F 00 00 00 00")),
                 (0x18DAC7F1, bytes.fromhex("03 22 31 D0 00 00 00 00")),
                 (0x18DAC7F1, bytes.fromhex("03 22 31 D1 00 00 00 00")),
                 (0x18DAC7F1, bytes.fromhex("03 22 31 D2 00 00 00 00")),
@@ -1459,6 +1527,12 @@ class BrokerActiveDriveTests(unittest.TestCase):
                 "quality": "observed_alfa_scale",
                 "interface_mode": "armed_diagnostic",
             },
+            {
+                "type": "observation", "metric": "engine.vvt_oil_temperature",
+                "value": 204.8, "unit": "°F", "source": "pcm.did.069f",
+                "bus": "c-can", "quality": "observed_alfa_scale",
+                "interface_mode": "armed_diagnostic",
+            },
         )
         for event in events:
             broker.handle_active_drive_event(event)
@@ -1474,6 +1548,7 @@ class BrokerActiveDriveTests(unittest.TestCase):
         )
         self.assertEqual(generator["interface_mode"], "armed_diagnostic")
         self.assertTrue(torque["available"])
+        self.assertEqual(broker.metric_response("engine.vvt_oil_temperature")["value"], 204.8)
         self.assertEqual(torque["value"], 177.6)
         self.assertEqual(torque["interface_mode"], "armed_diagnostic")
         power = broker.metric_response("engine.crankshaft_power")
@@ -1489,6 +1564,7 @@ class BrokerActiveDriveTests(unittest.TestCase):
         )
 
         clock.value = 105.0
+        self.assertFalse(broker.metric_response("engine.vvt_oil_temperature")["stale"])
         self.assertTrue(
             broker.metric_response("generator.field_duty")["stale"]
         )
@@ -1525,6 +1601,8 @@ class BrokerActiveDriveTests(unittest.TestCase):
             "engine_not_running",
         )
         self.assertTrue(broker.metric_response("vehicle.speed")["available"])
+        self.assertEqual(broker.metric_response("engine.vvt_oil_temperature")["reason"],
+                         "engine_not_running")
 
     def test_optional_torque_failure_does_not_change_active_owner_state(self):
         broker, _clock = self.make_broker()

@@ -1,6 +1,7 @@
 import argparse
 import contextlib
 import errno
+import json
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
@@ -523,6 +524,61 @@ class DriveRecorderTests(unittest.TestCase):
         record.assert_called_once()
         sleep.assert_called_once_with(drive_recorder.WAIT_SECONDS)
         self.assertEqual(write_state.call_args.kwargs["status"], "waiting")
+
+    def test_daemon_recovers_ownership_loss_through_real_capture_cleanup(self):
+        """Exercise Recorder.run, including the final error propagation boundary."""
+        for failure, recoverable, cleanup_error in (
+            (drive_recorder.BrokerOwnershipLost("broker ownership disappeared"), True, None),
+            (capture.CaptureError("compressor failed"), False, None),
+            (OSError("disk unavailable"), False, None),
+            (drive_recorder.BrokerOwnershipLost("broker ownership disappeared"), False,
+             capture.CaptureError("final compressor validation failed")),
+        ):
+            with self.subTest(failure=type(failure).__name__), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                client = mock.Mock()
+                client.request.return_value = (200, ready_status())
+                process = mock.Mock()
+                process.stdout.fileno.return_value = 91
+                process.poll.return_value = None
+                chunk = mock.Mock()
+                chunk.sequence = 0
+                chunk.finish.return_value = {
+                    "type": "chunk", "sequence": 0, "streams": {}, "complete": True,
+                }
+                chunk.finish.side_effect = cleanup_error
+                recorder = capture.Recorder(
+                    root, frozenset(), 600, 120, capture.DiskPolicy(300, 200),
+                    channel=TEST_CHANNEL, bitrate=500000,
+                    popen=lambda *_args, **_kwargs: process,
+                    disk_free=lambda _path: 1000,
+                    safety_check=lambda: interface(listen_only=False),
+                    mount_check=lambda: None,
+                    health_check=mock.Mock(side_effect=failure),
+                    install_signal_handlers=False,
+                )
+                args = SimpleNamespace(socket="/unused.sock", state_path=root / "state.json",
+                                       out_root=root)
+                with (
+                    mock.patch.object(capture, "Chunk", return_value=chunk),
+                    mock.patch.object(capture.os, "set_blocking"),
+                    mock.patch.object(capture.selectors, "DefaultSelector"),
+                    mock.patch.object(recorder, "_stop_process"),
+                    mock.patch.object(drive_recorder, "record_one_interval",
+                                      side_effect=lambda *_args: recorder.run()),
+                ):
+                    expected = KeyboardInterrupt if recoverable else drive_recorder.DriveRecorderError
+                    with self.assertRaises(expected):
+                        drive_recorder.run_daemon(
+                            args, capture.DiskPolicy(300, 200), client=client,
+                            sleep=mock.Mock(side_effect=KeyboardInterrupt),
+                        )
+                self.assertEqual(json.loads(args.state_path.read_text())["status"],
+                                 "waiting" if recoverable else "error")
+                checkpoint = json.loads((root / "checkpoint.json").read_text())
+                self.assertFalse(checkpoint["success"])
+                self.assertEqual(checkpoint["error"], str(cleanup_error or failure))
+                chunk.finish.assert_called_once()
 
     def test_validate_args_requires_explicit_execute_confirmation(self):
         parser = drive_recorder.build_parser()

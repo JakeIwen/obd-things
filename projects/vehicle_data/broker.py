@@ -51,6 +51,7 @@ ACTIVE_DRIVE_SOURCES = frozenset(
         "ccan.broadcast.0x41d",
         "pcm.did.01a1",
         "pcm.did.06da",
+        "pcm.did.069f",
         "rf_hub.did.31d0",
         "rf_hub.did.31d1",
         "rf_hub.did.31d2",
@@ -59,7 +60,7 @@ ACTIVE_DRIVE_SOURCES = frozenset(
     }
 )
 ACTIVE_DRIVE_OPTIONAL_METRICS = frozenset(
-    {"engine.crankshaft_torque"}
+    {"engine.crankshaft_torque", "engine.vvt_oil_temperature"}
 )
 DERIVED_POWER_METRIC = "engine.crankshaft_power"
 DERIVED_POWER_SOURCE = "derived.pcm_06da_x_ccan_0x0fc"
@@ -1529,6 +1530,7 @@ class TelemetryBroker:
             for metric in (
                 "generator.field_duty",
                 "engine.crankshaft_torque",
+                "engine.vvt_oil_temperature",
                 DERIVED_POWER_METRIC,
             ):
                 definition = self.definitions.get(metric)

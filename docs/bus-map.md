@@ -266,6 +266,13 @@ signatures and bitrate are secondary validation, never routing authority. CAN-CH
 | `0x082` | ASCII multiplex | — | user's OWN gear ("running_van_no_internet"), **not factory** — ignore | verified (owner-added) |
 | signature set | — | — | B-CAN identity guard: `0x46C 0A0 0E0 2EA 3DC 3DE 3E0 3E2 3E4 3E6 354 356` | used by `classify_bus()` |
 
+The independent September 4 drive replicated the B-CAN `0x760` distance
+candidate above without changing its field or formula: 446 of 482 ICS
+references matched within 100 ms (92.5% coverage), 435 were exact, and 11
+differed by one kilometre at an update boundary. The prior absolute dash offset
+remains unresolved, so this strengthens only the starred ICS-local candidate.
+See the [September 5 review](../projects/ecu_mapping/findings/promaster_2022/2026-09-05_drive_inventory_oil_candidates.md).
+
 ---
 
 ## Wake / sleep semantics (load-bearing — read before parked work)
