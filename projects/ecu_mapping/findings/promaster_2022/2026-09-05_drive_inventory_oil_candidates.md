@@ -4,9 +4,78 @@ Implementation follow-up: the owner authorized all three next items. Commit
 `3cc8c4f` now repairs typed recorder recovery, provides the bounded two-request
 parked support checker, and integrates `engine.vvt_oil_temperature` into the
 guarded running poller, history, and telemetry gauge. It was deployed asleep
-at 02:42 MDT with zero CAN TX change. Live `F45C` and direct no-session `069F`
-validation remain pending an ignition-on/engine-off vehicle window; the
-research evidence below does not claim those checks occurred.
+at 02:42 MDT with zero CAN TX change. The September 6 follow-up below completed
+the live support check and independently verified production `069F` polling.
+
+## September 6 live support and recorder recovery
+
+The owner confirmed parked readiness with AlfaOBD/MX polling stopped. The
+initial readback showed a stationary running engine, so the manual checker
+was held until the owner switched the engine off and confirmed ignition on.
+Fresh broker observations then proved zero RPM, zero road speed, ignition
+presence, idle helpers, exact passive roles, and no inhibit. The checker also
+repeated its direct broadcast/state gates under exclusive C-CAN ownership.
+
+| PCM DID | Exact request, padded to DLC 8 | Exact UDS response | Result |
+|---|---|---|---|
+| `F45C` | `03 22 F4 5C 00 00 00 00` | `7F 22 12` | rejected by the installed PCM in this no-session-change check |
+| `069F` | `03 22 06 9F 00 00 00 00` | `62 06 9F 60` | raw 96; 32 °C / 89.6 °F VVT oil temperature |
+
+The sends occurred at `2026-09-06T19:47:46.031754Z` and
+`19:47:47.117299Z`; the operation finished at `19:47:47.547161Z` with verified
+passive restoration and no error. There were exactly two C-CAN TX packets:
+38,841 to 38,843. B-CAN and CAN-CH stayed at 1,937 and zero. All three roles
+ended classical CAN, FD/ONE-SHOT off, listen-only, ERROR-ACTIVE, restart-ms zero,
+with zero error/drop counters and no operation inhibit. No session control,
+TesterPresent, wake, FlowControl, diagnostic retry, or service restart occurred.
+The inherited diagnostic session was not identified; this proves a working
+no-session-change recipe for `069F`, not a universal default-session claim.
+
+The first ownership attempt, eight seconds earlier, encountered the broker's
+shared C-CAN observer lease and returned before arming or sending anything.
+Its report has an empty results list. The second attempt acquired the role
+normally; no observer or background service was stopped to obtain it.
+
+The preceding stationary running interval independently exercised the deployed
+gauge. Exact extraction of its finalized C-CAN priority stream recovered
+13 requests and 13 matching `069F` positives, with raw bytes `58`, `59`, `5A`,
+and `5B` (24–27 °C / 75.2–80.6 °F). Inter-request intervals were
+5.046–6.077 seconds. The same capture contains 75 matching pairs each for
+`01A1` and `06DA`. Live cache reads confirmed fresh source `pcm.did.069f`,
+quality `observed_alfa_scale`, and automatic invalidation with
+`engine_not_running` after shutdown. This is real running-poller evidence,
+distinct from the previous synthetic browser test.
+
+The manual checker briefly armed C-CAN under its own owner while the earlier
+recording was still retaining its ignition-on tail. At that ownership boundary
+the recorder finalized all three raw streams with zero detected drops and
+returned to waiting in the same process (PID 1856974, `NRestarts=0`). Its
+journal at `19:47:47.207933Z` preserves the ownership-loss reason followed by
+`; waiting`; its ordinary broker-ownership wait followed one second later.
+The capture-set wrapper remains incomplete by design, rather than being
+relabeled a clean drive. This live handoff validates the repaired exception
+propagation and in-process recovery. It does not prove the specific transient
+socket-retry branch fired or resolve the separate top-of-hour trigger.
+
+Evidence:
+
+- `tmp/inventories/pcm/temperature-support-20260906T194745116577Z.json`;
+  SHA-256 `38ecc37915120f10a931be906e85a28acdc3cbffc17516d63bdb38a86a8ad9e7`.
+- No-TX contention report:
+  `tmp/inventories/pcm/temperature-support-20260906T194737123665Z.json`.
+- `tmp/vehicle_data/pcm-temperature-running-validation-20260906.json`;
+  SHA-256 `63976756281582d9439b68ded73db6a4a607538d158850c9e828c17fb2a4cb4f`.
+- Three-role campaign `broker-drive-20260906T194555184542` under the archive
+  root recorded below. C-CAN priority chunk SHA-256
+  `4521b7abe4fdd8787b413105b3bbef7044c4c9647c5c96acc16d1b9baffe2943`.
+- Exact PCM window extraction job `20260906T194838Z-ba524aab`;
+  `window.json` SHA-256
+  `1da5527f3989a00274bbe0a4b78dce668af7ca8961992aae9ca855d2bca4beae`.
+
+Continue using the explicitly labeled VVT gauge. `F45C` is not admitted as a
+working source, and this rejection does not justify trying nearby identifiers
+or adding diagnostic-session traffic. True sump-temperature identity remains
+unresolved.
 
 ## Recording inventory
 

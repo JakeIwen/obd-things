@@ -31,9 +31,12 @@ reported socket drops. Ten sets completed normally; four retained finalized
 raw streams but exposed an incomplete broker-ownership recovery path. An
 independent frozen-formula test strengthens passive `0x760` as an ICS-local
 distance copy (446 matches, 92.5% coverage, zero p95 raw error). For engine-oil
-temperature, supported `069F` retains its VVT-specific label; standardized
-`F45C` is a newly documented, untested physical-read candidate. No oil gauge
-or polling configuration was changed by that offline review.
+temperature, supported `069F` retains its VVT-specific label. The subsequent
+September 6 live check returned `62 06 9F 60` (89.6 °F) without a session
+change, while standardized candidate `F45C` returned `7F 22 12`. Thirteen
+production `069F` pairs independently verified the deployed running gauge.
+The same manual ownership handoff exercised recorder recovery without a
+service restart. Exact results and provenance are in the linked finding.
 
 The local
 [`legacy FCA Windows/CDA archive triage`](findings/promaster_2022/2026-07-29_legacy_fca_windows_archive.md)

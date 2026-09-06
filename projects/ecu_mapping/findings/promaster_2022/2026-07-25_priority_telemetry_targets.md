@@ -107,6 +107,15 @@ source is now allowlisted and displayed in °F. This establishes the measured
 value and trend, not an overtemperature threshold; the OEM adaptation window
 remains context only. True engine-oil temperature remains unresolved.
 
+Update 2026-09-06 (bounded standardized EOT check and VVT gauge): one physical
+padded `22 F45C` received `7F 22 12` while parked, ignition on, engine off.
+It is therefore not admitted as a working source for the no-session-change
+recipe. The paired `22 069F` returned `62 06 9F 60`, or 32 °C / 89.6 °F,
+with exact passive restoration. Thirteen earlier production request/response
+pairs also verify the labeled VVT gauge during stationary engine running,
+75.2–80.6 °F. Preserve the VVT label and unresolved sensor/model relationship
+to sump oil. See the [September live follow-up](2026-09-05_drive_inventory_oil_candidates.md#september-6-live-support-and-recorder-recovery).
+
 ## Engine-oil pressure: exact OEM context
 
 The OEM `OIL PRESSURE – UPGRADE ENGINE` table applies only when coolant is

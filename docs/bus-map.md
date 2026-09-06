@@ -327,6 +327,15 @@ unrelated. Each module keeps its own canonical map next to its analysis:
 - **PCM live data** → [`2026-07-26 simultaneous Plots/wire mapping`](../projects/ecu_mapping/findings/promaster_2022/2026-07-26_pcm_plots_idle_mapping.md) maps the current-vehicle Alfa profile's eleven-item idle polling cycle to PCM DIDs `022A`, `011D`, `0413`, `0188`, `0227`, `01A1`, `019B`, `019E`, `019C`, `06DA`, and `069E`. The [`2026-07-27 loaded-drive mapping`](../projects/ecu_mapping/findings/promaster_2022/2026-07-27_pcm_plots_loaded_drive_mapping.md) adds exact `01D5` engine rpm, loaded signed `06DA x 0.04 Nm`, and `069F - 64 °C` VVT-oil-temperature evidence. Passive `0x41D` byte2 x4 kPa, `0x2ED` byte0 -40 °C, and `0x0FC` u16be /4 rpm are allowlisted engine-oil-pressure, coolant-temperature, and engine-speed sources. The [`2026-07-30 generator-duty direct read`](../projects/ecu_mapping/findings/promaster_2022/2026-07-30_pcm_generator_duty_direct_read.md) qualifies the narrowly guarded `generator.field_duty` source `pcm.did.01a1`: physical padded `22 01A1`, exact `62 01A1 <u16be>`, and `% = raw x 100 / 32768`, with no explicit session change. The broker implementation keeps that path engine-running-only, immutable, and separate from a generic DID API. Passive torque remains unresolved; the PCM profile's legacy `21 18` transmission-temperature and `21 62` turbine-speed rows returned `7F 21 31` throughout the drive and must not be used.
 - **ics_bcan / uconnect_bcan / climate_bcan / emcm2_bcan** → [`2026-07-21 B-CAN live ECU discovery`](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_bcan_live_ecu_discovery.md) for exact addressing/identity, DTC semantics, result-only routines, and inherited-session `F100-F1FF`; [`live AlfaOBD status correlation`](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_alfaobd_live_status_correlation.md) for exact common scalars, candidate ICS/Uconnect status groups, and controlled EMCM2 `2A00/2A01` rotary/Mute/Screen mappings. The selected Climate profile failed variant verification, so its observed gauge labels/scales are explicitly invalid for the installed ECU.
 
+**PCM thermal follow-up, 2026-09-06:** parked ignition-on/engine-off physical
+padded `22 069F` returned `62 06 9F 60` (32 °C / 89.6 °F) without a session
+change. Thirteen matching production pairs independently verified the
+engine-running VVT gauge at 75.2–80.6 °F. The paired standardized EOT candidate
+`22 F45C` was rejected with `7F 22 12`; it is not a working telemetry source
+in this tested recipe. Exact passive restoration completed after two C-CAN
+TX packets, with zero errors/inhibits and no B-CAN/CAN-CH TX change.
+[Evidence](../projects/ecu_mapping/findings/promaster_2022/2026-09-05_drive_inventory_oil_candidates.md#september-6-live-support-and-recorder-recovery).
+
 To plan a new module inventory without touching CAN, run
 `python3 tools/did_sweep.py <key> START END` (dry-run is the default). A parked live run requires
 the explicit `--execute --confirm-parked --pair ... --conditions ...` gates described in the root

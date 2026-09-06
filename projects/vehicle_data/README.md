@@ -953,6 +953,20 @@ terminal detail instead of replacing it with only the recovery condition.
 
 ## Current vanpi deployment
 
+Live validation, 2026-09-06 13:47 MDT: the parked, ignition-on/engine-off check
+returned `7F 22 12` for `F45C` and `62 06 9F 60` (89.6 °F) for `069F`, with
+no session change. Exactly two C-CAN requests were sent; all roles returned
+exact passive/ERROR-ACTIVE with zero errors, no inhibit, and unchanged
+B-CAN/CAN-CH TX counts. The preceding stationary engine-running capture
+independently contains 13 matching `069F` pairs, 75.2–80.6 °F, at 5.046–6.077
+second intervals. The VVT metric became unavailable immediately after its
+owner stopped. The manual ownership handoff also live-validated recorder
+recovery: all raw role streams finalized with zero detected drops, the
+capture-set wrapper remained incomplete, and the same daemon returned to
+waiting with zero restarts. No service change or new deployment was needed.
+Full [support and recovery evidence](../ecu_mapping/findings/promaster_2022/2026-09-05_drive_inventory_oil_candidates.md#september-6-live-support-and-recorder-recovery)
+completes the pending validation below; `F45C` remains excluded from polling.
+
 Deployment update, 2026-09-05 02:42 MDT: `3cc8c4f` repaired capture-error
 propagation and deployed the fixed optional `069F` profile, broker metric,
 history entry, and explicitly labeled VVT temperature card. Broker and recorder
