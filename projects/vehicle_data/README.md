@@ -1444,6 +1444,14 @@ state; the van dashboard compares the saved sample timestamp with scheduled
 
 ## Validation
 
+Full portable regression on 2026-09-18 passed **1,168 tests, 4 skips, and
+773 subtests** on m4mac (`van_compute` job `20260918T171501Z-05fe09a6`),
+with no test-selection exclusions. The previously excluded
+`test_dashboard_assets_are_served_with_csp` now checks the initial HTML's
+`drive-note` element and the freshness explanation in the served JavaScript,
+where the renderer owns that text. CSP and freshness coverage remain enabled;
+no production asset, service, or CAN behavior changed for this correction.
+
 Offline tests use fake interfaces, locks, sources, and clocks. They cover
 cache-only GETs, strict local publication, typed values, source-metadata
 allowlists, broker-stamped age, passive acquisition, silent-bus handling,

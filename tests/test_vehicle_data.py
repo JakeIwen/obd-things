@@ -2103,7 +2103,7 @@ class WebTests(unittest.TestCase):
         self.assertIn(b"Tire pressure", body)
         self.assertIn(b"Read voltage now", body)
         self.assertNotIn(b"Wake if asleep", body)
-        self.assertIn(b"Only fresh, driver-qualified values", body)
+        self.assertIn(b'id="drive-note"', body)
         self.assertNotIn(b"Automatic bus switch", body)
         self.assertIn(b"Customize this device", body)
         self.assertIn(b"Loading metric catalog", body)
@@ -2125,6 +2125,8 @@ class WebTests(unittest.TestCase):
         status, app = self.request("GET", "/app.js")
         self.assertEqual(status, 200)
         self.assertIn(b"DRIVER_QUALITIES", app)
+        # The renderer fills drive-note after loading the metric catalog.
+        self.assertIn(b"Only fresh, driver-qualified values", app)
         self.assertIn(b"MAX_STATE_FALLBACK_AGE_MS", app)
         self.assertIn(b"diagnostics only", app)
         self.assertIn(b"vehicle.ignition_on", app)
