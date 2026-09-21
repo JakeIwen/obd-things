@@ -1250,6 +1250,16 @@ last-readings storage with no error, recovered VVT oil temperature and radar
 history are displayed, and the LAN web listener advertises passive voltage
 acquisition enabled. This agent did not perform the restart or any CAN work.
 
+Pre-drive investigation, 2026-09-06: an
+[offline reproduction](../ecu_mapping/findings/promaster_2022/2026-09-06_broker_topology_refresh_diagnosis.md)
+identified a separate source of false recorder ownership loss. A scheduled
+voltage acquisition refresh sets `topology.usable` from the role's
+`passive_ready` flag; legitimate broker-owned armed mode therefore makes that
+topology false even while the helper and running evidence remain valid. The
+recorder then rejects the refreshed status. This classification defect is
+reproduced but not yet repaired; it is distinct from the already-deployed
+exception-recovery fix below. No service or CAN state changed during diagnosis.
+
 Live validation, 2026-09-06 13:47 MDT: the parked, ignition-on/engine-off check
 returned `7F 22 12` for `F45C` and `62 06 9F 60` (89.6 °F) for `069F`, with
 no session change. Exactly two C-CAN requests were sent; all roles returned
