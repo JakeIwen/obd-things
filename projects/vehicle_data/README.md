@@ -61,6 +61,13 @@ current vanpi deployment is recorded below.
 
 ### Owner-configured warning triggers and Codex chat
 
+The [event evidence review and proposal](docs/event-evidence-review.md)
+verifies that opening assessments and lifecycle snapshots already survive in
+the historian but are omitted from dashboard/chat episode summaries. It records
+the September 18 coolant watch's original baseline and persistence, plus the
+proposed event detail, lifecycle, retention, and retrospective-analysis changes.
+This is a review/proposal; those changes are not implemented.
+
 September 20 update: the advisor's fixed job timeout is now 300 seconds
 (previously 180, producing “Codex took too long”). The dialog defaults to
 Default / High (currently Astra), exposes validated model/effort controls,
