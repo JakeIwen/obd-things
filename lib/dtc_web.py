@@ -1,9 +1,9 @@
-"""One-use local arming and fixed request records for web-supervised DTC jobs.
+"""Fixed request records and optional legacy local arming for DTC jobs.
 
-This module performs no CAN or network I/O.  A local operator creates a
-short-lived secret whose SHA-256 digest is stored under ``/run``.  The
-Tailscale-only web listener can consume that secret once and atomically place
-one closed-schema request for the separately sandboxed batch worker.
+This module performs no CAN or network I/O. The origin-restricted web listener
+queues one closed-schema request after explicit parked confirmations. Legacy
+clients may still supply a short-lived local token whose digest is stored under
+``/run``; the token is no longer required by the maintained dashboard.
 """
 
 from __future__ import annotations

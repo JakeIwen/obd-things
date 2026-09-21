@@ -18,7 +18,8 @@ class DtcDashboardContractTests(unittest.TestCase):
         self.assertNotIn("Last completed scan", html)
         self.assertIn("not live", html)
         self.assertIn("DIAGNOSTICS · CACHED ONLY", html)
-        self.assertIn("locally armed fixed scan", html)
+        self.assertIn("guarded fixed scan", html)
+        self.assertNotIn('id="dtc-arm-token"', html)
 
     @unittest.skipUnless(shutil.which("node"), "node is required for DTC UI test")
     def test_compact_dtc_states_render_without_claiming_live_or_clear(self):
@@ -63,7 +64,7 @@ const definitionsOnly = source.slice(
   source.indexOf('\nbyId("refresh").addEventListener'),
 );
 vm.runInThisContext(definitionsOnly + `
-  globalThis.dtcDashboardUnderTest = {renderDtcs};
+  globalThis.dtcDashboardUnderTest = {renderDtcs, dtcHistoryCutoff};
 `);
 
 function emptyGroups() {
@@ -123,9 +124,12 @@ function renderDtcPayload(payload) {
   globalThis.dtcDashboardUnderTest.renderDtcs(payload);
   const root = element("dtc-groups");
   const nodes = [];
-  function visit(node) {
+  const visibleCodes = [];
+  function visit(node, collapsed = false) {
     nodes.push(node);
-    (node.children || []).forEach(visit);
+    collapsed = collapsed || (node.tagName === "DETAILS" && !node.open);
+    if (!collapsed && node.className === "dtc-code") visibleCodes.push(node.textContent);
+    (node.children || []).forEach((child) => visit(child, collapsed));
   }
   visit(root);
   return {
@@ -133,6 +137,9 @@ function renderDtcPayload(payload) {
     newest: element("dtc-last-scan").textContent,
     coverage: element("dtc-module-coverage").textContent,
     note: element("dtc-note").textContent,
+    visibleCodes,
+    archives: nodes.filter((node) => node.id === "dtc-older-history")
+      .map((node) => ({open: node.open, count: node.children[1].children.length})),
     tree: nodes.map((node) => node.textContent).filter(Boolean).join(" | "),
     headings: nodes
       .filter((node) => ["H3", "SUMMARY"].includes(node.tagName))
@@ -275,6 +282,25 @@ const output = {
   authoritative: renderDtcPayload(authoritativeZero),
   nonAuthoritative: renderDtcPayload(nonAuthoritativeZero),
 };
+Date.now = () => Date.parse("2026-09-20T12:00:00Z");
+const datedHistory = {
+  groups: {
+    current: [record({fca_display: "CURRENT", last_seen_at: "2020-01-01T00:00:00Z"})],
+    pending: [record({fca_display: "PENDING", last_seen_at: "2020-01-01T00:00:00Z"})],
+    confirmed_history: [
+      record({fca_display: "OLD", last_seen_at: "2026-08-20T11:59:59Z"}),
+      record({fca_display: "BOUNDARY", last_seen_at: "2026-08-20T12:00:00Z"}),
+      record({fca_display: "RECENT", last_seen_at: "2026-09-19T00:00:00Z"}),
+      record({fca_display: "UNKNOWN", last_seen_at: null}),
+      record({fca_display: "INVALID", last_seen_at: "not a date"}),
+    ],
+  },
+};
+output.history = renderDtcPayload(datedHistory);
+element("dtc-older-history").open = true;
+output.expandedHistory = renderDtcPayload(datedHistory);
+output.monthEnd = ["2026-03-31T12:00:00Z", "2024-03-31T12:00:00Z", "2026-01-31T12:00:00Z"]
+  .map((date) => new Date(globalThis.dtcDashboardUnderTest.dtcHistoryCutoff(Date.parse(date))).toISOString());
 process.stdout.write(JSON.stringify(output));
 """
         completed = subprocess.run(
@@ -287,6 +313,15 @@ process.stdout.write(JSON.stringify(output));
 
         self.assertTrue(result["sourceUsesReturnedCounts"])
         self.assertTrue(result["sourceUsesTruncated"])
+        self.assertEqual(result["history"]["archives"], [{"open": False, "count": 1}])
+        self.assertEqual(result["history"]["visibleCodes"], [
+            "CURRENT", "PENDING", "BOUNDARY", "RECENT", "UNKNOWN", "INVALID",
+        ])
+        self.assertEqual(result["expandedHistory"]["archives"], [{"open": True, "count": 1}])
+        self.assertIn("OLD", result["expandedHistory"]["visibleCodes"])
+        self.assertEqual(result["monthEnd"], [
+            "2026-02-28T12:00:00.000Z", "2024-02-29T12:00:00.000Z", "2025-12-31T12:00:00.000Z",
+        ])
         self.assertEqual(result["mixed"]["newest"], result["expectedNewest"])
         self.assertNotEqual(result["mixed"]["newest"], result["oldSuccess"])
         self.assertIn("COVERAGE GAPS", result["mixed"]["state"])

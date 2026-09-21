@@ -574,6 +574,24 @@ CLUSTER_DID_0107_RAW = _raw_cluster_metric("0107", "raw_u8", 0xFF)
 CLUSTER_DID_1005_RAW = _raw_cluster_metric("1005", "raw_u8", 0xFF)
 
 
+def _radar_angle_metric(axis: str) -> MetricDefinition:
+    return MetricDefinition(
+        name=f"radar.alignment.{axis}", unit="deg", value_type="number",
+        stale_after_seconds=30.0, passive_min_interval_seconds=0.0,
+        minimum=-20.0, maximum=20.0,
+        sources=(SourceDefinition(
+            name="radar_acc.did.0845", bus="c-can", bitrate=500000,
+            acquisition_class="physical_read_data_by_identifier", quality="candidate",
+            provenance="projects/radar/findings/did_map.md; inferred signed i32 pair / 1e6 degrees",
+            side_effects="Fixed 22 0845 plus one ISO-TP FlowControl; no session change or calibration",
+        ),),
+    )
+
+
+RADAR_ELEVATION = _radar_angle_metric("elevation")
+RADAR_AZIMUTH = _radar_angle_metric("azimuth")
+
+
 METRICS = {
     definition.name: definition
     for definition in (
@@ -592,6 +610,8 @@ METRICS = {
         TRANSMISSION_TURBINE_SPEED,
         GENERATOR_FIELD_DUTY,
         VEHICLE_ODOMETER,
+        RADAR_ELEVATION,
+        RADAR_AZIMUTH,
         TIRE_PRESSURE_FL,
         TIRE_PRESSURE_FR,
         TIRE_PRESSURE_RR,

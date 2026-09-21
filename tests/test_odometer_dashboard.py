@@ -77,7 +77,7 @@ process.stdout.write(JSON.stringify({
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         rendered = json.loads(completed.stdout)
-        self.assertEqual(rendered["value"], "53191.9")
+        self.assertEqual(rendered["value"], "53,191")
         self.assertEqual(rendered["unit"], "mi")
         self.assertEqual(rendered["state"], "candidate")
         self.assertIn("CANDIDATE", rendered["status"])

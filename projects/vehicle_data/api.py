@@ -56,6 +56,8 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
             return self._json(200, self.broker.cached_health_response())
         if path == "/v1/diagnostics/dtcs":
             return self._json(200, self.broker.cached_dtc_response())
+        if path == "/v1/maintenance":
+            return self._json(200, self.broker.maintenance_response())
         if path == "/v1/metrics":
             return self._json(200, self.broker.list_metrics())
         prefix = "/v1/metrics/"
@@ -89,6 +91,8 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
         ):
             request_kind = "observation"
             metric = path[len(observation_prefix):]
+        elif path == "/v1/maintenance/oil-changes":
+            request_kind = "oil_change"
         else:
             return self._json(
                 404,
@@ -125,6 +129,14 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
                     "detail": "body must be one JSON object",
                 },
             )
+        if request_kind == "oil_change":
+            try:
+                record = self.broker.record_oil_change(payload)
+                return self._json(201, {"available": True, "record": record})
+            except (TypeError, ValueError) as exc:
+                return self._json(400, {"available": False, "detail": str(exc)})
+            except OSError as exc:
+                return self._json(503, {"available": False, "detail": f"Service record was not saved: {exc}"})
         if request_kind == "acquisition":
             allowed_mode = (
                 isinstance(payload, dict)

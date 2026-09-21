@@ -27,6 +27,20 @@ DIDs in `findings/radar_acc_did_findings.md` and `docs/oem/`.
 
 ## Maintained runtime
 
+The telemetry dashboard now has an always-visible alignment panel backed by
+`projects/vehicle_data/radar_alignment.py` (2026-09-16). It displays candidate
+stored `0845` elevation/azimuth and trailing one/five-minute sample averages.
+The +/-1 degree band is an approximate monitoring reference, not a verified
+firmware trip threshold; the signed microdegree scaling remains inferred.
+The instantaneous `0841` pitch signal is not used for this band.
+
+The fixed no-session `0845` read was commissioned parked on 2026-09-16 MDT:
+elevation +0.091537°, azimuth +0.093891°, exact response and passive restoration.
+The helper reads once per ten seconds during qualified engine-running
+intervals; that full cadence awaits live validation. Unlike the historical
+viewer, it does not change diagnostic session or send TesterPresent. See the
+vehicle-data README's radar deployment section and the DID map for provenance.
+
 `radar_acc_live.py` is the only maintained radar-specific executable. Direct
 mode is dry-run by default. Its gated live mode uses the shared scoped route
 owner: it resolves C-CAN from USB identity, arms only while it owns the logical

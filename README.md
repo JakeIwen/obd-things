@@ -59,7 +59,7 @@ tools/                     GENERIC, module-agnostic CLI tools (take a module key
   dtc_inventory.py           non-clearing per-ECU DTC inventory -> tmp/inventories/<key>/
   dtc_scan.py                offline multi-module DTC plan + saved-report import; no CAN access
   dtc_batch.py               guarded fixed 19 02 FF batch for 15 reviewed modules
-  dtc_web_arm.py             one-use local authorization for the Tailscale DTC UI
+  dtc_web_arm.py             optional legacy local authorization for older DTC UI clients
   can_capture_summary.py     interface-preserving offline candump/.zst summary (`--snapshot` bounds growing logs)
   can_event_window.py        bounded exact saved-log frame windows + optional CRC-8/SAE-J1850 audit
   three_bus_capture.py       cooperative receive-only three-role chunks -> tmp/captures/three_bus_drive/
@@ -284,7 +284,7 @@ bounded arm/restore interval after the additional gates below.
 | `identity_inventory.py` | bounded standardized/OEM identity set, excluding VIN | common live gates above; `--did` replaces defaults; VIN is opt-in and masked in reports |
 | `dtc_inventory.py` | non-clearing `19 01`, `19 02`, and `19 03` | common live gates; the larger supported-DTC `19 0A` catalog is opt-in |
 | `dtc_scan.py` | offline sequential multi-module `19 02 FF` plan and saved-report import | never opens CAN; preview/import existing reports only |
-| `dtc_batch.py` | fixed physical `19 02 FF` plan for 15 explicitly reviewed modules; PCM unsupported | `--execute` plus Park/gear/ignition-on-engine-off confirmations; fresh speed/RPM/identity/state gates before every request, <=1 Hz, grouped role windows, exact passive restoration before import; the Tailscale UI additionally requires a one-use local `dtc_web_arm.py` token |
+| `dtc_batch.py` | fixed physical `19 02 FF` plan for 15 explicitly reviewed modules; PCM unsupported | `--execute` plus Park/gear/ignition-on-engine-off confirmations; fresh speed/RPM/identity/state gates before every request, <=1 Hz, grouped role windows, exact passive restoration before import; Tailscale UI requires its exact configured Origin and the same explicit confirmations, without a separate local token |
 | `did_sweep.py` | bounded `22` range | common live gates; expanded ranges and explicit sessions have separate confirmations described below |
 | `routine_scan.py` | result-only `31 03` | common live gates; cannot start/stop a routine; expanded ranges and explicit sessions have separate confirmations |
 | `signal_correlate.py capture` | bounded capture plan | common live gates plus `--confirm-session-change --confirm-no-active-routine`; fixed extended session |

@@ -22,6 +22,9 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from projects.vehicle_data.api import MAX_REQUEST_BYTES, TelemetryClient
+from projects.vehicle_data.warning_chat import (
+    DEFAULT_SOCKET as DEFAULT_WARNING_CHAT_SOCKET, MAX_BODY as MAX_WARNING_CHAT_BYTES,
+)
 from projects.vehicle_data.broker import DEFAULT_SOCKET
 from lib.dtc_batch import FINAL_JOB_STATES, JobStore, atomic_json
 from lib.dtc_web import (
@@ -161,7 +164,7 @@ class DtcWebController:
                 "job": self._public_job(record),
             }
 
-    def start(self, token: str) -> dict[str, Any]:
+    def start(self, token: str | None = None) -> dict[str, Any]:
         with self._lock:
             current = self._pointer()
             if current is not None:
@@ -181,9 +184,10 @@ class DtcWebController:
                     raise DtcWebRequestError("a DTC batch is already queued or running")
             if self.request_path.exists():
                 raise DtcWebRequestError("a DTC batch request is already queued")
-            # Consume first: a later queue/storage failure requires a fresh
-            # local arm rather than leaving a reusable network credential.
-            self.arm_store.consume(token)
+            # Origin-restricted UI confirmation authorizes the guarded request.
+            # A local arm remains optional for compatibility with older clients.
+            if token is not None:
+                self.arm_store.consume(token)
             stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
             job_id = f"dtc-web-{stamp}-{uuid.uuid4().hex[:8]}"
             request = build_request(job_id)
@@ -338,11 +342,10 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
                 },
             )
         web_status = {
+            "warning_chat_enabled": self.server.warning_chat_socket is not None,
             "active_acquisition_enabled": self.server.allow_acquisitions,
             "dtc_jobs_enabled": self.server.dtc_controller is not None,
-            "dtc_jobs_require_local_one_use_arm": (
-                self.server.dtc_controller is not None
-            ),
+            "dtc_jobs_require_local_one_use_arm": False,
             "bind": f"{self.server.server_address[0]}:"
             f"{self.server.server_address[1]}",
         }
@@ -382,12 +385,16 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?", 1)[0]
+        if path.startswith("/v1/assistant/"):
+            return self._assistant_request("GET", path)
         if path in ("/", "/index.html"):
             return self._static("index.html", "text/html; charset=utf-8")
         if path == "/app.js":
             return self._static("app.js", "text/javascript; charset=utf-8")
         if path == "/profiles.js":
             return self._static("profiles.js", "text/javascript; charset=utf-8")
+        if path == "/warning-chat.js":
+            return self._static("warning-chat.js", "text/javascript; charset=utf-8")
         if path == "/style.css":
             return self._static("style.css", "text/css; charset=utf-8")
         if path in (
@@ -396,6 +403,7 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
             "/v1/history",
             "/v1/health",
             "/v1/diagnostics/dtcs",
+            "/v1/maintenance",
         ):
             return self._broker_request("GET", path)
         metric_prefix = "/v1/metrics/"
@@ -438,6 +446,10 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?", 1)[0]
+        if path.startswith("/v1/assistant/"):
+            return self._assistant_request("POST", path)
+        if path == "/v1/maintenance/oil-changes":
+            return self._maintenance_post(path)
         if path in (
             "/v1/diagnostics/dtc-jobs",
             "/v1/diagnostics/dtc-jobs/current/cancel",
@@ -487,6 +499,64 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
                     "detail": "only the approved acquisition modes are accepted",
                 },
             )
+        return self._broker_request("POST", path, payload)
+
+    def _assistant_request(self, method: str, path: str) -> None:
+        if self.server.warning_chat_socket is None:
+            return self._json(503, {"available": False, "detail": "Warning chat is disabled on this listener"})
+        allowed = (method == "GET" and (path == "/v1/assistant/status" or
+                   re.fullmatch(r"/v1/assistant/chats/[0-9a-f]{32}", path))) or (
+                   method == "POST" and (path == "/v1/assistant/chats" or
+                   re.fullmatch(r"/v1/assistant/chats/[0-9a-f]{32}/(messages|cancel|apply-warning|remove-warning)", path) or
+                   re.fullmatch(r"/v1/assistant/warnings/[0-9a-f]{64}/remove", path)))
+        if not allowed:
+            return self._json(404, {"available": False, "detail": "Unknown assistant request"})
+        host = self.headers.get("Host", "")
+        origin = f"http://{host}"
+        if (origin not in self.server.warning_chat_origins or
+                self.headers.get("Sec-Fetch-Site") not in (None, "same-origin") or
+                (method == "POST" and self.headers.get("Origin") != origin) or
+                (self.headers.get("Origin") not in (None, origin))):
+            return self._json(403, {"available": False, "detail": "Warning chat requires a trusted same-origin request"})
+        headers = {name: self.headers.get(name, "") for name in ("X-Van-Assistant-Key", "X-Van-Chat-Client")}
+        if any(not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", value) for value in headers.values()):
+            return self._json(401, {"available": False, "detail": "Connect this browser using the local assistant access code"})
+        payload = None
+        if method == "POST":
+            if self.headers.get_content_type() != "application/json":
+                return self._json(415, {"available": False, "detail": "JSON is required"})
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= MAX_WARNING_CHAT_BYTES:
+                    raise ValueError()
+                payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict):
+                    raise ValueError()
+            except (ValueError, UnicodeDecodeError):
+                return self._json(400, {"available": False, "detail": "Invalid assistant request body"})
+        try:
+            client = TelemetryClient(self.server.warning_chat_socket, timeout=12)
+            status, response = client.request(method, path, payload, headers=headers)
+            return self._json(status, response)
+        except (OSError, RuntimeError, ValueError):
+            return self._json(503, {"available": False, "detail": "Local Codex assistant is not running or is unavailable on the Pi"})
+
+    def _maintenance_post(self, path: str) -> None:
+        # Human notes only. Require a same-origin JSON request; plain forms
+        # and cross-origin browser requests cannot write the service journal.
+        expected_origin = f"http://{self.headers.get('Host', '')}"
+        if (self.headers.get("Origin") != expected_origin
+                or self.headers.get("Sec-Fetch-Site") not in (None, "same-origin")):
+            return self._json(403, {"available": False, "detail": "Service records require a same-origin request"})
+        if self.headers.get_content_type() != "application/json":
+            return self._json(415, {"available": False, "detail": "Service records require JSON"})
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= MAX_REQUEST_BYTES:
+                raise ValueError("Invalid service record size")
+            payload = json.loads(self.rfile.read(length))
+        except (ValueError, UnicodeDecodeError) as exc:
+            return self._json(400, {"available": False, "detail": str(exc)})
         return self._broker_request("POST", path, payload)
 
     def _dtc_job_post(self, path: str) -> None:
@@ -542,21 +612,20 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
                 result = controller.cancel()
             else:
                 expected = {
-                    "token",
                     "confirm_parked",
                     "confirm_park_gear",
                     "confirm_ignition_on_engine_off",
                 }
                 if (
                     not isinstance(payload, dict)
-                    or set(payload) != expected
+                    or set(payload) not in (expected, expected | {"token"})
                     or payload.get("confirm_parked") is not True
                     or payload.get("confirm_park_gear") is not True
                     or payload.get("confirm_ignition_on_engine_off") is not True
-                    or not isinstance(payload.get("token"), str)
+                    or ("token" in payload and not isinstance(payload["token"], str))
                 ):
                     raise DtcWebRequestError("DTC start request schema is not exact")
-                result = controller.start(payload["token"])
+                result = controller.start(payload.get("token"))
         except DtcWebAuthorizationError as exc:
             return self._json(
                 403,
@@ -590,12 +659,11 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
                     "GET", "/v1/snapshot"
                 )
                 web_status = {
+                    "warning_chat_enabled": self.server.warning_chat_socket is not None,
                     "active_acquisition_enabled":
                     self.server.allow_acquisitions,
                     "dtc_jobs_enabled": self.server.dtc_controller is not None,
-                    "dtc_jobs_require_local_one_use_arm": (
-                        self.server.dtc_controller is not None
-                    ),
+                    "dtc_jobs_require_local_one_use_arm": False,
                 }
                 payload["status_code"] = status_code
                 payload["web"] = web_status
@@ -653,12 +721,21 @@ class TelemetryWebServer(http.server.ThreadingHTTPServer):
         stream_max_seconds: float,
         dtc_controller: DtcWebController | None = None,
         dtc_trusted_origin: str | None = None,
+        warning_chat_socket: str | None = DEFAULT_WARNING_CHAT_SOCKET,
+        warning_chat_origins: list[str] | None = None,
     ):
         super().__init__(address, TelemetryWebHandler)
         self.telemetry_client = TelemetryClient(socket_path)
         self.allow_acquisitions = allow_acquisitions
         self.dtc_controller = dtc_controller
         self.dtc_trusted_origin = dtc_trusted_origin
+        self.warning_chat_socket = warning_chat_socket
+        bind, port = self.server_address[:2]
+        host = f"[{bind}]" if ":" in str(bind) else str(bind)
+        self.warning_chat_origins = {f"http://{host}:{port}"}
+        if bind in LOOPBACK_BINDS:
+            self.warning_chat_origins.add(f"http://localhost:{port}")
+        self.warning_chat_origins.update(warning_chat_origins or [])
         self.stream_interval_seconds = stream_interval_seconds
         self.stream_max_seconds = stream_max_seconds
         self.snapshot_instance_id = uuid.uuid4().hex
@@ -685,6 +762,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--socket", default=DEFAULT_SOCKET)
     parser.add_argument("--bind", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--warning-chat-socket", default=DEFAULT_WARNING_CHAT_SOCKET)
+    parser.add_argument("--no-warning-chat", action="store_true")
+    parser.add_argument("--warning-chat-origin", action="append", default=[],
+                        help="additional exact trusted HTTP origin for warning chat (for example http://vanpi.lan:8765)")
     parser.add_argument(
         "--allow-remote-bind",
         action="store_true",
@@ -699,16 +780,24 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_STREAM_INTERVAL_SECONDS,
     )
     parser.add_argument("--stream-max-seconds", type=float, default=MAX_STREAM_SECONDS)
-    parser.add_argument(
+    acquisition = parser.add_mutually_exclusive_group()
+    acquisition.add_argument(
         "--allow-acquisitions",
         action="store_true",
-        help="allow the dashboard to request an allowlisted passive acquisition",
+        default=True,
+        help="allow the dashboard to request an allowlisted passive voltage read (default)",
+    )
+    acquisition.add_argument(
+        "--cache-only",
+        dest="allow_acquisitions",
+        action="store_false",
+        help="disable browser-requested voltage reads; GETs and streams remain cache-only in either mode",
     )
     parser.add_argument(
         "--enable-dtc-jobs",
         action="store_true",
         help=(
-            "enable one-use-locally-armed fixed DTC batch requests on this "
+            "enable confirmed, guarded fixed DTC batch requests on this "
             "listener; never enable this on the unauthenticated LAN listener"
         ),
     )
@@ -801,6 +890,8 @@ def main(argv=None) -> int:
         stream_max_seconds=args.stream_max_seconds,
         dtc_controller=dtc_controller,
         dtc_trusted_origin=dtc_origin,
+        warning_chat_socket=None if args.no_warning_chat else args.warning_chat_socket,
+        warning_chat_origins=args.warning_chat_origin,
     )
     try:
         server.serve_forever(poll_interval=0.5)

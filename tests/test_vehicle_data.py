@@ -103,6 +103,14 @@ class FakeBackend:
         )
 
 class SourceTests(unittest.TestCase):
+    def test_web_passive_acquisition_default_and_cache_only_opt_out(self):
+        parser = build_web_parser()
+        self.assertTrue(parser.parse_args([]).allow_acquisitions)
+        self.assertTrue(parser.parse_args(["--allow-acquisitions"]).allow_acquisitions)
+        self.assertFalse(parser.parse_args(["--cache-only"]).allow_acquisitions)
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["--cache-only", "--allow-acquisitions"])
+
     def test_runtime_resolved_channel_is_required(self):
         for channel in (None, "c-can", "vcan0", "can", "can-1", ""):
             with self.subTest(channel=channel):
@@ -180,6 +188,8 @@ class SourceTests(unittest.TestCase):
                 "tire.pressure.rr",
                 "vehicle.ignition_on",
                 "vehicle.odometer",
+                "radar.alignment.elevation",
+                "radar.alignment.azimuth",
                 "vehicle.speed",
                 "diagnostics.cluster.did.0107.raw",
                 "diagnostics.cluster.did.1000.raw",
@@ -531,6 +541,26 @@ class FakeAcquirer:
             "active_inhibits": [],
         }
 class BrokerTests(unittest.TestCase):
+    def test_last_reading_survives_helper_stop_without_entering_live_cache(self):
+        broker = TelemetryBroker(acquirer=FakeAcquirer())
+        definition = METRICS["engine.vvt_oil_temperature"]
+        source = definition.sources[0]
+        broker._store_active_observation({
+            "metric": definition.name, "source": source.name,
+            "unit": definition.unit, "bus": source.bus, "quality": source.quality,
+            "value": 180,
+        })
+        live = broker.metric_response(definition.name)
+        self.assertTrue(live["available"])
+        broker._record_active_failure("engine_not_running", "stopped")
+        stopped = broker.metric_response(definition.name)
+        self.assertFalse(stopped["available"])
+        self.assertEqual(stopped["reason"], "engine_not_running")
+        self.assertEqual(stopped["last_recorded"]["value"], 180)
+        self.assertEqual(stopped["last_recorded"]["observed_at"], live["observed_at"])
+        self.assertNotIn(definition.name, broker._cache)
+        self.assertNotIn("available", stopped["last_recorded"])
+
     def test_broker_requires_explicit_role_aware_acquirer(self):
         with self.assertRaisesRegex(ValueError, "serial-role-aware"):
             TelemetryBroker()
@@ -1925,6 +1955,20 @@ class WebTests(unittest.TestCase):
         self.assertEqual(controller.started, ["x" * 43])
         self.assertEqual(json.loads(raw)["state"], "queued")
 
+        tokenless = {key: value for key, value in request.items() if key != "token"}
+        for field in ("confirm_parked", "confirm_park_gear", "confirm_ignition_on_engine_off"):
+            for bad in (False, 1, "true", None):
+                status, _ = self.request("POST", "/v1/diagnostics/dtc-jobs",
+                    {**tokenless, field: bad}, headers={"Origin": origin})
+                self.assertEqual(status, 409)
+        self.assertEqual(controller.started, ["x" * 43])
+        status, raw = self.request("POST", "/v1/diagnostics/dtc-jobs", tokenless,
+                                   headers={"Origin": origin})
+        self.assertEqual(status, 202)
+        self.assertEqual(controller.started, ["x" * 43, None])
+        status, raw = self.request("GET", "/v1/snapshot")
+        self.assertFalse(json.loads(raw)["web"]["dtc_jobs_require_local_one_use_arm"])
+
         status, raw = self.request(
             "POST",
             "/v1/diagnostics/dtc-jobs/current/cancel",
@@ -1934,7 +1978,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual(status, 202)
         self.assertEqual(controller.cancelled, 1)
 
-    def test_web_gets_are_cache_only_and_posts_default_closed(self):
+    def test_web_gets_are_cache_only_and_disabled_posts_are_closed(self):
         status, raw = self.request("GET", "/v1/snapshot")
         self.assertEqual(status, 200)
         snapshot = json.loads(raw)
@@ -1992,7 +2036,12 @@ class WebTests(unittest.TestCase):
         self.assertEqual(json.loads(raw)["reason"], "not_found")
 
     def test_enabled_web_proxy_allows_only_passive_acquisition(self):
-        self.web.allow_acquisitions = True
+        self.web.allow_acquisitions = build_web_parser().parse_args([]).allow_acquisitions
+
+        status, raw = self.request("GET", "/v1/snapshot")
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(raw)["web"]["active_acquisition_enabled"])
+        self.assertEqual(self.acquirer.calls, [])
 
         status, raw = self.request(
             "POST",
@@ -2117,7 +2166,8 @@ class WebTests(unittest.TestCase):
         self.assertIn(b"automaticProfile", profiles)
         self.assertIn(b'selected: "overview"', profiles)
         self.assertIn(b"van-telemetry.dashboard.v2", profiles)
-        self.assertIn(b"LEGACY_STORAGE_KEY", profiles)
+        self.assertIn(b"van-telemetry.dashboard.v3", profiles)
+        self.assertIn(b"van-telemetry.dashboard.v1", profiles)
         self.assertIn(b'"drive"', profiles)
         self.assertIn(b'"engine"', profiles)
         self.assertIn(b'"tires"', profiles)
@@ -2149,8 +2199,8 @@ class WebTests(unittest.TestCase):
         self.assertIn(b"DELIVERY ERROR", app)
         self.assertIn(b"renderOilPressureReference", app)
         self.assertIn("65–80 psi".encode(), app)
-        self.assertIn(b"Mapping pending", app)
-        self.assertIn(b"/4 MAPPED", app)
+        self.assertIn(b"UNMAPPED", app)
+        self.assertIn(b"sectionReadingStatus", app)
         self.assertNotIn(b"card.hidden = !definition", app)
         self.assertNotIn(b'byId("tire-grid").hidden = registered === 0', app)
         self.assertNotIn(b"Not yet allowlisted", app)
@@ -2540,7 +2590,7 @@ const emptyEngine = {
     "torque",
     "power",
   ].every(
-    (name) => element(`engine-${name}-status`).textContent === "Mapping pending",
+    (name) => element(`engine-${name}-status`).textContent === "UNMAPPED",
   ),
 };
 const coolantDefinition = {
@@ -2727,7 +2777,7 @@ process.stdout.write(JSON.stringify({
         )
         self.assertFalse(result["missingDriveRender"]["registered"])
         self.assertFalse(result["missingDriveRender"]["hidden"])
-        self.assertEqual(result["missingDriveRender"]["status"], "Mapping pending")
+        self.assertEqual(result["missingDriveRender"]["status"], "UNMAPPED")
         self.assertFalse(result["candidateDriveRender"]["hidden"])
         self.assertFalse(result["candidateDriveRender"]["heroReady"])
         self.assertEqual(result["candidateDriveRender"]["value"], "\u2014")
@@ -2737,7 +2787,8 @@ process.stdout.write(JSON.stringify({
         self.assertFalse(result["verifiedDriveRender"]["hidden"])
         self.assertTrue(result["verifiedDriveRender"]["heroReady"])
         self.assertEqual(result["verifiedDriveRender"]["value"], "1,234")
-        self.assertIn("VERIFIED", result["verifiedDriveRender"]["status"])
+        self.assertNotIn("VERIFIED", result["verifiedDriveRender"]["status"])
+        self.assertIn("old", result["verifiedDriveRender"]["status"])
         self.assertNotIn("engine.rpm", result["featuredCandidateDrive"])
         self.assertIn("engine.rpm", result["featuredVerifiedDrive"])
         self.assertTrue(result["locallyAged"]["metric"]["stale"])
@@ -2759,8 +2810,8 @@ process.stdout.write(JSON.stringify({
             "not independent verification",
             result["alfaTires"]["note"],
         )
-        self.assertEqual(result["registeredStale"], "0/4 LIVE · 4/4 MAPPED")
-        self.assertEqual(result["emptyTires"]["state"], "0/4 MAPPED")
+        self.assertEqual(result["registeredStale"], "NOT LIVE")
+        self.assertEqual(result["emptyTires"]["state"], "NOT LIVE · 0/4 MAPPED")
         self.assertIn(
             "mapping is pending",
             result["emptyTires"]["note"],
@@ -2768,15 +2819,16 @@ process.stdout.write(JSON.stringify({
         self.assertFalse(result["emptyTires"]["gridHidden"])
         self.assertFalse(result["emptyTires"]["cardsHidden"])
         self.assertEqual(result["emptyEngine"]["mapped"], 0)
-        self.assertEqual(result["emptyEngine"]["state"], "0/6 MAPPED")
-        self.assertIn("remain visible", result["emptyEngine"]["note"])
+        self.assertEqual(result["emptyEngine"]["state"], "NOT LIVE · 0/6 MAPPED")
+        self.assertEqual(result["emptyEngine"]["note"], "")
         self.assertTrue(result["emptyEngine"]["cardsVisible"])
         self.assertTrue(result["emptyEngine"]["statusesPending"])
         self.assertEqual(result["liveCoolant"]["ready"], 1)
         self.assertEqual(result["liveCoolant"]["state"], "1/6 LIVE · 1/6 MAPPED")
         self.assertEqual(result["liveCoolant"]["value"], "194")
         self.assertEqual(result["liveCoolant"]["unit"], "\u00b0F")
-        self.assertIn("VERIFIED", result["liveCoolant"]["status"])
+        self.assertNotIn("VERIFIED", result["liveCoolant"]["status"])
+        self.assertIn("old", result["liveCoolant"]["status"])
         self.assertEqual(result["liveTorque"]["ready"], 1)
         self.assertEqual(
             result["liveTorque"]["state"],

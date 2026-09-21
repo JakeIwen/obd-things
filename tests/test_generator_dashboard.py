@@ -22,7 +22,7 @@ class GeneratorDashboardAssetTests(unittest.TestCase):
 
         self.assertIn("Generator field duty", index)
         self.assertIn("high commanded charging effort", index)
-        self.assertIn("not alternator current or alternator", index)
+        self.assertNotIn("not alternator current or alternator", index)
         self.assertIn("temperature", index)
         self.assertIn("does not infer a thermal danger threshold", index)
         self.assertIn('data-widget="charging"', index)
@@ -44,7 +44,7 @@ process.stdout.write(JSON.stringify({
   parked: manager.profiles.parked.widgets,
   driving: manager.profiles.driving.widgets,
   diagnostics: manager.profiles.diagnostics.widgets,
-  custom: manager.defaultSettings().customWidgets,
+  custom: manager.resolve({...manager.defaultSettings(), selected: "custom"}).widgets,
 }));
 """
         completed = subprocess.run(
@@ -263,7 +263,7 @@ process.stdout.write(JSON.stringify({
         self.assertEqual(cached_error["cardState"], "unavailable")
         self.assertIn("owns can0", cached_error["detail"])
 
-        self.assertEqual(rendered["pending"]["status"], "Mapping pending")
+        self.assertEqual(rendered["pending"]["status"], "UNMAPPED")
         self.assertEqual(rendered["pending"]["state"], "mapping pending")
         self.assertIn("generator.field_duty", rendered["featured"])
 

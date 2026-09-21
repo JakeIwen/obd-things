@@ -384,8 +384,10 @@ class EarlyWarningEvaluator:
         rules: Sequence[WarningRule | AbsoluteOilPressureRule] = (
             DEFAULT_EVALUATION_RULES
         ),
+        custom_rules_path=None,
     ):
         self.historian = historian
+        self.custom_rules_path = custom_rules_path
         self.rules = tuple(rules)
         keys = [rule.key for rule in self.rules]
         if len(keys) != len(set(keys)):
@@ -1117,6 +1119,18 @@ class EarlyWarningEvaluator:
             self.evaluate_rule(rule, at=evaluated, _refresh_rollups=False)
             for rule in self.rules
         ]
+        custom_status = {"enabled": self.custom_rules_path is not None, "count": 0, "error": None}
+        if self.custom_rules_path is not None:
+            from projects.vehicle_data.custom_warnings import load_rules, evaluate_rule
+            try:
+                rows = load_rules(self.custom_rules_path)
+                custom = [evaluate_rule(self.historian, row, evaluated) for row in rows]
+                assessments.extend(custom)
+                custom_status["count"] = len(rows)
+                custom_status["rule_ids"] = [row["id"] for row in rows]
+            except (OSError, ValueError, KeyError, TypeError):
+                # Malformed owner configuration must not suppress built-in warnings.
+                custom_status["error"] = "Custom warning configuration could not be evaluated"
         active = [
             assessment
             for assessment in assessments
@@ -1125,6 +1139,7 @@ class EarlyWarningEvaluator:
         return {
             "schema_version": WARNING_SCHEMA_VERSION,
             "generated_at": evaluated.isoformat(),
+            "custom_rules": custom_status,
             "method": {
                 "center": "median of completed comparable bucket medians",
                 "spread": "1.4826 × median absolute deviation",

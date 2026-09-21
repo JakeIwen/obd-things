@@ -4,6 +4,7 @@ const byId = (id) => document.getElementById(id);
 const profileManager = window.VanDashboardProfiles;
 let acquisitionEnabled = false;
 let dtcJobsEnabled = false;
+let dtcLegacyTokenRequired = false;
 let dtcJobPollTimer = null;
 let dtcLastJobState = null;
 let dtcCancelRequested = false;
@@ -13,7 +14,9 @@ let lastSnapshot = {
   catalog: [],
   metrics: {},
 };
-let supplemental = {history: {}, earlyWarnings: {}, dtcs: {}};
+let supplemental = {history: {}, earlyWarnings: {}, dtcs: {}, maintenance: {}};
+let pendingOilChange = null;
+let oilChangeSaving = false;
 let supplementalRequestSequence = 0;
 let supplementalRequestStartedEpochMs = null;
 let supplementalRequestInFlight = null;
@@ -31,12 +34,26 @@ let lastAcceptedMonotonicMs = null;
 let ageCursorMonotonicMs = null;
 const retiredInstances = new Set();
 let lastProfileRenderKey = null;
+let lastLayoutEditorSignature = null;
+let lastAppliedLayoutSignature = null;
 let lastRoleGridSignature = null;
 let lastCatalogSignature = null;
 let additionalMetricStructureKey = null;
+let warningChatLoading = false;
 const additionalMetricNodes = new Map();
 
 const DRIVER_QUALITIES = new Set(["verified", "observed_alfa_scale"]);
+// Historical display policy only: never changes freshness, alarms or CAN gates.
+// Unlisted metrics (including operational states and diagnostic raw bytes) are live-only.
+const RETAIN_LAST_READING = new Set([
+  "battery.voltage", "vehicle.odometer", "engine.oil_life_remaining",
+  "engine.coolant_temperature", "engine.vvt_oil_temperature", "transmission.oil_temperature",
+  "tire.pressure.fl", "tire.pressure.fr", "tire.pressure.rl", "tire.pressure.rr",
+  "radar.alignment.elevation", "radar.alignment.azimuth",
+]);
+const RETAIN_CANDIDATE_ESTIMATES = new Set([
+  "vehicle.odometer", "radar.alignment.elevation", "radar.alignment.azimuth",
+]);
 const MAX_STATE_FALLBACK_AGE_MS = 5000;
 const MAX_STREAM_DELIVERY_AGE_MS = 10000;
 const MAX_HTTP_ROUND_TRIP_MS = 2000;
@@ -302,7 +319,7 @@ function ageSnapshot(snapshot, addedAgeMs) {
       vehicle.confidence = "stale";
       vehicle.basis = "client_freshness_expired";
       vehicle.detail = (
-        "No newer verified vehicle-state snapshot arrived before the " +
+        "No newer vehicle-state snapshot arrived before the " +
         "freshness window expired."
       );
     }
@@ -314,7 +331,7 @@ function ageSnapshot(snapshot, addedAgeMs) {
     vehicle.running = null;
     vehicle.confidence = "stale";
     vehicle.basis = "client_freshness_invalid";
-    vehicle.detail = "Verified vehicle-state evidence lacked a valid age.";
+    vehicle.detail = "Vehicle-state evidence lacked a valid age.";
   }
 }
 
@@ -457,8 +474,45 @@ function observationState(definition, metric) {
 }
 
 function displayQuality(quality) {
+  if (quality === "verified") return "";
   if (quality === "observed_alfa_scale") return "ALFA SCALE";
   return humanize(quality).toUpperCase();
+}
+
+function lastRecordedObservation(definition, metric) {
+  if (!definition || !RETAIN_LAST_READING.has(definition.name)) return null;
+  const valid = (sample) => {
+    if (!sample || typeof sample.value !== "number" || !Number.isFinite(sample.value) ||
+        sample.unit !== definition.unit || !Number.isFinite(Date.parse(sample.observed_at)) ||
+        Date.parse(sample.observed_at) > Date.now()) return false;
+    if (Number.isFinite(definition.minimum) && sample.value < definition.minimum) return false;
+    if (Number.isFinite(definition.maximum) && sample.value > definition.maximum) return false;
+    const source = definition.sources?.find((item) => item.name === sample.source);
+    const quality = normalizedQuality(sample.quality);
+    return Boolean(source && normalizedQuality(source.quality) === quality &&
+      (DRIVER_QUALITIES.has(quality) ||
+        (quality === "candidate" && RETAIN_CANDIDATE_ESTIMATES.has(definition.name))));
+  };
+  return [metric?.available ? metric : null, metric?.last_recorded]
+    .filter(valid).sort((a, b) => Date.parse(b.observed_at) - Date.parse(a.observed_at))[0] || null;
+}
+
+function lastRecordedStatus(sample, current) {
+  return formatTimestamp(sample.observed_at);
+}
+
+function markRetained(element, retained) {
+  const next = retained ? "true" : "false";
+  if (element.dataset.retained !== next) element.dataset.retained = next;
+}
+
+function sectionReadingStatus(live, mapped, total, retained = 0, quality = "") {
+  return [
+    live > 0 ? `${live}/${total} LIVE` : "NOT LIVE",
+    mapped < total ? `${mapped}/${total} MAPPED` : null,
+    retained > 0 ? `${retained}/${total} LAST READINGS` : null,
+    quality,
+  ].filter(Boolean).join(" · ");
 }
 
 function metricRole(definition) {
@@ -483,7 +537,7 @@ function findDefinition(catalog, descriptor) {
 function formatMetricValue(name, value) {
   if (typeof value !== "number" || !Number.isFinite(value)) return String(value);
   if (name === "generator.field_duty") return value.toFixed(3);
-  if (name === "vehicle.odometer") return value.toFixed(1);
+  if (name === "vehicle.odometer") return Math.trunc(value).toLocaleString();
   if (name.includes("rpm")) return Math.round(value).toLocaleString();
   if (name.includes("gear")) return String(value);
   if (name.includes("speed") || name.includes("pressure")) return value.toFixed(1);
@@ -497,7 +551,7 @@ function setCardState(id, state) {
 }
 
 function metricStatus(definition, metric, state) {
-  if (!definition) return "Mapping pending";
+  if (!definition) return "UNMAPPED";
   if (!state.available) {
     return humanize(metric?.reason || "no cached sample");
   }
@@ -508,7 +562,7 @@ function metricStatus(definition, metric, state) {
   if (!state.driverQualified) {
     return `${displayQuality(state.quality)} · diagnostics only`;
   }
-  return `${displayQuality(state.quality)} · ${formatAge(metric.age_ms)} old`;
+  return [displayQuality(state.quality), `${formatAge(metric.age_ms)} old`].filter(Boolean).join(" · ");
 }
 
 function updateMetricPanelSummary(profileId) {
@@ -539,60 +593,187 @@ function setProfile() {
   );
   const renderKey = JSON.stringify({
     selected: settings.selected,
-    customWidgets: settings.customWidgets,
+    customLayout: settings.customLayout,
     id: effective.id,
     title: effective.title,
     reason: effective.reason,
     widgets: effective.widgets,
+    rows: effective.rows,
   });
   if (renderKey === lastProfileRenderKey) return;
   lastProfileRenderKey = renderKey;
-  const visible = new Set(effective.widgets);
-  document.querySelectorAll("[data-widget]").forEach((panel) => {
-    panel.hidden = !visible.has(panel.dataset.widget);
-  });
+  const layoutSignature = JSON.stringify([effective.rows, effective.hidden]);
+  if (layoutSignature !== lastAppliedLayoutSignature) {
+    lastAppliedLayoutSignature = layoutSignature;
+    const visible = new Set(effective.widgets);
+    const panels = new Map();
+    document.querySelectorAll("[data-widget]").forEach((panel) => {
+      panel.hidden = !visible.has(panel.dataset.widget);
+      panels.set(panel.dataset.widget, panel);
+    });
+    const customizer = document.querySelector(".customizer");
+    [...effective.rows.flat(), ...effective.hidden].forEach((entry) => {
+      const panel = panels.get(entry.id);
+      panel.dataset.width = entry.width;
+      customizer.parentElement.insertBefore(panel, customizer);
+    });
+  }
   document.body.dataset.profile = effective.id;
   updateMetricPanelSummary(effective.id);
   text("dashboard-title", effective.title);
   text("profile-reason", effective.reason);
   byId("profile").value = settings.selected;
-  document.querySelectorAll("#widget-options input").forEach((input) => {
-    input.checked = settings.customWidgets.includes(input.value);
+  const customizer = document.querySelector(".customizer");
+  customizer.hidden = effective.id !== "custom";
+  if (!customizer.hidden) renderLayoutEditor(effective);
+}
+
+function editLayout(action) {
+  const focusId = document.activeElement?.id;
+  const current = profileManager.customize(settings, lastSnapshot.status?.vehicle_state);
+  settings = profileManager.saveSettings(action(current));
+  setProfile();
+  if (focusId) byId(focusId)?.focus({preventScroll: true});
+}
+
+function renderLayoutEditor(effective) {
+  const signature = JSON.stringify([effective.id, effective.rows, effective.hidden]);
+  if (signature === lastLayoutEditorSignature) return;
+  lastLayoutEditorSignature = signature;
+  const root = byId("widget-options");
+  root.replaceChildren();
+  const definitions = new Map(profileManager.widgets.map((widget) => [widget.id, widget]));
+  const halfTiles = effective.rows.flat().filter((entry) => entry.width === "half");
+  text("layout-editor-note", effective.id === "custom"
+    ? "Editing Custom · saved on this device. Rows below match the dashboard; phones stack each pair."
+    : `Showing ${effective.label}. Any edit copies this view to Custom; the preset stays unchanged.`);
+  function tileEditor(entry, partner) {
+    const widget = definitions.get(entry.id);
+    const card = document.createElement("div");
+    card.className = "layout-tile";
+    card.dataset.layoutWidget = entry.id;
+    const label = document.createElement("label");
+    const input = document.createElement("input");
+    input.id = `layout-visible-${entry.id}`;
+    input.type = "checkbox";
+    input.checked = entry.visible;
+    input.addEventListener("change", () => {
+      editLayout((current) => profileManager.changeTile(current, entry.id, {visible: input.checked}));
+    });
+    label.append(input, document.createTextNode(widget.label));
+    card.append(label);
+    if (widget.widths.length > 1) {
+      const widthLabel = document.createElement("label");
+      widthLabel.textContent = "Width";
+      const width = document.createElement("select");
+      width.id = `layout-width-${entry.id}`;
+      width.setAttribute("aria-label", `${widget.label} width`);
+      widget.widths.forEach((value) => {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = value === "half" ? "Half" : "Full";
+        width.append(option);
+      });
+      width.value = entry.width;
+      width.addEventListener("change", () => editLayout(
+        (current) => profileManager.changeTile(current, entry.id, {width: width.value}),
+      ));
+      widthLabel.append(width);
+      card.append(widthLabel);
+    } else {
+      const note = document.createElement("p");
+      note.className = "muted";
+      note.textContent = "Full width required";
+      card.append(note);
+    }
+    if (entry.visible && entry.width === "half" && halfTiles.length > 1) {
+      const pairLabel = document.createElement("label");
+      pairLabel.textContent = "Pair with";
+      const pair = document.createElement("select");
+      pair.id = `layout-pair-${entry.id}`;
+      pair.setAttribute("aria-label", `Pair ${widget.label} with`);
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "Choose tile";
+      pair.append(placeholder);
+      halfTiles.filter((other) => other.id !== entry.id).forEach((other) => {
+        const option = document.createElement("option");
+        option.value = other.id;
+        option.textContent = definitions.get(other.id).label;
+        pair.append(option);
+      });
+      pair.value = partner?.id || "";
+      pair.addEventListener("change", () => {
+        if (pair.value) editLayout((current) => profileManager.pairTiles(current, entry.id, pair.value));
+      });
+      pairLabel.append(pair);
+      card.append(pairLabel);
+    }
+    return card;
+  }
+  effective.rows.forEach((row, index) => {
+    const section = document.createElement("section");
+    section.className = "layout-row";
+    section.dataset.layoutRow = String(index);
+    const header = document.createElement("div");
+    header.className = "layout-row-heading";
+    const title = document.createElement("h3");
+    title.textContent = `Row ${index + 1}`;
+    header.append(title);
+    const actions = document.createElement("div");
+    actions.className = "button-row";
+    for (const [label, direction] of [["Move Up", -1], ["Move Down", 1]]) {
+      const button = document.createElement("button");
+      button.id = `layout-${direction < 0 ? "up" : "down"}-${row[0].id}`;
+      button.type = "button";
+      button.textContent = label;
+      button.setAttribute("aria-label", `${label}: row ${index + 1}`);
+      button.disabled = index + direction < 0 || index + direction >= effective.rows.length;
+      button.addEventListener("click", () => editLayout(
+        (current) => profileManager.moveRow(current, index, direction),
+      ));
+      actions.append(button);
+    }
+    if (row.length === 2) {
+      const swap = document.createElement("button");
+      swap.id = `layout-swap-${row.map((entry) => entry.id).sort().join("-")}`;
+      swap.type = "button";
+      swap.textContent = "Swap Tiles";
+      swap.setAttribute("aria-label", `Swap tiles in row ${index + 1}`);
+      swap.addEventListener("click", () => editLayout((current) => profileManager.swapRow(current, index)));
+      actions.append(swap);
+    }
+    header.append(actions);
+    const tiles = document.createElement("div");
+    tiles.className = "layout-row-tiles";
+    row.forEach((entry, position) => tiles.append(tileEditor(entry, row[1 - position])));
+    section.append(header, tiles);
+    root.append(section);
   });
+  const hidden = byId("hidden-widget-options");
+  hidden.replaceChildren();
+  effective.hidden.forEach((entry) => hidden.append(tileEditor(entry)));
+  byId("hidden-widgets").hidden = effective.hidden.length === 0;
 }
 
 function setupProfiles() {
+  const panels = [...document.querySelectorAll("main > section.panel")];
+  const known = new Set(profileManager.widgets.map((widget) => widget.id));
+  if (panels.length !== known.size || panels.some((panel) => !known.has(panel.dataset.widget)) ||
+      new Set(panels.map((panel) => panel.dataset.widget)).size !== known.size) {
+    throw new Error("Dashboard panels and widget registry must match exactly");
+  }
   const select = byId("profile");
-  const choices = [
-    ["auto", "Automatic"],
-    ...Object.entries(profileManager.profiles).map(
-      ([id, profile]) => [id, profile.label],
-    ),
-    ["custom", "Custom"],
-  ];
+  const choices = [["auto", "Automatic"],
+    ...Object.entries(profileManager.profiles).map(([id, profile]) => [id, profile.label]),
+    ["custom", "Custom"]];
   choices.forEach(([value, label]) => {
     const option = document.createElement("option");
     option.value = value;
     option.textContent = label;
     select.append(option);
   });
-  profileManager.widgets.forEach((widget) => {
-    const label = document.createElement("label");
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.value = widget.id;
-    input.addEventListener("change", () => {
-      const chosen = [...document.querySelectorAll("#widget-options input:checked")]
-        .map((element) => element.value);
-      settings = profileManager.saveSettings({
-        selected: "custom",
-        customWidgets: chosen,
-      });
-      setProfile();
-    });
-    label.append(input, document.createTextNode(widget.label));
-    byId("widget-options").append(label);
-  });
+  byId("customize-current").addEventListener("click", () => editLayout((current) => current));
   select.addEventListener("change", () => {
     settings = profileManager.saveSettings({
       ...settings,
@@ -611,10 +792,199 @@ function renderVehicleState(status) {
   const vehicle = status.vehicle_state || {};
   text("vehicle-state", humanize(vehicle.state));
   text("running-state", yesNoUnknown(vehicle.running));
-  text("state-confidence", humanize(vehicle.confidence));
+  const confidence = byId("state-confidence");
+  const verified = normalizedQuality(vehicle.confidence) === "verified";
+  text("state-confidence", verified ? "" : humanize(vehicle.confidence), "");
+  if (confidence.parentElement) confidence.parentElement.hidden = verified;
   text("state-basis", humanize(vehicle.basis));
   text("state-age", formatAge(vehicle.age_ms));
   text("state-detail", vehicle.detail, "No passive state detail is available.");
+}
+
+function renderRadarAlignment(status, catalog, metrics) {
+  const summaries = status.radar_alignment || {};
+  const format = (value) => Number.isFinite(value)
+    ? `${value >= 0 ? "+" : ""}${value.toFixed(3)}°` : "—";
+  let freshCount = 0;
+  let retainedCount = 0;
+  let maxMagnitude = 0;
+  ["elevation", "azimuth"].forEach((axis) => {
+    const name = `radar.alignment.${axis}`;
+    const metric = metrics[name];
+    const definition = catalog.find((item) => item.name === name);
+    const state = observationState(definition, metric);
+    const fresh = state.available && !state.stale && Number.isFinite(metric.value);
+    const windows = summaries[name] || {};
+    const retainedSample = lastRecordedObservation(definition, metric);
+    const latest = Number.isFinite(windows.latest_value) && windows.observed_at
+      ? {value: windows.latest_value, observed_at: windows.observed_at} : retainedSample;
+    const retained = Boolean(latest);
+    const observedAt = !fresh && retained ? latest.observed_at : null;
+    const timestamp = byId(`radar-${axis}-time`);
+    text(`radar-${axis}-time`, observedAt ? formatTimestamp(observedAt) : "", "");
+    if (timestamp.dateTime !== (observedAt || "")) timestamp.dateTime = observedAt || "";
+    timestamp.hidden = !observedAt;
+    markRetained(timestamp, false);
+    markRetained(byId(`radar-${axis}-margin`), false);
+    if (!fresh && retained) retainedCount += 1;
+    text(`radar-${axis}-current`, fresh ? format(metric.value)
+      : retained ? format(latest.value) : "—");
+    for (const seconds of [60, 300]) {
+      const window = windows[String(seconds)];
+      text(`radar-${axis}-${seconds}`, (fresh || retained) && window?.count >= 2 ? format(window.mean) : "—");
+    }
+    if (fresh) {
+      freshCount += 1;
+      const magnitude = Math.abs(metric.value);
+      maxMagnitude = Math.max(maxMagnitude, magnitude);
+      const remaining = 1 - magnitude;
+      text(`radar-${axis}-margin`, remaining >= 0
+        ? `${remaining.toFixed(3)}° to ±1.00° reference · ${formatAge(metric.age_ms)} old`
+        : `${(-remaining).toFixed(3)}° beyond ±1.00° reference · ${formatAge(metric.age_ms)} old`);
+      const peak = windows["300"]?.peak_abs;
+      text(`radar-${axis}-coverage`, Number.isFinite(peak)
+        ? `5 min peak |angle| ${peak.toFixed(3)}°` : "", "");
+    } else if (retained) {
+      text(`radar-${axis}-margin`, "", "");
+      const peak = windows["300"]?.peak_abs;
+      text(`radar-${axis}-coverage`, Number.isFinite(peak)
+        ? `Last 5 min peak |angle| ${peak.toFixed(3)}°` : "", "");
+    } else {
+      text(`radar-${axis}-margin`, metric?.available
+        ? `Last estimate ${format(metric.value)} · stale (${formatAge(metric.age_ms)} old)`
+        : status.radar_alignment_polling?.commissioned === false
+          ? status.radar_alignment_polling.detail
+          : metric?.detail || "Awaiting commissioned radar angle readings.");
+      text(`radar-${axis}-coverage`, "No current rolling average", "");
+    }
+    byId(`radar-${axis}-margin`).hidden = !byId(`radar-${axis}-margin`).textContent;
+  });
+  // Show the shared unavailable explanation once, beneath the second axis.
+  // Keep axis-specific margins and peak values when readings are present.
+  const duplicateUnavailable = byId("radar-elevation-coverage").textContent === "No current rolling average" &&
+    byId("radar-azimuth-coverage").textContent === "No current rolling average" &&
+    byId("radar-elevation-margin").textContent === byId("radar-azimuth-margin").textContent;
+  byId("radar-elevation-margin").hidden = duplicateUnavailable || !byId("radar-elevation-margin").textContent;
+  byId("radar-elevation-coverage").hidden = duplicateUnavailable;
+  const badge = freshCount < 2 ? (retainedCount ? "LAST RECORDED · NOT LIVE" : "NO LIVE ANGLE DATA")
+    : maxMagnitude >= 1 ? "OUTSIDE ±1° REFERENCE"
+    : maxMagnitude >= .8 ? "APPROACHING ±1°" : "WITHIN ±1° REFERENCE";
+  text("radar-state", badge);
+  markRetained(byId("radar-state"), freshCount < 2 && retainedCount > 0);
+  setCardState("radar-state", freshCount < 2 ? "unavailable"
+    : maxMagnitude >= 1 ? "outside" : maxMagnitude >= .8 ? "watch" : "normal");
+  text("radar-note", "±1.00° monitoring reference");
+}
+
+function serviceMileageLabel(source) {
+  return source === "ics_estimate" ? "ICS estimate*"
+    : source === "cluster_or_receipt" ? "Cluster / service receipt" : "Mileage not recorded";
+}
+
+function renderServiceMileage(metrics) {
+  const current = metrics["vehicle.odometer"];
+  const retained = supplemental.maintenance?.last_known_odometer;
+  const definition = lastSnapshot.catalog?.find((item) => item.name === "vehicle.odometer");
+  const recorded = lastRecordedObservation(definition, current);
+  const chosen = current?.available && Number.isFinite(current.value) ? current : recorded || retained;
+  text("service-odometer", chosen && Number.isFinite(chosen.value)
+    ? `${Math.trunc(chosen.value).toLocaleString()} mi` : "—");
+  const live = current?.available && !current.stale && validAgeMs(current.age_ms) && current.age_ms <= 15000;
+  const freshness = chosen
+    ? live ? `Latest ICS reading · ${formatAge(current.age_ms)} old`
+      : formatTimestamp(chosen.observed_at)
+    : "No ICS mileage has been recorded yet.";
+  const odometer = byId("service-odometer");
+  const tooltip = `${odometer.dataset.sourceNote || "ICS module estimate."} ${freshness}`;
+  if (odometer.title !== tooltip) odometer.title = tooltip;
+  const last = supplemental.maintenance?.last_oil_change;
+  if (last?.mileage_source === "ics_estimate" && Number.isFinite(last.mileage_mi) && chosen) {
+    const distance = chosen.value - last.mileage_mi;
+    text("oil-distance", distance >= 0
+      ? `${distance.toLocaleString(undefined, {maximumFractionDigits: 1})} estimated miles since service${live ? "" : " at last reading"}`
+      : "Service mileage exceeds the latest ICS reading; check the entry.");
+  } else {
+    text("oil-distance", last ? "Distance since service is not calculated across different mileage sources." : "", "");
+  }
+}
+
+function renderOilLife(catalog, metrics) {
+  const definition = catalog.find((item) => item.name === "engine.oil_life_remaining");
+  const metric = definition ? metrics[definition.name] : null;
+  const state = observationState(definition, metric);
+  const validPercent = (sample) => sample?.unit === "%" && typeof sample.value === "number" &&
+    Number.isFinite(sample.value) && sample.value >= 0 && sample.value <= 100;
+  const live = state.heroReady && validPercent(metric);
+  const retained = lastRecordedObservation(definition, metric);
+  const sample = live ? metric : validPercent(retained) ? retained : null;
+  markRetained(byId("service-oil-life-detail"), false);
+  text("service-oil-life", sample ? `${formatMetricValue(definition.name, sample.value)}%` : "—");
+  text("service-oil-life-detail", sample
+    ? live ? metricStatus(definition, metric, state) : lastRecordedStatus(sample, metric)
+    : definition ? metricStatus(definition, metric, state)
+      : "UNMAPPED");
+}
+
+function renderMaintenance(payload) {
+  const data = payload || {};
+  const last = data.last_oil_change;
+  renderOilLife(lastSnapshot.catalog || [], lastSnapshot.metrics || {});
+  text("oil-last-date", last?.date || "No service recorded");
+  text("oil-last-mileage", last && Number.isFinite(last.mileage_mi)
+    ? `${last.mileage_mi.toLocaleString()} mi` : "Mileage not recorded");
+  text("oil-last-notes", last?.notes || "", "");
+  const history = byId("oil-change-history");
+  history.replaceChildren();
+  (data.oil_changes || []).forEach((record) => {
+    const item = document.createElement("li");
+    item.textContent = `${record.date} · ${Number.isFinite(record.mileage_mi) ? `${record.mileage_mi.toLocaleString()} mi · ` : ""}` +
+      serviceMileageLabel(record.mileage_source) + (record.notes ? ` · ${record.notes}` : "");
+    history.append(item);
+  });
+  byId("oil-change-save").disabled = oilChangeSaving || !data.available || !data.persistent;
+  if (data.storage_error) text("oil-change-result", data.storage_error);
+  renderServiceMileage(lastSnapshot.metrics || {});
+}
+
+async function saveOilChange(event) {
+  event.preventDefault();
+  if (oilChangeSaving || byId("oil-change-save").disabled) return;
+  const rawMileage = byId("oil-change-mileage").value.trim();
+  const fields = {
+    date: byId("oil-change-date").value,
+    mileage_mi: rawMileage === "" ? null : Number(rawMileage),
+    mileage_source: rawMileage === "" ? "unknown" : byId("oil-change-source").value,
+    notes: byId("oil-change-notes").value.trim(),
+  };
+  const signature = JSON.stringify(fields);
+  if (!pendingOilChange || pendingOilChange.signature !== signature) {
+    const random = new Uint32Array(4);
+    window.crypto.getRandomValues(random);
+    pendingOilChange = {signature, payload: {...fields,
+      request_id: `oil_${Array.from(random, v => v.toString(16).padStart(8, "0")).join("")}`}};
+  }
+  oilChangeSaving = true;
+  byId("oil-change-save").disabled = true;
+  text("oil-change-result", "Saving…");
+  try {
+    const response = await fetch("/v1/maintenance/oil-changes", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(pendingOilChange.payload),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || `HTTP ${response.status}`);
+    pendingOilChange = null;
+    const refreshed = await fetch("/v1/maintenance", {cache: "no-store"});
+    if (!refreshed.ok) throw new Error("Record saved; reload the page to view it.");
+    supplemental.maintenance = await refreshed.json();
+    renderMaintenance(supplemental.maintenance);
+    text("oil-change-result", "Oil change saved on the Pi. The vehicle’s oil-change indicator was not reset.");
+  } catch (error) {
+    text("oil-change-result", String(error.message || error));
+  } finally {
+    oilChangeSaving = false;
+    byId("oil-change-save").disabled = !supplemental.maintenance?.available || !supplemental.maintenance?.persistent;
+  }
 }
 
 function renderHeroMetric(role, catalog, metrics) {
@@ -662,19 +1032,19 @@ function ignitionFromVehicleState(status) {
     return null;
   }
   if (vehicle.ignition_on === true) {
-    return {value: "ON", detail: `${displayQuality(confidence)} state evidence`};
+    return {value: "ON", detail: "State evidence"};
   }
   if (vehicle.ignition_on === false) {
-    return {value: "OFF", detail: `${displayQuality(confidence)} state evidence`};
+    return {value: "OFF", detail: "State evidence"};
   }
   if (
     confidence === "verified" &&
     ["moving", "running", "ignition_on"].includes(String(vehicle.state))
   ) {
-    return {value: "ON", detail: `VERIFIED · ${humanize(vehicle.state)}`};
+    return {value: "ON", detail: humanize(vehicle.state)};
   }
   if (confidence === "verified" && vehicle.state === "asleep") {
-    return {value: "OFF", detail: "VERIFIED · bus asleep"};
+    return {value: "OFF", detail: "Bus asleep"};
   }
   return null;
 }
@@ -688,6 +1058,8 @@ function renderDrive(status, catalog, metrics) {
     ? metrics[odometerDefinition.name]
     : null;
   const odometerState = observationState(odometerDefinition, odometerMetric);
+  const retainedOdometer = lastRecordedObservation(odometerDefinition, odometerMetric);
+  markRetained(byId("drive-odometer-status"), false);
   byId("drive-odometer-card").hidden = false;
   if (odometerState.available && !odometerState.stale) {
     text(
@@ -704,6 +1076,11 @@ function renderDrive(status, catalog, metrics) {
       "drive-odometer-status",
       `CANDIDATE · ${formatAge(odometerMetric.age_ms)} old · validation required`,
     );
+  } else if (retainedOdometer) {
+    text("drive-odometer", formatMetricValue(odometerDefinition.name, retainedOdometer.value));
+    text("drive-odometer-unit", retainedOdometer.unit);
+    setCardState("drive-odometer-card", "stale");
+    text("drive-odometer-status", lastRecordedStatus(retainedOdometer, odometerMetric));
   } else {
     text("drive-odometer", "—");
     text("drive-odometer-unit", "", "");
@@ -715,7 +1092,7 @@ function renderDrive(status, catalog, metrics) {
       "drive-odometer-status",
       odometerDefinition
         ? `${humanize(odometerMetric?.reason || "not sampled")} · candidate`
-        : "Mapping pending",
+        : "UNMAPPED",
     );
   }
 
@@ -737,7 +1114,7 @@ function renderDrive(status, catalog, metrics) {
     text("drive-ignition", ignitionMetric.value ? "ON" : "OFF");
     text(
       "drive-ignition-status",
-      `${displayQuality(ignitionState.quality)} · ${formatAge(ignitionMetric.age_ms)} old`,
+      [displayQuality(ignitionState.quality), `${formatAge(ignitionMetric.age_ms)} old`].filter(Boolean).join(" · "),
     );
     setCardState("drive-ignition-card", ignitionState.quality);
     ignitionReady = true;
@@ -770,13 +1147,7 @@ function renderDrive(status, catalog, metrics) {
     .filter(Boolean).length;
   text(
     "drive-freshness",
-    ready === 4
-      ? "4/4 LIVE"
-      : (
-        ready
-          ? `${ready} LIVE · ${registered}/4 MAPPED`
-          : `${registered}/4 MAPPED`
-      ),
+    sectionReadingStatus(ready, registered, 4),
   );
   byId("drive-freshness").dataset.state = ready === 4 ? "verified" : "partial";
   text(
@@ -784,7 +1155,7 @@ function renderDrive(status, catalog, metrics) {
     ready === 4
       ? "All core drive essentials are fresh. ODOMETER* remains candidate-quality."
       : (
-        `${registered}/4 drive sources are mapped. ` +
+        (registered < 4 ? `${registered}/4 drive sources are mapped. ` : "") +
         "Only fresh, driver-qualified values are promoted here. " +
         "ODOMETER* is shown separately as a candidate needing validation."
       ),
@@ -799,11 +1170,17 @@ function renderEngineMetric(role, catalog, metrics) {
   const cardId = `engine-${descriptor.id}-card`;
   const valueId = `engine-${descriptor.id}`;
   const unitId = `${valueId}-unit`;
+  const retained = state.heroReady ? null : lastRecordedObservation(definition, metric);
+  markRetained(byId(`${valueId}-status`), false);
   byId(cardId).hidden = false;
   if (state.heroReady) {
     text(valueId, formatMetricValue(definition.name, metric.value));
     text(unitId, metric.unit || definition.unit, "");
     setCardState(cardId, state.quality);
+  } else if (retained) {
+    text(valueId, formatMetricValue(definition.name, retained.value));
+    text(unitId, retained.unit, "");
+    setCardState(cardId, "stale");
   } else {
     text(valueId, "—");
     text(unitId, "", "");
@@ -814,9 +1191,9 @@ function renderEngineMetric(role, catalog, metrics) {
   }
   text(
     `${valueId}-status`,
-    metricStatus(definition, metric, state),
+    retained ? lastRecordedStatus(retained, metric) : metricStatus(definition, metric, state),
   );
-  return {definition, state};
+  return {definition, state, retained: Boolean(retained)};
 }
 
 function renderOilPressureReference(metrics) {
@@ -873,24 +1250,15 @@ function renderEngineHealth(catalog, metrics) {
   const total = states.length;
   const mapped = states.filter((state) => state.definition).length;
   const ready = states.filter((state) => state.state.heroReady).length;
+  const retained = states.filter((state) => state.retained).length;
+  markRetained(byId("engine-health-state"), retained > 0);
   text(
     "engine-health-state",
-    ready
-      ? `${ready}/${total} LIVE · ${mapped}/${total} MAPPED`
-      : `${mapped}/${total} MAPPED`,
+    sectionReadingStatus(ready, mapped, total, retained),
   );
   byId("engine-health-state").dataset.state = ready === total
     ? "verified"
     : "partial";
-  text(
-    "engine-health-note",
-    ready === total
-      ? "All powertrain-health values are fresh and driver-qualified."
-      : (
-        "Priority gauges remain visible while exact C-CAN sources and " +
-        "scaling are mapped. Candidate values remain available in Diagnostics."
-      ),
-  );
   return states;
 }
 
@@ -1003,10 +1371,10 @@ function renderCharging(status, catalog, metrics) {
   text(
     `${valueId}-status`,
     ready
-      ? `${displayChargingQuality(state.quality)} · ${formatAge(metric.age_ms)} old`
+      ? [displayChargingQuality(state.quality), `${formatAge(metric.age_ms)} old`].filter(Boolean).join(" · ")
       : (
         inactive?.reason === "mapping_pending"
-          ? "Mapping pending"
+          ? "UNMAPPED"
           : humanize(inactive?.reason || "unavailable")
       ),
   );
@@ -1020,10 +1388,13 @@ function renderCharging(status, catalog, metrics) {
       ? displayChargingQuality(normalizedQuality(metric.quality))
       : (
         sourceDefinition?.quality
-          ? `${displayChargingQuality(normalizedQuality(sourceDefinition.quality))} · REGISTERED`
+          ? [displayChargingQuality(normalizedQuality(sourceDefinition.quality)), "REGISTERED"].filter(Boolean).join(" · ")
           : null
       ),
   );
+  const qualityNode = byId(`${valueId}-quality`);
+  if (qualityNode.parentElement) qualityNode.parentElement.hidden =
+    normalizedQuality(metric?.quality || sourceDefinition?.quality) === "verified";
   text(
     `${valueId}-source`,
     metric?.source || (
@@ -1051,9 +1422,8 @@ function renderCharging(status, catalog, metrics) {
 
   text(
     "charging-state",
-    ready
-      ? `1/1 LIVE · ${displayChargingQuality(state.quality)}`
-      : (definition ? "0/1 LIVE · 1/1 MAPPED" : "0/1 MAPPED"),
+    sectionReadingStatus(ready ? 1 : 0, definition ? 1 : 0, 1, 0,
+      ready ? displayChargingQuality(state.quality) : ""),
   );
   byId("charging-state").dataset.state = (
     ready && state.quality === "verified"
@@ -1070,37 +1440,53 @@ function renderBattery(metrics) {
     reason: "stale",
     detail: "No cached observation.",
   };
+  const definition = lastSnapshot.catalog?.find((item) => item.name === "battery.voltage");
+  const state = observationState(definition, metric);
+  const live = Boolean(definition) && state.heroReady && Number.isFinite(metric.value) && metric.unit === "V";
+  const retained = live ? null : lastRecordedObservation(definition, metric);
+  const sample = live ? metric : retained;
+  markRetained(byId("quality"), retained);
+  const lastError = metric.last_acquisition_error || (metric.available === false ? metric : null);
   const card = document.querySelector(".battery-panel");
-  if (metric.available) {
-    text("voltage", Number(metric.value).toFixed(2));
+  if (sample) {
+    text("voltage", Number(sample.value).toFixed(2));
     text(
       "quality",
-      metric.stale ? "STALE" : displayQuality(normalizedQuality(metric.quality)),
+      retained ? "LAST RECORDED · NOT LIVE" : displayQuality(normalizedQuality(sample.quality)),
+      "",
     );
-    card.dataset.state = metric.stale
+    byId("quality").hidden = !byId("quality").textContent;
+    card.dataset.state = retained
       ? "stale"
-      : normalizedQuality(metric.quality);
+      : normalizedQuality(sample.quality);
     byId("quality").dataset.state = card.dataset.state;
-    text("bus", metric.bus);
-    text("source", metric.source);
-    text("age", formatAge(metric.age_ms));
-    text("acquisition", humanize(metric.acquisition));
+    text("bus", sample.bus);
+    text("source", sample.source);
+    text("battery-observed-at", formatTimestamp(sample.observed_at));
+    text("age", formatAge(retained ? Math.max(0, Date.now() - Date.parse(sample.observed_at)) : sample.age_ms));
+    text("acquisition", humanize(sample.acquisition));
     text(
       "battery-detail",
-      metric.last_acquisition_error
-        ? `Cached value retained · last attempt: ${metric.last_acquisition_error.detail}`
-        : "Latest broker-cached observation.",
+      lastError
+        ? `Cached value retained · last attempt: ${lastError.detail || humanize(lastError.reason)}`
+        : retained ? "Last recorded voltage; not a current battery measurement." : "Latest broker-cached observation.",
     );
-    text("source-detail", metric.detail, "Verified registered source.");
+    const sourceDetail = normalizedQuality(sample.quality) === "verified" ? ""
+      : sample.detail || `${displayQuality(normalizedQuality(sample.quality))} registered source.`;
+    text("source-detail", sourceDetail, "");
+    byId("source-detail").hidden = !sourceDetail;
   } else {
     text("voltage", "—");
     text("quality", String(metric.reason || "unavailable").toUpperCase());
+    byId("quality").hidden = false;
     text("battery-detail", metric.detail, "No cached observation.");
     text("bus", metric.bus);
     text("source", null);
+    text("battery-observed-at", null);
     text("age", null);
     text("acquisition", metric.acquisition ? humanize(metric.acquisition) : null);
     text("source-detail", "No current provenance is available.");
+    byId("source-detail").hidden = false;
     card.dataset.state = "unavailable";
     byId("quality").dataset.state = "unavailable";
   }
@@ -1124,7 +1510,12 @@ function buildMetricCard(definition) {
 
 function updateMetricCard(nodes, definition, metric) {
   const state = observationState(definition, metric);
-  const cardState = state.stale
+  const fresh = state.available && !state.stale;
+  const retained = fresh ? null : lastRecordedObservation(definition, metric);
+  const sample = fresh ? metric : retained;
+  markRetained(nodes.badge, retained);
+  markRetained(nodes.meta, false);
+  const cardState = state.stale || retained
     ? "stale"
     : (state.available ? state.quality : "unavailable");
   if (nodes.article.dataset.state !== cardState) {
@@ -1137,23 +1528,23 @@ function updateMetricCard(nodes, definition, metric) {
     // card crosses that visibility boundary.
     lastProfileRenderKey = null;
   }
-  elementText(nodes.badge, state.stale ? "STALE" : displayQuality(state.quality));
+  elementText(nodes.badge, retained ? "LAST RECORDED · NOT LIVE" : state.stale ? "STALE" : displayQuality(state.quality), "");
+  nodes.badge.hidden = !nodes.badge.textContent;
   elementText(
     nodes.value,
-    metric?.available
-      ? `${formatMetricValue(definition.name, metric.value)} ${metric.unit || definition.unit}`
-      : humanize(metric?.reason || "not sampled"),
+    sample
+      ? `${formatMetricValue(definition.name, sample.value)} ${sample.unit || definition.unit}`
+      : "—",
   );
   elementText(
     nodes.meta,
-    metric?.available
-      ? `${displayQuality(state.quality)} · ${formatAge(metric.age_ms)} old`
-      : metric?.detail || "No cached observation.",
+    retained ? lastRecordedStatus(retained, metric)
+      : metricStatus(definition, metric, state),
   );
 }
 
 function featuredMetricNames(catalog) {
-  const names = new Set(["battery.voltage"]);
+  const names = new Set(["battery.voltage", "radar.alignment.elevation", "radar.alignment.azimuth", "engine.oil_life_remaining"]);
   [
     ...Object.values(DRIVE_METRICS),
     ...Object.values(ENGINE_HEALTH_METRICS),
@@ -1211,6 +1602,7 @@ function renderTire(position, catalog, metrics) {
   card.hidden = false;
   if (!definition) {
     text(`tire-${position}`, "—");
+    markRetained(byId(`tire-${position}-status`), false);
     text(`tire-${position}-unit`, "", "");
     setCardState(cardId, "unavailable");
     text(`tire-${position}-status`, metricStatus(definition, metric, state));
@@ -1220,10 +1612,18 @@ function renderTire(position, catalog, metrics) {
       quality: state.quality,
     };
   }
-  if (state.heroReady) {
-    text(`tire-${position}`, formatMetricValue(definition.name, metric.value));
-    text(`tire-${position}-unit`, metric.unit || definition.unit, "");
-    setCardState(`tire-${position}-card`, state.quality);
+  const live = state.heroReady && Number.isFinite(metric?.value) &&
+    metric.value >= 0 && metric.value <= 150 && (metric.unit || definition.unit) === "psi";
+  const recorded = live ? null : lastRecordedObservation(definition, metric);
+  const retained = Boolean(recorded && recorded.value >= 0 && recorded.value <= 150 && recorded.unit === "psi");
+  const sample = live ? metric : retained ? recorded : null;
+  const readable = Boolean(sample);
+  // The panel badge carries the caution color; wheel details stay muted.
+  markRetained(byId(`tire-${position}-status`), false);
+  if (readable) {
+    text(`tire-${position}`, formatMetricValue(definition.name, sample.value));
+    text(`tire-${position}-unit`, sample.unit || definition.unit, "");
+    setCardState(`tire-${position}-card`, retained ? "stale" : state.quality);
   } else {
     text(`tire-${position}`, "—");
     text(`tire-${position}-unit`, "", "");
@@ -1232,10 +1632,13 @@ function renderTire(position, catalog, metrics) {
       state.stale ? "stale" : (state.available ? "unqualified" : "unavailable"),
     );
   }
-  text(`tire-${position}-status`, metricStatus(definition, metric, state));
+  text(`tire-${position}-status`, retained
+    ? lastRecordedStatus(sample, metric)
+    : metricStatus(definition, metric, state));
   return {
     registered: Boolean(definition),
-    live: state.heroReady,
+    live,
+    retained,
     quality: state.quality,
   };
 }
@@ -1247,6 +1650,8 @@ function renderTires(catalog, metrics) {
   byId("tire-grid").hidden = false;
   const live = states.filter((state) => state.live);
   const ready = live.length;
+  const retained = states.filter((state) => state.retained).length;
+  markRetained(byId("tires-state"), retained > 0);
   const liveQualities = new Set(live.map((state) => state.quality));
   const allVerified = (
     ready === 4 &&
@@ -1258,17 +1663,7 @@ function renderTires(catalog, metrics) {
     : "MIXED QUALITY";
   text(
     "tires-state",
-    ready === 4
-      ? `4/4 LIVE · ${qualityLabel}`
-      : (
-        ready
-          ? `${ready}/4 LIVE · ${registered}/4 MAPPED`
-          : (
-            registered
-              ? `0/4 LIVE · ${registered}/4 MAPPED`
-              : "0/4 MAPPED"
-          )
-      ),
+    sectionReadingStatus(ready, registered, 4, retained, ready === 4 ? qualityLabel : ""),
   );
   byId("tires-state").dataset.state = allVerified
     ? "verified"
@@ -1276,7 +1671,7 @@ function renderTires(catalog, metrics) {
   text(
     "tires-note",
     allVerified
-      ? "All four verified wheel-position samples are fresh."
+      ? "All four wheel-position samples are fresh."
       : (
         ready === 4
           ? (
@@ -1284,81 +1679,102 @@ function renderTires(catalog, metrics) {
             "observed scaling, not independent verification."
           )
           : (
-            registered
+            retained
+              ? ""
+              : registered
               ? (
                 `${registered}/4 wheel-position sources are mapped; ` +
                 "stale, unavailable, or candidate pressures are not shown as live."
               )
               : "Wheel-position pressure mapping is pending."
           )
-      ),
+    ),
+    "",
   );
+  byId("tires-note").hidden = !byId("tires-note").textContent;
 }
 
 function renderInterface(status) {
   const iface = status.interface || {};
-  const topology = iface.topology || {};
-  text("channel", iface.channel);
-  text(
-    "adapter-state",
-    iface.adapter_present === true
-      ? (iface.up ? "Present · up" : "Present · down")
-      : (iface.adapter_present === false ? "Absent" : "Unknown"),
-  );
-  text("bitrate", iface.bitrate == null ? null : `${iface.bitrate} bit/s`);
-  text("controller-state", iface.controller_state);
-  text("listen-only", yesNoUnknown(iface.listen_only));
-  text(
-    "topology",
-    topology.bus
-      ? `${topology.bus}${topology.pair ? ` · pins ${topology.pair}` : ""}`
-      : null,
-  );
-  const owner = status.current_owner;
-  text(
-    "current-owner",
-    owner
-      ? owner.names?.join(", ") || owner.kind || owner.detail
-      : "None reported",
-  );
   text(
     "inhibits",
-    Array.isArray(iface.active_inhibits) && iface.active_inhibits.length
-      ? iface.active_inhibits.join(", ")
-      : "None",
+    Array.isArray(iface.active_inhibits)
+      ? (iface.active_inhibits.join(", ") || "None")
+      : "Unknown",
   );
   const roleSnapshot = iface.role_interfaces || {};
   const roles = roleSnapshot.roles && typeof roleSnapshot.roles === "object"
     ? roleSnapshot.roles
     : {};
+  const issues = Array.isArray(roleSnapshot.issues)
+    ? roleSnapshot.issues.map((issue) => issue.detail || issue.reason || String(issue))
+    : [];
+  if (roles.spare && roles.spare.safe !== true) {
+    issues.push(roles.spare.detail || "Unconnected spare needs attention");
+  }
+  text("interface-issues", issues.join(" · "));
+  byId("interface-issues").hidden = issues.length === 0;
+  const vehicleRoles = ["c-can", "b-can", "can-ch"];
+  const linksUp = vehicleRoles.filter((role) => (
+    roles[role]?.channel && roles[role]?.actual?.present === true &&
+    roles[role]?.actual?.up === true
+  )).length;
+  text("interface-links", `${linksUp}/${vehicleRoles.length}`);
   const roleSignature = JSON.stringify(roles);
   if (roleSignature === lastRoleGridSignature) return;
   lastRoleGridSignature = roleSignature;
   const roleGrid = byId("interface-roles");
   roleGrid.replaceChildren();
-  Object.entries(roles).forEach(([role, payload]) => {
+  vehicleRoles.forEach((role) => {
+    const payload = roles[role] || {};
     const expected = payload?.expected || {};
     const actual = payload?.actual || {};
     const card = document.createElement("article");
     card.className = "role-card";
-    card.dataset.state = payload?.safe ? "ready" : "unavailable";
+    card.dataset.state = payload.safe === true && actual.present === true &&
+      actual.fd_enabled === false && actual.up === true &&
+      actual.controller_state === "ERROR-ACTIVE" ? "ready" : "unavailable";
     const heading = document.createElement("h3");
-    heading.textContent = `${role} · ${payload?.channel || "unresolved"}`;
+    heading.textContent = role === "can-ch" ? "CAN CH" : role.toUpperCase();
     const link = document.createElement("p");
-    link.textContent = expected.passive_required === false
-      ? `spare · ${actual.up === false ? "down" : humanize(payload?.reason)}`
-      : `${expected.pair ? `pins ${expected.pair} · ` : ""}` +
-        `${actual.bitrate ?? expected.bitrate ?? "—"} bit/s · ` +
-        `${actual.fd_enabled === false ? "classical CAN" : actual.fd_enabled === true ? "CAN FD" : "CAN mode unknown"} · ` +
-        `${actual.listen_only === true ? "listen-only" : humanize(payload?.reason)}`;
-    const identity = document.createElement("p");
-    identity.textContent = expected.usb_serial
-      ? `board ${expected.board} ${expected.connector} · serial …${String(expected.usb_serial).slice(-6)} · dev ${expected.dev_id}`
-      : payload?.detail || "Identity unavailable";
-    card.append(heading, link, identity);
+    link.textContent = `${expected.pair ? `Pins ${expected.pair} · ` : ""}` +
+      (actual.bitrate == null ? "Bitrate unknown" : `${actual.bitrate / 1000} kbit/s`);
+    const operating = document.createElement("p");
+    const linkState = actual.present === false ? "Absent"
+      : actual.up === true ? "Up" : actual.up === false ? "Down" : "Link unknown";
+    const mode = actual.listen_only === true ? "Listen-only"
+      : actual.listen_only === false
+        ? (payload.operating_mode === "armed_diagnostic" || actual.mode === "armed_diagnostic"
+          ? "Diagnostics enabled" : "Transmit enabled")
+        : "Mode unknown";
+    operating.textContent = `${linkState} · ${mode} · ${actual.controller_state || "Controller unknown"}`;
+    operating.title = "ERROR-ACTIVE is the normal CAN controller state, not an active fault.";
+    card.append(heading, link, operating);
+    if (payload.safe !== true || actual.fd_enabled !== false) {
+      const issue = document.createElement("p");
+      issue.textContent = [
+        actual.fd_enabled === true ? "Unexpected CAN FD" : null,
+        payload.detail || humanize(payload.reason) || "Role status unavailable",
+      ].filter(Boolean).join(" · ");
+      card.append(issue);
+    }
     roleGrid.append(card);
   });
   roleGrid.hidden = roleGrid.children.length === 0;
+  const identities = byId("interface-identities");
+  identities.replaceChildren();
+  Object.entries(roles).forEach(([role, payload]) => {
+    const expected = payload?.expected || {};
+    const identity = document.createElement("p");
+    identity.textContent = `${role} → ${payload?.channel || "unresolved"} · ` +
+      (expected.usb_serial
+        ? `board ${expected.board} ${expected.connector} · serial …${String(expected.usb_serial).slice(-6)} · dev ${expected.dev_id}`
+        : "Identity unavailable");
+    if (expected.passive_required === false) {
+      identity.textContent += ` · Unconnected spare · ${payload?.actual?.up === false ? "Down" : humanize(payload?.reason) || "State unknown"}`;
+    }
+    identities.append(identity);
+  });
 }
 
 function renderCollector(status) {
@@ -1366,6 +1782,9 @@ function renderCollector(status) {
   text("collector-state", humanize(collector.state));
   text("collector-cycles", collector.cycles);
   text("collector-last", collector.last_cycle_at);
+  text("collector-retention", status.last_readings?.storage_error || (
+    status.last_readings ? status.last_readings.persistent ? "Persistent" : "Memory only" : "Not reported"
+  ));
   text(
     "collector-interval",
     collector.interval_seconds == null
@@ -1601,6 +2020,14 @@ function renderEarlyWarnings(health) {
     const article = document.createElement("article");
     article.className = "summary-card";
     article.dataset.state = assessment.state || "unavailable";
+    const unresolved = assessment.episode_id != null;
+    article.dataset.unresolved = String(unresolved);
+    if (unresolved) {
+      const label = document.createElement("span");
+      label.className = "badge advisory-label";
+      label.textContent = "Unresolved advisory";
+      article.append(label);
+    }
     const heading = document.createElement("h3");
     heading.textContent = assessment.title || assessment.label ||
       assessment.metric || "Telemetry change";
@@ -1622,17 +2049,24 @@ function renderEarlyWarnings(health) {
       numeric(baseline.median) == null ? null : `baseline median ${baseline.median}`,
       numeric(baseline.mad) == null ? null : `MAD ${baseline.mad}`,
       deviation == null ? null : `deviation ${deviation.toFixed(2)}`,
+      assessment.custom_rule ? `Owner reference: ${humanize(assessment.custom_rule.operator)} ${assessment.custom_rule.threshold} ${assessment.current?.unit || ""}` : null,
       assessment.persistence?.observed == null
         ? null
         : `${assessment.persistence.observed}/${assessment.persistence.required} persistent observations`,
     ].filter(Boolean).join(" · ");
     article.append(heading, reason);
     if (evidence.textContent) article.append(evidence);
+    window.WarningChat?.attach(article, assessment.episode_id != null
+      ? {kind: "episode", id: String(assessment.episode_id)}
+      : {kind: "assessment", id: assessment.rule}, heading.textContent);
     list.append(article);
   });
-  const qualityShown = activeQuality.length
-    ? activeQuality
-    : recentQuality.filter((event) => event?.status === "resolved").slice(0, 3);
+  const recovered = recentQuality.filter((event) => event?.status === "resolved").slice(0, 3);
+  const recoveredList = byId("warning-recovered-list");
+  recoveredList.replaceChildren();
+  byId("warning-recovered").hidden = recovered.length === 0;
+  text("warning-recovered-title", `Recovered Events · ${recovered.length}`);
+  const qualityShown = [...activeQuality, ...recovered];
   qualityShown.forEach((event) => {
     const article = document.createElement("article");
     article.className = "summary-card";
@@ -1659,22 +2093,24 @@ function renderEarlyWarnings(health) {
       "data quality only — never notified",
     ].filter(Boolean).join(" · ");
     article.append(heading, reason, evidence);
-    list.append(article);
+    window.WarningChat?.attach(article, {kind: "quality", id: event?.incident_id}, heading.textContent);
+    (event?.status === "resolved" ? recoveredList : list).append(article);
   });
-  if (!shown.length && !qualityShown.length) {
+  if (!shown.length && !activeQuality.length) {
     const empty = document.createElement("p");
     empty.className = "muted";
     empty.textContent = unavailable
       ? summary.detail || "Early-warning history is unavailable."
-      : "No persistent regime-matched change is currently active.";
+      : (summary.custom_rules?.count ? "No persistent change is currently active." : "No persistent regime-matched change is currently active.");
     list.append(empty);
   }
   text(
     "warning-note",
     [
-      summary.detail || (
+      summary.custom_rules?.count ? "Warnings use learned baselines or owner-approved thresholds with persistence; neither is a mechanical diagnosis." : summary.detail || (
         "Warnings require persistent, like-for-like deviations and show their baseline evidence. They are not a diagnosis or an opaque health score."
       ),
+      summary.custom_rules?.error || "",
       delivery.enabled
         ? (
           `Durable warning delivery is enabled through the queued ntfy sink. ` +
@@ -1736,6 +2172,17 @@ function dtcModuleGapDetail(module) {
     );
   }
   return null;
+}
+
+function dtcHistoryCutoff(now = Date.now()) {
+  const cutoff = new Date(now);
+  const day = cutoff.getUTCDate();
+  cutoff.setUTCMonth(cutoff.getUTCMonth() - 1, 1);
+  const lastDay = new Date(Date.UTC(
+    cutoff.getUTCFullYear(), cutoff.getUTCMonth() + 1, 0,
+  )).getUTCDate();
+  cutoff.setUTCDate(Math.min(day, lastDay));
+  return cutoff.getTime();
 }
 
 function renderDtcs(dtcs) {
@@ -1834,6 +2281,8 @@ function renderDtcs(dtcs) {
       : "No validated module coverage",
   );
   const root = byId("dtc-groups");
+  const olderHistoryOpen = byId("dtc-older-history")?.open === true;
+  const historyCutoff = dtcHistoryCutoff();
   root.replaceChildren();
   const coverageGaps = modules.filter((module) => dtcModuleGapDetail(module));
   if (coverageGaps.length) {
@@ -1889,6 +2338,8 @@ function renderDtcs(dtcs) {
       );
     const list = document.createElement("ul");
     list.className = "dtc-list";
+    const olderList = document.createElement("ul");
+    olderList.className = "dtc-list";
     entries.slice(0, returned).forEach((entry) => {
       const item = document.createElement("li");
       const code = document.createElement("span");
@@ -1923,9 +2374,25 @@ function renderDtcs(dtcs) {
       ].filter(Boolean).join(" · ");
       body.append(detail);
       item.append(code, body);
-      list.append(item);
+      const lastSeen = Date.parse(entry.last_seen_at);
+      if (key === "confirmed_history" && Number.isFinite(lastSeen) && lastSeen < historyCutoff) {
+        olderList.append(item);
+      } else {
+        list.append(item);
+      }
     });
-    section.append(heading, list);
+    section.append(heading);
+    if (list.children.length) section.append(list);
+    if (olderList.children.length) {
+      const older = document.createElement("details");
+      older.id = "dtc-older-history";
+      older.className = "panel-note";
+      older.open = olderHistoryOpen;
+      const olderHeading = document.createElement("summary");
+      olderHeading.textContent = `Older Than 1 Month · ${olderList.children.length}`;
+      older.append(olderHeading, olderList);
+      section.append(older);
+    }
     root.append(section);
   });
   if (!renderedRecordGroups) {
@@ -1938,7 +2405,7 @@ function renderDtcs(dtcs) {
         "No saved DTC inventory is available. Run the parked local scanner; " +
         (
           dtcJobsEnabled
-            ? "the guarded controls below can queue it after local arming."
+            ? "the guarded controls below can queue it after parked confirmation."
             : "this cache-only listener cannot start it."
         )
       );
@@ -1989,14 +2456,15 @@ function dtcJobIsActive(state) {
 
 function updateDtcJobButtons() {
   const confirmed = byId("dtc-park-confirm").checked;
-  const token = byId("dtc-arm-token").value.trim();
   byId("dtc-scan-start").disabled = !(
-    dtcJobsEnabled && confirmed && token.length >= 32 &&
+    dtcJobsEnabled && confirmed && !dtcLegacyTokenRequired &&
     !dtcJobIsActive(dtcLastJobState) && dtcLastJobState !== "restoration_failed"
   );
   byId("dtc-scan-cancel").disabled = !(
     dtcJobsEnabled && dtcJobIsActive(dtcLastJobState) && !dtcCancelRequested
   );
+  byId("dtc-scan-start").title = dtcLegacyTokenRequired
+    ? "Restart the updated Tailscale web server to enable scanning without a local token" : "";
 }
 
 function renderDtcJob(payload) {
@@ -2006,6 +2474,7 @@ function renderDtcJob(payload) {
   dtcCancelRequested = job.cancel_requested === true;
   const progress = job.progress || {};
   const parts = [humanize(state)];
+  if (dtcLegacyTokenRequired) parts.push("Web server update needed for token-free scanning");
   if (progress.requestable != null) {
     parts.push(
       `${progress.queried || 0}/${progress.requestable} queried`,
@@ -2056,6 +2525,11 @@ async function fetchDtcJobStatus() {
 
 function configureDtcJobs(web) {
   const enabled = web?.dtc_jobs_enabled === true;
+  const legacy = web?.dtc_jobs_require_local_one_use_arm === true;
+  if (legacy !== dtcLegacyTokenRequired) {
+    dtcLegacyTokenRequired = legacy;
+    updateDtcJobButtons();
+  }
   if (enabled === dtcJobsEnabled) {
     if (enabled && dtcJobIsActive(dtcLastJobState) && dtcJobPollTimer == null) {
       void fetchDtcJobStatus();
@@ -2066,7 +2540,7 @@ function configureDtcJobs(web) {
   text(
     "dtc-eyebrow",
     enabled
-      ? "DIAGNOSTICS · LOCALLY ARMED PARKED SCAN"
+      ? "DIAGNOSTICS · GUARDED PARKED SCAN"
       : "DIAGNOSTICS · CACHED ONLY",
   );
   byId("dtc-scan-controls").hidden = !enabled;
@@ -2096,22 +2570,40 @@ function renderCatalog(catalog) {
     meta.className = "muted";
     meta.textContent = (
       `${definition.value_type} · ${definition.unit || "unitless"} · ` +
-      `stale after ${definition.stale_after_seconds} s`
+      `stale after ${definition.stale_after_seconds} s · ` +
+      (RETAIN_LAST_READING.has(definition.name) ? "dated last reading retained" : "live-only display")
     );
     item.append(heading, meta);
     (definition.sources || []).forEach((source) => {
       const sourceLine = document.createElement("p");
-      sourceLine.textContent = `${source.name} · ${source.bus} · ${source.quality}`;
+      sourceLine.textContent = [source.name, source.bus,
+        normalizedQuality(source.quality) === "verified" ? null : source.quality,
+      ].filter(Boolean).join(" · ");
       item.append(sourceLine);
     });
     list.append(item);
   });
 }
 
+function configureWarningChat(web) {
+  window.WarningChat?.configure(web);
+  if (web.warning_chat_enabled === true && !window.WarningChat && !warningChatLoading) {
+    warningChatLoading = true;
+    const script = document.createElement("script");
+    script.src = "/warning-chat.js";
+    script.addEventListener("load", () => {
+      window.WarningChat?.configure(lastSnapshot.web || {});
+      renderEarlyWarnings(supplemental.earlyWarnings);
+    });
+    document.head.append(script);
+  }
+}
+
 function render(snapshot) {
   if (!snapshot || typeof snapshot !== "object") return;
   const status = snapshot.status || {};
   const web = snapshot.web || status.web || {};
+  configureWarningChat(web);
   const metrics = snapshot.metrics || {};
   const catalog = Array.isArray(snapshot.catalog) ? snapshot.catalog : [];
   lastSnapshot = {
@@ -2128,10 +2620,15 @@ function render(snapshot) {
   text(
     "control-note",
     acquisitionEnabled
-      ? "A receive-only voltage read can be requested from the broker."
+      ? ""
       : "Web acquisition is disabled; this page only reads broker cache.",
+    "",
   );
+  byId("control-note").hidden = acquisitionEnabled;
   renderVehicleState(status);
+  renderRadarAlignment(status, catalog, metrics);
+  renderServiceMileage(metrics);
+  renderOilLife(catalog, metrics);
   renderDrive(status, catalog, metrics);
   renderEngineHealth(catalog, metrics);
   renderCharging(status, catalog, metrics);
@@ -2158,6 +2655,9 @@ function renderTimeSensitiveSnapshot() {
     : [];
   const metrics = lastSnapshot.metrics || {};
   renderVehicleState(status);
+  renderRadarAlignment(status, catalog, metrics);
+  renderServiceMileage(metrics);
+  renderOilLife(catalog, metrics);
   renderDrive(status, catalog, metrics);
   renderEngineHealth(catalog, metrics);
   renderCharging(status, catalog, metrics);
@@ -2240,6 +2740,7 @@ function fetchSupplemental() {
     ["history", "/v1/history"],
     ["earlyWarnings", "/v1/health"],
     ["dtcs", "/v1/diagnostics/dtcs"],
+    ["maintenance", "/v1/maintenance"],
   ];
   const operation = (async () => {
     const results = await Promise.all(requests.map(async ([key, path]) => {
@@ -2266,6 +2767,7 @@ function fetchSupplemental() {
     renderHistory(supplemental.history);
     renderEarlyWarnings(supplemental.earlyWarnings);
     renderDtcs(supplemental.dtcs);
+    renderMaintenance(supplemental.maintenance);
     return true;
   })();
   const trackedOperation = operation.finally(() => {
@@ -2396,6 +2898,8 @@ byId("refresh").addEventListener("click", () => {
   resyncSnapshot("manual");
 });
 
+byId("oil-change-form").addEventListener("submit", saveOilChange);
+
 byId("acquire").addEventListener("click", async () => {
   if (!acquisitionEnabled) return;
   const response = await fetch("/v1/acquisitions/battery.voltage", {
@@ -2410,7 +2914,6 @@ byId("acquire").addEventListener("click", async () => {
   await resyncSnapshot("acquisition");
 });
 
-byId("dtc-arm-token").addEventListener("input", updateDtcJobButtons);
 byId("dtc-park-confirm").addEventListener("change", updateDtcJobButtons);
 
 byId("dtc-scan-start").addEventListener("click", async () => {
@@ -2418,14 +2921,12 @@ byId("dtc-scan-start").addEventListener("click", async () => {
   if (!window.confirm(
     "Start the fixed read-only DTC batch now? Confirm Park, ignition ON, engine OFF, and stationary."
   )) return;
-  const token = byId("dtc-arm-token").value.trim();
   byId("dtc-scan-start").disabled = true;
   try {
     const response = await fetch("/v1/diagnostics/dtc-jobs", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({
-        token,
         confirm_parked: true,
         confirm_park_gear: true,
         confirm_ignition_on_engine_off: true,
@@ -2433,7 +2934,6 @@ byId("dtc-scan-start").addEventListener("click", async () => {
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
-    byId("dtc-arm-token").value = "";
     renderDtcJob(payload);
   } catch (error) {
     text("dtc-job-status", `DTC scan was not queued: ${error}`);

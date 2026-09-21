@@ -22,6 +22,11 @@ if str(REPO) not in sys.path:
 
 from lib import can_operation_state, diagnostic_safety
 from projects.vehicle_data.engine_off_voltage import EngineOffVoltageCapture
+from projects.vehicle_data.maintenance import MaintenanceStore
+from projects.vehicle_data.last_readings import LastReadings
+from projects.vehicle_data.radar_alignment import (
+    AlignmentHistory, LIVE_POLLING_COMMISSIONED, METRICS as RADAR_METRICS,
+)
 from projects.vehicle_data.metrics import METRICS, MetricDefinition
 from projects.vehicle_data.models import (
     AcquisitionResult,
@@ -57,10 +62,11 @@ ACTIVE_DRIVE_SOURCES = frozenset(
         "rf_hub.did.31d2",
         "rf_hub.did.31d3",
         "ics.did.2001",
+        "radar_acc.did.0845",
     }
 )
 ACTIVE_DRIVE_OPTIONAL_METRICS = frozenset(
-    {"engine.crankshaft_torque", "engine.vvt_oil_temperature"}
+    {"engine.crankshaft_torque", "engine.vvt_oil_temperature", *RADAR_METRICS}
 )
 DERIVED_POWER_METRIC = "engine.crankshaft_power"
 DERIVED_POWER_SOURCE = "derived.pcm_06da_x_ccan_0x0fc"
@@ -517,13 +523,18 @@ class TelemetryBroker:
         history_interval_seconds: float = 5.0,
         usb_can_monitor=None,
         engine_off_voltage_capture=None,
+        maintenance_store=None,
+        radar_history=None,
+        last_readings=None,
     ):
         if acquirer is None:
             raise ValueError(
                 "telemetry broker requires an explicit serial-role-aware acquirer"
             )
         self.acquirer = acquirer
+        self.maintenance = maintenance_store or MaintenanceStore()
         self.definitions = definitions or METRICS
+        self.last_readings = last_readings or LastReadings(self.definitions)
         self.monotonic = monotonic
         self.collector_interval_seconds = collector_interval_seconds
         self.acquisition_wait_seconds = acquisition_wait_seconds
@@ -545,6 +556,7 @@ class TelemetryBroker:
         self.engine_off_voltage_capture = engine_off_voltage_capture
 
         self._lock = threading.RLock()
+        self._radar_history = radar_history or AlignmentHistory()
         # Prevent the passive collector from racing a client-triggered active
         # request before the cross-process observer/exclusive lock is reached.
         self._source_lock = threading.Lock()
@@ -713,6 +725,18 @@ class TelemetryBroker:
                 "detail": f"history query failed: {type(exc).__name__}: {exc}",
             }
 
+    def maintenance_response(self) -> dict[str, object]:
+        result = self.maintenance.snapshot()
+        result["odometer"] = self.metric_response("vehicle.odometer")
+        result["oil_life"] = {
+            "available": False,
+            "detail": "Oil-life percentage was observed in AlfaOBD, but its exact current-vehicle DID/scale is not yet established for telemetry.",
+        }
+        return result
+
+    def record_oil_change(self, payload):
+        return self.maintenance.add_oil_change(payload)
+
     def health_response(self) -> dict[str, object]:
         """Return explainable, history-relative advisory assessments only."""
         if self.insights is None:
@@ -860,14 +884,19 @@ class TelemetryBroker:
                 }
             return payload
         if last_error is not None:
-            return self._serialize(last_error, definition)
-        return {
-            "metric": metric,
-            "available": False,
-            "unit": definition.unit,
-            "reason": "stale",
-            "detail": "no observation has been cached",
-        }
+            payload = self._serialize(last_error, definition)
+        else:
+            payload = {
+                "metric": metric,
+                "available": False,
+                "unit": definition.unit,
+                "reason": "stale",
+                "detail": "no observation has been cached",
+            }
+        retained = self.last_readings.get(metric)
+        if retained is not None:
+            payload["last_recorded"] = retained
+        return payload
 
     @staticmethod
     def _value_error(
@@ -1290,6 +1319,7 @@ class TelemetryBroker:
                 )
             else:
                 self._cache[metric] = result
+                self.last_readings.observe(result)
                 # Publisher success does not prove that a prior in-process CAN
                 # acquisition failure (for example can_busy or restoration_failed)
                 # has recovered. Keep that diagnostic until the acquirer itself
@@ -1363,11 +1393,19 @@ class TelemetryBroker:
                 )
             else:
                 self._cache[metric] = result
+                self.last_readings.observe(result)
+                if metric in RADAR_METRICS:
+                    self._radar_history.add(
+                        metric, value, result.observed_monotonic,
+                        result.observed_at.isoformat(),
+                    )
                 self._last_error.pop(metric, None)
                 if metric == TRANSMISSION_OIL_TEMPERATURE_METRIC:
                     self._resolve_data_quality(metric, source.name)
         if plausibility_error is not None:
             return
+        if metric == "vehicle.odometer":
+            self.maintenance.observe_odometer(result)
         self._update_vehicle_state(result)
         if metric == "engine.crankshaft_torque":
             self._refresh_derived_power()
@@ -1480,6 +1518,7 @@ class TelemetryBroker:
                     )
                     with self._lock:
                         self._cache[definition.name] = result
+                        self.last_readings.observe(result)
                         self._last_error.pop(definition.name, None)
                     return
 
@@ -1531,6 +1570,7 @@ class TelemetryBroker:
                 "generator.field_duty",
                 "engine.crankshaft_torque",
                 "engine.vvt_oil_temperature",
+                *RADAR_METRICS,
                 DERIVED_POWER_METRIC,
             ):
                 definition = self.definitions.get(metric)
@@ -1860,6 +1900,7 @@ class TelemetryBroker:
 
     def status_response(self) -> dict[str, object]:
         with self._lock:
+            radar_alignment = self._radar_history.summary(self.monotonic())
             interface = json.loads(json.dumps(self._interface_status))
             inflight = [
                 {"metric": metric, "mode": mode}
@@ -2164,6 +2205,8 @@ class TelemetryBroker:
             "started_at": self._started_at,
             "interface": interface,
             "current_owner": current_owner,
+            "last_readings": {"persistent": self.last_readings.path is not None,
+                              "storage_error": self.last_readings.storage_error},
             "active_acquisition_permitted": active_permitted,
             "collector": collector,
             "history_recorder": history_recorder,
@@ -2175,6 +2218,16 @@ class TelemetryBroker:
             "engine_off_voltage": engine_off_voltage,
             "interface_reconcile": interface_reconcile,
             "vehicle_state": vehicle_state,
+            "radar_alignment": radar_alignment,
+            "radar_alignment_polling": {
+                "commissioned": LIVE_POLLING_COMMISSIONED,
+                "retained_storage_error": self._radar_history.storage_error,
+                "detail": (
+                    "Fixed radar angle reads during qualified engine-running intervals"
+                    if LIVE_POLLING_COMMISSIONED else
+                    "Live monitoring awaits a parked no-session radar angle support check"
+                ),
+            },
             "inflight": inflight,
             "last_acquisition_errors": last_errors,
             "cached_metrics": cached,
@@ -2533,6 +2586,7 @@ class TelemetryBroker:
             with self._lock:
                 if completed.available:
                     self._cache[metric] = completed
+                    self.last_readings.observe(completed)
                     self._last_error.pop(metric, None)
                 elif completed.reason != "rate_limited":
                     self._last_error[metric] = completed
@@ -2676,6 +2730,13 @@ class TelemetryBroker:
                     >= SUPPLEMENTAL_REFRESH_INTERVAL_SECONDS
                 ):
                     self._refresh_supplemental_cache()
+                    try:
+                        self.maintenance.flush()
+                    except OSError as exc:
+                        with self._lock:
+                            self._history_recorder["last_error"] = f"Odometer persistence: {exc}"
+                self._radar_history.flush()
+                self.last_readings.flush()
                 self._history_stop.wait(self.history_interval_seconds)
         finally:
             with self._lock:
@@ -3157,6 +3218,9 @@ class TelemetryBroker:
                 self._insights_closed = True
         if should_close:
             self.insights.close()
+        self.maintenance.flush()
+        self._radar_history.flush()
+        self.last_readings.flush()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -3271,6 +3335,7 @@ def main(argv=None) -> int:
         RoleAwareVoltageAcquirer,
     )
     from projects.vehicle_data.early_warning import EarlyWarningEvaluator
+    from projects.vehicle_data.custom_warnings import DEFAULT_RULES_PATH
     from projects.vehicle_data.historian import TelemetryHistorian
     from projects.vehicle_data.insights import TelemetryInsights
     from projects.vehicle_data.notifications import NtfyAdvisoryNotificationSink
@@ -3327,9 +3392,17 @@ def main(argv=None) -> int:
             supervisor_factory=AuxiliaryDriveSupervisor,
         )
 
+    maintenance_store = MaintenanceStore(pathlib.Path(args.history_db).with_name("maintenance.json"))
+    radar_history = AlignmentHistory(pathlib.Path(args.history_db).with_name("radar-alignment.json"))
+    last_readings = LastReadings(METRICS, pathlib.Path(args.history_db).with_name("last-readings.json"))
     insights = None
     if not args.no_history:
         historian = TelemetryHistorian(args.history_db)
+        radar_history.restore_from_historian(historian)
+        last_readings.restore_from_historian(historian)
+        # One indexed lookup at startup recovers the dated prior ICS reading.
+        maintenance_store.restore_odometer(historian.latest_sample("vehicle.odometer"))
+        maintenance_store.flush()
         notification_sink = (
             NtfyAdvisoryNotificationSink(args.advisory_ntfy_topic)
             if args.enable_advisory_notifications
@@ -3337,7 +3410,8 @@ def main(argv=None) -> int:
         )
         insights = TelemetryInsights(
             historian,
-            warning_evaluator=EarlyWarningEvaluator(historian),
+            warning_evaluator=EarlyWarningEvaluator(historian,
+                custom_rules_path=DEFAULT_RULES_PATH),
             notification_sink=notification_sink,
             enable_notification_delivery=args.enable_advisory_notifications,
             dtc_cache_path=args.dtc_cache,
@@ -3355,6 +3429,9 @@ def main(argv=None) -> int:
         history_interval_seconds=args.history_interval,
         usb_can_monitor=usb_can_monitor,
         engine_off_voltage_capture=engine_off_voltage_capture,
+        maintenance_store=maintenance_store,
+        radar_history=radar_history,
+        last_readings=last_readings,
     )
     broker_holder["broker"] = broker
     broker.start_usb_monitor()

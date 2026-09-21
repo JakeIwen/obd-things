@@ -161,25 +161,27 @@ a cancellation only after the exact role has been restored. New guards are
 created for the next role, so cleanup on one bus cannot suppress termination
 on another.
 
-## Locally armed Tailscale web trigger
+## Confirmed Tailscale web trigger
 
-The LAN listener remains cache-only. The separately configured Tailscale
-listener exposes a fixed start/status/cancel UI, but a start also requires a
-short-lived, one-use authorization created locally on vanpi:
-
-```bash
-python3 tools/dtc_web_arm.py
-```
+The LAN listener remains DTC-read-only. The separately configured Tailscale
+listener exposes a fixed start/status/cancel UI. As requested by the owner on
+September 20, starting a scan no longer requires a separately generated local
+token. The exact configured Origin, JSON schema, all three explicit operator
+confirmations, single-job exclusion and every worker-side live safety gate
+above remain mandatory. The browser makes no scan request until the owner
+checks the parked conditions and explicitly confirms Scan.
 
 Its bind address is machine-local, not committed. Before installing/restarting
 the Tailscale unit, verify the current Tailscale IPv4 address and create
 `/etc/van-telemetry/tailscale-web.env` from the tracked example with both the
 exact bind and matching `http://<address>:8765` origin.
 
-Only the token digest is stored, in a mode-0600 file under
+For older clients, `tools/dtc_web_arm.py` and optional token validation remain
+compatible. Only the legacy token digest is stored, in a mode-0600 file under
 `/run/van-telemetry`; the plaintext token exists only in the terminal and the
-browser password field. It expires after five minutes and is deleted before a
-request is queued, including when later queueing fails. The POST must come
+legacy browser password field. It expires after five minutes and is deleted before a
+request is queued, including when later queueing fails. New clients omit the
+token field entirely. The POST must come
 from the exact configured Tailscale origin and repeats the three operator
 confirmations. It accepts no module list, CAN IDs, payload, session, clear
 option, channel, command, or filesystem path.
@@ -192,6 +194,6 @@ worker, not the web request thread, owns the CAN operation and its termination
 guards. Status is a bounded projection of the atomic job ledger. Cancellation
 only creates the existing cooperative cancel flag; it cannot retract an
 in-flight transport request. A `restoration_failed` job is sticky at the web
-boundary: a new token cannot start another job. Inspect the exact roles and
+boundary: neither a tokenless start nor a new legacy token can start another job. Inspect the exact roles and
 same-boot inhibit locally; only after deliberate repair may the operator
 manually retire the current-job pointer. No DTC clear endpoint exists.

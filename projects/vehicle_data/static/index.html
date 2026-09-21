@@ -18,10 +18,52 @@
       </div>
       <div class="profile-picker">
         <label for="profile">Dashboard</label>
-        <select id="profile" aria-describedby="profile-reason"></select>
+        <div class="profile-actions">
+          <select id="profile" aria-describedby="profile-reason"></select>
+          <button id="refresh" type="button" class="secondary" title="Reload dashboard data from the broker cache; does not request vehicle readings." aria-label="Refresh dashboard cache">Refresh</button>
+        </div>
         <p id="profile-reason" class="muted">Loading dashboard profile…</p>
       </div>
     </header>
+
+    <section class="panel maintenance-panel" data-widget="maintenance" aria-labelledby="maintenance-heading">
+      <div class="section-heading">
+        <div><p class="eyebrow">VEHICLE &amp; SERVICE</p><h2 id="maintenance-heading">Mileage and oil changes</h2></div>
+      </div>
+      <div class="maintenance-readings">
+        <article>
+          <h3>Odometer</h3>
+          <p class="maintenance-value" id="service-odometer" data-source-note="ICS module estimate. Recorded comparisons were about 11 miles below the cluster; no offset has been applied.">—</p>
+        </article>
+        <article>
+          <p>Last oil change: <span id="oil-last-date">No service recorded</span> · <span id="oil-last-mileage">—</span></p>
+          <h3>Oil life remaining</h3>
+          <p class="maintenance-value" id="service-oil-life">—</p>
+          <p class="muted" id="service-oil-life-detail">UNMAPPED</p>
+        </article>
+      </div>
+      <details class="maintenance-form-wrap">
+        <summary>Record an oil change</summary>
+        <form id="oil-change-form">
+          <label>Service date <input id="oil-change-date" type="date" required></label>
+          <label>Mileage (miles, optional) <input id="oil-change-mileage" type="number" min="0" max="2000000" step="0.1" inputmode="decimal"></label>
+          <label>Mileage source <select id="oil-change-source">
+            <option value="cluster_or_receipt">Instrument cluster or service receipt</option>
+            <option value="ics_estimate">ICS estimate shown on this dashboard</option>
+          </select></label>
+          <label>Oil, filter, shop, or other notes <textarea id="oil-change-notes" rows="3" maxlength="800"></textarea></label>
+          <p class="muted">Saves a service record on the Pi for all your devices. Does not reset the vehicle’s oil-change indicator. Existing records are retained.</p>
+          <button id="oil-change-save" type="submit" disabled>Save oil change</button>
+          <p id="oil-change-result" class="muted" role="status"></p>
+        </form>
+      </details>
+      <details class="maintenance-form-wrap">
+        <summary>Oil-change history</summary>
+        <p id="oil-last-notes" class="muted"></p>
+        <p id="oil-distance" class="muted"></p>
+        <ul id="oil-change-history"></ul>
+      </details>
+    </section>
 
     <section class="panel drive-panel" data-widget="drive" aria-labelledby="drive-heading">
       <div class="section-heading drive-heading">
@@ -78,16 +120,6 @@
         <span id="engine-health-state" class="badge">LOADING CATALOG</span>
       </div>
       <div class="engine-health-grid">
-        <article class="drive-tile health-tile" id="engine-oil-pressure-card">
-          <p class="eyebrow">OIL PRESSURE</p>
-          <p class="drive-value health-value">
-            <span id="engine-oil-pressure">—</span><span id="engine-oil-pressure-unit" class="drive-unit"></span>
-          </p>
-          <p id="engine-oil-pressure-status" class="drive-status">Loading metric catalog…</p>
-          <p id="engine-oil-pressure-reference" class="drive-status">
-            OEM warm-pressure context is loading…
-          </p>
-        </article>
         <article class="drive-tile health-tile" id="engine-coolant-temperature-card">
           <p class="eyebrow">COOLANT</p>
           <p class="drive-value health-value">
@@ -101,7 +133,7 @@
             <span id="engine-oil-temperature">—</span><span id="engine-oil-temperature-unit" class="drive-unit"></span>
           </p>
           <p id="engine-oil-temperature-status" class="drive-status">Loading metric catalog…</p>
-          <p class="card-note">ECU-reported VVT temperature; sump relationship unverified.</p>
+          <p class="card-note">Sump relationship unverified.</p>
         </article>
         <article class="drive-tile health-tile" id="engine-transmission-oil-temperature-card">
           <p class="eyebrow">TRANSMISSION OIL</p>
@@ -124,10 +156,17 @@
           </p>
           <p id="engine-power-status" class="drive-status">Derived estimate; not wheel horsepower.</p>
         </article>
+        <article class="drive-tile health-tile" id="engine-oil-pressure-card">
+          <p class="eyebrow">OIL PRESSURE</p>
+          <p class="drive-value health-value">
+            <span id="engine-oil-pressure">—</span><span id="engine-oil-pressure-unit" class="drive-unit"></span>
+          </p>
+          <p id="engine-oil-pressure-status" class="drive-status">Loading metric catalog…</p>
+          <p id="engine-oil-pressure-reference" class="drive-status">
+            OEM warm-pressure context is loading…
+          </p>
+        </article>
       </div>
-      <p id="engine-health-note" class="muted panel-note">
-        Priority gauges remain visible while their exact C-CAN sources and scaling are mapped.
-      </p>
     </section>
 
     <section class="panel charging-panel" data-widget="charging" aria-labelledby="charging-heading">
@@ -163,8 +202,7 @@
       </div>
       <p class="muted panel-note charging-explanation">
         Sustained high duty indicates high commanded charging effort. Generator
-        field duty is a field command—not alternator current or alternator
-        temperature—and this card does not infer a thermal danger threshold.
+        field duty is a field command; this card does not infer a thermal danger threshold.
       </p>
     </section>
 
@@ -191,6 +229,21 @@
       </div>
       <div id="quality" class="badge">NO SAMPLE</div>
       <p id="battery-detail" class="muted panel-note">Awaiting a cached observation.</p>
+      <div id="battery-source-details" class="panel-note">
+        <h3>Source Details</h3>
+        <dl class="detail-grid">
+          <div><dt>Bus</dt><dd id="bus">—</dd></div>
+          <div><dt>Source</dt><dd id="source">—</dd></div>
+          <div><dt>Recorded at</dt><dd id="battery-observed-at">—</dd></div>
+          <div><dt>Sample age</dt><dd id="age">—</dd></div>
+          <div><dt>Acquisition</dt><dd id="acquisition">—</dd></div>
+        </dl>
+        <p id="source-detail" class="muted">No provenance is cached.</p>
+        <div class="button-row">
+          <button id="acquire" type="button" disabled>Read voltage now</button>
+        </div>
+        <p id="control-note" class="muted panel-note">Checking voltage-read availability…</p>
+      </div>
     </section>
 
     <section class="panel tires-panel" data-widget="tires" aria-labelledby="tires-heading">
@@ -224,7 +277,7 @@
         </article>
       </div>
       <p id="tires-note" class="muted panel-note">
-        The four verified wheel-position metrics will group here automatically.
+        The four wheel-position metrics will group here automatically.
       </p>
     </section>
 
@@ -242,32 +295,56 @@
       </p>
     </section>
 
-    <section class="panel" data-widget="source" aria-labelledby="source-heading">
-      <p class="eyebrow">PROVENANCE</p>
-      <h2 id="source-heading">Battery source</h2>
-      <dl class="detail-grid">
-        <div><dt>Bus</dt><dd id="bus">—</dd></div>
-        <div><dt>Source</dt><dd id="source">—</dd></div>
-        <div><dt>Sample age</dt><dd id="age">—</dd></div>
-        <div><dt>Acquisition</dt><dd id="acquisition">—</dd></div>
-      </dl>
-      <p id="source-detail" class="muted panel-note">No provenance is cached.</p>
+    <section class="panel radar-panel" data-widget="radar" aria-labelledby="radar-heading">
+      <div class="section-heading">
+        <div><p class="eyebrow">ACC / FCW</p><h2 id="radar-heading">Radar alignment</h2></div>
+        <span id="radar-state" class="badge">NO ANGLE DATA</span>
+      </div>
+      <div class="radar-axes">
+        <article class="radar-axis">
+          <div class="radar-axis-heading">
+            <h3>Elevation · vertical</h3>
+            <time id="radar-elevation-time" class="muted" hidden></time>
+          </div>
+          <dl class="radar-readings">
+            <div><dt>Latest estimate</dt><dd id="radar-elevation-current">—</dd></div>
+            <div><dt>1 min average</dt><dd id="radar-elevation-60">—</dd></div>
+            <div><dt>5 min average</dt><dd id="radar-elevation-300">—</dd></div>
+          </dl>
+          <p id="radar-elevation-margin" class="muted">Awaiting radar angle data.</p>
+          <p id="radar-elevation-coverage" class="muted"></p>
+        </article>
+        <article class="radar-axis">
+          <div class="radar-axis-heading">
+            <h3>Azimuth · horizontal</h3>
+            <time id="radar-azimuth-time" class="muted" hidden></time>
+          </div>
+          <dl class="radar-readings">
+            <div><dt>Latest estimate</dt><dd id="radar-azimuth-current">—</dd></div>
+            <div><dt>1 min average</dt><dd id="radar-azimuth-60">—</dd></div>
+            <div><dt>5 min average</dt><dd id="radar-azimuth-300">—</dd></div>
+          </dl>
+          <p id="radar-azimuth-margin" class="muted">Awaiting radar angle data.</p>
+          <p id="radar-azimuth-coverage" class="muted"></p>
+        </article>
+      </div>
+      <p id="radar-note" class="muted panel-note">±1.00° monitoring reference</p>
     </section>
 
     <section class="panel" data-widget="interface" aria-labelledby="interface-heading">
       <p class="eyebrow">SOCKETCAN</p>
-      <h2 id="interface-heading">Interface</h2>
+      <h2 id="interface-heading">Vehicle buses</h2>
       <dl class="detail-grid">
-        <div><dt>Channel</dt><dd id="channel">—</dd></div>
-        <div><dt>Adapter</dt><dd id="adapter-state">—</dd></div>
-        <div><dt>Bitrate</dt><dd id="bitrate">—</dd></div>
-        <div><dt>Controller</dt><dd id="controller-state">—</dd></div>
-        <div><dt>Listen-only</dt><dd id="listen-only">—</dd></div>
-        <div><dt>Topology</dt><dd id="topology">—</dd></div>
-        <div><dt>Current owner</dt><dd id="current-owner">—</dd></div>
-        <div><dt>Inhibits</dt><dd id="inhibits">—</dd></div>
+        <div><dt>Links up</dt><dd id="interface-links">—</dd></div>
+        <div><dt>Safety inhibits</dt><dd id="inhibits">—</dd></div>
       </dl>
       <div id="interface-roles" class="role-grid" hidden></div>
+      <p id="interface-issues" class="panel-note" hidden></p>
+      <details class="panel-note">
+        <summary>Adapter details</summary>
+        <p class="muted">Buses are identified by adapter identity, not by canN. Linux interface names can change after reconnection.</p>
+        <div id="interface-identities"></div>
+      </details>
     </section>
 
     <section class="panel" data-widget="collector" aria-labelledby="collector-heading">
@@ -278,6 +355,7 @@
         <div><dt>Cycles</dt><dd id="collector-cycles">—</dd></div>
         <div><dt>Last cycle</dt><dd id="collector-last">—</dd></div>
         <div><dt>Interval</dt><dd id="collector-interval">—</dd></div>
+        <div><dt>Last-readings storage</dt><dd id="collector-retention">—</dd></div>
       </dl>
     </section>
 
@@ -287,9 +365,16 @@
           <p class="eyebrow">EARLY WARNING</p>
           <h2 id="warnings-heading">Changes worth watching</h2>
         </div>
-        <span id="warning-state" class="badge">NO HISTORY</span>
+        <div class="warning-heading-actions">
+          <button id="warning-add" type="button" hidden>Add Early Warning</button>
+          <span id="warning-state" class="badge">NO HISTORY</span>
+        </div>
       </div>
       <div id="warning-list" class="summary-list"></div>
+      <details id="warning-recovered" class="warning-recovered" hidden>
+        <summary id="warning-recovered-title">Recovered Events</summary>
+        <div id="warning-recovered-list" class="summary-list"></div>
+      </details>
       <p id="warning-note" class="muted panel-note">
         Warnings compare like-for-like operating regimes and require persistence;
         they are evidence to inspect, not a mechanical diagnosis or health score.
@@ -335,13 +420,9 @@
         <p class="muted">
           This sends one fixed physical <code>19 02 FF</code> read to each of
           15 supported registered modules. It never clears codes; PCM remains
-          unsupported. First run <code>python3 tools/dtc_web_arm.py</code> on
-          vanpi and enter the one-use token below.
+          unsupported. Confirm the parked conditions below; the worker also
+          checks fresh ignition, engine speed and vehicle speed before every request.
         </p>
-        <label>
-          One-use local token
-          <input id="dtc-arm-token" type="password" autocomplete="off" spellcheck="false">
-        </label>
         <label>
           <input id="dtc-park-confirm" type="checkbox">
           I confirm the van is stationary, selector in Park, ignition ON, and engine OFF.
@@ -356,7 +437,7 @@
         This page displays dated ReadDTCInformation results. Current and
         pending mean when that DTC was last observed, not live vehicle state.
         The LAN listener remains cache-only. The Tailscale listener can queue
-        only the locally armed fixed scan above and cannot clear a code.
+        only the guarded fixed scan above and cannot clear a code.
       </p>
     </section>
 
@@ -370,28 +451,75 @@
       <div id="catalog-list" class="catalog-list"></div>
     </section>
 
-    <section class="panel controls" data-widget="controls" aria-labelledby="controls-heading">
-      <p class="eyebrow">CACHE CONTROL</p>
-      <h2 id="controls-heading">Acquisition</h2>
-      <div class="button-row">
-        <button id="refresh" type="button">Refresh cache</button>
-        <button id="acquire" type="button" disabled>Read voltage now</button>
-      </div>
-      <p id="control-note" class="muted panel-note">
-        Web acquisition is disabled by default.
-      </p>
-    </section>
-
-    <details class="panel customizer">
+    <details class="panel customizer" hidden>
       <summary>Customize this device</summary>
       <p class="muted">
-        Choose the panels for the Custom profile. This preference stays in this
-        browser and never changes the broker or vehicle.
+        Show or hide tiles, choose supported widths, and move rows up or down.
+        Pair half-width tiles or swap their left/right positions. Layout changes
+        stay in this browser and never change the broker or vehicle.
       </p>
+      <p id="layout-editor-note" class="muted" aria-live="polite"></p>
+      <button id="customize-current" type="button">Customize This View</button>
       <div id="widget-options" class="widget-options"></div>
+      <section id="hidden-widgets" hidden>
+        <h3>Hidden Tiles</h3>
+        <div id="hidden-widget-options" class="layout-row-tiles"></div>
+      </section>
       <button id="reset-layout" type="button" class="secondary">Reset layout</button>
     </details>
   </main>
+  <div id="warning-chat-dialog" class="warning-chat-overlay" role="dialog" aria-modal="true" aria-labelledby="warning-chat-title" hidden>
+    <section class="warning-chat-box">
+      <header class="warning-chat-header">
+        <div><p class="eyebrow">ASK CODEX</p><h2 id="warning-chat-title">Warning explanation</h2></div>
+        <button id="warning-chat-close" type="button" aria-label="Close warning chat">×</button>
+      </header>
+      <p id="warning-chat-evidence" class="muted"></p>
+      <div class="warning-chat-settings">
+        <label>Model<select id="warning-chat-model"><option value="default">Default</option></select></label>
+        <label>Effort<select id="warning-chat-effort"><option value="high">High</option></select></label>
+      </div>
+      <form id="warning-chat-connect" hidden>
+        <label for="warning-chat-code">Assistant access code</label>
+        <p class="muted">On the Pi, read <code>/var/lib/van-telemetry-advisor/access-code</code> and paste the code here. This is not an OpenAI API key.</p>
+        <input id="warning-chat-code" type="password" autocomplete="off" maxlength="128" required>
+        <div class="button-row"><button type="submit">Connect</button></div>
+      </form>
+      <div id="warning-chat-messages" class="warning-chat-messages" role="log" aria-label="Warning conversation"></div>
+      <details id="warning-chat-saved" hidden>
+        <summary>Saved Custom Warnings</summary>
+        <div id="warning-chat-saved-list"></div>
+      </details>
+      <p id="warning-chat-status" class="muted" role="status"></p>
+      <details id="warning-chat-timing" hidden>
+        <summary>Timing Details</summary>
+        <p id="warning-chat-timing-detail" class="muted"></p>
+        <p class="muted">Local Codex event timings; turn start is not a remote request acknowledgement.</p>
+      </details>
+      <details id="warning-chat-proposal" hidden>
+        <summary>Review Early Warning</summary>
+        <p id="warning-chat-rule"></p>
+        <p class="muted">Owner monitoring reference—not an OEM limit. Uses recorded telemetry only.</p>
+        <div class="button-row">
+          <button id="warning-chat-apply" type="button">Approve &amp; Add Warning</button>
+          <button id="warning-chat-remove" type="button" hidden>Remove Warning</button>
+        </div>
+        <p id="warning-chat-applied" class="muted"></p>
+      </details>
+      <form id="warning-chat-form">
+        <label for="warning-chat-input">Ask a follow-up</label>
+        <textarea id="warning-chat-input" rows="2" maxlength="2000" placeholder="What does this mean for the van?"></textarea>
+        <div class="button-row">
+          <button id="warning-chat-send" type="submit" disabled>Send</button>
+          <button id="warning-chat-new" type="button" disabled>New Chat</button>
+          <button id="warning-chat-stop" type="button" hidden>Stop</button>
+          <button id="warning-chat-retry" type="button" hidden>Retry Answer</button>
+          <button id="warning-chat-reconnect" type="button" hidden>Reconnect</button>
+        </div>
+      </form>
+      <p class="warning-chat-footnote muted">Conversations are saved on the Pi for this browser. Closing this dialog does not stop an answer.</p>
+    </section>
+  </div>
   <script src="/profiles.js"></script>
   <script src="/app.js"></script>
 </body>

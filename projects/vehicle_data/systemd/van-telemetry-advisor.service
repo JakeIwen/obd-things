@@ -1,0 +1,35 @@
+[Unit]
+Description=Read-only Codex warning explanations for van telemetry
+After=network-online.target van-telemetry.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/dev/obd-things
+ExecStart=/usr/bin/python3 /home/pi/dev/obd-things/projects/vehicle_data/warning_chat.py
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=van-telemetry-advisor
+RuntimeDirectoryMode=0700
+StateDirectory=van-telemetry-advisor
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+# Codex owns its existing ChatGPT sign-in and may need to refresh it.
+ReadWritePaths=/home/pi/.codex
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+Nice=15
+IOSchedulingClass=idle
+CPUQuota=30%
+MemoryMax=768M
+TasksMax=96
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

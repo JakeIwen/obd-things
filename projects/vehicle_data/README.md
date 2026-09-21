@@ -18,9 +18,10 @@ The implementation has two trust zones:
   termination-safe exclusive C-CAN owner described below.
 - `web.py` has no CAN imports and proxies cache/status over HTTP. It defaults
   to loopback and requires `--allow-remote-bind` for any other address. It
-  rejects all acquisition requests unless deliberately started with
-  `--allow-acquisitions`; neither the tracked nor live systemd service enables
-  that flag.
+  permits the fixed passive voltage-read POST by default; `--cache-only`
+  disables that button/POST, and `--allow-acquisitions` remains a compatible
+  explicit enable flag. GETs/streams never acquire data. Wake requests remain
+  rejected by the web proxy.
 - `drive_recorder.py` is a synchronized three-bus receive-only companion to the
   broker-owned active interval. It opens no diagnostic transport, never
   configures an interface, and never transmits. It records only after the
@@ -57,6 +58,37 @@ The implementation has two trust zones:
 The code does not install or enable itself. The units under `systemd/` retain
 safe loopback defaults and must be reviewed against the target host. The
 current vanpi deployment is recorded below.
+
+### Owner-configured warning triggers and Codex chat
+
+September 20 update: the advisor's fixed job timeout is now 300 seconds
+(previously 180, producing “Codex took too long”). The dialog defaults to
+Default / High (currently Astra), exposes validated model/effort controls,
+records actual turn settings, and closes with X or Escape. Add Early Warning
+uses a dedicated structured-proposal chat and explicit approval to save
+bounded numeric threshold rules. Codex gains no shell, app-source editing,
+CAN or service-control tools. Approved configuration is the supported app
+modification path; unsupported trigger logic needs a separate implementation.
+
+`custom_warnings.py` validates and evaluates owner rules using fresh historian
+data. The advisor writes `/var/lib/van-telemetry-advisor/early-warnings.json`;
+the production evaluator reloads it in existing background evaluations. Tests
+opt in with a temporary path. Built-ins are unaffected by configuration errors.
+The frontend distinguishes saved from broker-loaded rules and supports removal.
+See [warning chat](docs/warning-chat.md) for boundaries and activation.
+Source is updated; advisor/web restarts and one safe parked broker restart are
+needed. No live warning was installed during tests.
+
+Follow-up timeout fix: the advisor now reuses the existing Codex SQLite index
+instead of backfilling an empty private index against the same 2 GB session
+archive. Ephemeral runs, restricted tools, private app chats and the existing
+ChatGPT login remain unchanged. Safe per-turn timing records distinguish local
+startup, turn start, response activity and shutdown, with CPU/throttling totals;
+Timing Details is available in the chat. This specific update requires only an
+advisor restart and page reload, not a broker/web/CAN restart. See the warning
+chat document for diagnostic semantics, verification and the prior live evidence.
+The owner subsequently reported a successful live response after applying this
+fix; the earlier timeout is no longer reproduced in that reported retry.
 
 ## Auxiliary bus development boundary
 
@@ -162,8 +194,8 @@ deliberately tabled; this work neither diagnosed nor modified the hub.
    fixed physical `19 02 FF`, at no more than one request per second, after
    fresh ignition-on/engine-off/speed-zero and exact identity/state gates. PCM
    remains explicitly unsupported. The LAN dashboard stays cache-only; the
-   Tailscale listener can queue this one fixed job only after a five-minute,
-   one-use token is created locally with `tools/dtc_web_arm.py`. There is no
+   Tailscale listener can queue this fixed job after explicit parked/gear/
+   ignition-on-engine-off confirmations, without a separate local token. There is no
    DTC-clear, arbitrary-payload, module-address, or session-control path.
 
 The tracked `dual-usbcanfd` systemd unit and
@@ -740,7 +772,7 @@ timestamp. Existing broadcast battery sources are not publisher-enabled,
 preventing a local logger from masquerading as the in-process voltage reader.
 The Unix acquisition handler accepts `wake_if_asleep` only for
 `battery.voltage`. `web.py` continues to accept/proxy only `mode=passive`, even
-when its otherwise-disabled acquisition proxy is explicitly enabled. The
+with its passive acquisition proxy enabled by default. The
 dashboard/manual voltage-check wrapper passes `--passive-only`, so it cannot
 indirectly select the wake mode through `voltage_mon.py`.
 
@@ -748,7 +780,7 @@ The broker Unix API has no raw-frame, arbitrary-DID, diagnostic-session,
 live-DTC-scan, DTC-clear, reset, calibration, configuration, or PROXI endpoint.
 Its DTC GET reads only the atomic JSON cache and cannot open SocketCAN. History
 and health likewise read only SQLite. The optional Tailscale web job boundary
-is separate: it can place only one locally armed, closed-schema request for the
+is separate: it can place only one explicitly confirmed, closed-schema request for the
 non-networked fixed batch worker and expose bounded status/cancel operations.
 The ordinary LAN listener does not expose those actions.
 
@@ -849,13 +881,18 @@ The reviewed multi-module live worker is also dry-run by default:
 python3 tools/dtc_batch.py --json
 ```
 
-Its exact execution, restoration, report-import, cancellation, and one-use web
+Its exact execution, restoration, report-import, cancellation, and guarded web
 authorization contracts are documented in
 [`docs/dtc-batch-worker.md`](../../docs/dtc-batch-worker.md). The Tailscale UI
 does not run CAN inside an HTTP thread: it writes a mode-0600 fixed request
 under `/run`, and `van-dtc-batch.path` starts the separate non-networked
-oneshot worker. Create the required five-minute token locally with
-`python3 tools/dtc_web_arm.py`; the token is consumed before queueing.
+oneshot worker. As requested on September 20, the browser no longer needs a
+locally generated token. The exact configured Origin, explicit confirmations,
+single-job exclusion, sticky restoration-failure block and every worker-side
+live state/identity/transport check remain. Legacy clients may still supply a
+valid optional token; it is consumed as before. The updated UI stays disabled
+against an older web process still advertising a required token, until that
+listener is restarted. No DTC scan was run while implementing this change.
 
 The one-module reader remains useful for an explicitly scoped investigation
 and is dry-run by default:
@@ -901,7 +938,7 @@ quality=...)`; it returns the same `(HTTP status, response object)` tuple as
 For a manual cache-only dashboard:
 
 ```bash
-python3 projects/vehicle_data/web.py --bind 127.0.0.1 --port 8765
+python3 projects/vehicle_data/web.py --bind 127.0.0.1 --port 8765 --cache-only
 ```
 
 The dashboard uses server-sent events, but every stream update is still made
@@ -915,11 +952,12 @@ python3 projects/vehicle_data/web.py \
 ```
 
 This opt-in does not add authentication. Bind to one intended interface address
-and keep the service cache-only; avoid a wildcard bind unless another layer
-restricts clients.
+and use `--cache-only` if browser-requested passive voltage reads are not
+wanted; avoid a wildcard bind unless another layer restricts clients.
 
 The responsive layout treats up to 1024 CSS pixels as tablet portrait: the
-masthead and split panels stack, drive/engine tiles use two balanced columns,
+masthead stacks, dashboard half-width panels stay paired above 640 pixels,
+drive/engine tiles use two balanced columns,
 and long status badges wrap rather than widening the page. A separate
 1024–1312 pixel tablet-landscape band uses a balanced three-column drive layout
 with the primary speed tile spanning two columns. Wider layouts keep all five
@@ -952,6 +990,265 @@ fail immediately. Broker blocked-state status retains the helper's original
 terminal detail instead of replacing it with only the recovery condition.
 
 ## Current vanpi deployment
+
+### Mileage and oil-change records (2026-09-16)
+
+The service panel (Overview/Parked/Custom; hidden in Driving/Diagnostics) exposes the existing candidate
+`vehicle.odometer` ICS feed and its roughly 11-mile recorded discrepancy from
+the cluster. Last-known mileage retains its original observation timestamp
+while parked and across broker restarts. Startup may recover one dated,
+previously fresh ICS sample through the historian's indexed latest-sample
+lookup. It is never injected into the live metric cache as a new observation.
+
+`/v1/maintenance` reads an in-memory service journal.
+`POST /v1/maintenance/oil-changes` accepts only date, optional miles, mileage
+source, notes, and an idempotency request ID. The web boundary requires
+same-origin JSON; the broker validates the closed schema and commits the
+record atomically before acknowledging it. Service history is append-only and
+persists in `maintenance.json` beside the configured history database
+(`/var/lib/van-telemetry/maintenance.json` on vanpi), shared by all browsers.
+The history thread flushes latest mileage at its supplemental-refresh cadence.
+Malformed existing storage is preserved and blocks journal writes. This
+endpoint does not grant CAN access or reset any vehicle indicator.
+
+Oil-life percentage remains explicitly unavailable: an AlfaOBD status label
+was observed, but its exact current-vehicle DID/scale has not been established.
+See the [service-dashboard evidence review](../ecu_mapping/findings/promaster_2022/2026-09-16_service_dashboard_evidence.md).
+Last oil-change data must be entered by the owner; old status logs are not
+treated as service records. Date is required, mileage is optional, and the
+form distinguishes cluster/receipt mileage from ICS estimates. Distance since
+service is calculated only for the same ICS mileage basis.
+
+Deployment verified 2026-09-16 MDT: memory API and shared form are live on LAN
+and Tailscale. Startup recovered 53,725.617 mi from the dated September 15 ICS
+historian observation. Browser verification shows 53,725.6 mi with its date
+and "not live", an enabled save form, and no fabricated oil-change entry.
+Portrait 800x1280 and landscape 1280x800 have no horizontal overflow or JS
+errors. Remote job `20260917T011211Z-857b3e15` passed 144 tests and 53 subtests;
+final maintenance job `20260917T011318Z-105ecf05` passed 16 tests and 7 subtests.
+Asleep deployment added no CAN TX; all roles stayed passive/error-free.
+
+### Radar alignment dashboard (2026-09-16)
+
+The ACC/FCW radar panel remains visible in every dashboard profile, including
+Custom. It shows latest elevation/azimuth, sample means over the trailing 60
+and 300 seconds, sample count/time coverage, absolute five-minute peak, and
+distance to the owner's +/-1 degree monitoring reference. At 0.8 degree it
+shows an approaching-reference indication; at 1 degree it shows outside the
+reference. These are display bands, not verified OEM fault thresholds or proof
+that ACC/FCW is correctly calibrated. Source/scaling remain **candidate**:
+the radar project's `0845` signed i32 pair /1e6 interpretation is inferred.
+`0841` instantaneous pitch is deliberately not used for alignment monitoring.
+
+`radar_alignment.py` implements only physical `22 0845` plus one fixed ISO-TP
+FlowControl for an exact 11-byte `62 08 45` reply. The optional helper path uses
+new running evidence and independent 250 ms permits for each send, at most one
+read per ten seconds. Session changes, TesterPresent and calibration actions
+are absent. A radar response failure disables radar reads for that epoch while
+PCM/TPMS continue; owner/permit safety failures retain fatal cleanup behavior.
+
+**Parked read support verified 2026-09-16 MDT:** `22 08 45` returned exact
+`62 08 45 00 01 65 91 00 01 6E C3`, elevation +0.091537° and azimuth
++0.093891° under the existing inferred scale, without a session change.
+The scoped owner verified passive restoration; evidence is recorded in the
+radar DID map and `tmp/radar/dashboard-support-20260917.txt`. The helper's
+commissioning flag is now enabled. Its full running cadence still requires
+validation during an owner-controlled engine-running interval.
+
+Deployment verified 2026-09-16 MDT: broker and LAN/Tailscale listeners restarted
+with idle helpers and verified passive roles. Both angle metrics and bounded
+summaries are exposed by the live snapshot. The support read added exactly two
+C-CAN TX packets (request plus FlowControl); the subsequent restart added none.
+All vehicle roles remained listen-only/ERROR-ACTIVE with zero RX/TX errors.
+Focused final remote job `20260917T004133Z-1d77e2d8` passed 79 tests and 55
+subtests. The one-off parked reading was not injected as live dashboard data.
+
+Rolling summaries count new observations in the broker. As of the September 20
+retention update, each window ends at its latest radar observation and freezes
+there while parked. The last reading, means, peaks, sample counts and original
+timestamp remain visible with a "LAST RECORDED · NOT LIVE" badge. New samples
+after a gap over 30 seconds start new averaging windows. Live freshness gates
+remain unchanged, and retained values never enter the live metric cache.
+The small `radar-alignment.json` file beside the history database retains these
+summaries across restarts; the history thread flushes changed summaries. A
+bounded indexed startup query can recover the final five-minute window from
+existing historian observations, deduplicating repeated cached samples.
+Raw averaging history is bounded to five minutes/512 observations per axis.
+Dashboard GETs perform no SQL, disk write, or diagnostic request.
+
+Activation verified September 20 via the live snapshot: the broker restarted
+outside this managed session at 20:22:54 UTC. Retained radar summaries and
+last readings are now exposed with no reported storage errors. This verifies
+historical recovery, not a new active radar polling interval.
+
+Dashboard layout has one registry in `static/profiles.js`: all 15 tile IDs,
+editor labels, default order and allowed/default widths live there. Presets
+are ordered tile lists, not CSS visibility overrides. Every tile, including
+Vehicle & Service and ACC/FCW, has a matching `data-widget` and is customizable.
+Runtime and regression checks require a one-to-one registry/panel match.
+Maintenance stays out of Driving/Diagnostics defaults; radar remains included
+in every preset, but both may be shown/hidden in Custom.
+
+`packRows` pairs half-width tiles, looking past intervening full-width tiles
+when needed; at most one unpaired half-width tile remains. The renderer moves
+the existing panel nodes into this packed order only when the layout changes.
+The editor, DOM, keyboard reading order and visual order therefore agree;
+CSS `grid-auto-flow: dense` and per-panel width/profile exceptions are removed.
+Half tiles span six columns above 640px; phones stack the same order. Metric
+catalog, drive/engine/charging, warnings/history/DTCs require full width; the
+other eight tiles support half or full width. Catalog entries retain their
+two-column layout on wider screens.
+
+Customize this device shows the actual rows, Show/Hide checkboxes, supported
+width selectors, Move Up/Down for whole rows, Swap Tiles within a pair, and
+Pair With selectors to regroup half-width tiles. Editing a preset copies that
+visible layout into Custom without changing the preset; Customize This View
+also explicitly seeds Custom. Hidden tiles remain listed and can be restored.
+Reset Layout restores the factory Overview/default Custom configuration.
+All settings remain browser-local; no server, vehicle or acquisition settings
+are changed. Layout/editor rendering is signature-cached, not rebuilt on every
+telemetry update.
+
+Storage version 3 saves ordered `{id, width, visible}` entries, with an optional
+`solo` marker to preserve the odd half-tile row's position when moving rows
+without splitting existing pairs. Normalization allows at most one such marker
+and removes it when the half-tile count is even. Migration reads
+v2 then v1, maps retired source/controls to battery, preserves previous hidden
+choices and implicit maintenance/radar visibility, and retains legacy keys.
+The old v1 Automatic default still migrates to Overview; an explicit v2 Auto
+selection remains Auto. An all-hidden v3 layout is valid. Unknown IDs,
+duplicate IDs and unsupported widths are sanitized; corrupt/denied storage
+falls back safely without throwing or discarding readable legacy preferences.
+Human-readable headings use title case; catalog/trend metric identifiers and
+interface identifiers retain their exact spelling.
+The SocketCAN tile is role-first: C-CAN, B-CAN and CAN CH each show their
+physical pins, observed bitrate, link/mode and controller state. The legacy
+top-level C-CAN-only channel/bitrate/topology summary is removed; current Linux
+names, board/connector identities and the unconnected spare are available in
+Adapter details. `canN` remains useful for host diagnosis but is not a stable
+bus identity. Missing roles remain visible, unknown bitrate is not replaced
+with configured bitrate, and safety inhibits/controller/identity faults are
+not suppressed. The old Current owner field reflected `status.current_owner`,
+which becomes `broker` during an in-flight operation and null between reads;
+it was not a service-ownership indicator. Removing that misleading field does
+not alter backend ownership, locks, acquisition, or service state.
+
+TPMS displays the broker's last available valid pressure even when stale, with
+each wheel's original timestamp, stale styling and "NOT LIVE" label. Retained
+readings are counted separately from live wheels. Candidate, invalid or missing
+values remain unavailable. This presentation uses the existing broker cache,
+performs no new CAN acquisition, and does not turn old samples into fresh ones.
+The Parked profile includes TPMS so these last readings remain accessible after
+shutdown as well as in Overview and Driving.
+
+Battery provenance is integrated into the 12 V System tile in an always-visible
+Source Details section: reporting bus/source, original observation timestamp,
+sample age, acquisition method and source detail. The existing quality/stale
+badge and acquisition-error note remain visible above the details. Fields use
+two columns above 640px and one column on narrower screens. The
+separate Battery Source tile and Custom checkbox are removed; stored Custom
+`source` selections migrate to `battery` without resetting other choices, and
+Diagnostics includes Battery so its provenance remains accessible there.
+Refresh is beside the dashboard selector and only resynchronizes cached data.
+The voltage-only read button and acquisition-availability note are inside
+12 V System's Source Details; existing server/handler acquisition gates are
+unchanged. The standalone Cache Control tile and its Custom checkbox are
+removed, with stored `controls` selections also migrated to `battery`.
+
+Confirmed DTC History keeps records whose `last_seen_at` predates one calendar
+month in a default-closed "Older Than 1 Month" disclosure. The cutoff uses UTC
+and clamps month-end dates (March 31 to February 28/29). Recent, undated and
+invalidly dated history remains visible, and Current/Pending groups are never
+age-collapsed. All saved records and counts remain intact. A user's expanded
+state survives supplemental refreshes within the page; reloading resets the
+default. This is presentation only, with no scan, clearing or cache mutation.
+
+### Last-recorded display policy (September 20 audit)
+
+Open early-warning episodes are explicitly labeled "Unresolved advisory" and
+retain a caution outline even when the latest assessment lacks fresh evidence.
+This does not promote that unavailable assessment to a live warning. Resolved
+sample-filter events are separated into a default-collapsed Recovered Events
+section, excluded from TO REVIEW; active filters stay in the main list. The
+disclosure keeps its open state across supplemental refreshes. Counts, episode
+resolution/acknowledgment and notification behavior are unchanged.
+
+Warning cards also have a staged, read-only local Codex explanation dialog with
+follow-up conversations. This is a separately authenticated/serialized worker,
+not a CAN or arbitrary-command endpoint. See
+[warning chat deployment and boundaries](docs/warning-chat.md) before enabling
+it; the current managed session could not install the worker or validate a real
+Codex reply. The feature loads only after the web process advertises support.
+
+`RETAIN_LAST_READING` in `static/app.js` is the single presentation policy for
+dated last values. Everything not explicitly included is live-only, including
+new metrics until reviewed. Metric Catalog displays the policy for each entry.
+Section/state badges use the shared yellow/amber caution color; individual
+historical captions show only the timestamp in normal muted text. The redundant
+Last recorded / NOT LIVE wording and latest-attempt suffix are omitted;
+unavailable gauges still show short statuses such as stale. NOT LIVE remains on the
+parent summary. Whole-mile odometer display truncates, never rounds, without
+changing stored precision. Fully mapped sections omit their mapped counts;
+zero-live sections say NOT LIVE. Unmapped gauges stay visible and say UNMAPPED.
+Oil Pressure is last in Engine Health, whose redundant explanatory paragraph
+is removed. These are presentation changes, not freshness/admission changes.
+Positive VERIFIED display labels and the verified-source boilerplate are
+omitted; quality admission checks and confidence values remain unchanged.
+ALFA SCALE/candidate/unknown and restoration-unverified cautions remain visible.
+The passive voltage-read capability no longer adds a success explanation under
+the button; disabled-capability explanations still appear when applicable.
+TPMS likewise keeps the caution color on its panel badge, not individual tire
+status lines.
+Vehicle & Service mileage keeps its timestamp/freshness and estimate caveat
+in the mileage hover tooltip, without a separate visible last-recorded line.
+ACC/FCW places each retained timestamp at the right of the Elevation/Azimuth
+heading; those timestamps disappear when live. The separate last-recorded
+sentence is removed, while the panel NOT LIVE badge remains.
+Radar sample-count/time-coverage text is omitted from the tile; the peak-angle
+lines remain, and the footer reads "±1.00° monitoring reference". Underlying
+coverage metadata and the documented scaling/threshold uncertainty are unchanged.
+
+| Data | Parked/stale display |
+| --- | --- |
+| Voltage, odometer, four tire pressures | Last accepted reading, original date, not live |
+| Coolant, VVT oil and transmission temperatures | Last accepted temperature, original date, not current temperature |
+| Radar elevation/azimuth | Last estimate; existing separately retained averages/coverage where available |
+| Oil life remaining | Retain a valid registered percent reading when a source exists; currently unmapped, so no invented value |
+| Speed, RPM, gear, ignition/running state | Fresh only; no historical value promoted as current state |
+| Oil pressure, torque/power/target torque, generator duty, shaft speeds | Fresh only; standalone historical values lack current operating context |
+| Diagnostic raw bytes | Fresh only in diagnostic cards; historical evidence remains in the historian |
+| Oil-change journal, DTC history, trip summaries | Already dated records; their existing historical presentation is unchanged |
+
+Historical values require a finite, in-range number, matching unit, registered
+source and quality, and valid non-future observation timestamp. Normal
+driver-facing retained values require verified or observed-Alfa-scale quality.
+Only the existing odometer and radar estimates permit candidate quality, with
+their original provenance unchanged. Retention never upgrades quality, live
+counts, engine-state evidence, alarms, acquisition permissions or sample age.
+The oil-life display now supports live/retained `engine.oil_life_remaining`
+**only if that metric is actually registered** with a qualified percent source;
+it is not added to the acquisition registry by this UI change. Historical
+AlfaOBD 17% is not imported or inferred from the owner service journal.
+
+`last_readings.py` maintains a separate bounded last-accepted observation per
+registry metric, updated only after successful source/value/plausibility
+admission. Current unavailable responses retain their failure reason and
+`available=false`; an optional `last_recorded` object carries historical data
+without live availability/age flags. GETs only copy memory. The normal history
+worker flushes dirty `last-readings.json` beside the history database every
+history cycle; clean shutdown also flushes. With history disabled, periodic
+flushing is unavailable and persistence occurs only on clean shutdown.
+Startup uses one indexed fresh-only `latest_sample` lookup per metric to
+recover existing evidence without new CAN reads. The historian's
+`metric_samples_fresh_latest` index bounds these lookups. Failures report via
+`status.last_readings.storage_error` and Collector Health; they do not stop
+live collection. Recovered values never enter the live cache.
+
+Deployment verified September 20: an externally performed broker restart at
+20:22:54 UTC activated durable retention. The live snapshot reports persistent
+last-readings storage with no error, recovered VVT oil temperature and radar
+history are displayed, and the LAN web listener advertises passive voltage
+acquisition enabled. This agent did not perform the restart or any CAN work.
 
 Live validation, 2026-09-06 13:47 MDT: the parked, ignition-on/engine-off check
 returned `7F 22 12` for `F45C` and `62 06 9F 60` (89.6 °F) for `069F`, with
@@ -1388,8 +1685,12 @@ interface untouched and otherwise uses the locked passive bring-up path.
   unit so the LAN endpoint remains available and neither listener needs a
   wildcard bind. Tailnet access remains subject to Tailscale policy; the
   dashboard itself does not add authentication.
-- The live web service omits `--allow-acquisitions`. Dashboard GETs and stream
-  updates are cache-only, and acquisition POSTs fail closed with HTTP 403.
+- The live web services omit `--allow-acquisitions`. Historically this blocked
+  voltage acquisition POSTs. On September 20 the owner requested passive reads
+  enabled by default, implemented in the parser with `--cache-only` as opt-out.
+  An externally performed restart at 20:22:54 UTC subsequently activated the
+  default; the LAN snapshot now advertises acquisition enabled. GETs/streams
+  remain cache-only and wake requests remain blocked.
 
 ### Current read-only host inspection
 

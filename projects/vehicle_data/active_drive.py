@@ -44,6 +44,7 @@ from projects.vehicle_data import (
     ccan_powertrain,
     pcm_electrical,
     transmit_permit,
+    radar_alignment,
 )
 
 
@@ -240,6 +241,11 @@ class SystemBackend:
         )
         poller.open()
         return poller
+
+    def open_radar(self):
+        if not radar_alignment.LIVE_POLLING_COMMISSIONED:
+            return None
+        return radar_alignment.RadarAlignmentPoller(self.channel).open()
 
 
 def _safe_passive_state(state: object) -> bool:
@@ -709,6 +715,7 @@ def run_active_session(
     mutation_attempted = False
     pcm_poller = None
     tpms_poller = None
+    radar_poller = None
     outcome = SessionOutcome("helper_failed", "active-drive session did not start")
     restored: bool | None = None
     try:
@@ -754,6 +761,15 @@ def run_active_session(
 
         pcm_poller = backend.open_pcm()
         tpms_poller = backend.open_tpms()
+        if hasattr(backend, "open_radar"):
+            try:
+                radar_poller = backend.open_radar()
+            except OSError as exc:
+                for metric in radar_alignment.METRICS:
+                    sink.emit("metric_failure", metric=metric, unit="deg",
+                              source=radar_alignment.SOURCE, bus="c-can", quality="candidate",
+                              reason="response_rejected", detail=f"Radar transport unavailable: {exc}",
+                              interface_mode="armed_diagnostic")
         sink.emit(
             "status",
             state="armed_diagnostic",
@@ -772,6 +788,8 @@ def run_active_session(
         torque_enabled = True
         vvt_temperature_enabled = True
         next_vvt_temperature = next_cycle
+        next_radar = next_cycle
+        radar_enabled = radar_poller is not None
         while True:
             cycle_started = backend.monotonic()
             gate_failure = _active_gate(backend, initial)
@@ -1005,6 +1023,44 @@ def run_active_session(
                         interface_mode="armed_diagnostic",
                     )
 
+            if radar_enabled and backend.monotonic() >= next_radar:
+                # Radar replies are segmented. Take new running evidence so
+                # the two independently permitted sends do not inherit time
+                # spent waiting on PCM/TPMS responses earlier in this cycle.
+                radar_snapshot = backend.broadcast_snapshot(ACTIVE_SNAPSHOT_SECONDS)
+                if not _running_snapshot(radar_snapshot):
+                    outcome = SessionOutcome("engine_not_running", "radar read skipped: fresh running evidence absent")
+                    break
+                gate_failure = _active_gate(backend, initial)
+                if gate_failure is not None:
+                    outcome = gate_failure
+                    break
+                try:
+                    request_permit = transmit_permit.issue(
+                        lock_handle, radar_snapshot, purpose=transmit_permit.RADAR_ALIGNMENT,
+                        channel=backend.channel, monotonic=backend.monotonic,
+                    )
+                    flow_permit = transmit_permit.issue(
+                        lock_handle, radar_snapshot, purpose=transmit_permit.RADAR_ALIGNMENT_FLOW,
+                        channel=backend.channel, monotonic=backend.monotonic,
+                    )
+                except transmit_permit.StaleTransmitEvidenceError:
+                    next_cycle = _wait_for_next_cycle(backend, next_cycle, cycle_started)
+                    continue
+                radar = radar_poller.poll(request_permit, flow_permit)
+                next_radar = backend.monotonic() + radar_alignment.POLL_INTERVAL_SECONDS
+                if radar.reason != "transmit_permit_expired":
+                    for index, metric in enumerate(radar_alignment.METRICS):
+                        common = dict(metric=metric, unit="deg", source=radar_alignment.SOURCE,
+                                      bus="c-can", quality="candidate", detail=radar.detail,
+                                      interface_mode="armed_diagnostic")
+                        if radar.available:
+                            sink.emit("observation", value=radar.angles[index], **common)
+                        else:
+                            sink.emit("metric_failure", reason=radar.reason, **common)
+                    if not radar.available:
+                        radar_enabled = False
+
             next_cycle = _wait_for_next_cycle(
                 backend, next_cycle, cycle_started
             )
@@ -1027,7 +1083,7 @@ def run_active_session(
         # also covers a TERM that first arrives after a normal RPM-gate exit.
         if termination_guard is not None:
             termination_guard.begin_cleanup()
-        for poller in (tpms_poller, pcm_poller):
+        for poller in (radar_poller, tpms_poller, pcm_poller):
             if poller is not None:
                 try:
                     poller.close()

@@ -21,6 +21,24 @@ internal C-CAN — this is why UDS works here and why OBD-II PIDs don't route. C
 | `0x0857` | `AA` | u8 | toggles ~170↔0 while driving — status/quality flag | S |
 
 ## Health (verified against AlfaOBD)
+
+### 2026-09-16 MDT: dashboard read support
+
+A bounded parked, ignition-on/engine-off physical `22 08 45` returned
+`62 08 45 00 01 65 91 00 01 6E C3` without session-control or TesterPresent.
+The existing inferred signed-i32 /1e6 decoder yields elevation **+0.091537°**
+and azimuth **+0.093891°**. This confirms current no-session-change read
+support and payload shape, not independent verification of physical scaling,
+axis signs, or a +/-1-degree firmware fault threshold. The shared scoped
+C-CAN owner reported verified passive restoration. Raw check output:
+`tmp/radar/dashboard-support-20260917.txt` (UTC date).
+
+The dashboard helper is now commissioned for one fixed `0845` read per ten
+seconds inside the existing qualified engine-running owner. It validates the
+exact 11-byte reply before accepting values and allows only one separately
+permitted ISO-TP FlowControl. The complete running cadence still needs live
+validation; no radar calibration action was performed.
+
 | DID | idle raw | decode | meaning | conf |
 |---|---|---|---|---|
 | `0x1006` | `85` | u8 ×0.1 → 13.3 V | control-module voltage | V |

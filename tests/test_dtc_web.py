@@ -139,6 +139,33 @@ class DtcWebBoundaryTests(unittest.TestCase):
             next(self.root.glob("request.json.cancelled-dtc-web-*"), None)
         )
 
+    def test_controller_queues_fixed_request_without_local_token(self):
+        arm = self.root / "arm.json"
+        request = self.root / "request.json"
+        controller = DtcWebController(arm_path=arm, request_path=request,
+            current_path=self.root / "current.json", cancel_dir=self.root / "cancel",
+            job_root=self.root / "jobs")
+        result = controller.start()
+        self.assertEqual(result["state"], "queued")
+        self.assertFalse(arm.exists())
+        payload = validate_request(json.loads(request.read_text()))
+        self.assertEqual(payload["request_hex"], "19 02 FF")
+        self.assertFalse(payload["clear_requested"])
+        for field in ("confirm_parked", "confirm_park_gear", "confirm_ignition_on_engine_off"):
+            self.assertIs(payload[field], True)
+        with self.assertRaisesRegex(DtcWebRequestError, "already"):
+            controller.start()
+
+    def test_tokenless_request_cannot_bypass_restoration_failure(self):
+        controller = DtcWebController(arm_path=self.root / "arm.json",
+            request_path=self.root / "request.json", current_path=self.root / "current.json",
+            cancel_dir=self.root / "cancel", job_root=self.root / "jobs")
+        (self.root / "current.json").write_text(json.dumps({
+            "job_id": "dtc-web-20260920T000000Z-12345678", "state": "restoration_failed"}))
+        with self.assertRaisesRegex(DtcWebRequestError, "unverified restoration"):
+            controller.start()
+        self.assertFalse((self.root / "request.json").exists())
+
     def test_trusted_origin_must_exactly_match_listener(self):
         self.assertEqual(
             validate_dtc_origin(
