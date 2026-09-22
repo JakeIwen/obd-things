@@ -77,6 +77,8 @@ class WarningRule:
     regime_dimensions: tuple[str, ...] = REGIME_DIMENSIONS
     corroborators: tuple[CorroborationRule, ...] = ()
     required_corroborators: int = 0
+    recovery_observations: int = 3
+    minimum_running_seconds: float = 0
     maximum_delta_c: float | None = None
     maximum_delta_window_seconds: float | None = None
 
@@ -96,11 +98,15 @@ class WarningRule:
             ("minimum_baseline_trips", self.minimum_baseline_trips),
             ("lookback_days", self.lookback_days),
             ("persistence_observations", self.persistence_observations),
+            ("recovery_observations", self.recovery_observations),
         ):
             if not isinstance(value, int) or isinstance(value, bool) or value < 1:
                 raise ValueError(f"{name} must be a positive integer")
         _validate_positive(self.persistence_window_seconds, "persistence_window_seconds")
         _validate_positive(self.max_age_seconds, "max_age_seconds")
+        _validate_nonnegative(self.minimum_running_seconds, "minimum_running_seconds")
+        if self.minimum_running_seconds > 900 or self.recovery_observations > 60:
+            raise ValueError("running or recovery window exceeds the bounded evaluator policy")
         project_regime("engine:motion:rpm:thermal", self.regime_dimensions)
         if (
             not isinstance(self.required_corroborators, int)
@@ -229,6 +235,7 @@ DEFAULT_WARNING_RULES: tuple[WarningRule, ...] = (
     ),
     WarningRule(
         key="engine_coolant_temperature_relative_high",
+        minimum_running_seconds=300,
         title="Coolant temperature above its comparable-history band",
         metric="engine.coolant_temperature",
         direction="high",
@@ -398,6 +405,7 @@ class EarlyWarningEvaluator:
         sample: dict[str, object], age_seconds: float
     ) -> dict[str, object]:
         return {
+            "sample_id": sample.get("sample_id"),
             "value": sample["value"],
             "unit": sample["unit"],
             "captured_at": sample["captured_at"],
@@ -413,7 +421,13 @@ class EarlyWarningEvaluator:
 
     @staticmethod
     def _base(rule: WarningRule) -> dict[str, object]:
+        from projects.vehicle_data.event_history import digest
+        rule_snapshot = asdict(rule)
         return {
+            "rule_snapshot": rule_snapshot,
+            "rule_revision": digest(rule_snapshot),
+            "evaluator_revision": "relative-v2",
+
             "rule": rule.key,
             "title": rule.title,
             "metric": rule.metric,
@@ -431,7 +445,10 @@ class EarlyWarningEvaluator:
 
     @staticmethod
     def _absolute_base(rule: AbsoluteOilPressureRule) -> dict[str, object]:
+        from projects.vehicle_data.event_history import digest
         return {
+            "rule_snapshot": asdict(rule), "rule_revision": digest(asdict(rule)),
+            "evaluator_revision": "absolute-oil-v1",
             "rule": rule.key,
             "title": rule.title,
             "metric": rule.metric,
@@ -755,6 +772,7 @@ class EarlyWarningEvaluator:
         at: datetime,
         lookback_days: int,
         regime_dimensions: Sequence[str],
+        minimum_trip_age_seconds: float = 0,
     ) -> BaselineStats | None:
         return self.historian.robust_baseline(
             metric,
@@ -769,6 +787,7 @@ class EarlyWarningEvaluator:
             source=str(sample["source"]),
             provenance=str(sample["provenance"]),
             regime_dimensions=regime_dimensions,
+            minimum_trip_age_seconds=minimum_trip_age_seconds,
         )
 
     @staticmethod
@@ -929,6 +948,22 @@ class EarlyWarningEvaluator:
                 "corroborators": [],
             }
 
+        if rule.minimum_running_seconds:
+            rpm = self.historian.latest_sample("engine.rpm", at=evaluated, fresh_only=True)
+            interval = None
+            if rpm and _sample_age_seconds(rpm, evaluated) is not None and _sample_age_seconds(rpm, evaluated) <= 5:
+                interval = self.historian.continuous_numeric_condition(
+                    "engine.rpm", at=evaluated, minimum=400.01, source=str(rpm["source"]),
+                    quality=str(rpm["quality"]), provenance=str(rpm["provenance"]),
+                    trip_id=rpm.get("trip_id"), max_gap_seconds=10,
+                    max_lookback_seconds=rule.minimum_running_seconds + 30)
+            if interval is None or interval["duration_seconds"] < rule.minimum_running_seconds:
+                return {**base, "state": "not_applicable", "reason": "coolant comparison awaits five minutes of continuous running evidence",
+                        "current": self._current_payload(sample, age), "regime": sample.get("regime"),
+                        "regime_dimensions": list(rule.regime_dimensions), "baseline": None, "deviation": None,
+                        "applicability": {"minimum_running_seconds": rule.minimum_running_seconds, "running_interval": interval},
+                        "persistence": {"required": rule.persistence_observations, "observed": 0, "evaluated": False}}
+
         plausibility = self._plausibility_rejection(
             rule,
             sample=sample,
@@ -969,6 +1004,7 @@ class EarlyWarningEvaluator:
             at=evaluated,
             lookback_days=rule.lookback_days,
             regime_dimensions=rule.regime_dimensions,
+            minimum_trip_age_seconds=rule.minimum_running_seconds,
         )
         shortfall = self._baseline_shortfall(
             baseline,
@@ -1096,6 +1132,7 @@ class EarlyWarningEvaluator:
                 "observed": observed,
                 "window_seconds": rule.persistence_window_seconds,
                 "satisfied": persistent,
+                "observations": [{k: p.get(k) for k in ("sample_id", "observed_at", "captured_at", "value", "source", "quality", "regime", "trip_id")} for p in recent[:observed]],
             },
             "corroboration": {
                 "required": rule.required_corroborators,
@@ -1131,6 +1168,8 @@ class EarlyWarningEvaluator:
             except (OSError, ValueError, KeyError, TypeError):
                 # Malformed owner configuration must not suppress built-in warnings.
                 custom_status["error"] = "Custom warning configuration could not be evaluated"
+        from projects.vehicle_data.monitoring_coverage import coverage_assessments
+        assessments.extend(coverage_assessments(self.historian, assessments, evaluated))
         active = [
             assessment
             for assessment in assessments
@@ -1257,12 +1296,18 @@ class InfrastructureHealthEvaluator:
             # advisory lifecycle treats unavailable as inconclusive and keeps
             # any already-open episode intact without notification eligibility.
             usb_state = "unavailable"
+        probe = context.get("interface_probe") or {}
+        probe_state = probe.get("state")
+        waiting_probe = probe_state == "awaiting_first_probe"
+        failed_probe = probe_state == "failed"
+        elapsed = probe.get("elapsed_seconds")
+        overdue = waiting_probe and isinstance(elapsed,(int,float)) and not isinstance(elapsed,bool) and elapsed >= 30
         assessments: list[dict[str, object]] = []
         for role in CAN_BUS_ROLES:
             normalized_rule = role.replace("-", "_")
             base = self._base(
                 rule=f"can_interface_role_{normalized_rule}",
-                title=f"{role} interface role is unhealthy",
+                title=f"{role} interface status",
             )
             current = roles.get(role)
             current = current if isinstance(current, Mapping) else None
@@ -1274,7 +1319,14 @@ class InfrastructureHealthEvaluator:
             role_gap = role_gap if isinstance(role_gap, Mapping) else global_gap
             count = role_gap.get("observation_count", 0)
             count = count if isinstance(count, int) and not isinstance(count, bool) else 0
-            if current is None:
+            status_unproven = current is None or current.get("health") == "unknown"
+            if status_unproven and (waiting_probe or failed_probe):
+                state = "unavailable"
+                reason = ("awaiting the broker's first interface status probe" if waiting_probe else "broker interface status probe failed; device health is unknown")
+                current_payload = {"role":role,"health":"unknown","reason":"status_probe_pending" if waiting_probe else "status_probe_failed"}
+                base["title"] = f"{role} interface status pending"
+            elif current is None:
+                base["title"] = f"{role} interface status is missing"
                 state = "warning" if count >= 2 else "watch"
                 reason = "logical role is absent from current interface status"
                 current_payload: dict[str, object] = {
@@ -1294,18 +1346,27 @@ class InfrastructureHealthEvaluator:
                 elif health == "unknown":
                     state = "watch"
                     reason = "role health evidence is incomplete"
+                    base["title"] = f"{role} interface status is incomplete"
                 else:
-                    immediate = (
-                        resolution == "ambiguous"
-                        or cause == "controller_unhealthy"
-                    )
+                    causes = set(str(cause).split(","))
+                    immediate = resolution == "ambiguous" or "controller_unhealthy" in causes
                     state = "warning" if immediate or count >= 2 else "watch"
                     if resolution in ("missing", "ambiguous"):
                         reason = f"logical USB role resolution is {resolution}"
-                    elif cause == "controller_unhealthy":
+                        base["title"] = f"{role} adapter {'identity is ambiguous' if resolution == 'ambiguous' else 'is missing'}"
+                    elif "controller_unhealthy" in causes:
                         reason = "SocketCAN controller is not ERROR-ACTIVE"
+                        base["title"] = f"{role} controller error"
                     else:
                         reason = f"interface health check failed: {cause}"
+                        if "interface_down" in causes:
+                            base["title"] = f"{role} interface is down"
+                        elif "adapter_missing" in causes:
+                            base["title"] = f"{role} adapter is missing"
+                        else:
+                            base["title"] = f"{role} interface configuration mismatch"
+                            if current.get("role_reason"):
+                                reason += f" ({current['role_reason']})"
                 current_payload["gap_observation_count"] = count
             role_serial = (
                 current.get("usb_serial")
@@ -1336,13 +1397,23 @@ class InfrastructureHealthEvaluator:
                             current is not None
                             and (
                                 current.get("resolution") == "ambiguous"
-                                or current.get("reason") == "controller_unhealthy"
+                                or "controller_unhealthy" in str(current.get("reason")).split(",")
                             )
                         ) else 2,
                         "observed": count,
                     },
                 }
             )
+
+        if probe:
+            discovery_state = "warning" if overdue or failed_probe else "unavailable" if waiting_probe else "normal"
+            assessments.append({
+                **self._base(rule="can_interface_status_probe", title="Interface status probe failed" if failed_probe else "Interface discovery delayed" if overdue else "Interface status initialization"),
+                "state":discovery_state,
+                "reason":"interface status probe failed; adapter health cannot be established" if failed_probe else "first interface status probe has not completed within 30 seconds" if overdue else "awaiting initial interface discovery" if waiting_probe else "interface status probe completed",
+                "notification_eligible":discovery_state == "warning",
+                "current":dict(probe),
+            })
 
         topology_changed = context.get("topology_changed") is True
         assessments.append(

@@ -275,3 +275,17 @@ schemas. The JSONL and ephemeral behavior follow the official
 [Codex noninteractive documentation](https://developers.openai.com/codex/noninteractive);
 permission and feature controls follow the
 [configuration reference](https://developers.openai.com/codex/config-reference).
+
+
+## Historical event evidence (September 21 UTC)
+
+Episode explanations now use the separate bounded event-detail reader, including
+resolved events by ID. Opening, first warning, last usable, latest assessment,
+rule/baseline provenance, completeness and lifecycle records remain distinct.
+The same versioned system guide is provided to the UI and agent. Each turn
+records its evidence revision/date; Refresh Evidence & New Chat preserves the
+old packet. Baseline input arrays are omitted from prompts with explicit archive
+references, and additional bounded omissions are labeled. See
+[event history](event-history.md) for the authoritative data/lifecycle contract,
+validation, and pending broker/web/advisor activation. The agent's command,
+file, model-tool, and CAN restrictions remain in force.

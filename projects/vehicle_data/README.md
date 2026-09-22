@@ -61,12 +61,43 @@ current vanpi deployment is recorded below.
 
 ### Owner-configured warning triggers and Codex chat
 
-The [event evidence review and proposal](docs/event-evidence-review.md)
-verifies that opening assessments and lifecycle snapshots already survive in
-the historian but are omitted from dashboard/chat episode summaries. It records
-the September 18 coolant watch's original baseline and persistence, plus the
-proposed event detail, lifecycle, retention, and retrospective-analysis changes.
-This is a review/proposal; those changes are not implemented.
+September 22 live repair: the Early Warning overview now omits repeated baseline
+input/sample arrays while retaining decision facts, with explicit omissions and
+a 512 KiB response budget. Full evidence remains in event details/exports. This
+fixes the observed 1.33 MB response exceeding the unchanged 1 MiB transport limit.
+Failed loads no longer incorrectly claim notification delivery is disabled.
+Broker/web/advisor are deployed and live-verified (HTTP 200, ~301 KB overview,
+full event detail intact, no CAN TX delta). This activation includes the earlier
+interface-health and monitoring changes described below. See
+[event-history.md](docs/event-history.md) for regression/deployment evidence.
+
+September 21 interface-health follow-up: first-probe initialization no longer
+opens three unhealthy-role watches. Failed/delayed discovery is one status
+advisory; real role/controller faults remain actionable. Verified active B-CAN
+ownership now reports healthy topology while remaining non-passive, guarded by
+exact route/identity/configuration checks. Legacy generic titles are clarified
+for display without rewriting saved evidence. The event dialog exposes its four
+actions in one row and restores the event-count paragraph's side inset. Source
+and validation are complete; activated September 22 with the overview-size fix.
+See the [implementation and validation record](docs/event-history.md).
+
+September 21 lifecycle follow-up: routine freshness expiry is a collapsed
+monitoring note. Interrupted vehicle-health watches that never qualified as a
+warning archive as **Unconfirmed · Monitoring ended** after their quiet window
+(60 seconds for coolant), retaining evidence and leaving TO REVIEW. Confirmed
+warnings remain unresolved during missing data. Sustained missing readings with
+independent fresh running RPM are separate, non-notifying telemetry-quality
+incidents. See [the event-history contract](docs/event-history.md) for scope,
+validation and the September 22 activation of this follow-up.
+
+[Event history and evidence](docs/event-history.md) now implements searchable
+saved events, opening/first-warning/checkpoint evidence, preserved baseline
+inputs and sample windows, lifecycle recovery gates, exports, owner annotations,
+and bounded counterfactual comparisons. The in-app agent receives the same
+dated event packet and a versioned system guide. The original
+[event evidence review](docs/event-evidence-review.md) records the motivating
+coolant case. Source, offline validation and production activation are complete;
+the event-history handoff records the September 22 live verification.
 
 September 20 update: the advisor's fixed job timeout is now 300 seconds
 (previously 180, producing “Codex took too long”). The dialog defaults to

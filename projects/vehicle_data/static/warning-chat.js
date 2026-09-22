@@ -314,7 +314,7 @@
   byId("warning-chat-apply").addEventListener("click", () => void applyWarning(false));
   byId("warning-chat-remove").addEventListener("click", () => void applyWarning(true));
   byId("warning-chat-new").addEventListener("click", () => {
-    if (!chat || requesting || busy() || !window.confirm("Start a new explanation? This conversation will remain saved on the Pi.")) return;
+    if (!chat || requesting || busy() || !window.confirm("Refresh the event evidence and start a new explanation? This conversation and its original evidence remain saved on the Pi.")) return;
     clearTimeout(timer);
     generation += 1;
     chat = null;
@@ -367,6 +367,7 @@
   });
 
   window.WarningChat = {
+    open,
     configure(web) {
       if (Object.hasOwn(web, "warning_chat_enabled")) enabled = web.warning_chat_enabled === true;
       byId("warning-add").hidden = !enabled;

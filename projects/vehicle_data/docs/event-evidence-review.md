@@ -1,7 +1,8 @@
 # Early Warning event evidence review and proposal
 
-Review date: 2026-09-21 UTC (September 20 local). Proposal only; no evaluator,
-API, dashboard, service, or CAN behavior changed.
+Review date: 2026-09-21 UTC (September 20 local). This document preserves the
+original review. The subsequent implementation and activation status are in
+[event-history.md](event-history.md).
 
 ## Verified findings
 

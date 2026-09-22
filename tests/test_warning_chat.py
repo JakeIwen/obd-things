@@ -21,6 +21,8 @@ class CachedEvidence:
 
     def request(self, method, path):
         self.calls.append((method, path))
+        if path.startswith("/v1/events/"):
+            return 404, {"available": False}
         if path == "/v1/health":
             return 200, {"available": True, "episodes": {"active": [{
                 "id": 579, "title": "Coolant above history", "status": "active",

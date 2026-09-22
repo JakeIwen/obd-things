@@ -29,7 +29,7 @@ from typing import Mapping, Sequence
 
 
 SCHEMA_VERSION = 1
-ADVISORY_SCHEMA_VERSION = 1
+ADVISORY_SCHEMA_VERSION = 2
 DATA_QUALITY_SCHEMA_VERSION = 1
 DEFAULT_DATABASE = Path("/var/lib/van-telemetry/history.sqlite3")
 MAX_QUERY_SAMPLES = 2_000
@@ -41,7 +41,7 @@ REGIME_DIMENSIONS = ("engine", "motion", "rpm", "thermal")
 ADVISORY_ACTIVE_STATES = frozenset(("watch", "warning"))
 ADVISORY_RESOLVING_STATES = frozenset(("normal", "suppressed"))
 ADVISORY_INCONCLUSIVE_STATES = frozenset(
-    ("unavailable", "insufficient_history", "rejected")
+    ("unavailable", "insufficient_history", "rejected", "not_applicable", "recovering")
 )
 
 
@@ -193,6 +193,9 @@ class BaselineStats:
     maximum: float
     first_at: str
     last_at: str
+    input_digest: str = ""
+    input_buckets: tuple = ()
+    input_buckets_complete: bool = False
 
     @property
     def robust_sigma(self) -> float:
@@ -347,6 +350,7 @@ class TelemetryHistorian:
             Path(self.database).expanduser().resolve().parent.mkdir(
                 parents=True, exist_ok=True
             )
+        self._baseline_inputs = {}
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(
             self.database,
@@ -360,6 +364,9 @@ class TelemetryHistorian:
             self._conn.execute("PRAGMA journal_mode = WAL")
             self._conn.execute("PRAGMA synchronous = NORMAL")
         self._create_schema()
+        from projects.vehicle_data.event_history import SCHEMA as event_schema
+        with self._lock, self._conn:
+            self._conn.executescript(event_schema)
 
     def close(self) -> None:
         with self._lock:
@@ -546,6 +553,11 @@ class TelemetryHistorian:
             ON interface_gaps(role) WHERE ended_us IS NULL;
         CREATE INDEX IF NOT EXISTS interface_gaps_time
             ON interface_gaps(started_us, ended_us);
+
+        CREATE TABLE IF NOT EXISTS interface_probe_samples (
+            snapshot_id INTEGER PRIMARY KEY REFERENCES snapshots(id) ON DELETE CASCADE,
+            probe_json TEXT NOT NULL
+        );
 
         CREATE TABLE IF NOT EXISTS system_health_samples (
             snapshot_id INTEGER PRIMARY KEY REFERENCES snapshots(id) ON DELETE CASCADE,
@@ -1800,6 +1812,11 @@ class TelemetryHistorian:
     ) -> None:
         status = snapshot.get("status")
         status = status if isinstance(status, Mapping) else {}
+        probe = status.get("interface_probe")
+        if isinstance(probe, Mapping):
+            safe_probe = {key:probe.get(key) for key in ("state","elapsed_seconds","startup_grace_seconds","producer_instance")}
+            self._conn.execute("INSERT INTO interface_probe_samples(snapshot_id,probe_json) VALUES(?,?)",
+                               (snapshot_id,json.dumps(safe_probe,sort_keys=True)))
         interface = status.get("interface")
         interface = interface if isinstance(interface, Mapping) else {}
         role_snapshot = interface.get("role_interfaces")
@@ -3447,6 +3464,7 @@ class TelemetryHistorian:
         else:
             value = row["value_text"]
         return {
+            "sample_id": row["id"],
             "captured_at": _iso_from_us(row["captured_us"]),
             "observed_at": row["observed_at"],
             "metric": row["metric"],
@@ -3666,6 +3684,8 @@ class TelemetryHistorian:
                 "SELECT * FROM system_health_samples WHERE snapshot_id=?",
                 (snapshot_id,),
             ).fetchone()
+            probe_row = self._conn.execute("SELECT probe_json FROM interface_probe_samples WHERE snapshot_id=?", (snapshot_id,)).fetchone()
+            probe = json.loads(probe_row[0]) if probe_row is not None else None
             role_rows = self._conn.execute(
                 """
                 SELECT sample.*,detail.resolution,detail.role_reason,
@@ -3757,6 +3777,7 @@ class TelemetryHistorian:
         return {
             "snapshot_id": snapshot_id,
             "captured_at": snapshot["captured_at"],
+            "interface_probe": probe,
             "topology_generation": generation,
             "previous_topology_generation": (
                 previous["topology_generation"] if previous is not None else None
@@ -4133,6 +4154,7 @@ class TelemetryHistorian:
         source: str,
         provenance: str,
         regime_dimensions: Sequence[str] = REGIME_DIMENSIONS,
+        minimum_trip_age_seconds: float = 0,
     ) -> BaselineStats | None:
         """Return a median/MAD baseline of completed bucket medians.
 
@@ -4164,6 +4186,9 @@ class TelemetryHistorian:
             source,
             provenance,
         ]
+        if minimum_trip_age_seconds:
+            clauses.append("EXISTS (SELECT 1 FROM trips WHERE trips.id=metric_rollups.trip_key AND metric_rollups.bucket_us >= trips.started_us + ?)")
+            args.append(int(minimum_trip_age_seconds * MICROSECONDS))
         if exclude_trip_id is not None:
             clauses.append("trip_key!=?")
             args.append(exclude_trip_id)
@@ -4184,6 +4209,12 @@ class TelemetryHistorian:
         ]
         if not rows:
             return None
+        inputs = [dict(row) for row in rows]
+        input_digest = hashlib.sha256(json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        with self._lock:
+            self._baseline_inputs[input_digest] = inputs
+            while len(self._baseline_inputs) > 24:
+                self._baseline_inputs.pop(next(iter(self._baseline_inputs)))
         values = [float(row["median"]) for row in rows]
         center, mad = _median_mad(values)
         return BaselineStats(
@@ -4202,6 +4233,9 @@ class TelemetryHistorian:
             maximum=max(float(row["maximum"]) for row in rows),
             first_at=_iso_from_us(min(row["first_us"] for row in rows)),
             last_at=_iso_from_us(max(row["last_us"] for row in rows)),
+            input_digest=input_digest,
+            input_buckets=tuple({"bucket_us": r["bucket_us"], "trip_key": r["trip_key"], "regime": r["regime"], "median": r["median"]} for r in rows[:128]),
+            input_buckets_complete=len(rows) <= 128,
         )
 
     def metric_series(
@@ -5099,10 +5133,13 @@ class TelemetryHistorian:
 
         ``normal`` and ``suppressed`` are affirmative recovery states and may
         resolve an episode.  Missing history, stale evidence, and plausibility
-        rejection are inconclusive: they retain any open episode while making
-        that evidence state explicit.  Only an unacknowledged ``warning`` with
+        rejection are inconclusive. Confirmed warnings retain their history;
+        interrupted never-warning vehicle-health watches archive unconfirmed
+        after their quiet window. Coverage changes are audit notes, not alerts.  Only an unacknowledged ``warning`` with
         ``notification_eligible=true`` enters the rate-limited outbox.
         """
+
+        from projects.vehicle_data.event_history import stamp, recovery_gate, checkpoint, archive_baselines, finish_windows, archive_interrupted_watch
 
         moment = _utc_datetime(evaluated_at, "evaluated_at")
         event_us = _to_us(moment)
@@ -5157,8 +5194,6 @@ class TelemetryHistorian:
                     raise ValueError(f"assessment[{index}].category must be text")
                 if assessment.get("advisory") is not True:
                     raise ValueError(f"assessment[{index}] must remain advisory")
-                assessment_json = self._advisory_json(assessment)
-                fingerprint = self._advisory_context_fingerprint(assessment)
                 episode = self._conn.execute(
                     """
                     SELECT * FROM advisory_episodes
@@ -5166,6 +5201,35 @@ class TelemetryHistorian:
                     """,
                     (rule_key,),
                 ).fetchone()
+
+                # Ignore duplicated or late evaluations before any counter/outbox mutation.
+                if episode is not None and event_us <= episode["last_evaluated_us"]:
+                    continue
+                if episode is not None and assessment.get("rule_revision"):
+                    opening = json.loads(episode["first_assessment_json"])
+                    prior_revision = opening.get("rule_revision")
+                    if prior_revision and prior_revision != assessment["rule_revision"]:
+                        retired = json.loads(episode["latest_assessment_json"])
+                        retired.update(state="suppressed", notification_eligible=False,
+                                       reason="rule revision replaced; administrative closure, recovery not established")
+                        self._conn.execute("UPDATE advisory_episodes SET status='resolved',current_state='suppressed',evidence_state='suppressed',resolved_us=?,resolved_at=?,resolution_reason=? WHERE id=?",
+                                           (event_us,_iso_from_us(event_us),retired["reason"],episode["id"]))
+                        self._insert_advisory_event_locked(episode_id=episode["id"],event_us=event_us,event_type="rule_replaced",previous_state=episode["current_state"],new_state="suppressed",context_fingerprint=self._advisory_context_fingerprint(retired),assessment_json=self._advisory_json(retired))
+                        self._conn.execute("UPDATE advisory_notification_outbox SET status='cancelled',last_error='rule replaced before delivery' WHERE episode_id=? AND status='pending'",(episode["id"],))
+                        counters["resolved"] += 1
+                        episode = None
+                if archive_interrupted_watch(self._conn, episode, assessment, event_us):
+                    counters["resolved"] += 1
+                    episode = None
+                assessment = recovery_gate(self._conn, episode, assessment, event_us)
+                if episode is not None or state in ADVISORY_ACTIVE_STATES:
+                    archive_baselines(self._conn, assessment, self._baseline_inputs)
+                assessment = stamp(assessment, _iso_from_us(event_us))
+                state = assessment["state"]
+                assessment_json = self._advisory_json(assessment)
+                fingerprint = self._advisory_context_fingerprint(assessment)
+                if episode is not None:
+                    checkpoint(self._conn, episode, assessment, event_us)
 
                 if state in ADVISORY_INCONCLUSIVE_STATES:
                     counters["inconclusive"] += 1
@@ -5295,6 +5359,7 @@ class TelemetryHistorian:
                         "SELECT * FROM advisory_episodes WHERE id=?",
                         (episode_id,),
                     ).fetchone()
+                    checkpoint(self._conn, episode, assessment, event_us)
                     counters["opened"] += 1
                 else:
                     previous_state = str(episode["current_state"])
@@ -5464,6 +5529,7 @@ class TelemetryHistorian:
                         (episode["id"],),
                     )
                     counters["resolved"] += 1
+            finish_windows(self._conn, event_us)
         return AdvisoryPersistenceResult(
             evaluated_at=_iso(moment),
             **counters,
@@ -5471,6 +5537,7 @@ class TelemetryHistorian:
 
     @staticmethod
     def _advisory_episode_dict(row: sqlite3.Row, now_us: int) -> dict[str, object]:
+        from projects.vehicle_data.event_history import episode_outcome
         end_us = row["resolved_us"] if row["resolved_us"] is not None else now_us
         return {
             "id": row["id"],
@@ -5486,6 +5553,7 @@ class TelemetryHistorian:
             "last_observed_at": row["last_observed_at"],
             "resolved_at": row["resolved_at"],
             "resolution_reason": row["resolution_reason"],
+            "outcome": episode_outcome(row),
             "duration_seconds": max(0.0, (end_us - row["opened_us"]) / MICROSECONDS),
             "observation_count": row["observation_count"],
             "update_count": row["update_count"],
@@ -5493,6 +5561,7 @@ class TelemetryHistorian:
             "acknowledged": row["acknowledged_us"] is not None,
             "acknowledged_at": row["acknowledged_at"],
             "acknowledgment_note": row["acknowledgment_note"],
+            "first_assessment": json.loads(row["first_assessment_json"]),
             "latest_assessment": json.loads(row["latest_assessment_json"]),
         }
 

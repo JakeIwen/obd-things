@@ -366,6 +366,7 @@
           <h2 id="warnings-heading">Changes worth watching</h2>
         </div>
         <div class="warning-heading-actions">
+          <button id="event-history-open" type="button" hidden>Event history</button>
           <button id="warning-add" type="button" hidden>Add Early Warning</button>
           <span id="warning-state" class="badge">NO HISTORY</span>
         </div>
@@ -511,7 +512,7 @@
         <textarea id="warning-chat-input" rows="2" maxlength="2000" placeholder="What does this mean for the van?"></textarea>
         <div class="button-row">
           <button id="warning-chat-send" type="submit" disabled>Send</button>
-          <button id="warning-chat-new" type="button" disabled>New Chat</button>
+          <button id="warning-chat-new" type="button" disabled>Refresh Evidence &amp; New Chat</button>
           <button id="warning-chat-stop" type="button" hidden>Stop</button>
           <button id="warning-chat-retry" type="button" hidden>Retry Answer</button>
           <button id="warning-chat-reconnect" type="button" hidden>Reconnect</button>
@@ -520,6 +521,22 @@
       <p class="warning-chat-footnote muted">Conversations are saved on the Pi for this browser. Closing this dialog does not stop an answer.</p>
     </section>
   </div>
+  <dialog id="event-history-dialog" aria-labelledby="event-history-title">
+    <header class="event-header">
+      <div><p id="event-history-eyebrow" class="eyebrow">EARLY WARNING</p><h2 id="event-history-title" tabindex="-1">Saved Events</h2></div>
+      <button id="event-history-close" type="button" aria-label="Close event history">×</button>
+    </header>
+    <form id="event-history-filter" class="event-filters">
+      <label>Find an event<input id="event-filter-search" maxlength="100" type="search" placeholder="Title or event number"></label>
+      <label>Status<select id="event-filter-status"><option value="all">All events</option><option value="open">Unresolved</option><option value="resolved">Closed</option></select></label>
+      <button type="submit">Search Events</button>
+      <details id="event-rule-filter"><summary>Filter by rule (optional)</summary><label>Rule identifier<input id="event-filter-rule" maxlength="200" placeholder="All rules"></label></details>
+    </form>
+    <nav id="event-history-actions" class="event-actions" aria-label="Event actions"></nav>
+    <p id="event-history-status" role="status"></p>
+    <div id="event-history-content"></div>
+  </dialog>
+  <script src="/event-history.js"></script>
   <script src="/profiles.js"></script>
   <script src="/app.js"></script>
 </body>

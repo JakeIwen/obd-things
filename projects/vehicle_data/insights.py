@@ -1038,7 +1038,8 @@ class TelemetryInsights:
             "History-relative advisory evidence only; this is not a diagnosis "
             "or an opaque health score."
         )
-        return summary
+        from projects.vehicle_data.health_summary import health_overview
+        return health_overview(summary)
 
     def acknowledge_episode(
         self,

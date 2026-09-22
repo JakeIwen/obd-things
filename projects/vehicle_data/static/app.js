@@ -1945,6 +1945,17 @@ function selectWarningCards(active, assessments) {
 
 function renderEarlyWarnings(health) {
   const summary = health && typeof health === "object" ? health : {};
+  if (summary.available === false) {
+    text("warning-state", "UNAVAILABLE");
+    const error = document.createElement("p");
+    error.className = "muted";
+    error.textContent = summary.detail || "Early-warning history is unavailable.";
+    byId("warning-list").replaceChildren(error);
+    byId("warning-recovered-list").replaceChildren();
+    byId("warning-recovered").hidden = true;
+    text("warning-note", "Warning and notification status could not be loaded. This does not mean warnings are cleared or delivery is disabled.");
+    return;
+  }
   const qualitySummary = summary.data_quality &&
     typeof summary.data_quality === "object"
     ? summary.data_quality
@@ -1956,11 +1967,12 @@ function renderEarlyWarnings(health) {
     ? qualitySummary.recent
     : [];
   const persistedEpisodes = Array.isArray(summary.episodes?.active)
-    ? summary.episodes.active
+    ? summary.episodes.active.filter(episode => episode.outcome !== "unconfirmed")
     : [];
   const active = persistedEpisodes.length
     ? persistedEpisodes.map((episode) => ({
       ...(episode.latest_assessment || {}),
+      opening_assessment: episode.first_assessment,
       episode_id: episode.id,
       episode_opened_at: episode.opened_at,
       acknowledged: episode.acknowledged,
@@ -2025,7 +2037,7 @@ function renderEarlyWarnings(health) {
     if (unresolved) {
       const label = document.createElement("span");
       label.className = "badge advisory-label";
-      label.textContent = "Unresolved advisory";
+      label.textContent = assessment.category === "telemetry_quality" ? "Telemetry data gap" : "Unresolved advisory";
       article.append(label);
     }
     const heading = document.createElement("h3");
@@ -2050,15 +2062,20 @@ function renderEarlyWarnings(health) {
       numeric(baseline.mad) == null ? null : `MAD ${baseline.mad}`,
       deviation == null ? null : `deviation ${deviation.toFixed(2)}`,
       assessment.custom_rule ? `Owner reference: ${humanize(assessment.custom_rule.operator)} ${assessment.custom_rule.threshold} ${assessment.current?.unit || ""}` : null,
-      assessment.persistence?.observed == null
+      ["unavailable", "not_applicable", "recovering", "insufficient_history", "rejected"].includes(assessment.state) ? "Persistence not evaluated" : assessment.persistence?.observed == null
         ? null
         : `${assessment.persistence.observed}/${assessment.persistence.required} persistent observations`,
     ].filter(Boolean).join(" · ");
     article.append(heading, reason);
     if (evidence.textContent) article.append(evidence);
-    window.WarningChat?.attach(article, assessment.episode_id != null
-      ? {kind: "episode", id: String(assessment.episode_id)}
-      : {kind: "assessment", id: assessment.rule}, heading.textContent);
+    if (assessment.episode_id != null) {
+      const opening = assessment.opening_assessment;
+      if (opening?.current?.value != null) article.append(Object.assign(document.createElement("p"), {textContent: `Opened as ${opening.state}: ${opening.current.value} ${opening.current.unit || ""} · ${opening.persistence?.observed ?? "?"}/${opening.persistence?.required ?? "?"} observations at opening`}));
+      if (window.EventHistory) window.EventHistory.attach(article, assessment.episode_id);
+      else window.WarningChat?.attach(article, {kind: "episode", id: String(assessment.episode_id)}, heading.textContent);
+    } else {
+      window.WarningChat?.attach(article, {kind: "assessment", id: assessment.rule}, heading.textContent);
+    }
     list.append(article);
   });
   const recovered = recentQuality.filter((event) => event?.status === "resolved").slice(0, 3);
@@ -2117,7 +2134,9 @@ function renderEarlyWarnings(health) {
           `Persisted outbox: ${pendingDelivery} pending · ${failedDelivery} failed.` +
           (deliveryError ? ` Latest delivery error: ${deliveryError}.` : "")
         )
-        : "External warning delivery is disabled.",
+        : (delivery.enabled === false
+          ? "External warning delivery is disabled."
+          : "External warning delivery status is unavailable."),
       qualitySummary.detail || (
         "Raw plausibility rejections are recorded separately as data quality and never generate notifications."
       ),

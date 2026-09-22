@@ -551,6 +551,9 @@ class TelemetryBroker:
         )
         self.interface_reconciler = interface_reconciler
         self.insights = insights
+        from projects.vehicle_data.event_history import EventReader
+        event_database = getattr(getattr(insights, "historian", None), "database", None)
+        self.event_reader = EventReader(event_database, self._event_related_context) if isinstance(event_database, str) and event_database != ":memory:" else None
         self.history_interval_seconds = history_interval_seconds
         self.usb_can_monitor = usb_can_monitor
         self.engine_off_voltage_capture = engine_off_voltage_capture
@@ -564,6 +567,8 @@ class TelemetryBroker:
         self._last_error: dict[str, AcquisitionResult] = {}
         self._last_attempt: dict[tuple[str, str], float] = {}
         self._inflight: dict[tuple[str, str], _Inflight] = {}
+        self._interface_probe_state = "awaiting_first_probe"
+        self._interface_probe_started = self.monotonic()
         self._interface_status: dict[str, object] = {
             "channel": getattr(self.acquirer, "channel", "c-can-unresolved"),
             "adapter_present": None,
@@ -813,6 +818,16 @@ class TelemetryBroker:
 
     def cached_history_response(self) -> dict[str, object]:
         return self._cached_supplemental_response("history")
+
+    def _event_related_context(self):
+        health = self.cached_health_response()
+        return {"dtcs":self.cached_dtc_response(), "maintenance":self.maintenance.snapshot(),
+                "health":{k:health.get(k) for k in ("evaluation_hook","notification_delivery","supplemental_cache")}}
+
+    def event_request(self, method, path, payload=None):
+        if self.event_reader is None:
+            return 503, {"available": False, "detail": "Persistent event history is not configured"}
+        return self.event_reader.request(method, path, payload)
 
     def cached_health_response(self) -> dict[str, object]:
         return self._cached_supplemental_response("health")
@@ -1831,6 +1846,14 @@ class TelemetryBroker:
                 or interface_mode != "armed_diagnostic"
             ):
                 raise ValueError("failed B-CAN restoration final is inconsistent")
+        owner_route = None
+        if event_type == "status":
+            supervisor = self.auxiliary_drive_supervisor
+            delegate = vars(supervisor).get("_delegate") if supervisor is not None else None
+            attrs = vars(delegate or supervisor) if (delegate or supervisor) is not None else {}
+            channel, serial, dev_id = (attrs.get("channel"), attrs.get("expected_usb_serial"), attrs.get("expected_dev_id"))
+            if isinstance(channel,str) and isinstance(serial,str) and type(dev_id) is int:
+                owner_route = {"channel":channel, "usb_serial":serial, "dev_id":dev_id}
         with self._lock:
             self._auxiliary_drive.update(
                 {
@@ -1839,6 +1862,7 @@ class TelemetryBroker:
                     "detail": detail,
                     "interface_mode": interface_mode,
                     "last_event_at": datetime.now(timezone.utc).isoformat(),
+                    "owner_route": owner_route,
                 }
             )
             pid = event.get("pid")
@@ -1866,9 +1890,11 @@ class TelemetryBroker:
                     )
 
     def _refresh_interface_status(self) -> None:
+        probe_state = "ready"
         try:
             snapshot = self.acquirer.status_snapshot()
         except Exception as exc:
+            probe_state = "failed"
             snapshot = {
                 "channel": getattr(
                     self.acquirer, "channel", "c-can-unresolved"
@@ -1897,11 +1923,15 @@ class TelemetryBroker:
                 pass
         with self._lock:
             self._interface_status = snapshot
+            self._interface_probe_state = probe_state
 
     def status_response(self) -> dict[str, object]:
         with self._lock:
             radar_alignment = self._radar_history.summary(self.monotonic())
             interface = json.loads(json.dumps(self._interface_status))
+            interface_probe = {"state":self._interface_probe_state,
+                               "elapsed_seconds":max(0, self.monotonic()-self._interface_probe_started),
+                               "startup_grace_seconds":30, "producer_instance":self._started_at}
             inflight = [
                 {"metric": metric, "mode": mode}
                 for metric, mode in sorted(self._inflight)
@@ -2118,16 +2148,45 @@ class TelemetryBroker:
             role_payloads = role_snapshot.get("roles") if isinstance(role_snapshot, dict) else None
             bcan_role = role_payloads.get("b-can") if isinstance(role_payloads, dict) else None
             if isinstance(bcan_role, dict):
-                actual = bcan_role.get("actual")
-                if isinstance(actual, dict):
+                actual = bcan_role.get("actual") or {}
+                expected = bcan_role.get("expected") or {}
+                route = auxiliary_drive.get("owner_route") or {}
+                verified_owner = (
+                    self.auxiliary_drive_enabled
+                    and auxiliary_drive.get("state") == "armed_diagnostic"
+                    and auxiliary_drive.get("reason") == "running_gate_satisfied"
+                    and type(auxiliary_drive.get("helper_pid")) is int
+                    and auxiliary_drive["helper_pid"] > 0
+                    and auxiliary_drive.get("restoration_failed") is False
+                    and not self._auxiliary_drive_restoration_latched
+                    and not inhibits
+                    and bcan_role.get("resolution") == "resolved"
+                    and bcan_role.get("reason") in ("ready", "interface_armed")
+                    and isinstance(route.get("channel"), str)
+                    and bcan_role.get("channel") == route.get("channel")
+                    and isinstance(route.get("usb_serial"), str)
+                    and expected.get("usb_serial") == route.get("usb_serial")
+                    and type(route.get("dev_id")) is int
+                    and expected.get("dev_id") == route.get("dev_id")
+                    and actual.get("present") is True and actual.get("up") is True
+                    and actual.get("bitrate") == expected.get("bitrate") == 125000
+                    and actual.get("fd_enabled") is False
+                    and actual.get("one_shot") is False
+                    and actual.get("restart_ms") == 0
+                    and actual.get("controller_state") == "ERROR-ACTIVE"
+                )
+                # This affects the health report only; it grants no CAN authority.
+                if verified_owner:
                     actual["listen_only"] = False
                     actual["mode"] = "armed_diagnostic"
-                bcan_role["passive_ready"] = False
-                bcan_role["operating_mode"] = "armed_diagnostic"
-                bcan_role["reason"] = (
-                    "broker auxiliary-drive owner has the resolved B-CAN "
-                    "channel armed for fixed ICS polling"
-                )
+                    bcan_role["passive_ready"] = False
+                    bcan_role["operating_mode"] = "armed_diagnostic"
+                    bcan_role["topology_usable"] = True
+                    bcan_role["reason"] = "broker auxiliary-drive owner has the resolved B-CAN channel armed for fixed ICS polling"
+                else:
+                    bcan_role["topology_usable"] = False
+                    if bcan_role.get("reason") in ("ready", "interface_armed"):
+                        bcan_role["reason"] = "active_owner_unverified"
                 if role_snapshot is not None:
                     role_snapshot["ready"] = False
         active_permitted = bool(
@@ -2203,6 +2262,7 @@ class TelemetryBroker:
         return {
             "service": "van-telemetry",
             "started_at": self._started_at,
+            "interface_probe": interface_probe,
             "interface": interface,
             "current_owner": current_owner,
             "last_readings": {"persistent": self.last_readings.path is not None,
@@ -3202,6 +3262,8 @@ class TelemetryBroker:
     def close(self) -> None:
         """Release offline storage after all background threads stop."""
         self.stop_collector()
+        if self.event_reader is not None:
+            self.event_reader.close()
         if self.usb_can_monitor is not None:
             self.usb_can_monitor.close()
         with self._lock:

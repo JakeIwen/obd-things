@@ -393,10 +393,14 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
             return self._static("app.js", "text/javascript; charset=utf-8")
         if path == "/profiles.js":
             return self._static("profiles.js", "text/javascript; charset=utf-8")
+        if path == "/event-history.js":
+            return self._static("event-history.js", "text/javascript; charset=utf-8")
         if path == "/warning-chat.js":
             return self._static("warning-chat.js", "text/javascript; charset=utf-8")
         if path == "/style.css":
             return self._static("style.css", "text/css; charset=utf-8")
+        if path == "/v1/events" or path.startswith("/v1/events/"):
+            return self._broker_request("GET", self.path)
         if path in (
             "/v1/status",
             "/v1/snapshot",
@@ -448,6 +452,8 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path.startswith("/v1/assistant/"):
             return self._assistant_request("POST", path)
+        if path.startswith("/v1/events/"):
+            return self._maintenance_post(self.path)
         if path == "/v1/maintenance/oil-changes":
             return self._maintenance_post(path)
         if path in (

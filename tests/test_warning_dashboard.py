@@ -18,7 +18,7 @@ class WarningDashboardTests(unittest.TestCase):
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const elements=new Map();
 const node=()=>({textContent:'',dataset:{},children:[],hidden:false,open:false,
-  append(...items){this.children.push(...items)},replaceChildren(){this.children=[]}});
+  append(...items){this.children.push(...items)},replaceChildren(...items){this.children=items}});
 const element=id=>{if(!elements.has(id))elements.set(id,node());return elements.get(id)};
 global.document={getElementById:element,createElement:node};
 global.window={VanDashboardProfiles:{loadSettings:()=>({})}};
@@ -50,6 +50,17 @@ assert(!element('warning-state').textContent.includes('TO REVIEW'));
 assert.equal(element('warning-recovered-list').children.length,2);
 health.data_quality.recent=[];renderEarlyWarnings(health);
 assert.equal(element('warning-recovered').hidden,true);
+renderEarlyWarnings({available:false,detail:'Error: broker response exceeded size limit'});
+assert.equal(element('warning-list').children.length,1);
+assert.equal(element('warning-list').children[0].textContent,'Error: broker response exceeded size limit');
+assert(!element('warning-note').textContent.includes('broker response exceeded'));
+assert(!element('warning-note').textContent.includes('External warning delivery is disabled.'));
+assert(element('warning-note').textContent.includes('status could not be loaded'));
+renderEarlyWarnings({available:true,notification_delivery:{enabled:false}});
+assert(element('warning-note').textContent.includes('External warning delivery is disabled.'));
+renderEarlyWarnings({available:true});
+assert(element('warning-note').textContent.includes('delivery status is unavailable'));
+
 '''
         result = subprocess.run(["node", "-e", script, str(APP)], text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)

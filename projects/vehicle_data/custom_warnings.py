@@ -82,9 +82,10 @@ def _qualified(sample, metric, at, max_age):
 
 
 def evaluate_rule(historian, row, at):
+    from projects.vehicle_data.event_history import digest
     rule = validate_rule(row["rule"])
     metric = rule["metric"]
-    result = {"rule": "custom_" + row["id"], "title": rule["title"], "metric": metric,
+    result = {"rule_snapshot": rule, "rule_revision": digest(rule), "evaluator_revision": "owner-threshold-v1", "rule": "custom_" + row["id"], "title": rule["title"], "metric": metric,
               "category": "vehicle_health", "severity": "warning", "advisory": True,
               "direction": "low" if rule["operator"] == "below" else "high",
               "state": "unavailable", "reason": "No qualified fresh reading",

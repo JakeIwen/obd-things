@@ -46,6 +46,8 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?", 1)[0]
+        if path == "/v1/events" or path.startswith("/v1/events/"):
+            return self._json(*self.broker.event_request("GET", self.path))
         if path == "/v1/status":
             return self._json(200, self.broker.status_response())
         if path == "/v1/snapshot":
@@ -77,7 +79,9 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         acquisition_prefix = "/v1/acquisitions/"
         observation_prefix = "/v1/observations/"
-        if (
+        if path.startswith("/v1/events/"):
+            request_kind = "event"
+        elif (
             path.startswith(acquisition_prefix)
             and path[len(acquisition_prefix):]
             and "/" not in path[len(acquisition_prefix):]
@@ -129,6 +133,8 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
                     "detail": "body must be one JSON object",
                 },
             )
+        if request_kind == "event":
+            return self._json(*self.broker.event_request("POST", self.path, payload))
         if request_kind == "oil_change":
             try:
                 record = self.broker.record_oil_change(payload)
