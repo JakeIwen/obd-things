@@ -8,8 +8,9 @@ diagnostic request or clear a code.
 
 from __future__ import annotations
 
+import copy
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -19,6 +20,7 @@ import time
 from typing import Mapping, Protocol, Sequence
 
 from lib.modules import MODULES
+from projects.vehicle_data import drift_warnings
 from projects.vehicle_data.api import MAX_RESPONSE_BYTES
 from projects.vehicle_data.dtc_descriptions import describe_dtc
 from projects.vehicle_data.early_warning import (
@@ -43,6 +45,7 @@ DEFAULT_HISTORY_METRICS = (
 )
 MAX_DTC_CACHE_BYTES = MAX_RESPONSE_BYTES
 MAINTENANCE_CHECK_INTERVAL_SECONDS = 60 * 60
+DRIFT_INTERVAL = timedelta(hours=24)
 DTC_CACHE_SCHEMA_VERSION = 2
 MAX_DELIVERY_ERROR_CHARS = 1000
 USB_REMOVAL_KINDS = frozenset(
@@ -572,6 +575,67 @@ def _validate_dtc_cache(payload: object) -> dict[str, object]:
     return payload
 
 
+MAX_VAN_SCAN_CACHE_BYTES = 256 * 1024
+VAN_SCAN_CACHE_SCHEMA_VERSION = 1
+VAN_SCAN_CACHE_NAME = "van-scan-cache.json"
+_HEX_TEXT = re.compile(r"(?:[0-9A-F]{2})+\Z")
+
+
+def _validate_van_scan_cache(payload: object) -> dict[str, object]:
+    """Validate ``van_scan_harvest.py``'s cache of the van's own (source F1) health checks."""
+
+    if not isinstance(payload, dict):
+        raise DtcCacheValidationError("in-vehicle scan cache root is not a JSON object")
+    if payload.get("schema_version") != VAN_SCAN_CACHE_SCHEMA_VERSION:
+        raise DtcCacheValidationError("in-vehicle scan cache is not schema version 1")
+    if payload.get("type") != "in_vehicle_scan_cache":
+        raise DtcCacheValidationError("in-vehicle scan cache has the wrong type")
+    if not isinstance(payload.get("provenance"), str):
+        raise DtcCacheValidationError("in-vehicle scan cache has no provenance")
+    if not _nonnegative_int(payload.get("scan_count")):
+        raise DtcCacheValidationError("in-vehicle scan cache scan_count is invalid")
+    last_scan = payload.get("last_scan")
+    if last_scan is not None:
+        if not isinstance(last_scan, dict):
+            raise DtcCacheValidationError("in-vehicle scan cache last_scan must be an object")
+        for field in ("started_at", "completed_at"):
+            if not isinstance(last_scan.get(field), str) or not _timestamp_or_none(last_scan[field]):
+                raise DtcCacheValidationError(f"last_scan.{field} is not a timestamp")
+        if not isinstance(last_scan.get("pi_quiet"), bool):
+            raise DtcCacheValidationError("last_scan.pi_quiet must be a boolean")
+    modules = payload.get("modules")
+    if not isinstance(modules, list):
+        raise DtcCacheValidationError("in-vehicle scan cache modules must be an array")
+    seen: set[str] = set()
+    for index, module in enumerate(modules):
+        if not isinstance(module, dict):
+            raise DtcCacheValidationError(f"modules[{index}] must be an object")
+        key = module.get("module_key")
+        if not isinstance(key, str) or not key or key in seen:
+            raise DtcCacheValidationError(f"modules[{index}].module_key is invalid or repeated")
+        seen.add(key)
+        observed = module.get("observed_at")
+        if not isinstance(observed, str) or not _timestamp_or_none(observed):
+            raise DtcCacheValidationError(f"modules[{index}].observed_at is not a timestamp")
+        dtcs = module.get("dtcs")
+        if not isinstance(dtcs, list):
+            raise DtcCacheValidationError(f"modules[{index}].dtcs must be an array")
+        for position, record in enumerate(dtcs):
+            if (
+                not isinstance(record, dict)
+                or not isinstance(record.get("raw_dtc"), str)
+                or not _HEX_TEXT.fullmatch(record["raw_dtc"])
+                or not isinstance(record.get("fca_display"), str)
+                or not isinstance(record.get("status"), str)
+                or _HEX_BYTE.fullmatch(record["status"]) is None
+                or not isinstance(record.get("display_group"), str)
+            ):
+                raise DtcCacheValidationError(
+                    f"modules[{index}].dtcs[{position}] is not a valid code record"
+                )
+    return payload
+
+
 class AdvisoryNotificationSink(Protocol):
     """Optional delivery boundary; no external sink is implemented here."""
 
@@ -702,6 +766,7 @@ class TelemetryInsights:
         notification_sink: AdvisoryNotificationSink | None = None,
         enable_notification_delivery: bool = False,
         dtc_cache_path: str | Path,
+        van_scan_cache_path: str | Path | None = None,
         history_metrics: Sequence[str] = DEFAULT_HISTORY_METRICS,
         maintenance_check_interval_seconds: float = (
             MAINTENANCE_CHECK_INTERVAL_SECONDS
@@ -720,6 +785,14 @@ class TelemetryInsights:
             enabled=enable_notification_delivery,
         )
         self.dtc_cache_path = Path(dtc_cache_path)
+        # The van's own health checks, harvested passively beside the Pi's DTC cache.
+        self.van_scan_cache_path = (
+            Path(van_scan_cache_path)
+            if van_scan_cache_path is not None
+            else self.dtc_cache_path.with_name(VAN_SCAN_CACHE_NAME)
+        )
+        self._van_scan_identity: tuple[int, int, int, int] | None = None
+        self._van_scan_payload: dict[str, object] | None = None
         self.history_metrics = tuple(dict.fromkeys(history_metrics))
         if not self.history_metrics:
             raise ValueError("at least one history metric is required")
@@ -744,6 +817,26 @@ class TelemetryInsights:
         self._dtc_lock = threading.Lock()
         self._dtc_identity: tuple[int, int, int, int] | None = None
         self._dtc_payload: dict[str, object] | None = None
+        # Tier-2 drift notices: evaluated at most daily from the maintenance
+        # hook, cached here and merged into every advisory persistence call.
+        self._drift_lock = threading.Lock()
+        self._drift: dict[str, object] = {
+            "last_run_at": None,
+            "last_error": None,
+            "assessments": [],
+        }
+        try:
+            self._drift_path = drift_warnings.state_path_for(historian)
+        except Exception:
+            self._drift_path = None
+        if self._drift_path is not None:
+            state = drift_warnings.load_state(self._drift_path)
+            if state is not None:
+                # Findings saved by other rule revisions are kept for continuity
+                # but re-evaluated at the first maintenance check.
+                current = drift_warnings.state_is_current(state["assessments"])
+                self._drift["last_run_at"] = state["last_run_at"] if current else None
+                self._drift["assessments"] = state["assessments"]
 
     def close(self) -> None:
         self.historian.close()
@@ -815,9 +908,22 @@ class TelemetryInsights:
                 snapshot_id,
                 at=captured_at,
             )
+            vehicle_assessments = list(vehicle.get("assessments", []))
+            infrastructure_assessments = list(infrastructure.get("assessments", []))
+            evaluated_rules = {
+                assessment.get("rule")
+                for assessment in (*vehicle_assessments, *infrastructure_assessments)
+                if isinstance(assessment, Mapping)
+            }
+            drift = [
+                assessment
+                for assessment in self._drift_assessments()
+                if assessment.get("rule") not in evaluated_rules
+            ]
             assessments = [
-                *vehicle.get("assessments", []),
-                *infrastructure.get("assessments", []),
+                *vehicle_assessments,
+                *drift,
+                *infrastructure_assessments,
             ]
             authoritative_rule_keys = tuple(
                 assessment.get("rule")
@@ -893,6 +999,7 @@ class TelemetryInsights:
                             "infrastructure_assessments": len(
                                 infrastructure.get("assessments", [])
                             ),
+                            "drift_assessments": len(drift),
                             "persistence": persistence_result,
                             "delivery": delivery,
                         },
@@ -935,6 +1042,86 @@ class TelemetryInsights:
                         "last_error": None,
                     }
                 )
+        # A separate second step: it runs whether maintenance succeeded, was
+        # not due, or raised, and its failures never touch the maintenance hook.
+        self._maybe_run_drift(captured_at=captured_at)
+
+    def _drift_assessments(self) -> list[dict[str, object]]:
+        with self._drift_lock:
+            return copy.deepcopy(list(self._drift["assessments"]))
+
+    def _maybe_run_drift(self, *, captured_at: datetime) -> None:
+        """Run the tier-2 drift job when the last run is 24 h old (by data time).
+
+        The gate compares snapshot times, never ``time.monotonic()``; the caller
+        already limits this to one check per maintenance interval.
+        """
+
+        try:
+            moment = captured_at.astimezone(timezone.utc)
+            with self._drift_lock:
+                last_text = self._drift["last_run_at"]
+                previous = {
+                    item.get("rule"): item.get("state")
+                    for item in self._drift["assessments"]
+                    if isinstance(item, Mapping)
+                }
+            last = None
+            if isinstance(last_text, str):
+                try:
+                    last = datetime.fromisoformat(last_text.replace("Z", "+00:00"))
+                except ValueError:
+                    last = None
+            if last is not None and last.tzinfo is not None and (
+                timedelta(0) <= moment - last < DRIFT_INTERVAL
+            ):
+                return
+            assessments = drift_warnings.evaluate_drift(
+                self.historian,
+                at=moment,
+                previous_state=previous,
+            )
+            assessments = json.loads(json.dumps(list(assessments), allow_nan=False))
+        except Exception as exc:
+            with self._drift_lock:
+                self._drift["last_error"] = f"{type(exc).__name__}: {exc}"
+            return
+        last_run_at = moment.isoformat()
+        with self._drift_lock:
+            self._drift.update(
+                {
+                    "last_run_at": last_run_at,
+                    "last_error": None,
+                    "assessments": assessments,
+                }
+            )
+            path = self._drift_path
+        if path is None:
+            return
+        try:
+            drift_warnings.save_state(
+                path,
+                last_run_at=last_run_at,
+                assessments=assessments,
+            )
+        except Exception as exc:
+            with self._drift_lock:
+                self._drift["last_error"] = (
+                    f"drift state not saved: {type(exc).__name__}: {exc}"
+                )
+
+    def drift_status(self) -> dict[str, object]:
+        with self._drift_lock:
+            assessments = self._drift["assessments"]
+            return {
+                "last_run_at": self._drift["last_run_at"],
+                "last_error": self._drift["last_error"],
+                "finding_count": sum(
+                    1
+                    for item in assessments
+                    if isinstance(item, Mapping) and item.get("state") == "warning"
+                ),
+            }
 
     def history_response(self) -> dict[str, object]:
         """Return bounded aggregates plus at most 96 downsampled points/metric."""
@@ -1005,6 +1192,22 @@ class TelemetryInsights:
 
     def health_response(self) -> dict[str, object]:
         summary = self.warning_evaluator.evaluate()
+        # New lists, never in-place extension: an evaluator may hand back the
+        # same summary object on every call.
+        existing = summary.get("assessments")
+        existing = list(existing) if isinstance(existing, list) else []
+        active = summary.get("active")
+        active = list(active) if isinstance(active, list) else []
+        known = {item.get("rule") for item in existing if isinstance(item, Mapping)}
+        drift = [
+            item for item in self._drift_assessments() if item.get("rule") not in known
+        ]
+        summary["assessments"] = [*existing, *drift]
+        summary["active"] = [
+            *active,
+            *(copy.deepcopy(item) for item in drift if item.get("state") == "warning"),
+        ]
+        summary["drift"] = self.drift_status()
         try:
             summary["episodes"] = self.historian.advisory_summary()
         except (AttributeError, RuntimeError, ValueError) as exc:
@@ -1060,6 +1263,96 @@ class TelemetryInsights:
         return self.notification_dispatcher.dispatch()
 
     def dtc_response(self) -> dict[str, object]:
+        """Saved Pi DTC cache plus the van's own latest health-check results.
+
+        ``in_vehicle_scan`` is additive: the Pi's groups, modules and coverage are unchanged, and
+        the in-vehicle results (a ``19 02 0D`` status mask read by the van's own diagnostic
+        client, harvested passively) are never merged into them here.  Neither part can start a
+        diagnostic request.
+        """
+
+        payload = self._pi_dtc_response()
+        payload["in_vehicle_scan"] = self._van_scan_response()
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        if len(encoded) >= MAX_RESPONSE_BYTES:
+            payload["in_vehicle_scan"] = {
+                "available": False,
+                "reason": "in_vehicle_scan_too_large",
+                "detail": "in-vehicle scan results exceed the broker transport limit",
+            }
+        return payload
+
+    def _van_scan_response(self) -> dict[str, object]:
+        """Read the harvester's bounded atomic cache; never perform diagnostic I/O."""
+
+        path = self.van_scan_cache_path
+        try:
+            with path.open("rb") as handle:
+                stat_result = os.fstat(handle.fileno())
+                identity = (
+                    int(stat_result.st_ino),
+                    int(stat_result.st_mtime_ns),
+                    int(stat_result.st_ctime_ns),
+                    int(stat_result.st_size),
+                )
+                if identity == self._van_scan_identity and self._van_scan_payload is not None:
+                    return copy.deepcopy(self._van_scan_payload)
+                raw = handle.read(MAX_VAN_SCAN_CACHE_BYTES + 1)
+        except FileNotFoundError:
+            return {
+                "available": False,
+                "reason": "not_harvested",
+                "detail": "No in-vehicle health check has been harvested yet.",
+            }
+        except OSError as exc:
+            return {
+                "available": False,
+                "reason": "in_vehicle_scan_unavailable",
+                "detail": f"in-vehicle scan cache read failed: {exc}",
+            }
+        if len(raw) > MAX_VAN_SCAN_CACHE_BYTES:
+            return {
+                "available": False,
+                "reason": "in_vehicle_scan_unavailable",
+                "detail": "in-vehicle scan cache exceeds its 256 KiB limit",
+            }
+        try:
+            cache = _validate_van_scan_cache(json.loads(raw))
+        except (UnicodeDecodeError, json.JSONDecodeError, DtcCacheValidationError) as exc:
+            return {
+                "available": False,
+                "reason": "in_vehicle_scan_unavailable",
+                "detail": f"in-vehicle scan cache is invalid: {exc}",
+            }
+        modules = []
+        for module in cache["modules"]:
+            records = []
+            for record in module["dtcs"]:
+                records.append(
+                    {
+                        **record,
+                        **describe_dtc(module["module_key"], record["fca_display"]),
+                    }
+                )
+            modules.append({**module, "dtcs": records})
+        payload = {
+            "available": True,
+            "acquisition": "passive_recording",
+            "source": "in_vehicle_scan",
+            "provenance": cache["provenance"],
+            "tester_source": cache.get("tester_source"),
+            "dtc_request": cache.get("dtc_request"),
+            "status_mask_note": cache.get("status_mask_note"),
+            "generated_at": cache.get("generated_at"),
+            "scan_count": cache["scan_count"],
+            "last_scan": cache["last_scan"],
+            "modules": modules,
+        }
+        self._van_scan_identity = identity
+        self._van_scan_payload = payload
+        return copy.deepcopy(payload)
+
+    def _pi_dtc_response(self) -> dict[str, object]:
         """Read one bounded atomic cache; never perform diagnostic I/O."""
 
         with self._dtc_lock:
@@ -1147,6 +1440,8 @@ __all__ = (
     "DTC_CACHE_SCHEMA_VERSION",
     "DtcCacheValidationError",
     "MAINTENANCE_CHECK_INTERVAL_SECONDS",
+    "MAX_VAN_SCAN_CACHE_BYTES",
+    "VAN_SCAN_CACHE_NAME",
     "MAX_DTC_CACHE_BYTES",
     "TelemetryInsights",
 )

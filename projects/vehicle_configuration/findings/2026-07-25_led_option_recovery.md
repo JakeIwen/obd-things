@@ -73,3 +73,15 @@ the two retained baseline binaries.
 The LED-management option did not produce a usable result in this campaign.
 Do not retry it until the headlamp behavior and AlfaOBD's DASM alignment path
 have been reviewed.
+
+## 2026-09-24 correction
+
+An offline review of the preserved command trace found that this was not a
+single labeled change. From 17:16:14 through 17:55:14, every aligned write
+also set `Stop&Start` (DID `0x2023` byte 57, bit 0) Present. The 17:37–17:41
+pass carried Stop&Start without the LED bit. From 18:26:28 onward the writes
+equal the baseline. The `B10AA` observed in the changed state therefore has at
+least two candidate causes. The review also verified the LED field (byte 143,
+bit 6) and found that it is an LED DRL/parking strategy rather than headlamp
+outage monitoring. See
+[`2026-09-24_led_low_beam_dtc_options.md`](2026-09-24_led_low_beam_dtc_options.md).

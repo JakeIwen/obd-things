@@ -9,6 +9,7 @@ from tools.dex_field_usage import (
     scan_all_fields_in_code_item,
     scan_code_item,
     scan_code_item_for_string,
+    scan_code_item_for_integer,
 )
 
 
@@ -152,3 +153,37 @@ def test_scan_code_item_finds_const_string_and_jumbo() -> None:
         ("const-string", 0x1234),
         ("const-string/jumbo", 0x12345678),
     ]
+
+
+def integer_code_item(units):
+    return b"\0" * 12 + len(units).to_bytes(4, "little") + b"".join(
+        unit.to_bytes(2, "little") for unit in units
+    )
+
+
+@pytest.mark.parametrize(("units", "value", "opcode"), [
+    ([0x7012], 7, "const/4"),
+    ([0xF012], -1, "const/4"),
+    ([0x0013, 7987], 7987, "const/16"),
+    ([0x0013, 0xFFFF], -1, "const/16"),
+    ([0x0014, 0x5678, 0x1234], 0x12345678, "const"),
+    ([0x0014, 0xFFFF, 0xFFFF], -1, "const"),
+    ([0x0015, 0xFFFF], -65536, "const/high16"),
+])
+def test_integer_literals(units, value, opcode):
+    hits = scan_code_item_for_integer(integer_code_item(units), 0, value)
+    assert [(hit["value"], hit["opcode"]) for hit in hits] == [(value, opcode)]
+    assert scan_code_item_for_integer(integer_code_item(units), 0, value + 1) == []
+
+
+def test_integer_scan_skips_operands_and_switch_data():
+    # const operand looks like const/16; packed-switch key contains literal.
+    units = [0x0014, 0x0013, 7987, 0x0100, 1, 0x0013, 7987, 0, 0, 0x000E]
+    assert scan_code_item_for_integer(integer_code_item(units), 0, 7987) == []
+
+
+@pytest.mark.parametrize("data", [b"", integer_code_item([0x0013]),
+                                  integer_code_item([0x0014, 7987])])
+def test_integer_scan_rejects_truncated_code(data):
+    with pytest.raises(DexError):
+        scan_code_item_for_integer(data, 0, 7987)

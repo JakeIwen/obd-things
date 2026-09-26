@@ -190,6 +190,13 @@ write may have reverted the option or may reflect a different configuration oper
 log does not provide a second matching label. Confirm with controlled before/after `22 2023` reads
 around one labeled AlfaOBD change before using this offset.
 
+**2026-09-24 update: verified.** AlfaOBD 2.4.4.0's own BCM PROXI table defines
+`Headlamp LED Management` as byte 143 (`0x8F`), bit 6. The labeled 2026-07-25 17:15:09 write differs
+from the baseline at exactly that bit plus metadata. The same table's byte/bit convention decodes 16
+lighting fields of the preserved baseline identically to AlfaOBD's UI. The field map and caveats are in
+[`2026-09-24_led_low_beam_dtc_options.md`](../../../vehicle_configuration/findings/2026-09-24_led_low_beam_dtc_options.md).
+It remains a decode reference only. Never write bits directly.
+
 The repeated reads also isolate four values that changed between the 01:38 sparse pass and the
 02:19 page pass, separated by exactly one observed ignition-off/on transition:
 
@@ -289,3 +296,37 @@ known-good recipe. Exact evidence and report provenance are recorded in
 [`2026-07-19_live_ecu_discovery.md`](2026-07-19_live_ecu_discovery.md).
 The later engine-off evidence is in
 [`2026-07-22_ccan_alfaobd_live_correlation.md`](2026-07-22_ccan_alfaobd_live_correlation.md#pcm-engine-off-legacy-session-result).
+
+## 2026-09-24 addendum: in-vehicle F1 client reads
+
+A later passive observation added per-ECU positives without any Pi transmission. An in-vehicle
+diagnostic client using tester address `F1` read these DIDs while the van was driving. The
+namespaces below are separate; do not merge them. The full evidence is in
+[`2026-09-24_in_vehicle_f1_scan.md`](2026-09-24_in_vehicle_f1_scan.md).
+
+**TCM `0x18`** (all positive; values identical to the same client's 2026-08-31 run except `213D`):
+
+| DID | length | status |
+|---|---:|---|
+| `026B` | 100 B | new positive; static record, unlabeled |
+| `211B`–`211E` | 1 B each | new positive; `00`, unlabeled |
+| `211F`–`212E` | 1 B each | first live reads of AlfaOBD ZF9HP catalog rows: clutch B/C/D/E filling pressure, filling counter, filling time, and fast-filling counter (learned adaptation) |
+| `2130` | 1 B | new positive; `02`, unlabeled |
+| `2131`, `2132`, `2136`–`213A` | 2 B each | new positive; `0000`, unlabeled |
+| `213B`, `213C` | 2 B each | catalog: TCC boost time offset; TCC base-point adapt |
+| `213D`, `213E` | 6 B each | catalog: gear engagement / disengagement pressures 0–2; `213D` changed by one count since 08-31 |
+
+**PCM `0x10`** (default/inherited session; no `10 92`):
+
+| request | result |
+|---|---|
+| `22 0137` | positive, 4 B, dynamic |
+| `22 0320` | positive, 1 B (`00`) |
+| `22 1FCC`–`1FD8` | positive first frames declaring 243 B each; body not received |
+| `22 1FD9` | positive first frame declaring 515 B; body not received |
+| `22 1FDA`, `1FDB`, `F132`, `F100` | `7F 22 12` |
+| KWP `21 01`–`21 07` | positive first frames declaring 149/177/177/177/177/135/37 B; body not received |
+
+The PCM bodies were lost because the client's FlowControl was an unpadded 3-byte `30 00 00`. PCM
+multi-frame reads need an 8-byte zero-padded FlowControl as well as fixed-DLC-8 requests. A
+parked, bounded read of these DIDs is listed as a follow-up in the finding. It has not been run.

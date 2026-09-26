@@ -36,8 +36,13 @@ C-CAN owner reported verified passive restoration. Raw check output:
 The dashboard helper is now commissioned for one fixed `0845` read per ten
 seconds inside the existing qualified engine-running owner. It validates the
 exact 11-byte reply before accepting values and allows only one separately
-permitted ISO-TP FlowControl. The complete running cadence still needs live
-validation; no radar calibration action was performed.
+permitted ISO-TP FlowControl. September 21 production captures now verify
+85 complete request/first-frame/FlowControl/consecutive-frame sequences in two
+sampled chunks, with 10.107–11.149-second inter-request intervals and 34.140 ms
+maximum response latency. PCM polling continued in those windows. See the
+[September 22 assessment](2026-09-22_acc_and_dashboard_mapping_outlook.md).
+This validates transport/cadence, not new physical scaling; no calibration was
+performed.
 
 | DID | idle raw | decode | meaning | conf |
 |---|---|---|---|---|

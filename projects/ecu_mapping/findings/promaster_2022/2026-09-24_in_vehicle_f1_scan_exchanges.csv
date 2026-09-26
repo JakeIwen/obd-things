@@ -1,0 +1,392 @@
+time_utc,phase,bus,buses_seen,can_ch_lag_ms,target,module_key,request_hex,service,did_or_lid,response_class,nrc_name,response_pending_78,p2_first_frame_ms,response_addr,c_can_copy_addr,fc_frames,response_hex,response_ascii
+2026-09-24T21:12:17.587Z,A-identity,c-can,c-can,,01,,22F132,ReadDataByIdentifier,F132,no_response,,,,,,,,
+2026-09-24T21:12:20.727Z,A-identity,c-can,c-can,,01,,22F100,ReadDataByIdentifier,F100,no_response,,,,,,,,
+2026-09-24T21:12:23.867Z,A-identity,c-can,c-can,,01,,22F1A0,ReadDataByIdentifier,F1A0,no_response,,,,,,,,
+2026-09-24T21:12:27.007Z,A-identity,c-can,c-can,,12,,22F132,ReadDataByIdentifier,F132,no_response,,,,,,,,
+2026-09-24T21:12:30.147Z,A-identity,c-can,c-can,,12,,22F100,ReadDataByIdentifier,F100,no_response,,,,,,,,
+2026-09-24T21:12:33.277Z,A-identity,c-can,c-can,,12,,22F1A0,ReadDataByIdentifier,F1A0,no_response,,,,,,,,
+2026-09-24T21:12:36.427Z,A-identity,c-can,c-can,,1F,shifter,22F132,ReadDataByIdentifier,F132,positive,,,0.6,F1,,F1:300000,62F13237464B34364C58484144,b.27FK46LXHAD
+2026-09-24T21:12:37.587Z,A-identity,c-can,c-can,,1F,shifter,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,0.3,F1,,,7F2231,".""1"
+2026-09-24T21:12:38.597Z,A-identity,c-can,c-can,,1F,shifter,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,0.5,F1,,,7F2231,".""1"
+2026-09-24T21:12:39.607Z,A-identity,c-can,c-can,,1F,shifter,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,0.9,F1,,,7F2231,".""1"
+2026-09-24T21:12:40.617Z,A-identity,c-can,c-can,,1F,shifter,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,0.5,F1,,,7F2231,".""1"
+2026-09-24T21:12:41.807Z,A-identity,c-can,c-can,,1F,shifter,22F1A0,ReadDataByIdentifier,F1A0,positive,,,0.4,F1,,F1:300000,62F1A05037464B34364C584841443343364C52564447344E452323232323233037333235303030324230044147534D3633374643412E04092020202020200016507A19,b..P7FK46LXHAD3C6LRVDG4NE######073250002B0.AGSM637FCA...      ..Pz.
+2026-09-24T21:12:43.136Z,A-identity,c-can,c-can,,20,,22F132,ReadDataByIdentifier,F132,no_response,,,,,,,,
+2026-09-24T21:12:46.277Z,A-identity,c-can,c-can,,20,,22F100,ReadDataByIdentifier,F100,no_response,,,,,,,,
+2026-09-24T21:12:49.427Z,A-identity,c-can,c-can,,20,,22F1A0,ReadDataByIdentifier,F1A0,no_response,,,,,,,,
+2026-09-24T21:12:52.557Z,A-identity,can-ch,c-can+can-ch,0.280,26,,22F132,ReadDataByIdentifier,F132,no_response,,,,,,,,
+2026-09-24T21:12:55.707Z,A-identity,can-ch,c-can+can-ch,0.618,26,,22F100,ReadDataByIdentifier,F100,no_response,,,,,,,,
+2026-09-24T21:12:58.846Z,A-identity,can-ch,c-can+can-ch,0.263,26,,22F1A0,ReadDataByIdentifier,F1A0,no_response,,,,,,,,
+2026-09-24T21:13:01.988Z,A-identity,can-ch,c-can+can-ch,0.392,28,abs_canch,22F132,ReadDataByIdentifier,F132,positive,,,5.3,F1,F2,F1:30000A | c-can:F1:300000,62F13220202020202020202020,b.2          
+2026-09-24T21:13:03.166Z,A-identity,can-ch,c-can+can-ch,0.300,28,abs_canch,22F100,ReadDataByIdentifier,F100,positive,,,1.8,F1,F2,F1:30000A | c-can:F1:300000,62F1002020202020202020202020202020202020202020202020202020202020,b..                             
+2026-09-24T21:13:04.347Z,A-identity,can-ch,c-can+can-ch,0.308,28,abs_canch,22F1A0,ReadDataByIdentifier,F1A0,positive,,,6.2,F1,F2,F1:30000A | c-can:F1:300000,62F1A036383531363238334144203343364C52564447344E45232323232323303236353935373031332000313236373938353639352002022020202020200006501520,b..68516283AD 3C6LRVDG4NE######0265957013 .1267985695 ..      ..P. 
+2026-09-24T21:13:05.876Z,A-identity,c-can,c-can,,2A,radar_acc,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,18.5,F1,,,7F2231,".""1"
+2026-09-24T21:13:06.887Z,A-identity,c-can,c-can,,2A,radar_acc,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,18.0,F1,,,7F2231,".""1"
+2026-09-24T21:13:07.897Z,A-identity,c-can,c-can,,2A,radar_acc,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,18.5,F1,,,7F2231,".""1"
+2026-09-24T21:13:08.907Z,A-identity,c-can,c-can,,2A,radar_acc,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,18.0,F1,,,7F2231,".""1"
+2026-09-24T21:13:10.067Z,A-identity,c-can,c-can,,2A,radar_acc,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,18.0,F1,,,7F2231,".""1"
+2026-09-24T21:13:11.077Z,A-identity,c-can,c-can,,2A,radar_acc,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,17.6,F1,,,7F2231,".""1"
+2026-09-24T21:13:12.087Z,A-identity,c-can,c-can,,2A,radar_acc,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,18.4,F1,,,7F2231,".""1"
+2026-09-24T21:13:13.097Z,A-identity,c-can,c-can,,2A,radar_acc,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,17.9,F1,,,7F2231,".""1"
+2026-09-24T21:13:14.276Z,A-identity,c-can,c-can,,2A,radar_acc,22F1A0,ReadDataByIdentifier,F1A0,positive,,,18.7,F1,,F1:300000,62F1A036383531363231354145203343364C52564447344E452323232323234D52523165766F3134462001313033373630393739342004002020202020200039501620,b..68516215AE 3C6LRVDG4NE######MRR1evo14F .1037609794 ..      .9P. 
+2026-09-24T21:13:15.536Z,A-identity,can-ch,c-can+can-ch,0.548,30,eps_canch,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,1.7,F1,F2,,7F2231,".""1"
+2026-09-24T21:13:16.547Z,A-identity,can-ch,c-can+can-ch,0.302,30,eps_canch,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,1.7,F1,F2,,7F2231,".""1"
+2026-09-24T21:13:17.557Z,A-identity,can-ch,c-can+can-ch,0.283,30,eps_canch,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,0.8,F1,F2,,7F2231,".""1"
+2026-09-24T21:13:18.567Z,A-identity,can-ch,c-can+can-ch,0.391,30,eps_canch,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,1.5,F1,F2,,7F2231,".""1"
+2026-09-24T21:13:19.726Z,A-identity,can-ch,c-can+can-ch,0.469,30,eps_canch,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,2.6,F1,F2,,7F2231,".""1"
+2026-09-24T21:13:20.737Z,A-identity,can-ch,c-can+can-ch,0.291,30,eps_canch,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,1.3,F1,F2,,7F2231,".""1"
+2026-09-24T21:13:21.747Z,A-identity,can-ch,c-can+can-ch,0.332,30,eps_canch,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,1.3,F1,F2,,7F2231,".""1"
+2026-09-24T21:13:22.757Z,A-identity,can-ch,c-can+can-ch,0.285,30,eps_canch,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,11.3,F1,F2,,7F2231,".""1"
+2026-09-24T21:13:23.997Z,A-identity,can-ch,c-can+can-ch,0.321,30,eps_canch,22F1A0,ReadDataByIdentifier,F1A0,positive,,,1.3,F1,F2,F1:30000A | c-can:F1:300000,62F1A036383530393139314144203343364C52564447344E4523232323232346344331202020202020200146493036454230302D303000300000000000000002507919,b..68509191AD 3C6LRVDG4NE######F4C1       .FI06EB00-00.0........Py.
+2026-09-24T21:13:25.448Z,A-identity,can-ch,c-can+can-ch,0.289,31,half_canch,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,5.8,F1,F2,,7F2231,".""1"
+2026-09-24T21:13:26.457Z,A-identity,can-ch,c-can+can-ch,0.296,31,half_canch,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,6.5,F1,F2,,7F2231,".""1"
+2026-09-24T21:13:27.466Z,A-identity,can-ch,c-can+can-ch,0.291,31,half_canch,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,7.2,F1,F2,,7F2231,".""1"
+2026-09-24T21:13:28.477Z,A-identity,can-ch,c-can+can-ch,0.258,31,half_canch,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,6.2,F1,F2,,7F2231,".""1"
+2026-09-24T21:13:29.636Z,A-identity,can-ch,c-can+can-ch,0.653,31,half_canch,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,6.8,F1,F2,,7F2231,".""1"
+2026-09-24T21:13:30.647Z,A-identity,can-ch,c-can+can-ch,0.289,31,half_canch,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,6.5,F1,F2,,7F2231,".""1"
+2026-09-24T21:13:31.657Z,A-identity,can-ch,c-can+can-ch,0.297,31,half_canch,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,6.4,F1,F2,,7F2231,".""1"
+2026-09-24T21:13:32.667Z,A-identity,can-ch,c-can+can-ch,0.229,31,half_canch,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,6.4,F1,F2,,7F2231,".""1"
+2026-09-24T21:13:33.827Z,A-identity,can-ch,c-can+can-ch,0.294,31,half_canch,22F1A0,ReadDataByIdentifier,F1A0,positive,,,6.4,F1,F2,F1:30000A | c-can:F1:300000,62F1A036383536373235344141203343364C52564447344E45232323232323413031324E333333202020013030362E3030332E3030300203313633373031001E502920,b..68567254AA 3C6LRVDG4NE######A012N333   .006.003.000..163701..P) 
+2026-09-24T21:13:35.128Z,A-identity,b-can,b-can,,32,,22F132,ReadDataByIdentifier,F132,no_response,,,,,,,,
+2026-09-24T21:13:38.288Z,A-identity,b-can,b-can,,32,,22F100,ReadDataByIdentifier,F100,no_response,,,,,,,,
+2026-09-24T21:13:41.419Z,A-identity,b-can,b-can,,32,,22F1A0,ReadDataByIdentifier,F1A0,no_response,,,,,,,,
+2026-09-24T21:13:51.417Z,A-identity,c-can,c-can,,40,bcm_ccan,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,2.0,F1,,,7F2231,".""1"
+2026-09-24T21:13:52.427Z,A-identity,c-can,c-can,,40,bcm_ccan,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,1.2,F1,,,7F2231,".""1"
+2026-09-24T21:13:53.437Z,A-identity,c-can,c-can,,40,bcm_ccan,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,2.1,F1,,,7F2231,".""1"
+2026-09-24T21:13:54.447Z,A-identity,c-can,c-can,,40,bcm_ccan,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,1.4,F1,,,7F2231,".""1"
+2026-09-24T21:13:55.697Z,A-identity,c-can,c-can,,40,bcm_ccan,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,1.3,F1,,,7F2231,".""1"
+2026-09-24T21:13:56.707Z,A-identity,c-can,c-can,,40,bcm_ccan,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,1.5,F1,,,7F2231,".""1"
+2026-09-24T21:13:57.716Z,A-identity,c-can,c-can,,40,bcm_ccan,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,2.6,F1,,,7F2231,".""1"
+2026-09-24T21:13:58.726Z,A-identity,c-can,c-can,,40,bcm_ccan,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,2.8,F1,,,7F2231,".""1"
+2026-09-24T21:13:59.887Z,A-identity,c-can,c-can,,40,bcm_ccan,22F1A0,ReadDataByIdentifier,F1A0,positive,,,1.0,F1,,F1:300000,62F1A036383532343833314146203343364C52564447344E4523232323232342433633374D2E3030303101303434343635363130303702072020202020200000607719,b..68524831AF 3C6LRVDG4NE######BC637M.0001.04446561007..      ..`w.
+2026-09-24T21:14:01.038Z,A-identity,b-can,b-can,,41,,22F132,ReadDataByIdentifier,F132,no_response,,,,,,,,
+2026-09-24T21:14:04.178Z,A-identity,b-can,b-can,,41,,22F100,ReadDataByIdentifier,F100,no_response,,,,,,,,
+2026-09-24T21:14:07.406Z,A-identity,b-can,b-can,,41,,22F1A0,ReadDataByIdentifier,F1A0,no_response,,,,,,,,
+2026-09-24T21:14:10.555Z,A-identity,c-can,c-can,,42,,22F132,ReadDataByIdentifier,F132,no_response,,,,,,,,
+2026-09-24T21:14:13.686Z,A-identity,c-can,c-can,,42,,22F100,ReadDataByIdentifier,F100,no_response,,,,,,,,
+2026-09-24T21:14:16.866Z,A-identity,c-can,c-can,,42,,22F1A0,ReadDataByIdentifier,F1A0,no_response,,,,,,,,
+2026-09-24T21:14:20.005Z,A-identity,c-can,c-can,,44,,22F132,ReadDataByIdentifier,F132,no_response,,,,,,,,
+2026-09-24T21:14:23.155Z,A-identity,c-can,c-can,,44,,22F100,ReadDataByIdentifier,F100,no_response,,,,,,,,
+2026-09-24T21:14:26.285Z,A-identity,c-can,c-can,,44,,22F1A0,ReadDataByIdentifier,F1A0,no_response,,,,,,,,
+2026-09-24T21:14:29.476Z,A-identity,b-can,b-can,,4A,,22F132,ReadDataByIdentifier,F132,no_response,,,,,,,,
+2026-09-24T21:14:32.606Z,A-identity,b-can,b-can,,4A,,22F100,ReadDataByIdentifier,F100,no_response,,,,,,,,
+2026-09-24T21:14:35.735Z,A-identity,b-can,b-can,,4A,,22F1A0,ReadDataByIdentifier,F1A0,no_response,,,,,,,,
+2026-09-24T21:14:38.914Z,A-identity,c-can,c-can,,4B,,22F132,ReadDataByIdentifier,F132,no_response,,,,,,,,
+2026-09-24T21:14:42.054Z,A-identity,c-can,c-can,,4B,,22F100,ReadDataByIdentifier,F100,no_response,,,,,,,,
+2026-09-24T21:14:45.185Z,A-identity,c-can,c-can,,4B,,22F1A0,ReadDataByIdentifier,F1A0,no_response,,,,,,,,
+2026-09-24T21:14:48.344Z,A-identity,c-can,c-can,,50,,22F132,ReadDataByIdentifier,F132,no_response,,,,,,,,
+2026-09-24T21:14:51.495Z,A-identity,c-can,c-can,,50,,22F100,ReadDataByIdentifier,F100,no_response,,,,,,,,
+2026-09-24T21:14:54.644Z,A-identity,c-can,c-can,,50,,22F1A0,ReadDataByIdentifier,F1A0,no_response,,,,,,,,
+2026-09-24T21:14:57.785Z,A-identity,b-can,b-can,,54,,22F132,ReadDataByIdentifier,F132,no_response,,,,,,,,
+2026-09-24T21:15:00.945Z,A-identity,b-can,b-can,,54,,22F100,ReadDataByIdentifier,F100,no_response,,,,,,,,
+2026-09-24T21:15:04.104Z,A-identity,b-can,b-can,,54,,22F1A0,ReadDataByIdentifier,F1A0,no_response,,,,,,,,
+2026-09-24T21:15:07.244Z,A-identity,b-can,b-can,,55,,22F132,ReadDataByIdentifier,F132,no_response,,,,,,,,
+2026-09-24T21:15:10.454Z,A-identity,b-can,b-can,,55,,22F100,ReadDataByIdentifier,F100,no_response,,,,,,,,
+2026-09-24T21:15:13.594Z,A-identity,b-can,b-can,,55,,22F1A0,ReadDataByIdentifier,F1A0,no_response,,,,,,,,
+2026-09-24T21:15:16.733Z,A-identity,c-can,c-can,,58,,22F132,ReadDataByIdentifier,F132,no_response,,,,,,,,
+2026-09-24T21:15:19.883Z,A-identity,c-can,c-can,,58,,22F100,ReadDataByIdentifier,F100,no_response,,,,,,,,
+2026-09-24T21:15:23.013Z,A-identity,c-can,c-can,,58,,22F1A0,ReadDataByIdentifier,F1A0,no_response,,,,,,,,
+2026-09-24T21:15:26.153Z,A-identity,c-can,c-can,,60,cluster,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,1.5,F1,,,7F2231,".""1"
+2026-09-24T21:15:27.162Z,A-identity,c-can,c-can,,60,cluster,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,1.9,F1,,,7F2231,".""1"
+2026-09-24T21:15:28.173Z,A-identity,c-can,c-can,,60,cluster,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,1.2,F1,,,7F2231,".""1"
+2026-09-24T21:15:29.183Z,A-identity,c-can,c-can,,60,cluster,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,1.6,F1,,,7F2231,".""1"
+2026-09-24T21:15:30.364Z,A-identity,c-can,c-can,,60,cluster,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,0.4,F1,,,7F2231,".""1"
+2026-09-24T21:15:31.373Z,A-identity,c-can,c-can,,60,cluster,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,1.2,F1,,,7F2231,".""1"
+2026-09-24T21:15:32.382Z,A-identity,c-can,c-can,,60,cluster,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,1.9,F1,,,7F2231,".""1"
+2026-09-24T21:15:33.393Z,A-identity,c-can,c-can,,60,cluster,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,1.6,F1,,,7F2231,".""1"
+2026-09-24T21:15:34.552Z,A-identity,c-can,c-can,,60,cluster,22F1A0,ReadDataByIdentifier,F1A0,positive,,,1.9,F1,,F1:300000,62F1A036383531373038344144203343364C52564447344E45232323232323353030313939393030303200303430303934363039323401922020202020200003507420,b..68517084AD 3C6LRVDG4NE######50019990002.04009460924..      ..Pt 
+2026-09-24T21:15:35.733Z,A-identity,b-can,b-can,,62,,22F132,ReadDataByIdentifier,F132,no_response,,,,,,,,
+2026-09-24T21:15:38.883Z,A-identity,b-can,b-can,,62,,22F100,ReadDataByIdentifier,F100,no_response,,,,,,,,
+2026-09-24T21:15:42.013Z,A-identity,b-can,b-can,,62,,22F1A0,ReadDataByIdentifier,F1A0,no_response,,,,,,,,
+2026-09-24T21:15:45.151Z,A-identity,b-can,b-can,,65,,22F132,ReadDataByIdentifier,F132,no_response,,,,,,,,
+2026-09-24T21:15:48.322Z,A-identity,b-can,b-can,,65,,22F100,ReadDataByIdentifier,F100,no_response,,,,,,,,
+2026-09-24T21:15:51.452Z,A-identity,b-can,b-can,,65,,22F1A0,ReadDataByIdentifier,F1A0,no_response,,,,,,,,
+2026-09-24T21:15:54.592Z,A-identity,b-can,b-can,,66,,22F132,ReadDataByIdentifier,F132,no_response,,,,,,,,
+2026-09-24T21:15:57.732Z,A-identity,b-can,b-can,,66,,22F100,ReadDataByIdentifier,F100,no_response,,,,,,,,
+2026-09-24T21:16:00.862Z,A-identity,b-can,b-can,,66,,22F1A0,ReadDataByIdentifier,F1A0,no_response,,,,,,,,
+2026-09-24T21:16:04.011Z,A-identity,b-can,b-can,,6A,,22F132,ReadDataByIdentifier,F132,no_response,,,,,,,,
+2026-09-24T21:16:07.162Z,A-identity,b-can,b-can,,6A,,22F100,ReadDataByIdentifier,F100,no_response,,,,,,,,
+2026-09-24T21:16:10.292Z,A-identity,b-can,b-can,,6A,,22F1A0,ReadDataByIdentifier,F1A0,no_response,,,,,,,,
+2026-09-24T21:16:16.862Z,A-identity,b-can,b-can,,83,,22F132,ReadDataByIdentifier,F132,no_response,,,,,,,,
+2026-09-24T21:16:20.081Z,A-identity,b-can,b-can,,83,,22F100,ReadDataByIdentifier,F100,no_response,,,,,,,,
+2026-09-24T21:16:23.222Z,A-identity,b-can,b-can,,83,,22F1A0,ReadDataByIdentifier,F1A0,no_response,,,,,,,,
+2026-09-24T21:16:26.361Z,A-identity,b-can,b-can,,85,ics_bcan,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,8.3,F1,,,7F2231,".""1"
+2026-09-24T21:16:27.372Z,A-identity,b-can,b-can,,85,ics_bcan,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,7.0,F1,,,7F2231,".""1"
+2026-09-24T21:16:28.382Z,A-identity,b-can,b-can,,85,ics_bcan,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,7.4,F1,,,7F2231,".""1"
+2026-09-24T21:16:29.391Z,A-identity,b-can,b-can,,85,ics_bcan,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,8.2,F1,,,7F2231,".""1"
+2026-09-24T21:16:30.542Z,A-identity,b-can,b-can,,85,ics_bcan,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,7.2,F1,,,7F2231,".""1"
+2026-09-24T21:16:31.550Z,A-identity,b-can,b-can,,85,ics_bcan,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,8.5,F1,,,7F2231,".""1"
+2026-09-24T21:16:32.561Z,A-identity,b-can,b-can,,85,ics_bcan,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,8.2,F1,,,7F2231,".""1"
+2026-09-24T21:16:33.571Z,A-identity,b-can,b-can,,85,ics_bcan,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,8.3,F1,,,7F2231,".""1"
+2026-09-24T21:16:34.730Z,A-identity,b-can,b-can,,85,ics_bcan,22F1A0,ReadDataByIdentifier,F1A0,positive,,,10.6,F1,,F1:300000,62F1A037444E30384C58464142203343364C52564447344E45232323232323343430303030313936202001343430303030343132202006002020202020200032701720,b..7DN08LXFAB 3C6LRVDG4NE######440000196  .440000412  ..      .2p. 
+2026-09-24T21:16:35.980Z,A-identity,b-can,b-can,,87,uconnect_bcan,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,10.2,F1,,,7F2231,".""1"
+2026-09-24T21:16:36.991Z,A-identity,b-can,b-can,,87,uconnect_bcan,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,8.9,F1,,,7F2231,".""1"
+2026-09-24T21:16:38.001Z,A-identity,b-can,b-can,,87,uconnect_bcan,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,9.9,F1,,,7F2231,".""1"
+2026-09-24T21:16:39.011Z,A-identity,b-can,b-can,,87,uconnect_bcan,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,9.0,F1,,,7F2231,".""1"
+2026-09-24T21:16:40.180Z,A-identity,b-can,b-can,,87,uconnect_bcan,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,9.9,F1,,,7F2231,".""1"
+2026-09-24T21:16:41.191Z,A-identity,b-can,b-can,,87,uconnect_bcan,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,9.5,F1,,,7F2231,".""1"
+2026-09-24T21:16:42.200Z,A-identity,b-can,b-can,,87,uconnect_bcan,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,10.0,F1,,,7F2231,".""1"
+2026-09-24T21:16:43.211Z,A-identity,b-can,b-can,,87,uconnect_bcan,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,9.1,F1,,,7F2231,".""1"
+2026-09-24T21:16:44.370Z,A-identity,b-can,b-can,,87,uconnect_bcan,22F1A0,ReadDataByIdentifier,F1A0,positive,,yes 20.3 ms,39.9,F1,,F1:300000,62F1A036303938313632362020203343364C52564447344E4523232323232332302E34302E3031202020003134352E30302E3135202091002020202020200000000000,b..60981626   3C6LRVDG4NE######20.40.01   .145.00.15  ..      .....
+2026-09-24T21:16:45.671Z,A-identity,b-can,b-can,,98,climate_bcan,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,7.0,F1,,,7F2231,".""1"
+2026-09-24T21:16:46.681Z,A-identity,b-can,b-can,,98,climate_bcan,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,7.5,F1,,,7F2231,".""1"
+2026-09-24T21:16:47.690Z,A-identity,b-can,b-can,,98,climate_bcan,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,7.8,F1,,,7F2231,".""1"
+2026-09-24T21:16:48.700Z,A-identity,b-can,b-can,,98,climate_bcan,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,7.7,F1,,,7F2231,".""1"
+2026-09-24T21:16:49.880Z,A-identity,b-can,b-can,,98,climate_bcan,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,7.7,F1,,,7F2231,".""1"
+2026-09-24T21:16:50.891Z,A-identity,b-can,b-can,,98,climate_bcan,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,6.8,F1,,,7F2231,".""1"
+2026-09-24T21:16:51.900Z,A-identity,b-can,b-can,,98,climate_bcan,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,7.5,F1,,,7F2231,".""1"
+2026-09-24T21:16:52.910Z,A-identity,b-can,b-can,,98,climate_bcan,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,8.0,F1,,,7F2231,".""1"
+2026-09-24T21:16:54.071Z,A-identity,b-can,b-can,,98,climate_bcan,22F1A0,ReadDataByIdentifier,F1A0,positive,,,7.5,F1,,F1:300000,62F1A036383531363132344145203343364C52564447344E4523232323232334343030303032343220200030303231333630312020201804202020202020000A702520,b..68516124AE 3C6LRVDG4NE######440000242  .00213601   ..      ..p% 
+2026-09-24T21:16:55.420Z,A-identity,can-ch,c-can+can-ch,0.281,A0,,22F132,ReadDataByIdentifier,F132,no_response,,,,,,,,
+2026-09-24T21:16:58.580Z,A-identity,can-ch,c-can+can-ch,0.363,A0,,22F100,ReadDataByIdentifier,F100,no_response,,,,,,,,
+2026-09-24T21:17:01.719Z,A-identity,can-ch,c-can+can-ch,0.284,A0,,22F1A0,ReadDataByIdentifier,F1A0,no_response,,,,,,,,
+2026-09-24T21:17:04.880Z,A-identity,c-can,c-can,,A1,,22F132,ReadDataByIdentifier,F132,no_response,,,,,,,,
+2026-09-24T21:17:08.019Z,A-identity,c-can,c-can,,A1,,22F100,ReadDataByIdentifier,F100,no_response,,,,,,,,
+2026-09-24T21:17:11.230Z,A-identity,c-can,c-can,,A1,,22F1A0,ReadDataByIdentifier,F1A0,no_response,,,,,,,,
+2026-09-24T21:17:14.380Z,A-identity,can-ch,c-can+can-ch,0.288,C0,orc_canch,22F132,ReadDataByIdentifier,F132,positive,,,2.5,F1,F2,F1:30000A | c-can:F1:300000,62F13220202020202020202020,b.2          
+2026-09-24T21:17:15.540Z,A-identity,can-ch,c-can+can-ch,0.268,C0,orc_canch,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,10.4,F1,F2,,7F2231,".""1"
+2026-09-24T21:17:16.549Z,A-identity,can-ch,c-can+can-ch,0.392,C0,orc_canch,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,9.7,F1,F2,,7F2231,".""1"
+2026-09-24T21:17:17.560Z,A-identity,can-ch,c-can+can-ch,0.664,C0,orc_canch,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,6.2,F1,F2,,7F2231,".""1"
+2026-09-24T21:17:18.569Z,A-identity,can-ch,c-can+can-ch,0.305,C0,orc_canch,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,5.6,F1,F2,,7F2231,".""1"
+2026-09-24T21:17:19.720Z,A-identity,can-ch,c-can+can-ch,0.720,C0,orc_canch,22F1A0,ReadDataByIdentifier,F1A0,positive,,yes 269.6 ms,42.3,F1,F2,F1:30000A | c-can:F1:300000,62F1A036383531383637344143203343364C52564447344E4523232323232330323835303135373637202142423130313436342020201020202020202020001A507720,b..68518674AC 3C6LRVDG4NE######0285015767 !BB101464   .       ..Pw 
+2026-09-24T21:17:21.310Z,A-identity,b-can,b-can,,C2,,22F132,ReadDataByIdentifier,F132,no_response,,,,,,,,
+2026-09-24T21:17:24.440Z,A-identity,b-can,b-can,,C2,,22F100,ReadDataByIdentifier,F100,no_response,,,,,,,,
+2026-09-24T21:17:27.649Z,A-identity,b-can,b-can,,C2,,22F1A0,ReadDataByIdentifier,F1A0,no_response,,,,,,,,
+2026-09-24T21:17:30.779Z,A-identity,c-can,c-can,,C4,,22F132,ReadDataByIdentifier,F132,no_response,,,,,,,,
+2026-09-24T21:17:33.919Z,A-identity,c-can,c-can,,C4,,22F100,ReadDataByIdentifier,F100,no_response,,,,,,,,
+2026-09-24T21:17:37.050Z,A-identity,c-can,c-can,,C4,,22F1A0,ReadDataByIdentifier,F1A0,no_response,,,,,,,,
+2026-09-24T21:17:40.190Z,A-identity,c-can,c-can,,C7,rf_hub,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,10.5,F1,,,7F2231,".""1"
+2026-09-24T21:17:41.200Z,A-identity,c-can,c-can,,C7,rf_hub,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,20.0,F1,,,7F2231,".""1"
+2026-09-24T21:17:42.209Z,A-identity,c-can,c-can,,C7,rf_hub,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,10.8,F1,,,7F2231,".""1"
+2026-09-24T21:17:43.220Z,A-identity,c-can,c-can,,C7,rf_hub,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,20.5,F1,,,7F2231,".""1"
+2026-09-24T21:17:44.400Z,A-identity,c-can,c-can,,C7,rf_hub,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,20.5,F1,,,7F2231,".""1"
+2026-09-24T21:17:45.410Z,A-identity,c-can,c-can,,C7,rf_hub,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,10.6,F1,,,7F2231,".""1"
+2026-09-24T21:17:46.420Z,A-identity,c-can,c-can,,C7,rf_hub,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,20.5,F1,,,7F2231,".""1"
+2026-09-24T21:17:47.430Z,A-identity,c-can,c-can,,C7,rf_hub,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,10.6,F1,,,7F2231,".""1"
+2026-09-24T21:17:48.610Z,A-identity,c-can,c-can,,C7,rf_hub,22F1A0,ReadDataByIdentifier,F1A0,positive,,,10.9,F1,,F1:300000,62F1A036383531363238354143203343364C52564447344E45232323232323363337303034333345412001313034333832343141412004002020202020200041502620,b..68516285AC 3C6LRVDG4NE######63700433EA .10438241AA ..      .AP& 
+2026-09-24T21:17:53.380Z,A-identity,c-can,c-can,,CB,,22F132,ReadDataByIdentifier,F132,no_response,,,,,,,,
+2026-09-24T21:17:56.530Z,A-identity,c-can,c-can,,CB,,22F100,ReadDataByIdentifier,F100,no_response,,,,,,,,
+2026-09-24T21:17:59.670Z,A-identity,c-can,c-can,,CB,,22F1A0,ReadDataByIdentifier,F1A0,no_response,,,,,,,,
+2026-09-24T21:18:02.808Z,A-identity,b-can,b-can,,D9,emcm2_bcan,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,7.3,F1,,,7F2231,".""1"
+2026-09-24T21:18:03.818Z,A-identity,b-can,b-can,,D9,emcm2_bcan,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,4.1,F1,,,7F2231,".""1"
+2026-09-24T21:18:04.828Z,A-identity,b-can,b-can,,D9,emcm2_bcan,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,1.6,F1,,,7F2231,".""1"
+2026-09-24T21:18:05.838Z,A-identity,b-can,b-can,,D9,emcm2_bcan,22F132,ReadDataByIdentifier,F132,NRC_31,requestOutOfRange,,9.0,F1,,,7F2231,".""1"
+2026-09-24T21:18:07.019Z,A-identity,b-can,b-can,,D9,emcm2_bcan,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,6.1,F1,,,7F2231,".""1"
+2026-09-24T21:18:08.028Z,A-identity,b-can,b-can,,D9,emcm2_bcan,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,4.2,F1,,,7F2231,".""1"
+2026-09-24T21:18:09.039Z,A-identity,b-can,b-can,,D9,emcm2_bcan,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,1.4,F1,,,7F2231,".""1"
+2026-09-24T21:18:10.047Z,A-identity,b-can,b-can,,D9,emcm2_bcan,22F100,ReadDataByIdentifier,F100,NRC_31,requestOutOfRange,,10.3,F1,,,7F2231,".""1"
+2026-09-24T21:18:11.229Z,A-identity,b-can,b-can,,D9,emcm2_bcan,22F1A0,ReadDataByIdentifier,F1A0,positive,,,6.3,F1,,F1:300000,62F1A037444E31344C5848414620FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF37444E31344C584841462046413231343930302020202021492020202020200066708320,b..7DN14LXHAF .................7DN14LXHAF FA214900    !I      .fp. 
+2026-09-24T21:18:12.480Z,A-identity,c-can,c-can,,1A,,22F132,ReadDataByIdentifier,F132,no_response,,,,,,,,
+2026-09-24T21:18:15.700Z,A-identity,c-can,c-can,,1A,,22F100,ReadDataByIdentifier,F100,no_response,,,,,,,,
+2026-09-24T21:18:18.840Z,A-identity,c-can,c-can,,1A,,22F1A0,ReadDataByIdentifier,F1A0,no_response,,,,,,,,
+2026-09-24T21:18:21.980Z,A-identity,c-can,c-can,,10,pcm,22F132,ReadDataByIdentifier,F132,NRC_12,subFunctionNotSupported/invalidFormat,,2.6,F1,,,7F2212,".""."
+2026-09-24T21:18:22.990Z,A-identity,c-can,c-can,,10,pcm,22F132,ReadDataByIdentifier,F132,NRC_12,subFunctionNotSupported/invalidFormat,,1.9,F1,,,7F2212,".""."
+2026-09-24T21:18:24.000Z,A-identity,c-can,c-can,,10,pcm,22F132,ReadDataByIdentifier,F132,NRC_12,subFunctionNotSupported/invalidFormat,,1.2,F1,,,7F2212,".""."
+2026-09-24T21:18:25.010Z,A-identity,c-can,c-can,,10,pcm,22F132,ReadDataByIdentifier,F132,NRC_12,subFunctionNotSupported/invalidFormat,,1.4,F1,,,7F2212,".""."
+2026-09-24T21:18:26.170Z,A-identity,c-can,c-can,,10,pcm,22F100,ReadDataByIdentifier,F100,NRC_12,subFunctionNotSupported/invalidFormat,,1.5,F1,,,7F2212,".""."
+2026-09-24T21:18:27.180Z,A-identity,c-can,c-can,,10,pcm,22F100,ReadDataByIdentifier,F100,NRC_12,subFunctionNotSupported/invalidFormat,,1.4,F1,,,7F2212,".""."
+2026-09-24T21:18:28.189Z,A-identity,c-can,c-can,,10,pcm,22F100,ReadDataByIdentifier,F100,NRC_12,subFunctionNotSupported/invalidFormat,,2.0,F1,,,7F2212,".""."
+2026-09-24T21:18:29.200Z,A-identity,c-can,c-can,,10,pcm,22F100,ReadDataByIdentifier,F100,NRC_12,subFunctionNotSupported/invalidFormat,,1.3,F1,,,7F2212,".""."
+2026-09-24T21:18:30.360Z,A-identity,c-can,c-can,,10,pcm,22F1A0,ReadDataByIdentifier,F1A0,incomplete_multiframe,,,1.8,F1,,F1:300000,"INCOMPLETE(len=67,got=6):62F1A0202020",b..   
+2026-09-24T21:18:36.490Z,A-identity,c-can,c-can,,10,pcm,1A87,KWP ReadEcuIdentification,87,incomplete_multiframe,,,1.7,F1,,F1:300000,"INCOMPLETE(len=22,got=6):5A8702407F34",Z..@.4
+2026-09-24T21:18:42.620Z,A-identity,c-can,c-can,,18,tcm,22F132,ReadDataByIdentifier,F132,positive,,,15.6,F1,,F1:300000,62F13236383533323136314146,b.268532161AF
+2026-09-24T21:18:43.801Z,A-identity,c-can,c-can,,18,tcm,22F100,ReadDataByIdentifier,F100,positive,,,15.3,F1,,F1:300000,62F100006500000B0026,b...e....&
+2026-09-24T21:18:44.987Z,A-identity,c-can,c-can,,18,tcm,22F1A0,ReadDataByIdentifier,F1A0,positive,,,9.3,F1,,F1:300000,62F1A034363334323038362020203343364C52564447344E45232323232323455331312D31303635204401363835333231363141462000012A2A2A2A2A2A5285040D3D,b..46342086   3C6LRVDG4NE######ES11-1065 D.68532161AF ..******R...=
+2026-09-24T21:18:46.247Z,B-dtc-pass1,c-can,c-can,,01,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:18:49.467Z,B-dtc-pass1,c-can,c-can,,12,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:18:52.607Z,B-dtc-pass1,c-can,c-can,,1F,shifter,19020D,ReadDTCInformation,020D,positive,,,3.3,F1,,F1:300000,59024F081C64081C73240F,Y.O..d..s$.
+2026-09-24T21:18:53.780Z,B-dtc-pass1,c-can,c-can,,20,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:18:56.907Z,B-dtc-pass1,can-ch,c-can+can-ch,0.270,26,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:19:00.070Z,B-dtc-pass1,can-ch,c-can+can-ch,0.310,28,abs_canch,19020D,ReadDTCInformation,020D,positive,,yes 435.1 ms,25.7,F1,F2,,5902CF5200174C,Y..R..L
+2026-09-24T21:19:01.767Z,B-dtc-pass1,c-can,c-can,,2A,radar_acc,19020D,ReadDTCInformation,020D,positive,,yes 142.9 ms,40.9,F1,,,5902CF54187808,Y..T.x.
+2026-09-24T21:19:03.097Z,B-dtc-pass1,can-ch,c-can+can-ch,0.336,30,eps_canch,19020D,ReadDTCInformation,020D,positive,,,12.8,F1,F2,,5902CF,Y..
+2026-09-24T21:19:04.267Z,B-dtc-pass1,can-ch,c-can+can-ch,0.332,31,half_canch,19020D,ReadDTCInformation,020D,positive,,,3.3,F1,F2,F1:30000A | c-can:F1:300000,59028F9006490C54A5920854A59708,Y....I.T...T...
+2026-09-24T21:19:05.486Z,B-dtc-pass1,b-can,b-can,,32,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:19:10.987Z,B-dtc-pass1,c-can,c-can,,40,bcm_ccan,19020D,ReadDTCInformation,020D,positive,,,3.1,F1,,F1:300000,59024F9636154D9632154D962E150F962A150F904E154D904D154D,Y.O.6.M.2.M.....*...N.M.M.M
+2026-09-24T21:19:12.137Z,B-dtc-pass1,b-can,b-can,,41,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:19:15.277Z,B-dtc-pass1,c-can,c-can,,42,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:19:18.416Z,B-dtc-pass1,c-can,c-can,,44,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:19:21.556Z,B-dtc-pass1,b-can,b-can,,4A,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:19:24.716Z,B-dtc-pass1,c-can,c-can,,4B,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:19:27.856Z,B-dtc-pass1,c-can,c-can,,50,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:19:31.017Z,B-dtc-pass1,b-can,b-can,,54,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:19:34.147Z,B-dtc-pass1,b-can,b-can,,55,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:19:37.296Z,B-dtc-pass1,c-can,c-can,,58,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:19:40.436Z,B-dtc-pass1,c-can,c-can,,60,cluster,19020D,ReadDTCInformation,020D,positive,,,8.8,F1,,,59024FD7418708,Y.O.A..
+2026-09-24T21:19:41.586Z,B-dtc-pass1,b-can,b-can,,62,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:19:44.767Z,B-dtc-pass1,b-can,b-can,,65,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:19:47.896Z,B-dtc-pass1,b-can,b-can,,66,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:19:51.036Z,B-dtc-pass1,b-can,b-can,,6A,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:19:55.317Z,B-dtc-pass1,b-can,b-can,,83,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:19:58.456Z,B-dtc-pass1,b-can,b-can,,85,ics_bcan,19020D,ReadDTCInformation,020D,positive,,,3.1,F1,,,59024F,Y.O
+2026-09-24T21:19:59.616Z,B-dtc-pass1,b-can,b-can,,87,uconnect_bcan,19020D,ReadDTCInformation,020D,positive,,,12.8,F1,,F1:300000,59024F943A1108957019089577130FA10A160CA80B0208C1558608,Y.O.:...p...w...........U..
+2026-09-24T21:20:00.796Z,B-dtc-pass1,b-can,b-can,,98,climate_bcan,19020D,ReadDTCInformation,020D,positive,,,2.0,F1,,F1:300000,59024FC1558708C4238708,Y.O.U...#..
+2026-09-24T21:20:01.965Z,B-dtc-pass1,can-ch,c-can+can-ch,0.268,A0,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:20:05.115Z,B-dtc-pass1,c-can,c-can,,A1,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:20:08.315Z,B-dtc-pass1,can-ch,c-can+can-ch,0.341,C0,orc_canch,19020D,ReadDTCInformation,020D,positive,,yes 199.6 ms,47.5,F1,F2,,5902CF,Y..
+2026-09-24T21:20:09.716Z,B-dtc-pass1,b-can,b-can,,C2,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:20:12.866Z,B-dtc-pass1,c-can,c-can,,C4,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:20:16.045Z,B-dtc-pass1,c-can,c-can,,C7,rf_hub,19020D,ReadDTCInformation,020D,positive,,,18.9,F1,,,5902CF90406408,Y...@d.
+2026-09-24T21:20:18.375Z,B-dtc-pass1,c-can,c-can,,CB,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:20:21.516Z,B-dtc-pass1,b-can,b-can,,D9,emcm2_bcan,19020D,ReadDTCInformation,020D,positive,,,7.0,F1,,,5902FF,Y..
+2026-09-24T21:20:22.725Z,B-dtc-pass1,c-can,c-can,,10,pcm,19020D,ReadDTCInformation,020D,NRC_11,serviceNotSupported,,2.0,F1,,,7F1911,...
+2026-09-24T21:20:23.736Z,B-dtc-pass1,c-can,c-can,,10,pcm,19020D,ReadDTCInformation,020D,NRC_11,serviceNotSupported,,1.8,F1,,,7F1911,...
+2026-09-24T21:20:24.745Z,B-dtc-pass1,c-can,c-can,,10,pcm,19020D,ReadDTCInformation,020D,NRC_11,serviceNotSupported,,2.2,F1,,,7F1911,...
+2026-09-24T21:20:25.755Z,B-dtc-pass1,c-can,c-can,,10,pcm,19020D,ReadDTCInformation,020D,NRC_11,serviceNotSupported,,2.1,F1,,,7F1911,...
+2026-09-24T21:20:26.925Z,B-dtc-pass1,c-can,c-can,,1A,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:20:30.056Z,B-dtc-pass1,c-can,c-can,,10,pcm,1800FF00,KWP ReadDTCByStatus,00FF00,positive,,,1.7,F1,,,5800,X.
+2026-09-24T21:20:31.215Z,B-dtc-pass1,c-can,c-can,,18,tcm,19020D,ReadDTCInformation,020D,positive,,yes 310.3 ms,47.8,F1,,,5902CF,Y..
+2026-09-24T21:20:32.715Z,B-dtc-pass1,c-can,c-can,,10,pcm,220137,ReadDataByIdentifier,0137,positive,,,1.3,F1,,,62013700013AF5,b.7..:.
+2026-09-24T21:20:33.945Z,B-dtc-pass1,c-can,c-can,,18,tcm,22026B,ReadDataByIdentifier,026B,positive,,,8.7,F1,,F1:300000,62026B15000BAA4A490002E139000099A13D2B9B6A3C2B7D0018580000187401E301E301F71FF80002CA020020000000002B6604DD0301F401F40B3401F401F416FC00000001004001000008081B1A0C0C470C00008002000000000000000000007E0004000000,b.k....JI...9....=+.j<+}..X...t............. ....+f........4...........@.........G...............~.....
+2026-09-24T21:20:35.236Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,01,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:20:38.375Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,2105,KWP ReadDataByLocalIdentifier,05,incomplete_multiframe,,,1.5,F1,,F1:300000,"INCOMPLETE(len=177,got=6):610500000000",a.....
+2026-09-24T21:20:44.526Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,22211B,ReadDataByIdentifier,211B,positive,,,8.4,F1,,,62211B00,b!..
+2026-09-24T21:20:45.695Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,12,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:20:48.825Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,220320,ReadDataByIdentifier,0320,positive,,,1.6,F1,,,62032000,b. .
+2026-09-24T21:20:49.986Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,22211C,ReadDataByIdentifier,211C,positive,,,8.3,F1,,,62211C00,b!..
+2026-09-24T21:20:51.135Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,1F,shifter,19020D,ReadDTCInformation,020D,positive,,,1.0,F1,,F1:300000,59024F081C64081C73240F,Y.O..d..s$.
+2026-09-24T21:20:52.345Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,221FCE,ReadDataByIdentifier,1FCE,incomplete_multiframe,,,1.6,F1,,F1:300000,"INCOMPLETE(len=243,got=6):621FCE000000",b.....
+2026-09-24T21:20:58.525Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,22211D,ReadDataByIdentifier,211D,positive,,,9.2,F1,,,62211D00,b!..
+2026-09-24T21:20:59.695Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,20,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:21:02.845Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,221FCF,ReadDataByIdentifier,1FCF,incomplete_multiframe,,,2.1,F1,,F1:300000,"INCOMPLETE(len=243,got=6):621FCF000000",b.....
+2026-09-24T21:21:08.995Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,22211E,ReadDataByIdentifier,211E,positive,,,8.3,F1,,,62211E00,b!..
+2026-09-24T21:21:10.146Z,C-dtc-pass2+PCM/TCM-data,can-ch,c-can+can-ch,0.390,26,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:21:13.285Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,221FD0,ReadDataByIdentifier,1FD0,incomplete_multiframe,,,1.6,F1,,F1:300000,"INCOMPLETE(len=243,got=6):621FD0000000",b.....
+2026-09-24T21:21:19.415Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,22211F,ReadDataByIdentifier,211F,positive,,,9.1,F1,,,62211F13,b!..
+2026-09-24T21:21:20.576Z,C-dtc-pass2+PCM/TCM-data,can-ch,c-can+can-ch,0.269,28,abs_canch,19020D,ReadDTCInformation,020D,positive,,yes 430.2 ms,26.7,F1,F2,,5902CF5200174C,Y..R..L
+2026-09-24T21:21:22.175Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,221FD1,ReadDataByIdentifier,1FD1,incomplete_multiframe,,,2.1,F1,,F1:300000,"INCOMPLETE(len=243,got=6):621FD1000000",b.....
+2026-09-24T21:21:28.345Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,222120,ReadDataByIdentifier,2120,positive,,,9.9,F1,,,6221203F,b! ?
+2026-09-24T21:21:29.505Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,2A,radar_acc,19020D,ReadDTCInformation,020D,positive,,yes 139.4 ms,47.5,F1,,,5902CF54187808,Y..T.x.
+2026-09-24T21:21:30.855Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,221FD2,ReadDataByIdentifier,1FD2,incomplete_multiframe,,,2.3,F1,,F1:300000,"INCOMPLETE(len=243,got=6):621FD2000000",b.....
+2026-09-24T21:21:36.985Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,222121,ReadDataByIdentifier,2121,positive,,,9.5,F1,,,62212108,b!!.
+2026-09-24T21:21:38.145Z,C-dtc-pass2+PCM/TCM-data,can-ch,c-can+can-ch,0.324,30,eps_canch,19020D,ReadDTCInformation,020D,positive,,,5.9,F1,F2,,5902CF,Y..
+2026-09-24T21:21:39.306Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,221FD3,ReadDataByIdentifier,1FD3,incomplete_multiframe,,,2.0,F1,,F1:300000,"INCOMPLETE(len=243,got=6):621FD3000000",b.....
+2026-09-24T21:21:45.435Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,222122,ReadDataByIdentifier,2122,positive,,,10.5,F1,,,6221223B,"b!"";"
+2026-09-24T21:21:46.655Z,C-dtc-pass2+PCM/TCM-data,can-ch,c-can+can-ch,0.315,31,half_canch,19020D,ReadDTCInformation,020D,positive,,,6.5,F1,F2,F1:30000A | c-can:F1:300000,59028F9006490C54A5920854A59708,Y....I.T...T...
+2026-09-24T21:21:47.835Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,221FD4,ReadDataByIdentifier,1FD4,incomplete_multiframe,,,1.7,F1,,F1:300000,"INCOMPLETE(len=243,got=6):621FD4000000",b.....
+2026-09-24T21:21:53.976Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,222123,ReadDataByIdentifier,2123,positive,,,10.3,F1,,,622123E5,b!#.
+2026-09-24T21:21:55.155Z,C-dtc-pass2+PCM/TCM-data,b-can,b-can,,32,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:21:58.304Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,221FD5,ReadDataByIdentifier,1FD5,incomplete_multiframe,,,2.2,F1,,F1:300000,"INCOMPLETE(len=243,got=6):621FD5000000",b.....
+2026-09-24T21:22:04.446Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,222124,ReadDataByIdentifier,2124,positive,,,9.5,F1,,,62212441,b!$A
+2026-09-24T21:22:06.785Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,221FD6,ReadDataByIdentifier,1FD6,incomplete_multiframe,,,2.4,F1,,F1:300000,"INCOMPLETE(len=243,got=6):621FD6000000",b.....
+2026-09-24T21:22:12.924Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,222125,ReadDataByIdentifier,2125,positive,,,12.7,F1,,,62212501,b!%.
+2026-09-24T21:22:15.365Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,221FD7,ReadDataByIdentifier,1FD7,incomplete_multiframe,,,2.7,F1,,F1:300000,"INCOMPLETE(len=243,got=6):621FD7000000",b.....
+2026-09-24T21:22:21.504Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,222126,ReadDataByIdentifier,2126,positive,,,13.2,F1,,,6221263E,b!&>
+2026-09-24T21:22:22.674Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,40,bcm_ccan,19020D,ReadDTCInformation,020D,positive,,,2.9,F1,,F1:300000,59024F9636154D9632154D962E150F962A150F904E154D904D154D,Y.O.6.M.2.M.....*...N.M.M.M
+2026-09-24T21:22:23.834Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,221FD8,ReadDataByIdentifier,1FD8,incomplete_multiframe,,,1.4,F1,,F1:300000,"INCOMPLETE(len=243,got=6):621FD8000000",b.....
+2026-09-24T21:22:29.974Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,222127,ReadDataByIdentifier,2127,positive,,,13.2,F1,,,62212701,b!'.
+2026-09-24T21:22:31.146Z,C-dtc-pass2+PCM/TCM-data,b-can,b-can,,41,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:22:34.284Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,221FD9,ReadDataByIdentifier,1FD9,incomplete_multiframe,,,1.3,F1,,,"INCOMPLETE(len=515,got=6):621FD9000000",b.....
+2026-09-24T21:22:40.414Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,222128,ReadDataByIdentifier,2128,positive,,,14.1,F1,,,62212836,b!(6
+2026-09-24T21:22:41.584Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,42,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:22:44.714Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,221FDA,ReadDataByIdentifier,1FDA,NRC_12,subFunctionNotSupported/invalidFormat,,1.6,F1,,,7F2212,".""."
+2026-09-24T21:22:45.725Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,221FDA,ReadDataByIdentifier,1FDA,NRC_12,subFunctionNotSupported/invalidFormat,,1.4,F1,,,7F2212,".""."
+2026-09-24T21:22:46.735Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,221FDA,ReadDataByIdentifier,1FDA,NRC_12,subFunctionNotSupported/invalidFormat,,2.1,F1,,,7F2212,".""."
+2026-09-24T21:22:47.744Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,221FDA,ReadDataByIdentifier,1FDA,NRC_12,subFunctionNotSupported/invalidFormat,,2.3,F1,,,7F2212,".""."
+2026-09-24T21:22:48.905Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,222129,ReadDataByIdentifier,2129,positive,,,13.8,F1,,,62212901,b!).
+2026-09-24T21:22:50.195Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,44,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:22:53.335Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,221FDB,ReadDataByIdentifier,1FDB,NRC_12,subFunctionNotSupported/invalidFormat,,2.2,F1,,,7F2212,".""."
+2026-09-24T21:22:54.344Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,221FDB,ReadDataByIdentifier,1FDB,NRC_12,subFunctionNotSupported/invalidFormat,,1.7,F1,,,7F2212,".""."
+2026-09-24T21:22:55.355Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,221FDB,ReadDataByIdentifier,1FDB,NRC_12,subFunctionNotSupported/invalidFormat,,2.2,F1,,,7F2212,".""."
+2026-09-24T21:22:56.364Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,221FDB,ReadDataByIdentifier,1FDB,NRC_12,subFunctionNotSupported/invalidFormat,,2.0,F1,,,7F2212,".""."
+2026-09-24T21:22:57.744Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,22212A,ReadDataByIdentifier,212A,positive,,,15.1,F1,,,62212A31,b!*1
+2026-09-24T21:22:58.927Z,C-dtc-pass2+PCM/TCM-data,b-can,b-can,,4A,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:23:02.074Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,221FCC,ReadDataByIdentifier,1FCC,incomplete_multiframe,,,1.6,F1,,F1:300000,"INCOMPLETE(len=243,got=6):621FCC000000",b.....
+2026-09-24T21:23:08.244Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,22212B,ReadDataByIdentifier,212B,positive,,,6.1,F1,,,62212B08,b!+.
+2026-09-24T21:23:09.415Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,4B,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:23:12.545Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,221FCD,ReadDataByIdentifier,1FCD,incomplete_multiframe,,,1.5,F1,,F1:300000,"INCOMPLETE(len=243,got=6):621FCD000000",b.....
+2026-09-24T21:23:18.795Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,22212C,ReadDataByIdentifier,212C,positive,,,9.4,F1,,,62212C38,"b!,8"
+2026-09-24T21:23:19.965Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,50,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:23:23.095Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,2102,KWP ReadDataByLocalIdentifier,02,incomplete_multiframe,,,2.0,F1,,F1:300000,"INCOMPLETE(len=177,got=6):610200000000",a.....
+2026-09-24T21:23:29.265Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,22212D,ReadDataByIdentifier,212D,positive,,,10.3,F1,,,62212D03,b!-.
+2026-09-24T21:23:30.455Z,C-dtc-pass2+PCM/TCM-data,b-can,b-can,,54,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:23:33.586Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,2103,KWP ReadDataByLocalIdentifier,03,incomplete_multiframe,,,2.2,F1,,F1:300000,"INCOMPLETE(len=177,got=6):610300000000",a.....
+2026-09-24T21:23:39.746Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,22212E,ReadDataByIdentifier,212E,positive,,,10.3,F1,,,62212E32,b!.2
+2026-09-24T21:23:40.927Z,C-dtc-pass2+PCM/TCM-data,b-can,b-can,,55,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:23:44.056Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,2104,KWP ReadDataByLocalIdentifier,04,incomplete_multiframe,,,1.6,F1,,F1:300000,"INCOMPLETE(len=177,got=6):610400000000",a.....
+2026-09-24T21:23:50.216Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,222130,ReadDataByIdentifier,2130,positive,,,10.0,F1,,,62213002,b!0.
+2026-09-24T21:23:51.396Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,58,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:23:54.537Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,2106,KWP ReadDataByLocalIdentifier,06,incomplete_multiframe,,,1.6,F1,,F1:300000,"INCOMPLETE(len=135,got=6):610600000000",a.....
+2026-09-24T21:24:00.787Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,222131,ReadDataByIdentifier,2131,positive,,,10.2,F1,,,6221310000,b!1..
+2026-09-24T21:24:01.947Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,60,cluster,19020D,ReadDTCInformation,020D,positive,,,3.5,F1,,,59024FD7418708,Y.O.A..
+2026-09-24T21:24:03.107Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,2107,KWP ReadDataByLocalIdentifier,07,incomplete_multiframe,,,2.0,F1,,F1:300000,"INCOMPLETE(len=37,got=6):61070000FF00",a.....
+2026-09-24T21:24:09.247Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,222132,ReadDataByIdentifier,2132,positive,,,10.4,F1,,,6221320000,b!2..
+2026-09-24T21:24:10.416Z,C-dtc-pass2+PCM/TCM-data,b-can,b-can,,62,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:24:13.577Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,2101,KWP ReadDataByLocalIdentifier,01,incomplete_multiframe,,,2.1,F1,,F1:300000,"INCOMPLETE(len=149,got=6):610100000000",a.....
+2026-09-24T21:24:19.718Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,222136,ReadDataByIdentifier,2136,positive,,,9.8,F1,,,6221360000,b!6..
+2026-09-24T21:24:20.896Z,C-dtc-pass2+PCM/TCM-data,b-can,b-can,,65,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:24:24.058Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,222137,ReadDataByIdentifier,2137,positive,,,9.8,F1,,,6221370000,b!7..
+2026-09-24T21:24:25.226Z,C-dtc-pass2+PCM/TCM-data,b-can,b-can,,66,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:24:28.428Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,222138,ReadDataByIdentifier,2138,positive,,,10.2,F1,,,6221380000,b!8..
+2026-09-24T21:24:29.606Z,C-dtc-pass2+PCM/TCM-data,b-can,b-can,,6A,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:24:32.747Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,222139,ReadDataByIdentifier,2139,positive,,,11.0,F1,,,6221390000,b!9..
+2026-09-24T21:24:35.047Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,22213A,ReadDataByIdentifier,213A,positive,,,11.3,F1,,,62213A0000,b!:..
+2026-09-24T21:24:36.216Z,C-dtc-pass2+PCM/TCM-data,b-can,b-can,,83,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:24:39.368Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,22213B,ReadDataByIdentifier,213B,positive,,,10.2,F1,,,62213B0000,b!;..
+2026-09-24T21:24:40.566Z,C-dtc-pass2+PCM/TCM-data,b-can,b-can,,85,ics_bcan,19020D,ReadDTCInformation,020D,positive,,,7.3,F1,,,59024F,Y.O
+2026-09-24T21:24:41.818Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,22213C,ReadDataByIdentifier,213C,positive,,,9.8,F1,,,62213C0003,b!<..
+2026-09-24T21:24:42.986Z,C-dtc-pass2+PCM/TCM-data,b-can,b-can,,87,uconnect_bcan,19020D,ReadDTCInformation,020D,positive,,,15.4,F1,,F1:300000,59024F943A1108957019089577130FA10A160CA80B0208C1558608,Y.O.:...p...w...........U..
+2026-09-24T21:24:44.168Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,22213D,ReadDataByIdentifier,213D,positive,,,10.4,F1,,F1:300000,62213D00000000FF34,b!=.....4
+2026-09-24T21:24:45.358Z,C-dtc-pass2+PCM/TCM-data,b-can,b-can,,98,climate_bcan,19020D,ReadDTCInformation,020D,positive,,,4.9,F1,,F1:300000,59024FC1558708C4238708,Y.O.U...#..
+2026-09-24T21:24:46.518Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,22213E,ReadDataByIdentifier,213E,positive,,,9.8,F1,,F1:300000,62213EFF2F00000000,b!>./....
+2026-09-24T21:24:47.708Z,C-dtc-pass2+PCM/TCM-data,can-ch,c-can+can-ch,0.307,A0,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:24:50.848Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,A1,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:24:54.018Z,C-dtc-pass2+PCM/TCM-data,can-ch,c-can+can-ch,0.372,C0,orc_canch,19020D,ReadDTCInformation,020D,positive,,yes 199.7 ms,40.9,F1,F2,,5902CF,Y..
+2026-09-24T21:24:55.416Z,C-dtc-pass2+PCM/TCM-data,b-can,b-can,,C2,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:24:58.549Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,C4,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:25:01.688Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,C7,rf_hub,19020D,ReadDTCInformation,020D,positive,,,20.6,F1,,,5902CF90406408,Y...@d.
+2026-09-24T21:25:04.018Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,CB,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:25:07.175Z,C-dtc-pass2+PCM/TCM-data,b-can,b-can,,D9,emcm2_bcan,19020D,ReadDTCInformation,020D,positive,,,4.6,F1,,,5902FF,Y..
+2026-09-24T21:25:08.349Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,19020D,ReadDTCInformation,020D,NRC_11,serviceNotSupported,,2.0,F1,,,7F1911,...
+2026-09-24T21:25:09.359Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,19020D,ReadDTCInformation,020D,NRC_11,serviceNotSupported,,2.3,F1,,,7F1911,...
+2026-09-24T21:25:10.369Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,19020D,ReadDTCInformation,020D,NRC_11,serviceNotSupported,,1.7,F1,,,7F1911,...
+2026-09-24T21:25:11.374Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,19020D,ReadDTCInformation,020D,NRC_11,serviceNotSupported,,5.3,F1,,,7F1911,...
+2026-09-24T21:25:12.569Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,1A,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:25:15.698Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,10,pcm,1800FF00,KWP ReadDTCByStatus,00FF00,positive,,,1.5,F1,,,5800,X.
+2026-09-24T21:25:16.860Z,C-dtc-pass2+PCM/TCM-data,c-can,c-can,,18,tcm,19020D,ReadDTCInformation,020D,positive,,yes 309.8 ms,39.4,F1,,,5902CF,Y..
+2026-09-24T21:25:18.404Z,D-dtc-pass3,c-can,c-can,,01,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:25:21.634Z,D-dtc-pass3,c-can,c-can,,12,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:25:24.824Z,D-dtc-pass3,c-can,c-can,,1F,shifter,19020D,ReadDTCInformation,020D,positive,,,3.8,F1,,F1:300000,59024F081C64081C73240F,Y.O..d..s$.
+2026-09-24T21:25:26.008Z,D-dtc-pass3,c-can,c-can,,20,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:25:29.160Z,D-dtc-pass3,can-ch,c-can+can-ch,0.491,26,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:25:32.295Z,D-dtc-pass3,can-ch,c-can+can-ch,2.167,28,abs_canch,19020D,ReadDTCInformation,020D,positive,,yes 435.2 ms,26.6,F1,F2,,5902CF5200174C,Y..R..L
+2026-09-24T21:25:33.994Z,D-dtc-pass3,c-can,c-can,,2A,radar_acc,19020D,ReadDTCInformation,020D,positive,,yes 139.8 ms,43.6,F1,,,5902CF54187808,Y..T.x.
+2026-09-24T21:25:35.425Z,D-dtc-pass3,can-ch,c-can+can-ch,2.780,30,eps_canch,19020D,ReadDTCInformation,020D,positive,,,5.9,F1,F2,,5902CF,Y..
+2026-09-24T21:25:36.598Z,D-dtc-pass3,can-ch,c-can+can-ch,0.317,31,half_canch,19020D,ReadDTCInformation,020D,positive,,,9.0,F1,F2,F1:30000A | c-can:F1:300000,59028F9006490C54A5920854A59708,Y....I.T...T...
+2026-09-24T21:25:37.796Z,D-dtc-pass3,b-can,b-can,,32,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:25:43.305Z,D-dtc-pass3,c-can,c-can,,40,bcm_ccan,19020D,ReadDTCInformation,020D,positive,,,3.3,F1,,F1:300000,59024F9636154D9632154D962E150F962A150F904E154D904D154D,Y.O.6.M.2.M.....*...N.M.M.M
+2026-09-24T21:25:44.466Z,D-dtc-pass3,b-can,b-can,,41,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:25:47.594Z,D-dtc-pass3,c-can,c-can,,42,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:25:50.744Z,D-dtc-pass3,c-can,c-can,,44,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:25:53.876Z,D-dtc-pass3,b-can,b-can,,4A,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:25:57.015Z,D-dtc-pass3,c-can,c-can,,4B,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:26:00.145Z,D-dtc-pass3,c-can,c-can,,50,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:26:03.286Z,D-dtc-pass3,b-can,b-can,,54,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:26:06.426Z,D-dtc-pass3,b-can,b-can,,55,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:26:09.565Z,D-dtc-pass3,c-can,c-can,,58,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:26:12.705Z,D-dtc-pass3,c-can,c-can,,60,cluster,19020D,ReadDTCInformation,020D,positive,,,3.7,F1,,,59024FD7418708,Y.O.A..
+2026-09-24T21:26:13.906Z,D-dtc-pass3,b-can,b-can,,62,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:26:17.046Z,D-dtc-pass3,b-can,b-can,,65,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:26:20.176Z,D-dtc-pass3,b-can,b-can,,66,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:26:23.316Z,D-dtc-pass3,b-can,b-can,,6A,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:26:27.596Z,D-dtc-pass3,b-can,b-can,,83,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:26:30.746Z,D-dtc-pass3,b-can,b-can,,85,ics_bcan,19020D,ReadDTCInformation,020D,positive,,,10.5,F1,,,59024F,Y.O
+2026-09-24T21:26:31.927Z,D-dtc-pass3,b-can,b-can,,87,uconnect_bcan,19020D,ReadDTCInformation,020D,positive,,,16.6,F1,,F1:300000,59024F943A1108957019089577130FA10A160CA80B0208C1558608,Y.O.:...p...w...........U..
+2026-09-24T21:26:33.126Z,D-dtc-pass3,b-can,b-can,,98,climate_bcan,19020D,ReadDTCInformation,020D,positive,,,8.9,F1,,F1:300000,59024FC1558708C4238708,Y.O.U...#..
+2026-09-24T21:26:34.376Z,D-dtc-pass3,can-ch,c-can+can-ch,0.302,A0,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:26:37.515Z,D-dtc-pass3,c-can,c-can,,A1,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:26:40.645Z,D-dtc-pass3,can-ch,c-can+can-ch,0.320,C0,orc_canch,19020D,ReadDTCInformation,020D,positive,,yes 199.7 ms,46.9,F1,F2,,5902CF,Y..
+2026-09-24T21:26:42.045Z,D-dtc-pass3,b-can,b-can,,C2,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:26:45.186Z,D-dtc-pass3,c-can,c-can,,C4,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:26:48.335Z,D-dtc-pass3,c-can,c-can,,C7,rf_hub,19020D,ReadDTCInformation,020D,positive,,,13.6,F1,,,5902CF90406408,Y...@d.
+2026-09-24T21:26:50.625Z,D-dtc-pass3,c-can,c-can,,CB,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:26:53.836Z,D-dtc-pass3,b-can,b-can,,D9,emcm2_bcan,19020D,ReadDTCInformation,020D,positive,,,7.6,F1,,,5902FF,Y..
+2026-09-24T21:26:54.995Z,D-dtc-pass3,c-can,c-can,,10,pcm,19020D,ReadDTCInformation,020D,NRC_11,serviceNotSupported,,3.6,F1,,,7F1911,...
+2026-09-24T21:26:56.006Z,D-dtc-pass3,c-can,c-can,,10,pcm,19020D,ReadDTCInformation,020D,NRC_11,serviceNotSupported,,3.1,F1,,,7F1911,...
+2026-09-24T21:26:57.015Z,D-dtc-pass3,c-can,c-can,,10,pcm,19020D,ReadDTCInformation,020D,NRC_11,serviceNotSupported,,4.1,F1,,,7F1911,...
+2026-09-24T21:26:58.026Z,D-dtc-pass3,c-can,c-can,,10,pcm,19020D,ReadDTCInformation,020D,NRC_11,serviceNotSupported,,3.7,F1,,,7F1911,...
+2026-09-24T21:26:59.186Z,D-dtc-pass3,c-can,c-can,,1A,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:27:02.325Z,D-dtc-pass3,c-can,c-can,,10,pcm,1800FF00,KWP ReadDTCByStatus,00FF00,positive,,,4.2,F1,,,5800,X.
+2026-09-24T21:27:03.495Z,D-dtc-pass3,c-can,c-can,,18,tcm,19020D,ReadDTCInformation,020D,positive,,yes 310.0 ms,40.4,F1,,,5902CF,Y..
+2026-09-24T21:27:05.096Z,E-dtc-pass4(aborted),c-can,c-can,,01,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,
+2026-09-24T21:27:08.649Z,E-dtc-pass4(aborted),c-can,c-can,,12,,19020D,ReadDTCInformation,020D,no_response,,,,,,,,

@@ -31,6 +31,12 @@ when that file is absent.
    data, or working outside a single well-documented project. It preserves the cross-project constraints
    and environment facts migrated from Claude's external memory store.
 
+For remaining dashboard mappings and live ACC settings, the September 22
+[mapping assessment](projects/radar/findings/2026-09-22_acc_and_dashboard_mapping_outlook.md)
+distinguishes unpopulated raw cluster inputs from unresolved signal decodes.
+Radar alignment polling is validated; ACC set speed/state/gap and lead-object
+data remain separate mapping work. Related-platform DBCs are candidates only.
+
 ## MacBook-managed `~/scripts` tree
 
 `/home/pi/scripts` (equivalently `~/scripts`) is managed from Jacob's MacBook,

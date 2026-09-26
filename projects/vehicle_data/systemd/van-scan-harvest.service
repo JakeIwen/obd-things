@@ -1,0 +1,29 @@
+[Unit]
+Description=Passively harvest the van's own diagnostic sweeps from completed drive-recorder chunks
+Documentation=file:///home/pi/dev/obd-things/projects/vehicle_data/README.md
+After=local-fs.target
+RequiresMountsFor=/mnt/EXFAT512
+ConditionPathIsMountPoint=/mnt/EXFAT512
+
+[Service]
+# Reads completed recorder chunk files only (never the .partial being written, capture.lock or the
+# recorder process) and writes tmp/vehicle_data/van_scans/, the in-vehicle tables of
+# dtc-history.sqlite3 and van-scan-cache.json. No CAN socket is opened; nothing is transmitted.
+Type=oneshot
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/dev/obd-things
+ExecStart=/usr/bin/python3 /home/pi/dev/obd-things/projects/vehicle_data/van_scan_harvest.py --max-chunks 30 --quiet
+Nice=19
+IOSchedulingClass=idle
+CPUQuota=50%
+MemoryMax=256M
+TimeoutStartSec=30min
+PrivateTmp=true
+PrivateNetwork=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/mnt/EXFAT512
+ReadWritePaths=/home/pi/dev/obd-things/tmp
+RestrictAddressFamilies=AF_UNIX
+NoNewPrivileges=true

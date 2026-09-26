@@ -127,8 +127,11 @@ service change.
   valid SQLite catalog. `tools/alfaobd_apk_db.py` and `tools/alfaobd_catalog.py` reproduce the
   read-only extraction/export; the canonical interpretation and hashes are in
   `projects/ecu_mapping/findings/promaster_2022/2026-07-21_alfaobd_apk_catalog.md`. Raw numeric string
-  placeholders are authoritative because direct indexing into the English resource is not yet a
-  valid label decode. Do not redistribute the APK/database.
+  placeholders must retain their namespace: whole-file indexing into the English resource is not a
+  valid label decode. The September 22
+  [loader investigation](../projects/ecu_mapping/findings/promaster_2022/2026-09-22_gear_and_oil_life_offline.md)
+  establishes zero-based `J1` plain labels after `######`, separate from `K1` enum pairs before it.
+  A recovered label still needs an exact request/decoder/variant join. Do not redistribute the APK/database.
 - Earlier interpretation of BCM `27xx`/`2Axx` as SecurityAccess was wrong: they were ISO-TP consecutive
   frames within a long `2E 2023` PROXI write. The current-van capture contains successful `2F` IO-control
   operations but no verified `27` exchange. Verify all candidates live before replaying.

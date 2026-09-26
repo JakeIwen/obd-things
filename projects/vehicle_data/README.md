@@ -777,6 +777,68 @@ Consequently a cache GET can wait behind one bounded active acquisition, but it
 cannot interrupt it or create concurrent CAN work. The unprivileged web process
 is threaded independently.
 
+### Passive harvest of the van's own health checks (2026-09-24)
+
+The van has its own diagnostic client, probably the TBM2. It is never queried itself, and it is
+the only registered module missing from the sweep table. It uses tester source `F1`, the same as
+the Pi. Now and then during a drive it runs a read-only sweep of about 40 addresses: identity DIDs
+`F132`/`F100`/`F1A0`, `19 02 0D` DTC passes, TCM `22 21xx` reads, and PCM KWP `18 00 FF 00` after
+`7F 19 11`. It runs only while the Pi's F1 traffic is quiet and yields within one to two seconds.
+CAN-CH targets are requested on C-CAN. The gateway forwards them, and their replies come back onto
+C-CAN as `18DAF2xx`. B-CAN targets are requested on B-CAN directly. Sweeps were seen on
+2026-08-31 02:38–02:56Z and 2026-09-24 21:12–21:27Z. The 08-31 capture also has two partial,
+identity-only sweeps at 02:26Z and 02:30Z. The analysis is in
+`tmp/ecu_mapping/f1-scan-20260924/`.
+
+`van_scan_harvest.py` turns those sweeps into app data with **no CAN access**:
+
+- **Input.** It reads only the chunks that a campaign's `manifest.jsonl` lists as complete, and
+  only when the file size matches the manifest. It never reads `.partial` files, never touches
+  `capture.lock` and never touches the recorder process. It streams `zstd -dcq | grep -F ' 18DA'`,
+  about 1.5 s per 14 MB C-CAN chunk.
+- **Reassembly and exclusion.** It reassembles ISO-TP messages and pairs each request with its
+  reply. The Pi's own requests are counted only as activity intervals:
+  - PCM `22 01A1/06DA/069F`
+  - RF Hub `22 31D0–31D3`
+  - radar `22 0845`
+  - ICS `22 2001`
+  - any `19 02 FF` / `19 01 FF` / `19 03` / `19 0A`
+
+  `tests/test_van_scan_harvest.py` checks this list against the helper modules.
+- **Windows.** Non-Pi exchanges are grouped into windows split by a gap of more than 60 s. A
+  window closes only after every recording bus has been read past it.
+- **Classification.** A window with a `19 02 0D` request is an in-vehicle health check. Any other
+  window is kept as `other_f1_traffic` and is not imported. One such window was the Pi's own PCM
+  experiments on 08-31.
+- **Idempotence.** Per-campaign checkpoints under `tmp/vehicle_data/van_scans/state/` carry the
+  ISO-TP and pairing state across chunk boundaries.
+- **Output.** Each scan is written to `tmp/vehicle_data/van_scans/scans/<campaign>--<start>.json`
+  with its windows, Pi-overlap evidence, and per-module `59 02`/`58` results, identity DIDs and
+  other reads. Every VIN is masked. The scan is imported into the separate
+  `in_vehicle_scans` / `in_vehicle_module_results` / `in_vehicle_dtc_observations` tables of
+  `tmp/vehicle_data/dtc-history.sqlite3`, versioned by the metadata key
+  `in_vehicle_scan_schema_version`. The Pi's `module_scans` table and its derived state are never
+  written, because a mask-`0D` read cannot resolve codes that a `19 02 FF` read found.
+- **Broker cache.** It rewrites `tmp/vehicle_data/van-scan-cache.json` atomically. The broker's
+  `/v1/diagnostics/dtcs` adds that file as `in_vehicle_scan`. The Pi fields are unchanged; the new
+  part carries the latest successful result per module with `observed_at`, and `last_scan` with
+  `pi_quiet`. v2 `dtc_lite` passes it through. The v2 Health card shows whichever read is newer
+  for each module, and System → Broker shows "Van health check". The owner-facing wording is in
+  `dashboard/docs/caveats.md`.
+
+It runs from `systemd/van-scan-harvest.{service,timer}`: a oneshot every 20 min at Nice 19 with
+idle I/O and `--max-chunks 30`. The mount is read-only in the unit, and `PrivateNetwork` and
+`AF_UNIX` only are set. A manual run looks like this:
+
+```bash
+nice -n 19 ionice -c3 python3 projects/vehicle_data/van_scan_harvest.py \
+  --campaign 'broker-drive-20260924T*'   # omit --campaign to process every incomplete campaign
+```
+
+The drive recorder's `run.json` conditions no longer claim "no external diagnostic client". They
+now say that the van's own F1 client may sweep while the Pi is not polling, and that this harvester
+notes it.
+
 ## Local API
 
 The default Unix socket is `/run/van-telemetry/api.sock`.

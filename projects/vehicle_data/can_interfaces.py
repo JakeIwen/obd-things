@@ -9,6 +9,7 @@ opens a CAN socket, or transmits a frame.
 
 from __future__ import annotations
 
+import pathlib
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -55,6 +56,15 @@ class SystemObserverLocks:
         return diagnostic_safety.channel_observer_lock(name)
 
 
+def read_rx_packets(channel: str) -> int | None:
+    """Kernel receive counter for one netdev (read-only sysfs), or None."""
+    try:
+        text = pathlib.Path(f"/sys/class/net/{channel}/statistics/rx_packets").read_text()
+        return int(text.strip())
+    except (OSError, ValueError):
+        return None
+
+
 @dataclass(frozen=True)
 class PassiveInterfaceLease:
     """A shared, read-only capability for one freshly resolved physical bus."""
@@ -96,6 +106,7 @@ class PassiveInterfaceManager:
         resolver: SysfsCanRoleResolver | None = None,
         specs: tuple[CanRoleSpec, ...] = CAN_ROLE_SPECS,
         interface_state_reader=None,
+        rx_counter_reader=None,
         locks: ObserverLocks | None = None,
         wall_clock=lambda: datetime.now(timezone.utc),
     ):
@@ -103,6 +114,9 @@ class PassiveInterfaceManager:
         self.specs = tuple(specs)
         self._spec_by_role = {item.role: item for item in self.specs}
         self.interface_state_reader = interface_state_reader or canbus.interface_state
+        # Receive counters feed the broker's deaf-adapter watch
+        # (receive_watch.py); they are reported, never used to route.
+        self.rx_counter_reader = rx_counter_reader or read_rx_packets
         self.locks = locks or SystemObserverLocks()
         self.wall_clock = wall_clock
         roles = tuple(item.role for item in self.specs)
@@ -207,6 +221,10 @@ class PassiveInterfaceManager:
             )
             return payload
         payload["actual"] = self._actual_payload(state)
+        try:
+            payload["actual"]["rx_packets"] = self.rx_counter_reader(channel)
+        except Exception:
+            payload["actual"]["rx_packets"] = None
         if state.channel != channel:
             payload.update(
                 reason="interface_identity_changed",

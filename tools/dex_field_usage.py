@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Find bytecode references to one field in an owner-supplied APK or DEX.
+"""Find field, string, or integer-literal references in an owner-supplied DEX.
 
 The parser is intentionally narrow: it reads the standard DEX identifier,
 class-data, and code-item structures and reports ordinary iget/iput/sget/sput
-field-reference instructions.  It does not decompile methods or emit code.
+field-reference and constant instructions. It does not decompile methods or
+infer dataflow from a literal match.
 """
 
 from __future__ import annotations
@@ -521,6 +522,70 @@ def analyze_string_usages(data: bytes, value: str) -> dict[str, object]:
     }
 
 
+def scan_code_item_for_integer(
+    data: bytes, code_offset: int, value: int
+) -> list[dict[str, object]]:
+    """Find single-word const literals, not operand words or payload data.
+
+    Encodings: https://source.android.com/docs/core/runtime/dalvik-bytecode
+    Literal matches are navigation evidence, not proof of array/dataflow use.
+    """
+    if code_offset < 0 or code_offset + 16 > len(data):
+        raise DexError("code item header is out of bounds")
+    size = _u32(data, code_offset + 12)
+    offset = code_offset + 16
+    if offset + size * 2 > len(data):
+        raise DexError("code item instructions are out of bounds")
+    units = [_u16(data, offset + index * 2) for index in range(size)]
+    hits = []
+    for index in iter_instruction_offsets(units):
+        opcode = units[index] & 0xFF
+        if opcode == 0x12:
+            raw, bits, name = units[index] >> 12, 4, "const/4"
+        elif opcode == 0x13:
+            raw, bits, name = units[index + 1], 16, "const/16"
+        elif opcode == 0x14:
+            raw = units[index + 1] | (units[index + 2] << 16)
+            bits, name = 32, "const"
+        elif opcode == 0x15:
+            raw, bits, name = units[index + 1] << 16, 32, "const/high16"
+        else:
+            continue
+        literal = raw - (1 << bits) if raw & (1 << (bits - 1)) else raw
+        if literal == value:
+            hits.append({
+                "code_unit_offset": index,
+                "opcode": name,
+                "value": literal,
+                "raw_units": [
+                    f"{unit:04X}" for unit in units[max(0, index - 2):index + 5]
+                ],
+            })
+    return hits
+
+
+def analyze_integer_usages(data: bytes, value: int) -> dict[str, object]:
+    strings, types, _, methods = _identifiers(data)
+    usages = []
+    for method_code in _method_code_items(data):
+        for hit in scan_code_item_for_integer(data, method_code.code_offset, value):
+            method_class, _, method_name = methods[method_code.method_index]
+            usages.append({
+                "method_index": method_code.method_index,
+                "method_class": types[method_class],
+                "method_name": strings[method_name],
+                "code_offset": method_code.code_offset,
+                **hit,
+            })
+    return {
+        "mode": "integer_usages",
+        "value": value,
+        "usage_count": len(usages),
+        "usages": usages,
+        "scan_note": "Single-word const literals only; no dataflow or label identity inferred.",
+    }
+
+
 def load_dex(path: Path, dex_member: str) -> tuple[bytes, str]:
     raw = path.read_bytes()
     if zipfile.is_zipfile(path):
@@ -550,6 +615,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="find const-string references to this exact DEX string value",
     )
     parser.add_argument(
+        "--integer-value", type=lambda value: int(value, 0),
+        help="find single-word const instructions with this signed integer literal",
+    )
+    parser.add_argument(
         "--start-code-unit",
         type=int,
         default=0,
@@ -575,11 +644,12 @@ def main() -> int:
     method_mode = bool(args.method_class or args.method_name)
     string_index_mode = bool(args.string_index)
     string_usage_mode = args.string_value is not None
-    if sum((field_mode, method_mode, string_index_mode, string_usage_mode)) != 1:
+    integer_mode = args.integer_value is not None
+    if sum((field_mode, method_mode, string_index_mode, string_usage_mode, integer_mode)) != 1:
         raise DexError(
             "choose exactly one target: --class-descriptor/--field-name, "
             "--method-class/--method-name, one or more --string-index values, "
-            "or --string-value"
+            "--string-value, or --integer-value"
         )
     if field_mode and not (args.class_descriptor and args.field_name):
         raise DexError("field mode requires --class-descriptor and --field-name")
@@ -613,6 +683,8 @@ def main() -> int:
         )
     elif string_index_mode:
         analysis = analyze_string_indexes(dex, args.string_index)
+    elif integer_mode:
+        analysis = analyze_integer_usages(dex, args.integer_value)
     else:
         analysis = analyze_string_usages(dex, args.string_value)
     report = {

@@ -170,13 +170,16 @@ class UsbCanHistoryTests(unittest.TestCase):
                 )["assessments"]
                 if item["rule"] == "usb_can_transient_disconnect"
             )
-            self.assertEqual(assessment["state"], "warning")
-            self.assertTrue(assessment["notification_eligible"])
+            # A short-lived hub re-enumeration is information, never a push.
+            self.assertEqual(assessment["state"], "normal")
+            self.assertFalse(assessment["notification_eligible"])
+            self.assertEqual(assessment["current"]["new_removal_event_count"], 1)
+            self.assertEqual(assessment["current"]["active_incident_count"], 1)
             persistence = historian.record_advisory_assessments(
                 [assessment], evaluated_at=self.start
             )
-            self.assertEqual(persistence.opened, 1)
-            self.assertEqual(persistence.notifications_enqueued, 1)
+            self.assertEqual(persistence.opened, 0)
+            self.assertEqual(persistence.notifications_enqueued, 0)
             historian.mark_usb_can_advisory_events_consumed(
                 (removed["event_id"],),
                 consumed_at=self.start,
@@ -213,7 +216,8 @@ class UsbCanHistoryTests(unittest.TestCase):
             persistence = historian.record_advisory_assessments(
                 [assessment], evaluated_at=recovered_at
             )
-            self.assertEqual(persistence.resolved, 1)
+            self.assertEqual(persistence.resolved, 0)
+            self.assertEqual(historian.list_advisory_episodes(), [])
 
             summary = historian.usb_can_incident_summary()
             self.assertEqual(summary["event_count"], 2)
@@ -303,7 +307,8 @@ class UsbCanHistoryTests(unittest.TestCase):
             second.advisory_consumed_event_ids,
             (removed["event_id"],),
         )
-        self.assertEqual(len(sink.payloads), 1)
+        # The self-resolved incident is information only: consumed, not pushed.
+        self.assertEqual(sink.payloads, [])
         self.assertEqual(
             historian.usb_can_health_context(second.snapshot_id)[
                 "unconsumed_removal_event_ids"
@@ -318,10 +323,10 @@ class UsbCanHistoryTests(unittest.TestCase):
             ingest_key="checkpoint-after-consumption",
         )
         self.assertTrue(third.advisory_checkpoint_complete)
-        self.assertEqual(len(sink.payloads), 1)
+        self.assertEqual(sink.payloads, [])
         self.assertEqual(
             historian.advisory_summary()["notification_outbox"]["delivered"],
-            1,
+            0,
         )
 
     def test_future_timestamp_removal_waits_for_next_snapshot_checkpoint(self):
@@ -381,7 +386,7 @@ class UsbCanHistoryTests(unittest.TestCase):
             second.advisory_consumed_event_ids,
             (removed["event_id"],),
         )
-        self.assertEqual(len(sink.payloads), 1)
+        self.assertEqual(sink.payloads, [])
 
     def test_replayed_event_id_is_not_a_second_new_edge(self):
         removed = usb_event(
@@ -427,17 +432,21 @@ class UsbCanHistoryTests(unittest.TestCase):
                 ingest_key="active-before-history-loss",
             )
             evaluator = InfrastructureHealthEvaluator(historian)
+            # The incident has stayed unresolved for six minutes.
+            late = self.start + timedelta(minutes=6)
             warning = next(
                 item
                 for item in evaluator.evaluate(
                     stored.snapshot_id,
-                    at=self.start,
+                    at=late,
                 )["assessments"]
                 if item["rule"] == "usb_can_transient_disconnect"
             )
+            self.assertEqual(warning["state"], "warning")
+            self.assertFalse(warning["notification_eligible"])
             historian.record_advisory_assessments(
                 [warning],
-                evaluated_at=self.start,
+                evaluated_at=late,
             )
 
             with mock.patch.object(
@@ -449,7 +458,7 @@ class UsbCanHistoryTests(unittest.TestCase):
                     item
                     for item in evaluator.evaluate(
                         stored.snapshot_id,
-                        at=self.start + timedelta(seconds=1),
+                        at=late + timedelta(seconds=1),
                     )["assessments"]
                     if item["rule"] == "usb_can_transient_disconnect"
                 )
@@ -457,7 +466,7 @@ class UsbCanHistoryTests(unittest.TestCase):
             self.assertFalse(unavailable["notification_eligible"])
             persistence = historian.record_advisory_assessments(
                 [unavailable],
-                evaluated_at=self.start + timedelta(seconds=1),
+                evaluated_at=late + timedelta(seconds=1),
             )
             self.assertEqual(persistence.inconclusive, 1)
             self.assertEqual(persistence.resolved, 0)
@@ -534,18 +543,19 @@ class UsbCanHistoryTests(unittest.TestCase):
                     for item in first_report["assessments"]
                     if item["notification_eligible"]
                 ],
-                ["usb_can_transient_disconnect"],
+                [],
             )
             topology = next(
                 item
                 for item in first_report["assessments"]
                 if item["rule"] == "usb_can_topology_generation_changed"
             )
-            self.assertEqual(topology["state"], "warning")
-            self.assertEqual(
-                topology["notification_suppressed_by"],
-                "usb_can_transient_disconnect",
-            )
+            # Both missing roles are still below their five-minute bar, so the
+            # topology change is information only.
+            self.assertEqual(topology["state"], "normal")
+            self.assertEqual(topology["severity"], "info")
+            self.assertTrue(topology["current"]["topology_changed"])
+            self.assertIsNone(topology["notification_suppressed_by"])
 
             repeated_at = self.start + timedelta(seconds=10)
             repeated = historian.ingest_snapshot(
@@ -563,7 +573,7 @@ class UsbCanHistoryTests(unittest.TestCase):
                     for item in repeated_report["assessments"]
                     if item["notification_eligible"]
                 ],
-                ["usb_can_transient_disconnect"],
+                [],
             )
             ccan = next(
                 item
@@ -575,6 +585,73 @@ class UsbCanHistoryTests(unittest.TestCase):
                 ccan["notification_suppressed_by"],
                 "usb_can_transient_disconnect",
             )
+
+    def test_long_unresolved_incident_or_repeated_removals_warn_without_notifying(self):
+        removed = usb_event(
+            self.start,
+            "usb-can-event-v1:long-lived",
+            "usb_parent_hub_removed",
+            "remove",
+            affected=("serial-c-can", "serial-b-can"),
+        )
+        active = usb_incident(self.start, removed)
+        with TelemetryHistorian(self.path) as historian:
+            stored = historian.ingest_snapshot(
+                self.payload(self.start, self.batch([removed], [active])),
+                captured_at=self.start,
+                ingest_key="long-lived",
+            )
+            evaluator = InfrastructureHealthEvaluator(historian)
+
+            def transient(at):
+                return next(
+                    item
+                    for item in evaluator.evaluate(stored.snapshot_id, at=at)["assessments"]
+                    if item["rule"] == "usb_can_transient_disconnect"
+                )
+
+            short = transient(self.start + timedelta(seconds=10))
+            self.assertEqual(short["state"], "normal")
+            self.assertEqual(short["severity"], "info")
+            late = transient(self.start + timedelta(minutes=6))
+            self.assertEqual(late["state"], "warning")
+            self.assertEqual(late["severity"], "warning")
+            self.assertFalse(late["notification_eligible"])
+            self.assertGreaterEqual(late["current"]["oldest_active_incident_seconds"], 360)
+            self.assertEqual((late["tier"], late["group"]), (3, "system"))
+
+        repeated_path = Path(self.tmp.name) / "repeated.sqlite3"
+        events = [
+            usb_event(
+                self.start + timedelta(seconds=index),
+                f"usb-can-event-v1:repeat-{index}",
+                "usb_can_adapter_removed",
+                "remove",
+            )
+            for index in range(3)
+        ]
+        with TelemetryHistorian(repeated_path) as historian:
+            at = self.start + timedelta(seconds=5)
+            stored = historian.ingest_snapshot(
+                self.payload(at, self.batch(events, [])),
+                captured_at=at,
+                ingest_key="repeated",
+            )
+            assessment = next(
+                item
+                for item in InfrastructureHealthEvaluator(historian).evaluate(
+                    stored.snapshot_id, at=at
+                )["assessments"]
+                if item["rule"] == "usb_can_transient_disconnect"
+            )
+            self.assertEqual(assessment["current"]["removal_event_count_24h"], 3)
+            self.assertEqual(assessment["state"], "warning")
+            self.assertFalse(assessment["notification_eligible"])
+            persistence = historian.record_advisory_assessments(
+                [assessment], evaluated_at=at
+            )
+            self.assertEqual(persistence.opened, 1)
+            self.assertEqual(persistence.notifications_enqueued, 0)
 
     def test_restart_retires_prior_active_incident_only_after_exact_roles_are_healthy(self):
         removed = usb_event(

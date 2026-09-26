@@ -18,6 +18,32 @@ This verifies the bitrate, physical adapter routing, and those four installed en
 grey-routed `0x26` park-assist and `0xA0` park-assist candidates were configured absent and were not
 probed; they remain unverified.
 
+## 2026-09-24 passive corroboration and gateway routing
+
+An in-vehicle diagnostic client using tester address `F1` read the same four modules during a
+drive, while the Pi's C-CAN interface was listen-only. Each module's `22 F1A0` composite record
+embeds the same F187 part number and F1A5 subtype as the AlfaOBD identities above:
+
+| module | F187 | sw / F192-like | F194-like | F195-like | F1A5 |
+|---|---|---|---|---|---|
+| ABS `0x28` | `68516283AD` | `0265957013` | `1267985695` | `0202` | `0006501520` |
+| EPS `0x30` | `68509191AD` | `F4C1` | `FI06EB00-00` | `0030` | `0002507919` |
+| HALF `0x31` | `68567254AA` | `A012N333` | `006.003.000` | `0203` | `001E502920` |
+| ORC `0xC0` | `68518674AC` | `0285015767` | `BB101464` | `1020` | `001A507720` |
+
+The embedded VIN matches this van and is masked in tracked material. ABS and ORC answered
+`22 F132` with ten ASCII spaces, and ABS answered `22 F100` with 29 spaces. EPS and HALF returned
+`7F 22 31` for both. `19 02 0D` reported ABS `C1200-17` (status `4C`), HALF `B1006-49` (`0C`),
+`C14A5-92` (`08`), and `C14A5-97` (`08`), with EPS and ORC clear. `0x26` and `0xA0` were queried
+once and stayed silent.
+
+The client transmitted these requests on **C-CAN**. The vehicle forwarded each frame to CAN-CH a
+median 0.31 ms later (0.23–2.78 ms). A gateway substituted FlowControl `30 00 0A` (STmin 10 ms) on
+CAN-CH, and it copied each CAN-CH reply back onto C-CAN as **`18DAF2xx`** (target byte `F2`). The
+physical request IDs above can therefore appear on C-CAN as well. Only the `18DAF1xx` replies are
+CAN-CH-exclusive. See
+[`2026-09-24_in_vehicle_f1_scan.md`](2026-09-24_in_vehicle_f1_scan.md).
+
 ## Passive capture evidence
 
 The ignored raw capture is:

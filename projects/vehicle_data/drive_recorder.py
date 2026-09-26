@@ -73,7 +73,8 @@ DEFAULT_STATE_PATH = REPO / "tmp" / "vehicle_data" / "drive-recorder-state.json"
 DEFAULT_CONDITIONS = (
     "ordinary driving; broker-owned fixed PCM 01A1/06DA/069F and RF Hub polling; "
     "serial-resolved synchronized C-CAN, B-CAN, and CAN-CH receive-only companions; "
-    "no external diagnostic client"
+    "the van's own diagnostic client (also tester source F1) may run a read-only sweep while "
+    "the Pi is not polling; such non-Pi F1 traffic is noted by van_scan_harvest.py"
 )
 WAIT_SECONDS = 1.0
 STATUS_TIMEOUT_SECONDS = 2.0

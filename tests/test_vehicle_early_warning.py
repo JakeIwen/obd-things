@@ -117,7 +117,7 @@ class EarlyWarningTests(unittest.TestCase):
             self.assertFalse(report["method"]["opaque_health_score"])
             self.assertEqual(report["active"][0]["rule"], "test_oil_low")
 
-    def test_nonpersistent_deviation_is_watch_and_provenance_change_retrains(self):
+    def test_nonpersistent_deviation_is_candidate_and_provenance_change_retrains(self):
         config = HistorianConfig(trip_idle_timeout_seconds=15, rollup_seconds=5)
         with TelemetryHistorian(self.path, config=config) as historian:
             self.train_three_trips(historian)
@@ -136,11 +136,18 @@ class EarlyWarningTests(unittest.TestCase):
                 minimum_baseline_trips=3,
                 persistence_observations=3,
             )
-            assessment = EarlyWarningEvaluator(historian, (watch_rule,)).evaluate(
-                at=at
-            )["assessments"][0]
-            self.assertEqual(assessment["state"], "watch")
+            report = EarlyWarningEvaluator(historian, (watch_rule,)).evaluate(at=at)
+            assessment = report["assessments"][0]
+            # An unconfirmed deviation stays normal with an in-memory candidate.
+            self.assertEqual(assessment["state"], "normal")
+            self.assertFalse(assessment["notification_eligible"])
             self.assertEqual(assessment["persistence"]["observed"], 1)
+            self.assertEqual(assessment["candidate"]["observed"], 1)
+            self.assertEqual(assessment["candidate"]["required"], 3)
+            self.assertEqual(assessment["candidate"]["confidence"], "low")
+            self.assertEqual(assessment["confidence"], "low")
+            self.assertEqual(report["active"], [])
+            self.assertEqual([item["rule"] for item in report["candidates"]], ["watch"])
 
         changed_path = Path(self.tempdir.name) / "changed.sqlite3"
         changed_oil = definition(
@@ -200,8 +207,9 @@ class EarlyWarningTests(unittest.TestCase):
             assessment = EarlyWarningEvaluator(historian, (rule,)).evaluate(
                 at=current_start + timedelta(seconds=2)
             )["assessments"][0]
-            self.assertEqual(assessment["state"], "watch")
+            self.assertEqual(assessment["state"], "normal")
             self.assertEqual(assessment["persistence"]["observed"], 1)
+            self.assertEqual(assessment["candidate"]["observed"], 1)
 
     def test_required_companion_metric_can_corroborate(self):
         config = HistorianConfig(trip_idle_timeout_seconds=15, rollup_seconds=5)
@@ -252,14 +260,33 @@ class EarlyWarningTests(unittest.TestCase):
             "engine.coolant_temperature",
             "transmission.oil_temperature",
             "battery.voltage",
-            "tire.pressure.fl",
-            "tire.pressure.fr",
-            "tire.pressure.rl",
-            "tire.pressure.rr",
+            "tire.pressure",
         }
         self.assertEqual({rule.metric for rule in DEFAULT_WARNING_RULES}, expected)
         self.assertEqual(len(default_rule_catalog()), len(DEFAULT_EVALUATION_RULES))
-        self.assertEqual(len(DEFAULT_ABSOLUTE_WARNING_RULES), 1)
+        self.assertEqual(
+            [rule.key for rule in DEFAULT_ABSOLUTE_WARNING_RULES],
+            [
+                "engine_oil_pressure_absolute_critical",
+                "engine_oil_pressure_below_band",
+                "engine_coolant_temperature_hot",
+                "transmission_oil_temperature_hot",
+                "battery_voltage_charging_failure",
+                "battery_voltage_low_parked",
+                "tire_pressure_low_absolute",
+                "tire_pressure_pair_asymmetry",
+            ],
+        )
+        self.assertEqual(
+            [rule.key for rule in DEFAULT_WARNING_RULES],
+            [
+                "engine_oil_pressure_relative_low",
+                "engine_coolant_temperature_relative_high",
+                "transmission_oil_temperature_relative_high",
+                "battery_voltage_relative_low",
+                "tire_pressure_relative_low",
+            ],
+        )
         by_metric = {rule.metric: rule for rule in DEFAULT_WARNING_RULES}
         self.assertEqual(
             by_metric["engine.oil_pressure"].regime_dimensions,
@@ -269,14 +296,12 @@ class EarlyWarningTests(unittest.TestCase):
             "thermal",
             by_metric["engine.coolant_temperature"].regime_dimensions,
         )
-        self.assertEqual(
-            by_metric["tire.pressure.fl"].regime_dimensions,
-            ("motion",),
-        )
+        self.assertEqual(by_metric["tire.pressure"].regime_dimensions, ("engine",))
+        self.assertEqual(by_metric["tire.pressure"].phase_dimension, "tire_phase")
         self.assertNotIn("generator.field_duty", by_metric)
         self.assertEqual(
             by_metric["battery.voltage"].required_corroborators,
-            0,
+            1,
         )
         config = HistorianConfig(rollup_seconds=5)
         with TelemetryHistorian(self.path, config=config) as historian:
@@ -295,9 +320,10 @@ class EarlyWarningTests(unittest.TestCase):
             tire = next(
                 item
                 for item in report["assessments"]
-                if item["metric"] == "tire.pressure.fl"
+                if item["rule"] == "tire_pressure_relative_low"
             )
             self.assertEqual(tire["state"], "unavailable")
+            self.assertEqual(tire["metric"], "tire.pressure")
 
     def test_evaluate_refreshes_rollups_once_and_standalone_rule_still_refreshes(self):
         config = HistorianConfig(rollup_seconds=5)

@@ -540,10 +540,13 @@ class AbsoluteAndPlausibilityWarningTests(unittest.TestCase):
                     captured_at=at,
                 )
                 states.append(evaluator.evaluate(at=at)["assessments"][0])
+            # Tiered rules keep an unconfirmed first hit as a normal-state
+            # candidate (never a visible watch); needs the rules-task evaluator.
             self.assertEqual(
                 [item["state"] for item in states],
-                ["suppressed", "suppressed", "watch", "warning"],
+                ["not_applicable", "not_applicable", "normal", "warning"],
             )
+            self.assertIsInstance(states[2].get("candidate"), dict)
             warning = states[-1]
             self.assertTrue(warning["notification_eligible"])
             self.assertTrue(warning["running_evidence"]["qualified"])
@@ -562,9 +565,15 @@ class AbsoluteAndPlausibilityWarningTests(unittest.TestCase):
                 ),
                 captured_at=stopped,
             )
+            # Engine off is inapplicable, not resolving: the confirmed
+            # critical event stays open (and its push is not cancelled).
+            stopped_assessment = evaluator.evaluate(at=stopped)["assessments"][0]
+            self.assertEqual(stopped_assessment["state"], "not_applicable")
+            historian.record_advisory_assessments([warning], evaluated_at=self.start + timedelta(seconds=15))
+            historian.record_advisory_assessments([stopped_assessment], evaluated_at=stopped)
             self.assertEqual(
-                evaluator.evaluate(at=stopped)["assessments"][0]["state"],
-                "suppressed",
+                [item["rule"] for item in historian.list_advisory_episodes(active_only=True)],
+                [warning["rule"]],
             )
 
     def test_absolute_oil_rule_requires_exact_pressure_and_rpm_sources(self):
@@ -837,9 +846,13 @@ class InfrastructureHealthEpisodeTests(unittest.TestCase):
                 for item in first_loss["assessments"]
                 if item["rule"] == "usb_can_topology_generation_changed"
             )
-            self.assertEqual(ccan["state"], "watch")
-            self.assertEqual(topology["state"], "warning")
-            self.assertTrue(topology["notification_eligible"])
+            # First observation: confirming, no System event yet.
+            self.assertEqual(ccan["state"], "normal")
+            self.assertEqual(ccan["current"]["pending"], {"observed": 1, "required": 2})
+            # A topology change while the role is only an unconfirmed loss is
+            # not a warning (rules-task evaluator, spec section 6).
+            self.assertEqual(topology["state"], "normal")
+            self.assertFalse(topology["notification_eligible"])
 
             repeated_at = self.start + timedelta(seconds=10)
             repeated = historian.ingest_snapshot(
@@ -862,7 +875,9 @@ class InfrastructureHealthEpisodeTests(unittest.TestCase):
                 if item["rule"] == "usb_can_topology_generation_changed"
             )
             self.assertEqual(ccan["state"], "warning")
-            self.assertTrue(ccan["notification_eligible"])
+            # A missing adapter notifies only after 60 gap observations
+            # (> 5 min); the second observation is not yet eligible.
+            self.assertFalse(ccan["notification_eligible"])
             self.assertEqual(topology["state"], "normal")
 
     def test_unknown_to_first_authoritative_topology_is_not_a_change(self):
@@ -912,7 +927,8 @@ class InfrastructureHealthEpisodeTests(unittest.TestCase):
             )
             self.assertEqual(restoration["state"], "warning")
             self.assertEqual(restoration["severity"], "critical")
-            self.assertTrue(restoration["notification_eligible"])
+            # System items are dashboard System notes only; never notified.
+            self.assertFalse(restoration["notification_eligible"])
             self.assertFalse(report["method"]["automatic_hardware_reset"])
 
 

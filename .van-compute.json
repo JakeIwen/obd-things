@@ -905,6 +905,56 @@
       "outputs": [
         "report.json"
       ]
+    },
+    {
+      "name": "gear-ratio-lookup",
+      "description": "Fit or score a frozen 0x1F7 turbine/output ratio-to-gear lookup on extracted C-CAN 0x1F7/0x0FC/0x101 JSONL frame lists; offline only, no gear label promoted.",
+      "profile": "can-log-batch",
+      "source_paths": [
+        "tools/gear_ratio_lookup.py"
+      ],
+      "minimum_inputs": 1,
+      "maximum_inputs": 16,
+      "argv": [
+        "{source:tools/gear_ratio_lookup.py}",
+        "{arguments}",
+        "{inputs}",
+        "--result-json",
+        "{result:analysis.json}"
+      ],
+      "outputs": [
+        "analysis.json",
+        "lookup.json",
+        "results.md",
+        "histogram_dev.txt",
+        "histogram_indep.txt",
+        "segments_dev.jsonl",
+        "segments_indep.jsonl"
+      ]
+    },
+    {
+      "name": "can-gear-ratio-analyze",
+      "description": "Compare established 0x1F7 shaft-speed ratios to shortlisted 0x1F4 nibbles in 1-4 saved captures; offline only, no gear labels promoted.",
+      "profile": "can-log-batch",
+      "source_paths": [
+        "tools/__init__.py",
+        "tools/can_capture_summary.py",
+        "tools/can_event_window.py",
+        "tools/can_gear_ratio_analyze.py"
+      ],
+      "minimum_inputs": 1,
+      "maximum_inputs": 4,
+      "argv": [
+        "{source:tools/can_gear_ratio_analyze.py}",
+        "{inputs}",
+        "--capture-channel",
+        "can0",
+        "--output",
+        "{result:gear-ratios.json}"
+      ],
+      "outputs": [
+        "gear-ratios.json"
+      ]
     }
   ]
 }

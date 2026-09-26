@@ -759,3 +759,59 @@ class DriveRecorderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+broker_armed_ready = drive_recorder.broker_armed_ready
+
+
+def _refresh_during_armed_interval(controller_state="ERROR-ACTIVE"):
+    """The scheduled voltage_mon acquisition refreshes interface status mid-drive
+    (2026-09-06 diagnosis; recorder stopped at 18:00 and 20:00 on 2026-09-24)."""
+    import copy
+    from types import SimpleNamespace
+    from unittest import mock
+
+    from projects.vehicle_data.broker import TelemetryBroker
+    from projects.vehicle_data.can_runtime import RoleAwareVoltageAcquirer
+    from projects.vehicle_data.models import failure
+
+    seed = ready_status()
+    roles = copy.deepcopy(seed["interface"]["role_interfaces"])
+    ccan = roles["roles"]["c-can"]
+    ccan.update(resolution="resolved", passive_ready=False, safe=False,
+                reason="interface_armed", detail="can7 is not listen-only")
+    ccan["actual"] = {
+        "present": True, "up": True, "bitrate": 500000,
+        "fd_enabled": False, "one_shot": False, "listen_only": False,
+        "controller_state": controller_state, "restart_ms": 0,
+    }
+    manager = SimpleNamespace(
+        status_snapshot=lambda: copy.deepcopy(roles),
+        channel_for_bus=lambda _bus: "can7",
+    )
+    source = RoleAwareVoltageAcquirer(manager, inhibit_reader=lambda _channel: [])
+    broker = TelemetryBroker(acquirer=source, monotonic=lambda: 100.0)
+    broker._interface_status = copy.deepcopy(seed["interface"])
+    broker._active_drive.update(seed["active_drive"])
+    broker._vehicle_state = copy.deepcopy(seed["vehicle_state"])
+    broker._vehicle_state_observed_monotonic = 100.0
+    assert broker_armed_ready(broker.status_response())
+    with mock.patch.object(source, "acquire", return_value=failure(
+        metric="battery.voltage", unit="V", reason="can_busy",
+        detail="B-CAN is already owned", bus="b-can", acquisition="passive",
+    )):
+        broker.acquire("battery.voltage", "wake_if_asleep")
+    return broker.status_response()
+
+
+def test_scheduled_status_refresh_keeps_the_recorder_admitted():
+    after = _refresh_during_armed_interval()
+    assert after["current_owner"]["kind"] == "broker_active_drive"
+    assert after["interface"]["listen_only"] is False
+    assert after["interface"]["topology"]["usable"] is True
+    assert broker_armed_ready(after) is True
+
+
+def test_refresh_with_an_unhealthy_controller_still_rejects():
+    after = _refresh_during_armed_interval(controller_state="ERROR-PASSIVE")
+    assert broker_armed_ready(after) is False

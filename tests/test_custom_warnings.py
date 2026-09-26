@@ -50,8 +50,15 @@ class CustomWarningTests(unittest.TestCase):
         self.assertEqual(result["state"], "warning")
         self.assertTrue(result["notification_eligible"])
         self.assertIn("not an OEM limit", result["interpretation"])
+        self.assertEqual((result["tier"], result["group"], result["confidence"]), (1, "custom", "medium"))
+        self.assertEqual(result["action"], "Check it at the next stop.")
         self.history.points = self.history.points[:1]
-        self.assertEqual(self.evaluate()["state"], "watch")
+        pending = self.evaluate()
+        self.assertEqual(pending["state"], "normal")
+        self.assertFalse(pending["notification_eligible"])
+        self.assertEqual(pending["candidate"]["observed"], 1)
+        self.assertEqual(pending["candidate"]["required"], 3)
+        self.assertEqual(pending["candidate"]["confidence"], "low")
 
     def test_no_stale_future_unqualified_or_invalid_latest_alerts(self):
         for point in (sample(seconds=11), sample(seconds=-1), sample(freshness="stale"),

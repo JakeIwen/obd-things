@@ -36,8 +36,14 @@ The instantaneous `0841` pitch signal is not used for this band.
 
 The fixed no-session `0845` read was commissioned parked on 2026-09-16 MDT:
 elevation +0.091537°, azimuth +0.093891°, exact response and passive restoration.
-The helper reads once per ten seconds during qualified engine-running
-intervals; that full cadence awaits live validation. Unlike the historical
+The helper reads no more often than once per ten seconds during qualified
+engine-running intervals. September 21 drive evidence, analyzed September 22,
+contains 85 complete replies in two sampled chunks at 10.107–11.149-second
+request intervals alongside PCM telemetry. See the
+[dashboard/ACC mapping outlook](findings/2026-09-22_acc_and_dashboard_mapping_outlook.md)
+for provenance, remaining dashboard gaps, and the read-only ACC settings plan.
+Set speed, selected gap, engagement state, and lead-vehicle data are separate
+mapping work; alignment readings do not expose them. Unlike the historical
 viewer, it does not change diagnostic session or send TesterPresent. See the
 vehicle-data README's radar deployment section and the DID map for provenance.
 

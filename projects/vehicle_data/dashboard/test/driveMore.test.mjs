@@ -1,0 +1,144 @@
+// Drive page 2 helpers (design 3.1.1): radar aim tile, gear estimate, shaft ratio, swipe paging,
+// and the page-2 entries of the Drive customiser registry.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import * as H from "../src/views/driveMore.helpers.js";
+import { swipeTarget, DRIVE_PAGE_NAMES } from "../src/views/drivePager.js";
+
+const here = (p) => fileURLToPath(new URL(p, import.meta.url));
+const MINUS = "−";
+
+const WINDOWS = {
+  "radar.alignment.azimuth": {
+    60: { count: 6, mean: 0.150841, peak_abs: 0.150841, span_seconds: 54.9 },
+    300: { count: 20, mean: 0.15084, peak_abs: 0.150841, span_seconds: 208 },
+    latest_value: 0.150841,
+    observed_at: "2026-09-24T21:10:38.001564+00:00",
+  },
+  "radar.alignment.elevation": {
+    60: { count: 6, mean: -0.0173, peak_abs: 0.0174, span_seconds: 54.9 },
+    300: { count: 20, mean: -0.0177, peak_abs: 0.0184, span_seconds: 208 },
+    latest_value: -0.017161,
+    observed_at: "2026-09-24T21:10:38.001188+00:00",
+  },
+};
+
+test("fmtAngleSigned and windowMean", () => {
+  assert.equal(H.fmtAngleSigned(0.150841), "+0.15°");
+  assert.equal(H.fmtAngleSigned(-0.0173), MINUS + "0.02°");
+  assert.equal(H.fmtAngleSigned(0.001), "0.00°");
+  assert.equal(H.fmtAngleSigned(null), "—");
+  assert.equal(H.windowMean({ count: 3, mean: 0.5 }), "+0.50°");
+  assert.equal(H.windowMean({ count: 0, mean: 0.5 }), "—");
+  assert.equal(H.windowMean(null), "—");
+  assert.equal(H.windowMean({ count: 2 }), "—");
+});
+
+test("radar tile: live readings show latest, means and the ±1° reference in words", () => {
+  const m = H.radarTileModel({
+    axes: { azimuth: { fresh: true, value: 0.150841 }, elevation: { fresh: true, value: -0.017161 } },
+    windows: WINDOWS,
+    polling: { commissioned: true },
+  });
+  assert.equal(m.live, true);
+  assert.equal(m.sub, "within ±1°");
+  assert.deepEqual(m.axes.azimuth, { latest: "+0.15°", m1: "+0.15°", m5: "+0.15°" });
+  assert.deepEqual(m.axes.elevation, { latest: MINUS + "0.02°", m1: MINUS + "0.02°", m5: MINUS + "0.02°" });
+  const near = H.radarTileModel({ axes: { azimuth: { fresh: true, value: -0.85 } } });
+  assert.equal(near.sub, "near the ±1° limit");
+  const out = H.radarTileModel({ axes: { elevation: { fresh: true, value: 1.2 } } });
+  assert.equal(out.sub, "outside ±1°");
+  assert.equal(out.axes.azimuth.latest, "—");
+});
+
+test("radar tile: not reading shows the last reading once, with its time", () => {
+  const nowMs = Date.parse("2026-09-24T21:30:00Z");
+  const held = H.radarTileModel({
+    axes: {
+      azimuth: { fresh: false, value: null, held: { value: 0.150841, observed_at: "2026-09-24T21:10:38Z" } },
+      elevation: { fresh: false, value: null, held: null },
+    },
+    windows: WINDOWS,
+    nowMs,
+  });
+  assert.equal(held.live, false);
+  assert.match(held.sub, /^Not reading · last \d{1,2}:\d{2} (am|pm)$/);
+  assert.equal(held.sub.split("stale").length, 1, "no 'stale' word");
+  assert.equal(held.axes.azimuth.latest, "+0.15°");
+  // Elevation falls back to the broker's latest window value.
+  assert.equal(held.axes.elevation.latest, MINUS + "0.02°");
+  assert.equal(held.axes.elevation.m5, MINUS + "0.02°");
+});
+
+test("radar tile: nothing to show, or reads switched off, says Not reading", () => {
+  const empty = H.radarTileModel({});
+  assert.equal(empty.live, false);
+  assert.equal(empty.sub, "Not reading");
+  for (const axis of H.RADAR_TILE_AXES) assert.deepEqual(empty.axes[axis.id], { latest: "—", m1: "—", m5: "—" });
+  const off = H.radarTileModel({
+    axes: { azimuth: { fresh: true, value: 0.2 } },
+    polling: { commissioned: false, detail: "off" },
+  });
+  assert.equal(off.live, false, "a record is never live when the reads are not commissioned");
+  assert.equal(off.sub, "Not reading");
+  assert.equal(H.radarTileModel(null).sub, "Not reading");
+});
+
+test("radar tile text carries no provenance jargon", () => {
+  const texts = [];
+  for (const input of [{}, { axes: { azimuth: { fresh: true, value: 0.3 } }, windows: WINDOWS }]) {
+    const m = H.radarTileModel(input);
+    texts.push(m.sub, ...Object.values(m.axes).flatMap((a) => Object.values(a)));
+  }
+  texts.push(...H.RADAR_TILE_AXES.map((a) => a.label));
+  for (const t of texts) assert.doesNotMatch(t, /candidate|0845|did|radar_acc|stale|quality/i, t);
+});
+
+test("gearText shows ~gear only while the record is current", () => {
+  assert.equal(H.gearText({ available: true, stale: false, value: "7" }), "~7");
+  assert.equal(H.gearText({ available: true, stale: false, value: " R " }), "~R");
+  assert.equal(H.gearText({ available: true, stale: false, value: 4 }), "~4");
+  assert.equal(H.gearText({ available: true, stale: true, value: "7" }), "—");
+  assert.equal(H.gearText({ available: false, value: "7" }), "—");
+  assert.equal(H.gearText({ available: true, stale: false, value: "" }), "—");
+  assert.equal(H.gearText(null), "—");
+});
+
+test("ratioText needs both shafts and a turning output", () => {
+  assert.equal(H.ratioText(2100, 2500), "ratio 0.84");
+  assert.equal(H.ratioText(2100, 1000), "ratio 2.10");
+  assert.equal(H.ratioText(2100, 50), "");
+  assert.equal(H.ratioText(null, 2000), "");
+  assert.equal(H.ratioText(2000, null), "");
+});
+
+test("swipeTarget pages only on a deliberate horizontal swipe", () => {
+  assert.equal(swipeTarget(-120, 10, 300, 1), 2);
+  assert.equal(swipeTarget(120, -10, 300, 2), 1);
+  assert.equal(swipeTarget(-120, 10, 300, 2), 2, "left on page 2 stays");
+  assert.equal(swipeTarget(-60, 0, 300, 1), 1, "too short");
+  assert.equal(swipeTarget(-120, 80, 300, 1), 1, "too diagonal (vertical scroll on a phone)");
+  assert.equal(swipeTarget(-120, 0, 1200, 1), 1, "too slow");
+  assert.equal(swipeTarget(NaN, 0, 100, 1), 1);
+  assert.deepEqual(DRIVE_PAGE_NAMES.map(([n]) => n), [1, 2]);
+});
+
+test("Drive registry lists page-2 tiles with unique ids and every id is rendered", () => {
+  const drive = readFileSync(here("../src/views/Drive.jsx"), "utf8");
+  const more = readFileSync(here("../src/views/DriveMore.jsx"), "utf8");
+  const block = drive.slice(drive.indexOf("export const DRIVE_TILES"), drive.indexOf("];", drive.indexOf("export const DRIVE_TILES")));
+  const ids = [...block.matchAll(/(?:id: |\[)"([^"]+)"/g)].map((m) => m[1]);
+  assert.equal(new Set(ids).size, ids.length, "ids are unique across both pages");
+  const page2 = ["field", "gear", "radar", "turbine", "output", "power2", "torque", "target", "odometer"];
+  for (const id of page2) {
+    assert.ok(ids.includes(id), id + " registered");
+    assert.ok(more.includes('show("' + id + '")'), id + " rendered through isHidden");
+  }
+  // Page 2 is a lazy chunk: Drive.jsx must not import it statically.
+  assert.doesNotMatch(drive, /^import .*DriveMore/m);
+  assert.match(drive, /import\("\.\/DriveMore\.jsx"\)/);
+  // CSP: no inline style props on either page.
+  assert.doesNotMatch(drive + more, /style=/);
+});

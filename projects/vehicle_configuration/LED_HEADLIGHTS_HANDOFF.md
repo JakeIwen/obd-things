@@ -1,9 +1,51 @@
 # LED low beams / IPC lamp-out handoff
 
-Last reviewed: 2026-08-20 for permanent dual-USBCANFD coordination; the
-configuration evidence and recovery decision remain the dated 2026-07-26 state.
+Last reviewed: 2026-09-24 (offline options analysis); dual-USBCANFD
+coordination below dates from 2026-08-20.
 
 ## Decision state
+
+**Current recommendation (2026-09-24, revised 2026-09-25):** the owner
+confirmed that the low beams, high beams, and DRLs are **all LED**. Six BCM
+circuits are affected:
+
+| Circuit | DTC | OEM bulb |
+|---|---|---|
+| Low beam L/R | `B162A` / `B162E` | H7 55 W |
+| High beam L/R | `B1632` / `B1636` | H7 55 W |
+| DRL L/R | `B104D` / `B104E` | 7440/W21W 21 W, a dedicated lamp rather than a dimmed beam |
+
+Fix the codes in hardware with parallel load resistors:
+- **H7 circuits:** four 6 Ω (5.6–6.8 Ω) resistors, 100 W class.
+- **DRLs:** two 12 Ω resistors, 50 W class.
+- **Mounting:** every resistor on a real heat sink.
+- **Order:** install and verify one circuit at a time.
+
+The resistors add about 35 W of heat in daytime, 69 W with low beams on, and
+138 W with low and high beams together.
+
+A lighter alternative is the hybrid: LED low beams only, with halogen high
+beams and DRLs, which needs two resistors.
+
+The one-bit `Front Lights Diagnosis` configuration route is now relatively more
+attractive, but it stays deferred until the AlfaOBD 2022 alignment/DASM problem
+is solved. Defer any further configuration write. The ranked options, per-circuit
+sizing, heat limits, parts list, and install order are in
+[`findings/2026-09-24_led_low_beam_dtc_options.md`](findings/2026-09-24_led_low_beam_dtc_options.md).
+Key facts established offline, all from AlfaOBD's own APK definitions and the
+preserved July trace:
+
+- `Headlamp LED Management` is verified at DID `0x2023` byte 143, bit 6. It is
+  AlfaOBD's LED DRL/parking/sidelight strategy, not headlamp outage monitoring.
+  With it Present, the BCM still set every lamp code.
+- The field that governs front-lamp diagnosis is `Front Lights Diagnosis`
+  (byte 190, bit 1, currently Enabled). `Front Lights PWM Enable` is byte 190,
+  bit 3. Changing either one is still a PROXI write plus alignment.
+- **Correction:** the 2026-07-25 aligned "LED" state was *not* a single
+  labeled change. From 17:16 onward, every aligned write also set `Stop&Start`
+  (byte 57, bit 0) Present, and the 17:37–17:41 pass carried Stop&Start alone.
+  The July `B10AA` therefore cannot be attributed to the LED option alone. Any
+  future run must prove the before/after diff before alignment.
 
 The labeled AlfaOBD experiment was performed on 2026-07-25 and then rolled
 back. The original 250-byte backup, which records
@@ -29,8 +71,10 @@ another write or alignment solely to obtain them. If more confirmation is
 needed, use read-only status, configuration, and DTC collection.
 
 There is no supported next LED-setting experiment at present. Do not retry
-`Absent -> Present` until the AlfaOBD DASM behavior and the headlamp-option
-result have been reviewed from the preserved evidence.
+`Absent -> Present`: the 2026-09-24 review found that it targets the wrong
+function. If a configuration route is ever chosen, it is the deferred
+`Front Lights Diagnosis` change under the preconditions in the 2026-09-24
+options finding.
 
 ## Problem being investigated
 
@@ -45,6 +89,18 @@ open/short-to-battery families. Because several lighting outputs are involved,
 changing `Headlamp LED Management` may alter more than the two low-beam
 monitoring thresholds. The experiment must verify all exterior lighting, not
 only disappearance of the IPC icon.
+
+**Owner-confirmed DTC attribution (2026-09-24):** BCM `B162A-15` and
+`B162E-15` (left/right low-beam circuit short to battery or open) are
+confirmed by the owner to be caused entirely by the LED headlight conversion.
+`B1636-15` is likely the same lamp family and cause. Treat these codes as
+expected consequences of the conversion, not as wiring or BCM faults to
+diagnose. The high-beam `B1632-15` and DRL `B104D-15`/`B104E-15` codes were
+also active on 2026-09-24, but the owner did not attribute them explicitly.
+**Update 2026-09-25:** the owner confirmed that the high beams and DRLs are
+also LED, so all six codes are expected consequences of the conversion.
+The current snapshot is in the
+[in-vehicle F1 scan finding](../ecu_mapping/findings/promaster_2022/2026-09-24_in_vehicle_f1_scan.md#dtc-snapshot--19-02-0d-2026-09-24).
 
 ## Prior incomplete experiment
 
@@ -341,10 +397,14 @@ This is a supervised runbook, not authorization for unattended execution.
 
 ## Unresolved questions
 
-1. Will the labeled option eliminate only low-beam load monitoring, or also
-   change DRL/high-beam diagnostics or output behavior?
-2. Is offset `0x8F`, bit `0x40`, the sole fresh before/after difference once
-   metadata is excluded?
+1. ~~Will the labeled option eliminate only low-beam load monitoring, or also
+   change DRL/high-beam diagnostics or output behavior?~~ **Answered
+   2026-09-24:** it eliminated none of the lamp codes. It is an LED
+   DRL/parking-lamp strategy option.
+2. ~~Is offset `0x8F`, bit `0x40`, the sole fresh before/after difference once
+   metadata is excluded?~~ **Answered 2026-09-24:** yes, for the 17:15:09
+   labeled write. It matches AlfaOBD's own table. Later July writes also
+   carried an unintended `Stop&Start` bit (see Decision state).
 3. Does AlfaOBD 2.4.4.0 automatically begin alignment after the labeled
    one-option write, or return to a separate confirmation screen?
 4. Which exact adapter prompts and participating modules appear during a full

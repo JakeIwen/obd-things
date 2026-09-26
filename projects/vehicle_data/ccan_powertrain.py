@@ -378,6 +378,62 @@ def decode_frame(can_id: int, data: bytes) -> PassiveObservation | None:
     return observations[0] if observations else None
 
 
+# Frozen ZF 9HP48 ratio bands for the gear estimate (see metrics.TRANSMISSION_GEAR_ESTIMATE).
+GEAR_ESTIMATE_SOURCE = "derived.ccan_0x1f7_shaft_ratio"
+GEAR_RATIO_BANDS = (
+    ("R", 3.8358209),
+    ("1", 4.7191978),
+    ("2", 2.8451178),
+    ("3", 1.9101382),
+    ("4", 1.3819561),
+    ("5", 0.9999915),
+    ("6", 0.8080387),
+    ("7", 0.6990113),
+)
+GEAR_RATIO_TOLERANCE = 0.03
+GEAR_MIN_OUTPUT_RPM = 100.0
+GEAR_MIN_ENGINE_RPM = 500.0
+GEAR_MIN_SPEED_MPH = 3.0
+# A forward 1->2 upshift sweeps the ratio through R's band (4.72 -> 2.85 passes 3.84); the
+# 2026-09-24 drive did so at 8.2 and 13.8 mph. Reverse is never driven that fast.
+GEAR_MAX_REVERSE_SPEED_MPH = 6.0
+
+
+def gear_from_ratio(ratio: float) -> str | None:
+    """Gear label for a turbine/output ratio, or None outside every frozen band."""
+    if not math.isfinite(ratio) or ratio <= 0:
+        return None
+    for label, center in GEAR_RATIO_BANDS:
+        if abs(ratio - center) <= center * GEAR_RATIO_TOLERANCE:
+            return label
+    return None
+
+
+def gear_estimate(observations) -> "PassiveObservation | None":
+    """Derive the gear estimate from one snapshot's median observations (moving only)."""
+    values = {o.metric: o.value for o in observations}
+    output = values.get("transmission.output_speed")
+    turbine = values.get("transmission.turbine_speed")
+    rpm = values.get("engine.rpm")
+    speed = values.get("vehicle.speed")
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (output, turbine, rpm, speed)):
+        return None
+    if output <= GEAR_MIN_OUTPUT_RPM or rpm <= GEAR_MIN_ENGINE_RPM or speed <= GEAR_MIN_SPEED_MPH:
+        return None
+    ratio = float(turbine) / float(output)
+    label = gear_from_ratio(ratio)
+    if label is None or (label == "R" and speed > GEAR_MAX_REVERSE_SPEED_MPH):
+        return None
+    return PassiveObservation(
+        metric="transmission.gear_estimate",
+        value=label,
+        unit="gear",
+        source=GEAR_ESTIMATE_SOURCE,
+        quality="candidate",
+        detail=f"0x1F7 shaft ratio {ratio:.3f} within 3 % of the frozen gear {label} band",
+    )
+
+
 def _median_observation(
     samples: list[PassiveObservation],
 ) -> PassiveObservation:
@@ -505,11 +561,10 @@ def read_broadcast_snapshot(
                 break
     finally:
         sock.close()
+    medians = tuple(_median_observation(samples[metric]) for metric in sorted(samples))
+    gear = gear_estimate(medians)
     return BroadcastSnapshot(
-        observations=tuple(
-            _median_observation(samples[metric])
-            for metric in sorted(samples)
-        ),
+        observations=medians + ((gear,) if gear is not None else ()),
         rpm_samples=tuple(rpm_samples),
         frame_count=frame_count,
         completed_monotonic=monotonic(),

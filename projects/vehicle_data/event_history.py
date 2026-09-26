@@ -28,23 +28,32 @@ EVALUABLE = ACTIVE | {"normal", "recovering"}
 GUIDE = {
     "version": VERSION,
     "architecture": "CAN observations -> five-second historian -> deterministic assessments -> atomic episode/events/outbox -> separate event reader -> dashboard and explanation chat. Viewing events never acquires vehicle data.",
-    "episode": "An episode can open as watch before persistence qualifies warning. first_assessment is opening evidence; first_warning is separate and null means no recorded warning. A confirmed warning remains unresolved when latest_assessment is unavailable. An interrupted vehicle-health watch that never warned is archived unconfirmed after a full persistence window without usable evidence (at least 60 seconds). Archival is not recovery.",
+    "episode": "Legacy (untiered) rules can open an episode as watch before persistence qualifies warning; tiered vehicle rules (assessments carrying tier) open only at a confirmed warning, and their unconfirmed candidates never open an episode. first_assessment is opening evidence; first_warning is separate and null means no recorded warning. A confirmed warning remains unresolved when latest_assessment is unavailable. An interrupted vehicle-health watch that never warned is archived unconfirmed after a full persistence window without usable evidence (at least 60 seconds). A tiered episode not re-observed for 24 hours while no trip is open closes as parked_closed with resolution not_re_observed. Archival and parked closure are not recovery.",
     "overview": "The Early Warning health endpoint is a compact overview, with baseline input arrays and qualifying sample arrays omitted and explicitly marked. These omissions are not deletion or missing acquisition: full saved evidence remains in per-event details and exports. A failed overview fetch establishes neither that warnings cleared nor that notification delivery is disabled.",
     "storage": "Opening and transition assessments are retained; latest assessment is replaced. The event ledger is not every evaluation. Since evidence version 2, last evaluable/peak assessments and bounded sample windows are also retained. Legacy missing fields are never reconstructed as facts.",
-    "baseline": "Relative rules compare a value to the median of comparable prior-trip minute medians, with threshold max(minimum_effect, MAD multiplier * 1.4826 * MAD). The full observation regime is not the set of baseline matching dimensions. A relative band is not an OEM limit or a diagnosis.",
-    "interface_health": "Interface health is host telemetry infrastructure, not engine health. Before the first broker status probe, absent status is initialization and opens no role-failure episode. A probe still pending after 30 seconds or a failed probe is one status-discovery advisory, not three claims of broken adapters. Explicit missing/ambiguous identities, down links, controller errors and restoration inhibits remain actionable even at startup. Broker-owned B-CAN diagnostic mode is healthy only with a matching recorded supervisor route and exact healthy channel configuration; passive_ready=false alone does not mean a fault. Legacy generic unhealthy titles may be clarified for display; original_title and saved assessments preserve the original record. Do not assume every historical interface event was benign.",
+    "baseline": "Relative rules compare a value to the median of comparable prior-trip minute medians. Legacy threshold: max(minimum_effect, MAD multiplier * 1.4826 * MAD); tier-1 rules floor the spread (sigma_floor) and de-escalate only below deescalate_fraction (0.7) of the threshold. The full observation regime is not the set of baseline matching dimensions. A relative band is not an OEM limit or a diagnosis.",
+    "interface_health": "Interface health is host telemetry infrastructure, not engine health. Before the first broker status probe, absent status is initialization and opens no role-failure episode. A probe still pending after 30 seconds or a failed probe is one status-discovery advisory, not three claims of broken adapters. Explicit missing/ambiguous identities, down links, controller errors and restoration inhibits remain actionable even at startup. Broker-owned B-CAN diagnostic mode is healthy only with a matching recorded supervisor route and exact healthy channel configuration; passive_ready=false alone does not mean a fault. Legacy generic unhealthy titles may be clarified for display; original_title and saved assessments preserve the original record. Do not assume every historical interface event was benign. System items never notify.",
     "monitoring": "Routine freshness expiry is a quiet coverage note within an episode, not a new vehicle-health event or alert. Never infer shutdown from silence. Confirmed running with a sustained loss of an expected metric can produce a separate telemetry-quality advisory, never a mechanical warning. Unconfirmed archived watches are excluded from TO REVIEW. Historical notes retain exact measurement age and any saved freshness limit.",
     "freshness": "observed_at is the measurement timestamp; captured_at is historian capture; evaluated_at is the decision time. capture_freshness describes capture only. effective_age_seconds and evaluation_state govern decision validity. Stale is not deleted. Unavailable persistence is not evaluated, not failed persistence.",
-    "lifecycle": "Acknowledged/dismissed are owner dispositions, not mechanical recovery. Rule retirement and unconfirmed-watch archival are administrative. Confirmed warnings retain unresolved history during missing or inapplicable evidence. Recovering assessments retain unresolved episodes. Relative recovery requires comparable regime, unchanged rule revision, three distinct normal observations with bounded gaps and 20% threshold hysteresis. Historical pre-v2 recovery retains its original semantics.",
+    "lifecycle": "Acknowledged/dismissed are owner dispositions, not mechanical recovery. Rule retirement, unconfirmed-watch archival and parked closure are administrative. Confirmed warnings retain unresolved history during missing or inapplicable evidence. Recovering assessments retain unresolved episodes. Tiered rules (rule_snapshot.recovery_seconds) recover in any regime once comparable readings (same source, quality, provenance, unit and rule revision) stay normal and inside the de-escalation margin for recovery_seconds (default 600) with no gap above twice the freshness limit; recovery.held_seconds/required_seconds record progress. Legacy rules (recovery_observations only) require the opening regime, three distinct normal observations with bounded gaps and 20% threshold hysteresis. Tiered episodes with no warning observation for 24 hours and no open trip close as parked_closed (resolution not_re_observed, outcome closed); legacy episodes never do. Historical pre-v2 recovery retains its original semantics.",
     "duration": "Elapsed open time includes parked/unobserved time. observed_abnormal_seconds sums only bounded adjacent fresh abnormal observations under the same regime; it does not prove continuous abnormality between samples. Unobserved time and evaluator gaps are separate; legacy durations may be unknown.",
     "retention": "Compact episode/event evidence has no automatic age deletion. Content-addressed baseline input archives are retained with decisions. Raw metric/interface samples default to seven days with rollup-before-prune. Per-event windows cover two minutes before/three after opening (256 primary samples max), globally budgeted to 128 MiB; pruned windows leave explicit tombstones. Export pages and event JSON for independent backups.",
     "analysis": "Cite evidence_ref/event_id/sample_id for facts. Separate recorded facts, calculations, hypotheses, and unknowns. Correlation with DTC/maintenance/data quality is temporal, not causal. Counterfactual replay never changes original decisions; partial windows cannot establish complete historical outcomes. Chat keeps the dated evidence revision used for its answers; refresh opens a new conversation.",
+    "tiers": "Tier 0 = absolute OEM/owner limits (critical pushes urgently and repeats every 5 minutes while active and unacknowledged; warning pushes once per episode, 6 hour cooldown per group; a delivered tier-0 item sends one recovery notification when it returns to normal). Tier 1 = sustained same-conditions deviation (pushed once, 6 hour group cooldown). Tier 2 = slow drift notices from rollups (once, 7 day group cooldown, resolve as soon as the drift reverses). Tier 3 = system/data items: dashboard System notes only, never notified. Notifications are grouped by component group (oil, cooling, transmission, charging, battery, tires, system, custom), at most 3 non-critical per open trip, and tier 1/2 raised 22:00-07:30 in the van zone (US/Mountain) are held until 07:30; tier 0 never waits. A held item whose event closes before delivery is cancelled. Assessments without tier keep the legacy per-rule rate limit, reminders and lifecycle.",
     "coolant": "Coolant baseline matching excludes thermal bands because conditioning on the measured temperature can hide an anomaly. Coolant v2 requires five minutes of continuous fresh RPM evidence and excludes baseline buckets in the first five minutes of each prior trip; these are monitoring choices, not OEM limits. Engine-off and early running applicability are explicit; candidate changes must be replayed with coverage shown. A later cold regime cannot demonstrate recovery in the earlier regime.",
 }
 
 
 UNCONFIRMED = "unconfirmed_monitoring_ended"
-COVERAGE_EVENTS = frozenset(("evidence_inconclusive", "evidence_restored", "watch_unconfirmed"))
+NOT_RE_OBSERVED = "not_re_observed"
+PARKED_CLOSE_SECONDS = 24 * 60 * 60
+INCONCLUSIVE = frozenset(("unavailable", "not_applicable"))
+# Evaluations that neither prove nor disprove recovery; timed recovery
+# progress survives them (see timed_recovery_gate).
+RECOVERY_CARRY_STATES = frozenset(
+    ("unavailable", "not_applicable", "insufficient_history", "rejected", "recovering")
+)
+COVERAGE_EVENTS = frozenset(("evidence_inconclusive", "evidence_restored", "watch_unconfirmed", "parked_closed"))
 
 
 def episode_outcome(row):
@@ -109,6 +118,11 @@ def archive_interrupted_watch(conn, episode, assessment, us):
 def coverage_note(assessment):
     """Human explanation of monitoring validity; no inference about shutdown."""
     a = assessment or {}
+    parked = a.get("parked_closure")
+    if isinstance(parked, dict):
+        return {"title": "Closed while parked",
+                "detail": "No new reading re-confirmed this warning for 24 hours and no trip was in progress, so it was closed as not re-observed. "
+                          "Earlier evidence is retained. This does not establish recovery; if it happens again on a drive, a new event opens."}
     current = a.get("current") or {}
     policy = a.get("rule_snapshot") or {}
     age = current.get("effective_age_seconds")
@@ -187,7 +201,17 @@ def stamp(assessment, at):
 
 
 def recovery_gate(conn, episode, a, us):
-    """Apply only the versioned relative-rule recovery contract; no legacy rewrite."""
+    """Apply only the versioned relative-rule recovery contract; no legacy rewrite.
+
+    The incoming assessment's rule_snapshot selects the path: recovery_seconds
+    (tiered rules; it wins when recovery_observations is also present) uses the
+    time-based any-regime gate; recovery_observations alone keeps the legacy
+    count-based same-regime gate below unchanged; neither key (owner rules,
+    drift notices) leaves the assessment untouched.
+    """
+    snapshot = a.get("rule_snapshot")
+    if episode is not None and isinstance(snapshot, dict) and "recovery_seconds" in snapshot:
+        return timed_recovery_gate(conn, episode, a, us)
     if episode is None or not a.get("rule_snapshot", {}).get("recovery_observations"):
         return a
     first = json.loads(episode["first_assessment_json"])
@@ -222,6 +246,106 @@ def recovery_gate(conn, episode, a, us):
         a.update(state="recovering", notification_eligible=False,
                  reason="comparable normal evidence awaits persistent recovery with hysteresis")
     return a
+
+
+def timed_recovery_gate(conn, episode, a, us):
+    """Tiered recovery: normal in any regime, held for recovery_seconds.
+
+    Comparability is the measurement itself (source, quality, provenance,
+    unit) plus an unchanged rule revision; the operating regime may differ.
+    A normal reading is safe when its effect is within deescalate_fraction of
+    the threshold (default 0.8), or, without a deviation (absolute rules), when
+    the rule itself reports normal after its own hysteresis.  A gap longer than
+    twice the freshness limit between normal readings restarts the clock.
+    An inconclusive evaluation in between (a stale sample, a momentarily
+    unmet gate) neither counts nor resets: checkpoint() keeps the saved
+    progress for it (RECOVERY_CARRY_STATES).
+    """
+    if a.get("state") != "normal":
+        return a
+    first = json.loads(episode["first_assessment_json"])
+    a = dict(a)
+    policy = a["rule_snapshot"]
+    old = first.get("rule_revision")
+    changed = old is not None and old != a.get("rule_revision")
+    comparable = all((first.get("current") or {}).get(k) == (a.get("current") or {}).get(k)
+                     for k in ("source", "quality", "provenance", "unit"))
+    if changed or not comparable:
+        a.update(state="not_applicable", notification_eligible=False,
+                 reason="rule revision changed; original condition not re-evaluated" if changed
+                 else "measurement source or unit changed; original condition not re-evaluated")
+        return a
+    required = policy.get("recovery_seconds")
+    required = float(required) if number(required) and required >= 0 else 600.0
+    fraction = policy.get("deescalate_fraction", .8)
+    fraction = float(fraction) if number(fraction) and 0 < fraction <= 1 else .8
+    saved = conn.execute("SELECT data_json FROM advisory_evidence WHERE episode_id=?", (episode["id"],)).fetchone()
+    previous = (json.loads(saved[0]) if saved else {}).get("recovery") or {}
+    obs = (a.get("current") or {}).get("observed_at")
+    deviation = a.get("deviation") or {}
+    effect, threshold = deviation.get("effect_in_rule_direction"), deviation.get("threshold")
+    if number(effect) and number(threshold):
+        safe = effect <= threshold * fraction
+    else:
+        safe = True  # absolute rules report normal only after their own clear margin
+    max_gap = policy.get("max_age_seconds", 10)
+    max_gap = 2 * (max_gap if number(max_gap) else 10)
+    start = None
+    if safe and obs:
+        gap = seconds(obs, previous.get("last_normal_at"))
+        start = previous.get("first_normal_at") if gap is not None and 0 <= gap <= max_gap else None
+        start = start or obs
+    held = seconds(obs, start) if start else None
+    held = max(0.0, held) if held is not None else 0.0
+    a["recovery"] = {"first_normal_at": start, "last_normal_at": obs if start else None,
+                     "held_seconds": held, "required_seconds": required, "comparable": True,
+                     "hysteresis_fraction": round(1 - fraction, 6)}
+    if not start or held < required:
+        a.update(state="recovering", notification_eligible=False,
+                 reason="normal readings must hold for the recovery period before this closes")
+    return a
+
+
+def archive_parked_episode(conn, episode, assessment, us):
+    """Administrative 24 h parked closure for tiered vehicle-health episodes.
+
+    Applies only when the stored latest assessment carries an integer tier
+    (legacy episodes keep today's lifecycle), both the stored and incoming
+    states are inconclusive (unavailable/not_applicable), no warning has been
+    observed for 24 hours and no trip is open.  Never claims recovery and never
+    sends a recovery notification.
+    """
+    if episode is None or episode["status"] != "open" or episode["category"] != "vehicle_health":
+        return False
+    # Cheap checks first: this runs on every evaluation of an open episode.
+    if assessment.get("state") not in INCONCLUSIVE:
+        return False
+    if us - episode["last_observed_us"] < PARKED_CLOSE_SECONDS * 1_000_000:
+        return False
+    prior = json.loads(episode["latest_assessment_json"])
+    tier = prior.get("tier")
+    if not isinstance(tier, int) or isinstance(tier, bool) or prior.get("state") not in INCONCLUSIVE:
+        return False
+    if conn.execute("SELECT 1 FROM trips WHERE ended_us IS NULL LIMIT 1").fetchone():
+        return False
+    closing = stamp(assessment, iso(us))
+    closing["episode_outcome"] = "closed"
+    closing["parked_closure"] = {"last_observed_at": iso(episode["last_observed_us"]), "closed_at": iso(us),
+                                 "unobserved_seconds": (us - episode["last_observed_us"]) / 1e6,
+                                 "cause": NOT_RE_OBSERVED}
+    checkpoint(conn, episode, closing, us)
+    conn.execute("""UPDATE advisory_episodes SET status='resolved',current_state='suppressed',
+        evidence_state=?,last_evaluated_us=?,last_evaluated_at=?,resolved_us=?,resolved_at=?,
+        resolution_reason=?,latest_assessment_json=?,update_count=update_count+1,
+        transition_count=transition_count+1 WHERE id=? AND status='open'""",
+        (closing["state"], us, iso(us), us, iso(us), NOT_RE_OBSERVED, encode(closing), episode["id"]))
+    conn.execute("""INSERT INTO advisory_episode_events(episode_id,event_us,event_at,event_type,
+        previous_state,new_state,context_fingerprint,assessment_json) VALUES(?,?,?,?,?,?,?,?)""",
+        (episode["id"], us, iso(us), "parked_closed", episode["current_state"], "suppressed", digest(closing), encode(closing)))
+    conn.execute("""UPDATE advisory_notification_outbox SET status='cancelled',last_error='closed while parked'
+        WHERE episode_id=? AND status='pending'
+          AND coalesce(json_extract(payload_json,'$.notification_kind'),'')!='recovery'""", (episode["id"],))
+    return True
 
 
 def checkpoint(conn, episode, a, us):
@@ -266,7 +390,15 @@ def checkpoint(conn, episode, a, us):
         if number(value) and (not number(old_value) or value > old_value):
             data["peak_value"] = ref
     data["previous"] = {"observed_at": obs, "state": a.get("state"), "regime": a.get("regime")}
-    data["recovery"] = a.get("recovery", {})
+    recovery = a.get("recovery")
+    if (recovery is None and a.get("state") in RECOVERY_CARRY_STATES
+            and "recovery_seconds" in (a.get("rule_snapshot") or {})):
+        # Tiered timed recovery: an inconclusive evaluation between normal
+        # readings keeps the clock (the gap rule in timed_recovery_gate still
+        # applies).  Storing {} here reset 10 minutes of progress on one
+        # stale sample or unmet gate.
+        recovery = data.get("recovery")
+    data["recovery"] = recovery or {}
     data["last_evaluated_at"] = iso(us)
     window = json.loads(row["window_json"]) if row else []
     window_state = row["window_state"] if row else "collecting"

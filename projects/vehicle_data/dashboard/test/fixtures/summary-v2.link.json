@@ -1,0 +1,490 @@
+{
+ "available": true,
+ "dtcs": {
+  "available": true,
+  "coverage": {
+   "available_modules": 11,
+   "last_attempt_at": "2026-07-25T02:32:14Z",
+   "last_success_at": "2026-07-25T02:32:09Z",
+   "modules_no_dtcs": 1,
+   "modules_status_coverage_incomplete": 0,
+   "modules_with_dtcs": 10,
+   "modules_with_last_known_dtcs": 10,
+   "never_scanned_modules": 4,
+   "total_modules": 16,
+   "unavailable_modules": 1
+  },
+  "group_counts": {
+   "confirmed_history": 38,
+   "current": 5,
+   "incomplete_only": 213,
+   "other": 0,
+   "pending": 0
+  },
+  "schema_version": 2
+ },
+ "generated_at_ms": 1790116075653,
+ "health": {
+  "available": true,
+  "generated_at": "2026-09-22T18:57:18.441057+00:00",
+  "notification_delivery": {
+   "enabled": true,
+   "last_attempt_at": "2026-09-22T18:57:12.756863+00:00",
+   "last_delivered": 0,
+   "last_error": null,
+   "last_failed": 0,
+   "sink": "NtfyAdvisoryNotificationSink"
+  },
+  "schema_version": 1
+ },
+ "history": {
+  "available": true,
+  "coverage": {
+   "active_interface_gaps": [],
+   "active_metric_gaps": [
+    {
+     "detail": "the value is retained with its age but is not current evidence",
+     "duration_seconds": 3374.303361,
+     "ended_at": null,
+     "key": "battery.voltage",
+     "kind": "metric",
+     "last_seen_at": "2026-09-22T18:57:12.756863+00:00",
+     "observation_count": 546,
+     "reason": "stale_observation",
+     "started_at": "2026-09-22T18:00:58.811480+00:00",
+     "state": "stale"
+    },
+    {
+     "detail": "the value is retained with its age but is not current evidence",
+     "duration_seconds": 3387.894502,
+     "ended_at": null,
+     "key": "vehicle.speed",
+     "kind": "metric",
+     "last_seen_at": "2026-09-22T18:57:12.756863+00:00",
+     "observation_count": 547,
+     "reason": "stale_observation",
+     "started_at": "2026-09-22T18:00:45.220339+00:00",
+     "state": "stale"
+    },
+    {
+     "detail": "the value is retained with its age but is not current evidence",
+     "duration_seconds": 9078.042671,
+     "ended_at": null,
+     "key": "tire.pressure.fr",
+     "kind": "metric",
+     "last_seen_at": "2026-09-22T18:57:12.756863+00:00",
+     "observation_count": 1570,
+     "reason": "stale_observation",
+     "started_at": "2026-09-22T16:25:55.072170+00:00",
+     "state": "stale"
+    },
+    {
+     "detail": "the value is retained with its age but is not current evidence",
+     "duration_seconds": 9078.042671,
+     "ended_at": null,
+     "key": "tire.pressure.fl",
+     "kind": "metric",
+     "last_seen_at": "2026-09-22T18:57:12.756863+00:00",
+     "observation_count": 1570,
+     "reason": "stale_observation",
+     "started_at": "2026-09-22T16:25:55.072170+00:00",
+     "state": "stale"
+    },
+    {
+     "detail": "the value is retained with its age but is not current evidence",
+     "duration_seconds": 9083.719397,
+     "ended_at": null,
+     "key": "tire.pressure.rr",
+     "kind": "metric",
+     "last_seen_at": "2026-09-22T18:57:12.756863+00:00",
+     "observation_count": 1571,
+     "reason": "stale_observation",
+     "started_at": "2026-09-22T16:25:49.395444+00:00",
+     "state": "stale"
+    },
+    {
+     "detail": "the value is retained with its age but is not current evidence",
+     "duration_seconds": 9083.719397,
+     "ended_at": null,
+     "key": "tire.pressure.rl",
+     "kind": "metric",
+     "last_seen_at": "2026-09-22T18:57:12.756863+00:00",
+     "observation_count": 1571,
+     "reason": "stale_observation",
+     "started_at": "2026-09-22T16:25:49.395444+00:00",
+     "state": "stale"
+    },
+    {
+     "detail": "the value is retained with its age but is not current evidence",
+     "duration_seconds": 9096.011415,
+     "ended_at": null,
+     "key": "transmission.turbine_speed",
+     "kind": "metric",
+     "last_seen_at": "2026-09-22T18:57:12.756863+00:00",
+     "observation_count": 1573,
+     "reason": "stale_observation",
+     "started_at": "2026-09-22T16:25:37.103426+00:00",
+     "state": "stale"
+    },
+    {
+     "detail": "the value is retained with its age but is not current evidence",
+     "duration_seconds": 9096.011415,
+     "ended_at": null,
+     "key": "transmission.output_speed",
+     "kind": "metric",
+     "last_seen_at": "2026-09-22T18:57:12.756863+00:00",
+     "observation_count": 1573,
+     "reason": "stale_observation",
+     "started_at": "2026-09-22T16:25:37.103426+00:00",
+     "state": "stale"
+    },
+    {
+     "detail": "the value is retained with its age but is not current evidence",
+     "duration_seconds": 9096.011415,
+     "ended_at": null,
+     "key": "transmission.oil_temperature",
+     "kind": "metric",
+     "last_seen_at": "2026-09-22T18:57:12.756863+00:00",
+     "observation_count": 1573,
+     "reason": "stale_observation",
+     "started_at": "2026-09-22T16:25:37.103426+00:00",
+     "state": "stale"
+    },
+    {
+     "detail": "the value is retained with its age but is not current evidence",
+     "duration_seconds": 9101.841611,
+     "ended_at": null,
+     "key": "vehicle.ignition_on",
+     "kind": "metric",
+     "last_seen_at": "2026-09-22T18:57:12.756863+00:00",
+     "observation_count": 1574,
+     "reason": "stale_observation",
+     "started_at": "2026-09-22T16:25:31.273230+00:00",
+     "state": "stale"
+    },
+    {
+     "detail": "qualified passive engine-running evidence is absent",
+     "duration_seconds": 9101.841611,
+     "ended_at": null,
+     "key": "radar.alignment.elevation",
+     "kind": "metric",
+     "last_seen_at": "2026-09-22T18:57:12.756863+00:00",
+     "observation_count": 1574,
+     "reason": "engine_not_running",
+     "started_at": "2026-09-22T16:25:31.273230+00:00",
+     "state": "missing"
+    },
+    {
+     "detail": "qualified passive engine-running evidence is absent",
+     "duration_seconds": 9101.841611,
+     "ended_at": null,
+     "key": "radar.alignment.azimuth",
+     "kind": "metric",
+     "last_seen_at": "2026-09-22T18:57:12.756863+00:00",
+     "observation_count": 1574,
+     "reason": "engine_not_running",
+     "started_at": "2026-09-22T16:25:31.273230+00:00",
+     "state": "missing"
+    },
+    {
+     "detail": "qualified passive engine-running evidence is absent",
+     "duration_seconds": 9101.841611,
+     "ended_at": null,
+     "key": "generator.field_duty",
+     "kind": "metric",
+     "last_seen_at": "2026-09-22T18:57:12.756863+00:00",
+     "observation_count": 1574,
+     "reason": "engine_not_running",
+     "started_at": "2026-09-22T16:25:31.273230+00:00",
+     "state": "missing"
+    },
+    {
+     "detail": "qualified passive engine-running evidence is absent",
+     "duration_seconds": 9101.841611,
+     "ended_at": null,
+     "key": "engine.vvt_oil_temperature",
+     "kind": "metric",
+     "last_seen_at": "2026-09-22T18:57:12.756863+00:00",
+     "observation_count": 1574,
+     "reason": "engine_not_running",
+     "started_at": "2026-09-22T16:25:31.273230+00:00",
+     "state": "missing"
+    },
+    {
+     "detail": "the value is retained with its age but is not current evidence",
+     "duration_seconds": 9101.841611,
+     "ended_at": null,
+     "key": "engine.target_crankshaft_torque",
+     "kind": "metric",
+     "last_seen_at": "2026-09-22T18:57:12.756863+00:00",
+     "observation_count": 1574,
+     "reason": "stale_observation",
+     "started_at": "2026-09-22T16:25:31.273230+00:00",
+     "state": "stale"
+    },
+    {
+     "detail": "the value is retained with its age but is not current evidence",
+     "duration_seconds": 9101.841611,
+     "ended_at": null,
+     "key": "engine.rpm",
+     "kind": "metric",
+     "last_seen_at": "2026-09-22T18:57:12.756863+00:00",
+     "observation_count": 1574,
+     "reason": "stale_observation",
+     "started_at": "2026-09-22T16:25:31.273230+00:00",
+     "state": "stale"
+    },
+    {
+     "detail": "the value is retained with its age but is not current evidence",
+     "duration_seconds": 9101.841611,
+     "ended_at": null,
+     "key": "engine.oil_pressure",
+     "kind": "metric",
+     "last_seen_at": "2026-09-22T18:57:12.756863+00:00",
+     "observation_count": 1574,
+     "reason": "stale_observation",
+     "started_at": "2026-09-22T16:25:31.273230+00:00",
+     "state": "stale"
+    },
+    {
+     "detail": "qualified passive engine-running evidence is absent",
+     "duration_seconds": 9101.841611,
+     "ended_at": null,
+     "key": "engine.crankshaft_torque",
+     "kind": "metric",
+     "last_seen_at": "2026-09-22T18:57:12.756863+00:00",
+     "observation_count": 1574,
+     "reason": "engine_not_running",
+     "started_at": "2026-09-22T16:25:31.273230+00:00",
+     "state": "missing"
+    },
+    {
+     "detail": "qualified passive engine-running evidence is absent",
+     "duration_seconds": 9101.841611,
+     "ended_at": null,
+     "key": "engine.crankshaft_power",
+     "kind": "metric",
+     "last_seen_at": "2026-09-22T18:57:12.756863+00:00",
+     "observation_count": 1574,
+     "reason": "engine_not_running",
+     "started_at": "2026-09-22T16:25:31.273230+00:00",
+     "state": "missing"
+    },
+    {
+     "detail": "the value is retained with its age but is not current evidence",
+     "duration_seconds": 9101.841611,
+     "ended_at": null,
+     "key": "engine.coolant_temperature",
+     "kind": "metric",
+     "last_seen_at": "2026-09-22T18:57:12.756863+00:00",
+     "observation_count": 1574,
+     "reason": "stale_observation",
+     "started_at": "2026-09-22T16:25:31.273230+00:00",
+     "state": "stale"
+    },
+    {
+     "detail": "awake traffic did not match the verified B-CAN signature",
+     "duration_seconds": 9280.761556,
+     "ended_at": null,
+     "key": "vehicle.odometer",
+     "kind": "metric",
+     "last_seen_at": "2026-09-22T18:57:12.756863+00:00",
+     "observation_count": 1601,
+     "reason": "wrong_bus",
+     "started_at": "2026-09-22T16:22:32.353285+00:00",
+     "state": "missing"
+    },
+    {
+     "detail": "no observation has been cached",
+     "duration_seconds": 2750235.912388,
+     "ended_at": null,
+     "key": "diagnostics.cluster.did.1005.raw",
+     "kind": "metric",
+     "last_seen_at": "2026-09-22T18:57:12.756863+00:00",
+     "observation_count": 511381,
+     "reason": "stale",
+     "started_at": "2026-08-21T22:59:57.202453+00:00",
+     "state": "missing"
+    },
+    {
+     "detail": "no observation has been cached",
+     "duration_seconds": 2750235.912388,
+     "ended_at": null,
+     "key": "diagnostics.cluster.did.1002.raw",
+     "kind": "metric",
+     "last_seen_at": "2026-09-22T18:57:12.756863+00:00",
+     "observation_count": 511381,
+     "reason": "stale",
+     "started_at": "2026-08-21T22:59:57.202453+00:00",
+     "state": "missing"
+    },
+    {
+     "detail": "no observation has been cached",
+     "duration_seconds": 2750235.912388,
+     "ended_at": null,
+     "key": "diagnostics.cluster.did.1000.raw",
+     "kind": "metric",
+     "last_seen_at": "2026-09-22T18:57:12.756863+00:00",
+     "observation_count": 511381,
+     "reason": "stale",
+     "started_at": "2026-08-21T22:59:57.202453+00:00",
+     "state": "missing"
+    },
+    {
+     "detail": "no observation has been cached",
+     "duration_seconds": 2750235.912388,
+     "ended_at": null,
+     "key": "diagnostics.cluster.did.0107.raw",
+     "kind": "metric",
+     "last_seen_at": "2026-09-22T18:57:12.756863+00:00",
+     "observation_count": 511381,
+     "reason": "stale",
+     "started_at": "2026-08-21T22:59:57.202453+00:00",
+     "state": "missing"
+    }
+   ],
+   "age_seconds": 0.355547,
+   "last_snapshot_at": "2026-09-22T18:57:12.756863+00:00",
+   "retention": {
+    "delete_limit_per_table": 2000000,
+    "due": false,
+    "effective_cutoff_at": "2026-09-15T18:57:00+00:00",
+    "last_attempt_at": "2026-09-22T07:23:21.758256+00:00",
+    "last_deleted": {
+     "interface_samples": 49848,
+     "metric_samples": 232624,
+     "snapshots": 16572
+    },
+    "last_effective_cutoff_at": "2026-09-15T07:23:00+00:00",
+    "last_status": "completed",
+    "last_success_at": "2026-09-22T07:23:21.758256+00:00",
+    "maintenance_interval_seconds": 86400,
+    "raw_retention_days": 7,
+    "retention_cutoff_at": "2026-09-15T18:57:13.112410+00:00",
+    "rollup_through_at": "2026-09-22T18:57:00+00:00"
+   },
+   "status": "current"
+  },
+  "current_trip": null,
+  "recent_trips": [
+   {
+    "duration_seconds": 172.901508,
+    "end_reason": "activity_timeout",
+    "ended_at": "2026-09-22T16:25:25.254793+00:00",
+    "id": 57,
+    "last_active_at": "2026-09-22T16:25:25.254793+00:00",
+    "snapshot_count": 79,
+    "start_basis": "fresh_engine_rpm",
+    "started_at": "2026-09-22T16:22:32.353285+00:00",
+    "state": "complete"
+   },
+   {
+    "duration_seconds": 196.123432,
+    "end_reason": "activity_timeout",
+    "ended_at": "2026-09-22T06:09:47.689408+00:00",
+    "id": 56,
+    "last_active_at": "2026-09-22T06:09:47.689408+00:00",
+    "snapshot_count": 83,
+    "start_basis": "fresh_engine_rpm",
+    "started_at": "2026-09-22T06:06:31.565976+00:00",
+    "state": "complete"
+   }
+  ],
+  "schema_version": 1
+ },
+ "maintenance": {
+  "available": true,
+  "last_known_odometer": {
+   "observed_at": "2026-09-22T06:09:39.646302+00:00",
+   "quality": "candidate",
+   "source": "ics.did.2001",
+   "unit": "mi",
+   "value": 53892.766
+  },
+  "last_oil_change": {
+   "date": "2026-07-24",
+   "mileage_mi": 52000,
+   "mileage_source": "cluster_or_receipt",
+   "notes": "DIY",
+   "recorded_at": "2026-09-20T18:31:53.381803+00:00",
+   "request_id": "oil_5277b50188954a3bae963e49edbe0100"
+  },
+  "odometer": {
+   "acquisition": "physical_read_data_by_identifier",
+   "available": false,
+   "bus": "b-can",
+   "detail": "awake traffic did not match the verified B-CAN signature",
+   "interface_mode": "listen_only",
+   "last_recorded": {
+    "acquisition": "physical_read_data_by_identifier",
+    "bus": "b-can",
+    "observed_at": "2026-09-22T06:09:39.646302+00:00",
+    "quality": "candidate",
+    "source": "ics.did.2001",
+    "unit": "mi",
+    "value": 53892.766
+   },
+   "metric": "vehicle.odometer",
+   "reason": "wrong_bus",
+   "unit": "mi"
+  },
+  "oil_changes": [
+   {
+    "date": "2026-07-24",
+    "mileage_mi": 52000,
+    "mileage_source": "cluster_or_receipt",
+    "notes": "DIY",
+    "recorded_at": "2026-09-20T18:31:53.381803+00:00",
+    "request_id": "oil_5277b50188954a3bae963e49edbe0100"
+   },
+   {
+    "date": "2026-07-24",
+    "mileage_mi": 52000,
+    "mileage_source": "cluster_or_receipt",
+    "notes": "DIY",
+    "recorded_at": "2026-09-20T18:29:51.245181+00:00",
+    "request_id": "oil_729f9d7aaaefc04387e7d1ff9b382632"
+   }
+  ],
+  "oil_life": {
+   "available": false,
+   "detail": "Oil-life percentage was observed in AlfaOBD, but its exact current-vehicle DID/scale is not yet established for telemetry."
+  },
+  "persistent": true,
+  "record_count": 2,
+  "status_code": 200,
+  "storage_error": null
+ },
+ "schema_version": 1,
+ "status_full": {
+  "collector": {
+   "cycles": 6848,
+   "failure_detail": null,
+   "interval_seconds": 1.0,
+   "last_cycle_at": "2026-09-22T18:58:21.747823+00:00",
+   "state": "running"
+  },
+  "service": "van-telemetry",
+  "started_at": "2026-09-22T15:17:40.207789+00:00",
+  "supplemental_cache": {
+   "enabled": true,
+   "last_error": null,
+   "last_refresh_duration_ms": 5679.246,
+   "last_refreshed_at": "2026-09-22T18:57:13.112380+00:00",
+   "refresh_interval_seconds": 60.0,
+   "state": "ready"
+  },
+  "vehicle_state": {
+   "age_ms": 666,
+   "basis": "passive_bus_silence",
+   "confidence": "inferred",
+   "detail": "no frames arrived at the approved bitrate; this is consistent with a sleeping vehicle, but an unplugged physical leg is not distinguishable from silence",
+   "observed_at": "2026-09-22T18:58:21.747230+00:00",
+   "running": false,
+   "state": "asleep"
+  }
+ },
+ "web": {
+  "dashboard": "v2"
+ }
+}

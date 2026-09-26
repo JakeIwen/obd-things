@@ -25,6 +25,25 @@ The cross-project [`AlfaOBD evidence history`](../../docs/alfaobd-evidence-histo
 canonical chronology of confirmed mis-mappings, incompatible profiles, recording/catalog traps,
 project parser corrections, and the trust rules derived from them.
 
+The [September 24 in-vehicle F1 scan](findings/promaster_2022/2026-09-24_in_vehicle_f1_scan.md)
+passively identifies an in-vehicle diagnostic client that also uses tester address `F1`. It
+periodically runs a read-only identity and `19 02 0D` sweep, plus PCM and TCM data jobs, but only
+while Pi polling is quiet. The leading identity guess is TBM2 `0xC6`, moderate confidence. The
+finding records C-CAN→CAN-CH gateway routing (`18DAF2xx` reply copies), the first Pi-side CAN-CH
+identity/DTC snapshot, new TCM `22 211B–213E`/`026B` positives, and PCM default-session DIDs whose
+multi-frame bodies need an 8-byte padded FlowControl. Parked follow-ups (none run):
+(a) a bounded PCM read of `22 0137`, `0320`, and `1FCC–1FD9` with fixed-DLC-8 requests and a padded
+FlowControl; (b) tester identity confirmation from a Uconnect/Mopar Vehicle Health Report dated
+2026-08-30 about 20:26–20:56 MDT or 2026-09-24 about 15:12–15:27 MDT.
+
+The [September 22 gear/oil-life offline follow-up](findings/promaster_2022/2026-09-22_gear_and_oil_life_offline.md)
+shortlists `0x1F4` byte 4's upper nibble against established transmission-shaft
+speeds and the exact OEM ratios. It also resolves AlfaOBD's separate enum/plain
+language-table indexing and establishes PCM `2185` as oil life remaining:
+one unsigned percentage byte, with saved `62 21 85 11` matching the July 17%
+display. Session-free support still needs a bounded parked check; neither
+result currently changes the live telemetry allowlist.
+
 The [September 5 drive review](findings/promaster_2022/2026-09-05_drive_inventory_oil_candidates.md)
 found 14 new three-bus intervals with about 3.75 hours per role and zero
 reported socket drops. Ten sets completed normally; four retained finalized
@@ -1381,3 +1400,10 @@ verify the `/4` rpm scale or authorize public telemetry promotion.
    unlabeled/untimestamped and is not a substitute for the fresh joined trace.
 6. Once a DID/address/routine is *verified on 2022 ProMaster*, promote it into the canonical maps
    (`../../docs/bus-map.md`, `../../lib/modules.py`, project DID maps) per the maintenance rule.
+7. **In-vehicle F1 client follow-ups (parked; see the
+   [September 24 finding](findings/promaster_2022/2026-09-24_in_vehicle_f1_scan.md#follow-ups-parked-none-run)):**
+   first, a bounded parked PCM read of `0137`, `0320`, and `1FCC–1FD9` using fixed-DLC-8 requests
+   and an 8-byte padded FlowControl, without a session change. This is active traffic under the
+   normal safety gates. Second, confirm the tester's identity from a Uconnect/Mopar Vehicle Health
+   Report dated 2026-08-30 about 20:26–20:56 MDT or 2026-09-24 about 15:12–15:27 MDT. Exclude or
+   label the client's windows in any passive `F1`-traffic analysis.

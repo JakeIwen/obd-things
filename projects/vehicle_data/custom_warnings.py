@@ -81,6 +81,19 @@ def _qualified(sample, metric, at, max_age):
                     and s.quality in ("verified", "observed_alfa_scale") for s in definition.sources))
 
 
+def _open_warning(historian, rule_key):
+    """Whether the rule has an open episode whose current state is warning."""
+    lister = getattr(historian, "list_advisory_episodes", None)
+    if lister is None:
+        return False
+    try:
+        episodes = lister(active_only=True, limit=200)
+    except (AttributeError, TypeError, ValueError, RuntimeError):
+        return False
+    return any(isinstance(item, dict) and item.get("rule") == rule_key
+               and item.get("state") == "warning" for item in episodes or ())
+
+
 def evaluate_rule(historian, row, at):
     from projects.vehicle_data.event_history import digest
     rule = validate_rule(row["rule"])
@@ -90,6 +103,7 @@ def evaluate_rule(historian, row, at):
               "direction": "low" if rule["operator"] == "below" else "high",
               "state": "unavailable", "reason": "No qualified fresh reading",
               "notification_eligible": False, "notification_rate_limit_seconds": 1800,
+              "tier": 1, "group": "custom", "action": "Check it at the next stop.", "confidence": None,
               "interpretation": "Owner-approved monitoring reference, not an OEM limit or diagnosis",
               "custom_rule": rule, "current": None, "baseline": None, "deviation": None,
               "persistence": {"required": rule["persistence_observations"], "observed": 0,
@@ -115,6 +129,7 @@ def evaluate_rule(historian, row, at):
         at=at, limit=rule["persistence_observations"], quality=sample["quality"],
         source=sample["source"], provenance=sample["provenance"])
     seen = set()
+    oldest = None
     previous_age = _age(sample, at)
     for point in points:
         age = _age(point, at)
@@ -124,9 +139,26 @@ def evaluate_rule(historian, row, at):
         if rule["engine_running"] and not running(datetime.fromisoformat(point["observed_at"].replace("Z", "+00:00"))):
             break
         seen.add(point["observed_at"])
+        oldest = point["observed_at"]
         previous_age = age
     persistent = len(seen) >= rule["persistence_observations"]
     result["persistence"].update(observed=len(seen), satisfied=persistent)
-    result.update(state="warning" if persistent else "watch", notification_eligible=persistent,
-                  reason="Outside the owner-approved reference" + (" persistently" if persistent else "; awaiting persistence"))
+    if persistent:
+        result.update(state="warning", notification_eligible=True, confidence="medium",
+                      reason="Outside the owner-approved reference persistently")
+        return result
+    if _open_warning(historian, result["rule"]):
+        # A confirmed owner warning holds while the reading stays outside the
+        # reference; a short run (regime change, sample gap) is not recovery.
+        # "normal" here would close the event and reopen it moments later.
+        result.update(state="warning", notification_eligible=True, confidence="medium",
+                      reason="Still outside the owner-approved reference")
+        return result
+    # An unconfirmed reading never opens an episode: it stays normal and
+    # carries a low-confidence candidate until persistence is met.
+    result.update(state="normal", notification_eligible=False, confidence="low",
+                  reason="Outside the owner-approved reference; waiting to confirm",
+                  candidate={"observed": len(seen), "required": rule["persistence_observations"],
+                             "window_seconds": float(rule["window_seconds"]),
+                             "first_seen_at": oldest or sample.get("observed_at"), "confidence": "low"})
     return result

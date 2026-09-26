@@ -28,6 +28,7 @@ from projects.vehicle_data.radar_alignment import (
     AlignmentHistory, LIVE_POLLING_COMMISSIONED, METRICS as RADAR_METRICS,
 )
 from projects.vehicle_data.metrics import METRICS, MetricDefinition
+from projects.vehicle_data.receive_watch import ReceiveSilenceWatch
 from projects.vehicle_data.models import (
     AcquisitionResult,
     ScalarValue,
@@ -54,6 +55,10 @@ ACTIVE_DRIVE_SOURCES = frozenset(
         "ccan.broadcast.0x2ef",
         "ccan.broadcast.0x41a",
         "ccan.broadcast.0x41d",
+        # read_broadcast_snapshot derives the gear from 0x1F7, and the helper
+        # reuses that snapshot; without this every drive latched restoration
+        # failure on the first moving gear sample (2026-09-24).
+        "derived.ccan_0x1f7_shaft_ratio",
         "pcm.did.01a1",
         "pcm.did.06da",
         "pcm.did.069f",
@@ -569,6 +574,8 @@ class TelemetryBroker:
         self._inflight: dict[tuple[str, str], _Inflight] = {}
         self._interface_probe_state = "awaiting_first_probe"
         self._interface_probe_started = self.monotonic()
+        self._receive_watch = ReceiveSilenceWatch()
+        self._receive_silent_roles: tuple[str, ...] = ()
         self._interface_status: dict[str, object] = {
             "channel": getattr(self.acquirer, "channel", "c-can-unresolved"),
             "adapter_present": None,
@@ -1913,6 +1920,22 @@ class TelemetryBroker:
                 },
                 "active_inhibits": ["status-unavailable"],
             }
+        silent_roles: tuple[str, ...] = ()
+        role_snapshot = snapshot.get("role_interfaces")
+        role_payloads = (
+            role_snapshot.get("roles") if isinstance(role_snapshot, dict) else None
+        )
+        if isinstance(role_payloads, dict):
+            try:
+                findings = self._receive_watch.update(role_payloads, self.monotonic())
+                for role, finding in findings.items():
+                    if isinstance(role_payloads.get(role), dict):
+                        role_payloads[role]["receive_watch"] = finding
+                silent_roles = self._receive_watch.silent_roles(findings)
+            except Exception:
+                # Deaf-adapter evidence is advisory; never let it break the
+                # role-status path.
+                silent_roles = ()
         if self.usb_can_monitor is not None:
             try:
                 self.usb_can_monitor.reconcile(snapshot)
@@ -1924,6 +1947,7 @@ class TelemetryBroker:
         with self._lock:
             self._interface_status = snapshot
             self._interface_probe_state = probe_state
+            self._receive_silent_roles = silent_roles
 
     def status_response(self) -> dict[str, object]:
         with self._lock:
@@ -2125,12 +2149,44 @@ class TelemetryBroker:
                 and ccan_role.get("channel") == interface.get("channel")
             ):
                 actual = ccan_role.get("actual")
+                # Physical route validity, not passive admission.  A status
+                # refresh during the armed interval (the scheduled voltage_mon
+                # acquisition at 18:00/20:00 local) re-probes the role as
+                # ``interface_armed`` with passive_ready false, and the
+                # top-level topology.usable copies that bit (see
+                # 2026-09-06_broker_topology_refresh_diagnosis.md).  Copying it
+                # here made the historian flag the broker's own armed channel
+                # as "topology_unusable" on every such drive (episodes 643/644).
+                # ``interface_armed`` is only reached after the identity, link,
+                # bitrate, FD and one-shot checks pass (can_interfaces.py), so
+                # it still proves the route; any other reason stays unusable.
+                route_verified = (
+                    ccan_role.get("resolution") == "resolved"
+                    and ccan_role.get("reason") in ("ready", "interface_armed")
+                    and isinstance(actual, dict)
+                    and actual.get("up") is True
+                    and actual.get("controller_state") == "ERROR-ACTIVE"
+                )
                 if isinstance(actual, dict):
                     actual["listen_only"] = False
                     actual["mode"] = "armed_diagnostic"
                 ccan_role["passive_ready"] = False
                 ccan_role["operating_mode"] = "armed_diagnostic"
-                ccan_role["topology_usable"] = bool(topology.get("usable"))
+                ccan_role["topology_usable"] = route_verified
+                if route_verified:
+                    # Structured owner marker for status consumers (historian).
+                    ccan_role["armed_owner"] = "broker_active_drive"
+                    # Same repair for the top-level flag the drive recorder
+                    # admits on: after that mid-drive refresh it copied
+                    # passive_ready=false and the recorder stopped for the rest
+                    # of the drive (2026-09-24 18:00 and 20:00). It describes the
+                    # verified physical route here, not passive admission;
+                    # listen_only stays false, so passive admission is unchanged.
+                    if isinstance(interface.get("topology"), dict):
+                        interface["topology"]["usable"] = True
+                        interface["topology"]["reason"] = (
+                            "C-CAN route verified; armed by the broker active-drive owner"
+                        )
                 ccan_role["reason"] = (
                     "broker active-drive owner has the resolved C-CAN channel "
                     "armed for reviewed diagnostics"
@@ -2182,6 +2238,7 @@ class TelemetryBroker:
                     bcan_role["passive_ready"] = False
                     bcan_role["operating_mode"] = "armed_diagnostic"
                     bcan_role["topology_usable"] = True
+                    bcan_role["armed_owner"] = "broker_auxiliary_drive"
                     bcan_role["reason"] = "broker auxiliary-drive owner has the resolved B-CAN channel armed for fixed ICS polling"
                 else:
                     bcan_role["topology_usable"] = False
@@ -2413,6 +2470,20 @@ class TelemetryBroker:
                     "not yet distinguished"
                 ),
             }
+        elif result.reason == "bus_asleep" and "c-can" in self._receive_silent_roles_snapshot():
+            # The C-CAN leg is silent but CAN-CH has been busy for minutes: the
+            # van is awake and the C-CAN adapter is deaf (2026-09-22 incident).
+            state = {
+                "state": "awake",
+                "running": None,
+                "confidence": "inferred",
+                "basis": "passive_can_ch_activity_c_can_silent",
+                "detail": (
+                    "CAN-CH traffic is present but the C-CAN adapter has "
+                    "received nothing for minutes; replug its USB cable or "
+                    "reboot the Pi"
+                ),
+            }
         elif result.reason == "bus_asleep":
             state = {
                 "state": "asleep",
@@ -2461,6 +2532,10 @@ class TelemetryBroker:
                 if result.observed_monotonic is not None
                 else self.monotonic()
             )
+
+    def _receive_silent_roles_snapshot(self) -> tuple[str, ...]:
+        with self._lock:
+            return self._receive_silent_roles
 
     def _wake_state_conflicts(self, *, require_fresh: bool) -> tuple[str, ...]:
         now = self.monotonic()

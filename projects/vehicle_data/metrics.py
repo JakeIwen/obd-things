@@ -588,6 +588,41 @@ def _radar_angle_metric(axis: str) -> MetricDefinition:
     )
 
 
+
+# Estimated engaged gear from the 0x1F7 turbine/output shaft-speed ratio (ZF 9HP48). The ratio
+# bands were fitted on the 2026-08-30 drive, frozen, and scored on the independent 2026-09-22
+# drive: 99.0 % of 191,211 qualifying frames inside a band, no unmatched peak, no no-band run
+# >= 1 s (tmp/ecu_mapping/gear-ratio-20260922/full/, tools/gear_ratio_lookup.py). Only R and 1-7
+# are ever engaged on this van (owner, 2026-09-24), so 8/9 are not published. It is an
+# operational estimate (Tier-2 state_detection proxy), not a decoded PRND or TCM gear: quality
+# stays "candidate", it is only published while moving, and it never feeds a warning.
+TRANSMISSION_GEAR_ESTIMATE = MetricDefinition(
+    name="transmission.gear_estimate",
+    unit="gear",
+    value_type="string",
+    stale_after_seconds=5.0,
+    passive_min_interval_seconds=0.0,
+    minimum=None,
+    maximum=None,
+    sources=(
+        SourceDefinition(
+            name="derived.ccan_0x1f7_shaft_ratio",
+            bus="c-can",
+            bitrate=500000,
+            acquisition_class="passive_broadcast",
+            quality="candidate",
+            provenance=(
+                "0x1F7 turbine rpm / output rpm (both observed_alfa_scale) matched to frozen "
+                "ZF 9HP48 ratio bands +-3 %: R 3.836, 1 4.719, 2 2.845, 3 1.910, 4 1.382, "
+                "5 1.000, 6 0.808, 7 0.699; gate PASS 99.0 % on an independent drive"
+            ),
+            side_effects="none; derived from receive-only frames",
+            publisher_allowed=True,
+            publisher_values=("R", "1", "2", "3", "4", "5", "6", "7"),
+        ),
+    ),
+)
+
 RADAR_ELEVATION = _radar_angle_metric("elevation")
 RADAR_AZIMUTH = _radar_angle_metric("azimuth")
 
@@ -608,6 +643,7 @@ METRICS = {
         TRANSMISSION_OUTPUT_SPEED,
         TRANSMISSION_OIL_TEMPERATURE,
         TRANSMISSION_TURBINE_SPEED,
+        TRANSMISSION_GEAR_ESTIMATE,
         GENERATOR_FIELD_DUTY,
         VEHICLE_ODOMETER,
         RADAR_ELEVATION,

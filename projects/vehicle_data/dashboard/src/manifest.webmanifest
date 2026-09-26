@@ -1,0 +1,14 @@
+{
+  "name": "Van telemetry",
+  "short_name": "Van",
+  "description": "Live telemetry from the ProMaster's CAN buses",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0e1412",
+  "theme_color": "#0e1412",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

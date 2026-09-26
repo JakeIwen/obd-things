@@ -27,6 +27,12 @@ low-beam investigation.
   does not publish the `2023`/`40A2` wire layouts or current node-bit
   assignments, so it corroborates the domain without upgrading the legacy
   field map.
+- 2026-09-24 offline review: the recommended fix is hardware (parallel load
+  resistors). `Headlamp LED Management` (byte 143, bit 6) is verified as an
+  LED DRL/parking strategy and did not suppress the lamp codes. The relevant
+  PROXI field is `Front Lights Diagnosis` (byte 190, bit 1), which is deferred.
+  The July aligned state also carried an unintended `Stop&Start` change. See
+  [`findings/2026-09-24_led_low_beam_dtc_options.md`](findings/2026-09-24_led_low_beam_dtc_options.md).
 - On 2026-07-25 the owner tried AlfaOBD's labeled
   `Headlamp LED Management: Absent -> Present` change and PROXI alignment.
   AlfaOBD repeatedly reported `Failure connecting to module` for DASM even

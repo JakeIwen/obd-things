@@ -1,0 +1,22 @@
+{
+  "name": "van-telemetry-dashboard-v2",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Portrait-tablet telemetry dashboard for the 2022 ProMaster telemetry broker (parallel app on port 8766).",
+  "type": "module",
+  "scripts": {
+    "build": "node tools/build.mjs",
+    "watch": "node tools/build.mjs --watch",
+    "test": "node --test test/",
+    "measure": "node --experimental-websocket tools/measure.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@preact/signals": "2.11.2",
+    "esbuild": "0.28.2",
+    "marked": "16.4.2",
+    "preact": "10.29.8"
+  }
+}

@@ -138,6 +138,12 @@ resource. The catalog also contains malformed or ambiguous numeric metadata, inc
 `0.10.0` and 32-bit bounds represented as `0..-1`. Raw request bytes, field positions, and unexpanded
 resource IDs remain useful, but the human labels and scaling require validation.
 
+**September 22 clarification:** the
+[app-loader investigation](../projects/ecu_mapping/findings/promaster_2022/2026-09-22_gear_and_oil_life_offline.md)
+resolves the section boundary: `K1` enum pairs precede `######`, and zero-based
+`J1` plain labels follow it. Whole-file indexing remains invalid; this does not
+license arbitrary placeholder expansion or remove ECU/decoder validation.
+
 **Artifact/catalog limitation — diagnostic menu labels do not bind actions to payloads.** The exact
 BCM menu proves that front/rear lock-relay actions exist, but its tables do not join those labels to
 the six captured `2F` DIDs. Likewise, a Climate `31 01 0201` start payload was found in application

@@ -43,6 +43,28 @@ ADVISORY_RESOLVING_STATES = frozenset(("normal", "suppressed"))
 ADVISORY_INCONCLUSIVE_STATES = frozenset(
     ("unavailable", "insufficient_history", "rejected", "not_applicable", "recovering")
 )
+# Tiered notification policy (warnings-redesign.md section 6).  Cooldowns are
+# per group (dedupe key), never per rule; the 8-day rate-limit bound admits the
+# 7-day tier-2 cooldown.
+MAX_NOTIFICATION_RATE_LIMIT_SECONDS = 8 * 24 * 60 * 60
+TRIP_NONCRITICAL_PUSH_CAP = 3
+# Categories shown only as dashboard System notes; never notified (owner
+# decision 2026-09-24), whatever tier or eligibility an assessment carries.
+SYSTEM_NOTE_CATEGORIES = frozenset(
+    ("can_infrastructure", "telemetry_quality", "data_quality", "system")
+)
+# Urgency rank of a tiered outbox row.  A group cooldown only counts earlier
+# pushes of the same or higher rank, so an escalation (notice -> tier-1 ->
+# tier-0 warning -> critical) in one group is never swallowed or delayed by a
+# lower-urgency push.  Keep in step with ``_notification_rank``.
+NOTIFICATION_RANK_SQL = """
+    CASE
+        WHEN json_extract(payload_json,'$.severity')='critical' THEN 4
+        WHEN json_extract(payload_json,'$.tier')=0 THEN 3
+        WHEN json_extract(payload_json,'$.tier')=2 THEN 1
+        ELSE 2
+    END
+"""
 
 
 class HistorianError(RuntimeError):
@@ -171,6 +193,11 @@ class AdvisoryPersistenceResult:
     resolved: int
     inconclusive: int
     notifications_enqueued: int
+    # Tiered delivery policy counters (defaults keep older consumers working):
+    # evaluations in which the per-trip cap blocked a due push, and rows
+    # enqueued with a quiet-hours deferral.
+    notifications_capped: int = 0
+    notifications_deferred: int = 0
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -1553,7 +1580,15 @@ class TelemetryHistorian:
                     "bitrate": actual.get("bitrate"),
                     "listen_only": actual.get("listen_only"),
                     "controller_state": actual.get("controller_state"),
+                    "receive_silent": (
+                        payload.get("receive_watch", {}).get("receive_silent") is True
+                        if isinstance(payload.get("receive_watch"), Mapping)
+                        else False
+                    ),
                     "mode": operating_mode,
+                    # Set by the broker only for its own verified armed owner
+                    # ("broker_active_drive" / "broker_auxiliary_drive").
+                    "armed_owner": payload.get("armed_owner"),
                     "topology": {
                         "bus": role,
                         "usable": topology_usable,
@@ -1646,6 +1681,9 @@ class TelemetryHistorian:
                 and payload.get("controller_state") != "ERROR-ACTIVE"
             ),
             "topology_unusable": topology_usable is False,
+            # Board A went deaf on 2026-09-22 with every link check passing;
+            # see receive_watch.py.
+            "receive_silent": payload.get("receive_silent") is True,
         }
         failures = [reason for reason, failed in checks.items() if failed]
         if failures:
@@ -5011,28 +5049,77 @@ class TelemetryHistorian:
         rule_key: str,
         event_us: int,
         rate_limit_seconds: float,
+        group_key: str | None = None,
+        rank: int | None = None,
+        critical: bool = False,
     ) -> bool:
-        pending = self._conn.execute(
-            """
-            SELECT 1 FROM advisory_notification_outbox
-            WHERE episode_id=? AND status IN ('pending','failed') LIMIT 1
-            """,
-            (episode_id,),
-        ).fetchone()
+        if critical:
+            # A critical push is owned only by an undelivered critical row of
+            # the same episode.  A pending lower-severity row (superseded by
+            # the caller) or a terminally failed row must never silence it.
+            pending = self._conn.execute(
+                """
+                SELECT 1 FROM advisory_notification_outbox
+                WHERE episode_id=? AND status='pending'
+                  AND json_extract(payload_json,'$.severity')='critical' LIMIT 1
+                """,
+                (episode_id,),
+            ).fetchone()
+        else:
+            pending = self._conn.execute(
+                """
+                SELECT 1 FROM advisory_notification_outbox
+                WHERE episode_id=? AND status IN ('pending','failed') LIMIT 1
+                """,
+                (episode_id,),
+            ).fetchone()
         if pending is not None:
             # One durable delivery owner per episode.  A periodic reminder
             # must not overtake a pending retry or resurrect a row that already
             # reached its terminal failed state.  Resolution/reopening creates
             # a new episode and therefore a new bounded owner.
             return False
-        last = self._conn.execute(
-            """
-            SELECT max(coalesce(delivered_us,last_attempt_us,created_us))
-            FROM advisory_notification_outbox
-            WHERE rule_key=? AND status!='cancelled'
-            """,
-            (rule_key,),
-        ).fetchone()[0]
+        if group_key is None:
+            last = self._conn.execute(
+                """
+                SELECT max(coalesce(delivered_us,last_attempt_us,created_us))
+                FROM advisory_notification_outbox
+                WHERE rule_key=? AND status!='cancelled'
+                """,
+                (rule_key,),
+            ).fetchone()[0]
+        else:
+            # Tiered cooldown per group across rules and episodes.  The outbox
+            # is tiny and the lower bound (the longest cooldown) keeps the
+            # json_extract scan bounded; recovery rows are not warning pushes.
+            # Only same-or-higher urgency pushes count (``rank``).
+            lower_us = event_us - MAX_NOTIFICATION_RATE_LIMIT_SECONDS * MICROSECONDS
+            last = self._conn.execute(
+                f"""
+                SELECT max(coalesce(delivered_us,last_attempt_us,created_us))
+                FROM advisory_notification_outbox
+                WHERE status!='cancelled' AND created_us>=?
+                  AND json_extract(payload_json,'$.group')=?
+                  AND coalesce(json_extract(payload_json,'$.notification_kind'),'')
+                      !='recovery'
+                  AND ({NOTIFICATION_RANK_SQL})>=?
+                """,
+                (lower_us, group_key, 0 if rank is None else int(rank)),
+            ).fetchone()[0]
+            if last is not None:
+                # A later "back to normal" push in the group ends the cooldown:
+                # a recurrence after the owner was told it recovered must push.
+                recovered = self._conn.execute(
+                    """
+                    SELECT max(created_us) FROM advisory_notification_outbox
+                    WHERE status!='cancelled' AND created_us>=?
+                      AND json_extract(payload_json,'$.group')=?
+                      AND json_extract(payload_json,'$.notification_kind')='recovery'
+                    """,
+                    (lower_us, group_key),
+                ).fetchone()[0]
+                if recovered is not None and int(recovered) > int(last):
+                    return True
         return last is None or event_us - int(last) >= int(
             round(rate_limit_seconds * MICROSECONDS)
         )
@@ -5046,12 +5133,92 @@ class TelemetryHistorian:
             isinstance(rate_limit, bool)
             or not isinstance(rate_limit, (int, float))
             or not math.isfinite(float(rate_limit))
-            or not 60 <= float(rate_limit) <= 24 * 60 * 60
+            or not 60 <= float(rate_limit) <= MAX_NOTIFICATION_RATE_LIMIT_SECONDS
         ):
             raise ValueError(
-                "notification_rate_limit_seconds must be between 60 and 86400"
+                "notification_rate_limit_seconds must be between 60 and "
+                f"{MAX_NOTIFICATION_RATE_LIMIT_SECONDS}"
             )
         return float(rate_limit)
+
+    @staticmethod
+    def _notification_policy(
+        assessment: Mapping[str, object],
+    ) -> dict[str, object]:
+        """Delivery policy for one assessment; ``legacy`` without a tier.
+
+        Tier 0 critical: 5-minute repeats, never deferred.  Tier 0 warning:
+        once per episode, 6 h group cooldown, never deferred.  Tier 1: once,
+        6 h, quiet-hours deferral.  Tier 2: once, 7 d, deferral.  Tier 3: once,
+        6 h, deferral except critical; unreachable, because
+        ``_record_tiered_notification_locked`` never enqueues tier 3 or a
+        System-note category (owner decision 2026-09-24).
+        """
+
+        tier = assessment.get("tier")
+        if (
+            not isinstance(tier, int)
+            or isinstance(tier, bool)
+            or not 0 <= tier <= 3
+        ):
+            return {"legacy": True}
+        severity = assessment.get("severity")
+        if tier == 0 and severity == "critical":
+            cooldown, repeat, defer, once = 300, True, False, False
+        elif tier == 0:
+            cooldown, repeat, defer, once = 21600, False, False, True
+        elif tier == 1:
+            cooldown, repeat, defer, once = 21600, False, True, True
+        elif tier == 2:
+            cooldown, repeat, defer, once = 604800, False, True, True
+        else:
+            cooldown, repeat, defer, once = 21600, False, severity != "critical", True
+        group = assessment.get("group")
+        group = group if isinstance(group, str) and group else None
+        return {
+            "legacy": False,
+            "tier": tier,
+            "cooldown_seconds": float(cooldown),
+            "repeat": repeat,
+            "defer": defer,
+            "once_per_episode": once,
+            "group": group,
+            "dedupe_key": group or assessment.get("rule"),
+        }
+
+    @staticmethod
+    def _notification_rank(tier: object, severity: object) -> int:
+        """Urgency rank of a tiered push; mirrors ``NOTIFICATION_RANK_SQL``."""
+
+        if severity == "critical":
+            return 4
+        if tier == 0:
+            return 3
+        if tier == 2:
+            return 1
+        return 2
+
+    def _trip_push_count_locked(self, event_us: int) -> int:
+        """Non-critical tiered warning rows created since the open trip began."""
+
+        trip = self._conn.execute(
+            "SELECT started_us FROM trips WHERE ended_us IS NULL LIMIT 1"
+        ).fetchone()
+        if trip is None:
+            return 0
+        return int(
+            self._conn.execute(
+                """
+                SELECT count(*) FROM advisory_notification_outbox
+                WHERE created_us>=? AND created_us<=? AND status!='cancelled'
+                  AND json_extract(payload_json,'$.tier') IS NOT NULL
+                  AND coalesce(json_extract(payload_json,'$.severity'),'')!='critical'
+                  AND coalesce(json_extract(payload_json,'$.notification_kind'),'')
+                      !='recovery'
+                """,
+                (int(trip["started_us"]), event_us),
+            ).fetchone()[0]
+        )
 
     def _enqueue_advisory_notification_locked(
         self,
@@ -5062,10 +5229,27 @@ class TelemetryHistorian:
         context_fingerprint: str,
         assessment: Mapping[str, object],
         assessment_json: str,
+        rate_limit_seconds: float | None = None,
+        eligible_after_us: int | None = None,
+        notification_kind: str = "warning",
+        payload_extra: Mapping[str, object] | None = None,
+        dedupe_source: str | None = None,
+        skip_due_check: bool = False,
     ) -> bool:
+        """Insert one pending outbox row.  Keyword defaults are the legacy path.
+
+        Tiered callers pass the policy cooldown, the quiet-hours eligibility,
+        the C3 payload additions and ``skip_due_check`` (they already ran the
+        group-keyed due check and the per-trip cap).
+        """
+
         rule_key = str(episode["rule_key"])
-        rate_limit = self._notification_rate_limit(assessment)
-        if not self._notification_due_locked(
+        rate_limit = (
+            self._notification_rate_limit(assessment)
+            if rate_limit_seconds is None
+            else float(rate_limit_seconds)
+        )
+        if not skip_due_check and not self._notification_due_locked(
             episode_id=int(episode["id"]),
             rule_key=rule_key,
             event_us=event_us,
@@ -5085,14 +5269,18 @@ class TelemetryHistorian:
             "evaluated_at": _iso_from_us(event_us),
             "assessment": json.loads(assessment_json),
         }
-        bucket_us = max(
-            MICROSECONDS,
-            int(round(float(rate_limit) * MICROSECONDS)),
-        )
-        dedupe_source = (
-            f"{rule_key}:{episode['id']}:{event_us // bucket_us}:"
-            f"{context_fingerprint}"
-        )
+        if payload_extra is not None or notification_kind != "warning":
+            payload.update(dict(payload_extra or {}))
+            payload["notification_kind"] = notification_kind
+        if dedupe_source is None:
+            bucket_us = max(
+                MICROSECONDS,
+                int(round(float(rate_limit) * MICROSECONDS)),
+            )
+            dedupe_source = (
+                f"{rule_key}:{episode['id']}:{event_us // bucket_us}:"
+                f"{context_fingerprint}"
+            )
         dedupe_key = hashlib.sha256(dedupe_source.encode()).hexdigest()
         cursor = self._conn.execute(
             """
@@ -5108,7 +5296,7 @@ class TelemetryHistorian:
                 dedupe_key,
                 event_us,
                 _iso_from_us(event_us),
-                event_us,
+                event_us if eligible_after_us is None else int(eligible_after_us),
                 "pending",
                 json.dumps(payload, sort_keys=True, separators=(",", ":")),
             ),
@@ -5121,6 +5309,230 @@ class TelemetryHistorian:
             )
             return True
         return False
+
+    @staticmethod
+    def _tiered_payload_extra(
+        assessment: Mapping[str, object],
+        *,
+        tier: int,
+        group: str | None,
+        event_us: int,
+        eligible_after_us: int,
+    ) -> dict[str, object]:
+        """Contract C3 additions carried by every tiered outbox row."""
+
+        current = assessment.get("current")
+        current = current if isinstance(current, Mapping) else {}
+        trip_id = current.get("trip_id")
+        return {
+            "tier": tier,
+            "group": group,
+            "severity": assessment.get("severity"),
+            "action": assessment.get("action"),
+            "confidence": assessment.get("confidence"),
+            "deferred_until": (
+                _iso_from_us(eligible_after_us)
+                if eligible_after_us > event_us
+                else None
+            ),
+            "trip_id": (
+                trip_id
+                if isinstance(trip_id, int) and not isinstance(trip_id, bool)
+                else None
+            ),
+        }
+
+    def _record_tiered_notification_locked(
+        self,
+        *,
+        episode: sqlite3.Row,
+        event_id: int | None,
+        event_us: int,
+        fingerprint: str,
+        assessment: Mapping[str, object],
+        assessment_json: str,
+        policy: Mapping[str, object],
+        counters: dict[str, int],
+    ) -> None:
+        """Group cooldown, once-per-episode/repeat, trip cap, quiet hours."""
+
+        if not (
+            assessment.get("state") == "warning"
+            and assessment.get("notification_eligible") is True
+            and episode["acknowledged_us"] is None
+        ):
+            return
+        if policy["tier"] == 3 or assessment.get("category") in SYSTEM_NOTE_CATEGORIES:
+            # Owner decision 2026-09-24: adapter, bus and data-quality items
+            # are dashboard System notes only and never notify, even if a
+            # producer marks one eligible by mistake.
+            return
+        episode_id = int(episode["id"])
+        rule_key = str(episode["rule_key"])
+        cooldown = float(policy["cooldown_seconds"])
+        critical = assessment.get("severity") == "critical"
+        prior_row = self._conn.execute(
+            """
+            SELECT 1 FROM advisory_notification_outbox
+            WHERE episode_id=? AND status!='cancelled' LIMIT 1
+            """,
+            (episode_id,),
+        ).fetchone()
+        if policy["once_per_episode"] and prior_row is not None:
+            return
+        group = policy.get("group")
+        if not self._notification_due_locked(
+            episode_id=episode_id,
+            rule_key=rule_key,
+            event_us=event_us,
+            rate_limit_seconds=cooldown,
+            group_key=group if isinstance(group, str) else None,
+            rank=self._notification_rank(policy["tier"], assessment.get("severity")),
+            critical=critical,
+        ):
+            return
+        # Tier 0 is never capped: an absolute-limit warning (oil below its
+        # band, coolant or transmission hot, charging failure, tire low) must
+        # not be dropped because lower tiers already pushed this trip.
+        if (
+            not critical
+            and policy["tier"] != 0
+            and self._trip_push_count_locked(event_us) >= TRIP_NONCRITICAL_PUSH_CAP
+        ):
+            counters["notifications_capped"] += 1
+            return
+        eligible_after_us = event_us
+        # A tier-1 warning raised while a trip is open is not deferred: the
+        # owner is driving (trips 50-55 ran until 23:27 local), so holding it
+        # to 07:30 would deliver it after the drive, or cancel it unseen if
+        # the episode resolves overnight.  Parked tier-1 and tier-2 still wait.
+        in_trip_tier1 = policy["tier"] == 1 and self._conn.execute(
+            "SELECT 1 FROM trips WHERE ended_us IS NULL AND started_us<=? LIMIT 1",
+            (event_us,),
+        ).fetchone() is not None
+        if policy["defer"] and not in_trip_tier1:
+            from projects.vehicle_data.notifications import quiet_hours_deferral
+
+            eligible_after_us = quiet_hours_deferral(event_us) or event_us
+        prior_critical = None
+        if critical:
+            # An escalation supersedes the episode's undelivered lower-severity
+            # row: the critical row goes out now at urgent priority instead.
+            self._conn.execute(
+                """
+                UPDATE advisory_notification_outbox
+                SET status='cancelled',last_error='superseded by a critical notification'
+                WHERE episode_id=? AND status='pending'
+                  AND coalesce(json_extract(payload_json,'$.severity'),'')!='critical'
+                """,
+                (episode_id,),
+            )
+            prior_critical = self._conn.execute(
+                """
+                SELECT 1 FROM advisory_notification_outbox
+                WHERE episode_id=? AND status!='cancelled'
+                  AND json_extract(payload_json,'$.severity')='critical' LIMIT 1
+                """,
+                (episode_id,),
+            ).fetchone()
+        kind = "repeat" if policy["repeat"] and prior_critical is not None else "warning"
+        if event_id is None:
+            event_id = self._insert_advisory_event_locked(
+                episode_id=episode_id,
+                event_us=event_us,
+                event_type=(
+                    "notification_repeat_due" if kind == "repeat" else "notification_due"
+                ),
+                previous_state=str(assessment["state"]),
+                new_state=str(assessment["state"]),
+                context_fingerprint=fingerprint,
+                assessment_json=assessment_json,
+            )
+        if self._enqueue_advisory_notification_locked(
+            episode=episode,
+            event_id=event_id,
+            event_us=event_us,
+            context_fingerprint=fingerprint,
+            assessment=assessment,
+            assessment_json=assessment_json,
+            rate_limit_seconds=cooldown,
+            eligible_after_us=eligible_after_us,
+            notification_kind=kind,
+            payload_extra=self._tiered_payload_extra(
+                assessment,
+                tier=int(policy["tier"]),
+                group=group if isinstance(group, str) else None,
+                event_us=event_us,
+                eligible_after_us=eligible_after_us,
+            ),
+            skip_due_check=True,
+        ):
+            counters["notifications_enqueued"] += 1
+            if eligible_after_us > event_us:
+                counters["notifications_deferred"] += 1
+
+    def _enqueue_recovery_notification_locked(
+        self,
+        *,
+        episode: sqlite3.Row,
+        event_id: int,
+        event_us: int,
+        fingerprint: str,
+        assessment: Mapping[str, object],
+        assessment_json: str,
+    ) -> bool:
+        """One recovery row for a delivered tier-0 episode that returned normal.
+
+        Not subject to cooldown or the trip cap.  The caller has already
+        cancelled the episode's pending warning rows.
+        """
+
+        if assessment.get("state") != "normal" or episode["acknowledged_us"] is not None:
+            return False
+        stored: dict[str, object] = {}
+        tier = assessment.get("tier")
+        if not isinstance(tier, int) or isinstance(tier, bool):
+            try:
+                loaded = json.loads(episode["latest_assessment_json"])
+            except (TypeError, json.JSONDecodeError):
+                loaded = {}
+            stored = loaded if isinstance(loaded, dict) else {}
+            tier = stored.get("tier")
+        if not isinstance(tier, int) or isinstance(tier, bool) or tier != 0:
+            return False
+        delivered = self._conn.execute(
+            """
+            SELECT 1 FROM advisory_notification_outbox
+            WHERE episode_id=? AND status='delivered'
+              AND coalesce(json_extract(payload_json,'$.notification_kind'),'')
+                  !='recovery'
+            LIMIT 1
+            """,
+            (int(episode["id"]),),
+        ).fetchone()
+        if delivered is None:
+            return False
+        group = assessment.get("group") or stored.get("group")
+        return self._enqueue_advisory_notification_locked(
+            episode=episode,
+            event_id=event_id,
+            event_us=event_us,
+            context_fingerprint=fingerprint,
+            assessment=assessment,
+            assessment_json=assessment_json,
+            rate_limit_seconds=300.0,
+            eligible_after_us=event_us,
+            notification_kind="recovery",
+            payload_extra=self._tiered_payload_extra(
+                assessment,
+                tier=0,
+                group=group if isinstance(group, str) and group else None,
+                event_us=event_us,
+                eligible_after_us=event_us,
+            ),
+            dedupe_source=f"recovery:{int(episode['id'])}",
+            skip_due_check=True,
+        )
 
     def record_advisory_assessments(
         self,
@@ -5137,9 +5549,15 @@ class TelemetryHistorian:
         interrupted never-warning vehicle-health watches archive unconfirmed
         after their quiet window. Coverage changes are audit notes, not alerts.  Only an unacknowledged ``warning`` with
         ``notification_eligible=true`` enters the rate-limited outbox.
+
+        Assessments carrying an integer ``tier`` follow the tiered policy
+        (``_notification_policy``): group cooldowns, once-per-episode pushes,
+        tier-0 critical repeats, a per-trip cap, quiet-hours deferral, a
+        tier-0 recovery row, any-regime timed recovery and the 24 h parked
+        closure.  Assessments without ``tier`` keep the legacy behaviour.
         """
 
-        from projects.vehicle_data.event_history import stamp, recovery_gate, checkpoint, archive_baselines, finish_windows, archive_interrupted_watch
+        from projects.vehicle_data.event_history import stamp, recovery_gate, checkpoint, archive_baselines, finish_windows, archive_interrupted_watch, archive_parked_episode
 
         moment = _utc_datetime(evaluated_at, "evaluated_at")
         event_us = _to_us(moment)
@@ -5164,6 +5582,8 @@ class TelemetryHistorian:
             "resolved": 0,
             "inconclusive": 0,
             "notifications_enqueued": 0,
+            "notifications_capped": 0,
+            "notifications_deferred": 0,
         }
         seen: set[str] = set()
         with self._lock, self._conn:
@@ -5219,6 +5639,9 @@ class TelemetryHistorian:
                         counters["resolved"] += 1
                         episode = None
                 if archive_interrupted_watch(self._conn, episode, assessment, event_us):
+                    counters["resolved"] += 1
+                    episode = None
+                if archive_parked_episode(self._conn, episode, assessment, event_us):
                     counters["resolved"] += 1
                     episode = None
                 assessment = recovery_gate(self._conn, episode, assessment, event_us)
@@ -5293,7 +5716,7 @@ class TelemetryHistorian:
                             episode["id"],
                         ),
                     )
-                    self._insert_advisory_event_locked(
+                    resolved_event_id = self._insert_advisory_event_locked(
                         episode_id=int(episode["id"]),
                         event_us=event_us,
                         event_type="resolved",
@@ -5310,6 +5733,16 @@ class TelemetryHistorian:
                         """,
                         (episode["id"],),
                     )
+                    # After the cancel above, so the new row survives it.
+                    if self._enqueue_recovery_notification_locked(
+                        episode=episode,
+                        event_id=resolved_event_id,
+                        event_us=event_us,
+                        fingerprint=fingerprint,
+                        assessment=assessment,
+                        assessment_json=assessment_json,
+                    ):
+                        counters["notifications_enqueued"] += 1
                     counters["resolved"] += 1
                     continue
 
@@ -5419,10 +5852,24 @@ class TelemetryHistorian:
                     ).fetchone()
                     counters["updated"] += 1
 
+                policy = self._notification_policy(assessment)
+                if not policy.get("legacy"):
+                    self._record_tiered_notification_locked(
+                        episode=episode,
+                        event_id=event_id,
+                        event_us=event_us,
+                        fingerprint=fingerprint,
+                        assessment=assessment,
+                        assessment_json=assessment_json,
+                        policy=policy,
+                        counters=counters,
+                    )
+                    continue
                 notification_eligible = (
                     state == "warning"
                     and assessment.get("notification_eligible") is True
                     and episode["acknowledged_us"] is None
+                    and assessment.get("category") not in SYSTEM_NOTE_CATEGORIES
                 )
                 if notification_eligible:
                     rate_limit = self._notification_rate_limit(assessment)
@@ -5687,7 +6134,9 @@ class TelemetryHistorian:
                 SELECT outbox.* FROM advisory_notification_outbox AS outbox
                 JOIN advisory_episodes AS episode ON episode.id=outbox.episode_id
                 WHERE outbox.status='pending' AND outbox.eligible_after_us<=?
-                  AND episode.status='open' AND episode.acknowledged_us IS NULL
+                  AND (episode.status='open'
+                       OR json_extract(outbox.payload_json,'$.notification_kind')='recovery')
+                  AND episode.acknowledged_us IS NULL
                 ORDER BY outbox.created_us,outbox.id LIMIT ?
                 """,
                 (_to_us(moment), limit),

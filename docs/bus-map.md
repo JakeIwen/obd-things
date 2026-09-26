@@ -106,19 +106,19 @@ registry can't hold; keep the addresses in sync with `lib/modules.py`.
 | `radar_acc` | Bosch ACC radar (DASM / MRR1evo) | C-CAN | `18DA2AF1` → `18DAF12A` | ACKs our frames even with ignition cut mid-sweep. Speed only via DID `0x1002` (no OBD PIDs behind SGW). |
 | `pcm` | Powertrain Control Module (3.6L Pentastar) | C-CAN | `18DA10F1` → `18DAF110` | Fixed-DLC-8 padded `10 92 → 50 92`, then `1A 87 → 5A 87` containing `68532157AI`, was independently verified while idling on 2026-07-21. AlfaOBD repeated the positive `50 92` ignition-on/engine-off on 2026-07-22; the identical Alfa profile/setup timed out while ignition was asleep and succeeded after rearm. The 2026-07-26 simultaneous Plots/wire campaign mapped eleven runtime DIDs, including oil pressure `022A`, coolant `011D`, and signed current torque `06DA`. A 2026-07-30 direct follow-up returned `62 01 A1 80 00` twice for padded physical `22 01A1` with no explicit session change; this is generator field-command duty at `u16be x 100 / 32768`, not current or temperature. |
 | `rf_hub` | RF Hub (Continental) — TPMS/RKE | C-CAN | `18DAC7F1` → `18DAF1C7` | **Answers with ignition OFF** (battery-powered RKE receiver). |
-| `tcm` | ZF 948TE transmission controller | C-CAN | `18DA18F1` → `18DAF118` | Live identity on 2026-07-19: `F187=46342086`, `F194/F132=68532161AF`, `F192=ES11-1065 D`. |
+| `tcm` | ZF 948TE transmission controller | C-CAN | `18DA18F1` → `18DAF118` | Live identity on 2026-07-19: `F187=46342086`, `F194/F132=68532161AF`, `F192=ES11-1065 D`. The 2026-09-24 passive in-vehicle-client observation found UDS `22 211B–2132`, `2136–213E`, and `026B` (100 B) positive; `211F–212E`/`213B–213E` are learned clutch-fill/adaptation values ([evidence](../projects/ecu_mapping/findings/promaster_2022/2026-09-24_in_vehicle_f1_scan.md#tcm-0x18--per-ecu-results)). |
 | `shifter` | SILATECH electronic shifter | C-CAN | `18DA1FF1` → `18DAF11F` | Live identity on 2026-07-19: `F187=P7FK46LXHAD`, `F188/F194=AGSM637FCA`. |
 | `bcm_ccan` | Body Control Module, C-CAN endpoint | C-CAN | `18DA40F1` → `18DAF140` | Live identity on 2026-07-19: `F187=68524831AF`, `F192=BC637M.0001`; actuation remains power-mode gated. |
 | `cluster` | Marelli Instrument Panel Cluster (IPC) | C-CAN | `18DA60F1` → `18DAF160` | Live identity on 2026-07-19: `F187=68517084AD`, `F192=50019990002`. FCA's [NHTSA Part 573 filing](https://downloads.regulations.gov/NHTSA-2023-0046-0001/attachment_1.pdf) identifies `68517084AD` as the Marelli IPC. |
-| `telematics` | Global Telematics Box Module (TBM2) | C-CAN | `18DAC6F1` → `18DAF1C6` | Live identity on 2026-07-19: `F132=68510377AC`, `F192=TBM200A11P`. The TBM string, exact-part [Mopar catalog supersession](https://www.moparpartsgiant.com/parts/mopar-module-telematics~68647858aa.html), and exact-vehicle local OEM TBM2 procedure make the role high-confidence. |
+| `telematics` | Global Telematics Box Module (TBM2) | C-CAN | `18DAC6F1` → `18DAF1C6` | Live identity on 2026-07-19: `F132=68510377AC`, `F192=TBM200A11P`. The TBM string, exact-part [Mopar catalog supersession](https://www.moparpartsgiant.com/parts/mopar-module-telematics~68647858aa.html), and exact-vehicle local OEM TBM2 procedure make the role high-confidence. Moderate-confidence leading candidate for the [in-vehicle F1 diagnostic client](#in-vehicle-f1-diagnostic-client-not-the-pi): it is the only registered module that client never queries. |
 | `ics_bcan` | Integrated Center Stack customer-interface panel | B-CAN | `18DA85F1` → `18DAF185` | Live identity on 2026-07-21: `F1A5=0032701720`, `F187=7DN08LXFAB`; exact APK subtype match plus exact-vehicle OEM CAN-IHS role. |
 | `uconnect_bcan` | Uconnect radio/display module | B-CAN | `18DA87F1` → `18DAF187` | Live identity on 2026-07-21: `F1A5=0024701A19`, `F187=60986318`; exact global APK UCONNECT subtype/address match plus Radio/DSM DTC families. |
 | `climate_bcan` | Electronic Climate Control / HVAC module | B-CAN | `18DA98F1` → `18DAF198` | Live identity on 2026-07-21: `F1A5=000A702520`, `F187=68516124AE`; AlfaOBD routing plus exact-vehicle HVAC DTC evidence. |
 | `emcm2_bcan` | EMCM2 center-stack menu/volume controls | B-CAN | `18DAD9F1` → `18DAF1D9` | Live identity on 2026-07-21: `F1A5=0066708320`, `F187=7DN14LXHAF`; exact APK subtype match plus exact-vehicle OEM CAN-IHS role. |
-| `abs_canch` | ABS/ESC | CAN CH | `18DA28F1` → `18DAF128` | Live grey-adapter identity on 2026-07-25: `F1A5=0006501520`, `F187=68516283AD`; C1200 was history/intermittent and last test passed. |
-| `eps_canch` | Electric Power Steering (ZF/TRW) | CAN CH | `18DA30F1` → `18DAF130` | Live grey-adapter identity on 2026-07-25: `F1A5=0002507919`, `F187=68509191AD`; no faults reported. |
-| `half_canch` | HALF driver-assistance / forward-camera module | CAN CH | `18DA31F1` → `18DAF131` | Live grey-adapter identity on 2026-07-25: `F1A5=001E502920`, `F187=68567254AA`. |
-| `orc_canch` | Occupant Restraint Controller / airbag | CAN CH | `18DAC0F1` → `18DAF1C0` | Live grey-adapter identity on 2026-07-25: `F1A5=001A507720`, `F187=68518674AC`; no faults reported. |
+| `abs_canch` | ABS/ESC | CAN CH | `18DA28F1` → `18DAF128` | Live grey-adapter identity on 2026-07-25: `F1A5=0006501520`, `F187=68516283AD`; C1200 was history/intermittent and last test passed. The same F1A0-embedded identity was read passively via C-CAN→gateway on 2026-09-24 ([routing](#c-can--can-ch-diagnostic-routing)). |
+| `eps_canch` | Electric Power Steering (ZF/TRW) | CAN CH | `18DA30F1` → `18DAF130` | Live grey-adapter identity on 2026-07-25: `F1A5=0002507919`, `F187=68509191AD`; no faults reported. The same F1A0-embedded identity was read passively via C-CAN→gateway on 2026-09-24 ([routing](#c-can--can-ch-diagnostic-routing)). |
+| `half_canch` | HALF driver-assistance / forward-camera module | CAN CH | `18DA31F1` → `18DAF131` | Live grey-adapter identity on 2026-07-25: `F1A5=001E502920`, `F187=68567254AA`. The same F1A0-embedded identity was read passively via C-CAN→gateway on 2026-09-24 ([routing](#c-can--can-ch-diagnostic-routing)). |
+| `orc_canch` | Occupant Restraint Controller / airbag | CAN CH | `18DAC0F1` → `18DAF1C0` | Live grey-adapter identity on 2026-07-25: `F1A5=001A507720`, `F187=68518674AC`; no faults reported. The same F1A0-embedded identity was read passively via C-CAN→gateway on 2026-09-24 ([routing](#c-can--can-ch-diagnostic-routing)). |
 
 Four B-CAN diagnostic endpoints are now registered from exact physical request/response captures.
 This does **not** validate the previously listed `0x75C`, `0x760`, `0x762`, `0x764`, `0x768`, and
@@ -166,6 +166,52 @@ the installed unmatched subtype. [Evidence](../projects/ecu_mapping/findings/pro
 > request is rejected; session control remains disabled. See
 > [`2026-07-30 direct-read evidence`](../projects/ecu_mapping/findings/promaster_2022/2026-07-30_pcm_generator_duty_direct_read.md).
 
+> **PCM FlowControl must also be 8-byte padded (2026-09-24 passive evidence):** the in-vehicle
+> client described below sent an unpadded 3-byte `30 00 00` FlowControl. The PCM answered every
+> multi-frame read with a first frame and then sent nothing more. The Pi's 8-byte zero-padded
+> FlowControl completed `1A 87` on 2026-08-30. Other responders completed after the same unpadded
+> FlowControl. The client also found default/inherited-session positives at PCM `22 0137`, `0320`,
+> `1FCC–1FD8` (243-byte first frames), and `1FD9` (515 B), plus KWP `21 01–07`. Their bodies have
+> not yet been read.
+
+### In-vehicle F1 diagnostic client (not the Pi)
+
+**Verified 2026-09-24 from passive captures; identity unresolved.** An in-vehicle diagnostic
+client uses tester source address `F1` (`18DA<tgt>F1` → `18DAF1<tgt>`), exactly like the Pi and
+AlfaOBD. It runs a read-only identity sweep (`22 F132/F100/F1A0`) and `19 02 0D` DTC passes over
+every registered module except `telematics`. It also queries 25 absent/optional addresses and runs
+a PCM job (`1A 87`, KWP `18 00 FF 00`, KWP `21 01–07`, and `22` DIDs) plus a TCM `22 211B–213E` /
+`026B` job. It was seen on 2026-08-31 UTC in three windows and on 2026-09-24 from
+21:12:17–21:27:08Z. On 2026-09-24 the Pi's C-CAN role was listen-only, and the owner confirmed that
+no external scan tool was connected.
+
+- **Attachment:** direct on C-CAN and B-CAN. Its FlowControl follows each first frame within
+  about one frame time on both buses. B-CAN exchanges never appear on C-CAN.
+- **Timing:** across 87 captures it never overlapped Pi polling. It starts only after `F1` traffic
+  has been quiet (92 s before the 2026-09-24 run; 309 s and 5–6 s before 2026-08-31 runs) and
+  aborts within 1–2 s after the Pi resumes. Quiet alone does not trigger it: 2026-08-30 had about
+  98 minutes of engine-running quiet without a scan. The trigger is scheduled or conditional.
+- **Identity:** the leading guess is TBM2 telematics `0xC6`, moderate confidence, because it is
+  the only registered module the client never queried. The alternative is SGW `0xCB`, which the
+  client did query and which stayed silent.
+- **Consequence:** during a period with no Pi polling, `F1` diagnostic traffic that the broker
+  did not originate is this client. Do not attribute it to a Pi tool, AlfaOBD, or a fault.
+  Passive DID/DTC correlations must exclude or explicitly label these windows.
+
+Evidence, per-ECU results, and follow-ups:
+[`2026-09-24 in-vehicle F1 scan`](../projects/ecu_mapping/findings/promaster_2022/2026-09-24_in_vehicle_f1_scan.md).
+
+### C-CAN → CAN-CH diagnostic routing
+
+**Verified 2026-09-24 from simultaneous C-CAN and CAN-CH captures.** Physical requests for CAN-CH
+targets (`0x26 0x28 0x30 0x31 0xA0 0xC0`) sent on C-CAN are forwarded frame by frame to CAN-CH, a
+median 0.31 ms later (range 0.23–2.78 ms, 51 exchanges). On CAN-CH, a gateway substitutes its own
+FlowControl `30 00 0A` (STmin 10 ms). ECU replies (`18DAF1xx` on CAN-CH) are **copied back onto
+C-CAN re-addressed as `18DAF2xx`** (target byte `F2`). An `18DAF2xx` frame on C-CAN is therefore a
+gateway copy of a CAN-CH reply, not another tester. This establishes that a C-CAN tester can reach
+the CAN-CH modules through the vehicle gateway. The Pi has not used this path. Direct access on
+the permanent CAN-CH role remains the documented route.
+
 ---
 
 ## C-CAN broadcast frames (passive-readable)
@@ -203,6 +249,13 @@ the installed unmatched subtype. [Evidence](../projects/ecu_mapping/findings/pro
 | `0x1F7` | byte3 signed i8 | `0.375 × raw + 57 °C` | **transmission/gearbox oil temperature**, exact-linked to installed-TCM DID `04FE`; telemetry converts the canonical °C value to °F | ignition ON / running | **observed Alfa scale; receive-only telemetry allowlisted**. Independent narrow and broad thermal legs repeatedly held fixed-formula RMSE below 0.89 °C. The predeclared hot-soak counterexample added 1,217 paired oil/chip cycles across 62–82 °C oil, with 1,164 consecutive cycles separated by at least 3 °C. The unchanged formula produced 0.838 °C oil RMSE versus 13.106 °C chip RMSE, and oil-minus-chip R² margin 0.207, passing every frozen identity/scale gate. No overheat threshold is inferred. [mapping evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-29_tcm_oil_temperature_candidate.md) |
 | `0x1F7` | bytes4–5 BE u16 | `raw / 2 rpm` | **transmission turbine/input speed**, exact-linked to TCM DID `2102` and its labeled Alfa gauge | ignition ON / running | **observed Alfa scale; receive-only telemetry allowlisted**. Initial 248-sample fit R² 0.99999024; independent blind whole-leg recovery used 2,014 samples, full coverage, rank 4, R² 0.99996705, and the expected approximately `×2` raw relationship; [loaded evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-27_tcm_plots_loaded_drive_mapping.md), [blind benchmark](../projects/ecu_mapping/findings/promaster_2022/2026-07-28_signal_field_engine_benchmark.md) |
 | signature set | — | — | C-CAN identity guard: `0x100 101 103 104 10F 110 116 0EA 0EE 0FA 0FE` (+ `2EF 41A`) | high-rate, ignition-on & in parked wakes | used by `classify_bus()` |
+
+**Exploratory numbered-gear lead (September 22):** C-CAN `0x1F4`, DLC 8,
+byte 4's upper nibble (Motorola start 39, length 4) is `7` in a saved window
+where the established `0x1F7` turbine/output ratio is approximately `0.699`,
+the exact OEM seventh-gear ratio. This is a single-regime candidate, not a
+qualified gear enum or a PRND decode; no telemetry promotion. Cross-gear and
+independent-leg checks remain. [Evidence and pending offline task](../projects/ecu_mapping/findings/promaster_2022/2026-09-22_gear_and_oil_life_offline.md).
 
 **Exact-vehicle sliding-door exception:** the sliding-door ajar circuit has
 been modified to permanently report closed. No factory CAN/BCM value may be
@@ -245,7 +298,7 @@ also seen on ordinary C-CAN, so bitrate or one shared identifier cannot identify
 | id set | meaning | confidence |
 |---|---|---|
 | `0x0DA 0x0DC 0x0F1 0x106 0x10E 0x117 0x1F6` | high-rate CAN-CH identity guard. All seven occurred about 100 Hz in the grey capture and were absent from the same campaign's pins-6/14 reference capture. `identify_bus()` requires at least three together. | verified for awake CAN-CH; [evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-25_canch_live_verification.md) |
-| `18DA28F1/F128`, `18DA30F1/F130`, `18DA31F1/F131`, `18DAC0F1/F1C0` | physical AlfaOBD exchanges with installed ABS, EPS, HALF, and ORC. Any captured member is decisive CAN-CH evidence. | verified |
+| `18DA28F1/F128`, `18DA30F1/F130`, `18DA31F1/F131`, `18DAC0F1/F1C0` | physical AlfaOBD exchanges with installed ABS, EPS, HALF, and ORC. On CAN-CH, any captured member is decisive CAN-CH evidence. **Caveat (2026-09-24):** the request side `18DAxxF1` also appears on C-CAN when a C-CAN tester addresses these modules through the gateway, and replies are copied to C-CAN as `18DAF2xx`. Only the `18DAF1xx` reply ID is CAN-CH-exclusive. | verified; [routing evidence](../projects/ecu_mapping/findings/promaster_2022/2026-09-24_in_vehicle_f1_scan.md) |
 
 A silent 500-kbit/s interface cannot be distinguished passively between C-CAN and CAN-CH. Do not
 probe, wake, or switch bitrate merely to identify grey. Current live code routes by the permanent
@@ -325,6 +378,8 @@ unrelated. Each module keeps its own canonical map next to its analysis:
 - **tcm / shifter / bcm_ccan / cluster / telematics / pcm** → [`2026-07-21 candidate DID inventory`](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_candidate_did_inventory.md) for complete inherited-session `F100-F1FF` results and BCM candidate/page inventories; [`2026-07-22 C-CAN AlfaOBD correlation`](../projects/ecu_mapping/findings/promaster_2022/2026-07-22_ccan_alfaobd_live_correlation.md) for installed runtime-profile aliases, bounded cluster/TCM/PCM polling sets, controlled BCM `0130/0152` door and `0132/0150` brake groups, and the engine-off PCM legacy-session result. The complete BCM session-03 `4000-40FF` page found only default-visible `40A1`, `40A2`, `40AA` and session-gated `40A3`, `40A6`; no other session-only positive appeared. Keep these namespaces separate; Alfa-rendered labels/scaling remain candidates unless controlled state or an exact decoder verifies them.
 - **cluster live data** → [`2026-07-24 singleton correlation`](../projects/ecu_mapping/findings/promaster_2022/2026-07-24_cluster_singleton_correlation.md) independently discriminates AlfaOBD labels `Engine speed`, `Vehicle speed`, `Actual Gear`, `Battery Voltage (+30)`, and `Outside temperature` to cluster DIDs `1000`, `1002`, `0107`, `1004`, and `1005`. Battery `1004` supports AlfaOBD's `raw x 0.1 V` rendering over observed raw values `0x76-0x79`; speed scale, the non-P gear enum, the temperature formula, and independent physical voltage remain unverified. A direct Alfa-closed comparison produced identical responses after positively acknowledged `10 01` and `10 03`, proving default session suffices and extended session adds no access for this set. A separate no-session pass also succeeded, but its inherited session was not positively identified. The [`2026-07-25 idling logger shakedown`](../projects/ecu_mapping/findings/promaster_2022/2026-07-25_cluster_idle_logger_shakedown.md) added 623 nonzero `1000` samples: raw `2936..6136` fell from an initial high, warm-up-like value to a stable band near `3000` while `1002=00` and `0107=00`. The subsequent [`DID 1000 broadcast correlation`](../projects/ecu_mapping/findings/promaster_2022/2026-07-26_cluster_did1000_broadcast_correlation.md) exact-linked those 623 samples and ranked `0x0FC` bytes 0–1 (`u16be`) first with full coverage, R² 0.9998896, a unit-slope fit, and 6.42 raw-count RMSE. The loaded PCM campaign now independently establishes the physical `0x0FC / 4 rpm` scale; cluster `1000` mirrors the same broadcast raw value.
 - **PCM live data** → [`2026-07-26 simultaneous Plots/wire mapping`](../projects/ecu_mapping/findings/promaster_2022/2026-07-26_pcm_plots_idle_mapping.md) maps the current-vehicle Alfa profile's eleven-item idle polling cycle to PCM DIDs `022A`, `011D`, `0413`, `0188`, `0227`, `01A1`, `019B`, `019E`, `019C`, `06DA`, and `069E`. The [`2026-07-27 loaded-drive mapping`](../projects/ecu_mapping/findings/promaster_2022/2026-07-27_pcm_plots_loaded_drive_mapping.md) adds exact `01D5` engine rpm, loaded signed `06DA x 0.04 Nm`, and `069F - 64 °C` VVT-oil-temperature evidence. Passive `0x41D` byte2 x4 kPa, `0x2ED` byte0 -40 °C, and `0x0FC` u16be /4 rpm are allowlisted engine-oil-pressure, coolant-temperature, and engine-speed sources. The [`2026-07-30 generator-duty direct read`](../projects/ecu_mapping/findings/promaster_2022/2026-07-30_pcm_generator_duty_direct_read.md) qualifies the narrowly guarded `generator.field_duty` source `pcm.did.01a1`: physical padded `22 01A1`, exact `62 01A1 <u16be>`, and `% = raw x 100 / 32768`, with no explicit session change. The broker implementation keeps that path engine-running-only, immutable, and separate from a generic DID API. Passive torque remains unresolved; the PCM profile's legacy `21 18` transmission-temperature and `21 62` turbine-speed rows returned `7F 21 31` throughout the drive and must not be used.
+- **tcm / pcm (2026-09-24 in-vehicle-client addendum)** → [`2026-09-24 in-vehicle F1 scan`](../projects/ecu_mapping/findings/promaster_2022/2026-09-24_in_vehicle_f1_scan.md) records TCM `22 211B–213E` and `026B` positives, with catalog clutch-fill/adaptation decodes for `211F–212E` and `213B–213E`, in the TCM namespace only. It separately records PCM default-session positives `0137`, `0320`, `1FCC–1FD9`, and KWP `21 01–07` first frames, plus NRC `12` at `1FDA/1FDB`, in the PCM namespace only. The same summary was added to the [candidate DID inventory](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_candidate_did_inventory.md#2026-09-24-addendum-in-vehicle-f1-client-reads).
+- **abs_canch / eps_canch / half_canch / orc_canch** → identity only, in the [CAN-CH verification](../projects/ecu_mapping/findings/promaster_2022/2026-07-25_canch_live_verification.md) and the 2026-09-24 F1A0/F132/F100 results in the in-vehicle F1 scan finding. No DID sweep has been run.
 - **ics_bcan / uconnect_bcan / climate_bcan / emcm2_bcan** → [`2026-07-21 B-CAN live ECU discovery`](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_bcan_live_ecu_discovery.md) for exact addressing/identity, DTC semantics, result-only routines, and inherited-session `F100-F1FF`; [`live AlfaOBD status correlation`](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_alfaobd_live_status_correlation.md) for exact common scalars, candidate ICS/Uconnect status groups, and controlled EMCM2 `2A00/2A01` rotary/Mute/Screen mappings. The selected Climate profile failed variant verification, so its observed gauge labels/scales are explicitly invalid for the installed ECU.
 
 **PCM thermal follow-up, 2026-09-06:** parked ignition-on/engine-off physical

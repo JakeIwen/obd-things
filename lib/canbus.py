@@ -209,18 +209,22 @@ def append_csv(path, volts, status):
 # --- bus identity (signature id sets are bus facts: docs/bus-map.md) ----------
 BITRATE_BCAN = 125000        # B-CAN body bus
 # High-rate frames unique to each bus (present ignition-on AND in parked wakes). Source: docs/bus-map.md.
-CCAN_SIG = {0x100, 0x101, 0x103, 0x104, 0x10F, 0x110, 0x116, 0x0EA, 0x0EE, 0x0FA, 0x0FE, 0x2EF, 0x41A}
+# 0x41A was removed 2026-09-24: B-CAN also carries it (~1 Hz while driving), so one copy made
+# identify_bus() call B-CAN "c-can" and the B-CAN odometer read failed with wrong_bus.
+CCAN_SIG = {0x100, 0x101, 0x103, 0x104, 0x10F, 0x110, 0x116, 0x0EA, 0x0EE, 0x0FA, 0x0FE, 0x2EF}
 BCAN_SIG = {0x46C, 0x0A0, 0x0E0, 0x2EA, 0x3DC, 0x3DE, 0x3E0, 0x3E2, 0x3E4, 0x3E6, 0x354, 0x356}
 # CAN-CH shares some gateway-forwarded identifiers with ordinary C-CAN. These seven high-rate
 # identifiers were all present on pins 12/13 and absent from the same campaign's pins-6/14
 # reference capture. Require several of them together instead of treating one identifier as proof.
 CANCH_SIG = {0x0DA, 0x0DC, 0x0F1, 0x106, 0x10E, 0x117, 0x1F6}
-# A captured physical request or response for an installed grey-routed ECU is independently decisive.
+# A captured physical response from an installed grey-routed ECU is independently decisive. Requests
+# are not: the gateway forwards C-CAN requests to these ECUs, so 18DAxxF1 also appears on C-CAN (the
+# in-vehicle F1 scan, 2026-09-24), where the replies come back as 18DAF2xx. Responses only.
 CANCH_DIAG_SIG = {
-    0x18DA28F1, 0x18DAF128,  # ABS
-    0x18DA30F1, 0x18DAF130,  # EPS
-    0x18DA31F1, 0x18DAF131,  # HALF
-    0x18DAC0F1, 0x18DAF1C0,  # ORC
+    0x18DAF128,  # ABS
+    0x18DAF130,  # EPS
+    0x18DAF131,  # HALF
+    0x18DAF1C0,  # ORC
 }
 CANCH_MIN_BROADCAST_HITS = 3
 RX_ERR_ABORT = 200           # rx-error climb over a probe -> a bus sampled at the WRONG bitrate

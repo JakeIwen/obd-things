@@ -393,5 +393,128 @@ class VehicleInsightsTests(unittest.TestCase):
         self.assertTrue(broker.health_response()["available"])
 
 
+def van_scan_cache(**updates):
+    payload = {
+        "schema_version": 1,
+        "type": "in_vehicle_scan_cache",
+        "generated_at": "2026-09-24T23:00:00Z",
+        "provenance": "in-vehicle scan (source F1), passive",
+        "tester_source": "F1",
+        "dtc_request": "19 02 0D",
+        "status_mask_note": "mask 0D",
+        "scan_count": 1,
+        "last_scan": {
+            "scan_id": "c--20260924T211217Z",
+            "started_at": "2026-09-24T21:12:17.587Z",
+            "completed_at": "2026-09-24T21:27:08.649Z",
+            "buses": ["b-can", "c-can", "can-ch"],
+            "modules_queried": 40,
+            "modules_answered": 15,
+            "pi_quiet": True,
+        },
+        "modules": [
+            {
+                "module_key": "bcm_ccan",
+                "module_name": "Body Control Module",
+                "logical_bus": "c-can",
+                "observed_at": "2026-09-24T21:25:18.100Z",
+                "scan_id": "c--20260924T211217Z",
+                "protocol": "uds",
+                "status_availability_mask": "4F",
+                "dtc_count": 1,
+                "dtcs": [
+                    {
+                        "raw_dtc": "963215",
+                        "fca_display": "B1632-15",
+                        "status": "4D",
+                        "status_flags": ["test_failed", "pending", "confirmed"],
+                        "display_group": "current",
+                        "current": True,
+                        "pending": True,
+                        "confirmed": True,
+                        "warning_indicator_requested": False,
+                        "incomplete_only": False,
+                    }
+                ],
+            }
+        ],
+    }
+    payload.update(updates)
+    return payload
+
+
+class InVehicleScanResponseTests(unittest.TestCase):
+    """The van's own health-check results ride beside, never inside, the Pi's DTC cache."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="vehicle-insights-van-", dir="/tmp")
+        self.cache = Path(self.tmp.name) / "dtc-cache.json"
+        self.van_cache = Path(self.tmp.name) / "van-scan-cache.json"
+        self.insights = TelemetryInsights(
+            FakeHistorian(),
+            warning_evaluator=mock.Mock(),
+            dtc_cache_path=self.cache,
+            history_metrics=("battery.voltage",),
+        )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_default_path_is_beside_the_dtc_cache(self):
+        self.assertEqual(self.insights.van_scan_cache_path, self.van_cache)
+
+    def test_absent_cache_is_explicitly_not_harvested(self):
+        self.cache.write_text(json.dumps(compact_dtc_cache()))
+        response = self.insights.dtc_response()
+        self.assertTrue(response["available"])
+        self.assertEqual(response["in_vehicle_scan"]["reason"], "not_harvested")
+        self.assertFalse(response["in_vehicle_scan"]["available"])
+
+    def test_results_are_additive_and_described(self):
+        self.cache.write_text(json.dumps(compact_dtc_cache()))
+        before = self.insights.dtc_response()
+        self.van_cache.write_text(json.dumps(van_scan_cache()))
+        response = self.insights.dtc_response()
+        van = response.pop("in_vehicle_scan")
+        before.pop("in_vehicle_scan")
+        self.assertEqual(response, before)  # Pi groups, modules and coverage unchanged
+        self.assertTrue(van["available"])
+        self.assertEqual(van["source"], "in_vehicle_scan")
+        self.assertEqual(van["provenance"], "in-vehicle scan (source F1), passive")
+        self.assertTrue(van["last_scan"]["pi_quiet"])
+        record = van["modules"][0]["dtcs"][0]
+        self.assertTrue(record["description_reviewed"])
+        self.assertIn("high-beam", record["description"])
+        self.assertEqual(van["modules"][0]["observed_at"], "2026-09-24T21:25:18.100Z")
+
+    def test_van_results_survive_an_unavailable_pi_cache(self):
+        self.van_cache.write_text(json.dumps(van_scan_cache()))
+        response = self.insights.dtc_response()
+        self.assertFalse(response["available"])
+        self.assertTrue(response["in_vehicle_scan"]["available"])
+
+    def test_invalid_or_oversized_cache_is_unavailable(self):
+        self.cache.write_text(json.dumps(compact_dtc_cache()))
+        bad = van_scan_cache()
+        bad["modules"][0]["dtcs"][0]["status"] = "zz"
+        self.van_cache.write_text(json.dumps(bad))
+        van = self.insights.dtc_response()["in_vehicle_scan"]
+        self.assertFalse(van["available"])
+        self.assertIn("not a valid code record", van["detail"])
+        self.van_cache.write_text(json.dumps(van_scan_cache()))
+        with mock.patch.object(insights_module, "MAX_VAN_SCAN_CACHE_BYTES", 16):
+            van = self.insights.dtc_response()["in_vehicle_scan"]
+        self.assertFalse(van["available"])
+        self.assertIn("256 KiB", van["detail"])
+
+    def test_v2_summary_keeps_the_in_vehicle_scan(self):
+        from projects.vehicle_data.web_v2 import dtc_lite
+
+        self.cache.write_text(json.dumps(compact_dtc_cache()))
+        self.van_cache.write_text(json.dumps(van_scan_cache()))
+        lite = dtc_lite(self.insights.dtc_response())
+        self.assertTrue(lite["in_vehicle_scan"]["available"])
+
+
 if __name__ == "__main__":
     unittest.main()

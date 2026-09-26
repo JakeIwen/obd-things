@@ -1,0 +1,107 @@
+/**
+ * Pure helpers for Drive page 2 ("Sensors", design 3.1.1): the radar aim tile, the gear
+ * estimate and the shaft-speed ratio. No DOM, no signals; node-testable.
+ */
+
+import { DASH, fmtFixed, fmtDelta, fmtTime } from "../format.js";
+
+/** Radar axes in tile order (horizontal first, as the owner reads "az … el"). */
+export const RADAR_TILE_AXES = Object.freeze([
+  Object.freeze({ id: "azimuth", name: "radar.alignment.azimuth", label: "Horizontal" }),
+  Object.freeze({ id: "elevation", name: "radar.alignment.elevation", label: "Vertical" }),
+]);
+
+/** Reference limit (degrees) and where "near" starts; the same numbers as the System card. */
+export const RADAR_TILE_LIMIT = 1;
+export const RADAR_TILE_NEAR = 0.8;
+
+const isNum = (v) => typeof v === "number" && isFinite(v);
+const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+
+/** Signed angle with two decimals: `+0.15°`, `−0.02°`, `0.00°`; `—` for no number. */
+export function fmtAngleSigned(value) {
+  return isNum(value) ? fmtDelta(value, 2) + "°" : DASH;
+}
+
+/** Mean of one broker window (`{count, mean}`) as a signed angle, or `—` with no samples. */
+export function windowMean(w) {
+  if (!isObj(w) || !isNum(w.mean) || !(isNum(w.count) && w.count > 0)) return DASH;
+  return fmtAngleSigned(w.mean);
+}
+
+/**
+ * Radar aim tile model.
+ * @param {{axes?: Object<string, {fresh?: boolean, value?: number|null,
+ *   held?: {value: number, observed_at: string}|null}>, windows?: object|null,
+ *   polling?: object|null, nowMs?: number}} input
+ *   `axes[id]`: `fresh` is a current record, `value` its number, `held` the dated last reading;
+ *   `windows` is `status.radar_alignment` (per metric name: `latest_value`, `observed_at` and the
+ *   `"60"`/`"300"` second windows); `polling` is `status.radar_alignment_polling`.
+ * @returns {{live: boolean, sub: string, axes: Object<string, {latest: string, m1: string, m5: string}>}}
+ */
+export function radarTileModel(input) {
+  const i = isObj(input) ? input : {};
+  const axesIn = isObj(i.axes) ? i.axes : {};
+  const windows = isObj(i.windows) ? i.windows : {};
+  const polling = isObj(i.polling) ? i.polling : null;
+  const nowMs = isNum(i.nowMs) ? i.nowMs : Date.now();
+  const off = polling !== null && polling.commissioned === false;
+  const axes = {};
+  let live = false;
+  let maxAbs = null;
+  let newest = NaN;
+  for (let a = 0; a < RADAR_TILE_AXES.length; a += 1) {
+    const axis = RADAR_TILE_AXES[a];
+    const src = isObj(axesIn[axis.id]) ? axesIn[axis.id] : {};
+    const w = isObj(windows[axis.name]) ? windows[axis.name] : {};
+    let value = null;
+    let at = null;
+    if (!off && src.fresh === true && isNum(src.value)) {
+      value = src.value;
+      live = true;
+    } else if (isObj(src.held) && isNum(src.held.value)) {
+      value = src.held.value;
+      at = src.held.observed_at;
+    } else if (isNum(w.latest_value)) {
+      value = w.latest_value;
+      at = w.observed_at;
+    }
+    if (value !== null) maxAbs = maxAbs === null ? Math.abs(value) : Math.max(maxAbs, Math.abs(value));
+    const atMs = typeof at === "string" ? Date.parse(at) : NaN;
+    if (isFinite(atMs) && !(atMs <= newest)) newest = atMs;
+    axes[axis.id] = {
+      latest: fmtAngleSigned(value),
+      m1: windowMean(w["60"]),
+      m5: windowMean(w["300"]),
+    };
+  }
+  let sub;
+  if (live) {
+    sub = maxAbs >= RADAR_TILE_LIMIT ? "outside ±1°" : maxAbs >= RADAR_TILE_NEAR ? "near the ±1° limit" : "within ±1°";
+  } else if (maxAbs !== null && isFinite(newest)) {
+    sub = "Not reading · last " + fmtTime(newest, new Date(nowMs));
+  } else {
+    sub = "Not reading";
+  }
+  return { live, sub, axes };
+}
+
+/**
+ * Gear estimate text: `~7` while the record is current, else `—`. The broker publishes the
+ * estimate only while moving; its quality is below the driver-qualified set, so the tilde stays.
+ * @param {{available?: boolean, stale?: boolean, value?: *}|null} rec metric record from the store
+ */
+export function gearText(rec) {
+  if (!rec || rec.available !== true || rec.stale) return DASH;
+  const v = typeof rec.value === "string" ? rec.value.trim() : isNum(rec.value) ? String(rec.value) : "";
+  return v ? "~" + v : DASH;
+}
+
+/**
+ * Turbine ÷ output shaft speed as `ratio 2.10`, or "" when either is missing or the output shaft
+ * turns too slowly for the ratio to mean anything (< 100 rpm).
+ */
+export function ratioText(turbine, output) {
+  if (!isNum(turbine) || !isNum(output) || output < 100 || turbine < 0) return "";
+  return "ratio " + fmtFixed(turbine / output, 2);
+}

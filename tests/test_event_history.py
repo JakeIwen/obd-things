@@ -85,6 +85,30 @@ class EventEvidenceTests(unittest.TestCase):
         self.record(coolant('normal',195,30),30)
         self.assertEqual(self.event()['status'],'resolved')
 
+    def test_tiered_recovery_counts_any_regime_and_holds_ten_minutes(self):
+        # Tiered twin of the legacy case above: recovery_seconds wins over
+        # recovery_observations, a different regime still counts, and three
+        # distinct normal observations are not enough.
+        def tiered(state,value,offset):
+            a=coolant(state,value,offset,regime='engine_running:stationary:rpm_idle:warm' if state=='warning' else 'engine_running:road:rpm_low:cold')
+            a['rule_snapshot']={'max_age_seconds':10,'recovery_observations':3,'recovery_seconds':600,'deescalate_fraction':0.7}
+            a.update(tier=1,group='cooling',action='Ease off and watch the gauge.')
+            if state!='warning':a['baseline_regime']='different'
+            return a
+        self.record(tiered('warning',220,0))
+        self.record(tiered('normal',195,5),5)
+        e=self.event()
+        self.assertEqual(e['evidence_state'],'recovering')
+        self.assertEqual(e['evidence']['recovery']['held_seconds'],0)
+        self.assertEqual(e['evidence']['recovery']['required_seconds'],600)
+        self.assertNotIn('count',e['evidence']['recovery'])
+        for offset in range(15,600,10):
+            self.record(tiered('normal',195,offset),offset)
+        self.assertEqual(self.event()['status'],'open')
+        self.assertEqual(self.event()['evidence']['recovery']['held_seconds'],590)
+        self.record(tiered('normal',195,605),605)
+        self.assertEqual(self.event()['status'],'resolved')
+
     def test_gap_does_not_count_as_abnormal_duration(self):
         self.record(coolant())
         self.record(coolant('watch',218,3600),3600)

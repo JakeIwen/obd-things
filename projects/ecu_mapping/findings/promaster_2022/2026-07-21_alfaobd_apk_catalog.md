@@ -561,6 +561,12 @@ placeholder IDs, bit layouts, and numeric scale fields are preserved as evidence
 text remains explicitly heuristic until that indirection is reversed. No PROXI, car-configuration,
 coding, write, or alignment operation was run during this extraction.
 
+September 22 follow-up: the application loader now establishes the missing
+section split—zero-based `J1` labels after `######`, separate `K1` enum pairs
+before it. See the [oil-life investigation](2026-09-22_gear_and_oil_life_offline.md).
+The older whole-file expansions remain invalid; individual labels require
+the correct namespace and an exact request/decoder join.
+
 The 20 catalog requests that were negative in the trace are `0140`, `0155`, `0157`, `2940`,
 `2947`, `3505`, `A023-A02F`, and `A054`. Those negatives are still condition/session evidence, not
 proof the definitions are wrong. Re-test one only when its catalog label supplies a concrete

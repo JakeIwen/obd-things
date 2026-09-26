@@ -182,6 +182,7 @@ class SourceTests(unittest.TestCase):
                 "transmission.output_speed",
                 "transmission.oil_temperature",
                 "transmission.turbine_speed",
+                "transmission.gear_estimate",
                 "tire.pressure.fl",
                 "tire.pressure.fr",
                 "tire.pressure.rl",
@@ -560,6 +561,31 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(stopped["last_recorded"]["observed_at"], live["observed_at"])
         self.assertNotIn(definition.name, broker._cache)
         self.assertNotIn("available", stopped["last_recorded"])
+
+    def test_helper_gear_estimate_is_accepted_not_a_restoration_failure(self):
+        """2026-09-24: the helper forwards read_broadcast_snapshot's derived gear,
+        and an unlisted source latched restoration_failed on every drive."""
+        from projects.vehicle_data import ccan_powertrain
+
+        broker = TelemetryBroker(acquirer=FakeAcquirer())
+        observation = ccan_powertrain.gear_estimate(
+            (
+                ccan_powertrain.PassiveObservation("transmission.output_speed", 2467.0, "rpm", "ccan.broadcast.0x1f7", "verified", "test"),
+                ccan_powertrain.PassiveObservation("transmission.turbine_speed", 1724.0, "rpm", "ccan.broadcast.0x1f7", "verified", "test"),
+                ccan_powertrain.PassiveObservation("engine.rpm", 1782.0, "rpm", "ccan.broadcast.0x0fc", "verified", "test"),
+                ccan_powertrain.PassiveObservation("vehicle.speed", 50.5, "mph", "ccan.broadcast.0x101", "verified", "test"),
+            )
+        )
+        self.assertIsNotNone(observation)
+        # Same fields active_drive._emit_observation sends.
+        broker._store_active_observation({
+            "metric": observation.metric, "value": observation.value,
+            "unit": observation.unit, "source": observation.source,
+            "bus": "c-can", "quality": observation.quality,
+        })
+        live = broker.metric_response("transmission.gear_estimate")
+        self.assertTrue(live["available"])
+        self.assertEqual(live["value"], "7")
 
     def test_broker_requires_explicit_role_aware_acquirer(self):
         with self.assertRaisesRegex(ValueError, "serial-role-aware"):
@@ -989,6 +1015,29 @@ class BrokerTests(unittest.TestCase):
         self.assertFalse(state["running"])
         self.assertEqual(state["confidence"], "inferred")
         self.assertIn("unplugged", state["detail"])
+
+    def test_silent_ccan_while_can_ch_is_busy_reports_awake_not_asleep(self):
+        """2026-09-22: a deaf Board A made a 30-minute drive read as asleep."""
+        asleep = failure(
+            metric="battery.voltage",
+            unit="V",
+            reason="bus_asleep",
+            detail="passive bus identification returned silent",
+            bus="silent",
+            acquisition="passive",
+        )
+        broker = TelemetryBroker(
+            acquirer=FakeAcquirer(result=asleep),
+            monotonic=FakeClock(),
+        )
+        broker._receive_silent_roles = ("c-can", "b-can")
+
+        broker._update_vehicle_state(asleep)
+        state = broker.status_response()["vehicle_state"]
+
+        self.assertEqual(state["state"], "awake")
+        self.assertEqual(state["basis"], "passive_can_ch_activity_c_can_silent")
+        self.assertIn("C-CAN adapter", state["detail"])
 
     def test_wrong_rate_activity_never_claims_running_state(self):
         wrong_rate = failure(

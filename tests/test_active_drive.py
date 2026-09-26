@@ -1823,6 +1823,64 @@ class BrokerActiveDriveTests(unittest.TestCase):
         self.assertFalse(ccan["passive_ready"])
         self.assertTrue(ccan["topology_usable"])
         self.assertEqual(ccan["operating_mode"], "armed_diagnostic")
+        self.assertEqual(ccan["armed_owner"], "broker_active_drive")
+
+    def armed_after_status_refresh(self, *, reason):
+        """Status as re-probed while the helper holds C-CAN (voltage_mon refresh)."""
+
+        broker, _clock = self.make_broker()
+        interface_status = self.Acquirer().status_snapshot()
+        # The refresh derives the top-level topology from passive_ready.
+        interface_status["listen_only"] = False
+        interface_status["topology"] = {
+            **interface_status.get("topology", {}), "bus": "c-can", "usable": False,
+            "reason": f"{TEST_CHANNEL} is not listen-only",
+        }
+        interface_status["role_interfaces"] = {
+            "ready": False,
+            "issues": [],
+            "roles": {
+                "c-can": {
+                    "resolution": "resolved",
+                    "channel": TEST_CHANNEL,
+                    "expected": {"usb_serial": "serial-a", "dev_id": 0, "passive_required": True},
+                    "actual": {
+                        "up": True, "bitrate": 500000, "listen_only": False,
+                        "controller_state": "ERROR-ACTIVE", "restart_ms": 0,
+                    },
+                    "passive_ready": False,
+                    "reason": reason,
+                    "detail": f"{TEST_CHANNEL} is not listen-only",
+                }
+            },
+        }
+        broker._interface_status = interface_status
+        broker.handle_active_drive_event(
+            {
+                "type": "status",
+                "state": "armed_diagnostic",
+                "reason": "running_gate_satisfied",
+                "detail": "coordinated owner is armed",
+                "interface_mode": "armed_diagnostic",
+                "pid": 123,
+            }
+        )
+        return broker.status_response()["interface"]["role_interfaces"]["roles"]["c-can"]
+
+    def test_own_armed_channel_stays_usable_after_a_status_refresh(self):
+        """Episodes 643/644: a voltage_mon refresh mid-drive flagged the
+        broker's own armed C-CAN as topology_unusable."""
+
+        ccan = self.armed_after_status_refresh(reason="interface_armed")
+        self.assertTrue(ccan["topology_usable"])
+        self.assertEqual(ccan["operating_mode"], "armed_diagnostic")
+        self.assertEqual(ccan["armed_owner"], "broker_active_drive")
+        self.assertFalse(ccan["passive_ready"])
+
+    def test_armed_channel_with_a_route_fault_stays_unusable(self):
+        ccan = self.armed_after_status_refresh(reason="bitrate_mismatch")
+        self.assertFalse(ccan["topology_usable"])
+        self.assertNotIn("armed_owner", ccan)
 
     def test_active_pipe_rejects_unregistered_source_and_public_spoofing(self):
         broker, _clock = self.make_broker()

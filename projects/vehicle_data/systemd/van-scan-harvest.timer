@@ -1,0 +1,11 @@
+[Unit]
+Description=Harvest the van's own diagnostic sweeps every 20 minutes (passive, file-only)
+
+[Timer]
+OnBootSec=15min
+OnUnitInactiveSec=20min
+RandomizedDelaySec=2min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

@@ -11,6 +11,12 @@ parked periods/restarts; a saved reading is never republished as fresh CAN data.
 
 ## Oil life is observed but its telemetry mapping is not established
 
+**Superseded September 22:** the
+[offline decoder follow-up](2026-09-22_gear_and_oil_life_offline.md) now joins
+PCM `2185` to a direct unsigned percentage byte, reproducing the historical
+17% display. The remainder of this section records the September 16 decision;
+today's value and no-session-change polling support remain unverified.
+
 The current-van July 22 AlfaOBD status export contains `Engine Oil Life
 Remaining: 17 %`, alongside runtime-since-reset and other oil-change fields.
 Source: `tmp/ecu_mapping/android_tablet/ccan_live_20260722_001010/pcm_system_status_text.txt`.

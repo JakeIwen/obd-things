@@ -88,7 +88,14 @@ MODULES = {
             "out while ignition was asleep. Default-session 22 F187 and unpadded probes timed "
             "out. Parked engine-running tests on 2026-07-30 independently returned "
             "22 01A1 -> 62 01A1 8000 twice with fixed-DLC-8 zero padding and no explicit "
-            "session change; the inherited session was not positively identified."
+            "session change; the inherited session was not positively identified. "
+            "2026-09-24 passive observation of an in-vehicle F1 client: FlowControl must be "
+            "8-byte padded too (after an unpadded 3-byte 30 00 00 FC the PCM sent no consecutive "
+            "frame; the Pi's padded FC completed 1A 87 on 2026-08-30). Default-session first "
+            "frames/positives: 22 0137 (4 B, dynamic), 22 0320, 22 1FCC-1FD8 (243 B), "
+            "22 1FD9 (515 B), KWP 21 01-07; 1FDA/1FDB, F132, F100 -> 7F 22 12; 19 -> 7F 19 11; "
+            "KWP 18 00 FF 00 -> 58 00 (no DTCs). See "
+            "projects/ecu_mapping/findings/promaster_2022/2026-09-24_in_vehicle_f1_scan.md."
         ),
     ),
     "rf_hub": Module(
@@ -107,7 +114,11 @@ MODULES = {
         bus="c-can",
         note=(
             "Live-verified 2026-07-19 ignition-on; F187=46342086, F192=ES11-1065 D, "
-            "F194/F132=68532161AF. FCA's J2534 report maps 68532161AF to 2022 VF 948TE."
+            "F194/F132=68532161AF. FCA's J2534 report maps 68532161AF to 2022 VF 948TE. "
+            "2026-09-24 passive observation (in-vehicle F1 client, driving): UDS 22 211B-2132, "
+            "2136-213E and 22 026B (100 B) all positive; 211F-212E/213B-213E are learned "
+            "clutch-fill/adaptation values per the AlfaOBD ZF9HP catalog. See "
+            "projects/ecu_mapping/findings/promaster_2022/2026-09-24_in_vehicle_f1_scan.md."
         ),
     ),
     "shifter": Module(
@@ -149,7 +160,11 @@ MODULES = {
         bus="c-can",
         note=(
             "Live-verified 2026-07-19 ignition-on; F192=TBM200A11P and F132=68510377AC. "
-            "Exact role is high-confidence from the TBM identifier, OEM TBM2 docs, and Mopar part catalog."
+            "Exact role is high-confidence from the TBM identifier, OEM TBM2 docs, and Mopar part catalog. "
+            "Leading (moderate-confidence) candidate for the in-vehicle F1 diagnostic client that "
+            "scans the vehicle when Pi F1 traffic is quiet: it is the only registered module that "
+            "client never queried (alternative: SGW 0xCB). See "
+            "projects/ecu_mapping/findings/promaster_2022/2026-09-24_in_vehicle_f1_scan.md."
         ),
     ),
     "ics_bcan": Module(
@@ -216,7 +231,10 @@ MODULES = {
         bus="can-ch",
         note=(
             "Live-verified through the grey adapter on DLC pins 12/13 at 500 kbit/s "
-            "2026-07-25; AlfaOBD identity F1A5=0006501520 and F187=68516283AD."
+            "2026-07-25; AlfaOBD identity F1A5=0006501520 and F187=68516283AD. "
+            "2026-09-24: the same F1A0 identity was read passively from an in-vehicle F1 client; "
+            "C-CAN requests are gateway-forwarded to CAN-CH (~0.3 ms) and replies are copied "
+            "back onto C-CAN as 18DAF2xx. See projects/ecu_mapping/findings/promaster_2022/2026-09-24_in_vehicle_f1_scan.md."
         ),
     ),
     "eps_canch": Module(
@@ -227,7 +245,10 @@ MODULES = {
         bus="can-ch",
         note=(
             "Live-verified through the grey adapter on DLC pins 12/13 at 500 kbit/s "
-            "2026-07-25; AlfaOBD identity F1A5=0002507919 and F187=68509191AD."
+            "2026-07-25; AlfaOBD identity F1A5=0002507919 and F187=68509191AD. "
+            "2026-09-24: the same F1A0 identity was read passively from an in-vehicle F1 client; "
+            "C-CAN requests are gateway-forwarded to CAN-CH (~0.3 ms) and replies are copied "
+            "back onto C-CAN as 18DAF2xx. See projects/ecu_mapping/findings/promaster_2022/2026-09-24_in_vehicle_f1_scan.md."
         ),
     ),
     "half_canch": Module(
@@ -238,7 +259,10 @@ MODULES = {
         bus="can-ch",
         note=(
             "Live-verified through the grey adapter on DLC pins 12/13 at 500 kbit/s "
-            "2026-07-25; AlfaOBD identity F1A5=001E502920 and F187=68567254AA."
+            "2026-07-25; AlfaOBD identity F1A5=001E502920 and F187=68567254AA. "
+            "2026-09-24: the same F1A0 identity was read passively from an in-vehicle F1 client; "
+            "C-CAN requests are gateway-forwarded to CAN-CH (~0.3 ms) and replies are copied "
+            "back onto C-CAN as 18DAF2xx. See projects/ecu_mapping/findings/promaster_2022/2026-09-24_in_vehicle_f1_scan.md."
         ),
     ),
     "orc_canch": Module(
@@ -249,10 +273,17 @@ MODULES = {
         bus="can-ch",
         note=(
             "Live-verified through the grey adapter on DLC pins 12/13 at 500 kbit/s "
-            "2026-07-25; AlfaOBD identity F1A5=001A507720 and F187=68518674AC."
+            "2026-07-25; AlfaOBD identity F1A5=001A507720 and F187=68518674AC. "
+            "2026-09-24: the same F1A0 identity was read passively from an in-vehicle F1 client; "
+            "C-CAN requests are gateway-forwarded to CAN-CH (~0.3 ms) and replies are copied "
+            "back onto C-CAN as 18DAF2xx. See projects/ecu_mapping/findings/promaster_2022/2026-09-24_in_vehicle_f1_scan.md."
         ),
     ),
     # e.g. add more modules here as the project expands:
+    # 2026-09-24: an in-vehicle F1 client's one-attempt sweep found 25 further addresses silent
+    # (C-CAN 01 12 1A 20 42 44 4B 50 58 A1 C4 CB; CAN-CH 26 A0; B-CAN 32 41 4A 54 55 62 65 66 6A
+    # 83 C2). Do not register them from that list; see
+    # projects/ecu_mapping/findings/promaster_2022/2026-09-24_in_vehicle_f1_scan.md.
     # Four B-CAN endpoints are registered above. Formerly suggested high 11-bit IDs on B-CAN /
     # CAN-IHS are periodic application broadcasts, not ISO-TP pair evidence. Register another
     # B-CAN module only after a captured request/response exchange.
