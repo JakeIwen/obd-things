@@ -1,7 +1,7 @@
 /**
  * Guarded parked DTC scan (dashboard v2, design 3.3 / critique A11): the pure state machine and a
  * small controller with injected fetch, timers, visibility and confirm, so every gate is
- * node-testable. Ported from the production app (static/app.js dtcJobIsActive,
+ * node-testable. Ported from the former static app (static/app.js dtcJobIsActive,
  * updateDtcJobButtons, renderDtcJob, fetchDtcJobStatus, configureDtcJobs and the
  * #dtc-scan-controls handlers):
  *
@@ -52,7 +52,7 @@ export const TEXT = Object.freeze({
   starting: "Queuing…",
   cancel: "Cancel scan",
   cancelling: "Cancelling…",
-  // Kept word for word from the production app: this is the safety prompt the owner knows.
+  // Kept word for word from the former static app: this is the safety prompt the owner knows.
   confirmPrompt: "Start the fixed read-only DTC batch now? Confirm Park, ignition ON, engine OFF, and stationary.",
   checking: "Checking for a running scan…",
   idle: "No scan is running.",

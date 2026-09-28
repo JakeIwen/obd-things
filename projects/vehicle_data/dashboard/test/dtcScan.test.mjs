@@ -334,7 +334,7 @@ test("declining the confirm dialog sends nothing", async () => {
   assert.equal(env.calls.length, 1);
 });
 
-test("the confirm prompt is the production app's wording", () => {
+test("the confirm prompt is the former static app's wording", () => {
   assert.equal(
     H.TEXT.confirmPrompt,
     "Start the fixed read-only DTC batch now? Confirm Park, ignition ON, engine OFF, and stationary.",

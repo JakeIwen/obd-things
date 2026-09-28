@@ -16,12 +16,15 @@ The implementation has two trust zones:
   an exact metric/source tuple already approved for a local logger. While the
   engine is proven running, the broker may supervise `active_drive.py`, a
   termination-safe exclusive C-CAN owner described below.
-- `web.py` has no CAN imports and proxies cache/status over HTTP. It defaults
-  to loopback and requires `--allow-remote-bind` for any other address. It
-  permits the fixed passive voltage-read POST by default; `--cache-only`
-  disables that button/POST, and `--allow-acquisitions` remains a compatible
-  explicit enable flag. GETs/streams never acquire data. Wake requests remain
-  rejected by the web proxy.
+- `web.py` has no CAN imports and proxies cache/status over HTTP as the `/v1`
+  JSON API; it serves no page. `web_v2.py` subclasses it, adds the `/v2`
+  routes and serves the one telemetry dashboard (`dashboard/dist`) on port
+  8765; both web units run `web_v2.py` (see "Telemetry dashboard" below). The
+  listener defaults to loopback and requires `--allow-remote-bind` for any
+  other address. It permits the fixed passive voltage-read POST by default;
+  `--cache-only` disables that button/POST, and `--allow-acquisitions` remains
+  a compatible explicit enable flag. GETs/streams never acquire data. Wake
+  requests remain rejected by the web proxy.
 - `drive_recorder.py` is a synchronized three-bus receive-only companion to the
   broker-owned active interval. It opens no diagnostic transport, never
   configures an interface, and never transmits. It records only after the
@@ -503,26 +506,182 @@ The evidence, exact OEM
 pressure/thermostat context, alert-design constraints, PCM/TCM acquisition
 sequence, and later mechanical and electrical targets are maintained in the
 [`priority telemetry finding`](../ecu_mapping/findings/promaster_2022/2026-07-25_priority_telemetry_targets.md).
-The dashboard keeps roadmap cards visible for oil pressure, coolant
-temperature, engine-oil temperature, crankshaft torque, and crankshaft power.
-Oil pressure, coolant, RPM, and guarded diagnostic crankshaft torque now
-receive fresh observations. The remaining roadmap labels do not create
-metrics or imply that a source is available. Context-aware oil-pressure bands
-and fresh time-aligned torque/RPM power derivation still require specialized
-evaluation and presentation logic. Passive RPM sends no diagnostic traffic.
+Oil pressure, coolant, RPM, and guarded diagnostic crankshaft torque receive
+fresh observations; engine-oil temperature has only the separately labeled
+VVT `069F` reading. Context-aware oil-pressure evaluation and fresh
+time-aligned torque/RPM power derivation still require specialized evaluation
+logic. Passive RPM sends no diagnostic traffic.
 
-The oil-pressure card does provide **advisory OEM context**, not an alert. When
-fresh coolant and RPM are available it selects a published warm-engine
-reference: 15–34 psi at approximately 650 rpm, 28–35 psi from 1,000–3,000 rpm,
-or 65–80 psi above 3,500 rpm, and only at 192–212 °F coolant. Because the OEM
-idle row names a point rather than a range, the UI uses 550–850 rpm only as a
-clearly labeled nearest-reference context window; it is not presented as an
-OEM test band. The card explicitly reports that the 3,000–3,500 rpm transition
-has no published band. It does not color or classify the live pressure as
-safe/unsafe and does not implement the approximately-12-psi critical rule,
-because that rule still needs a verified running/startup-grace evaluator.
+The OEM warm-engine oil-pressure references (15–34 psi at approximately
+650 rpm, 28–35 psi from 1,000–3,000 rpm, 65–80 psi above 3,500 rpm, only at
+192–212 °F coolant; no published band for 3,000–3,500 rpm) are advisory context,
+not alerts. The dashboard's oil-pressure bands, their slightly lower floors and
+their running/coolant gates are specified in
+[`dashboard/docs/caveats.md`](dashboard/docs/caveats.md) and `dashboard/src/bands.js`.
+The broker's approximately-12-psi critical rule is an early-warning concern,
+documented in [`warnings-redesign.md`](dashboard/docs/warnings-redesign.md).
 
-## Dashboard profiles and vehicle state
+## Telemetry dashboard
+
+There is one telemetry dashboard: the app in [`dashboard/`](dashboard/), served
+on port 8765. It was built in September 2026 as "v2", a parallel app on port
+8766, and on 2026-09-27 it replaced the former static frontend
+(`static/*.js`, removed; it survives in git history up to commit `fa966ba`).
+Port 8766 and the `van-telemetry-web-v2{,-tailscale}.service` units are
+retired. "v2" survives only in names: the `/v2/*` routes, `web_v2.py`, the
+`van-telemetry.v2.settings` storage key and the node-suite wrapper
+`tests/test_dashboard_v2_node.py`.
+
+Documents, in reading order:
+
+- [`dashboard/docs/design.md`](dashboard/docs/design.md) is the build
+  contract (the 09-22 baseline with the 09-23 review amendments A1–A21) and
+  the deployment recipe (section 11). Read it before changing the app.
+- [`dashboard/docs/caveats.md`](dashboard/docs/caveats.md) and
+  [`dashboard/docs/warnings.md`](dashboard/docs/warnings.md) are the
+  owner-facing pages, rendered to `/docs/caveats.html` and
+  `/docs/warnings.html`; no other docs are published.
+- [`dashboard/docs/freshness-contract.md`](dashboard/docs/freshness-contract.md)
+  lists the acceptance rules `src/link.js` implements, and
+  [`dashboard/docs/warnings-redesign.md`](dashboard/docs/warnings-redesign.md)
+  the tiered early-warning backend.
+
+### Serving and deployment
+
+- `web_v2.py` subclasses `web.py` for every `/v1` route and adds: the built
+  frontend from `dashboard/dist` (`index.html` no-cache with ETag, hashed
+  `/assets/*` gzip'd and immutable, `/docs/*` allowlist); `GET /v2/stream`
+  (status-lite plus a catalog hash instead of the catalog); `GET /v2/summary`
+  (one trimmed bundle; warning lists are never capped and other capped lists
+  report `<key>_omitted_count`); `bind` and the `build` id in every `web` flags
+  object; and one User-Agent log line per client IP. `web.py` alone serves no
+  page. Keep the `web_v2.py` filename: the installed units execute it by path.
+- `van-telemetry-web.service` binds loopback in the tracked unit; the
+  machine-local drop-in `/etc/systemd/system/van-telemetry-web.service.d/10-lan.conf`
+  adds `--allow-remote-bind` and the LAN address (`http://vanpi.lan:8765/`).
+  The passive voltage read is allowed there and DTC jobs are not.
+  `van-telemetry-web-tailscale.service` binds the Tailscale address from
+  `/etc/van-telemetry/tailscale-web.env` on port 8765 with guarded DTC jobs
+  (`VAN_TELEMETRY_DTC_ORIGIN=http://<tailscale-ip>:8765`). Both run with
+  `PrivateDevices`, `ProtectHome=read-only` and `PartOf=van-telemetry.service`.
+- The MacBook-managed Van Dashboard (`van-dashboard.service`, from read-only
+  `/home/pi/scripts`) reads `http://192.168.6.103:8765/v1/snapshot`. Every
+  `/v1` route must keep working.
+- `dist/` is gitignored build output served live. `npm ci && npm run build` in
+  `dashboard/` is the frontend deploy step; the build publishes atomically and
+  writes its id to `dist/build.json`. A frontend-only change needs no restart.
+  A `web.py`/`web_v2.py` change needs a restart of the two web units. New
+  broker metrics need a parked `van-telemetry` restart (the broker registry,
+  passive reader and active helper snapshot all change).
+- Only the Tailscale listener has DTC jobs, so only one process writes the
+  unlocked on-disk job pointer. The request file is exclusive-create. Start
+  one scan at a time.
+
+### Frontend decisions
+
+- Preact 10, @preact/signals 2 and esbuild, targeting `chrome80`/`firefox78`
+  for the owner's portrait-mounted 800×1280 Samsung tablet. The core bundle
+  budget is 92,160 B (91,749 B used on 2026-09-27), so new code belongs in lazy
+  chunks.
+- Views read summary slices and stable signals. Only `derive.minuteClock`
+  touches the clock in a render. There are no inline styles, and the only
+  timers are the DTC poll and the shared 10 s sparkline redraw. Status-lite is
+  published only when its stable projection changes.
+- Views: Drive (page 1 fits one portrait screen; page 2 "Sensors" is a lazy
+  chunk with speed limit, ACC set speed, gear estimate, radar aim, shaft
+  speeds, power and torque), Parked, Health, History and System. Dialogs:
+  event history, Ask Codex / Add Early Warning (needs
+  `van-telemetry-advisor.service`, see [warning chat](docs/warning-chat.md)),
+  the per-device customiser and the oil-change sheet. The guarded DTC scan
+  appears only where `web.dtc_jobs_enabled`.
+- Owner rules: no feature removed; no provenance jargon on cards; "stale" at
+  most once per card; nothing under 13 px; 44 px tap targets. The alert lives
+  in the 48 px top bar in place of the state text (warning/critical only,
+  `metric value +n`).
+- Tires are coloured by absolute floors and warning rules only. Voltage band
+  gating is `derive.voltageMode`: running after 10 s of RPM ≥ 400, parked for
+  samples ≥ 30 s after running, otherwise neutral. Coolant normal is
+  160–220 °F. Numerals change colour only for a confirmed warning or a live red
+  band; the normal band is drawn neutral. Voltage shows 1 decimal on Drive and
+  2 on Parked.
+- A manual view choice lasts until the engine next starts or stops. Dim is per
+  device. Tapping the connection dot runs a resync plus a forced summary
+  fetch. Settings live in `localStorage` (`van-telemetry.v2.settings`); on the
+  shared 8765 origin the former app's `van-telemetry.dashboard.v3` view
+  selection migrates once and the Codex chat access code
+  (`van-warning-chat.*`) carries over.
+- `RETAIN_LAST_READING` in `dashboard/src/store.js` is the single presentation
+  policy for dated last values (see "Last-recorded display policy" below).
+- Held-open tier-2 warning notices can carry `None` in
+  `current.observed_at`/`source` and in baseline/deviation values; the
+  frontend must tolerate this.
+
+Tests: `npm test` in `dashboard/` (node suite, also run by
+`tests/test_dashboard_v2_node.py`), `tests/test_web_v2.py`, and
+`tools/shoot.mjs` / `tools/measure.mjs` for browser screenshots and
+measurements at 800×1280 and 1280×800.
+
+### Open items (2026-09-27)
+
+- Still to build: the tablet probe page (design section 10, step 0), 192/512
+  PNG icons, the `window.__perf` counters with a live-drive replay in
+  `tools/measure.mjs`, and a formal parity-checklist run against the former
+  app (git history).
+- Needs a drive: `vehicle.speed_limit`, `acc.set_speed` and the candidate
+  `acc.state` (deployed 2026-09-27, catalog 29 metrics) are not yet observed
+  on the dashboard; ACC state and gap confirmation wait for an annotated drive.
+- The passive collector cycles every ~4.3 s instead of 1 s, giving 2–3.5 s old
+  values and `unknown` vehicle-state blips (drive audit 2026-09-24).
+- Parked battery-low (tier 0, S1) needs 3 readings in ~24 s, but parked wakes
+  are single bursts, so a sagging battery over a multi-day stay may not
+  confirm. Old rules never pushed parked cases either. Replay reports are
+  under `tmp/vehicle_data/warning_replay/`.
+- From the 2026-09-24 drive audit: output speed carries a constant +1/32 rpm
+  LSB; the API returns unrounded floats; `active_drive.interface_mode` stays
+  `armed_diagnostic` after restoration.
+- Warning backend decisions still open: a robust slope for tire notices; a
+  minimum number of settled buckets per stop for resting voltage; whether to
+  keep the coolant 222 °F slow-motion floor. Tier 3 (adapter/bus/data quality)
+  never notifies, and a single cranking dip never alerts.
+- Server work for later: the per-wheel TPMS cold baseline, `trip_summaries`
+  per-trip statistics, and a `recent_series` seed for the Drive sparklines
+  (design section 8). The RPM gear footer waits for a driver-qualified
+  `transmission.gear_estimate` (candidate today; design section 9).
+- ACC radar DID reads while driving are blocked by design (all DID tools
+  require `--confirm-parked`, and the helper has no running-engine handoff).
+  Candidates: radar 102A, 1921, 0103, 0851, 0858, 0863, 0872, 2013, 292E,
+  0857, 0861, 0862; PCM 0891. Next: a parked default-session check, then a
+  reviewed addition to the helper's fixed read list.
+- Board A receive stall (2026-09-22 → 09-24): C-CAN and B-CAN stopped
+  receiving while their links stayed UP/listen-only/ERROR-ACTIVE; a reboot
+  recovered it and the cause is unknown. A low-speed device at USB
+  1-1.2.4.4.2 failing enumeration every few seconds on the same hub tree is a
+  suspect. `receive_watch.py` now flags a role whose `rx_packets` stays flat
+  ≥ 120 s while CAN-CH moves (broker basis
+  `passive_can_ch_activity_c_can_silent`, historian reason `receive_silent`,
+  a tier-3 System note that never notifies).
+
+### Fixes deployed during the dashboard build (2026-09-24 → 09-27)
+
+- `lib/canbus.py`: `CCAN_SIG` no longer contains `0x41A` (B-CAN carries it at
+  about 1 Hz, so B-CAN was identified as C-CAN and the auxiliary odometer
+  failed `wrong_bus`), and `CANCH_DIAG_SIG` holds CAN-CH *responses* only
+  (`18DAF1xx` for ABS/EPS/HALF/ORC), because the van's own F1 sweep puts
+  forwarded `18DAxxF1` requests on C-CAN. Tests: `tests/test_canbus_identify.py`.
+- `derived.ccan_0x1f7_shaft_ratio` is in the broker's `ACTIVE_DRIVE_SOURCES`;
+  its absence latched `restoration_failed` on the first moving gear sample on
+  2026-09-24. Every snapshot source is now covered by a regression test in
+  `tests/test_vehicle_data.py`.
+- Tire pair asymmetry counts only moving, freshly sent readings, opens on the
+  latest pair and clears fast (false alarm of trip 59; see
+  [`warnings-redesign.md`](dashboard/docs/warnings-redesign.md)). The card
+  sentence comes from `early_warning._pair_summary`.
+- The broker's `armed_owner` and route-derived `topology_usable` survive the
+  scheduled `voltage_mon` status refresh; see "Scheduled status refresh and
+  secondary-route resilience" below and the
+  [2026-09-06 diagnosis](../ecu_mapping/findings/promaster_2022/2026-09-06_broker_topology_refresh_diagnosis.md).
+
+### Vehicle state for the dashboard
 
 Dashboard values are registry-driven even where the layout keeps a future
 metric role visible. `GET /v1/snapshot` returns the public metric catalog,
@@ -531,43 +690,20 @@ evidence-qualified `vehicle_state` object in one request. A future registered
 metric therefore becomes available to the generic metric and catalog panels
 without adding another web proxy route or SSE request.
 
-Built-in dashboard profiles are **Overview**, **Parked**, **Driving**, and
-**Diagnostics**. **Overview is the stable default.** The user can select one
-manually, opt into **Automatic**, or choose exactly which panels appear in a
-**Custom** profile. The selection and custom panel list use browser
-`localStorage`; they are per-device preferences and never write broker
-configuration or touch CAN. Browsers carrying the former default Automatic
-selection are migrated to Overview; explicit manual and Custom selections are
-preserved.
-
-Future drive, engine-health, and tire roles remain visible with `MAPPING
-PENDING` instead of disappearing. This makes the intended dashboard and current
-mapping gaps explicit without inventing a value. Registry membership is a
-metric-schema and evidence boundary, not a request for human approval before
-each read. Candidate metrics may appear in Diagnostics, but they remain
-withheld from driver-qualified hero values until their identity and scaling
-meet the recorded evidence policy.
-
-Automatic mode currently makes only these evidence-backed choices, and every
-state used for a layout must carry a finite nonnegative age no older than three
-seconds:
-
-- fresh `asleep`/`parked` selects the Parked electrical layout;
-- the verified `vehicle.ignition_on` observation selects Driving while true;
-- a future verified `moving` or `running` state also selects Driving;
-- `awake` or `unknown` selects Overview.
-
-Automatic Driving selection is only a layout choice. It is not an
-engine-running safety gate for oil-pressure alerts or any other mechanical
-limit evaluator.
+Candidate metrics stay out of driver-qualified values until their identity
+and scaling meet the recorded evidence policy; the System view's catalog shows
+them. The dashboard's automatic view (design section 5.2) uses only fresh
+evidence and is a layout choice, never an engine-running safety gate for
+oil-pressure alerts or any other mechanical limit evaluator.
 
 The broker deliberately does **not** infer engine-running state from charging
 voltage. An external charger can overlap alternator voltage, and ordinary bus
 activity can be ignition-on or a key-fob/module wake. Current
 passive acquisition can report `awake`, inferred `asleep`, or `unknown`, with
 `running: null` whenever the evidence cannot distinguish those cases. This
-keeps the automatic layout engine ready for a separately verified
-ignition/motion metric without silently promoting a voltage heuristic.
+keeps the dashboard's automatic view selection ready for a separately
+verified ignition/motion metric without silently promoting a voltage
+heuristic.
 
 ## Dashboard freshness timing
 
@@ -924,7 +1060,7 @@ identity-only sweeps at 02:26Z and 02:30Z. The analysis is in
 - **Broker cache.** It rewrites `tmp/vehicle_data/van-scan-cache.json` atomically. The broker's
   `/v1/diagnostics/dtcs` adds that file as `in_vehicle_scan`. The Pi fields are unchanged; the new
   part carries the latest successful result per module with `observed_at`, and `last_scan` with
-  `pi_quiet`. v2 `dtc_lite` passes it through. The v2 Health card shows whichever read is newer
+  `pi_quiet`. `web_v2.dtc_lite` passes it through. The dashboard Health card shows whichever read is newer
   for each module, and System → Broker shows "Van health check". The owner-facing wording is in
   `dashboard/docs/caveats.md`.
 
@@ -1000,33 +1136,22 @@ The web SSE stream uses that same cache-only snapshot. It does not acquire or
 poll CAN when a browser connects. The web tier adds a `web_delivery` envelope
 to every HTTP and SSE snapshot with a process-instance ID, increasing
 sequence, wall-clock generation time, and process-monotonic generation time.
-The browser establishes an instance with a cache-bypassing HTTP snapshot,
-accepts only newer events from that instance, and bounds HTTP round-trip time
-before using its midpoint to map the web process's monotonic clock onto the
-browser's monotonic clock. Stream age never depends on wall time, so an NTP
-clock step cannot make queued data younger. The full bounded HTTP trip and the
-monotonic-offset uncertainty are conservatively added to embedded observation
-ages. A queued stream event is rejected if it is over ten seconds old **or**
-if its delivery delay would carry any available metric or verified vehicle
-state past its registered freshness window. Missing, nonnumeric, or negative
-ages are never driver-qualified.
-
-A visible-page watchdog advances cached ages using the browser's monotonic
-clock even when no event arrives; expired verified vehicle state becomes
-unknown and can no longer select the automatic Driving layout. A stalled or
-errored stream triggers a new cache-bypassing HTTP baseline. On page
-hide, restoration, or visibility change the browser immediately invalidates
-the displayed cache, closes the old stream, obtains a fresh no-store HTTP
-snapshot when visible, and only then opens a new stream. It does not assume
-that `performance.now()` advanced across Android deep sleep. Obsolete HTTP
-callbacks cannot render. Together these guards prevent Chrome/Android tab
-suspension, buffered SSE, wall-clock adjustment, or a dead stream from
-replaying old relative-age fields as apparently live telemetry.
+The dashboard client (`dashboard/src/link.js`) establishes an instance with a
+cache-bypassing HTTP snapshot, accepts only newer events from that instance,
+maps the web process's monotonic clock onto its own with a bounded HTTP round
+trip, rejects queued stream events that are over ten seconds old or would carry
+a metric or verified vehicle state past its freshness window, resyncs on a
+stalled or errored stream, and invalidates its cache on page hide, restore or
+visibility change. Stream age never depends on wall time, so an NTP clock step
+cannot make queued data younger. The numbered rules and their tests are in
+[`dashboard/docs/freshness-contract.md`](dashboard/docs/freshness-contract.md).
+Missing, nonnumeric, or negative ages are never driver-qualified.
 
 History, early-warning, and saved DTC payloads are intentionally absent from
-the one-hertz snapshot/SSE response. The browser fetches their three dedicated
-GET endpoints on page synchronization and then no more often than once per
-minute. This prevents the compact but substantially larger diagnostic cache
+the one-hertz snapshot/SSE response. The dashboard fetches them as one trimmed
+`/v2/summary` bundle after every resync and then every 60 seconds while the
+page is visible; `/v1/history`, `/v1/health` and `/v1/diagnostics/dtcs` remain
+available to other clients. This prevents the compact but substantially larger diagnostic cache
 from being duplicated into every live telemetry event.
 
 Those dedicated GETs are also memory-only at the serialized Unix API. The
@@ -1137,44 +1262,21 @@ Logger code can use
 quality=...)`; it returns the same `(HTTP status, response object)` tuple as
 `TelemetryClient.request`.
 
-For a manual cache-only dashboard:
+For a manual cache-only dashboard trial on a spare loopback port (build
+`dashboard/dist` first; see "Telemetry dashboard" above):
 
 ```bash
-python3 projects/vehicle_data/web.py --bind 127.0.0.1 --port 8765 --cache-only
+python3 projects/vehicle_data/web_v2.py --bind 127.0.0.1 --port 8799 --cache-only
 ```
 
 The dashboard uses server-sent events, but every stream update is still made
 from broker GET endpoints and cannot trigger CAN traffic. Bind defaults to
 loopback; remote access normally belongs behind an authenticated proxy. A
-deliberately trusted interface can instead be selected explicitly:
-
-```bash
-python3 projects/vehicle_data/web.py \
-  --bind <interface-address> --port 8765 --allow-remote-bind
-```
-
-This opt-in does not add authentication. Bind to one intended interface address
-and use `--cache-only` if browser-requested passive voltage reads are not
-wanted; avoid a wildcard bind unless another layer restricts clients.
-
-The responsive layout treats up to 1024 CSS pixels as tablet portrait: the
-masthead stacks, dashboard half-width panels stay paired above 640 pixels,
-drive/engine tiles use two balanced columns,
-and long status badges wrap rather than widening the page. A separate
-1024–1312 pixel tablet-landscape band uses a balanced three-column drive layout
-with the primary speed tile spanning two columns. Wider layouts keep all five
-drive essentials on one row, while the six engine-health cards use two rows of
-three instead of leaving a lone sixth card and a large empty remainder.
-
-The browser renderer is deliberately framework-free and incremental. Live SSE
-updates change existing text/attributes only when their displayed value has
-changed. Additional-metric card nodes are reused until the catalog shape
-changes; profile visibility, role cards, and the metric catalog are keyed by
-stable structure signatures. DTCs, history, and warnings render only when
-their minute-level supplemental payload arrives, not on every live snapshot.
-The one-second freshness watchdog still advances and invalidates stale state,
-but skips its duplicate render when a healthy SSE update already advanced the
-same interval.
+deliberately trusted interface can instead be selected explicitly with
+`--bind <interface-address> --allow-remote-bind`. This opt-in does not add
+authentication. Bind to one intended interface address and use `--cache-only`
+if browser-requested passive voltage reads are not wanted; avoid a wildcard
+bind unless another layer restricts clients.
 
 Active-drive host-latency handling keeps the 250 ms RPM-evidence permit
 boundary strict without turning ordinary scheduler delay into an epoch-wide
@@ -1195,7 +1297,7 @@ terminal detail instead of replacing it with only the recovery condition.
 
 ### Mileage and oil-change records (2026-09-16)
 
-The service panel (Overview/Parked/Custom; hidden in Driving/Diagnostics) exposes the existing candidate
+The Service card (Parked and Health views) exposes the existing candidate
 `vehicle.odometer` ICS feed and its roughly 11-mile recorded discrepancy from
 the cluster. Last-known mileage retains its original observation timestamp
 while parked and across broker restarts. Startup may recover one dated,
@@ -1232,9 +1334,9 @@ Asleep deployment added no CAN TX; all roles stayed passive/error-free.
 
 ### Radar alignment dashboard (2026-09-16)
 
-The ACC/FCW radar panel remains visible in every dashboard profile, including
-Custom. It shows latest elevation/azimuth, sample means over the trailing 60
-and 300 seconds, sample count/time coverage, absolute five-minute peak, and
+The dashboard shows radar alignment on a Drive page 2 tile and the System
+view's radar card. The broker provides latest elevation/azimuth, sample means
+over the trailing 60 and 300 seconds, sample count/time coverage, absolute five-minute peak, and
 distance to the owner's +/-1 degree monitoring reference. At 0.8 degree it
 shows an approaching-reference indication; at 1 degree it shows outside the
 reference. These are display bands, not verified OEM fault thresholds or proof
@@ -1283,132 +1385,31 @@ outside this managed session at 20:22:54 UTC. Retained radar summaries and
 last readings are now exposed with no reported storage errors. This verifies
 historical recovery, not a new active radar polling interval.
 
-Dashboard layout has one registry in `static/profiles.js`: all 15 tile IDs,
-editor labels, default order and allowed/default widths live there. Presets
-are ordered tile lists, not CSS visibility overrides. Every tile, including
-Vehicle & Service and ACC/FCW, has a matching `data-widget` and is customizable.
-Runtime and regression checks require a one-to-one registry/panel match.
-Maintenance stays out of Driving/Diagnostics defaults; radar remains included
-in every preset, but both may be shown/hidden in Custom.
-
-`packRows` pairs half-width tiles, looking past intervening full-width tiles
-when needed; at most one unpaired half-width tile remains. The renderer moves
-the existing panel nodes into this packed order only when the layout changes.
-The editor, DOM, keyboard reading order and visual order therefore agree;
-CSS `grid-auto-flow: dense` and per-panel width/profile exceptions are removed.
-Half tiles span six columns above 640px; phones stack the same order. Metric
-catalog, drive/engine/charging, warnings/history/DTCs require full width; the
-other eight tiles support half or full width. Catalog entries retain their
-two-column layout on wider screens.
-
-Customize this device shows the actual rows, Show/Hide checkboxes, supported
-width selectors, Move Up/Down for whole rows, Swap Tiles within a pair, and
-Pair With selectors to regroup half-width tiles. Editing a preset copies that
-visible layout into Custom without changing the preset; Customize This View
-also explicitly seeds Custom. Hidden tiles remain listed and can be restored.
-Reset Layout restores the factory Overview/default Custom configuration.
-All settings remain browser-local; no server, vehicle or acquisition settings
-are changed. Layout/editor rendering is signature-cached, not rebuilt on every
-telemetry update.
-
-Storage version 3 saves ordered `{id, width, visible}` entries, with an optional
-`solo` marker to preserve the odd half-tile row's position when moving rows
-without splitting existing pairs. Normalization allows at most one such marker
-and removes it when the half-tile count is even. Migration reads
-v2 then v1, maps retired source/controls to battery, preserves previous hidden
-choices and implicit maintenance/radar visibility, and retains legacy keys.
-The old v1 Automatic default still migrates to Overview; an explicit v2 Auto
-selection remains Auto. An all-hidden v3 layout is valid. Unknown IDs,
-duplicate IDs and unsupported widths are sanitized; corrupt/denied storage
-falls back safely without throwing or discarding readable legacy preferences.
-Human-readable headings use title case; catalog/trend metric identifiers and
-interface identifiers retain their exact spelling.
-The SocketCAN tile is role-first: C-CAN, B-CAN and CAN CH each show their
-physical pins, observed bitrate, link/mode and controller state. The legacy
-top-level C-CAN-only channel/bitrate/topology summary is removed; current Linux
-names, board/connector identities and the unconnected spare are available in
-Adapter details. `canN` remains useful for host diagnosis but is not a stable
-bus identity. Missing roles remain visible, unknown bitrate is not replaced
-with configured bitrate, and safety inhibits/controller/identity faults are
-not suppressed. The old Current owner field reflected `status.current_owner`,
-which becomes `broker` during an in-flight operation and null between reads;
-it was not a service-ownership indicator. Removing that misleading field does
-not alter backend ownership, locks, acquisition, or service state.
-
-TPMS displays the broker's last available valid pressure even when stale, with
-each wheel's original timestamp, stale styling and "NOT LIVE" label. Retained
-readings are counted separately from live wheels. Candidate, invalid or missing
-values remain unavailable. This presentation uses the existing broker cache,
-performs no new CAN acquisition, and does not turn old samples into fresh ones.
-The Parked profile includes TPMS so these last readings remain accessible after
-shutdown as well as in Overview and Driving.
-
-Battery provenance is integrated into the 12 V System tile in an always-visible
-Source Details section: reporting bus/source, original observation timestamp,
-sample age, acquisition method and source detail. The existing quality/stale
-badge and acquisition-error note remain visible above the details. Fields use
-two columns above 640px and one column on narrower screens. The
-separate Battery Source tile and Custom checkbox are removed; stored Custom
-`source` selections migrate to `battery` without resetting other choices, and
-Diagnostics includes Battery so its provenance remains accessible there.
-Refresh is beside the dashboard selector and only resynchronizes cached data.
-The voltage-only read button and acquisition-availability note are inside
-12 V System's Source Details; existing server/handler acquisition gates are
-unchanged. The standalone Cache Control tile and its Custom checkbox are
-removed, with stored `controls` selections also migrated to `battery`.
-
-Confirmed DTC History keeps records whose `last_seen_at` predates one calendar
-month in a default-closed "Older Than 1 Month" disclosure. The cutoff uses UTC
-and clamps month-end dates (March 31 to February 28/29). Recent, undated and
-invalidly dated history remains visible, and Current/Pending groups are never
-age-collapsed. All saved records and counts remain intact. A user's expanded
-state survives supplemental refreshes within the page; reloading resets the
-default. This is presentation only, with no scan, clearing or cache mutation.
+The former static frontend's layout registry, customiser, SocketCAN/TPMS/
+battery tiles and DTC-history disclosure were ported into `dashboard/src`
+(customiser, System buses card, tire grid, Parked battery card, Health codes
+card) and are specified in `dashboard/docs/design.md`. One backend fact from
+that era still matters: `status.current_owner` becomes `broker` during an
+in-flight operation and null between reads; it is not a service-ownership
+indicator. Confirmed DTC history older than one calendar month (UTC, month-end
+clamped) is collapsed by default; this is presentation only.
 
 ### Last-recorded display policy (September 20 audit)
 
-Open early-warning episodes are explicitly labeled "Unresolved advisory" and
-retain a caution outline even when the latest assessment lacks fresh evidence.
-This does not promote that unavailable assessment to a live warning. Resolved
-sample-filter events are separated into a default-collapsed Recovered Events
-section, excluded from TO REVIEW; active filters stay in the main list. The
-disclosure keeps its open state across supplemental refreshes. Counts, episode
-resolution/acknowledgment and notification behavior are unchanged.
+Open early-warning episodes stay visible as unresolved advisories even when
+the latest assessment lacks fresh evidence; this does not promote that
+unavailable assessment to a live warning. Recovered sample-filter incidents are
+kept apart from open items. Warning cards offer the read-only local Codex
+explanation dialog when the web process advertises it; see
+[warning chat deployment and boundaries](docs/warning-chat.md).
 
-Warning cards also have a staged, read-only local Codex explanation dialog with
-follow-up conversations. This is a separately authenticated/serialized worker,
-not a CAN or arbitrary-command endpoint. See
-[warning chat deployment and boundaries](docs/warning-chat.md) before enabling
-it; the current managed session could not install the worker or validate a real
-Codex reply. The feature loads only after the web process advertises support.
-
-`RETAIN_LAST_READING` in `static/app.js` is the single presentation policy for
-dated last values. Everything not explicitly included is live-only, including
-new metrics until reviewed. Metric Catalog displays the policy for each entry.
-Section/state badges use the shared yellow/amber caution color; individual
-historical captions show only the timestamp in normal muted text. The redundant
-Last recorded / NOT LIVE wording and latest-attempt suffix are omitted;
-unavailable gauges still show short statuses such as stale. NOT LIVE remains on the
-parent summary. Whole-mile odometer display truncates, never rounds, without
-changing stored precision. Fully mapped sections omit their mapped counts;
-zero-live sections say NOT LIVE. Unmapped gauges stay visible and say UNMAPPED.
-Oil Pressure is last in Engine Health, whose redundant explanatory paragraph
-is removed. These are presentation changes, not freshness/admission changes.
-Positive VERIFIED display labels and the verified-source boilerplate are
-omitted; quality admission checks and confidence values remain unchanged.
-ALFA SCALE/candidate/unknown and restoration-unverified cautions remain visible.
-The passive voltage-read capability no longer adds a success explanation under
-the button; disabled-capability explanations still appear when applicable.
-TPMS likewise keeps the caution color on its panel badge, not individual tire
-status lines.
-Vehicle & Service mileage keeps its timestamp/freshness and estimate caveat
-in the mileage hover tooltip, without a separate visible last-recorded line.
-ACC/FCW places each retained timestamp at the right of the Elevation/Azimuth
-heading; those timestamps disappear when live. The separate last-recorded
-sentence is removed, while the panel NOT LIVE badge remains.
-Radar sample-count/time-coverage text is omitted from the tile; the peak-angle
-lines remain, and the footer reads "±1.00° monitoring reference". Underlying
-coverage metadata and the documented scaling/threshold uncertainty are unchanged.
+`RETAIN_LAST_READING` in `dashboard/src/store.js` is the single presentation
+policy for dated last values. Everything not explicitly included is live-only,
+including new metrics until reviewed; `RETAIN_CANDIDATE_ESTIMATES` names the
+only candidate-quality metrics that may be retained. Whole-mile odometer
+display truncates, never rounds, without changing stored precision. These are
+presentation rules, not freshness or admission changes; the owner-facing
+wording is in `dashboard/docs/caveats.md`.
 
 | Data | Parked/stale display |
 | --- | --- |
@@ -1505,18 +1506,6 @@ error-free with unchanged TX counts 36,802/2,485/0, so recovery sent no CAN
 frame. Focused remote validation passed 23 tests; broader recorder validation
 passed 39 tests and seven subtests. The bounded branch still awaits natural
 exercise during a future broker-owned drive interval.
-
-Deployment update, 2026-08-31 01:20 MDT: the incremental vanilla-JS renderer
-is live directly from the static source tree; no broker/service/CAN restart was
-required. In Playwright Firefox at an 800x1280 tablet viewport, an exact
-eight-second idle window fell from 2,200 DOM mutation records and 1,672/1,672
-added/removed nodes to 83 records and 27/27 nodes: about 96% fewer mutations
-and 98% fewer node replacements. The corrected page retained all seven
-additional metric cards, the three-card Overview count, and zero JavaScript
-errors. Both 800x1280 portrait and 1280x800 landscape had document width equal
-to viewport width with no horizontal overflow. Remote focused validation
-passed 178 tests and 77 subtests. Five-second vehicle-state freshness,
-three-second stream-stall resync, and all CAN-side behavior are unchanged.
 
 Deployment update, 2026-08-30 23:18 MDT: the vehicle-state precedence and
 supplemental-cache repair are live. Both restart gates observed the van asleep,
@@ -1652,14 +1641,6 @@ listeners returned HTTP 200, historian state remained running without error,
 SQLite `quick_check` returned `ok`, and query plans selected the new indexes.
 No CAN acquisition behavior, evidence rule, sampling interval, or notification
 latency was relaxed.
-
-The same 2026-08-24 UI review narrowed **Changes worth watching** cards to
-current `watch`/`warning` assessments or persisted open episodes. A rule that
-is merely unavailable or still training remains represented by the panel badge
-and explanatory note, but a never-started `0/N` persistence counter no longer
-looks like an emerging vehicle change. An already-open episode remains visible
-if its newest evidence becomes unavailable, preserving the fail-inconclusive
-rather than fail-resolved advisory contract.
 
 The installed role-aware `van-drive-recorder.service` is enabled and active,
 waiting receive-only for broker-owned active-drive intervals. `tpms-logger`,
@@ -1959,18 +1940,18 @@ state; the van dashboard compares the saved sample timestamp with scheduled
 
 Full portable regression on 2026-09-18 passed **1,168 tests, 4 skips, and
 773 subtests** on m4mac (`van_compute` job `20260918T171501Z-05fe09a6`),
-with no test-selection exclusions. The previously excluded
-`test_dashboard_assets_are_served_with_csp` now checks the initial HTML's
-`drive-note` element and the freshness explanation in the served JavaScript,
-where the renderer owns that text. CSP and freshness coverage remain enabled;
-no production asset, service, or CAN behavior changed for this correction.
+with no test-selection exclusions. On 2026-09-27 the former static
+frontend's asset tests were removed with it; `test_base_listener_serves_no_dashboard_page`
+now checks that `web.py` alone serves only JSON (404 with CSP for `/`), and
+the dashboard is covered by `tests/test_web_v2.py` and the node suite
+(`npm test`, wrapped by `tests/test_dashboard_v2_node.py`).
 
 Offline tests use fake interfaces, locks, sources, and clocks. They cover
 cache-only GETs, strict local publication, typed values, source-metadata
 allowlists, broker-stamped age, passive acquisition, silent-bus handling,
 coalescing and rate limits,
 Unix API behavior, the registry-driven snapshot, evidence-qualified vehicle
-state, dashboard profile assets, cache-only web defaults, exact broker-owned
+state, the dashboard listener and client, cache-only web defaults, exact broker-owned
 recorder admission, initial-ignition timeout, and persistent-candump command
 construction.
 

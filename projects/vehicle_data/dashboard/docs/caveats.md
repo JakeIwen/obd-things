@@ -285,10 +285,11 @@ switched off on the Pi, the System view says so in one sentence.
   says how many of how many are shown. The counts are always complete.
 - The module list shows which modules answered, which were unavailable and which have never been
   read.
-- **Scanning.** The LAN screen cannot scan or clear. The Tailscale screens (ports 8765 and 8766) can
-  queue one guarded, parked read of 15 modules after you confirm the van is parked in P with the
-  ignition on and the engine off. They can never clear a code. Start one scan at a time, from one
-  screen: both screens share the same job record, and each shows a scan started from the other.
+- **Scanning.** The LAN screen cannot scan or clear. The Tailscale screen (port 8765 on the Pi's
+  Tailscale address) can queue one guarded, parked read of 15 modules after you confirm the van is
+  parked in P with the ignition on and the engine off. It can never clear a code. Every browser
+  open on the Tailscale screen shares the same job record, so each shows a scan started from
+  another; start one scan at a time.
   "Restoration unverified" means the Pi could not prove the adapters returned to listen-only
   afterwards; inspect before scanning again.
 
@@ -342,6 +343,6 @@ switched off on the Pi, the System view says so in one sentence.
 ## This device
 
 Dashboard settings (the view, Auto, Dim, hidden cards and card order) are stored in this browser
-only and never reach the Pi or the van. The dashboard on port 8766 is a separate site to the browser,
-so settings made on the old port 8765 dashboard do not carry over. The Codex chat access code must
-also be entered once more on 8766.
+only and never reach the Pi or the van. The dashboard replaced the old one at the same address
+(port 8765), so the view last chosen on the old dashboard is carried over once, and a Codex chat
+access code already entered in this browser still works.

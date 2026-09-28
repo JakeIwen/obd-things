@@ -37,6 +37,19 @@ distinguishes unpopulated raw cluster inputs from unresolved signal decodes.
 Radar alignment polling is validated; ACC set speed/state/gap and lead-object
 data remain separate mapping work. Related-platform DBCs are candidates only.
 
+## Telemetry dashboard (one app, port 8765)
+
+The repository has exactly one telemetry dashboard: the Preact app in
+`projects/vehicle_data/dashboard/` (built into the gitignored `dist/`), served on port 8765 by
+`projects/vehicle_data/web_v2.py` in `van-telemetry-web.service` (LAN via a machine-local drop-in)
+and `van-telemetry-web-tailscale.service` (Tailscale, guarded DTC jobs). The former static frontend
+(`projects/vehicle_data/static/`) and the temporary parallel "v2" units were removed on 2026-09-27.
+`web_v2.py` keeps its filename because the installed units execute it by path; `web.py` is its base
+class and provides the `/v1` JSON API. The MacBook-managed Van Dashboard reads
+`http://192.168.6.103:8765/v1/snapshot`, so `/v1` routes must keep working. Start with
+`projects/vehicle_data/README.md` section "Telemetry dashboard" and
+`projects/vehicle_data/dashboard/docs/design.md`.
+
 ## MacBook-managed `~/scripts` tree
 
 `/home/pi/scripts` (equivalently `~/scripts`) is managed from Jacob's MacBook,

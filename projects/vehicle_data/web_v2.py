@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Second-port telemetry dashboard listener (dashboard v2).
+"""Telemetry dashboard listener (port 8765).
 
-Same broker proxy, POST gates, origin checks and server-sent-event contract as
-``web.py`` (which it subclasses and never edits), plus:
+This is the only dashboard web server; both systemd web units run this file.
+The filename keeps its historical ``_v2`` suffix because the installed units
+execute it by path. It has the same broker proxy, POST gates, origin checks and
+server-sent-event contract as ``web.py``, which it subclasses for the ``/v1``
+API, and adds:
 
-- a different static root (``dashboard/dist``) with MIME by extension, gzip for
+- the built frontend from ``dashboard/dist``, with MIME by extension, gzip for
   compressible bodies, immutable caching for content-hashed assets and ETag
   revalidation for everything else;
 - ``GET /v2/stream``: the ``/v1/stream`` loop with a reduced ``status`` and a
@@ -20,7 +23,8 @@ Same broker proxy, POST gates, origin checks and server-sent-event contract as
 - each client IP's User-Agent is logged once (bounded memory), to record which
   browser the tablet runs.
 
-GETs remain cache-only and never touch CAN. No route of ``web.py`` is removed.
+GETs remain cache-only and never touch CAN. Every ``/v1`` route of ``web.py``
+stays available; the MacBook-managed Van Dashboard reads ``/v1/snapshot``.
 """
 
 from __future__ import annotations
@@ -44,7 +48,7 @@ if str(REPO) not in sys.path:
 from projects.vehicle_data import web as base  # noqa: E402
 
 DEFAULT_STATIC_ROOT = pathlib.Path(__file__).with_name("dashboard") / "dist"
-DEFAULT_PORT = 8766
+DEFAULT_PORT = 8765
 
 MIME_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -784,7 +788,7 @@ class DashboardServer(base.TelemetryWebServer):
 
 def build_parser():
     parser = base.build_parser()
-    parser.description = "Dashboard v2 listener (port 8766 by default)"
+    parser.description = "Telemetry dashboard listener (port 8765 by default)"
     parser.add_argument(
         "--static-root",
         default=str(DEFAULT_STATIC_ROOT),

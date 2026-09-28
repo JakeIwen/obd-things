@@ -1,7 +1,6 @@
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -127,31 +126,3 @@ class MaintenanceWebTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["last_oil_change"]["date"], "2026-07-21")
         self.assertEqual(self.acquirer.calls, [])
-
-
-class MaintenanceUiTests(unittest.TestCase):
-    def test_stale_mileage_and_unmapped_oil_life_are_honest(self):
-        app = Path(__file__).resolve().parents[1] / "projects/vehicle_data/static/app.js"
-        script = r'''
-const fs=require('fs'),vm=require('vm');
-const nodes=new Map();
-function element(id){if(!nodes.has(id))nodes.set(id,{textContent:'',dataset:{},disabled:false,children:[],replaceChildren(){this.children=[];},append(n){this.children.push(n);}});return nodes.get(id);}
-global.document={getElementById:element,createElement:()=>({textContent:''})};
-global.window={VanDashboardProfiles:{loadSettings:()=>({})}};
-const source=fs.readFileSync(process.argv[1],'utf8');
-vm.runInThisContext(source.slice(0,source.indexOf('\nbyId("refresh").addEventListener')));
-supplemental.maintenance={available:true,persistent:true,last_known_odometer:{value:53191.86,observed_at:'2026-08-28T00:00:00Z'},
-last_oil_change:{date:'2026-07-21',mileage_mi:50000,mileage_source:'cluster_or_receipt',notes:'<script>not executed</script>'},oil_changes:[]};
-renderMaintenance(supplemental.maintenance);
-process.stdout.write(JSON.stringify({odo:element('service-odometer').textContent,age:element('service-odometer').title,
-oil:element('service-oil-life').textContent,distance:element('oil-distance').textContent,notes:element('oil-last-notes').textContent,disabled:element('oil-change-save').disabled}));
-'''
-        result = subprocess.run(["node", "-e", script, str(app)], capture_output=True, text=True, check=True)
-        payload = json.loads(result.stdout)
-        self.assertEqual(payload["odo"], "53,191 mi")
-        self.assertNotIn("not live", payload["age"])
-        self.assertIn("2026", payload["age"])
-        self.assertEqual(payload["oil"], "—")
-        self.assertIn("different mileage sources", payload["distance"])
-        self.assertEqual(payload["notes"], "<script>not executed</script>")
-        self.assertFalse(payload["disabled"])

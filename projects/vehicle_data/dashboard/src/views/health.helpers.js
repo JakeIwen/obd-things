@@ -34,7 +34,7 @@ export const DTC_GROUPS = Object.freeze([
   ["other", "Other status combinations"],
 ]);
 
-/** Most recovered sample-filter incidents shown (as the production app). */
+/** Most recovered sample-filter incidents shown (as the former static app). */
 export const RECOVERED_LIMIT = 3;
 
 const BUS_NAMES = Object.freeze({ "c-can": "C-CAN", "b-can": "B-CAN", "can-ch": "CAN-CH" });
@@ -107,7 +107,7 @@ function stripUnconfirmed(line) {
 }
 
 /**
- * True when the card's saved event was marked reviewed in the event dialog (the production card
+ * True when the card's saved event was marked reviewed in the event dialog (the former static app's card
  * printed "acknowledged" in its evidence line). warnings.js sets `ackable` false for those.
  */
 export function isReviewed(card) {
@@ -151,7 +151,7 @@ export function unconfirmedRow(card) {
 }
 
 /**
- * Delivery line: shown only when phone alerts are switched off on the Pi (the production note
+ * Delivery line: shown only when phone alerts are switched off on the Pi (the former static app's note
  * "External warning delivery is disabled"), or when something is pending, failed or errored.
  * @param {object|null} delivery warnings.js delivery state
  * @param {boolean} [off] `notification_delivery.enabled === false` in the health slice
@@ -168,7 +168,7 @@ export function deliveryLine(delivery, off) {
 }
 
 /**
- * What the Pi's checks can see when nothing is open (the production badge's TRAINING / DATA
+ * What the Pi's checks can see when nothing is open (the former static app's TRAINING / DATA
  * UNAVAILABLE / NO ASSESSMENTS states, in plain words). Null when every check is evaluating or
  * the slice carries no assessment list.
  * @param {object|null} health `summary.health` slice
@@ -310,7 +310,7 @@ export function systemNotesView(model, health, nowMs) {
 
 /**
  * Cut-off for "older than one month" confirmed history: the same UTC day of the previous month
- * (clamped to its length), as the production app's dtcHistoryCutoff.
+ * (clamped to its length), as the former static app's dtcHistoryCutoff.
  * @param {number} nowMs
  * @returns {number} epoch ms
  */
@@ -333,7 +333,7 @@ export function codeOf(entry) {
 
 /**
  * Plain note for a saved code whose status is not from the module's latest good read (the
- * production row's observation label). The normal case, `observed_in_latest_success`, says nothing.
+ * former static app's row observation label). The normal case, `observed_in_latest_success`, says nothing.
  */
 export const OBSERVATION_NOTES = Object.freeze({
   stale_after_unavailable_attempt: "module did not answer the latest read",

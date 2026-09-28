@@ -128,7 +128,7 @@ test("migration from the old van-telemetry.dashboard.v3 key when the v2 key is a
     assert.equal(loaded.version, 1);
     // The migration is written under the v2 key so it runs once.
     assert.deepEqual(JSON.parse(storage.getItem(STORAGE_KEY)), loaded);
-    assert.ok(storage.map.has(LEGACY_KEY), "the old key is left for the production app");
+    assert.ok(storage.map.has(LEGACY_KEY), "the old key is left untouched");
   }
   assert.deepEqual(migrateLegacy(null), defaultSettings());
   assert.deepEqual(migrateLegacy({ selected: "parked" }), Object.assign(defaultSettings(), { view: "parked", auto: false }));

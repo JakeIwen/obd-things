@@ -493,7 +493,7 @@ test("owner rules: no provenance jargon in any card text built from the fixtures
 });
 
 test("parity: oil life shows from the catalog metric even before the maintenance payload lists a source", () => {
-  // The production card read engine.oil_life_remaining directly; the broker still reports
+  // The former static app's card read engine.oil_life_remaining directly; the broker still reports
   // maintenance.oil_life.available = false (September 22 payload).
   assert.equal(SUMMARY.maintenance.oil_life.available, false);
   assert.deepEqual(H.oilLifeView(SUMMARY.maintenance, { kind: "live", value: 63.4 }, NOW), { text: "63 %", sub: "" });

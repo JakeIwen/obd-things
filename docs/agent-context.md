@@ -51,6 +51,11 @@ service, cron, network, and vehicle state before acting.
 - Parked C-CAN diagnostic TX can wake the BCM, briefly power switched accessories, and boot the dashcam.
   The user approved low-frequency parked TX without a separate prompt, but it is still an observer and
   battery effect. Avoid gratuitous traffic. See `docs/bus-map.md` for verified wake behavior.
+- Two different dashboards exist; do not confuse them. The repository's telemetry dashboard is the
+  single Preact app served on port 8765 by `projects/vehicle_data/web_v2.py`
+  (`van-telemetry-web{,-tailscale}.service`; the old static frontend and the parallel "v2" units were retired on
+  2026-09-27). The MacBook-managed Van Dashboard (`van-dashboard.service`, running from read-only
+  `/home/pi/scripts`) consumes that listener's `/v1/snapshot` API.
 - The separate machine-local `van-dashboard.service` remains CAN-free: it may display cache-only
   telemetry over HTTP, publish the existing COP ALERT marker, and observe the independent ignition
   marker, but it must never open a CAN socket, inspect an interface, or select a netdev. The role-aware

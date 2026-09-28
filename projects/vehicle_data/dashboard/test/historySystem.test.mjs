@@ -629,7 +629,7 @@ test("device and app rows: tablet facts, build id, listener and flags", () => {
   assert.equal(app["Voltage read button"], "allowed here");
   assert.equal(app["Code scan"], "not on this listener");
   assert.equal(app["Codex advisor"], "available here");
-  const fallback = Object.fromEntries(H.appRows({ build: "ffee", bind: "100.82.91.76:8766" }, null, NOW));
+  const fallback = Object.fromEntries(H.appRows({ build: "ffee", bind: "100.82.91.76:8765" }, null, NOW));
   assert.equal(fallback["App build"], "ffee");
   assert.equal(fallback["Code scan"], "not reported");
   assert.equal(Object.fromEntries(H.appRows(null, null, NOW))["App build"], "not reported");
@@ -650,7 +650,7 @@ test("History and System views keep the performance contract", () => {
 });
 
 // ---------------------------------------------------------------------------
-// feature-parity additions (production app items that had no home in v2)
+// feature-parity additions (former static app items that had no home in v2)
 
 test("parity: the catalog says why a metric has no current value (was the tiles' status line)", () => {
   const m = SNAPSHOT.metrics;
@@ -658,7 +658,7 @@ test("parity: the catalog says why a metric has no current value (was the tiles'
   assert.equal(H.catalogWhy(m["engine.crankshaft_torque"], { kind: "off" }), "No value: engine not running");
   assert.equal(H.catalogWhy(m["vehicle.odometer"], { kind: "held" }), "No value: adapter is not on this value's bus");
   assert.equal(H.catalogWhy(m["diagnostics.cluster.did.0107.raw"], { kind: "off" }), "No value: no recent reading");
-  // The battery's retained value with a failed last read (production: "last attempt: …").
+  // The battery's retained value with a failed last read (former static app: "last attempt: …").
   assert.equal(H.catalogWhy(m["battery.voltage"], { kind: "held" }), "Last read failed: van asleep, no bus traffic");
   assert.equal(
     H.catalogWhy({ available: true, stale: false, value: 180, last_acquisition_error: { reason: "implausible_transition" } }, { kind: "live" }),

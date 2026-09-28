@@ -36,6 +36,14 @@ Every warning is written the same way: the number, the comparison, how long, and
 
 - The comparison is against this van's usual value in the same conditions when there is one. For an
   absolute rule it is the limit, and for a rule you added it is your threshold.
+- `over` and `under` follow the two numbers on the line, so the line always adds up. When both round
+  to the same number it reads `at its usual 78`.
+- Durations carry their units: `5 min`, `1 h 05 min`, and days from two days on (`2 d 8 h`).
+- A slow-drift notice is worded differently, because it compares cold starts or whole drives rather
+  than the newest reading with a usual value. It says what was found, and the card's `since` time
+  says when:
+
+  > RR cold pressure 2.9 psi a week below RL's over 4 cold starts. Check the RR tire for a slow leak.
 - Until the condition has lasted long enough to count, the line says `just now` instead of a
   duration.
 - `Unconfirmed · engine off since 4:25 pm` means the item was open when the engine stopped and
@@ -120,6 +128,15 @@ These are checked once a day from the one-minute history, never from a single dr
   fall against its mate by 0.5 psi a week (over two weeks) or 3 psi (last three cold starts against
   the month), and the wheel's own pressure to fall by at least half that. Readings the tire hub
   repeated from the previous drive are skipped.
+  - The weekly trend is the middle one of the slopes between every pair of cold starts, so a single
+    stray reading does not tilt it.
+  - The trend only counts while the newest cold starts agree with it. Against the wheel's usual gap
+    to its mate, the latest cold start must be at least 0.5 psi lower and the middle of the last
+    three at least 0.25 psi lower. A tire that has come back up is not a leak.
+  - An open notice clears when the trend has levelled off, or when the latest cold start and the
+    middle of the last three are both back within 0.25 psi of the usual gap.
+  - Cold readings on one axle can differ by a few psi from sun or sensor timing, so a notice is a
+    prompt to check with a gauge on a cold tire, not proof of a leak.
 - **Resting voltage**: the settled engine-off voltage of each parked stop (from 1 minute after
   stopping until 2 minutes before the next start). A notice appears when the week's median is under
   12.2 V, or it falls 0.1 V a day; it clears at 12.3 V and a flat trend.
@@ -143,12 +160,11 @@ filter throwing away an implausible reading, never notify; they are listed in Sy
 `Ask Codex` explains a warning or drafts a new rule. It runs on the Pi, and appears only on screens
 where the advisor is enabled. Conversations are saved on the Pi for the browser that started them,
 and closing the dialog does not stop an answer. The access code is read on the Pi (not an OpenAI API
-key). The dashboard on port 8766 is a separate site to the browser, so the code must be entered
-there once even if it was entered on port 8765.
+key). A code entered once in a browser is remembered by that browser.
 
 ## Current status
 
-The v2 dashboard renders today's evaluator with the vocabulary above:
+The dashboard renders today's evaluator with the vocabulary above:
 
 - history-relative rules sit in the Warning tier (as Watch until confirmed);
 - the oil-pressure absolute rule is Critical;

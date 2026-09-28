@@ -640,3 +640,49 @@ Tests: `tests/test_warning_rules_v3.py` (`TierOneCadenceTests`, `RunningGapTests
 `StickyCriticalTests`, `CoolantFloorTests`, `HeldWheelRecoveryTests`, `CachedTireReadingTests`, and
 the split `CoolantRateOfRiseTests`) and `tests/test_interface_health_events.py`
 (`test_system_items_never_enqueue_a_notification`, first-observation `pending`).
+
+## Drift notice wording and tire trend robustness (September 27)
+
+Owner report on event 645 (`tire_pressure_rr_slow_leak`, opened 2026-09-25 20:06 UTC): the card
+read "RR tire 76 psi, 1 psi under its usual 75 for 56 h 42. Check the RR tire for a slow leak."
+
+**Findings.**
+
+- The card sentence came from the generic value-against-baseline template in the dashboard's
+  `warnings.js`. For a tier-2 notice, `current.value` is the newest cold-start reading (75.6 psi,
+  trip 58) and `baseline.median` is the 30-day cold median (75.4 psi), so the pair is not the
+  comparison the rule made. The template took `under` from the rule direction, subtracted the
+  rounded numbers, and printed the age of the event as `56 h 42`. The phone notification was
+  already correct: `notifications._comparison` uses the `reason` for tier 2.
+- The notice itself rested on a least-squares slope through four scattered cold starts
+  (RR − RL = +1.9, −1.3, −5.5, −1.2 psi; usual gap −1.2 psi): −2.9 psi a week, with the newest
+  reading exactly at the usual gap. Dropping the first point gives −0.44, above the −0.5 limit.
+  RR's own cold pressure had returned from 71.3 to 75.6 psi.
+
+**Changes.**
+
+- `dashboard/src/warnings.js`: `over` / `under` follow the numbers shown (`at its usual <n>` when
+  they round alike); sentence durations carry units through `format.js` `fmtDurationLong`; a
+  tier-2 notice renders the broker `reason` and `title`. Spec in `dashboard/docs/design.md` 5.1
+  and 7.1, owner wording in `dashboard/docs/warnings.md`.
+- `drift_warnings.py`: the tire trend is a Theil-Sen slope, and it fires only while the newest
+  cold starts agree (`SLOW_LEAK_LATEST_GAP` −0.5 psi, `SLOW_LEAK_RECENT_GAP` −0.25 psi against
+  the usual gap). An open notice also clears once both are back above −0.25 psi
+  (`SLOW_LEAK_CLEAR_LATEST_GAP`). New drift fields and snapshot keys are listed in
+  `dashboard/docs/warnings-redesign.md` section 5. The delta rule, own-series corroboration,
+  cached-reading filter and held-open behaviour are unchanged. `EVALUATOR_REVISION` stays
+  `drift-v1`; the snapshot change alone makes a new rule revision.
+- Limit that remains: the gates reduce false notices from scatter, they do not remove them. A
+  marginal leak of 0.5 psi a week is now noticed about a week later than before.
+
+**Validation.** `tests/test_drift_warnings.py` `SlowLeakRobustnessTests` replays event 645's saved
+cold starts (normal when fresh, cleared when previously open), a single stray low reading, and a
+leak followed by one and by two good readings. Dashboard tests cover the sign, the units, the
+event 645 payload, held notices and the template fallback. Python suite through `repo-tests`:
+1501 passed, 7 skipped, 1199 subtests (job `20260928T050353Z-aeadeab4`). Dashboard suite: 439
+passed; core 92,107 B of 92,160 B.
+
+**Activation.** The dashboard part takes effect with the next `npm run build`. The rule change
+needs a parked `van-telemetry` restart. The changed rule revision then closes event 645
+administratively, and the first drift check re-evaluates RR as normal. No CAN transmission,
+production database write or synthetic production event was made for this work.

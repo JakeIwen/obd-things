@@ -33,7 +33,7 @@ const torqueSub = computed(() => {
   return t === null ? "" : fmtValue("engine.crankshaft_torque", t) + " lb-ft";
 });
 // Reserved for a broker gear metric (design section 9); empty until one is live and
-// driver-qualified. The production GEAR tile also accepted these catalog names.
+// driver-qualified. The former static app's GEAR tile also accepted these catalog names.
 const GEAR_METRICS = ["transmission.gear_estimate", "transmission.gear", "cluster.actual_gear"];
 const gearText = computed(() => {
   // Estimated gear (broker metric transmission.gear_estimate, candidate quality): shown with "~"

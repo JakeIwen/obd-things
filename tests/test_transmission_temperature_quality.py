@@ -364,18 +364,5 @@ class HistorianQualityTests(unittest.TestCase):
                 self.assertEqual(incident["producer_instance"], "broker-prior")
 
 
-class DashboardQualityTests(unittest.TestCase):
-    def test_dashboard_labels_quality_as_non_notifying_sample_filter(self):
-        app = (
-            Path(__file__).resolve().parents[1]
-            / "projects"
-            / "vehicle_data"
-            / "static"
-            / "app.js"
-        ).read_text()
-        self.assertIn("Telemetry sample filter active", app)
-        self.assertIn("data quality only — never notified", app)
-
-
 if __name__ == "__main__":
     unittest.main()

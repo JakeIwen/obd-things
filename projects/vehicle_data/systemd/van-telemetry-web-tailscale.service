@@ -1,5 +1,5 @@
 [Unit]
-Description=Tailscale van telemetry dashboard with locally armed DTC jobs
+Description=Tailscale van telemetry dashboard (port 8765) with locally armed DTC jobs
 After=network-online.target tailscaled.service van-telemetry.service van-dtc-batch.path
 Wants=network-online.target tailscaled.service
 Requires=van-telemetry.service van-dtc-batch.path
@@ -11,11 +11,12 @@ User=pi
 Group=pi
 WorkingDirectory=/home/pi/dev/obd-things
 EnvironmentFile=/etc/van-telemetry/tailscale-web.env
-ExecStart=/usr/bin/python3 /home/pi/dev/obd-things/projects/vehicle_data/web.py --socket /run/van-telemetry/api.sock --bind ${VAN_TELEMETRY_TAILSCALE_BIND} --port 8765 --allow-remote-bind --enable-dtc-jobs --dtc-trusted-origin ${VAN_TELEMETRY_DTC_ORIGIN}
+ExecStart=/usr/bin/python3 /home/pi/dev/obd-things/projects/vehicle_data/web_v2.py --socket /run/van-telemetry/api.sock --bind ${VAN_TELEMETRY_TAILSCALE_BIND} --port 8765 --allow-remote-bind --enable-dtc-jobs --dtc-trusted-origin ${VAN_TELEMETRY_DTC_ORIGIN} --static-root /home/pi/dev/obd-things/projects/vehicle_data/dashboard/dist
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/run/van-telemetry

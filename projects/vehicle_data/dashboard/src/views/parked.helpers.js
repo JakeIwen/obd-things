@@ -606,7 +606,7 @@ export function oilLifeView(maintenance, state, now) {
   const m = obj(maintenance);
   const ol = m ? obj(m.oil_life) : null;
   const s = obj(state);
-  // Parity: the production card showed `engine.oil_life_remaining` whenever the catalog metric had
+  // Parity: the former static app's card showed `engine.oil_life_remaining` whenever the catalog metric had
   // a live or dated reading, even while the maintenance payload still reports no source.
   const metricHasValue = Boolean(s && s.kind !== "off" && finite(s.value));
   if ((!ol || ol.available !== true) && !metricHasValue) return null;

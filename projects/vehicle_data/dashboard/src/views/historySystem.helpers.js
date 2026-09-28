@@ -202,7 +202,7 @@ export function coverageLine(history, ctx) {
   }
   if (h.available === false) {
     // The broker's own reason (e.g. "telemetry history is disabled by broker configuration"), as the
-    // production history note printed it.
+    // former static app's history note printed it.
     if (str(h.detail)) problems.push(capital(clip(str(h.detail), 160)));
     return { text: "History is not available right now", tone: "amber", problems };
   }
@@ -1163,7 +1163,7 @@ function whyWords(reason, detail) {
 }
 
 /**
- * Why a catalog metric shows no current value (the production tiles' status line: "engine not
+ * Why a catalog metric shows no current value (the former static app's tiles' status line: "engine not
  * running", the battery's "last attempt: …", the charging card's State/Detail). Empty when the
  * value is current, or when there is no record to explain.
  * @param {object|null} rec the metric record (`store.metricSignal(name).value`)
@@ -1196,7 +1196,7 @@ const CONNECTION_WORDS = Object.freeze({
 });
 
 /**
- * The broker link as one line for the Device & app card, with the error the production masthead
+ * The broker link as one line for the Device & app card, with the error the former static app's masthead
  * printed (`Broker unavailable: …`) when the link is down.
  * @param {{state:string, reason?:string|null, detail?:string|null}|null} conn `store.connection`
  * @returns {string}

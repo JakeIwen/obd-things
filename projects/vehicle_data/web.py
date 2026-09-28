@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Explicitly gated cached telemetry web proxy and dashboard."""
+"""Explicitly gated cached telemetry web proxy (the ``/v1`` API).
+
+This module serves only JSON routes: the cached broker proxy, the server-sent
+event stream, the gated passive voltage read, maintenance and event POSTs, DTC
+batch jobs and the warning-advisor proxy. It serves no dashboard page. The
+dashboard listener is ``web_v2.py``, which subclasses these classes and adds
+the built frontend from ``dashboard/dist`` plus the ``/v2`` routes; the systemd
+units run that file, not this one.
+"""
 
 from __future__ import annotations
 
@@ -44,7 +52,6 @@ from lib.dtc_web import (
 )
 
 
-STATIC = pathlib.Path(__file__).with_name("static")
 MAX_STREAM_SECONDS = 300.0
 DEFAULT_STREAM_INTERVAL_SECONDS = 1.0
 LOOPBACK_BINDS = frozenset(("127.0.0.1", "::1", "localhost"))
@@ -360,45 +367,10 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
                 response["status"]["web"] = web_status
         return self._json(status, response)
 
-    def _static(self, filename: str, content_type: str) -> None:
-        path = STATIC / filename
-        try:
-            body = path.read_bytes()
-        except OSError:
-            return self._json(
-                500,
-                {
-                    "available": False,
-                    "reason": "static_asset_unavailable",
-                    "detail": filename,
-                },
-            )
-        try:
-            self.send_response(200)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(body)))
-            self._common_headers()
-            self.end_headers()
-            self.wfile.write(body)
-        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
-            return
-
     def do_GET(self):
         path = self.path.split("?", 1)[0]
         if path.startswith("/v1/assistant/"):
             return self._assistant_request("GET", path)
-        if path in ("/", "/index.html"):
-            return self._static("index.html", "text/html; charset=utf-8")
-        if path == "/app.js":
-            return self._static("app.js", "text/javascript; charset=utf-8")
-        if path == "/profiles.js":
-            return self._static("profiles.js", "text/javascript; charset=utf-8")
-        if path == "/event-history.js":
-            return self._static("event-history.js", "text/javascript; charset=utf-8")
-        if path == "/warning-chat.js":
-            return self._static("warning-chat.js", "text/javascript; charset=utf-8")
-        if path == "/style.css":
-            return self._static("style.css", "text/css; charset=utf-8")
         if path == "/v1/events" or path.startswith("/v1/events/"):
             return self._broker_request("GET", self.path)
         if path in (

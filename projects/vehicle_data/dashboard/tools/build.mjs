@@ -32,7 +32,7 @@ function esbuildOptions(outDir, logLevel) {
     minify: true,
     // External .map files beside each output (linked by a sourceMappingURL comment).
     sourcemap: true,
-    // Android tablet (Chromium). It already runs the 8765 app's ES2020 syntax, so Chrome 80+ is a safe floor.
+    // Android tablet (Chromium). It already ran the former static app's ES2020 syntax, so Chrome 80+ is a safe floor.
     target: ["chrome80", "firefox78"],
     jsx: "automatic",
     jsxImportSource: "preact",

@@ -177,7 +177,7 @@ class DtcWebBoundaryTests(unittest.TestCase):
         )
         for origin in (
             None,
-            "http://100.64.0.10:8766",
+            "http://100.64.0.10:8799",
             "http://192.168.6.103:8765",
             "http://100.64.0.10:8765/path",
             "http://user@100.64.0.10:8765",

@@ -2,7 +2,7 @@
  * Per-device dashboard settings (design section 3 and 5.2): the selected
  * view, automatic view selection, per-view hidden cards and card order, the
  * time format, the night dim toggle and the Drive page. Stored in `localStorage` under `van-telemetry.v2.settings`;
- * never sent to the broker. The old production key
+ * never sent to the broker. The former static app's key
  * (`van-telemetry.dashboard.v3`) is migrated once when the v2 key is absent.
  *
  * Storage access is tolerant: a denied, throwing or corrupt store falls back to
@@ -14,7 +14,7 @@ import { signal } from "@preact/signals-core";
 /** localStorage key for v2 settings. */
 export const STORAGE_KEY = "van-telemetry.v2.settings";
 
-/** localStorage key of the production (v1 app) settings, migrated once. */
+/** localStorage key of the former static app's settings (same origin, port 8765), migrated once. */
 export const LEGACY_KEY = "van-telemetry.dashboard.v3";
 
 /** Valid view ids in tab order. */
@@ -71,7 +71,7 @@ export function normalizeSettings(candidate) {
 }
 
 /**
- * Translate a production-app settings object (`{version:3, selected, ...}`)
+ * Translate a former static app settings object (`{version:3, selected, ...}`)
  * into v2 settings: `driving`→`drive`, `parked`→`parked`, `overview`→`health`,
  * `diagnostics`→`system`, `auto`→`auto:true` with the default view.
  * @param {*} legacy parsed value of the old key

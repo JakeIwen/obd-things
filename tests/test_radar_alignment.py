@@ -1,7 +1,6 @@
 import json
 from pathlib import Path
 import struct
-import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -159,60 +158,6 @@ class RadarAlignmentTests(unittest.TestCase):
         poller.poll.assert_called_once()
         self.assertEqual(len([e for e in events if e["type"] == "metric_failure"]), 2)
         poller.close.assert_called_once()
-
-
-class RadarDashboardTests(unittest.TestCase):
-    def test_current_mean_peak_stale_and_registered_tile(self):
-        root = Path(__file__).resolve().parents[1]
-        html = (root / "projects/vehicle_data/static/index.html").read_text()
-        section = html.split('aria-labelledby="radar-heading"')[0].rsplit("<section", 1)[1]
-        self.assertIn('data-widget="radar"', section)
-        script = r'''
-const fs = require('fs'), vm = require('vm');
-const elements = new Map();
-const element = id => {if(!elements.has(id)) elements.set(id, {textContent:'',dataset:{}}); return elements.get(id);};
-global.document = {getElementById:element};
-global.window = {VanDashboardProfiles:{loadSettings:()=>({})}};
-const source=fs.readFileSync(process.argv[1],'utf8');
-vm.runInThisContext(source.slice(0,source.indexOf('\nbyId("refresh").addEventListener')));
-const catalog=['elevation','azimuth'].map(axis=>({name:`radar.alignment.${axis}`,stale_after_seconds:30}));
-const metrics={}, summaries={};
-catalog.forEach(d=>{metrics[d.name]={available:true,stale:false,value:.9,age_ms:100,quality:'candidate'};
-summaries[d.name]={'60':{mean:.5,count:3,span_seconds:20},'300':{mean:.4,count:3,span_seconds:20,peak_abs:1.1}};});
-renderRadarAlignment({radar_alignment:summaries},catalog,metrics);
-const fresh={badge:element('radar-state').textContent,current:element('radar-elevation-current').textContent,
-mean:element('radar-elevation-60').textContent,coverage:element('radar-elevation-coverage').textContent,
-timestampHidden:element('radar-elevation-time').hidden};
-metrics['radar.alignment.elevation'].stale=true;
-metrics['radar.alignment.azimuth'].age_ms=31000;
-renderRadarAlignment({radar_alignment:summaries},catalog,metrics);
-const stale=element('radar-state').textContent, mean=element('radar-elevation-60').textContent;
-catalog.forEach(d=>{summaries[d.name].latest_value=.9;summaries[d.name].observed_at='2026-09-19T10:00:00Z';metrics[d.name]={available:false,reason:'engine_not_running'};});
-renderRadarAlignment({radar_alignment:summaries},catalog,metrics);
-process.stdout.write(JSON.stringify({fresh,stale,mean,parked:{badge:element('radar-state').textContent,
-current:element('radar-elevation-current').textContent,mean:element('radar-elevation-60').textContent,
-detail:element('radar-elevation-margin').textContent,detailHidden:element('radar-elevation-margin').hidden,
-timestamp:element('radar-elevation-time').textContent,dateTime:element('radar-elevation-time').dateTime}}));
-'''
-        completed = subprocess.run(["node", "-e", script, str(root / "projects/vehicle_data/static/app.js")],
-                                   capture_output=True, text=True, check=True)
-        result = json.loads(completed.stdout)
-        self.assertEqual(result["fresh"]["badge"], "APPROACHING ±1°")
-        self.assertEqual(result["fresh"]["current"], "+0.900°")
-        self.assertTrue(result["fresh"]["timestampHidden"])
-        self.assertEqual(result["fresh"]["mean"], "+0.500°")
-        self.assertIn("1.100°", result["fresh"]["coverage"])
-        self.assertNotIn("samples", result["fresh"]["coverage"])
-        self.assertNotIn("coverage", result["fresh"]["coverage"])
-        self.assertEqual(result["stale"], "NO LIVE ANGLE DATA")
-        self.assertEqual(result["mean"], "—")
-        self.assertEqual(result["parked"]["badge"], "LAST RECORDED · NOT LIVE")
-        self.assertEqual(result["parked"]["current"], "+0.900°")
-        self.assertEqual(result["parked"]["mean"], "+0.500°")
-        self.assertEqual(result["parked"]["detail"], "")
-        self.assertTrue(result["parked"]["detailHidden"])
-        self.assertTrue(result["parked"]["timestamp"])
-        self.assertEqual(result["parked"]["dateTime"], "2026-09-19T10:00:00Z")
 
 
 if __name__ == "__main__":

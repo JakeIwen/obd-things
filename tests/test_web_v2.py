@@ -1,4 +1,4 @@
-"""Dashboard v2 listener (``web_v2.py``) contract tests.
+"""Dashboard listener (``web_v2.py``, port 8765) contract tests.
 
 A canned Unix-socket broker stands in for the real one so the tests cover the
 listener's own behaviour: static serving from the built dashboard root, gzip
@@ -690,14 +690,15 @@ class HelperTests(unittest.TestCase):
 
     def test_tailscale_unit_arguments_validate_with_only_the_documented_variables(self):
         systemd = pathlib.Path(web_v2.__file__).with_name("systemd")
-        unit = (systemd / "van-telemetry-web-v2-tailscale.service").read_text()
+        unit = (systemd / "van-telemetry-web-tailscale.service").read_text()
         example = (systemd / "tailscale-web.env.example").read_text()
         documented = set(re.findall(r"^([A-Z_]+)=", example, re.MULTILINE))
         exec_line = next(line for line in unit.splitlines() if line.startswith("ExecStart="))
         used = set(re.findall(r"\$\{([A-Z_]+)\}", exec_line))
         self.assertEqual(used - documented, set())  # an undefined variable crash-loops the unit
         self.assertNotIn("VAN_TELEMETRY_DTC_ORIGIN_V2", unit)
-        env = {"VAN_TELEMETRY_TAILSCALE_BIND": "100.82.91.76"}
+        env = {"VAN_TELEMETRY_TAILSCALE_BIND": "100.82.91.76",
+               "VAN_TELEMETRY_DTC_ORIGIN": "http://100.82.91.76:8765"}
         words = [
             re.sub(r"\$\{([A-Z_]+)\}", lambda match: env[match.group(1)], word)
             for word in shlex.split(exec_line[len("ExecStart="):])
@@ -705,17 +706,17 @@ class HelperTests(unittest.TestCase):
         self.assertTrue(words[1].endswith("projects/vehicle_data/web_v2.py"))
         args = web_v2.build_parser().parse_args(words[2:])
         self.assertTrue(args.enable_dtc_jobs)
-        self.assertEqual(args.port, 8766)
+        self.assertEqual(args.port, 8765)
         web_v2.base.validate_dtc_job_bind(args.bind)
         self.assertEqual(
             web_v2.base.validate_dtc_origin(args.dtc_trusted_origin, bind=args.bind, port=args.port),
-            "http://100.82.91.76:8766",
+            "http://100.82.91.76:8765",
         )
 
-    def test_parser_defaults_to_port_8766_and_requires_a_built_root(self):
+    def test_parser_defaults_to_port_8765_and_requires_a_built_root(self):
         parser = web_v2.build_parser()
         args = parser.parse_args([])
-        self.assertEqual(args.port, 8766)
+        self.assertEqual(args.port, 8765)
         self.assertTrue(args.static_root.endswith("dashboard/dist"))
         with self.assertRaises(SystemExit):
             web_v2.main(["--static-root", "/nonexistent/dist"])

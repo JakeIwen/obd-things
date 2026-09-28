@@ -167,7 +167,7 @@ function DialogHost() {
     closeDialog();
   };
   const extra = {};
-  // Ask Codex exists only when this listener has the advisor enabled (as in the 8765 app).
+  // Ask Codex exists only when this listener has the advisor enabled (as in the former static app).
   if (name === "events" && store.web.value && store.web.value.warning_chat_enabled === true) {
     extra.onAskCodex = (eventId, summary) => openChat({ eventId, summary }, "explain");
   }

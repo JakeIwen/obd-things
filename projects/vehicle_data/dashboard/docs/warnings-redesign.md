@@ -180,11 +180,19 @@ has fewer than N readings reports `recovering`.
 
 | finding | method | notice | clears |
 |---|---|---|---|
-| tire slow leak (per wheel) | cold-start medians (window: trip start to 180 s after first moving, after ≥ 4 h parked); drops buckets equal to the wheel's last pre-trip value ± 0.05 psi (cached); compares with the axle mate (own − mate − usual offset) | relative slope ≤ −0.5 psi/week over 14 days (≥ 4 points) or relative delta ≤ −3 psi (median of last 3 minus 30-day median), **and** the wheel's own series shows at least half of that (≤ −0.25 psi/week or ≤ −1.5 psi) | relative slope > −0.25 and relative delta > −1.5 psi |
+| tire slow leak (per wheel) | cold-start medians (window: trip start to 180 s after first moving, after ≥ 4 h parked); drops buckets equal to the wheel's last pre-trip value ± 0.05 psi (cached); compares with the axle mate (own − mate − usual offset) | relative slope ≤ −0.5 psi/week over 14 days (≥ 4 points; Theil-Sen, the median of the pairwise slopes) **with** the newest cold starts in agreement (latest paired cold start ≤ −0.5 psi and relative delta ≤ −0.25 psi against the usual gap), or relative delta ≤ −3 psi (median of last 3 minus 30-day median), **and** the wheel's own series shows at least half of that (≤ −0.25 psi/week or ≤ −1.5 psi) | relative delta > −1.5 psi and either relative slope > −0.25 or the newest cold starts are back (latest > −0.25 psi and relative delta > −0.25 psi against the usual gap) |
 | coolant idle creep | per-trip median of `engine_running:stationary:rpm_idle:warm` buckets after minute 10; last 2 trips vs the prior 10 (≥ 5) | +5 °F | < +2.5 °F |
 | oil pressure decline | per-trip median of `rpm_idle` / `rpm_low` warm buckets; last 2 vs prior 10 | −3 psi | > −1.5 psi |
 | charge acceptance | share of running 1-minute buckets < 13.0 V per trip (≥ 10 buckets) | > 40 % for 3 consecutive trips | < 25 % |
 | resting voltage (`battery_voltage_resting_low`, group `battery`) | per parked stop, median of settled engine-off buckets (≥ 60 s after the last activity and ending ≥ 120 s before the next start, so key-on and crank dips are excluded); majority source identity in the window | 7-day median of stops < 12.2 V (≥ 3 stops) or OLS slope < −0.1 V/day (≥ 5 stops) | ≥ 12.3 V and slope > −0.05 V/day |
+
+The tire trend was an ordinary least-squares fit until 2026-09-27. Event 645 (RR, 2026-09-25)
+opened on four scattered cold starts (RR − RL = +1.9, −1.3, −5.5, −1.2 psi against a usual −1.2):
+the fit read −2.9 psi a week although the newest reading sat exactly at the usual gap. Same-axle
+cold readings on this van scatter by several psi, so the slope alone cannot carry a notice. The
+drift payload now adds `slope_method`, `latest_gap_psi`, `slope_steep` (the raw slope test) and
+`recent_agrees`; `slope_fires` is `slope_steep and recent_agrees`. The rule snapshot carries the
+method and the three gap thresholds, so the change is a new rule revision.
 
 Insufficient data never resolves an open notice. When the previous state was `warning`, the
 notice stays open with `drift.held_open = true`. It then carries `baseline` / `deviation` with
@@ -212,6 +220,15 @@ The format is `<Metric> <value> <unit>, <comparison> for <duration>. <Action>.`:
 card, two in ntfy, and no evaluator vocabulary. Examples and the per-state table are in
 `warnings.md`. The `action` field carries the imperative sentence, so the dashboard and ntfy never
 diverge.
+
+- `over` / `under` follow the sign of value − median on both surfaces, never the rule direction.
+  The card says `at its usual <n>` when both numbers round to the same value.
+- A tier-2 notice uses the assessment `reason` as its sentence on both surfaces
+  (`notifications._comparison`, `warnings.js` `warningLine`), because it compares cold starts or
+  trips and its `current` / `baseline` pair is not a live comparison. The card capitalises the
+  reason, uses the broker `title`, and leaves the duration to the card's `since` label. A reason
+  with evaluator vocabulary, or none, falls back to the template.
+- Card durations inside a sentence carry units (`fmtDurationLong`): `1 h 05 min`, `2 d 8 h`.
 
 ## 8. Validation (offline) and deployment
 

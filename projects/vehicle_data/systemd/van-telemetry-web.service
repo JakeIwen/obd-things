@@ -1,5 +1,5 @@
 [Unit]
-Description=Loopback cached van telemetry dashboard
+Description=Van telemetry dashboard (port 8765; loopback by default, LAN via the local 10-lan.conf drop-in)
 After=van-telemetry.service
 Requires=van-telemetry.service
 PartOf=van-telemetry.service
@@ -9,11 +9,12 @@ Type=simple
 User=pi
 Group=pi
 WorkingDirectory=/home/pi/dev/obd-things
-ExecStart=/usr/bin/python3 /home/pi/dev/obd-things/projects/vehicle_data/web.py --socket /run/van-telemetry/api.sock --bind 127.0.0.1 --port 8765
+ExecStart=/usr/bin/python3 /home/pi/dev/obd-things/projects/vehicle_data/web_v2.py --socket /run/van-telemetry/api.sock --bind 127.0.0.1 --port 8765 --static-root /home/pi/dev/obd-things/projects/vehicle_data/dashboard/dist
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=read-only
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

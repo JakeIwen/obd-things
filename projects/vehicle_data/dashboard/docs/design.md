@@ -1,9 +1,12 @@
-# Van telemetry dashboard v2 — design specification
+# Van telemetry dashboard — design specification
 
 Status: build contract, 2026-09-23. It is the 2026-09-22 design baseline with the confirmed design
-review applied (amendments A1–A21, with the owner exceptions listed below). It describes what is being
-built. The existing app keeps running on port 8765 from `projects/vehicle_data/static/` and is not
-edited. v2 runs from `projects/vehicle_data/dashboard/` on port 8766.
+review applied (amendments A1–A21, with the owner exceptions listed below). It was built as "v2", a
+parallel app on port 8766. On 2026-09-27 it replaced the former static app: it now runs from
+`projects/vehicle_data/dashboard/` on port 8765 in the existing `van-telemetry-web.service` and
+`van-telemetry-web-tailscale.service` units, and the old `projects/vehicle_data/static/` frontend and
+port 8766 were removed. "v2" below names this app and its `/v2/*` routes; there is no other
+dashboard.
 
 Inputs: the September 22 audits (UI inventory, API contract, early-warning history, historian data,
 DID-mapping state, tablet performance), the September 23 design review, and the owner's answers.
@@ -24,8 +27,8 @@ Owner decisions:
 - Caveats move to a docs page. Cards carry no provenance words (REGISTERED, MAPPED, ALFA SCALE,
   `n/m LIVE`, candidate prose). A card says "stale" at most once. Plain English, numbers first,
   nothing under 13 px, 44 px tap targets.
-- Owner exceptions to the review: **DTC scans stay available on the v2 Tailscale listener**, with the
-  trusted origin derived from the bind (section 2.1). **Alerts render inside the 48 px top bar**, in
+- Owner exceptions to the review: **DTC scans stay available on the Tailscale listener**, with the
+  exact trusted origin configured beside the bind (section 2.1). **Alerts render inside the 48 px top bar**, in
   place of the state text (section 3).
 - A manual view choice lasts until the engine next starts or stops (section 5.2).
 
@@ -45,7 +48,7 @@ Goals, in priority order:
 5. Warnings a driver can act on: the number, the comparison and an action. System noise goes on a
    separate card.
 
-Non-goals for v2.0: replacing the production app on 8765; any new CAN acquisition; changing the
+Non-goals for v2.0: any new CAN acquisition; changing the
 broker's safety contract; a light theme (a high-contrast day mode waits until the screen is checked in
 sunlight); a no-scroll landscape layout; standalone (browser-chrome-free) display, which needs HTTPS.
 Deferred to v2.1: the per-wheel tire cold baseline, per-trip statistics, seeded Drive sparklines,
@@ -54,7 +57,7 @@ consuming the warning backend's `group`/`tier`/`action` fields, and the gear foo
 ## 2. Architecture
 
 ```
-tablet browser ──HTTP/SSE──▶ web_v2.py (:8766, subclass of web.py)
+tablet browser ──HTTP/SSE──▶ web_v2.py (:8765, subclass of web.py)
                                 │  /            index.html (no-cache, ETag)
                                 │  /assets/*    hashed bundle, gzip, immutable cache
                                 │  /docs/*      caveats.html and warnings.html only
@@ -69,7 +72,9 @@ tablet browser ──HTTP/SSE──▶ web_v2.py (:8766, subclass of web.py)
 ### 2.1 Server: `projects/vehicle_data/web_v2.py`
 
 - It imports `projects.vehicle_data.web` and subclasses `TelemetryWebHandler` and
-  `TelemetryWebServer`. `web.py` is **not edited**, because both production listeners run it.
+  `TelemetryWebServer`. `web.py` provides the `/v1` JSON API (broker proxy, stream, POST gates, DTC
+  jobs, advisor proxy) and, since the 2026-09-27 swap, serves no page of its own; only `web_v2.py`
+  serves the frontend.
 - Static root: `projects/vehicle_data/dashboard/dist/`, which is **gitignored build output**
   (section 2.2). The server refuses to start when `dist/index.html` is missing, so the build must
   succeed before the units are installed. Path traversal gets the same JSON 404 envelope as `web.py`.
@@ -140,23 +145,26 @@ tablet browser ──HTTP/SSE──▶ web_v2.py (:8766, subclass of web.py)
   `/v1/acquisitions/battery.voltage`. No route is removed. There is no `/v2/health-full`.
 - Every `web` flags object on this listener adds `bind` and the dashboard `build` id, read from
   `<static_root>/build.json` and refreshed when that file's mtime changes.
-- CLI: `web_v2.py --socket … --bind <addr> --port 8766 --allow-remote-bind [--cache-only]
+- CLI: `web_v2.py --socket … --bind <addr> [--port 8765] --allow-remote-bind [--cache-only]
   [--enable-dtc-jobs --dtc-trusted-origin …] [--warning-chat-origin …] --static-root <dist>`.
-- Two deployments mirror the existing pair:
-  - **LAN** `192.168.6.103:8766` (`van-telemetry-web-v2.service`). The passive voltage read is
-    allowed, for parity with the production LAN listener, which is also not cache-only. There are
-    no DTC jobs: `web.py` refuses DTC jobs on any bind other than loopback or Tailscale.
-  - **Tailscale** `${VAN_TELEMETRY_TAILSCALE_BIND}:8766`
-    (`van-telemetry-web-v2-tailscale.service`), **with guarded DTC jobs**. The owner kept this
-    feature on v2. The trusted origin is derived from the bind as
-    `http://${VAN_TELEMETRY_TAILSCALE_BIND}:8766`, so `/etc/van-telemetry/tailscale-web.env` needs no
-    new variable. The unit `Requires=van-dtc-batch.path` and has `ReadWritePaths=/run/van-telemetry`.
-  - Concurrency: the DTC request file is exclusive-create, so two scans can never both be queued.
-    The job pointer on disk is shared with the 8765 Tailscale listener and is **not locked across
-    processes**. Both listeners read the same pointer, so each shows a scan started from the other.
-    The remaining race is two Scan presses on different listeners at almost the same moment, which
-    can leave the pointer reading `failed` for a scan that is still running. Rule: start one scan at
-    a time, from one listener. A cross-process lock is a follow-up if both listeners stay long term.
+  `--port` defaults to 8765 and `--static-root` to `dashboard/dist`.
+- Two deployments, both on port 8765:
+  - **LAN** (`van-telemetry-web.service`). The tracked unit binds loopback; the machine-local drop-in
+    `/etc/systemd/system/van-telemetry-web.service.d/10-lan.conf` adds `--allow-remote-bind` and the
+    selected LAN address (`http://vanpi.lan:8765/`). The passive voltage read is allowed (the
+    listener is not `--cache-only`). There are no DTC jobs: `web.py` refuses DTC jobs on any bind
+    other than loopback or Tailscale.
+  - **Tailscale** `${VAN_TELEMETRY_TAILSCALE_BIND}:8765` (`van-telemetry-web-tailscale.service`),
+    **with guarded DTC jobs**. The trusted origin is `VAN_TELEMETRY_DTC_ORIGIN` from
+    `/etc/van-telemetry/tailscale-web.env` (`http://<tailscale-ip>:8765`). The unit
+    `Requires=van-dtc-batch.path` and has `ReadWritePaths=/run/van-telemetry`.
+  - The MacBook-managed Van Dashboard (`/home/pi/scripts/python-automation/van_dashboard_common.py`)
+    reads `http://192.168.6.103:8765/v1/snapshot` from the LAN listener, so every `/v1` route must keep
+    working.
+  - Concurrency: the DTC request file is exclusive-create, so two scans can never both be queued. The
+    job pointer on disk is not locked across processes; only the Tailscale listener has DTC jobs, so
+    only one process writes it. Several browsers on that listener share the pointer and each shows a
+    scan started from another. Rule: start one scan at a time.
 
 ### 2.2 Frontend: Preact + signals, esbuild, no framework re-renders on the hot path
 
@@ -277,9 +285,9 @@ critical. The layout never changes height. Tapping the alert opens that item's e
 view when it has none. `watch` items appear only on the Health card.
 
 Each scrolling view carries one link to `/docs/caveats.html`. Settings live in `localStorage` under
-`van-telemetry.v2.settings`, per device, and are never sent to the broker. Port 8766 is a different
-browser origin from 8765, so neither the 8765 settings nor the Codex chat access code carry over;
-the migration code runs only after a future same-origin swap.
+`van-telemetry.v2.settings`, per device, and are never sent to the broker. The app now serves the
+former app's origin (port 8765), so the old `van-telemetry.dashboard.v3` view selection migrates once
+when the v2 key is absent, and the Codex chat access code (`van-warning-chat.*`) carries over.
 
 ### 3.1 Drive (one screen in portrait; no scrolling)
 
@@ -377,6 +385,8 @@ content. Page 2 ("Sensors") uses the same frame and the same no-scrolling gate.
 - Caveats for these tiles are in `docs/caveats.md` (Drive and engine, Electrical, Radar alignment).
 - The core bundle grew by about 130 B for the two registry entries and the page-1 speed-limit
   sub-line (91,749 B of 92,160 B on 2026-09-27); the tiles themselves live in the lazy chunk.
+  The warning-sentence fixes of the same day (section 7.1) took the core to 92,107 B and the
+  shared chunk holding `warnings.js` to 46,069 B of 46,080 B, so both budgets are nearly spent.
 
 ### 3.2 Parked
 
@@ -435,8 +445,8 @@ checks when stopped:
   - `Pending`, `Confirmed history`, `Test not completed`, `Other status combinations` (only when
     `group_counts.other > 0`) and `Modules · n of m answered` are collapsed.
   - A group longer than the cache says how many of how many are shown.
-- **Guarded scan**, inside the codes card, only when `web.dtc_jobs_enabled` (the Tailscale 8766 and
-  8765 listeners):
+- **Guarded scan**, inside the codes card, only when `web.dtc_jobs_enabled` (the Tailscale
+  listener):
   - A parked-confirmation checkbox gates `Scan`.
   - Scan also requires: no active job; `state !== "restoration_failed"` (otherwise it shows
     "restoration unverified — inspect before retry"); a legacy one-use arm token when
@@ -575,7 +585,8 @@ implements this path. It stays unused until a baseline exists, and tires are nev
   browser's local zone with fixed formatters. It never uses `toLocaleString`, which is slow on old
   Android and printed en-GB dates in the Pi audits.
 - **Times and durations.** Times are 12-hour lowercase: `4:25 pm`, `yesterday 4:25 pm`,
-  `Sep 22, 4:25 pm`. Durations read `32 min` or `1 h 05`.
+  `Sep 22, 4:25 pm`. Durations read `32 min` or `1 h 05` on tiles and in tables. Inside a
+  sentence every unit is written (`fmtDurationLong`): `1 h 05 min`, and from 48 h `2 d 8 h`.
 - **Ages** are computed at `minuteClock` resolution: `now` under a minute, then `2 min`, `1.4 h`,
   `2 d`. No view renders a per-second age, `collector.cycles` or `elapsed_seconds`.
 - **Decimals.** Numbers use tabular digits and fixed decimals per metric:
@@ -637,6 +648,11 @@ resync path, then forces a summary fetch.
     owner template).
   - The duration is omitted, reading `just now`, until `observed ≥ required`.
   - `null` is never rendered.
+  - `over` / `under` follow the two numbers shown, never the rule direction; equal rounded
+    numbers read `at its usual 78`.
+  - A tier-2 notice is the broker's `reason`, capitalised, then the action, under the broker's
+    `title`: `RR cold pressure 2.9 psi a week below RL's over 4 cold starts. Check the RR tire
+    for a slow leak.` It has no duration clause; the card's `since` label carries the time.
 - **Tiers.** `watch` shows only on the Health card. `warning` state and critical severity also drive
   the top-bar alert and the numeral colour (sections 3 and 3.1). The Health tab badge counts open
   items and turns red when any is critical.
@@ -687,9 +703,15 @@ quality. A candidate-quality estimate stays in the System catalog's Diagnostic-o
 Ambient temperature, wheel speeds, and brake and turn-signal leads follow the same route; none of
 them changes the v2 layout.
 
+Status 2026-09-27: `transmission.gear_estimate` is a deployed broker metric at **candidate** quality
+(`0x1F7` shaft-ratio bands R/1–7 via `tools/gear_ratio_lookup.py`; `R` is suppressed above 6 mph
+because 1→2 upshifts cross R's band). It was observed live on 2026-09-24 (7th at 50 mph, ratio
+0.699). The RPM footer still waits for a driver-qualified estimate; the offline evidence is in
+`projects/ecu_mapping/findings/promaster_2022/2026-09-22_gear_and_oil_life_offline.md`.
+
 ## 10. Verification
 
-- **Step 0, tablet probe** (still to be built): a static probe page on 8766 with a flat Health mock
+- **Step 0, tablet probe** (not built): a static probe page with a flat Health mock
   of about 400 nodes. It reports UA, DPR, `innerWidth×innerHeight`, `display-mode` and rAF gaps
   during a flick scroll. The owner opens it on the tablet and sends a screenshot. If it stutters,
   re-examine the rendering assumptions.
@@ -704,8 +726,8 @@ them changes the v2 layout.
   - The build smoke test (`test/build.test.mjs`) builds into a temp dir and asserts `index.html` and
     hashed js/css, the size budgets, no `style=` in built HTML, and the docs allowlist.
 - **Python**: `tests/test_web_v2.py` covers routes, the traversal guard, gzip, cache headers, stream
-  shape, summary trimming (uncapped warning lists, `omitted_count`), and origin behaviour on the new
-  port. `tests/test_dashboard_v2_node.py` runs the node suite from the Python runners, and skips
+  shape, summary trimming (uncapped warning lists, `omitted_count`), and origin behaviour on port
+  8765. `tests/test_dashboard_v2_node.py` runs the node suite from the Python runners, and skips
   without Node 20+ or `node_modules`. Both run inside `pi_compute run repo-tests` as the regression
   gate. Owner action: add `node_modules` and `dist` to van_compute's ignored directories, because the
   snapshot otherwise ships 13 MB of dependencies.
@@ -718,39 +740,43 @@ them changes the v2 layout.
 
   Still to add: a recorded live-drive replay, with `window.__perf = {signalWrites, textWrites,
   componentRenders}` counters and `componentRenders == 0` over 10 s of replay.
-- **Parity checklist**: every control in legacy `index.html`, `event-history.js` and
-  `warning-chat.js` is reachable in v2. The existing dialog helper tests cover the event and chat
+- **Parity checklist** (not run as a formal pass before the swap): every control in the former static
+  app's `index.html`, `event-history.js` and `warning-chat.js` (git history, commit `fa966ba`) is
+  reachable in this app. The existing dialog helper tests cover the event and chat
   features (filters, replay, annotations, export, access code, model/effort, saved warnings,
   retry/stop).
 - **Manual on the tablet**: a `chrome://inspect` performance profile while flick-scrolling Health.
   Paint flashing should show no full-card repaints.
 
-## 11. Deployment (owner actions; nothing here restarts the production app)
+## 11. Deployment (owner actions)
 
-Build first. The service refuses to start without `dist/index.html`, and the units restart every
-5 s on failure. Manual trial as user `pi`:
+The dashboard is live on port 8765 (2026-09-27 swap). `dist/` is gitignored build output served
+directly by both web units, and the build publishes atomically, so a build is the frontend deploy
+step:
 
 ```bash
 cd /home/pi/dev/obd-things/projects/vehicle_data/dashboard && npm ci && npm run build
+cat /home/pi/dev/obd-things/projects/vehicle_data/dashboard/dist/build.json
+```
+
+No restart is needed for frontend changes. Restart the two units only when `web_v2.py` or `web.py`
+changed (the service refuses to start without `dist/index.html`, and the units restart every 5 s on
+failure):
+
+```bash
+sudo systemctl restart van-telemetry-web.service van-telemetry-web-tailscale.service
+systemctl status van-telemetry-web.service van-telemetry-web-tailscale.service --no-pager
+curl -sI http://vanpi.lan:8765/
+curl -s http://vanpi.lan:8765/v1/snapshot | head -c 200; echo
+curl -sI "http://$(tailscale ip -4):8765/"
+```
+
+A manual trial on another port, as user `pi`, leaves the live units untouched:
+
+```bash
 cd /home/pi/dev/obd-things && python3 projects/vehicle_data/web_v2.py \
-  --socket /run/van-telemetry/api.sock --bind 192.168.6.103 --port 8766 --allow-remote-bind \
+  --socket /run/van-telemetry/api.sock --bind 127.0.0.1 --port 8799 \
   --static-root projects/vehicle_data/dashboard/dist
 ```
 
-After a green build and a good trial, install the units. `van-telemetry-web-v2.service` (LAN) and
-`van-telemetry-web-v2-tailscale.service` (Tailscale, guarded DTC jobs) mirror the existing pair. Both
-have `PartOf=van-telemetry.service` and `ProtectHome=read-only`, with the static root under the repo.
-
-```bash
-grep VAN_TELEMETRY_TAILSCALE_BIND /etc/van-telemetry/tailscale-web.env && tailscale ip -4
-sudo cp /home/pi/dev/obd-things/projects/vehicle_data/systemd/van-telemetry-web-v2.service /home/pi/dev/obd-things/projects/vehicle_data/systemd/van-telemetry-web-v2-tailscale.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now van-telemetry-web-v2.service van-telemetry-web-v2-tailscale.service
-systemctl status van-telemetry-web-v2.service van-telemetry-web-v2-tailscale.service --no-pager
-curl -sI http://192.168.6.103:8766/
-curl -sI "http://$(tailscale ip -4):8766/"
-```
-
-To update later, pull and run `npm ci && npm run build`. No restart is needed for frontend changes;
-restart the two units only when `web_v2.py` changed. Record the build id from `dist/build.json` in
-the deployment note.
+Record the build id from `dist/build.json` in the deployment note.

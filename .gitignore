@@ -32,9 +32,9 @@ $RECYCLE.BIN/
 # Nothing a tool writes is ever tracked; promote anything worth keeping into projects/<x>/findings/.
 tmp/
 
-# Frontend build dependencies (dashboard v2)
+# Frontend build dependencies (telemetry dashboard)
 node_modules/
 
-# Dashboard v2 build output is not tracked: `npm ci && npm run build`
+# Telemetry dashboard build output is not tracked: `npm ci && npm run build`
 # in projects/vehicle_data/dashboard is the deploy step; dist/build.json records the build id.
 projects/vehicle_data/dashboard/dist/

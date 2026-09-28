@@ -179,7 +179,7 @@ test("notes: the payload has no active notes but lists recovered sample filters"
   for (const t of textsOf(vm)) assert.doesNotMatch(t, JARGON, t);
 });
 
-test("notes: at most three recovered incidents, as the production app", () => {
+test("notes: at most three recovered incidents, as the former static app", () => {
   const recent = Array.from({ length: 6 }, (_, i) => ({ status: i === 1 ? "active" : "resolved", incident_id: "i" + i, metric: "transmission.oil_temperature", resolved_at: "2026-09-15T23:23:46Z", rejection_count: 1 }));
   const vm = H.systemNotesView(model([]), { data_quality: { recent } }, NOW);
   assert.deepEqual(vm.recovered.map((r) => r.id), ["recovered:i0", "recovered:i2", "recovered:i3"]);
@@ -361,7 +361,7 @@ test("modules given as an object map are accepted", () => {
 });
 
 // ---------------------------------------------------------------------------
-// feature-parity additions (production app items that had no home in v2)
+// feature-parity additions (former static app items that had no home in v2)
 
 test("parity: warnings say when phone alerts are switched off on the Pi", () => {
   const off = { notification_delivery: { enabled: false } };

@@ -201,9 +201,9 @@ API surface (all require the local capability and browser key):
 - `POST /v1/assistant/chats/<id>/apply-warning` or `/remove-warning`
 - `POST /v1/assistant/warnings/<proposal-id>/remove` — owner-scoped removal
 
-The UI script loads only when the web server advertises
-`warning_chat_enabled`, so serving newer static HTML from an older web process
-does not break the existing dashboard.
+The dashboard (`dashboard/src/dialogs/WarningChat.jsx`, served by `web_v2.py`)
+offers Ask Codex only when the listener advertises `warning_chat_enabled`, so a
+listener started with `--no-warning-chat` simply hides it.
 
 ## Activation on vanpi
 

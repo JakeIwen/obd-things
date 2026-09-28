@@ -1,7 +1,8 @@
 # Freshness and acceptance contract for dashboard clients
 
 Extracted verbatim from the 2026-09-22 web API audit of `projects/vehicle_data/web.py` and
-`static/app.js` (line numbers refer to those files at commit 83ecdac). The v2 client
+`static/app.js` (line numbers refer to those files at commit 83ecdac; the static app was removed on
+2026-09-27 and survives only in git history). The dashboard client
 (`dashboard/src/link.js`) implements every numbered rule; `dashboard/test/link.test.mjs` exercises
 each one with synthetic snapshots. Two v2-specific additions follow the list.
 
