@@ -180,13 +180,16 @@ a { color: var(--blue); }
   height: 100%;
   gap: var(--gap);
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-template-rows: 1fr 1.2fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr 1.2fr 1fr 1fr;
   grid-template-areas:
+    "d2limit d2acc d2acc"
     "d2field d2field d2gear"
     "d2radar d2radar d2radar"
     "d2turb d2out d2power"
     "d2torque d2target d2odo";
 }
+.area-d2limit { grid-area: d2limit; }
+.area-d2acc { grid-area: d2acc; }
 .area-d2field { grid-area: d2field; }
 .area-d2gear { grid-area: d2gear; }
 .area-d2radar { grid-area: d2radar; }
@@ -200,6 +203,17 @@ a { color: var(--blue); }
 .area-d2odo .tile__value { font-size: var(--tire); }
 .area-d2odo .tile__unit { font-size: max(13px, .4em); }
 
+/* Speed limit: the number inside a sign outline (no white fill, so night mode stays dark). */
+.drive2-limit { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; }
+.drive2-limit__sign {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-width: 2.4em; max-height: 100%; padding: .12em .3em .1em;
+  border: 3px solid var(--text); border-radius: 10px; font-size: var(--value); line-height: 1;
+}
+.drive2-limit__value { font-weight: 700; letter-spacing: -.02em; white-space: nowrap; }
+.drive2-limit__unit { font-size: 13px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--text-2); }
+.tile--off .drive2-limit__sign { border-color: var(--line-strong); color: var(--dim); }
+
 .drive2-radar__axes { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 24px; align-content: center; }
 .drive2-radar__axis { display: flex; flex-direction: column; justify-content: center; min-width: 0; }
 .drive2-radar__name { font-size: 14px; font-weight: 700; letter-spacing: .04em; color: var(--dim); white-space: nowrap; }
@@ -212,9 +226,10 @@ a { color: var(--blue); }
 @media (min-aspect-ratio: 1/1) and (min-width: 900px) {
   .drive2 {
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    grid-template-rows: 1fr 1fr 1fr;
+    grid-template-rows: repeat(4, minmax(0, 1fr));
     grid-template-areas:
-      "d2field d2gear d2power d2odo"
+      "d2limit d2acc d2acc d2gear"
+      "d2field d2field d2power d2odo"
       "d2radar d2radar d2turb d2out"
       "d2radar d2radar d2torque d2target";
   }
@@ -229,6 +244,7 @@ a { color: var(--blue); }
     grid-template-rows: none;
     grid-auto-rows: 150px;
     grid-template-areas:
+      "d2limit d2acc"
       "d2field d2gear"
       "d2radar d2radar"
       "d2turb d2out"

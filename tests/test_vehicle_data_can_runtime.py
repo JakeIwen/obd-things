@@ -618,6 +618,7 @@ class RoleAwareSourceTests(unittest.TestCase):
             "can7",
             timeout=0.5,
             temperature_gate=reader.temperature_gate,
+            display_wait=reader.display_wait,
         )
 
     def test_powertrain_observer_yields_to_reserved_active_handoff(self):

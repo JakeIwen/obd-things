@@ -5,6 +5,11 @@ Status: **draft; every field below is a Tier 1 exploratory candidate** under
 drive legs, but no independent labeled reference exists yet. Do not add them to `docs/bus-map.md` as
 verified decodes or to the telemetry allowlist until the owner confirmations listed at the end are in.
 
+> **Update 2026-09-27:** an owner-annotated drive verified the `0x5A0` set speed (61→66 mph) and the
+> `0x2FA` SET+ bit, and added the speed-limit display field `0x0E0` B0 (mph). See
+> [2026-09-27 owner-referenced drive](2026-09-27_acc_speed_limit_owner_reference.md). The remaining
+> rows below are unchanged Tier 1 candidates.
+
 ## Scope and provenance
 
 This is offline analysis of saved full-stream captures only. It sent no CAN traffic and made no

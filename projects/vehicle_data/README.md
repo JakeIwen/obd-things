@@ -306,6 +306,9 @@ The initial drive-publisher vocabulary is intentionally narrow:
 | `transmission.turbine_speed` | `ccan.broadcast.0x1f7` | number, `rpm` | `observed_alfa_scale` |
 | `vehicle.ignition_on` | `ccan.broadcast.0x2ef` | boolean, `boolean` | `verified` |
 | `vehicle.speed` | `ccan.broadcast.0x101` | number, `mph` | `observed_alfa_scale` |
+| `vehicle.speed_limit` | `ccan.broadcast.0x0e0` | integer, `mph` | `verified` |
+| `acc.set_speed` | `ccan.broadcast.0x5a0` | integer, `mph` | `verified` |
+| `acc.state` | `ccan.broadcast.0x5a0` | string, `state` | `candidate` |
 | `tire.pressure.fl` | `rf_hub.did.31d0` | number, `psi` | `verified` |
 | `tire.pressure.fr` | `rf_hub.did.31d1` | number, `psi` | `verified` |
 | `tire.pressure.rr` | `rf_hub.did.31d2` | number, `psi` | `verified` |
@@ -319,6 +322,38 @@ The initial drive-publisher vocabulary is intentionally narrow:
 frame may publish only `true`. A publisher-supplied `false` is rejected
 because silence is not a decoded negative value; the observation instead
 expires to stale/unknown when the frame disappears.
+
+`vehicle.speed_limit` and `acc.set_speed` are the instrument cluster's
+display values, referenced by the owner on the 2026-09-27 drive (every
+captured speed-limit change and the ACC set speed 61 → 66 matched exactly; see
+the [owner-referenced drive](../radar/findings/2026-09-27_acc_speed_limit_owner_reference.md)
+and the `docs/bus-map.md` rows for `0x0E0` and `0x5A0`):
+
+- `0x0E0` byte 0 is the speed limit in raw mph. Its `0` (key-off / no limit
+  shown) is never published, so "none" arrives as the metric going stale
+  after five seconds.
+- `0x5A0` byte 3 is the set speed in raw mph, published only while the
+  candidate ACC state is ready, engaged, override or standby, byte 3 is
+  nonzero and byte 2 (km/h) agrees within 1 km/h. Off and ready-before-SET
+  publish no set speed; the broker cache keeps an earlier value until its
+  10-second staleness, so consumers gate on `acc.state`.
+- `acc.state` (`off`, `ready`, `engaged`, `override`, `standby`) is the Tier 1
+  behavioural decode `((B6 & 1) << 2) | (B7 >> 6)` of the same frame. Other raw
+  values are not published.
+
+They are display information only: no warning, notification or safety logic
+uses them. `0x5A0` is sent at 1 Hz plus on change, and `0x0E0` trails the
+required powertrain frames within each 100 ms cycle, so an early-ending
+snapshot would miss both. `ccan_powertrain.LowRateFrameWait`, held by the
+passive reader and by the active helper like the temperature gate, lets a
+snapshot keep listening for a display frame not seen within its refresh
+interval (0x0E0 every snapshot, 0x5A0 after 2 s), bounded by the snapshot's
+existing timeout (0.5 s passive, 0.35 s active). A frame absent through six
+extended waits and ten seconds backs off for 30 s. Values are never carried
+between snapshots, so the broker's receipt timestamp stays honest. Both
+sources are in the broker's `ACTIVE_DRIVE_SOURCES`, and
+`tests/test_display_frames.py` fails if any source the snapshot can emit is
+missing from that allowlist.
 
 The four TPMS metrics use the wheel map and `raw x 0.1 kPa` pressure scale
 verified by the TPMS project's 2026-07-07 deflate/reinflate test. RF Hub slots
@@ -716,9 +751,12 @@ passive B-CAN lease path.
   topology, no operation inhibit, and the broker-reported healthy 500-kbit/s
   ERROR-ACTIVE `canN`, rechecked against the expected USB serial and `dev_id`;
 - an initial `0x2EF` frame within five seconds of opening the receive socket.
-- exact passive B-CAN and CAN-CH broker routes followed by freshly acquired
-  shared role/channel leases; B-CAN must produce `0x46C` and CAN-CH its unique
-  `0x0DA` signature within five seconds.
+- for each secondary, an exact passive B-CAN/CAN-CH broker route followed by a
+  freshly acquired shared role/channel lease (or the exact auxiliary B-CAN
+  owner above); B-CAN must produce `0x46C` and CAN-CH its unique `0x0DA`
+  signature within five seconds of each segment start. Since 2026-09-27 an
+  unproven secondary no longer blocks the C-CAN start; it joins when proven
+  (see below).
 
 It then runs three loss-accounted recorders with `candump -D`, 16 MiB socket
 receive buffers, ten-minute zstd chunks, a C-CAN priority stream, and full
@@ -728,9 +766,73 @@ across the broker's expected end-of-interval interface down/up restoration.
 The recorder accepts an armed interface only while the exact broker owner is
 present, but may continue after verified listen-only restoration so the raw
 session includes the key-off tail. Twenty seconds without C-CAN `0x2EF`
-cleanly ends all three recorders. A complete `capture-set.json` is written only
-after every role finalizes successfully; one missing role, identity change,
-drop, or recorder failure makes the campaign explicitly incomplete.
+cleanly ends all three recorders. `capture-set.json` is written after every
+role finalizes; its `complete` flag is true only when all three roles recorded
+one uninterrupted segment, and `primary_complete` reports C-CAN. A drop,
+compression, storage, or cleanup failure on any role still fails the campaign.
+
+#### Scheduled status refresh and secondary-route resilience (2026-09-27)
+
+Campaign `broker-drive-20260927T212949433889` stopped all three buses at
+22:00:10Z, 34 minutes before engine stop, when the owner's cron
+`projects/battery/voltage_mon.py` requested `battery.voltage`. As in the
+[2026-09-06 diagnosis](../ecu_mapping/findings/promaster_2022/2026-09-06_broker_topology_refresh_diagnosis.md),
+the refused (`can_busy`) acquisition refreshed the broker's interface snapshot
+mid-interval. The auxiliary-armed B-CAN role was re-probed as
+`interface_armed` with `safe=false`; `safe` is the passive-observer bit and
+only a verified listen-only role gets it. The broker's verified-owner overlay
+still marked the route correctly (`armed_owner=broker_auxiliary_drive`,
+`topology_usable=true`; the historian kept `topology_usable=1` throughout),
+but `drive_recorder.broker_secondary_route()` required `safe=true` for the
+armed branch too, so every B-CAN route check failed once a second until the
+engine stopped. The C-CAN side of the same refresh was repaired on 09-26.
+
+Repairs:
+
+- `broker_secondary_route()` requires `safe=true` only for the passive branch.
+  The armed branch now requires the broker's verified-owner markers
+  (`armed_owner=broker_auxiliary_drive`, `topology_usable=true`) in addition to
+  the unchanged auxiliary helper, identity, bitrate, FD, one-shot, restart-ms,
+  and controller checks. The broker sets those markers only after re-checking
+  the helper's owner route, restoration latch, and inhibits. The broker is
+  unchanged.
+- The recorder records C-CAN as the only required role. B-CAN and CAN-CH are
+  best-effort segments. A secondary route loss ends only that role's segment,
+  after the generic recorder finalizes it. Route loss here means lost broker
+  proof, failed lease/identity/listen-only/controller revalidation, or no
+  `0x46C`/`0x0DA` within five seconds. C-CAN and the other secondary keep
+  recording. The lost role is re-admitted no sooner than 10 s later. That
+  requires a fresh broker status that still proves the primary interval and
+  the exact route, then a fresh lease or armed-owner check. The new segment
+  appends to the same role directory and continues its chunk numbering
+  (`Recorder(sequence_start=...)`), so no earlier chunk or partial is reopened.
+  `run.json` lists `secondary_admission`. `route-events.jsonl` logs every
+  segment start/end and await. `capture-set.json` lists each secondary's
+  `segments` and `continuous`. A secondary directory appears only after its
+  first admitted segment. `van_scan_harvest.bus_capture_ended()` now uses the
+  latest `capture_start`/`capture_end` marker.
+- The recorder remains receive-only: it never configures CAN, never takes an
+  exclusive lease, and never records a route it cannot currently prove.
+- Rejected alternative: skipping `_refresh_interface_status()` in
+  `TelemetryBroker.acquire()` after a `can_busy` refusal. While the helpers
+  own the channels, the collector is blocked, so this refresh is the only
+  fresh kernel evidence during a drive. Skipping it would keep a pre-arm
+  snapshot that still claims listen-only and would hide a real
+  controller/USB/identity fault. It would also freeze status whenever the
+  TPMS logger or a manual tool holds the lock, and it would starve the
+  USB-CAN monitor and receive-watch evidence. The defect was in how
+  consumers classified the refresh.
+- Regressions (`tests/test_vehicle_drive_recorder.py`): the B-CAN refresh
+  replay for both the armed auxiliary helper and a blocked helper with passive
+  B-CAN. Negative cases cover controller, bitrate, FD, one-shot, restart-ms,
+  link, foreign owner route, restoration latch, inhibit, and missing owner
+  markers. Segment tests cover loss/re-admission, a missing start signature,
+  fatal drop/storage errors, start while a secondary is unproven, and type
+  preservation through the real `Recorder`.
+
+Deployment requires only restarting `van-drive-recorder` while parked.
+Operational follow-up: the next drive that crosses a scheduled voltage check
+(10:00–22:00 local, even hours) should keep one uninterrupted B-CAN segment.
 
 An armed recorder status check retries only the observed transient Unix-socket
 conditions (`EAGAIN`/`EWOULDBLOCK` and timeout), for at most five attempts and a

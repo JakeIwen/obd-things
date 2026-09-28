@@ -105,3 +105,41 @@ export function ratioText(turbine, output) {
   if (!isNum(turbine) || !isNum(output) || output < 100 || turbine < 0) return "";
   return "ratio " + fmtFixed(turbine / output, 2);
 }
+
+/**
+ * Speed-limit sign text: whole mph, or `—` when the cluster shows no limit (the broker never
+ * publishes the frame's 0, so "none" arrives as no live value).
+ * @param {number|null} mph live `vehicle.speed_limit`
+ */
+export function speedLimitText(mph) {
+  return isNum(mph) && mph > 0 ? String(Math.round(mph)) : DASH;
+}
+
+/** Sub-line word for each published ACC state (`off` has its own value). */
+export const ACC_STATE_WORDS = Object.freeze({
+  ready: "ready",
+  engaged: "engaged",
+  override: "accelerator override",
+  standby: "standby",
+});
+
+/**
+ * ACC tile model.
+ * @param {string|null} state current `acc.state` record value (read from the record: its quality
+ *   is below the driver-qualified set), or null when there is no current record
+ * @param {number|null} setSpeed live `acc.set_speed` in mph, or null
+ * @returns {{value: string, unit: string, sub: string, kind: "live"|"held"|"off"}}
+ *   `held` dims the number: standby keeps the set speed in memory but is not controlling.
+ */
+export function accTileModel(state, setSpeed) {
+  const st = typeof state === "string" && Object.prototype.hasOwnProperty.call(ACC_STATE_WORDS, state) ? state : null;
+  if (state === "off") return { value: "Off", unit: "", sub: "", kind: "off" };
+  if (st === "ready") return { value: DASH, unit: "", sub: "ready · no set speed", kind: "off" };
+  if (!isNum(setSpeed) || setSpeed <= 0) return { value: DASH, unit: "", sub: st ? ACC_STATE_WORDS[st] : "", kind: "off" };
+  return {
+    value: String(Math.round(setSpeed)),
+    unit: "mph",
+    sub: st ? "set · " + ACC_STATE_WORDS[st] : "set speed",
+    kind: st === "standby" ? "held" : "live",
+  };
+}

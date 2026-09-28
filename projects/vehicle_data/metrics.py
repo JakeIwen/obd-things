@@ -623,6 +623,99 @@ TRANSMISSION_GEAR_ESTIMATE = MetricDefinition(
     ),
 )
 
+# Cluster display fields referenced by the owner on the 2026-09-27 drive
+# (projects/radar/findings/2026-09-27_acc_speed_limit_owner_reference.md):
+# every captured owner-noted speed-limit change and the ACC set speed 61 -> 66
+# matched exactly. They are what the cluster shows, never a safety input.
+_DISPLAY_FINDING = (
+    "projects/radar/findings/2026-09-27_acc_speed_limit_owner_reference.md"
+)
+
+VEHICLE_SPEED_LIMIT = MetricDefinition(
+    name="vehicle.speed_limit",
+    unit="mph",
+    value_type="integer",
+    # 10 Hz frame, waited for by every snapshot; same window as the other
+    # passive powertrain scalars.
+    stale_after_seconds=5.0,
+    passive_min_interval_seconds=0.0,
+    minimum=1,
+    maximum=120,
+    sources=(
+        SourceDefinition(
+            name="ccan.broadcast.0x0e0",
+            bus="c-can",
+            bitrate=500000,
+            acquisition_class="passive_broadcast",
+            quality="verified",
+            provenance=(
+                f"{_DISPLAY_FINDING}; 0x0E0 byte 0 raw mph, the cluster's "
+                "traffic-sign speed limit (4/4 owner-noted changes exact); "
+                "raw 0 (key-off / no limit shown) is never published"
+            ),
+            side_effects="none; observation is receive-only",
+            publisher_allowed=True,
+        ),
+    ),
+)
+
+ACC_SET_SPEED = MetricDefinition(
+    name="acc.set_speed",
+    unit="mph",
+    value_type="integer",
+    # 0x5A0 is 1 Hz plus on change and a snapshot listens for it only when
+    # it is due (about every 2-4 s), so the window allows a few misses.
+    stale_after_seconds=10.0,
+    passive_min_interval_seconds=0.0,
+    minimum=1,
+    maximum=120,
+    sources=(
+        SourceDefinition(
+            name="ccan.broadcast.0x5a0",
+            bus="c-can",
+            bitrate=500000,
+            acquisition_class="passive_broadcast",
+            quality="verified",
+            provenance=(
+                f"{_DISPLAY_FINDING}; 0x5A0 byte 3 raw mph (byte 2 = "
+                "round(mph x 1.609344) km/h cross-check), owner-displayed "
+                "61 -> 66 matched; published only while the candidate "
+                "acc.state is ready/engaged/override/standby and byte 3 > 0"
+            ),
+            side_effects="none; observation is receive-only",
+            publisher_allowed=True,
+        ),
+    ),
+)
+
+ACC_STATE = MetricDefinition(
+    name="acc.state",
+    unit="state",
+    value_type="string",
+    stale_after_seconds=10.0,
+    passive_min_interval_seconds=0.0,
+    minimum=None,
+    maximum=None,
+    sources=(
+        SourceDefinition(
+            name="ccan.broadcast.0x5a0",
+            bus="c-can",
+            bitrate=500000,
+            acquisition_class="passive_broadcast",
+            quality="candidate",
+            provenance=(
+                "projects/radar/findings/2026-09-25_acc_passive_mapping.md; "
+                "0x5A0 ((B6 & 1) << 2) | (B7 >> 6): 0 off, 1 ready, "
+                "2 engaged, 4 accelerator override, 5 standby; behavioural "
+                "Tier 1 candidate, other raw values are not published"
+            ),
+            side_effects="none; observation is receive-only",
+            publisher_allowed=True,
+            publisher_values=("off", "ready", "engaged", "override", "standby"),
+        ),
+    ),
+)
+
 RADAR_ELEVATION = _radar_angle_metric("elevation")
 RADAR_AZIMUTH = _radar_angle_metric("azimuth")
 
@@ -644,6 +737,9 @@ METRICS = {
         TRANSMISSION_OIL_TEMPERATURE,
         TRANSMISSION_TURBINE_SPEED,
         TRANSMISSION_GEAR_ESTIMATE,
+        VEHICLE_SPEED_LIMIT,
+        ACC_SET_SPEED,
+        ACC_STATE,
         GENERATOR_FIELD_DUTY,
         VEHICLE_ODOMETER,
         RADAR_ELEVATION,

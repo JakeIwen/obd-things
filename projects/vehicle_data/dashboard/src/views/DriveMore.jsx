@@ -1,6 +1,7 @@
 /**
- * Drive page 2, "Sensors" (design 3.1.1): alternator field duty, the gear estimate, radar aim,
- * transmission shaft speeds, power, torque and target torque, and the odometer. One screen, no
+ * Drive page 2, "Sensors" (design 3.1.1): the cluster's speed limit and ACC set speed, alternator
+ * field duty, the gear estimate, radar aim, transmission shaft speeds, power, torque and target
+ * torque, and the odometer. One screen, no
  * scrolling, at 800×1280 portrait and 1280×800 landscape. Loaded lazily the first time page 2
  * is shown; while page 1 is on screen none of this is mounted.
  *
@@ -13,7 +14,59 @@ import { Tile } from "../components/Tile.jsx";
 import { liveValue, obs, isHidden, dayClock } from "../app/derive.js";
 import * as store from "../store.js";
 import { DASH, fmtFixed } from "../format.js";
-import { RADAR_TILE_AXES, radarTileModel, gearText, ratioText } from "./driveMore.helpers.js";
+import {
+  RADAR_TILE_AXES,
+  radarTileModel,
+  gearText,
+  ratioText,
+  speedLimitText,
+  accTileModel,
+} from "./driveMore.helpers.js";
+
+// Speed limit: the number the cluster's traffic-sign display shows, in a sign outline; `—` when
+// it shows none (the broker publishes nothing for the frame's 0, so the record goes stale).
+const limit = computed(() => speedLimitText(liveValue("vehicle.speed_limit").value));
+const limitOn = computed(() => limit.value !== DASH);
+const limitCls = computed(() => "tile area-d2limit " + (limitOn.value ? "tile--live" : "tile--off"));
+const limitUnit = computed(() => (limitOn.value ? "mph" : ""));
+
+function LimitTile() {
+  return (
+    <section class={limitCls} aria-label="Speed limit">
+      <div class="tile__label">Speed limit</div>
+      <div class="drive2-limit">
+        <div class="drive2-limit__sign num">
+          <span class="drive2-limit__value">{limit}</span>
+          <span class="drive2-limit__unit">{limitUnit}</span>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ACC: set speed (verified) with the state word (candidate, read from its record like the gear).
+const acc = computed(() => {
+  const rec = store.metricSignal("acc.state").value;
+  const state = rec && rec.available === true && !rec.stale && typeof rec.value === "string" ? rec.value : null;
+  return accTileModel(state, liveValue("acc.set_speed").value);
+});
+const accCls = computed(() => "tile area-d2acc tile--" + acc.value.kind);
+const accValue = computed(() => acc.value.value);
+const accUnit = computed(() => acc.value.unit);
+const accSub = computed(() => acc.value.sub);
+
+function AccTile() {
+  return (
+    <section class={accCls} aria-label="Adaptive cruise">
+      <div class="tile__label">ACC</div>
+      <div class="tile__value num">
+        <span>{accValue}</span>
+        <span class="tile__unit">{accUnit}</span>
+      </div>
+      <div class="tile__sub">{accSub}</div>
+    </section>
+  );
+}
 
 // Alternator field duty pairs with the battery voltage it is regulating.
 const batterySub = computed(() => {
@@ -106,6 +159,8 @@ export default function DriveMore() {
   const show = (id) => !isHidden("drive", id);
   return (
     <div class="drive2">
+      {show("limit") && <LimitTile />}
+      {show("acc") && <AccTile />}
       {show("field") && <Tile name="generator.field_duty" label="Alternator field" area="d2field" spark sub={batterySub} />}
       {show("gear") && <GearTile />}
       {show("radar") && <RadarTile />}

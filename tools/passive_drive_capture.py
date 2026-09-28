@@ -744,6 +744,7 @@ class Recorder:
         install_signal_handlers: bool = True,
         channel: str,
         bitrate: int,
+        sequence_start: int = 0,
     ) -> None:
         self.run_dir = run_dir
         self.priority_ids = priority_ids
@@ -780,8 +781,17 @@ class Recorder:
             raise ValueError("recorder channel must be a resolved kernel canN")
         if not isinstance(bitrate, int) or isinstance(bitrate, bool) or bitrate <= 0:
             raise ValueError("recorder bitrate must be a positive integer")
+        if (
+            not isinstance(sequence_start, int)
+            or isinstance(sequence_start, bool)
+            or sequence_start < 0
+        ):
+            raise ValueError("sequence_start must be a non-negative integer")
         self.channel = channel
         self.bitrate = bitrate
+        # A later segment appended to the same directory continues the chunk
+        # numbering so it can never reopen an earlier chunk or partial.
+        self.sequence_start = sequence_start
         self.popen = popen
         self.runner = runner
         self.disk_free = disk_free
@@ -936,7 +946,7 @@ class Recorder:
         pending: list[
             tuple[concurrent.futures.Future, float, int]
         ] = []
-        sequence = 0
+        sequence = self.sequence_start
         buffer = bytearray()
         started = time.monotonic()
         next_disk_check = started

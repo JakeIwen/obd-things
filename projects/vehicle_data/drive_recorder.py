@@ -4,19 +4,28 @@
 This daemon never configures SocketCAN or sends a CAN frame.  It waits until
 the telemetry broker proves that its reviewed active-drive helper owns the
 serial-resolved C-CAN channel, attaches an independent receive socket to that
-broker-owned route, and takes shared passive observer leases for the separately
-resolved B-CAN and CAN-CH routes.  All three write distinct loss-accounted zstd
-streams to the required external mount.
+broker-owned route, and records the separately resolved B-CAN (shared passive
+lease, or the broker's exact auxiliary owner) and CAN-CH (shared passive
+lease) routes.  Each writes distinct loss-accounted zstd streams to the
+required external mount.
 
 The normal observer lock cannot be acquired during this interval: the broker
 correctly holds the exclusive channel lock for its fixed PCM/RF-Hub requests.
 Instead, this companion requires the broker's machine-readable ownership state
-before accepting the armed C-CAN interface.  B-CAN and CAN-CH retain their
-ordinary shared role/channel leases for the complete interval.  It may continue
-receiving after the broker restores C-CAN listen-only mode so the same raw
-session reaches ignition loss.  Any armed state without the broker owner, any
-secondary-role identity/loss failure, or a missing secondary awake signature
-fails the complete three-bus evidence set.
+before accepting the armed C-CAN interface.  It may continue receiving after
+the broker restores C-CAN listen-only mode so the same raw session reaches
+ignition loss.  Any armed C-CAN state without the broker owner ends the
+interval.
+
+C-CAN is the primary, required role.  B-CAN and CAN-CH are best-effort
+segments (2026-09-27): a secondary records only while its exact route is
+proven; a route loss (broker proof, identity/listen-only revalidation, or a
+missing bus-identity start frame) cleanly ends only that role's segment, and
+the role is re-admitted after a fresh broker proof plus a fresh lease or
+armed-owner check.  Every gap is recorded in ``route-events.jsonl`` and
+``capture-set.json`` (``complete`` stays true only for three uninterrupted
+roles).  Storage, compression, socket-drop, and cleanup failures on any role
+still fail the whole campaign.
 """
 
 from __future__ import annotations
@@ -48,6 +57,7 @@ from lib.can_role_resolver import SysfsCanRoleResolver  # noqa: E402
 from projects.vehicle_data.can_interfaces import (  # noqa: E402
     PassiveInterfaceLease,
     PassiveInterfaceManager,
+    PassiveInterfaceUnavailable,
 )
 from tools import passive_drive_capture as capture  # noqa: E402
 
@@ -60,6 +70,11 @@ SECONDARY_START_IDS = {"b-can": 0x46C, "can-ch": 0x0DA}
 SECONDARY_START_TIMEOUT_SECONDS = 5.0
 SECONDARY_START_WAIT_SECONDS = 8.0
 SECONDARY_JOIN_TIMEOUT_SECONDS = 150.0
+# Re-admission of a lost/unproven secondary: poll the broker this often, and
+# never start a new segment sooner than the backoff after the previous loss.
+SECONDARY_READMIT_INTERVAL_SECONDS = 2.0
+SECONDARY_READMIT_BACKOFF_SECONDS = 10.0
+ROUTE_EVENTS_NAME = "route-events.jsonl"
 DEFAULT_OUT_ROOT = (
     Path("/mnt/EXFAT512")
     / "obd-things"
@@ -89,6 +104,14 @@ class DriveRecorderError(RuntimeError):
 
 class BrokerOwnershipLost(DriveRecorderError, capture.RecoverableCaptureError):
     """Broker attribution was lost; recover only after successful capture cleanup."""
+
+
+class SecondaryRouteLost(BrokerOwnershipLost):
+    """One B-CAN/CAN-CH route could not be re-proven.
+
+    It ends only that role's current segment (after the generic recorder has
+    finalized it); the primary C-CAN capture and any other proven role go on.
+    """
 
 
 @dataclasses.dataclass(frozen=True)
@@ -323,9 +346,17 @@ def broker_secondary_route(
     dev_id = expected.get("dev_id")
     bitrate = expected.get("bitrate")
     pair = expected.get("pair")
+    # ``safe`` belongs to the passive-observer contract (can_interfaces.py sets
+    # it only for a verified listen-only role), so it is required below for
+    # the passive path only.  An armed B-CAN is proven instead by the broker's
+    # verified-owner overlay (``armed_owner``/``topology_usable``), which
+    # re-checks the owner route identity, restoration latch, inhibits, link,
+    # bitrate, FD, one-shot, restart-ms, and controller state.  Requiring
+    # ``safe`` there stopped the 2026-09-27 drive: the pre-arm snapshot still
+    # said safe=true, the 22:00 voltage_mon refresh re-probed B-CAN as
+    # ``interface_armed``/safe=false, and every B-CAN route check failed.
     common_valid = bool(
         payload.get("resolution") == "resolved"
-        and payload.get("safe") is True
         and isinstance(channel, str)
         and re.fullmatch(r"can[0-9]+", channel)
         and isinstance(serial, str)
@@ -358,11 +389,14 @@ def broker_secondary_route(
         and isinstance(auxiliary.get("helper_pid"), int)
         and not isinstance(auxiliary.get("helper_pid"), bool)
         and payload.get("operating_mode") == "armed_diagnostic"
+        and payload.get("armed_owner") == "broker_auxiliary_drive"
+        and payload.get("topology_usable") is True
         and payload.get("passive_ready") is False
         and actual.get("listen_only") is False
     )
     passive = bool(
-        payload.get("passive_ready") is True
+        payload.get("safe") is True
+        and payload.get("passive_ready") is True
         and actual.get("listen_only") is True
     )
     if not common_valid or not (armed_bcan or passive):
@@ -478,19 +512,28 @@ class PassiveLeaseSafetyCheck:
         self.lease = lease
 
     def __call__(self) -> capture.InterfaceState:
-        with self.manager.observe(self.lease.role) as checked:
-            if route_from_lease(checked) != route_from_lease(self.lease):
-                raise DriveRecorderError(
-                    f"{self.lease.role} changed while validating capture ownership"
-                )
-        return query_interface(
-            channel=self.lease.channel,
-            bitrate=self.lease.bitrate,
-            require_listen_only=True,
-            role=self.lease.role,
-            expected_usb_serial=self.lease.usb_serial,
-            expected_dev_id=self.lease.dev_id,
-        )
+        try:
+            with self.manager.observe(self.lease.role) as checked:
+                if route_from_lease(checked) != route_from_lease(self.lease):
+                    raise DriveRecorderError(
+                        f"{self.lease.role} changed while validating capture ownership"
+                    )
+            return query_interface(
+                channel=self.lease.channel,
+                bitrate=self.lease.bitrate,
+                require_listen_only=True,
+                role=self.lease.role,
+                expected_usb_serial=self.lease.usb_serial,
+                expected_dev_id=self.lease.dev_id,
+            )
+        except BrokerOwnershipLost:
+            raise
+        except (DriveRecorderError, PassiveInterfaceUnavailable) as exc:
+            # Identity, listen-only, bitrate, controller, or counter proof is
+            # gone: stop receiving this role, never guess it is still valid.
+            raise SecondaryRouteLost(
+                f"{self.lease.role} passive route could not be revalidated: {exc}"
+            ) from exc
 
 
 class CoordinatedSafetyCheck:
@@ -608,6 +651,16 @@ class AuxiliaryBcanSafetyCheck:
         )
 
     def __call__(self) -> capture.InterfaceState:
+        try:
+            return self._check()
+        except BrokerOwnershipLost:
+            raise
+        except DriveRecorderError as exc:
+            raise SecondaryRouteLost(
+                f"b-can route could not be revalidated: {exc}"
+            ) from exc
+
+    def _check(self) -> capture.InterfaceState:
         interface = self.interface_reader()
         if interface.listen_only:
             if self.require_initial_armed and not self.initial_gate_passed:
@@ -635,6 +688,262 @@ class AuxiliaryBcanSafetyCheck:
             )
         self.initial_gate_passed = True
         return interface
+
+
+AdmittedRoute = tuple[CaptureRoute, Callable[[], capture.InterfaceState], ExitStack]
+
+
+def admit_secondary_route(
+    role: str,
+    status: dict[str, object],
+    client: TelemetryClient,
+    interface_manager: PassiveInterfaceManager,
+    *,
+    expected_route: CaptureRoute | None = None,
+    auxiliary_check_factory: Callable[..., Callable[[], capture.InterfaceState]]
+    | None = None,
+    passive_check_factory: Callable[..., Callable[[], capture.InterfaceState]]
+    | None = None,
+) -> tuple[AdmittedRoute, capture.InterfaceState]:
+    """Prove one secondary route from a broker status plus a fresh local check.
+
+    The broker must prove the exact route; a passive role then takes a fresh
+    shared role/channel lease that must match it, and an auxiliary-owned
+    B-CAN must pass the exact armed-owner check.  Any failure raises
+    ``SecondaryRouteLost`` with nothing left held.
+    """
+    auxiliary_check_factory = auxiliary_check_factory or AuxiliaryBcanSafetyCheck
+    passive_check_factory = passive_check_factory or PassiveLeaseSafetyCheck
+    route = broker_secondary_route(status, role)
+    if expected_route is not None and route != expected_route:
+        raise SecondaryRouteLost(f"{role} route changed after broker admission")
+    stack = ExitStack()
+    try:
+        if route.ownership == "broker_auxiliary_drive_companion":
+            check = auxiliary_check_factory(
+                client, route, require_initial_armed=True
+            )
+        else:
+            try:
+                lease = stack.enter_context(interface_manager.observe(role))
+            except Exception as exc:
+                raise SecondaryRouteLost(
+                    f"cannot acquire required passive {role} recorder route: {exc}"
+                ) from exc
+            if route_from_lease(lease) != route:
+                raise SecondaryRouteLost(f"{role} route changed after broker admission")
+            check = passive_check_factory(interface_manager, lease)
+        interface = check()
+    except BaseException:
+        stack.close()
+        raise
+    return (route, check, stack), interface
+
+
+class SecondaryRoleSupervisor:
+    """Record one B-CAN/CAN-CH role as consecutive broker-proven segments.
+
+    A route loss (broker proof, lease/identity revalidation, or a missing
+    bus-identity start frame) ends only this role's current segment, after the
+    generic recorder has finalized it cleanly; the primary C-CAN capture and
+    any still-proven role continue.  The role is re-admitted only from a fresh
+    broker status that still proves the primary interval and the exact route,
+    followed by a fresh lease or armed-owner check.  Storage, compression,
+    socket-drop accounting, and every other capture failure stays fatal for
+    the whole campaign.  Nothing here configures CAN or transmits.
+    """
+
+    def __init__(
+        self,
+        *,
+        role: str,
+        role_dir: Path,
+        client: TelemetryClient,
+        interface_manager: PassiveInterfaceManager,
+        recorder_factory: Callable[
+            [CaptureRoute, Callable[[], capture.InterfaceState], int], object
+        ],
+        stop_event: threading.Event,
+        settled_event: threading.Event,
+        events_path: Path,
+        admitted: AdmittedRoute | None,
+        admission_detail: str | None = None,
+        on_change: Callable[[], None] | None = None,
+        status_reader: Callable[[TelemetryClient], dict[str, object]] = (
+            lambda client: read_broker_status(client)
+        ),
+        admitter: Callable[..., tuple[AdmittedRoute, capture.InterfaceState]]
+        | None = None,
+        readmit_interval_seconds: float | None = None,
+        readmit_backoff_seconds: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if role not in SECONDARY_ROLES:
+            raise ValueError(f"unsupported secondary recorder role {role!r}")
+        self.role = role
+        self.role_dir = role_dir
+        self.client = client
+        self.interface_manager = interface_manager
+        self.recorder_factory = recorder_factory
+        self.stop_event = stop_event
+        self.settled_event = settled_event
+        self.events_path = events_path
+        self._admitted = admitted
+        self.admitted_at_start = admitted is not None
+        self.admission_detail = admission_detail
+        self.on_change = on_change
+        self.status_reader = status_reader
+        self.admitter = admitter or admit_secondary_route
+        self.readmit_interval_seconds = (
+            SECONDARY_READMIT_INTERVAL_SECONDS
+            if readmit_interval_seconds is None
+            else readmit_interval_seconds
+        )
+        self.readmit_backoff_seconds = (
+            SECONDARY_READMIT_BACKOFF_SECONDS
+            if readmit_backoff_seconds is None
+            else readmit_backoff_seconds
+        )
+        self.monotonic = monotonic
+        self.segments: list[dict[str, object]] = []
+        self.state = "starting" if admitted is not None else "awaiting_route"
+        if admitted is None:
+            # Nothing to wait for at startup; the role joins when proven.
+            settled_event.set()
+
+    def _event(self, kind: str, **payload: object) -> None:
+        capture.append_manifest(
+            self.events_path,
+            {"type": kind, "role": self.role, "time_utc": utc_now(), **payload},
+        )
+
+    def _set_state(self, state: str) -> None:
+        self.state = state
+        if self.on_change is not None:
+            try:
+                self.on_change()
+            except Exception:
+                # The small operational state file is advisory only.
+                pass
+
+    def next_sequence(self) -> int:
+        """First chunk number no earlier segment (complete or partial) used."""
+        highest = -1
+        if self.role_dir.is_dir():
+            for path in self.role_dir.iterdir():
+                match = re.match(r"chunk_([0-9]+)_", path.name)
+                if match:
+                    highest = max(highest, int(match.group(1)))
+        return highest + 1
+
+    def continuous(self) -> bool:
+        return bool(
+            self.admitted_at_start
+            and len(self.segments) == 1
+            and self.segments[0].get("end") == "completed"
+        )
+
+    def _try_admit(self) -> AdmittedRoute | None:
+        try:
+            status = self.status_reader(self.client)
+        except Exception as exc:
+            self.admission_detail = (
+                f"broker status unavailable: {type(exc).__name__}: {exc}"
+            )
+            return None
+        if not broker_armed_ready(status):
+            self.admission_detail = "broker no longer proves the primary C-CAN interval"
+            return None
+        try:
+            admitted, _interface = self.admitter(
+                self.role, status, self.client, self.interface_manager
+            )
+        except BrokerOwnershipLost as exc:
+            self.admission_detail = str(exc)
+            return None
+        return admitted
+
+    def run(self) -> None:
+        admitted = self._admitted
+        self._admitted = None
+        lost_at: float | None = None
+        announced_wait = False
+        while not self.stop_event.is_set():
+            if admitted is None:
+                if not announced_wait:
+                    self._event(
+                        "secondary_awaiting_route", detail=self.admission_detail
+                    )
+                    self._set_state("awaiting_route")
+                    announced_wait = True
+                if self.stop_event.wait(self.readmit_interval_seconds):
+                    break
+                if (
+                    lost_at is not None
+                    and self.monotonic() - lost_at < self.readmit_backoff_seconds
+                ):
+                    continue
+                admitted = self._try_admit()
+                if admitted is None:
+                    continue
+            route, check, stack = admitted
+            admitted = None
+            announced_wait = False
+            sequence_start = self.next_sequence()
+            segment: dict[str, object] = {
+                "segment": len(self.segments),
+                "route": route.as_dict(),
+                "sequence_start": sequence_start,
+                "started_utc": utc_now(),
+                "ended_utc": None,
+                "end": None,
+                "detail": None,
+            }
+            self.segments.append(segment)
+            self._event(
+                "secondary_segment_start",
+                segment=segment["segment"],
+                sequence_start=sequence_start,
+                route=route.as_dict(),
+            )
+            self._set_state("recording")
+            end = "completed"
+            detail: str | None = None
+            fatal: BaseException | None = None
+            try:
+                with stack:
+                    recorder = self.recorder_factory(route, check, sequence_start)
+                    recorder.run()
+            except BrokerOwnershipLost as exc:
+                end, detail = "route_lost", f"{type(exc).__name__}: {exc}"
+            except capture.CaptureError as exc:
+                if "required start CAN ID" in str(exc):
+                    end, detail = "start_signature_missing", str(exc)
+                else:
+                    end, detail, fatal = "error", f"{type(exc).__name__}: {exc}", exc
+            except BaseException as exc:
+                end, detail, fatal = "error", f"{type(exc).__name__}: {exc}", exc
+            segment.update(ended_utc=utc_now(), end=end, detail=detail)
+            try:
+                self._event(
+                    "secondary_segment_end",
+                    segment=segment["segment"],
+                    end=end,
+                    detail=detail,
+                )
+            except Exception:
+                if fatal is None:
+                    raise
+            if fatal is not None:
+                self._set_state("failed")
+                raise fatal
+            if end == "completed":
+                break
+            lost_at = self.monotonic()
+            self.admission_detail = detail
+            # A loss before the first start frame still settles startup.
+            self.settled_event.set()
+        self._set_state("stopped")
 
 
 def priority_ids() -> frozenset[int]:
@@ -701,17 +1010,18 @@ def record_one_interval(
     *,
     interface_manager: PassiveInterfaceManager | None = None,
 ) -> Path:
-    """Start one synchronized three-role session without configuring CAN."""
+    """Start one C-CAN-primary session with best-effort B-CAN/CAN-CH segments.
+
+    Nothing here configures CAN.  C-CAN is required for the whole interval;
+    each secondary role records only while its exact route is proven and is
+    re-admitted after a loss (see ``SecondaryRoleSupervisor``).
+    """
     if not broker_armed_ready(initial_status):
         raise BrokerOwnershipLost(
             "broker ownership disappeared before raw capture setup"
         )
     channel, usb_serial, dev_id = broker_c_can_route(initial_status)
     interface_manager = interface_manager or PassiveInterfaceManager()
-    expected_secondary = {
-        role: broker_secondary_route(initial_status, role)
-        for role in SECONDARY_ROLES
-    }
     mount_device = capture.require_writable_mount(
         args.out_root,
         args.require_mount,
@@ -737,49 +1047,37 @@ def record_one_interval(
         expected_device=mount_device,
     )
     with ExitStack() as lease_stack:
-        leases: dict[str, PassiveInterfaceLease] = {}
-        secondary_checks: dict[str, Callable[[], capture.InterfaceState]] = {}
+        admitted: dict[str, AdmittedRoute] = {}
+        admission_detail: dict[str, str] = {}
         secondary_interfaces: dict[str, capture.InterfaceState] = {}
-        secondary_routes: dict[str, CaptureRoute] = {}
         for role in SECONDARY_ROLES:
-            expected_route = expected_secondary[role]
-            if expected_route.ownership == "broker_auxiliary_drive_companion":
-                check = AuxiliaryBcanSafetyCheck(
-                    client,
-                    expected_route,
-                    require_initial_armed=True,
-                )
-                secondary_interfaces[role] = check()
-                secondary_checks[role] = check
-                secondary_routes[role] = expected_route
-                continue
             try:
-                lease = lease_stack.enter_context(interface_manager.observe(role))
-            except Exception as exc:
-                raise BrokerOwnershipLost(
-                    f"cannot acquire required passive {role} recorder route: {exc}"
-                ) from exc
-            actual_route = route_from_lease(lease)
-            if actual_route != expected_secondary[role]:
-                raise BrokerOwnershipLost(
-                    f"{role} route changed after broker admission"
+                item, secondary_interfaces[role] = admit_secondary_route(
+                    role, initial_status, client, interface_manager
                 )
-            check = PassiveLeaseSafetyCheck(interface_manager, lease)
-            secondary_interfaces[role] = check()
-            leases[role] = lease
-            secondary_checks[role] = check
-            secondary_routes[role] = actual_route
+            except BrokerOwnershipLost as exc:
+                # The primary C-CAN evidence does not wait for a secondary.
+                admission_detail[role] = str(exc)
+                continue
+            lease_stack.callback(item[2].close)
+            admitted[role] = item
 
         refreshed_status = read_broker_status(client)
         if not broker_armed_ready(refreshed_status, expected_channel=channel):
             raise BrokerOwnershipLost(
                 "broker ownership disappeared during raw capture preflight"
             )
-        for role in SECONDARY_ROLES:
-            if broker_secondary_route(refreshed_status, role) != secondary_routes[role]:
-                raise BrokerOwnershipLost(
-                    f"broker {role} route changed during raw capture preflight"
-                )
+        for role in list(admitted):
+            try:
+                current = broker_secondary_route(refreshed_status, role)
+            except BrokerOwnershipLost as exc:
+                current, detail = None, str(exc)
+            else:
+                detail = f"broker {role} route changed during raw capture preflight"
+            if current != admitted[role][0]:
+                admitted.pop(role)[2].close()
+                secondary_interfaces.pop(role, None)
+                admission_detail[role] = detail
 
         args.out_root.mkdir(parents=True, exist_ok=True)
         run_id = campaign_id()
@@ -788,8 +1086,10 @@ def record_one_interval(
             raise DriveRecorderError(f"campaign directory already exists: {run_dir}")
         run_dir.mkdir()
         role_dirs = {role: run_dir / role for role in ("c-can", *SECONDARY_ROLES)}
-        for role_dir in role_dirs.values():
-            role_dir.mkdir()
+        # Secondary directories appear with their first admitted segment, so a
+        # never-proven role leaves no empty, never-ending bus directory.
+        role_dirs["c-can"].mkdir()
+        events_path = run_dir / ROUTE_EVENTS_NAME
         selected_ids = priority_ids()
         routes = {
             "c-can": CaptureRoute(
@@ -801,7 +1101,7 @@ def record_one_interval(
                 pair=PAIR,
                 ownership="broker_active_drive_companion",
             ),
-            **secondary_routes,
+            **{role: item[0] for role, item in admitted.items()},
         }
         metadata = {
             "type": "run_metadata",
@@ -809,13 +1109,27 @@ def record_one_interval(
             "campaign": run_id,
             "conditions": args.conditions.strip(),
             "interaction": "synchronized_three_bus_receive_only_companion",
-            "roles_required": ["c-can", *SECONDARY_ROLES],
+            "roles_required": ["c-can"],
+            "secondary_roles": list(SECONDARY_ROLES),
+            "secondary_policy": (
+                "best-effort segments: a secondary records only while its exact "
+                "route is proven; a loss ends that segment only and the role is "
+                f"re-admitted after re-proof; see {ROUTE_EVENTS_NAME}"
+            ),
+            "secondary_admission": {
+                role: (
+                    "admitted"
+                    if role in admitted
+                    else f"awaiting_route: {admission_detail.get(role)}"
+                )
+                for role in SECONDARY_ROLES
+            },
             "routes": {role: route.as_dict() for role, route in routes.items()},
             "initial_interfaces": {
                 "c-can": dataclasses.asdict(interface),
                 **{
-                    role: dataclasses.asdict(secondary_interfaces[role])
-                    for role in SECONDARY_ROLES
+                    role: dataclasses.asdict(state)
+                    for role, state in secondary_interfaces.items()
                 },
             },
             "initial_broker_status": initial_status,
@@ -849,16 +1163,33 @@ def record_one_interval(
             ],
         }
         capture.atomic_write_json(run_dir / "run.json", metadata)
-        write_state(
-            args.state_path,
-            status="recording",
-            campaign=run_id,
-            capture_dir=str(run_dir),
-            roles_recording=["c-can", *SECONDARY_ROLES],
-            c_can_interface_mode=(
-                "listen_only" if interface.listen_only else "armed_diagnostic"
-            ),
-        )
+
+        supervisors: dict[str, SecondaryRoleSupervisor] = {}
+        state_lock = threading.Lock()
+
+        def publish_state() -> None:
+            with state_lock:
+                recording = [
+                    role
+                    for role, supervisor in supervisors.items()
+                    if supervisor.state == "recording"
+                ]
+                awaiting = [
+                    role
+                    for role, supervisor in supervisors.items()
+                    if supervisor.state == "awaiting_route"
+                ]
+                write_state(
+                    args.state_path,
+                    status="recording",
+                    campaign=run_id,
+                    capture_dir=str(run_dir),
+                    roles_recording=["c-can", *recording],
+                    roles_awaiting_route=awaiting,
+                    c_can_interface_mode=(
+                        "listen_only" if interface.listen_only else "armed_diagnostic"
+                    ),
+                )
 
         mount_check = lambda: capture.require_writable_mount(
             args.out_root,
@@ -868,50 +1199,77 @@ def record_one_interval(
         zstd = shutil.which("zstd") or "zstd"
         candump = shutil.which("candump") or "candump"
         stop_secondaries = threading.Event()
-        secondary_started = {
+        secondary_settled = {
             role: threading.Event() for role in SECONDARY_ROLES
         }
         secondary_errors: dict[str, BaseException] = {}
         secondary_error_lock = threading.Lock()
-        secondary_recorders: dict[str, capture.Recorder] = {}
         secondary_threads: dict[str, threading.Thread] = {}
+
+        def recorder_factory(role: str):
+            def build(
+                route: CaptureRoute,
+                check: Callable[[], capture.InterfaceState],
+                sequence_start: int,
+            ) -> capture.Recorder:
+                role_dirs[role].mkdir(exist_ok=True)
+                return capture.Recorder(
+                    role_dirs[role],
+                    frozenset(),
+                    args.rotation_seconds,
+                    args.duration_seconds,
+                    policy,
+                    required_start_id=SECONDARY_START_IDS[role],
+                    required_start_id_timeout_seconds=SECONDARY_START_TIMEOUT_SECONDS,
+                    safety_check=check,
+                    mount_check=mount_check,
+                    zstd=zstd,
+                    candump=candump,
+                    candump_extra_args=("-D",),
+                    external_stop_requested=stop_secondaries.is_set,
+                    started_callback=secondary_settled[role].set,
+                    install_signal_handlers=False,
+                    channel=route.channel,
+                    bitrate=route.bitrate,
+                    sequence_start=sequence_start,
+                )
+
+            return build
+
+        for role in SECONDARY_ROLES:
+            supervisors[role] = SecondaryRoleSupervisor(
+                role=role,
+                role_dir=role_dirs[role],
+                client=client,
+                interface_manager=interface_manager,
+                recorder_factory=recorder_factory(role),
+                stop_event=stop_secondaries,
+                settled_event=secondary_settled[role],
+                events_path=events_path,
+                admitted=admitted.get(role),
+                admission_detail=admission_detail.get(role),
+                on_change=publish_state,
+            )
+        publish_state()
 
         def run_secondary(role: str) -> None:
             try:
-                secondary_recorders[role].run()
+                supervisors[role].run()
             except BaseException as exc:
                 with secondary_error_lock:
                     secondary_errors[role] = exc
 
         for role in SECONDARY_ROLES:
-            route = secondary_routes[role]
-            secondary_recorders[role] = capture.Recorder(
-                role_dirs[role],
-                frozenset(),
-                args.rotation_seconds,
-                args.duration_seconds,
-                policy,
-                required_start_id=SECONDARY_START_IDS[role],
-                required_start_id_timeout_seconds=SECONDARY_START_TIMEOUT_SECONDS,
-                safety_check=secondary_checks[role],
-                mount_check=mount_check,
-                zstd=zstd,
-                candump=candump,
-                candump_extra_args=("-D",),
-                external_stop_requested=stop_secondaries.is_set,
-                started_callback=secondary_started[role].set,
-                install_signal_handlers=False,
-                channel=route.channel,
-                bitrate=route.bitrate,
-            )
-            thread = threading.Thread(
+            secondary_threads[role] = threading.Thread(
                 name=f"broker-drive-recorder-{role}",
                 target=run_secondary,
                 args=(role,),
             )
-            secondary_threads[role] = thread
 
         def secondary_health_check() -> None:
+            # Route loss is handled inside each supervisor; only a failure that
+            # would compromise the whole evidence set (storage, compression,
+            # drop accounting, cleanup) reaches this point.
             with secondary_error_lock:
                 failures = dict(secondary_errors)
             if failures:
@@ -968,7 +1326,7 @@ def record_one_interval(
                 deadline = time.monotonic() + SECONDARY_START_WAIT_SECONDS
                 for role in SECONDARY_ROLES:
                     remaining = max(0.0, deadline - time.monotonic())
-                    if not secondary_started[role].wait(remaining):
+                    if not secondary_settled[role].wait(remaining):
                         secondary_health_check()
                         raise DriveRecorderError(
                             f"required {role} recorder did not start within "
@@ -1001,21 +1359,42 @@ def record_one_interval(
                 raise BrokerOwnershipLost(str(main_error)) from main_error
             raise main_error
         secondary_health_check()
+        continuous = {
+            role: supervisor.continuous()
+            for role, supervisor in supervisors.items()
+        }
         capture.atomic_write_json(
             run_dir / "capture-set.json",
             {
                 "type": "synchronized_three_bus_capture_set",
                 "completed_utc": utc_now(),
                 "campaign": run_id,
-                "complete": True,
+                # True only when every role recorded one uninterrupted segment
+                # for the whole interval, as before the segmented policy.
+                "complete": all(continuous.values()),
+                "primary_complete": True,
+                "route_events": str(events_path),
                 "roles": {
-                    role: {
-                        "route": routes[role].as_dict(),
-                        "capture_dir": str(role_dirs[role]),
-                        "checkpoint": str(role_dirs[role] / "checkpoint.json"),
-                        "manifest": str(role_dirs[role] / "manifest.jsonl"),
-                    }
-                    for role in ("c-can", *SECONDARY_ROLES)
+                    "c-can": {
+                        "route": routes["c-can"].as_dict(),
+                        "capture_dir": str(role_dirs["c-can"]),
+                        "checkpoint": str(role_dirs["c-can"] / "checkpoint.json"),
+                        "manifest": str(role_dirs["c-can"] / "manifest.jsonl"),
+                        "continuous": True,
+                    },
+                    **{
+                        role: {
+                            "route": (
+                                routes[role].as_dict() if role in routes else None
+                            ),
+                            "capture_dir": str(role_dirs[role]),
+                            "checkpoint": str(role_dirs[role] / "checkpoint.json"),
+                            "manifest": str(role_dirs[role] / "manifest.jsonl"),
+                            "continuous": continuous[role],
+                            "segments": supervisor.segments,
+                        }
+                        for role, supervisor in supervisors.items()
+                    },
                 },
             },
         )
@@ -1189,9 +1568,16 @@ def plan(args: argparse.Namespace, policy: capture.DiskPolicy) -> dict[str, obje
         "roles": ["c-can", *SECONDARY_ROLES],
         "routing": {
             "c-can": "broker-owned serial-resolved active-drive channel",
-            "b-can": "shared serial-resolved passive observer lease",
+            "b-can": (
+                "shared serial-resolved passive observer lease, or the broker's "
+                "exact auxiliary-drive owner"
+            ),
             "can-ch": "shared serial-resolved passive observer lease",
         },
+        "roles_required": ["c-can"],
+        "secondary_policy": (
+            "best-effort segments with re-admission after a fresh route proof"
+        ),
         "bitrates": {"c-can": BITRATE, "b-can": 125000, "can-ch": 500000},
         "output_root": str(args.out_root),
         "required_mount": str(args.require_mount),

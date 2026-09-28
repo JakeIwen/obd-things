@@ -145,6 +145,9 @@ class SystemBackend:
         self.temperature_gate = (
             ccan_powertrain.TransmissionTemperaturePlausibilityGate()
         )
+        # Listen within the snapshot timeout for a due 0x0E0/0x5A0 display
+        # frame; its observations are forwarded like every other broadcast.
+        self.display_wait = ccan_powertrain.LowRateFrameWait()
 
     def interface_state(self):
         return canbus.interface_state(self.channel)
@@ -190,6 +193,7 @@ class SystemBackend:
             required_rpm_samples=REQUIRED_RPM_SAMPLES,
             monotonic=self.monotonic,
             temperature_gate=self.temperature_gate,
+            display_wait=self.display_wait,
         )
 
     def arm(self, initial: canbus.InterfaceState) -> bool:

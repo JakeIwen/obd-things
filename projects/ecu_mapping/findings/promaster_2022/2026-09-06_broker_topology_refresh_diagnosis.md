@@ -95,3 +95,26 @@ Other work available before driving: implement the replicated passive `0x760`
 starred odometer path; plan a parked below-full `0227` fuel-level comparison.
 The full VVT thermal trajectory and new passive CAN-CH correlations benefit
 from the next ordinary drive.
+
+## Follow-up — 2026-09-26/27
+
+- **09-26 (C-CAN):** after drive interruptions at 18:00 and 20:00 on 09-24,
+  `TelemetryBroker.status_response()` changed. While the active-drive
+  overlay holds a verified armed route, top-level `topology.usable` now
+  reflects that verified physical route. Passive admission is unchanged. A
+  regression covers this in `tests/test_vehicle_drive_recorder.py`.
+- **09-27 (B-CAN):** campaign `broker-drive-20260927T212949433889` stopped at
+  22:00:10Z on the same scheduled refresh. This time the failure was on the
+  B-CAN route check. The refresh re-probed the auxiliary-armed B-CAN as
+  `interface_armed`/`safe=false`. The broker's verified-owner overlay stayed
+  correct: the historian kept `topology_usable=1`. The recorder, however,
+  still required the passive-contract `safe` bit for the armed branch. The
+  repair drops that requirement and requires the broker's verified-owner
+  markers instead. The recorder now also treats B-CAN/CAN-CH as best-effort
+  re-admitted segments, so a secondary loss no longer stops C-CAN. Details:
+  `projects/vehicle_data/README.md` → "Scheduled status refresh and
+  secondary-route resilience (2026-09-27)".
+- The cheaper root fix proposed here was evaluated and rejected: skipping the
+  post-acquisition refresh on `can_busy`. During an armed interval that
+  refresh is the only fresh kernel evidence, so skipping it would mask real
+  faults behind a stale listen-only snapshot.

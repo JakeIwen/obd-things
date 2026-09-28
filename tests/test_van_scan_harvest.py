@@ -319,6 +319,25 @@ class CampaignTests(unittest.TestCase):
         self.assertEqual(harvest.completed_chunks(self.campaign / "c-can"), [])
 
 
+class BusCaptureEndedTests(unittest.TestCase):
+    def test_readmitted_secondary_segment_reopens_the_bus(self):
+        # drive_recorder appends a new segment after a secondary route loss.
+        with tempfile.TemporaryDirectory() as tmp:
+            bus_dir = Path(tmp)
+            manifest = bus_dir / "manifest.jsonl"
+            self.assertFalse(harvest.bus_capture_ended(bus_dir))
+            for marker, ended in (
+                ("capture_start", False),
+                ("capture_end", True),
+                ("capture_start", False),
+                ("capture_end", True),
+            ):
+                with manifest.open("a") as handle:
+                    handle.write(json.dumps({"type": marker}) + "\n")
+                    handle.write(json.dumps({"type": "chunk"}) + "\n")
+                self.assertEqual(harvest.bus_capture_ended(bus_dir), ended, marker)
+
+
 class DriveRecorderConditionsTests(unittest.TestCase):
     def test_conditions_no_longer_deny_the_vans_own_client(self):
         from projects.vehicle_data import drive_recorder

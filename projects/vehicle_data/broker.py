@@ -59,6 +59,9 @@ ACTIVE_DRIVE_SOURCES = frozenset(
         # reuses that snapshot; without this every drive latched restoration
         # failure on the first moving gear sample (2026-09-24).
         "derived.ccan_0x1f7_shaft_ratio",
+        # Cluster display frames decoded by the same snapshot (2026-09-27).
+        "ccan.broadcast.0x0e0",
+        "ccan.broadcast.0x5a0",
         "pcm.did.01a1",
         "pcm.did.06da",
         "pcm.did.069f",

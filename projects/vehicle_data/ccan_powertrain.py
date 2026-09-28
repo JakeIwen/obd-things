@@ -45,6 +45,12 @@ VEHICLE_SPEED_ID = 0x101
 TRANSMISSION_SHAFT_SPEED_ID = 0x1F7
 IGNITION_ON_ID = 0x2EF
 SYSTEM_VOLTAGE_ID = 0x41A
+# Owner-referenced cluster display frames (2026-09-27 drive):
+# 0x0E0 B0 is the traffic-sign speed limit in mph (10 Hz); 0x5A0 is the
+# cluster ACC frame (1 Hz plus on change) whose B3 is the set speed in mph.
+SPEED_LIMIT_ID = 0x0E0
+ACC_DISPLAY_ID = 0x5A0
+DISPLAY_FRAME_IDS = (SPEED_LIMIT_ID, ACC_DISPLAY_ID)
 FILTER_IDS = (
     OIL_PRESSURE_ID,
     COOLANT_TEMPERATURE_ID,
@@ -53,7 +59,7 @@ FILTER_IDS = (
     VEHICLE_SPEED_ID,
     TRANSMISSION_SHAFT_SPEED_ID,
     IGNITION_ON_ID,
-)
+) + DISPLAY_FRAME_IDS
 ACTIVE_FILTER_IDS = FILTER_IDS + (SYSTEM_VOLTAGE_ID,)
 KPA_TO_PSI = 0.14503773773020923
 KMH_TO_MPH = 0.621371192237334
@@ -62,6 +68,25 @@ TRANSMISSION_TEMPERATURE_MAX_DELTA_C = 10.0
 TRANSMISSION_TEMPERATURE_DELTA_WINDOW_SECONDS = 1.0
 TRANSMISSION_TEMPERATURE_METRIC = "transmission.oil_temperature"
 TRANSMISSION_TEMPERATURE_SOURCE = "ccan.broadcast.0x1f7"
+SPEED_LIMIT_SOURCE = "ccan.broadcast.0x0e0"
+ACC_DISPLAY_SOURCE = "ccan.broadcast.0x5a0"
+# Candidate ACC state enum, ((B6 & 1) << 2) | (B7 >> 6); raw 3 (seen once for
+# 80 ms at CANC), 6 and 7 are unmapped and never published.
+ACC_STATE_NAMES = {
+    0: "off",
+    1: "ready",
+    2: "engaged",
+    4: "override",
+    5: "standby",
+}
+# The set speed is only meaningful while ACC is ready/engaged/override/standby.
+# Ready reads 0 until the first SET, and 0 is never published.
+ACC_SET_SPEED_STATES = frozenset({1, 2, 4, 5})
+DISPLAY_SPEED_MAX_MPH = 120
+MPH_TO_KMH = 1.609344
+# How long a display frame counts as recently seen, so a snapshot need not keep
+# listening for it (see LowRateFrameWait).
+DISPLAY_REFRESH_SECONDS = {SPEED_LIMIT_ID: 0.0, ACC_DISPLAY_ID: 2.0}
 
 
 @dataclass(frozen=True)
@@ -211,6 +236,87 @@ class TransmissionTemperaturePlausibilityGate:
         )
 
 
+class LowRateFrameWait:
+    """Decide which low-rate display frames a bounded snapshot waits for.
+
+    A snapshot normally ends as soon as the powertrain set is complete, often
+    within about 0.1 s. That would sample the 1 Hz ``0x5A0`` ACC frame in only
+    a small fraction of cycles, and could systematically miss a 10 Hz frame
+    whose phase trails the last required frame. With this helper a snapshot
+    keeps listening, never past its own timeout, for a display frame that was
+    not seen within its refresh interval. Values are never carried across
+    snapshots: the broker stamps each observation on receipt, so only a frame
+    actually received in this snapshot is published.
+
+    If a wanted frame stays absent through several extended waits and for at
+    least ``absent_seconds`` (its module is not transmitting), waiting for it
+    backs off so an absent frame cannot pin every snapshot at its full
+    timeout. A 0.35-0.5 s window misses a 1 Hz frame about half the time, so
+    both conditions are needed. A frame seen incidentally during the back-off
+    clears it.
+    """
+
+    def __init__(
+        self,
+        refresh_seconds: dict[int, float] | None = None,
+        *,
+        misses_before_backoff: int = 6,
+        absent_seconds: float = 10.0,
+        backoff_seconds: float = 30.0,
+    ) -> None:
+        self.refresh_seconds = dict(
+            DISPLAY_REFRESH_SECONDS if refresh_seconds is None else refresh_seconds
+        )
+        self.misses_before_backoff = misses_before_backoff
+        self.absent_seconds = absent_seconds
+        self.backoff_seconds = backoff_seconds
+        self._lock = threading.Lock()
+        self._last_seen: dict[int, float] = {}
+        self._misses: dict[int, int] = {}
+        self._backoff_until: dict[int, float] = {}
+
+    def wanted(self, now: float) -> frozenset[int]:
+        with self._lock:
+            wanted = set()
+            for can_id, refresh in self.refresh_seconds.items():
+                if now < self._backoff_until.get(can_id, float("-inf")):
+                    continue
+                last = self._last_seen.get(can_id)
+                if last is None or now - last >= refresh:
+                    wanted.add(can_id)
+            return frozenset(wanted)
+
+    def finish(
+        self,
+        wanted: frozenset[int],
+        seen: dict[int, float],
+        *,
+        extended_to_deadline: bool,
+        now: float,
+    ) -> None:
+        """Record one snapshot: ``seen`` maps display ids to frame times."""
+        with self._lock:
+            for can_id, observed in seen.items():
+                if can_id not in self.refresh_seconds:
+                    continue
+                self._last_seen[can_id] = observed
+                self._misses[can_id] = 0
+                self._backoff_until.pop(can_id, None)
+            if not extended_to_deadline:
+                return
+            for can_id in wanted:
+                if can_id in seen:
+                    continue
+                misses = self._misses.get(can_id, 0) + 1
+                last = self._last_seen.get(can_id)
+                if misses >= self.misses_before_backoff and (
+                    last is None or now - last >= self.absent_seconds
+                ):
+                    self._backoff_until[can_id] = now + self.backoff_seconds
+                    misses = 0
+                self._misses[can_id] = misses
+
+
 @dataclass(frozen=True)
 class BroadcastSnapshot:
     """One bounded raw-broadcast sample collected without changing CAN state."""
@@ -358,6 +464,24 @@ def decode_frame_observations(
                 detail="0x1F7 bytes 4-5 big-endian / 2 rpm",
             ),
         )
+    if can_id == SPEED_LIMIT_ID and data:
+        limit = int(data[0])
+        # 0 is what the cluster sends with no limit (key-off/none); it is not
+        # a speed, so it is never published and the metric goes stale.
+        if not 0 < limit <= DISPLAY_SPEED_MAX_MPH:
+            return ()
+        return (
+            PassiveObservation(
+                metric="vehicle.speed_limit",
+                value=limit,
+                unit="mph",
+                source=SPEED_LIMIT_SOURCE,
+                quality="verified",
+                detail="0x0E0 byte 0 raw mph (cluster speed-limit display)",
+            ),
+        )
+    if can_id == ACC_DISPLAY_ID and len(data) >= 8:
+        return _decode_acc_display(data)
     if can_id == IGNITION_ON_ID:
         return (
             PassiveObservation(
@@ -370,6 +494,54 @@ def decode_frame_observations(
             ),
         )
     return ()
+
+
+def acc_state_raw(data: bytes) -> int:
+    """Candidate 3-bit ACC state: B6 bit0 is the high bit, B7 bits 7:6 below it."""
+    return ((data[6] & 0x01) << 2) | (data[7] >> 6)
+
+
+def _decode_acc_display(data: bytes) -> tuple[PassiveObservation, ...]:
+    state = acc_state_raw(data)
+    observations = []
+    name = ACC_STATE_NAMES.get(state)
+    if name is not None:
+        observations.append(
+            PassiveObservation(
+                metric="acc.state",
+                value=name,
+                unit="state",
+                source=ACC_DISPLAY_SOURCE,
+                quality="candidate",
+                detail=(
+                    f"0x5A0 ((B6 & 1) << 2) | (B7 >> 6) = {state} ({name}); "
+                    "candidate enum"
+                ),
+            )
+        )
+    mph = int(data[3])
+    kmh = int(data[2])
+    if (
+        state in ACC_SET_SPEED_STATES
+        and 0 < mph <= DISPLAY_SPEED_MAX_MPH
+        # B2 is the same set speed in km/h (round(mph x 1.609344)); a pair
+        # that disagrees is not a set-speed frame this decode understands.
+        and abs(kmh - mph * MPH_TO_KMH) <= 1.0
+    ):
+        observations.append(
+            PassiveObservation(
+                metric="acc.set_speed",
+                value=mph,
+                unit="mph",
+                source=ACC_DISPLAY_SOURCE,
+                quality="verified",
+                detail=(
+                    f"0x5A0 byte 3 raw mph (byte 2 = {kmh} km/h) while the "
+                    f"candidate ACC state is {name}"
+                ),
+            )
+        )
+    return tuple(observations)
 
 
 def decode_frame(can_id: int, data: bytes) -> PassiveObservation | None:
@@ -458,6 +630,7 @@ def read_broadcast_snapshot(
     socket_factory: Callable[..., socket.socket] = socket.socket,
     monotonic: Callable[[], float] = time.monotonic,
     temperature_gate: TransmissionTemperaturePlausibilityGate | None = None,
+    display_wait: LowRateFrameWait | None = None,
 ) -> BroadcastSnapshot:
     """Read a short filtered snapshot without changing interface state.
 
@@ -465,6 +638,10 @@ def read_broadcast_snapshot(
     the exclusive owner of an armed diagnostic interval. This primitive only
     receives allowlisted standard broadcast identifiers; it never configures
     or transmits through the interface.
+
+    Without ``display_wait`` the display frames (0x0E0, 0x5A0) are decoded
+    only when they arrive before the powertrain set completes. With it, the
+    snapshot may keep listening for them, bounded by ``timeout``.
     """
     if timeout <= 0:
         raise ValueError("timeout must be positive")
@@ -479,6 +656,17 @@ def read_broadcast_snapshot(
     quality_events: dict[tuple[str, str, str], DataQualityEvent] = {}
     rpm_samples: list[float] = []
     frame_count = 0
+    # Display frames keep only their latest frame's observations, so a state
+    # change inside the window cannot pair a new state with an old set speed.
+    display_latest: dict[int, tuple[PassiveObservation, ...]] = {}
+    display_counts: dict[int, int] = {}
+    display_seen: dict[int, float] = {}
+    wanted_display = (
+        display_wait.wanted(monotonic()) if display_wait is not None else frozenset()
+    )
+    # Only a snapshot that had everything else and still listened to its
+    # deadline is evidence that a wanted display frame is absent.
+    extended_for_display = False
     try:
         filter_ids = ACTIVE_FILTER_IDS if include_battery else FILTER_IDS
         filters = b"".join(
@@ -511,9 +699,17 @@ def read_broadcast_snapshot(
                 continue
             frame_count += 1
             frame_observed_monotonic = monotonic()
+            standard_id = can_id & SFF_MASK
             observations = decode_frame_observations(
-                can_id & SFF_MASK, raw_data[: min(dlc, 8)]
+                standard_id, raw_data[: min(dlc, 8)]
             )
+            if standard_id in DISPLAY_FRAME_IDS:
+                display_seen[standard_id] = frame_observed_monotonic
+                display_counts[standard_id] = (
+                    display_counts.get(standard_id, 0) + 1
+                )
+                display_latest[standard_id] = observations
+                observations = ()
             for observation in observations:
                 if (
                     temperature_gate is not None
@@ -554,20 +750,45 @@ def read_broadcast_snapshot(
                 "transmission.turbine_speed",
                 "vehicle.ignition_on",
             ) + (("battery.voltage",) if include_battery else ())
-            if (
-                len(rpm_samples) >= required_rpm_samples
-                and all(metric in samples for metric in required_metrics)
+            if len(rpm_samples) >= required_rpm_samples and all(
+                metric in samples for metric in required_metrics
             ):
-                break
+                if wanted_display.issubset(display_seen):
+                    extended_for_display = False
+                    break
+                extended_for_display = True
     finally:
         sock.close()
     medians = tuple(_median_observation(samples[metric]) for metric in sorted(samples))
     gear = gear_estimate(medians)
+    display = tuple(
+        PassiveObservation(
+            metric=observation.metric,
+            value=observation.value,
+            unit=observation.unit,
+            source=observation.source,
+            quality=observation.quality,
+            detail=(
+                f"{observation.detail}; latest of "
+                f"{display_counts[can_id]} frame(s)"
+            ),
+        )
+        for can_id in sorted(display_latest)
+        for observation in display_latest[can_id]
+    )
+    completed = monotonic()
+    if display_wait is not None:
+        display_wait.finish(
+            wanted_display,
+            display_seen,
+            extended_to_deadline=extended_for_display,
+            now=completed,
+        )
     return BroadcastSnapshot(
-        observations=medians + ((gear,) if gear is not None else ()),
+        observations=medians + ((gear,) if gear is not None else ()) + display,
         rpm_samples=tuple(rpm_samples),
         frame_count=frame_count,
-        completed_monotonic=monotonic(),
+        completed_monotonic=completed,
         quality_events=tuple(quality_events.values()),
     )
 

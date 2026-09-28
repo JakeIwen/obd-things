@@ -577,6 +577,10 @@ def bus_capture_ended(bus_dir: Path) -> bool:
             entry = json.loads(line)
         except json.JSONDecodeError:
             continue
+        # The drive recorder may append a re-admitted secondary segment after a
+        # route loss; only the latest start/end marker says whether it ended.
+        if isinstance(entry, dict) and entry.get("type") == "capture_start":
+            return False
         if isinstance(entry, dict) and entry.get("type") == "capture_end":
             return True
     return False

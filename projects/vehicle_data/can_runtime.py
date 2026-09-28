@@ -709,6 +709,10 @@ class RoleAwareCcanPowertrainReader:
             ccan_powertrain.TransmissionTemperaturePlausibilityGate()
         )
         self._quality_events: list[ccan_powertrain.DataQualityEvent] = []
+        # Also outlives each snapshot: it remembers when the low-rate display
+        # frames (0x0E0 speed limit, 1 Hz 0x5A0 ACC) were last received so a
+        # snapshot listens longer, within read_timeout, only when one is due.
+        self.display_wait = ccan_powertrain.LowRateFrameWait()
 
     def read(self) -> tuple[ccan_powertrain.PassiveObservation, ...]:
         try:
@@ -726,6 +730,7 @@ class RoleAwareCcanPowertrainReader:
                         lease.channel,
                         timeout=self.read_timeout,
                         temperature_gate=self.temperature_gate,
+                        display_wait=self.display_wait,
                     )
                     self._quality_events.extend(snapshot.quality_events)
                     return snapshot.observations

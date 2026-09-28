@@ -23,6 +23,11 @@ const alternatorSub = computed(() => {
   const duty = liveValue("generator.field_duty").value;
   return duty === null ? "" : "alternator " + fmtValue("generator.field_duty", duty) + " %";
 });
+// The cluster's speed limit (page 2 has the sign) as the Speed tile's sub-line.
+const speedSub = computed(() => {
+  const mph = liveValue("vehicle.speed_limit").value;
+  return mph === null ? "" : "limit " + mph + " mph";
+});
 const torqueSub = computed(() => {
   const t = liveValue("engine.crankshaft_torque").value;
   return t === null ? "" : fmtValue("engine.crankshaft_torque", t) + " lb-ft";
@@ -98,6 +103,8 @@ export const DRIVE_TILES = [
   { id: "trip", label: "Trip" },
   // Page 2 (DriveMore.jsx), in screen order; ids must not collide with page 1.
   ...[
+    ["limit", "Speed limit"],
+    ["acc", "ACC"],
     ["field", "Alternator field"],
     ["gear", "Gear"],
     ["radar", "Radar aim"],
@@ -208,7 +215,7 @@ function DriveGauges() {
   const show = (id) => !isHidden("drive", id);
   return (
     <div class="drive">
-      {show("speed") && <Tile name="vehicle.speed" label="Speed" area="speed" size="hero" />}
+      {show("speed") && <Tile name="vehicle.speed" label="Speed" area="speed" size="hero" sub={speedSub} />}
       {show("rpm") && <Tile name="engine.rpm" label="RPM" area="rpm" size="large" sub={rpmSub} spark showUnit={false} />}
       {show("coolant") && <Tile name="engine.coolant_temperature" label="Coolant" area="coolant" band spark />}
       {show("trans") && <Tile name="transmission.oil_temperature" label="Trans oil" area="trans" band spark />}

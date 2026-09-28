@@ -289,7 +289,7 @@ tab bar, with 16 px gutters and 12 px gaps.
 
 | row | content |
 |---|---|
-| A | **SPEED** (2 cols, hero numerals, `mph`) · **RPM** (1 col; the unit is in the label; the footer reads `gear 6` once a live gear metric exists and is empty until then; 15-min sparkline) |
+| A | **SPEED** (2 cols, hero numerals, `mph`; sub-line `limit 55 mph` while `vehicle.speed_limit` is live, else empty) · **RPM** (1 col; the unit is in the label; the footer reads `gear 6` once a live gear metric exists and is empty until then; 15-min sparkline) |
 | B | **COOLANT** · **TRANS OIL** · **OIL PRESSURE**: value, unit, band bar, 15-min sparkline |
 | C | **VOLTAGE** (1 decimal; sub-line `alternator 42 %`) · **POWER** (`hp`; sub-line `165 lb-ft`) · **OIL TEMP (VVT)** |
 | D | **TIRES** (2 cols: 2×2 grid FL FR / RL RR) · **TRIP** (Time, Distance `≈ 12.3 mi`, Coolant max, Avg power) |
@@ -342,17 +342,20 @@ content. Page 2 ("Sensors") uses the same frame and the same no-scrolling gate.
   - Only the page on screen is mounted, so page-1 tiles and sparklines unmount on page 2.
     `views/DriveMore.jsx` is a lazy chunk, fetched the first time page 2 is shown. The core bundle
     grows only by the pager and swipe code (about 2 KB).
-- **Portrait grid** (3 columns; rows `1fr 1.2fr 1fr 1fr`):
+- **Portrait grid** (3 columns; rows `1fr 1fr 1.2fr 1fr 1fr`; the speed-limit/ACC row was added
+  on 2026-09-27):
 
   | row | content |
   |---|---|
+  | 0 | **SPEED LIMIT** (`vehicle.speed_limit` in a sign outline with `MPH` under it; `—` in a dim outline when the cluster shows none) · **ACC** (2 cols: `acc.set_speed` `66 mph`, sub-line `set · engaged` / `set · accelerator override` / `set · standby` from the candidate `acc.state` record; standby dims the number; `Off` when the state is off; `—` with `ready · no set speed` in ready) |
   | A | **ALTERNATOR FIELD** (2 cols: `generator.field_duty` %, 15-min sparkline, sub-line `battery 14.0 V`) · **GEAR** (`~7` from `transmission.gear_estimate` while its record is current, else `—`; sub-line `ratio 0.70` = turbine ÷ output when the output shaft turns ≥ 100 rpm) |
   | B | **RADAR AIM** (3 cols): Horizontal and Vertical side by side. Each shows its latest angle (`+0.15°`) and then `1-min avg` / `5-min avg` from `status.radar_alignment` windows `"60"`/`"300"`. |
   | C | **TURBINE** (rpm) · **OUTPUT SHAFT** (rpm) · **POWER** (hp, sparkline) |
   | D | **TORQUE** (`engine.crankshaft_torque`, lb-ft) · **TARGET TORQUE** (`engine.target_crankshaft_torque`, lb-ft) · **ODOMETER** (held value with its time; smaller `--tire` numerals so six digits fit a third of the width) |
 
-- **Landscape** (4 columns × 3 rows): `field gear power odo` / `radar radar turbine output` /
-  `radar radar torque target`. On a phone (≤ 640 px) it has 2 columns and scrolls, like page 1.
+- **Landscape** (4 columns × 4 rows): `limit acc acc gear` / `field field power odo` /
+  `radar radar turbine output` / `radar radar torque target`. On a phone (≤ 640 px) it has 2
+  columns (`limit acc` first) and scrolls, like page 1.
 - **Radar aim footer** (said once):
   - live: `within ±1°`, `near the ±1° limit` (≥ 0.8°) or `outside ±1°`;
   - otherwise: `Not reading · last 3:10 pm` with the values dimmed, or `Not reading` when there is
@@ -360,14 +363,20 @@ content. Page 2 ("Sensors") uses the same frame and the same no-scrolling gate.
   - The numerals never change colour; the System card keeps the badge, peak and margin.
   - The windows come from status-lite (already in `STATUS_LITE_KEYS`), with `status_full` as the
     fallback. No server change was needed.
-- **Data rules.** The gear estimate and the radar angles are candidate quality, so they are read
-  from the metric record: current means `available && !stale`. The other page-2 tiles use the
+- **Data rules.** The gear estimate, the radar angles and the ACC state are candidate quality, so
+  they are read from the metric record: current means `available && !stale`. The speed limit and
+  the set speed are `verified` (owner-referenced) and use `liveValue`; a state of `off` or `ready`
+  hides a set speed the broker still holds from before (it keeps a value until its 10 s
+  staleness). The other page-2 tiles use the
   normal `Tile` rules (live, held with its time, or `—`). `generator.field_duty` joins
   `SPARK_METRICS` (minimum span 20 %). No new timers were added.
-- **Customisation.** The page-2 tiles are in `DRIVE_TILES` with ids `field`, `gear`, `radar`,
-  `turbine`, `output`, `power2`, `torque`, `target` and `odometer`, each labelled `… (page 2)`. They
+- **Customisation.** The page-2 tiles are in `DRIVE_TILES` with ids `limit`, `acc`, `field`,
+  `gear`, `radar`, `turbine`, `output`, `power2`, `torque`, `target` and `odometer`, each labelled
+  `… (page 2)`. They
   hide like page-1 tiles, and a hidden tile leaves its cell empty.
 - Caveats for these tiles are in `docs/caveats.md` (Drive and engine, Electrical, Radar alignment).
+- The core bundle grew by about 130 B for the two registry entries and the page-1 speed-limit
+  sub-line (91,749 B of 92,160 B on 2026-09-27); the tiles themselves live in the lazy chunk.
 
 ### 3.2 Parked
 

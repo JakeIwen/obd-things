@@ -114,6 +114,32 @@ test("ratioText needs both shafts and a turning output", () => {
   assert.equal(H.ratioText(2000, null), "");
 });
 
+test("speedLimitText: whole mph, or — when the cluster shows none", () => {
+  assert.equal(H.speedLimitText(55), "55");
+  assert.equal(H.speedLimitText(30), "30");
+  assert.equal(H.speedLimitText(0), "—");
+  assert.equal(H.speedLimitText(null), "—");
+  assert.equal(H.speedLimitText(NaN), "—");
+});
+
+test("accTileModel: set speed with the state word; Off and ready have no number", () => {
+  assert.deepEqual(H.accTileModel("engaged", 66), { value: "66", unit: "mph", sub: "set · engaged", kind: "live" });
+  assert.deepEqual(H.accTileModel("override", 61), { value: "61", unit: "mph", sub: "set · accelerator override", kind: "live" });
+  assert.deepEqual(H.accTileModel("standby", 66), { value: "66", unit: "mph", sub: "set · standby", kind: "held" });
+  // A cached set speed never shows once the state says off or ready.
+  assert.deepEqual(H.accTileModel("off", 66), { value: "Off", unit: "", sub: "", kind: "off" });
+  assert.deepEqual(H.accTileModel("ready", 66), { value: "—", unit: "", sub: "ready · no set speed", kind: "off" });
+  // No current state record: the verified set speed alone, or nothing.
+  assert.deepEqual(H.accTileModel(null, 66), { value: "66", unit: "mph", sub: "set speed", kind: "live" });
+  assert.deepEqual(H.accTileModel(null, null), { value: "—", unit: "", sub: "", kind: "off" });
+  assert.deepEqual(H.accTileModel("engaged", null), { value: "—", unit: "", sub: "engaged", kind: "off" });
+  assert.deepEqual(H.accTileModel("mystery", 50), { value: "50", unit: "mph", sub: "set speed", kind: "live" });
+  for (const state of ["off", "ready", "engaged", "override", "standby", null]) {
+    const m = H.accTileModel(state, 60);
+    for (const t of [m.value, m.sub]) assert.doesNotMatch(t, /candidate|0x5a0|quality|stale/i, t);
+  }
+});
+
 test("swipeTarget pages only on a deliberate horizontal swipe", () => {
   assert.equal(swipeTarget(-120, 10, 300, 1), 2);
   assert.equal(swipeTarget(120, -10, 300, 2), 1);
@@ -131,7 +157,7 @@ test("Drive registry lists page-2 tiles with unique ids and every id is rendered
   const block = drive.slice(drive.indexOf("export const DRIVE_TILES"), drive.indexOf("];", drive.indexOf("export const DRIVE_TILES")));
   const ids = [...block.matchAll(/(?:id: |\[)"([^"]+)"/g)].map((m) => m[1]);
   assert.equal(new Set(ids).size, ids.length, "ids are unique across both pages");
-  const page2 = ["field", "gear", "radar", "turbine", "output", "power2", "torque", "target", "odometer"];
+  const page2 = ["limit", "acc", "field", "gear", "radar", "turbine", "output", "power2", "torque", "target", "odometer"];
   for (const id of page2) {
     assert.ok(ids.includes(id), id + " registered");
     assert.ok(more.includes('show("' + id + '")'), id + " rendered through isHidden");
