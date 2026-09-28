@@ -129,7 +129,7 @@ export function ServiceCard({ docsLink = false }) {
       {m.state !== "ok" || m.note ? <p class="status-line">{m.note}</p> : null}
       <KV rows={rows} />
       <div class="btn-row parked-svc__actions">
-        <button type="button" class="btn btn--primary" onClick={recordOilChange}>
+        <button type="button" class="btn" onClick={recordOilChange}>
           Record oil change
         </button>
       </div>
