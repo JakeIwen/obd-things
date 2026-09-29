@@ -1,9 +1,11 @@
 import json
+import queue
 import socket
 import struct
 import subprocess
 import sys
 import threading
+import time
 import unittest
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -2479,6 +2481,238 @@ class BrokerActiveDriveTests(unittest.TestCase):
         self.assertEqual(process.kill_calls, 1)
         self.assertEqual(result["reason"], "restoration_failed")
         self.assertIsNone(supervisor._process)
+
+    # -- host stalls (2026-09-28: a 10 s stall of the whole Pi latched a
+    # restoration inhibit mid-drive although the helper had done nothing wrong)
+
+    FINAL_RESTORED = json.dumps({
+        "type": "final",
+        "state": "idle",
+        "reason": "engine_not_running",
+        "detail": "engine stopped",
+        "interface_mode": "listen_only",
+        "restored": True,
+    }) + "\n"
+
+    class _StallClock:
+        """Monotonic clock: ``step`` per read, plus any jump queued by the test."""
+
+        def __init__(self, step):
+            self._lock = threading.Lock()
+            self._now = 1000.0
+            self._step = step
+            self._pending = 0.0
+
+        def jump(self, seconds):
+            with self._lock:
+                self._pending += seconds
+
+        def __call__(self):
+            with self._lock:
+                self._now += self._step + self._pending
+                self._pending = 0.0
+                return self._now
+
+    class _ScriptedStream:
+        def __init__(self):
+            self.lines = queue.Queue()
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            item = self.lines.get(timeout=10.0)
+            if item is None:
+                raise StopIteration
+            return item
+
+        def close(self):
+            self.lines.put(None)
+
+    class _ScriptedProcess:
+        def __init__(self, stream, *, finish_on_terminate=None):
+            self.stdout = stream
+            self.returncode = None
+            self.terminate_calls = 0
+            self.kill_calls = 0
+            self.finish_on_terminate = finish_on_terminate
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                raise subprocess.TimeoutExpired("active-drive", timeout)
+            return self.returncode
+
+        def finish(self, final_line):
+            self.stdout.lines.put(final_line)
+            self.returncode = 0
+            self.stdout.lines.put(None)
+
+        def terminate(self):
+            self.terminate_calls += 1
+            if self.finish_on_terminate is not None and self.returncode is None:
+                self.finish(self.finish_on_terminate)
+
+        def kill(self):
+            self.kill_calls += 1
+            self.returncode = -9
+            self.stdout.lines.put(None)
+
+    def _stall_supervisor(self, process, clock, events, **overrides):
+        options = dict(
+            channel=TEST_CHANNEL,
+            expected_usb_serial=TEST_SERIAL,
+            expected_dev_id=TEST_DEV_ID,
+            event_handler=events.append,
+            popen_factory=lambda *_args, **_kwargs: process,
+            event_silence_timeout_seconds=10.0,
+            shutdown_timeout_seconds=10.0,
+            queue_poll_seconds=0.001,
+            stall_tolerance_seconds=30.0,
+            stall_detection_seconds=1.0,
+            monotonic=clock,
+        )
+        options.update(overrides)
+        return ActiveDriveSupervisor(**options)
+
+    def _run_in_thread(self, supervisor, stop_event=None):
+        results = []
+        thread = threading.Thread(
+            target=lambda: results.append(
+                supervisor.run(stop_event or threading.Event())
+            )
+        )
+        thread.start()
+        self.addCleanup(thread.join, 5.0)
+        return thread, results
+
+    def _wait_for(self, condition, what):
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if condition():
+                return
+            time.sleep(0.002)
+        self.fail(f"timed out waiting for {what}")
+
+    def test_supervisor_tolerates_a_short_host_stall(self):
+        clock = self._StallClock(0.001)
+        process = self._ScriptedProcess(self._ScriptedStream())
+        events = []
+        supervisor = self._stall_supervisor(process, clock, events)
+        with mock.patch("sys.stderr"):
+            thread, results = self._run_in_thread(supervisor)
+            process.stdout.lines.put(json.dumps({"type": "heartbeat"}) + "\n")
+            self._wait_for(lambda: len(events) == 1, "the first helper event")
+            clock.jump(12.0)  # longer than the 10 s silence limit
+            self._wait_for(lambda: supervisor.tolerated_stalls == 1, "the stall")
+            time.sleep(0.02)
+            self.assertEqual(process.terminate_calls, 0)
+            process.finish(self.FINAL_RESTORED)
+            thread.join(5.0)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(results[0]["type"], "final")
+        self.assertIs(results[0]["restored"], True)
+        self.assertEqual(results[0]["reason"], "engine_not_running")
+        self.assertEqual(process.terminate_calls, 0)
+        self.assertEqual(process.kill_calls, 0)
+        self.assertAlmostEqual(supervisor.tolerated_stall_seconds, 12.0, places=1)
+
+    def test_supervisor_still_bounds_a_helper_that_hangs_without_a_stall(self):
+        # The loop keeps running (0.5 s per tick, under the 1 s detection), so
+        # the helper earns no credit and is terminated after 10 s of silence.
+        clock = self._StallClock(0.5)
+        process = self._ScriptedProcess(
+            self._ScriptedStream(), finish_on_terminate=self.FINAL_RESTORED
+        )
+        supervisor = self._stall_supervisor(process, clock, [])
+        thread, results = self._run_in_thread(supervisor)
+        thread.join(5.0)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(supervisor.tolerated_stalls, 0)
+        self.assertGreaterEqual(process.terminate_calls, 1)
+        self.assertEqual(results[0]["reason"], "restoration_failed")
+        self.assertIs(results[0]["restored"], False)
+        self.assertIn("bounded event-silence interval", results[0]["detail"])
+
+    def test_supervisor_fails_closed_on_a_stall_beyond_the_tolerance(self):
+        clock = self._StallClock(0.001)
+        process = self._ScriptedProcess(
+            self._ScriptedStream(), finish_on_terminate=self.FINAL_RESTORED
+        )
+        events = []
+        supervisor = self._stall_supervisor(process, clock, events)
+        with mock.patch("sys.stderr"):
+            thread, results = self._run_in_thread(supervisor)
+            process.stdout.lines.put(json.dumps({"type": "heartbeat"}) + "\n")
+            self._wait_for(lambda: len(events) == 1, "the first helper event")
+            clock.jump(45.0)  # 30 s credited, 15 s of silence remain
+            thread.join(5.0)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(supervisor.tolerated_stalls, 1)
+        self.assertAlmostEqual(supervisor.tolerated_stall_seconds, 30.0, places=1)
+        self.assertGreaterEqual(process.terminate_calls, 1)
+        self.assertEqual(results[0]["reason"], "restoration_failed")
+        self.assertIn("bounded event-silence interval", results[0]["detail"])
+
+    def test_supervisor_does_not_kill_cleanup_interrupted_by_a_stall(self):
+        clock = self._StallClock(0.001)
+        process = self._ScriptedProcess(self._ScriptedStream())
+        supervisor = self._stall_supervisor(process, clock, [])
+        stop_event = threading.Event()
+        stop_event.set()  # the broker asked the helper to stop and restore
+        with mock.patch("sys.stderr"):
+            thread, results = self._run_in_thread(supervisor, stop_event)
+            self._wait_for(lambda: process.terminate_calls >= 1, "termination")
+            time.sleep(0.02)
+            clock.jump(12.0)  # longer than the 10 s cleanup limit
+            self._wait_for(lambda: supervisor.tolerated_stalls == 1, "the stall")
+            time.sleep(0.02)
+            self.assertEqual(process.kill_calls, 0)
+            process.finish(self.FINAL_RESTORED)
+            thread.join(5.0)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(process.kill_calls, 0)
+        self.assertEqual(results[0]["type"], "final")
+        self.assertIs(results[0]["restored"], True)
+
+    def test_supervisor_with_zero_tolerance_keeps_the_old_behaviour(self):
+        clock = self._StallClock(0.001)
+        process = self._ScriptedProcess(
+            self._ScriptedStream(), finish_on_terminate=self.FINAL_RESTORED
+        )
+        events = []
+        supervisor = self._stall_supervisor(
+            process, clock, events, stall_tolerance_seconds=0.0
+        )
+        thread, results = self._run_in_thread(supervisor)
+        process.stdout.lines.put(json.dumps({"type": "heartbeat"}) + "\n")
+        self._wait_for(lambda: len(events) == 1, "the first helper event")
+        clock.jump(12.0)
+        thread.join(5.0)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(supervisor.tolerated_stalls, 0)
+        self.assertEqual(results[0]["reason"], "restoration_failed")
+
+    def test_supervisor_rejects_invalid_stall_settings(self):
+        for overrides in (
+            {"stall_tolerance_seconds": -1.0},
+            {"stall_detection_seconds": 0.0},
+        ):
+            with self.subTest(overrides=overrides), self.assertRaises(ValueError):
+                ActiveDriveSupervisor(
+                    channel=TEST_CHANNEL,
+                    expected_usb_serial=TEST_SERIAL,
+                    expected_dev_id=TEST_DEV_ID,
+                    event_handler=lambda _event: None,
+                    **overrides,
+                )
 
     def test_collector_reports_unexpected_failure_instead_of_silent_death(self):
         class Supervisor:

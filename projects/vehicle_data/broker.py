@@ -118,7 +118,17 @@ ACTIVE_DRIVE_FAILURE_REASONS = frozenset(
     }
 )
 class ActiveDriveSupervisor:
-    """Supervise the termination-safe active-drive owner subprocess."""
+    """Supervise the termination-safe active-drive owner subprocess.
+
+    The helper must emit an event within ``event_silence_timeout_seconds`` and
+    finish cleanup within ``shutdown_timeout_seconds``.  Both limits measure
+    the helper, not the host: when this supervisor's own loop did not run for
+    ``stall_detection_seconds`` or more (the whole Pi stalled, as on
+    2026-09-28 when a 10 s stall latched a restoration inhibit mid-drive), that
+    time is credited to both deadlines, up to ``stall_tolerance_seconds`` per
+    silence window.  A helper that goes quiet while this loop keeps running
+    gets no credit, and a longer stall still fails closed.
+    """
 
     def __init__(
         self,
@@ -132,6 +142,9 @@ class ActiveDriveSupervisor:
         event_silence_timeout_seconds: float = 10.0,
         queue_poll_seconds: float = 0.1,
         helper_path: pathlib.Path = ACTIVE_DRIVE_HELPER,
+        stall_tolerance_seconds: float = 30.0,
+        stall_detection_seconds: float = 1.0,
+        monotonic=time.monotonic,
     ):
         self.channel = channel
         self.event_handler = event_handler
@@ -139,6 +152,11 @@ class ActiveDriveSupervisor:
         self.shutdown_timeout_seconds = shutdown_timeout_seconds
         self.event_silence_timeout_seconds = event_silence_timeout_seconds
         self.queue_poll_seconds = queue_poll_seconds
+        self.stall_tolerance_seconds = stall_tolerance_seconds
+        self.stall_detection_seconds = stall_detection_seconds
+        self._monotonic = monotonic
+        self.tolerated_stalls = 0
+        self.tolerated_stall_seconds = 0.0
         self.expected_usb_serial = expected_usb_serial
         self.expected_dev_id = expected_dev_id
         self.helper_path = pathlib.Path(helper_path)
@@ -159,8 +177,30 @@ class ActiveDriveSupervisor:
             or self.queue_poll_seconds <= 0
         ):
             raise ValueError("active-drive supervisor timeouts must be positive")
+        if self.stall_tolerance_seconds < 0 or self.stall_detection_seconds <= 0:
+            raise ValueError(
+                "active-drive stall tolerance must not be negative and stall "
+                "detection must be positive"
+            )
         self._lock = threading.Lock()
         self._process = None
+
+    def _note_stall(self, stalled: float, credit: float) -> None:
+        """Count a tolerated stall and leave one line in the service journal."""
+
+        self.tolerated_stalls += 1
+        self.tolerated_stall_seconds += credit
+        try:
+            print(
+                f"{datetime.now(timezone.utc).isoformat()} "
+                f"{pathlib.Path(self.helper_path).name} supervisor on {self.channel}: "
+                f"this process did not run for {stalled:.1f} s; credited {credit:.1f} s "
+                "to the helper's silence and cleanup limits",
+                file=sys.stderr,
+                flush=True,
+            )
+        except Exception:
+            pass
 
     def stop(self) -> None:
         with self._lock:
@@ -294,11 +334,26 @@ class ActiveDriveSupervisor:
                 daemon=True,
             )
             reader_thread.start()
-            last_event_at = time.monotonic()
+            last_event_at = self._monotonic()
+            previous_tick = last_event_at
+            stall_budget = self.stall_tolerance_seconds
             termination_started_at = None
             eof_seen = False
             while True:
-                now = time.monotonic()
+                now = self._monotonic()
+                # A host stall freezes this loop and the helper alike, so time in
+                # which this loop did not run is neither helper silence nor slow
+                # cleanup.  Both deadlines move by it, within the budget of the
+                # current silence window.
+                stalled = now - previous_tick - self.queue_poll_seconds
+                previous_tick = now
+                if stalled >= self.stall_detection_seconds and stall_budget > 0:
+                    credit = min(stalled, stall_budget)
+                    stall_budget -= credit
+                    last_event_at += credit
+                    if termination_started_at is not None:
+                        termination_started_at += credit
+                    self._note_stall(stalled, credit)
                 if stop_event.is_set() and termination_started_at is None:
                     termination_started_at = now
                     try:
@@ -351,7 +406,7 @@ class ActiveDriveSupervisor:
                         f"{type(error).__name__}: {error}"
                     )
                     if termination_started_at is None:
-                        termination_started_at = time.monotonic()
+                        termination_started_at = self._monotonic()
                         try:
                             if process.poll() is None:
                                 process.terminate()
@@ -363,7 +418,7 @@ class ActiveDriveSupervisor:
                     if process.poll() is not None:
                         break
                     if termination_started_at is None:
-                        termination_started_at = time.monotonic()
+                        termination_started_at = self._monotonic()
                         if final_event is None:
                             protocol_error = (
                                 "active-drive helper closed stdout without a "
@@ -380,7 +435,8 @@ class ActiveDriveSupervisor:
                         "active-drive helper emitted non-text output"
                     )
                 elif protocol_error is None and supervisor_error is None:
-                    last_event_at = time.monotonic()
+                    last_event_at = self._monotonic()
+                    stall_budget = self.stall_tolerance_seconds
                     if len(line.encode("utf-8", errors="replace")) > MAX_ACTIVE_EVENT_BYTES:
                         protocol_error = "active-drive helper event exceeded size limit"
                     else:
@@ -419,7 +475,7 @@ class ActiveDriveSupervisor:
                     (protocol_error or supervisor_error)
                     and termination_started_at is None
                 ):
-                    termination_started_at = time.monotonic()
+                    termination_started_at = self._monotonic()
                     try:
                         if process.poll() is None:
                             process.terminate()

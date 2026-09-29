@@ -843,6 +843,35 @@ failure, timeout, malformed response, rejection, termination, or exception.
 change. A failed or unverified restoration sets a persistent operation inhibit,
 is latched in the broker, and prevents another active interval.
 
+The broker's supervisor (`ActiveDriveSupervisor`, also used for the B-CAN
+auxiliary helper) ends a helper that emits nothing for 10 s, and kills one that
+has not finished cleanup 10 s after termination. Either case is an unverified
+restoration. Both limits measure the helper, not the host. When the
+supervisor's own loop did not run for 1 s or more, that time is credited to
+both limits, up to 30 s per silence window, and one line is written to the
+service journal. A helper that goes quiet while the supervisor keeps running
+gets no credit, and a stall longer than 30 s still fails closed.
+
+- Reason (2026-09-28, trip 67): at 01:38:30Z the whole Pi stalled for about
+  10 s. The journal has a gap and out-of-order entries from 19:38:19 to
+  19:38:29 MDT, the drive recorder logged three timed-out broker status
+  requests (6.2 s), and an agent CLI process started at 19:38:29 after an SSH
+  login. Both helpers were ended for silence and both inhibits latched
+  (`vehicle-data-restoration-failed`, `vehicle-data-bcan-restoration-failed`).
+  Polled metrics and the drive capture stopped for the rest of the drive. The
+  stall's cause is likely the process start under memory pressure; that is not
+  proven.
+- Read back the next day: all three vehicle roles UP, listen-only and
+  ERROR-ACTIVE with zero bus errors, restarts and bus-off, and static TX
+  counters. The adapters had been restored; only the confirmation was lost.
+- Recovery used, owner-directed, van asleep: inspect all four roles, then
+  `python3 tools/can_operation_state.py inhibit-end NAME` for each inhibit,
+  then restart `van-telemetry` (the broker also holds the latch in memory).
+  The broker serves a cached interface status, so an ended inhibit can still be
+  listed for a few seconds.
+- Tests: `tests/test_active_drive.py`, the `test_supervisor_*stall*` cases and
+  `test_supervisor_still_bounds_a_helper_that_hangs_without_a_stall`.
+
 The newly added torque read is optional within an otherwise healthy interval:
 its first response failure is published as a metric-specific acquisition
 failure and suppresses further `06DA` requests until the next engine-running
