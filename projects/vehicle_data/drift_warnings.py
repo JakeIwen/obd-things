@@ -11,6 +11,10 @@ bounded by ``metric`` and a 45-day ``bucket_us`` window, and it never reads
   Cold-window buckets that still carry the RF hub's cached pre-trip reading
   are dropped, and the wheel's own series must fall too, so a common-mode
   change (weather, all four tires) or an inflated mate never reads as a leak.
+  The trend is a Theil-Sen slope (median of the pairwise slopes), and it
+  counts only while the newest cold starts sit below the wheel's usual gap to
+  its mate, so a few scattered readings or a tire that has come back up never
+  read as a leak (event 645, 2026-09-25).
 - ``engine_coolant_temperature_idle_creep``: warm idle coolant creeping up.
 - ``engine_oil_pressure_decline``: warm idle / low-rpm oil pressure falling.
 - ``battery_voltage_charge_acceptance``: many running minutes below 13.0 V.
@@ -60,6 +64,15 @@ SLOW_LEAK_SLOPE = -0.5
 SLOW_LEAK_DELTA = -3.0
 SLOW_LEAK_CLEAR_SLOPE = -0.25
 SLOW_LEAK_CLEAR_DELTA = -1.5
+# The trend counts only while the newest cold starts agree with it.  Against
+# the wheel's usual gap to its mate (30-day median of own - mate), the latest
+# paired cold start must sit at least 0.5 psi lower (one week at the notice
+# slope) and the median of the last three at least 0.25 psi lower.  An open
+# notice stops being held by the trend once both are back above -0.25 psi.
+SLOW_LEAK_LATEST_GAP = -0.5
+SLOW_LEAK_RECENT_GAP = -0.25
+SLOW_LEAK_CLEAR_LATEST_GAP = -0.25
+SLOW_LEAK_SLOPE_METHOD = "theil_sen"
 SLOW_LEAK_SLOPE_DAYS = 14
 SLOW_LEAK_REFERENCE_DAYS = 30
 SLOW_LEAK_MIN_POINTS = 4
@@ -199,10 +212,14 @@ def _tire_spec(wheel: str) -> _Spec:
             "mate": AXLE_MATE[wheel],
             "stale_tolerance_psi": SLOW_LEAK_STALE_TOLERANCE_PSI,
             "own_corroboration_fraction": SLOW_LEAK_OWN_CORROBORATION,
+            "slope_method": SLOW_LEAK_SLOPE_METHOD,
             "slope_fire_psi_per_week": SLOW_LEAK_SLOPE,
             "delta_fire_psi": SLOW_LEAK_DELTA,
             "slope_clear_psi_per_week": SLOW_LEAK_CLEAR_SLOPE,
             "delta_clear_psi": SLOW_LEAK_CLEAR_DELTA,
+            "latest_gap_fire_psi": SLOW_LEAK_LATEST_GAP,
+            "recent_gap_fire_psi": SLOW_LEAK_RECENT_GAP,
+            "latest_gap_clear_psi": SLOW_LEAK_CLEAR_LATEST_GAP,
             "slope_window_days": SLOW_LEAK_SLOPE_DAYS,
             "reference_window_days": SLOW_LEAK_REFERENCE_DAYS,
             "minimum_points": SLOW_LEAK_MIN_POINTS,
@@ -370,20 +387,24 @@ def _round(value: float | None, digits: int = 3) -> float | None:
 
 
 def _slope_per_week(points: Sequence[_Point]) -> float | None:
-    """Ordinary least squares slope of value against trip start, per week."""
+    """Theil-Sen slope of value against trip start, per week.
 
-    if len(points) < 2:
+    The median of the slopes between every pair of points.  One stray cold
+    start moves it far less than it moves a least-squares fit, and on an
+    exactly linear series both give the same slope.
+    """
+
+    ordered = list(points)
+    slopes = [
+        (later.value - earlier.value)
+        / ((later.trip.started_us - earlier.trip.started_us) / DAY_US)
+        for index, earlier in enumerate(ordered)
+        for later in ordered[index + 1:]
+        if later.trip.started_us != earlier.trip.started_us
+    ]
+    if not slopes:
         return None
-    origin = points[0].trip.started_us
-    xs = [(p.trip.started_us - origin) / DAY_US for p in points]
-    ys = [p.value for p in points]
-    mean_x = sum(xs) / len(xs)
-    mean_y = sum(ys) / len(ys)
-    sxx = sum((x - mean_x) ** 2 for x in xs)
-    if sxx <= 0:
-        return None
-    sxy = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
-    return sxy / sxx * 7.0
+    return _median(slopes) * 7.0
 
 
 def _point_list(points: Sequence[_Point]) -> list[list[object]]:
@@ -857,15 +878,23 @@ def _tire_finding(
         )
     assert rel_delta is not None and own_delta is not None
     usual_offset = _median(p.value for p in rel_reference)
-    slope_fires = rel_slope is not None and rel_slope <= SLOW_LEAK_SLOPE
+    # Newest paired cold start against the usual gap (+ 0.0 turns -0.0 into 0.0).
+    latest_gap = round(rel_reference[-1].value - usual_offset, 6) + 0.0
+    slope_steep = rel_slope is not None and rel_slope <= SLOW_LEAK_SLOPE
+    recent_agrees = (
+        latest_gap <= SLOW_LEAK_LATEST_GAP and rel_delta <= SLOW_LEAK_RECENT_GAP
+    )
+    recent_back = (
+        latest_gap > SLOW_LEAK_CLEAR_LATEST_GAP and rel_delta > SLOW_LEAK_RECENT_GAP
+    )
+    slope_fires = slope_steep and recent_agrees
     delta_fires = rel_delta <= SLOW_LEAK_DELTA
     own_corroborates = (
         own_slope is not None and own_slope <= SLOW_LEAK_SLOPE * SLOW_LEAK_OWN_CORROBORATION
     ) or own_delta <= SLOW_LEAK_DELTA * SLOW_LEAK_OWN_CORROBORATION
     fires = (slope_fires or delta_fires) and own_corroborates
-    clears = (
-        (rel_slope is None or rel_slope > SLOW_LEAK_CLEAR_SLOPE)
-        and rel_delta > SLOW_LEAK_CLEAR_DELTA
+    clears = rel_delta > SLOW_LEAK_CLEAR_DELTA and (
+        rel_slope is None or rel_slope > SLOW_LEAK_CLEAR_SLOPE or recent_back
     )
     state = _hysteresis(previous, fires=fires, clears=clears)
     slope_text = (
@@ -888,6 +917,12 @@ def _tire_finding(
             f"{label} cold pressure still lower against {mate_label} than before "
             f"({rel_delta:+.1f} psi, {slope_text}); clears when it levels off"
         )
+    elif slope_steep and not recent_agrees:
+        reason = (
+            f"{label} cold pressure is back at its usual gap to {mate_label} "
+            f"on the newest cold starts ({round(latest_gap, 1) + 0.0:+.1f} psi); "
+            "the earlier drop did not continue"
+        )
     else:
         reason = (
             f"{label} cold pressure steady against {mate_label} "
@@ -908,6 +943,10 @@ def _tire_finding(
         recent_median_psi=_round(
             _median(p.value for p in reference[-SLOW_LEAK_RECENT_POINTS:])),
         reference_median_psi=_round(reference_median),
+        slope_method=SLOW_LEAK_SLOPE_METHOD,
+        latest_gap_psi=_round(latest_gap),
+        slope_steep=slope_steep,
+        recent_agrees=recent_agrees,
         slope_fires=slope_fires,
         delta_fires=delta_fires,
         clear_condition_met=clears,

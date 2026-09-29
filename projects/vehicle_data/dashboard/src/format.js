@@ -321,6 +321,30 @@ export function fmtDuration(seconds) {
 }
 
 /**
+ * Duration inside a sentence, with every unit written out: `45 s`, `32 min`,
+ * `1 h 05 min`, then days from 48 h (`2 d 8 h`). Tiles and tables keep the
+ * compact `fmtDuration` (`1 h 05`).
+ * @param {number} seconds
+ * @returns {string}
+ */
+export function fmtDurationLong(seconds) {
+  const text = fmtDuration(seconds);
+  const hours = Math.floor(seconds / 3600);
+  // Under an hour, and for input fmtDuration rejects (hours is then NaN or negative), text stands.
+  if (!(hours >= 1)) return text;
+  return hours < 48 ? text + " min" : Math.floor(hours / 24) + " d " + (hours % 24) + " h";
+}
+
+/**
+ * Upper-case the first letter, for broker text that starts a sentence.
+ * @param {string} text
+ * @returns {string}
+ */
+export function capFirst(text) {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/**
  * Integer with thousands separators (`6,303`); rounds half away from zero.
  * @param {number} n
  * @returns {string} or `DASH` when not finite

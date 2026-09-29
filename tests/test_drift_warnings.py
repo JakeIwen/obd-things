@@ -446,6 +446,120 @@ def _median_of_offsets():
     )
 
 
+# Event 645 (2026-09-25): the van's own RR/RL cold starts, as saved in the
+# event's drift points.  RL has no fresh cold reading on the second trip.
+EVENT_645_AT = datetime(2026, 9, 25, 20, 6, 4, tzinfo=timezone.utc)
+EVENT_645_COLD_STARTS = (
+    (datetime(2026, 9, 1, 0, 39, 16, tzinfo=timezone.utc), 79.2, 77.8),
+    (datetime(2026, 9, 1, 17, 11, 34, tzinfo=timezone.utc), 78.4, None),
+    (datetime(2026, 9, 4, 21, 35, 35, tzinfo=timezone.utc), 75.2, 79.2),
+    (datetime(2026, 9, 6, 19, 45, 56, tzinfo=timezone.utc), 74.4, 75.2),
+    (datetime(2026, 9, 17, 1, 28, 13, tzinfo=timezone.utc), 75.6, 73.7),
+    (datetime(2026, 9, 17, 17, 28, 31, tzinfo=timezone.utc), 71.6, 72.9),
+    (datetime(2026, 9, 22, 0, 2, 31, tzinfo=timezone.utc), 71.3, 76.8),
+    (datetime(2026, 9, 24, 21, 7, 9, tzinfo=timezone.utc), 75.6, 76.8),
+)
+
+
+class SlowLeakRobustnessTests(DriftCase):
+    """The trend is outlier-resistant and needs the newest cold starts to agree."""
+
+    RR = "tire_pressure_rr_slow_leak"
+
+    def _event_645_history(self):
+        self.r.seed(EVENT_645_AT - timedelta(days=40))
+        for start, rr, rl in EVENT_645_COLD_STARTS:
+            pressures = {"rr": rr} if rl is None else {"rr": rr, "rl": rl}
+            self.r.cold_trip(start, pressures)
+
+    def test_event_645_scattered_cold_starts_are_not_a_leak(self):
+        # The least-squares fit through the four cold starts of the last 14 days
+        # (RR - RL = +1.9, -1.3, -5.5, -1.2) fell 2.9 psi a week and opened a
+        # notice, although the newest reading sat exactly at the usual gap.
+        self._event_645_history()
+        rr = self.evaluate(at=EVENT_645_AT)[self.RR]
+        drift = rr["drift"]
+        self.assertEqual(rr["state"], "normal", rr["reason"])
+        self.assertFalse(rr["notification_eligible"])
+        self.assertEqual(drift["paired_cold_start_count"], 7)
+        self.assertEqual(drift["slope_points"], 4)
+        self.assertEqual(drift["usual_offset_psi"], -1.2)
+        self.assertEqual(drift["latest_gap_psi"], 0.0)
+        self.assertAlmostEqual(drift["relative_delta_psi"], -0.1, places=3)
+        self.assertAlmostEqual(drift["own_delta_psi"], -3.8, places=3)
+        self.assertEqual(drift["slope_method"], "theil_sen")
+        self.assertTrue(drift["slope_steep"])
+        self.assertFalse(drift["recent_agrees"])
+        self.assertFalse(drift["slope_fires"])
+        self.assertFalse(drift["delta_fires"])
+        self.assertTrue(drift["own_corroborates"])
+        self.assertIn("back at its usual gap to RL", rr["reason"])
+        self.assertIn("(+0.0 psi)", rr["reason"])
+        self.assertEqual(rr["current"]["value"], 75.6)
+
+    def test_event_645_open_notice_clears_at_the_next_check(self):
+        self._event_645_history()
+        result = self.evaluate(at=EVENT_645_AT, previous={self.RR: "warning"})
+        rr = result[self.RR]
+        self.assertEqual(rr["state"], "normal", rr["reason"])
+        self.assertTrue(rr["drift"]["clear_condition_met"])
+        self.assertEqual(rr["drift"]["previous_state"], "warning")
+        self.assertEqual(result["tire_pressure_rl_slow_leak"]["state"], "normal")
+        self.assert_c1(list(result.values()))
+
+    def test_one_stray_low_cold_start_is_not_a_trend(self):
+        # Least squares reads -1.5 psi a week from this one reading.
+        self.r.seed(AT - timedelta(days=40))
+        for day in SIX_DAYS:
+            self.r.cold_trip(AT - timedelta(days=day),
+                             {**FLAT, "rr": 72.0 if day == 3.5 else 78.0})
+        result = self.evaluate()
+        rr = result[self.RR]
+        self.assertEqual(rr["state"], "normal", rr["reason"])
+        self.assertEqual(rr["drift"]["relative_slope_psi_per_week"], 0.0)
+        self.assertEqual(rr["drift"]["own_slope_psi_per_week"], 0.0)
+        self.assertFalse(rr["drift"]["slope_steep"])
+        self.assertTrue(rr["reason"].startswith("RR cold pressure steady against RL"))
+        self.assert_c1(list(result.values()))
+
+    def _leak_then_top_up(self, good_readings):
+        self.r.seed(AT - timedelta(days=40))
+        days = (13, 11, 8.5, 6, 3.5) + tuple(1.0 - 0.25 * n for n in range(good_readings))
+        for day in days:
+            leaking = day >= 3.5
+            rr = 78.0 - 1.2 / 7.0 * (13 - day) if leaking else 78.0
+            self.r.cold_trip(AT - timedelta(days=day), {**FLAT, "rr": rr})
+
+    def test_a_trend_needs_the_newest_cold_start_below_the_usual_gap(self):
+        self._leak_then_top_up(1)
+        rr = self.evaluate()[self.RR]
+        self.assertEqual(rr["state"], "normal", rr["reason"])
+        self.assertAlmostEqual(rr["drift"]["relative_slope_psi_per_week"], -1.2, places=3)
+        self.assertTrue(rr["drift"]["slope_steep"])
+        self.assertGreater(rr["drift"]["latest_gap_psi"], 0.0)
+        self.assertFalse(rr["drift"]["slope_fires"])
+
+    def test_one_good_reading_does_not_clear_an_open_notice_but_two_do(self):
+        self._leak_then_top_up(1)
+        held = self.evaluate(previous={self.RR: "warning"})[self.RR]
+        self.assertEqual(held["state"], "warning", held["reason"])
+        self.assertFalse(held["drift"]["clear_condition_met"])
+        self.assertIn("clears when it levels off", held["reason"])
+
+    def test_two_good_readings_clear_an_open_notice(self):
+        self._leak_then_top_up(2)
+        rr = self.evaluate(previous={self.RR: "warning"})[self.RR]
+        self.assertEqual(rr["state"], "normal", rr["reason"])
+        self.assertTrue(rr["drift"]["clear_condition_met"])
+
+    def test_snapshot_names_the_method_and_the_gates(self):
+        snapshot = dw.rule_snapshot(self.RR)
+        self.assertEqual(snapshot["slope_method"], "theil_sen")
+        self.assertEqual(snapshot["latest_gap_fire_psi"], -0.5)
+        self.assertEqual(snapshot["recent_gap_fire_psi"], -0.25)
+        self.assertEqual(snapshot["latest_gap_clear_psi"], -0.25)
+
+
 class HeldOpenTests(DriftCase):
     """D11/P10: running short of data never resolves an open notice."""
 

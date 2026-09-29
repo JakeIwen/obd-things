@@ -21,7 +21,7 @@ import {
   FORBIDDEN_WORDS,
   OPEN_STATES,
 } from "../src/warnings.js";
-import { fmtTime } from "../src/format.js";
+import { fmtTime, fmtDurationLong } from "../src/format.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const healthFixture = JSON.parse(readFileSync(join(here, "fixtures", "health-lite.json"), "utf8"));
@@ -494,4 +494,99 @@ test("pair warning sentence uses the broker's lower-wheel comparison", () => {
   const out = warningLine(a, null, Date.now());
   assert.equal(out.line, "RL 76.0 psi is 3.6 under RR 79.6 (usually 0.8 over). Check both rear tires at the next stop.");
   assert.equal(out.title, "Rear tires uneven");
+});
+
+test("relative comparison: the word follows the numbers on screen, not the rule direction", () => {
+  // Event 645: a low-direction rule whose reading (75.6) sat above its median (75.4) read
+  // "76 psi, 1 psi under its usual 75".
+  const above = warningLine(relative("tire_pressure_rr_relative_low", "tire.pressure.rr", 75.6, "psi", 75.4, "low", "warning"), null, NOW);
+  assert.equal(above.line, "RR tire 76 psi, 1 psi over its usual 75 for 1 min. Check pressure at the next stop.");
+  const below = warningLine(relative("engine_coolant_temperature_relative_high", "engine.coolant_temperature", 188.2, "°F", 190.4, "high", "watch"), null, NOW);
+  assert.equal(below.line, "Coolant 188 °F, 2 °F under its usual 190 for 12 s. Ease off and watch the gauge.");
+  // Both numbers round to the same value: no "0 psi under".
+  const level = warningLine(relative("tire_pressure_rr_relative_low", "tire.pressure.rr", 78.2, "psi", 78.4, "low", "warning"), null, NOW);
+  assert.equal(level.line, "RR tire 78 psi, at its usual 78 for 1 min. Check pressure at the next stop.");
+  const volts = warningLine(relative("battery_voltage_relative_low", "battery.voltage", 14.2, "V", 14.0, "low", "warning"), null, NOW);
+  assert.equal(volts.line, "Battery 14.20 V, 0.20 V over its usual 14.00 for 1 min. Limit accessories and check charging.");
+});
+
+test("durations inside a sentence carry every unit", () => {
+  assert.equal(fmtDurationLong(56 * 3600 + 42 * 60), "2 d 8 h", "event 645 read 'for 56 h 42'");
+  const a = relative("tire_pressure_rr_relative_low", "tire.pressure.rr", 74.0, "psi", 78, "low", "warning");
+  const hour = warningLine(a, episode(1, a.rule, 65 * 60000), NOW).line;
+  assert.equal(hour, "RR tire 74 psi, 4 psi under its usual 78 for 1 h 05 min. Check pressure at the next stop.");
+  const days = warningLine(a, episode(1, a.rule, (56 * 60 + 42) * 60000), NOW).line;
+  assert.equal(days, "RR tire 74 psi, 4 psi under its usual 78 for 2 d 8 h. Check pressure at the next stop.");
+});
+
+// Event 645 as the broker served it on 2026-09-27 (evidence arrays trimmed).
+function event645() {
+  return {
+    rule: "tire_pressure_rr_slow_leak",
+    metric: "tire.pressure.rr",
+    category: "vehicle_health",
+    severity: "notice",
+    tier: 2,
+    group: "tires",
+    direction: "low",
+    state: "warning",
+    title: "RR tire slow leak",
+    action: "Check the RR tire for a slow leak.",
+    reason: "RR cold pressure 2.9 psi a week below RL's over 4 cold starts",
+    regime: "cold_start",
+    current: { metric: "tire.pressure.rr", value: 75.6, unit: "psi", observed_at: "2026-09-24T21:07:09.263704+00:00" },
+    baseline: { median: 75.4, unit: "psi", bucket_count: 74, trip_count: 8, window_days: 30 },
+    deviation: { signed_from_median: -0.1, effect_in_rule_direction: 0.1, threshold: 3.0 },
+    persistence: { basis: "cold starts", evaluated: true, observed: 7, required: 4, satisfied: true },
+    drift: { method: "cold_start_trend_axle_relative", mate: "rl", relative_slope_psi_per_week: -2.8991, usual_offset_psi: -1.2 },
+    evaluated_at: "2026-09-26T22:42:57.727387+00:00",
+  };
+}
+
+test("slow-drift notices say what the broker found, not value against baseline (event 645)", () => {
+  const now = Date.parse("2026-09-28T04:48:00Z");
+  const notice = event645();
+  const ep = { id: 645, rule: notice.rule, status: "open", state: "warning", opened_at: "2026-09-25T20:06:04.774734+00:00", acknowledged: false, category: "vehicle_health" };
+  const expected = "RR cold pressure 2.9 psi a week below RL's over 4 cold starts. Check the RR tire for a slow leak.";
+
+  const built = warningLine(notice, ep, now);
+  assert.equal(built.line, expected);
+  assert.equal(built.title, "RR tire slow leak");
+  assert.equal(built.action, "Check the RR tire for a slow leak.");
+
+  const result = buildWarningCards({ available: true, assessments: [notice], active: [notice], episodes: { active: [ep] } }, now);
+  assert.equal(result.warnings.length, 1);
+  const card = result.warnings[0];
+  assert.equal(card.line, expected);
+  assert.equal(card.title, "RR tire slow leak");
+  assert.equal(card.tier, "notice");
+  assert.equal(card.episodeId, 645);
+  assert.ok(card.sinceLabel, "the card still says since when");
+  assert.doesNotMatch(card.line, /its usual|56 h/);
+  assert.doesNotMatch(card.line, FORBIDDEN_WORDS);
+
+  // Other drift findings start lower-case in the broker; a held notice has no numbers at all.
+  const creep = warningLine({ rule: "engine_coolant_temperature_idle_creep", metric: "engine.coolant_temperature", tier: 2, severity: "notice", state: "warning", title: "Idle coolant creeping up", reason: "warm idle coolant +5.4 °F against the prior 10 trips", action: "Check the coolant level and the fan." }, null, now);
+  assert.equal(creep.line, "Warm idle coolant +5.4 °F against the prior 10 trips. Check the coolant level and the fan.");
+  assert.equal(creep.title, "Idle coolant creeping up");
+  const held = Object.assign(event645(), {
+    reason: "not enough paired cold starts (2 of 4 in 30 days; 0 cached readings skipped); the notice stays open until it can be re-checked",
+    current: { metric: "tire.pressure.rr", value: null, unit: "psi", observed_at: null, source: null },
+    baseline: { median: null, unit: "psi" },
+    deviation: { signed_from_median: null, effect_in_rule_direction: null, threshold: null },
+  });
+  assert.equal(
+    warningLine(held, ep, now).line,
+    "Not enough paired cold starts (2 of 4 in 30 days; 0 cached readings skipped); the notice stays open until it can be re-checked. Check the RR tire for a slow leak."
+  );
+
+  // A reason carrying evaluator vocabulary, or no reason, falls back to the template.
+  const jargon = warningLine(Object.assign(event645(), { reason: "deviation persisted in the cold regime" }), null, now);
+  assert.equal(jargon.line, "RR tire 76 psi, 1 psi over its usual 75. Check the RR tire for a slow leak.");
+  assert.equal(jargon.title, "RR tire low");
+  const silent = warningLine(Object.assign(event645(), { reason: null }), null, now);
+  assert.equal(silent.line, jargon.line);
+  // Tier 0/1 keep the template even when the broker sends a reason.
+  const tierOne = warningLine(relative("tire_pressure_rr_relative_low", "tire.pressure.rr", 74.0, "psi", 78, "low", "warning", { tier: 1, reason: "stayed below its usual pressure for this trip phase long enough to confirm" }), null, NOW);
+  assert.equal(tierOne.line, "RR tire 74 psi, 4 psi under its usual 78 for 1 min. Check pressure at the next stop.");
 });

@@ -21,7 +21,7 @@
  * only when the summary's health slice changes.
  */
 
-import { fmtValue, fmtUnit, fmtFixed, fmtTime, fmtDuration, fmtInt, decimalsFor, parseDate } from "./format.js";
+import { fmtValue, fmtUnit, fmtFixed, fmtTime, fmtDurationLong, capFirst, fmtInt, decimalsFor, parseDate } from "./format.js";
 
 /** Card tiers in display order. */
 export const TIERS = ["critical", "warning", "notice", "system"];
@@ -184,9 +184,11 @@ function thresholdText(f) {
 
 function relativeComparison(f) {
   if (f.delta === null || f.median === null) return null;
-  const unit = f.unit ? " " + f.unit : "";
-  const word = f.direction === "high" ? "over" : "under";
-  return f.deltaText + unit + " " + word + " its usual " + f.medianText;
+  const usual = " its usual " + f.medianText;
+  // The word follows the two numbers on screen, never the rule's direction. Rounding keeps
+  // their order, so a non-zero displayed difference has the sign of value - median.
+  if (f.delta === 0) return "at" + usual;
+  return f.deltaText + (f.unit ? " " + f.unit : "") + (f.value > f.median ? " over" : " under") + usual;
 }
 
 function customComparison(f) {
@@ -444,7 +446,7 @@ export function warningFacts(assessment, episode, nowMs) {
     alternator: corroboratingAlternator(a),
     parked: regime.indexOf("engine_off") === 0,
     heldSeconds: held,
-    heldText: held === null || held < 1 ? null : fmtDuration(held),
+    heldText: held === null || held < 1 ? null : fmtDurationLong(held),
     customTitle: custom ? str(custom.title) : null,
     title: str(a.title) || (episode ? str(episode.title) : null),
     group: str(a.group),
@@ -455,6 +457,10 @@ export function warningFacts(assessment, episode, nowMs) {
  * Compose the one-line card sentence for a live watch/warning assessment:
  * `<Subject> <value> <unit>[ qualifier], <comparison> for <duration>. <Action>`.
  * A backend-supplied `action` replaces the template's closing sentence.
+ * A slow-drift notice (tier 2) compares cold starts or whole trips, not the
+ * newest reading with a baseline, so its sentence is the broker's `reason`
+ * (as in the phone notification) and its title is the broker's `title`:
+ * `RR cold pressure 2.9 psi a week below RL's over 4 cold starts. <Action>`.
  * @param {Object} assessment
  * @param {Object|null} episode open episode for the same rule, if any
  * @param {number} nowMs wall-clock epoch ms
@@ -472,11 +478,14 @@ export function warningLine(assessment, episode, nowMs) {
   if (qualifier) head += " " + qualifier;
   const comparison = pairHead ? null : tpl.comparison(f);
   let sentence = head + (comparison ? ", " + comparison : "") + (f.heldText ? " for " + f.heldText : "") + ".";
+  const found = assessment && assessment.tier === 2 && str(assessment.reason);
+  const drift = found && !FORBIDDEN_WORDS.test(found);
+  if (drift) sentence = capFirst(found) + ".";
   const supplied = str(assessment && assessment.action);
   let action = supplied || tpl.action(f);
   if (action.charAt(action.length - 1) !== ".") action += ".";
   sentence += " " + action;
-  return { line: sentence, action: action, title: tpl.title(f), facts: f };
+  return { line: sentence, action: action, title: (drift && f.title) || tpl.title(f), facts: f };
 }
 
 /**

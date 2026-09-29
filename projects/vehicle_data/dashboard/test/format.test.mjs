@@ -12,6 +12,8 @@ import {
   fmtAgeCoarse,
   fmtTime,
   fmtDuration,
+  fmtDurationLong,
+  capFirst,
   fmtInt,
   fmtFixed,
   fmtDelta,
@@ -267,6 +269,29 @@ test("fmtDuration", () => {
   assert.equal(fmtDuration(-1), DASH);
   assert.equal(fmtDuration(NaN), DASH);
   assert.equal(fmtDuration(null), DASH);
+});
+
+test("fmtDurationLong writes every unit and switches to days at 48 h", () => {
+  assert.equal(fmtDurationLong(0), "0 s");
+  assert.equal(fmtDurationLong(45), "45 s");
+  assert.equal(fmtDurationLong(300), "5 min");
+  assert.equal(fmtDurationLong(3599), "59 min");
+  assert.equal(fmtDurationLong(3600), "1 h 00 min");
+  assert.equal(fmtDurationLong(3900), "1 h 05 min");
+  assert.equal(fmtDurationLong(26 * 3600 + 12 * 60), "26 h 12 min");
+  assert.equal(fmtDurationLong(47 * 3600 + 59 * 60 + 59), "47 h 59 min");
+  assert.equal(fmtDurationLong(48 * 3600), "2 d 0 h");
+  assert.equal(fmtDurationLong(56 * 3600 + 42 * 60), "2 d 8 h");
+  assert.equal(fmtDurationLong(30 * 86400 + 5 * 3600), "30 d 5 h");
+  assert.equal(fmtDurationLong(-1), DASH);
+  assert.equal(fmtDurationLong(NaN), DASH);
+  assert.equal(fmtDurationLong(null), DASH);
+});
+
+test("capFirst", () => {
+  assert.equal(capFirst("warm idle coolant +5.4 °F"), "Warm idle coolant +5.4 °F");
+  assert.equal(capFirst("RR cold pressure"), "RR cold pressure");
+  assert.equal(capFirst(""), "");
 });
 
 test("formatters never call Intl or toLocaleString", () => {
