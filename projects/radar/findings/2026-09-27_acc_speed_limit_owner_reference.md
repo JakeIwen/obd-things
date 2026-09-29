@@ -123,6 +123,10 @@ capture reproduce every transition in the tables above; tests use its real frame
 
 ## Remaining owner/recording asks
 
+The owner annotated such a drive on 2026-09-28 and the recorder covered all of it. The notes and
+the list of raw-frame checks are in
+[2026-09-28_acc_owner_reference_drive.md](2026-09-28_acc_owner_reference_drive.md).
+
 1. Capture a drive covering distance toggles, the target icon, ACC off and fixed cruise. The
    recorder must stay up past the B-CAN ownership failure, or the notes must fall inside its
    coverage. Note the bars shown after each distance press.

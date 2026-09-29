@@ -627,9 +627,11 @@ measurements at 800×1280 and 1280×800.
   PNG icons, the `window.__perf` counters with a live-drive replay in
   `tools/measure.mjs`, and a formal parity-checklist run against the former
   app (git history).
-- Needs a drive: `vehicle.speed_limit`, `acc.set_speed` and the candidate
-  `acc.state` (deployed 2026-09-27, catalog 29 metrics) are not yet observed
-  on the dashboard; ACC state and gap confirmation wait for an annotated drive.
+- `vehicle.speed_limit`, `acc.set_speed` and the candidate `acc.state`
+  (deployed 2026-09-27, catalog 29 metrics) were first recorded live on
+  2026-09-28 (historian trip 67). The owner annotated that drive; ACC state,
+  gap and target-icon confirmation now wait for the raw-frame analysis listed in
+  [the September 28 notes](../radar/findings/2026-09-28_acc_owner_reference_drive.md).
 - The passive collector cycles every ~4.3 s instead of 1 s, giving 2–3.5 s old
   values and `unknown` vehicle-state blips (drive audit 2026-09-24).
 - Parked battery-low (tier 0, S1) needs 3 readings in ~24 s, but parked wakes
