@@ -682,7 +682,24 @@ event 645 payload, held notices and the template fallback. Python suite through 
 1501 passed, 7 skipped, 1199 subtests (job `20260928T050353Z-aeadeab4`). Dashboard suite: 439
 passed; core 92,107 B of 92,160 B.
 
-**Activation.** The dashboard part takes effect with the next `npm run build`. The rule change
-needs a parked `van-telemetry` restart. The changed rule revision then closes event 645
-administratively, and the first drift check re-evaluates RR as normal. No CAN transmission,
-production database write or synthetic production event was made for this work.
+**Activation.** The dashboard part went live with build `7aea51abf235` on 2026-09-27. The rule
+change was activated by a parked `van-telemetry` restart on 2026-09-29 at 19:22:08Z (13:22 MDT),
+with the van asleep and the CAN transmit counters unchanged (can0 113827, can1 8396, can2 0). No
+CAN transmission or synthetic production event was made for this work.
+
+**Outcome of the first drift check (2026-09-29 19:22:12Z).** Event 645 closed as "rule revision
+replaced; administrative closure". The notice did not end, though: event 647 opened 7 s later.
+
+- A new cold start had arrived (trip 66, 2026-09-28 21:58Z): RR 74.0 psi, 2.0 psi under RL against
+  a usual 1.25. That gives `latest_gap_psi` −0.75, `relative_delta_psi` −0.75 and a Theil-Sen
+  slope of −1.85 psi a week over five cold starts, so `recent_agrees` and `slope_fires` are true.
+- The wheel's own series does not corroborate (`own_slope_psi_per_week` −0.2457 against the
+  required −0.25, `own_delta_psi` −1.2 against −1.5), so a fresh evaluation would read normal.
+- The drift job carries the previous state across a rule revision (`insights._maybe_run_drift`
+  passes every saved state, whatever its revision). The saved state was `warning`, from the old
+  rule, and the clear condition is not met, so the notice is held: "RR cold pressure still lower
+  against RL than before (-0.7 psi, -1.85 psi a week); clears when it levels off".
+- Event 647 is notification-eligible. The tires group cooldown runs 7 days from the push of
+  2026-09-25 20:06Z, so no push was queued at opening (outbox still 131 delivered, 0 pending).
+- Owner decision 2026-09-29: no further work on tire notices, because the van's own TPMS covers
+  low tires. The carried state stays as it is, and event 647 is left to clear by the rule.
