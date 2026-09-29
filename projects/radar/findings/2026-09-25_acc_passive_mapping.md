@@ -7,8 +7,13 @@ verified decodes or to the telemetry allowlist until the owner confirmations lis
 
 > **Update 2026-09-27:** an owner-annotated drive verified the `0x5A0` set speed (61→66 mph) and the
 > `0x2FA` SET+ bit, and added the speed-limit display field `0x0E0` B0 (mph). See
-> [2026-09-27 owner-referenced drive](2026-09-27_acc_speed_limit_owner_reference.md). The remaining
-> rows below are unchanged Tier 1 candidates.
+> [2026-09-27 owner-referenced drive](2026-09-27_acc_speed_limit_owner_reference.md).
+>
+> **Update 2026-09-29:** the owner's callouts on the 2026-09-28 drive verified the state enum, the
+> gap (bars = raw + 1), the target family and every button below, and added Distance Decrease
+> (B0 bit6), the fixed-cruise button (B0 bit1) and the fixed-cruise indices 27–32. See
+> [2026-09-28 owner-referenced drive](2026-09-28_acc_owner_reference_drive.md). `0x4AF`, `0x5A5`,
+> `0x1F2`, `0x5E4` and the lead-object rows below remain Tier 1.
 
 ## Scope and provenance
 

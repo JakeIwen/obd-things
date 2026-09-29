@@ -123,8 +123,9 @@ capture reproduce every transition in the tables above; tests use its real frame
 
 ## Remaining owner/recording asks
 
-The owner annotated such a drive on 2026-09-28 and the recorder covered all of it. The notes and
-the list of raw-frame checks are in
+Both asks were met on 2026-09-28: the owner annotated a drive, the recorder covered all of it,
+and the raw frames confirmed `bars = raw + 1`, Distance Decrease (`0x2FA` B0 bit6) and the
+fixed-cruise button (B0 bit1). See
 [2026-09-28_acc_owner_reference_drive.md](2026-09-28_acc_owner_reference_drive.md).
 
 1. Capture a drive covering distance toggles, the target icon, ACC off and fixed cruise. The
