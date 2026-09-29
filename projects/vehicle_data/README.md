@@ -311,7 +311,10 @@ The initial drive-publisher vocabulary is intentionally narrow:
 | `vehicle.speed` | `ccan.broadcast.0x101` | number, `mph` | `observed_alfa_scale` |
 | `vehicle.speed_limit` | `ccan.broadcast.0x0e0` | integer, `mph` | `verified` |
 | `acc.set_speed` | `ccan.broadcast.0x5a0` | integer, `mph` | `verified` |
-| `acc.state` | `ccan.broadcast.0x5a0` | string, `state` | `candidate` |
+| `acc.state` | `ccan.broadcast.0x5a0` | string, `state` | `verified` |
+| `acc.mode` | `ccan.broadcast.0x5a0` | string, `mode` | `verified` |
+| `acc.follow_distance` | `ccan.broadcast.0x5a0` | integer, `bars` | `verified` |
+| `acc.lead_vehicle` | `ccan.broadcast.0x5a0` | boolean, `boolean` | `verified` |
 | `tire.pressure.fl` | `rf_hub.did.31d0` | number, `psi` | `verified` |
 | `tire.pressure.fr` | `rf_hub.did.31d1` | number, `psi` | `verified` |
 | `tire.pressure.rr` | `rf_hub.did.31d2` | number, `psi` | `verified` |
@@ -335,14 +338,30 @@ and the `docs/bus-map.md` rows for `0x0E0` and `0x5A0`):
 - `0x0E0` byte 0 is the speed limit in raw mph. Its `0` (key-off / no limit
   shown) is never published, so "none" arrives as the metric going stale
   after five seconds.
-- `0x5A0` byte 3 is the set speed in raw mph, published only while the
-  candidate ACC state is ready, engaged, override or standby, byte 3 is
-  nonzero and byte 2 (km/h) agrees within 1 km/h. Off and ready-before-SET
-  publish no set speed; the broker cache keeps an earlier value until its
-  10-second staleness, so consumers gate on `acc.state`.
-- `acc.state` (`off`, `ready`, `engaged`, `override`, `standby`) is the Tier 1
-  behavioural decode `((B6 & 1) << 2) | (B7 >> 6)` of the same frame. Other raw
-  values are not published.
+- `0x5A0` byte 3 is the set speed in raw mph, published only while the ACC
+  state is ready, engaged, override or standby, byte 3 is nonzero and byte 2
+  (km/h) agrees within 1 km/h. Off and ready-before-SET publish no set speed;
+  the broker cache keeps an earlier value until its 10-second staleness, so
+  consumers gate on `acc.state`.
+- `acc.state` (`off`, `ready`, `engaged`, `override`, `standby`) is
+  `((B6 & 1) << 2) | (B7 >> 6)` of the same frame, for adaptive and fixed-speed
+  cruise alike. The owner's callouts on the 2026-09-28 drive matched every
+  state (see the
+  [owner-referenced drive](../radar/findings/2026-09-28_acc_owner_reference_drive.md)).
+  Other raw values are not published.
+- The graphic index `B6 >> 2` of the same frame gives three more display
+  fields, checked against the same callouts:
+  - `acc.mode` is `adaptive` or `fixed` (regular cruise);
+  - `acc.follow_distance` is the distance setting in bars, 1 to 4, in adaptive
+    mode;
+  - `acc.lead_vehicle` says whether the cluster shows the vehicle-ahead icon,
+    while engaged or in accelerator override in adaptive mode.
+
+  Each is published only in the states that show it and only for a state and
+  index pair listed in `ccan_powertrain.ACC_HUD_FAMILIES`. As with the set
+  speed, the cache keeps an earlier value for up to 10 seconds, so consumers
+  gate on `acc.state`. The lead vehicle's range and relative speed are not in
+  this frame and have not been found.
 
 They are display information only: no warning, notification or safety logic
 uses them. `0x5A0` is sent at 1 Hz plus on change, and `0x0E0` trails the
@@ -627,11 +646,16 @@ measurements at 800×1280 and 1280×800.
   PNG icons, the `window.__perf` counters with a live-drive replay in
   `tools/measure.mjs`, and a formal parity-checklist run against the former
   app (git history).
-- `vehicle.speed_limit`, `acc.set_speed` and the candidate `acc.state`
-  (deployed 2026-09-27, catalog 29 metrics) were first recorded live on
-  2026-09-28 (historian trip 67). The owner annotated that drive; ACC state,
-  gap and target-icon confirmation now wait for the raw-frame analysis listed in
-  [the September 28 notes](../radar/findings/2026-09-28_acc_owner_reference_drive.md).
+- `vehicle.speed_limit`, `acc.set_speed` and `acc.state` (deployed
+  2026-09-27) were first recorded live on 2026-09-28 (historian trip 67). The
+  owner annotated that drive, and its raw frames verified the ACC state,
+  following distance, lead-vehicle icon, cruise mode and every cruise button
+  ([September 28 drive](../radar/findings/2026-09-28_acc_owner_reference_drive.md)).
+  `acc.mode`, `acc.follow_distance` and `acc.lead_vehicle` were added on
+  2026-09-29 (catalog 32 metrics) and have not been seen live yet.
+- The historian's 5-second `acc.state` series missed a 32 s `off` interval that
+  the raw frames have (2026-09-29 00:04:23Z). Whether the broker published it
+  is not known.
 - The passive collector cycles every ~4.3 s instead of 1 s, giving 2–3.5 s old
   values and `unknown` vehicle-state blips (drive audit 2026-09-24).
 - Parked battery-low (tier 0, S1) needs 3 readings in ~24 s, but parked wakes

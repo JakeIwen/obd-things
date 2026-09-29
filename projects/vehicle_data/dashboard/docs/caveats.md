@@ -80,9 +80,8 @@ what they meant and where that information lives now.
   far. Only verified and observed-scale values drive a big number on Drive.
 - **candidate**: a strong lead whose offset, scale or identity is not yet settled. A candidate never
   drives an alarm. Candidates shown outside the catalog are the odometer (dimmed with its time,
-  with a small `*` on the Service card), the gear estimate (always written with `~`), the radar
-  angles (System card and Drive page 2) and the ACC state word (Drive page 2), and each is
-  explained in its own section below.
+  with a small `*` on the Service card), the gear estimate (always written with `~`) and the radar
+  angles (System card and Drive page 2), and each is explained in its own section below.
 
 ## Drive and engine
 
@@ -102,12 +101,19 @@ what they meant and where that information lives now.
   then reads `—`.
 - **ACC** (Drive page 2): the adaptive-cruise set speed from the cluster frame `0x5A0` (byte 3 in
   mph, cross-checked against byte 2 in km/h), checked against the cluster display on the same
-  drive. The word under it (`set · engaged`, `standby`, `accelerator override`, `ready · no set
-  speed`) and the `Off` value come from a **candidate** decode of the same frame's state bits:
-  they matched every button press and brake cancel seen so far but have not been confirmed
-  against the cluster. In standby the number is dimmed because the speed is only remembered, not
-  being held. The frame arrives about once a second, so the tile can take a few seconds to follow
-  a button press. It is display information only and never drives a warning.
+  drive. The words under it come from the same frame and were checked against the cluster on a
+  September 28 drive, where every noted event matched:
+  - the state (`engaged`, `standby`, `accelerator override`, `ready`) and the `Off` value;
+  - `vehicle ahead`, shown while the cluster shows its vehicle-ahead icon;
+  - `gap 3 of 4`, the following-distance setting in bars;
+  - `fixed cruise`, when regular cruise is in use instead of adaptive cruise. This was seen in
+    one short episode only.
+
+  In standby the number is dimmed because the speed is only remembered, not being held. The frame
+  arrives about once a second, so the tile can take a few seconds to follow a button press or a
+  vehicle moving in. `vehicle ahead` is the cluster's icon, not a distance: the van does not put
+  the range or closing speed of that vehicle on the buses the Pi listens to. All of it is display
+  information only and never drives a warning.
 - **Coolant**: C-CAN `0x2ED` byte 0, raw − 40 °C, shown in °F. The thermostat is fully open near
   220 °F. The highest value seen in 57 recorded trips is 221 °F. Hot-day idle at 213–220 °F is
   inside the normal envelope for this engine (13 of 57 trips reached it). Below 160 °F the engine is

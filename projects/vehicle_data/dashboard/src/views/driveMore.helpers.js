@@ -124,22 +124,46 @@ export const ACC_STATE_WORDS = Object.freeze({
 });
 
 /**
+ * What the cluster shows beside the ACC state, as sub-line parts: `vehicle ahead` first (it is
+ * what changes while driving), then `gap 3 of 4`, or `fixed cruise`. The broker keeps each value
+ * until it goes stale, so every part is gated on the state that shows it: a vehicle ahead only
+ * while engaged or in override, a gap in every adaptive state, nothing without a state.
+ * @param {string|null} st a state with a word in `ACC_STATE_WORDS`, or null
+ * @param {{mode?: string|null, bars?: number|null, lead?: boolean|null}|null|undefined} shown
+ *   current `acc.mode`, `acc.follow_distance` and `acc.lead_vehicle` record values
+ * @returns {string[]}
+ */
+export function accShownParts(st, shown) {
+  if (st === null || !shown) return [];
+  if (shown.mode === "fixed") return ["fixed cruise"];
+  if (shown.mode !== "adaptive") return [];
+  const parts = [];
+  if (shown.lead === true && (st === "engaged" || st === "override")) parts.push("vehicle ahead");
+  if (isNum(shown.bars) && shown.bars >= 1 && shown.bars <= 4) parts.push("gap " + Math.round(shown.bars) + " of 4");
+  return parts;
+}
+
+/**
  * ACC tile model.
- * @param {string|null} state current `acc.state` record value (read from the record: its quality
- *   is below the driver-qualified set), or null when there is no current record
+ * @param {string|null} state current `acc.state` record value, or null when there is no current
+ *   record
  * @param {number|null} setSpeed live `acc.set_speed` in mph, or null
+ * @param {{mode?: string|null, bars?: number|null, lead?: boolean|null}|null} [shown] current
+ *   cruise mode, following-distance bars and lead-vehicle icon (see `accShownParts`)
  * @returns {{value: string, unit: string, sub: string, kind: "live"|"held"|"off"}}
  *   `held` dims the number: standby keeps the set speed in memory but is not controlling.
  */
-export function accTileModel(state, setSpeed) {
+export function accTileModel(state, setSpeed, shown) {
   const st = typeof state === "string" && Object.prototype.hasOwnProperty.call(ACC_STATE_WORDS, state) ? state : null;
   if (state === "off") return { value: "Off", unit: "", sub: "", kind: "off" };
-  if (st === "ready") return { value: DASH, unit: "", sub: "ready · no set speed", kind: "off" };
-  if (!isNum(setSpeed) || setSpeed <= 0) return { value: DASH, unit: "", sub: st ? ACC_STATE_WORDS[st] : "", kind: "off" };
+  const extra = accShownParts(st, shown);
+  const sub = (first) => [first].concat(extra).join(" · ");
+  if (st === "ready") return { value: DASH, unit: "", sub: sub(extra.length ? "ready" : "ready · no set speed"), kind: "off" };
+  if (!isNum(setSpeed) || setSpeed <= 0) return { value: DASH, unit: "", sub: st ? sub(ACC_STATE_WORDS[st]) : "", kind: "off" };
   return {
     value: String(Math.round(setSpeed)),
     unit: "mph",
-    sub: st ? "set · " + ACC_STATE_WORDS[st] : "set speed",
+    sub: st ? sub(extra.length ? ACC_STATE_WORDS[st] : "set · " + ACC_STATE_WORDS[st]) : "set speed",
     kind: st === "standby" ? "held" : "live",
   };
 }

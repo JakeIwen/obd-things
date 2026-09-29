@@ -140,6 +140,42 @@ test("accTileModel: set speed with the state word; Off and ready have no number"
   }
 });
 
+test("accTileModel: vehicle ahead, following distance and fixed cruise (2026-09-28 callouts)", () => {
+  const adaptive = (bars, lead) => ({ mode: "adaptive", bars, lead });
+  // 7:44 PM: following a vehicle at four bars, set 66.
+  assert.deepEqual(H.accTileModel("engaged", 66, adaptive(4, true)), { value: "66", unit: "mph", sub: "engaged · vehicle ahead · gap 4 of 4", kind: "live" });
+  // 7:00 PM: one bar, no vehicle.
+  assert.deepEqual(H.accTileModel("engaged", 73, adaptive(1, false)), { value: "73", unit: "mph", sub: "engaged · gap 1 of 4", kind: "live" });
+  assert.deepEqual(H.accTileModel("override", 40, adaptive(4, true)), { value: "40", unit: "mph", sub: "accelerator override · vehicle ahead · gap 4 of 4", kind: "live" });
+  // Standby and ready show the gap but never a vehicle: the broker may still hold an old `true`.
+  assert.deepEqual(H.accTileModel("standby", 61, adaptive(4, true)), { value: "61", unit: "mph", sub: "standby · gap 4 of 4", kind: "held" });
+  assert.deepEqual(H.accTileModel("ready", null, adaptive(1, null)), { value: "—", unit: "", sub: "ready · gap 1 of 4", kind: "off" });
+  // 7:05 PM: regular cruise on, set 65, cancel.
+  const fixed = { mode: "fixed", bars: 3, lead: true };
+  assert.deepEqual(H.accTileModel("ready", null, fixed), { value: "—", unit: "", sub: "ready · fixed cruise", kind: "off" });
+  assert.deepEqual(H.accTileModel("engaged", 65, fixed), { value: "65", unit: "mph", sub: "engaged · fixed cruise", kind: "live" });
+  assert.deepEqual(H.accTileModel("standby", 65, fixed), { value: "65", unit: "mph", sub: "standby · fixed cruise", kind: "held" });
+  // Off hides everything, whatever is still cached.
+  assert.deepEqual(H.accTileModel("off", 65, fixed), { value: "Off", unit: "", sub: "", kind: "off" });
+  assert.deepEqual(H.accTileModel("off", 66, adaptive(4, true)), { value: "Off", unit: "", sub: "", kind: "off" });
+  // Nothing current, or values the tile does not know: the earlier wording stands.
+  for (const shown of [null, undefined, {}, { mode: null, bars: null, lead: null }, { mode: "mystery", bars: 2, lead: true }]) {
+    assert.deepEqual(H.accTileModel("engaged", 66, shown), { value: "66", unit: "mph", sub: "set · engaged", kind: "live" });
+    assert.deepEqual(H.accTileModel("ready", 66, shown), { value: "—", unit: "", sub: "ready · no set speed", kind: "off" });
+  }
+  assert.deepEqual(H.accTileModel("engaged", 66, adaptive(7, false)), { value: "66", unit: "mph", sub: "set · engaged", kind: "live" }, "bars outside 1-4 are not shown");
+  assert.deepEqual(H.accTileModel("engaged", 66, adaptive(null, true)), { value: "66", unit: "mph", sub: "engaged · vehicle ahead", kind: "live" });
+  // Without a current state nothing beside it is shown either.
+  assert.deepEqual(H.accTileModel(null, 66, adaptive(4, true)), { value: "66", unit: "mph", sub: "set speed", kind: "live" });
+  assert.deepEqual(H.accShownParts("engaged", adaptive(2, true)), ["vehicle ahead", "gap 2 of 4"]);
+  assert.deepEqual(H.accShownParts(null, adaptive(2, true)), []);
+  for (const st of ["ready", "engaged", "override", "standby"]) {
+    for (const shown of [adaptive(3, true), fixed]) {
+      assert.doesNotMatch(H.accTileModel(st, 60, shown).sub, /candidate|0x5a0|quality|stale|index|hud/i);
+    }
+  }
+});
+
 test("swipeTarget pages only on a deliberate horizontal swipe", () => {
   assert.equal(swipeTarget(-120, 10, 300, 1), 2);
   assert.equal(swipeTarget(120, -10, 300, 2), 1);

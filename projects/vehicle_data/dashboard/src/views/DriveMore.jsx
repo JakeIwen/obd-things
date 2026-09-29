@@ -44,12 +44,20 @@ function LimitTile() {
   );
 }
 
-// ACC: set speed (verified) with the state word (candidate, read from its record like the gear).
-const acc = computed(() => {
-  const rec = store.metricSignal("acc.state").value;
-  const state = rec && rec.available === true && !rec.stale && typeof rec.value === "string" ? rec.value : null;
-  return accTileModel(state, liveValue("acc.set_speed").value);
-});
+// ACC: set speed with the state word and what the cluster shows beside it (vehicle ahead,
+// following-distance bars, fixed cruise). These are strings, booleans and small integers, read
+// from their records; a value that is not current reads as null.
+function shownNow(name, type) {
+  const rec = store.metricSignal(name).value;
+  return rec && rec.available === true && !rec.stale && typeof rec.value === type ? rec.value : null;
+}
+const acc = computed(() =>
+  accTileModel(shownNow("acc.state", "string"), liveValue("acc.set_speed").value, {
+    mode: shownNow("acc.mode", "string"),
+    bars: shownNow("acc.follow_distance", "number"),
+    lead: shownNow("acc.lead_vehicle", "boolean"),
+  })
+);
 const accCls = computed(() => "tile area-d2acc tile--" + acc.value.kind);
 const accValue = computed(() => acc.value.value);
 const accUnit = computed(() => acc.value.unit);

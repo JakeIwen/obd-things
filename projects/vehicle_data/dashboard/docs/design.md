@@ -355,7 +355,7 @@ content. Page 2 ("Sensors") uses the same frame and the same no-scrolling gate.
 
   | row | content |
   |---|---|
-  | 0 | **SPEED LIMIT** (`vehicle.speed_limit` in a sign outline with `MPH` under it; `—` in a dim outline when the cluster shows none) · **ACC** (2 cols: `acc.set_speed` `66 mph`, sub-line `set · engaged` / `set · accelerator override` / `set · standby` from the candidate `acc.state` record; standby dims the number; `Off` when the state is off; `—` with `ready · no set speed` in ready) |
+  | 0 | **SPEED LIMIT** (`vehicle.speed_limit` in a sign outline with `MPH` under it; `—` in a dim outline when the cluster shows none) · **ACC** (2 cols: `acc.set_speed` `66 mph`; sub-line from the `acc.state` record, then what the cluster shows beside it: `engaged · vehicle ahead · gap 4 of 4`, `standby · gap 4 of 4`, `engaged · fixed cruise`; without those records it reads `set · engaged` as before; standby dims the number; `Off` when the state is off; `—` with `ready · gap 1 of 4`, or `ready · no set speed`, in ready) |
   | A | **ALTERNATOR FIELD** (2 cols: `generator.field_duty` %, 15-min sparkline, sub-line `battery 14.0 V`) · **GEAR** (`~7` from `transmission.gear_estimate` while its record is current, else `—`; sub-line `ratio 0.70` = turbine ÷ output when the output shaft turns ≥ 100 rpm) |
   | B | **RADAR AIM** (3 cols): Horizontal and Vertical side by side. Each shows its latest angle (`+0.15°`) and then `1-min avg` / `5-min avg` from `status.radar_alignment` windows `"60"`/`"300"`. |
   | C | **TURBINE** (rpm) · **OUTPUT SHAFT** (rpm) · **POWER** (hp, sparkline) |
@@ -371,11 +371,15 @@ content. Page 2 ("Sensors") uses the same frame and the same no-scrolling gate.
   - The numerals never change colour; the System card keeps the badge, peak and margin.
   - The windows come from status-lite (already in `STATUS_LITE_KEYS`), with `status_full` as the
     fallback. No server change was needed.
-- **Data rules.** The gear estimate, the radar angles and the ACC state are candidate quality, so
-  they are read from the metric record: current means `available && !stale`. The speed limit and
-  the set speed are `verified` (owner-referenced) and use `liveValue`; a state of `off` or `ready`
-  hides a set speed the broker still holds from before (it keeps a value until its 10 s
-  staleness). The other page-2 tiles use the
+- **Data rules.** The gear estimate and the radar angles are candidate quality, so they are read
+  from the metric record: current means `available && !stale`. The ACC state, mode, distance bars
+  and lead-vehicle flag are `verified` but are strings, a small integer and a boolean, so they are
+  read from their records the same way. The speed limit and the set speed are `verified`
+  (owner-referenced) and use `liveValue`. The broker keeps a value until its 10 s staleness, so the
+  state gates everything else: `off` or `ready` hides a set speed, `vehicle ahead` shows only
+  while engaged or in override, and nothing beside the state shows without a current state.
+  `vehicle ahead` comes first in the sub-line, which ends in an ellipsis on a narrow tile. The
+  other page-2 tiles use the
   normal `Tile` rules (live, held with its time, or `—`). `generator.field_duty` joins
   `SPARK_METRICS` (minimum span 20 %). No new timers were added.
 - **Customisation.** The page-2 tiles are in `DRIVE_TILES` with ids `limit`, `acc`, `field`,

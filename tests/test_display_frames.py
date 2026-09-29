@@ -1,9 +1,11 @@
-"""Speed limit (0x0E0) and ACC set speed/state (0x5A0) from real 2026-09-27 frames.
+"""Speed limit (0x0E0) and the ACC display (0x5A0) from real owner-annotated frames.
 
-Frames are copied from the owner-annotated drive capture
-/mnt/EXFAT512/obd-things/tmp/captures/three_bus_drive/broker-drive/
-broker-drive-20260927T212949433889/c-can/*full*.zst (see
-projects/radar/findings/2026-09-27_acc_speed_limit_owner_reference.md).
+Frames are copied from the owner-annotated drive captures under
+/mnt/EXFAT512/obd-things/tmp/captures/three_bus_drive/broker-drive/:
+broker-drive-20260927T212949433889 (set speed, speed limit; see
+projects/radar/findings/2026-09-27_acc_speed_limit_owner_reference.md) and
+broker-drive-20260928T231134826208 (states, cruise mode, following distance,
+lead vehicle; see projects/radar/findings/2026-09-28_acc_owner_reference_drive.md).
 """
 
 import socket
@@ -145,7 +147,7 @@ class AccDisplayDecodeTests(unittest.TestCase):
             with self.subTest(data):
                 observation = self.decode(data)["acc.state"]
                 self.assertEqual(observation.value, state)
-                self.assertEqual(observation.quality, "candidate")
+                self.assertEqual(observation.quality, "verified")
                 self.assertEqual(observation.unit, "state")
 
     def test_set_speed_matches_owner_display_only_while_ready_engaged_or_standby(self):
@@ -179,6 +181,106 @@ class AccDisplayDecodeTests(unittest.TestCase):
         self.assertEqual(decoded["acc.state"].value, "engaged")
         self.assertNotIn("acc.set_speed", decoded)
         self.assertEqual(cp.decode_frame_observations(0x5A0, bytes.fromhex(ACC_SET_66)[:7]), ())
+
+
+# Real 0x5A0 frames of the owner-annotated 2026-09-28 drive (UTC), one per
+# display the owner called out.  Each row: (note, frame, state, mode, bars,
+# lead vehicle, set speed); None means the metric is not published.
+CALLOUT_FRAMES = (
+    # 7:00 PM CDT: distance stepped one bar to four and back, 5 s apart
+    ("00:00:07.916Z distance+ to two bars", "2D3F7549033C2C80", "engaged", "adaptive", 2, False, 73),
+    ("00:00:15.036Z distance+ to three bars", "2D407549033C3080", "engaged", "adaptive", 3, False, 73),
+    ("00:00:21.395Z distance+ to four bars", "2D417549033C3480", "engaged", "adaptive", 4, False, 73),
+    ("00:00:40.315Z distance- back at one bar", "2D007549033C2880", "engaged", "adaptive", 1, False, 73),
+    # 7:01 PM: ACC off, then on again
+    ("23:11:35.628Z ACC off", "2D0000003F3C0400", "off", None, None, None, None),
+    ("00:01:58.754Z ACC on, ready", "2D000000033C0840", "ready", "adaptive", 1, None, None),
+    # 7:05 PM: regular cruise on, set 65, cancel, off
+    ("00:05:00.959Z fixed cruise on", "2D000000033C7040", "ready", "fixed", None, None, None),
+    ("00:05:04.369Z fixed cruise set 65", "2D006941033C7480", "engaged", "fixed", None, None, 65),
+    ("00:05:04.319Z fixed cruise, accelerator", "2D546941033C8100", "override", "fixed", None, None, 65),
+    ("00:05:19.118Z fixed cruise cancelled", "2D006941033C6D40", "standby", "fixed", None, None, 65),
+    ("00:05:27.119Z fixed cruise off", "2D000000033C7C00", "off", None, None, None, None),
+    # 7:08 PM: accelerator override, set speed blinking
+    ("00:08:11.881Z gas override", "2D005D3A033C5D00", "override", "adaptive", 1, False, 58),
+    ("00:19:14.055Z gas override at four bars", "2D4A653F033C6900", "override", "adaptive", 4, False, 63),
+    # 7:10 PM: cancelled, then RES back to 61
+    ("23:18:05.055Z cancelled at one bar", "2D00643E033C3940", "standby", "adaptive", 1, None, 62),
+    ("00:11:56.287Z cancelled at four bars", "2D00623D033C4540", "standby", "adaptive", 4, None, 61),
+    # 7:11 PM and 7:44-7:47 PM: vehicle ahead, icon shown
+    ("23:30:48.589Z vehicle ahead at one bar", "2D00653F033C1880", "engaged", "adaptive", 1, True, 63),
+    ("00:44:56.133Z vehicle ahead at two bars", "2D006A42033C1C80", "engaged", "adaptive", 2, True, 66),
+    ("00:11:31.649Z vehicle ahead at three bars", "2D3C623D033C2080", "engaged", "adaptive", 3, True, 61),
+    ("00:11:36.249Z vehicle ahead at four bars", "2D00623D033C2480", "engaged", "adaptive", 4, True, 61),
+    ("23:30:48.509Z override with a vehicle ahead", "2D4A653F033C9500", "override", "adaptive", 1, True, 63),
+    ("00:48:23.979Z override, vehicle ahead, four bars", "2D4A4028033CA100", "override", "adaptive", 4, True, 40),
+)
+# Raw state 3 for 80-240 ms while cancelling or switching off: nothing is published.
+TRANSITIONAL_FRAMES = ("2D350000033C04C0", "2D46623D033C38C0", "2D46643E033C44C0", "2D4F6941033C6CC0")
+
+
+class AccCalloutDecodeTests(unittest.TestCase):
+    def decode(self, hexdata):
+        return by_metric(cp.decode_frame_observations(0x5A0, bytes.fromhex(hexdata)))
+
+    def test_every_owner_callout_frame_decodes_to_what_the_cluster_showed(self):
+        names = ("acc.state", "acc.mode", "acc.follow_distance", "acc.lead_vehicle", "acc.set_speed")
+        for note, frame, *expected in CALLOUT_FRAMES:
+            with self.subTest(note):
+                decoded = self.decode(frame)
+                for name, value in zip(names, expected):
+                    if value is None:
+                        self.assertNotIn(name, decoded)
+                    else:
+                        self.assertEqual(decoded[name].value, value)
+                        self.assertIs(type(decoded[name].value), type(value))
+                        self.assertEqual(decoded[name].quality, "verified")
+                        self.assertEqual(decoded[name].source, "ccan.broadcast.0x5a0")
+
+    def test_units_and_registry_values(self):
+        decoded = self.decode("2D00623D033C2480")
+        self.assertEqual(decoded["acc.mode"].unit, "mode")
+        self.assertEqual(decoded["acc.follow_distance"].unit, "bars")
+        self.assertEqual(decoded["acc.lead_vehicle"].unit, "boolean")
+        for _note, frame, *_expected in CALLOUT_FRAMES:
+            for observation in cp.decode_frame_observations(0x5A0, bytes.fromhex(frame)):
+                source = METRICS[observation.metric].sources[0]
+                self.assertEqual(observation.unit, METRICS[observation.metric].unit)
+                if source.publisher_values is not None:
+                    self.assertIn(observation.value, source.publisher_values)
+
+    def test_transitional_frames_publish_nothing(self):
+        for frame in TRANSITIONAL_FRAMES:
+            with self.subTest(frame):
+                self.assertEqual(self.decode(frame), {})
+
+    def test_unknown_state_and_index_pairs_publish_only_the_state(self):
+        # Index 20 has never been seen; index 10 belongs to engaged, not ready.
+        for index, state_bits in ((20, (0, 0x80)), (10, (0, 0x40))):
+            frame = bytearray.fromhex("2D00623D033C2880")
+            frame[6] = (index << 2) | state_bits[0]
+            frame[7] = state_bits[1]
+            decoded = self.decode(frame.hex())
+            with self.subTest(index=index):
+                self.assertIn("acc.state", decoded)
+                for name in ("acc.mode", "acc.follow_distance", "acc.lead_vehicle"):
+                    self.assertNotIn(name, decoded)
+
+    def test_family_table_has_no_overlap_and_matches_the_observed_indices(self):
+        seen = {}
+        for state, first, length, mode, _lead in cp.ACC_HUD_FAMILIES:
+            self.assertIn(state, cp.ACC_STATE_NAMES.values())
+            self.assertIn(mode, cp.ACC_MODE_NAMES)
+            for index in range(first, first + length):
+                self.assertNotIn(index, seen, f"index {index} listed twice")
+                seen[index] = state
+        self.assertEqual(sorted(seen), [*range(2, 18), *range(23, 30), 32, *range(37, 41)])
+        self.assertEqual(cp.acc_display_family("engaged", 9), ("adaptive", True, 4))
+        self.assertEqual(cp.acc_display_family("engaged", 10), ("adaptive", False, 1))
+        self.assertEqual(cp.acc_display_family("engaged", 29), ("fixed", None, None))
+        self.assertIsNone(cp.acc_display_family("off", 1))
+        self.assertIsNone(cp.acc_display_family("off", 31))
+        self.assertIsNone(cp.acc_display_family(None, 10))
 
 
 class DisplaySnapshotTests(unittest.TestCase):
@@ -368,9 +470,23 @@ class RegistryTests(unittest.TestCase):
         self.assertGreaterEqual(set_speed.stale_after_seconds, 3.0)
         state = METRICS["acc.state"]
         self.assertEqual(state.value_type, "string")
-        self.assertEqual(state.sources[0].quality, "candidate")
+        self.assertEqual(state.sources[0].quality, "verified")
         self.assertEqual(set(state.sources[0].publisher_values), set(cp.ACC_STATE_NAMES.values()))
-        for metric in (limit, set_speed, state):
+        mode = METRICS["acc.mode"]
+        self.assertEqual((mode.unit, mode.value_type), ("mode", "string"))
+        self.assertEqual(mode.sources[0].publisher_values, cp.ACC_MODE_NAMES)
+        distance = METRICS["acc.follow_distance"]
+        self.assertEqual((distance.unit, distance.value_type), ("bars", "integer"))
+        self.assertEqual((distance.minimum, distance.maximum), (1, 4))
+        self.assertEqual(distance.sources[0].publisher_values, cp.ACC_FOLLOW_DISTANCE_BARS)
+        lead = METRICS["acc.lead_vehicle"]
+        self.assertEqual((lead.unit, lead.value_type), ("boolean", "boolean"))
+        self.assertEqual(lead.sources[0].publisher_values, (True, False))
+        for metric in (mode, distance, lead):
+            self.assertEqual(metric.sources[0].name, "ccan.broadcast.0x5a0")
+            self.assertEqual(metric.sources[0].quality, "verified")
+            self.assertEqual(metric.stale_after_seconds, set_speed.stale_after_seconds)
+        for metric in (limit, set_speed, state, mode, distance, lead):
             source = metric.sources[0]
             self.assertEqual((source.bus, source.acquisition_class), ("c-can", "passive_broadcast"))
             self.assertTrue(source.publisher_allowed)

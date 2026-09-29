@@ -630,6 +630,11 @@ TRANSMISSION_GEAR_ESTIMATE = MetricDefinition(
 _DISPLAY_FINDING = (
     "projects/radar/findings/2026-09-27_acc_speed_limit_owner_reference.md"
 )
+# Owner callouts of the 2026-09-28 drive: ACC off/on, fixed cruise, gas
+# override, resume, distance bars and the lead-vehicle icon.
+_ACC_CALLOUT_FINDING = (
+    "projects/radar/findings/2026-09-28_acc_owner_reference_drive.md"
+)
 
 VEHICLE_SPEED_LIMIT = MetricDefinition(
     name="vehicle.speed_limit",
@@ -679,8 +684,8 @@ ACC_SET_SPEED = MetricDefinition(
             provenance=(
                 f"{_DISPLAY_FINDING}; 0x5A0 byte 3 raw mph (byte 2 = "
                 "round(mph x 1.609344) km/h cross-check), owner-displayed "
-                "61 -> 66 matched; published only while the candidate "
-                "acc.state is ready/engaged/override/standby and byte 3 > 0"
+                "61 -> 66 matched; published only while acc.state is "
+                "ready/engaged/override/standby and byte 3 > 0"
             ),
             side_effects="none; observation is receive-only",
             publisher_allowed=True,
@@ -702,16 +707,90 @@ ACC_STATE = MetricDefinition(
             bus="c-can",
             bitrate=500000,
             acquisition_class="passive_broadcast",
-            quality="candidate",
+            quality="verified",
             provenance=(
-                "projects/radar/findings/2026-09-25_acc_passive_mapping.md; "
-                "0x5A0 ((B6 & 1) << 2) | (B7 >> 6): 0 off, 1 ready, "
-                "2 engaged, 4 accelerator override, 5 standby; behavioural "
-                "Tier 1 candidate, other raw values are not published"
+                f"{_ACC_CALLOUT_FINDING}; 0x5A0 ((B6 & 1) << 2) | (B7 >> 6): "
+                "0 off, 1 ready, 2 engaged, 4 accelerator override, "
+                "5 standby; each state matched an owner-noted event (ACC off "
+                "and on, set, gas override, cancel, resume); other raw values "
+                "are not published"
             ),
             side_effects="none; observation is receive-only",
             publisher_allowed=True,
             publisher_values=("off", "ready", "engaged", "override", "standby"),
+        ),
+    ),
+)
+
+
+def _acc_display_source(provenance: str, values: tuple[object, ...]) -> SourceDefinition:
+    return SourceDefinition(
+        name="ccan.broadcast.0x5a0",
+        bus="c-can",
+        bitrate=500000,
+        acquisition_class="passive_broadcast",
+        quality="verified",
+        provenance=f"{_ACC_CALLOUT_FINDING}; {provenance}",
+        side_effects="none; observation is receive-only",
+        publisher_allowed=True,
+        publisher_values=values,
+    )
+
+
+# The three fields below come from the cluster graphic index of the same frame.
+# Like the set speed they are published only in the states that show them, so
+# consumers gate on acc.state: the broker keeps an earlier value until its
+# 10-second staleness.
+ACC_MODE = MetricDefinition(
+    name="acc.mode",
+    unit="mode",
+    value_type="string",
+    stale_after_seconds=10.0,
+    passive_min_interval_seconds=0.0,
+    minimum=None,
+    maximum=None,
+    sources=(
+        _acc_display_source(
+            "0x5A0 graphic index B6 >> 2: adaptive 2-17, 23-26 and 37-40; "
+            "fixed-speed cruise 27-29 and 32, seen only in the owner-noted "
+            "regular-cruise episode (on, set 65, cancel, off); not published "
+            "while off",
+            ("adaptive", "fixed"),
+        ),
+    ),
+)
+
+ACC_FOLLOW_DISTANCE = MetricDefinition(
+    name="acc.follow_distance",
+    unit="bars",
+    value_type="integer",
+    stale_after_seconds=10.0,
+    passive_min_interval_seconds=0.0,
+    minimum=1,
+    maximum=4,
+    sources=(
+        _acc_display_source(
+            "0x5A0 graphic index offset within its adaptive run plus one; the "
+            "owner-noted 1 -> 4 -> 1 bars matched six presses one for one; "
+            "not published in fixed cruise or while off",
+            (1, 2, 3, 4),
+        ),
+    ),
+)
+
+ACC_LEAD_VEHICLE = MetricDefinition(
+    name="acc.lead_vehicle",
+    unit="boolean",
+    value_type="boolean",
+    stale_after_seconds=10.0,
+    passive_min_interval_seconds=0.0,
+    sources=(
+        _acc_display_source(
+            "0x5A0 graphic index 6-9 and 37-40 (lead-vehicle icon shown) "
+            "against 10-13 and 23-26 (not shown); both owner-noted icon "
+            "episodes matched to the second; published only while engaged "
+            "or in accelerator override in adaptive mode",
+            (True, False),
         ),
     ),
 )
@@ -740,6 +819,9 @@ METRICS = {
         VEHICLE_SPEED_LIMIT,
         ACC_SET_SPEED,
         ACC_STATE,
+        ACC_MODE,
+        ACC_FOLLOW_DISTANCE,
+        ACC_LEAD_VEHICLE,
         GENERATOR_FIELD_DUTY,
         VEHICLE_ODOMETER,
         RADAR_ELEVATION,

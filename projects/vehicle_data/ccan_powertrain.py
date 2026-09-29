@@ -45,9 +45,11 @@ VEHICLE_SPEED_ID = 0x101
 TRANSMISSION_SHAFT_SPEED_ID = 0x1F7
 IGNITION_ON_ID = 0x2EF
 SYSTEM_VOLTAGE_ID = 0x41A
-# Owner-referenced cluster display frames (2026-09-27 drive):
+# Owner-referenced cluster display frames (2026-09-27 and 2026-09-28 drives):
 # 0x0E0 B0 is the traffic-sign speed limit in mph (10 Hz); 0x5A0 is the
-# cluster ACC frame (1 Hz plus on change) whose B3 is the set speed in mph.
+# cluster ACC frame (1 Hz plus on change) whose B3 is the set speed in mph and
+# whose graphic index carries the cruise mode, the following distance and the
+# lead-vehicle icon.
 SPEED_LIMIT_ID = 0x0E0
 ACC_DISPLAY_ID = 0x5A0
 DISPLAY_FRAME_IDS = (SPEED_LIMIT_ID, ACC_DISPLAY_ID)
@@ -70,8 +72,9 @@ TRANSMISSION_TEMPERATURE_METRIC = "transmission.oil_temperature"
 TRANSMISSION_TEMPERATURE_SOURCE = "ccan.broadcast.0x1f7"
 SPEED_LIMIT_SOURCE = "ccan.broadcast.0x0e0"
 ACC_DISPLAY_SOURCE = "ccan.broadcast.0x5a0"
-# Candidate ACC state enum, ((B6 & 1) << 2) | (B7 >> 6); raw 3 (seen once for
-# 80 ms at CANC), 6 and 7 are unmapped and never published.
+# ACC state enum, ((B6 & 1) << 2) | (B7 >> 6).  Every named state matched an
+# owner-noted event on 2026-09-28.  Raw 3 lasts 80-240 ms while the system is
+# cancelled or switched off; it, 6 and 7 are never published.
 ACC_STATE_NAMES = {
     0: "off",
     1: "ready",
@@ -82,6 +85,26 @@ ACC_STATE_NAMES = {
 # The set speed is only meaningful while ACC is ready/engaged/override/standby.
 # Ready reads 0 until the first SET, and 0 is never published.
 ACC_SET_SPEED_STATES = frozenset({1, 2, 4, 5})
+# Cluster graphic index, B6 >> 2.  Each display state has its own run of
+# indices: (state, first index, length, cruise mode, lead vehicle shown).  In an
+# adaptive run the offset from the first index is the following distance, 0-3
+# for one to four bars.  Fixed-speed cruise shows neither distance nor a lead
+# vehicle.  Off (1, or 31 after fixed cruise) and unlisted pairs publish no
+# mode, distance or lead vehicle.
+ACC_HUD_FAMILIES = (
+    ("ready", 2, 4, "adaptive", None),
+    ("engaged", 6, 4, "adaptive", True),
+    ("engaged", 10, 4, "adaptive", False),
+    ("standby", 14, 4, "adaptive", None),
+    ("override", 23, 4, "adaptive", False),
+    ("override", 37, 4, "adaptive", True),
+    ("standby", 27, 1, "fixed", None),
+    ("ready", 28, 1, "fixed", None),
+    ("engaged", 29, 1, "fixed", None),
+    ("override", 32, 1, "fixed", None),
+)
+ACC_MODE_NAMES = ("adaptive", "fixed")
+ACC_FOLLOW_DISTANCE_BARS = (1, 2, 3, 4)
 DISPLAY_SPEED_MAX_MPH = 120
 MPH_TO_KMH = 1.609344
 # How long a display frame counts as recently seen, so a snapshot need not keep
@@ -501,6 +524,28 @@ def acc_state_raw(data: bytes) -> int:
     return ((data[6] & 0x01) << 2) | (data[7] >> 6)
 
 
+def acc_hud_index(data: bytes) -> int:
+    """Cluster ACC graphic index, the upper six bits of byte 6."""
+    return data[6] >> 2
+
+
+def acc_display_family(
+    state: str | None, index: int
+) -> tuple[str, bool | None, int | None] | None:
+    """``(mode, lead vehicle shown, distance bars)`` for a state and index.
+
+    ``None`` when the pair is not a known display.  The lead vehicle is
+    ``None`` where the cluster shows no target information (ready, standby,
+    fixed cruise); the bars are ``None`` in fixed cruise.
+    """
+
+    for name, first, length, mode, lead in ACC_HUD_FAMILIES:
+        if name == state and first <= index < first + length:
+            bars = index - first + 1 if mode == "adaptive" else None
+            return mode, lead, bars
+    return None
+
+
 def _decode_acc_display(data: bytes) -> tuple[PassiveObservation, ...]:
     state = acc_state_raw(data)
     observations = []
@@ -512,13 +557,50 @@ def _decode_acc_display(data: bytes) -> tuple[PassiveObservation, ...]:
                 value=name,
                 unit="state",
                 source=ACC_DISPLAY_SOURCE,
-                quality="candidate",
-                detail=(
-                    f"0x5A0 ((B6 & 1) << 2) | (B7 >> 6) = {state} ({name}); "
-                    "candidate enum"
-                ),
+                quality="verified",
+                detail=f"0x5A0 ((B6 & 1) << 2) | (B7 >> 6) = {state} ({name})",
             )
         )
+    index = acc_hud_index(data)
+    family = acc_display_family(name, index)
+    if family is not None:
+        mode, lead, bars = family
+        shown = f"0x5A0 graphic index B6 >> 2 = {index} while {name}"
+        observations.append(
+            PassiveObservation(
+                metric="acc.mode",
+                value=mode,
+                unit="mode",
+                source=ACC_DISPLAY_SOURCE,
+                quality="verified",
+                detail=f"{shown}: {mode} cruise",
+            )
+        )
+        if bars is not None:
+            observations.append(
+                PassiveObservation(
+                    metric="acc.follow_distance",
+                    value=bars,
+                    unit="bars",
+                    source=ACC_DISPLAY_SOURCE,
+                    quality="verified",
+                    detail=f"{shown}: following distance {bars} of 4 bars",
+                )
+            )
+        if lead is not None:
+            observations.append(
+                PassiveObservation(
+                    metric="acc.lead_vehicle",
+                    value=lead,
+                    unit="boolean",
+                    source=ACC_DISPLAY_SOURCE,
+                    quality="verified",
+                    detail=(
+                        f"{shown}: lead-vehicle icon "
+                        f"{'shown' if lead else 'not shown'}"
+                    ),
+                )
+            )
     mph = int(data[3])
     kmh = int(data[2])
     if (
@@ -537,7 +619,7 @@ def _decode_acc_display(data: bytes) -> tuple[PassiveObservation, ...]:
                 quality="verified",
                 detail=(
                     f"0x5A0 byte 3 raw mph (byte 2 = {kmh} km/h) while the "
-                    f"candidate ACC state is {name}"
+                    f"ACC state is {name}"
                 ),
             )
         )
