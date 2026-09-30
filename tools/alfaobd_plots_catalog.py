@@ -36,25 +36,27 @@ if str(REPO) not in sys.path:
 
 from lib import can_runtime_route, diagnostic_safety  # noqa: E402
 from lib.modules import MODULES  # noqa: E402
-from tools.alfaobd_singleton_campaign import (  # noqa: E402
-    ACTIVE_DIAGNOSTIC_IDS,
-    BLOCKING_DIALOG_TEXT,
-    CAMPAIGN_ID_RE,
+from lib.alfaobd_common import (  # noqa: E402
     PACKAGE,
     SAFE_ID_PREFIX,
-    AdbClient,
+    CAMPAIGN_ID_RE,
+    ACTIVE_DIAGNOSTIC_IDS,
+    BLOCKING_DIALOG_TEXT,
     Bounds,
+    UiNode,
+    EventWriter,
+    _write_bytes,
+    _write_text,
+)
+from tools.alfaobd_singleton_campaign import (  # noqa: E402
+    AdbClient,
     CampaignError,
     CommandRunner,
-    EventWriter,
-    UiNode,
     _disk_guard,
     _one_by_id,
     _service_active,
     _tap_with_intent,
     _ui_supervisor_lock,
-    _write_bytes,
-    _write_text,
     monitor_visual_state,
     parse_ui_xml,
 )

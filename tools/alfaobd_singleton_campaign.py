@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import datetime, timezone
 import fcntl
 import hashlib
@@ -57,14 +57,25 @@ from lib.alfaobd_adb import (
     WaitOutcome as UiWaitOutcome,
 )
 from lib.modules import MODULES
+from lib.alfaobd_common import (
+    PACKAGE,
+    SAFE_ID_PREFIX,
+    CAMPAIGN_ID_RE,
+    ACTIVE_DIAGNOSTIC_IDS,
+    BLOCKING_DIALOG_TEXT,
+    Bounds,
+    UiNode,
+    ArtifactStat,
+    CampaignPlan,
+    EventWriter,
+    _write_bytes,
+    _write_text,
+)
 
 
 DEFAULT_OUT_ROOT = REPO / "tmp" / "ecu_mapping" / "alfaobd_singleton"
 LOCK_DIR = REPO / "tmp" / "locks"
-PACKAGE = "com.AlfaOBD.AlfaOBD"
 REMOTE_LOG_ROOT = "/sdcard/Android/data/com.android.AlfaOBD/files/logs"
-SAFE_ID_PREFIX = f"{PACKAGE}:id/"
-CAMPAIGN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
 BOUNDS_RE = re.compile(r"^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$")
 
 MONITOR_PAGE_IDS = {
@@ -74,17 +85,6 @@ MONITOR_PAGE_IDS = {
     f"{SAFE_ID_PREFIX}bSelectParameters",
     f"{SAFE_ID_PREFIX}bStartmonitoring",
     f"{SAFE_ID_PREFIX}tB2",
-}
-ACTIVE_DIAGNOSTIC_IDS = {
-    f"{SAFE_ID_PREFIX}activediag_label",
-    f"{SAFE_ID_PREFIX}spinnerDiag",
-    f"{SAFE_ID_PREFIX}bStart",
-}
-BLOCKING_DIALOG_TEXT = {
-    "ECU verification failed",
-    "SEND ISO TO ALFAOBD",
-    "Failed!",
-    "Interface message: NO DATA",
 }
 GLOBAL_UI_LOCK = LOCK_DIR / "alfaobd-singleton.lock"
 MIN_PULL_TIMEOUT_SECONDS = 180.0
@@ -98,95 +98,6 @@ UI_MONITOR_TRANSITION_TIMEOUT_SECONDS = 15.0
 
 class CampaignError(RuntimeError):
     """A fail-closed plan, UI, device, provenance, or safety failure."""
-
-
-@dataclass(frozen=True)
-class Bounds:
-    left: int
-    top: int
-    right: int
-    bottom: int
-
-    @property
-    def center(self) -> tuple[int, int]:
-        return ((self.left + self.right) // 2, (self.top + self.bottom) // 2)
-
-
-@dataclass(frozen=True)
-class UiNode:
-    text: str
-    resource_id: str
-    class_name: str
-    package: str
-    checkable: bool
-    checked: bool
-    clickable: bool
-    enabled: bool
-    selected: bool
-    bounds: Bounds
-
-
-@dataclass(frozen=True)
-class ArtifactStat:
-    path: str
-    size: int | None
-
-    def as_dict(self) -> dict[str, object]:
-        return {"path": self.path, "size": self.size}
-
-
-@dataclass(frozen=True)
-class CampaignPlan:
-    campaign_id: str
-    module_key: str
-    expected_runtime: str
-    expected_app_version: str
-    expected_width: int
-    expected_height: int
-    expected_rotation: int
-    dialog_labels: tuple[str, ...]
-    gauges: tuple[str, ...]
-    repeat_anchors: tuple[str, ...]
-    segment_seconds: float
-    settle_seconds: float
-    verify_seconds: float
-    min_free_bytes: int
-    min_tablet_free_bytes: int
-    artifacts: tuple[str, ...]
-    required_segment_growth: tuple[str, ...]
-    required_stop_stability: tuple[str, ...]
-    screenshot_each_segment: bool
-
-    @property
-    def schedule(self) -> tuple[str, ...]:
-        return self.gauges + self.repeat_anchors
-
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "schema_version": 1,
-            "campaign_id": self.campaign_id,
-            "module_key": self.module_key,
-            "expected_runtime": self.expected_runtime,
-            "expected_app_version": self.expected_app_version,
-            "expected_screen": {
-                "width": self.expected_width,
-                "height": self.expected_height,
-                "rotation": self.expected_rotation,
-            },
-            "dialog_labels": list(self.dialog_labels),
-            "gauges": list(self.gauges),
-            "repeat_anchors": list(self.repeat_anchors),
-            "schedule": list(self.schedule),
-            "segment_seconds": self.segment_seconds,
-            "settle_seconds": self.settle_seconds,
-            "verify_seconds": self.verify_seconds,
-            "min_free_bytes": self.min_free_bytes,
-            "min_tablet_free_bytes": self.min_tablet_free_bytes,
-            "artifacts": list(self.artifacts),
-            "required_segment_growth": list(self.required_segment_growth),
-            "required_stop_stability": list(self.required_stop_stability),
-            "screenshot_each_segment": self.screenshot_each_segment,
-        }
 
 
 def _bool(value: str | None) -> bool:
@@ -874,40 +785,6 @@ class AdbClient:
         return pulled_size, timeout
 
 
-class EventWriter:
-    def __init__(self, directory: Path):
-        self.directory = directory
-        self.events_path = directory / "events.jsonl"
-        self.state_path = directory / "state.json"
-
-    def event(self, event: str, **fields: object) -> None:
-        record = {
-            "event": event,
-            "wall_time_utc": datetime.now(timezone.utc).isoformat(),
-            "monotonic_s": time.monotonic(),
-            **fields,
-        }
-        with self.events_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, sort_keys=True) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-
-    def state(self, payload: dict[str, object]) -> None:
-        fd, temporary = tempfile.mkstemp(
-            prefix=".state-", suffix=".json", dir=self.directory
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(payload, handle, indent=2, sort_keys=True)
-                handle.write("\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, self.state_path)
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
-
-
 def _service_active(runner: CommandRunner, service: str) -> bool:
     result = runner.run(
         ["systemctl", "is-active", service], timeout=10, check=False
@@ -1104,18 +981,6 @@ def require_writable_mount(
             f"required mount device changed: {device} != {expected_device}"
         )
     return device
-
-
-def _write_bytes(path: Path, payload: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("wb") as handle:
-        handle.write(payload)
-        handle.flush()
-        os.fsync(handle.fileno())
-
-
-def _write_text(path: Path, payload: str) -> None:
-    _write_bytes(path, payload.encode("utf-8"))
 
 
 def _tap_with_intent(

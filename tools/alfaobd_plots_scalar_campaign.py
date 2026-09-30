@@ -56,7 +56,6 @@ from tools.alfaobd_plots_catalog import (  # noqa: E402
     CatalogPlan,
     CatalogInventory,
     DialogPage,
-    EventWriter,
     _dialog_signature,
     _observe_stable_dialog,
     _swipe_dialog,
@@ -68,10 +67,13 @@ from tools.alfaobd_plots_catalog import (  # noqa: E402
     plot_labels,
     validate_plots_page,
 )
-from tools.alfaobd_singleton_campaign import (  # noqa: E402
-    CAMPAIGN_ID_RE,
-    CampaignError,
+from lib.alfaobd_common import (  # noqa: E402
+    EventWriter,
     SAFE_ID_PREFIX,
+    CAMPAIGN_ID_RE,
+)
+from tools.alfaobd_singleton_campaign import (  # noqa: E402
+    CampaignError,
     _one_by_id,
 )
 

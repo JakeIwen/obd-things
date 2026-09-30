@@ -44,7 +44,8 @@ if str(REPO) not in sys.path:
 from lib.modules import MODULES
 from lib.candump_io import CandumpFormat, parse_candump_line, zstd_stream
 from lib.vehicle_can_roles import CAN_ROLE_SPECS, normalize_can_role
-from tools.alfaobd_singleton_campaign import CampaignError, CampaignPlan, load_plan
+from lib.alfaobd_common import CampaignPlan
+from tools.alfaobd_singleton_campaign import CampaignError, load_plan
 
 
 DEFAULT_OUT_DIR = REPO / "tmp" / "ecu_mapping" / "alfaobd_singleton_join"
