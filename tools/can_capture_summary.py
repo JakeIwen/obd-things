@@ -33,26 +33,23 @@ import json
 import math
 import os
 from pathlib import Path
-import re
 import subprocess
 import sys
 from typing import BinaryIO, Iterable, Iterator, TextIO
 
 
-_TIMESTAMP = r"(?P<timestamp>[+-]?(?:\d+(?:\.\d*)?|\.\d+))"
-_LONG_FRAME = re.compile(
-    rf"^\s*\({_TIMESTAMP}\)\s+"
-    r"(?P<interface>\S+)\s+"
-    r"(?P<can_id>[0-9A-Fa-f]{1,8})\s+"
-    r"\[(?P<dlc>\d{1,2})\]"
-    r"(?:\s+(?P<data>[0-9A-Fa-f]{2}(?:\s+[0-9A-Fa-f]{2})*))?\s*$"
-)
-_COMPACT_FRAME = re.compile(
-    rf"^\s*\({_TIMESTAMP}\)\s+"
-    r"(?P<interface>\S+)\s+"
-    r"(?P<can_id>[0-9A-Fa-f]{1,8})#(?P<data>(?:[0-9A-Fa-f]{2})*)\s*$"
+REPO = Path(__file__).resolve().parents[1]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+from lib.candump_io import (
+    CandumpFormat, CandumpSyntaxError, candump_patterns, identifier_bits,
+    parse_candump_line, zstd_stream,
 )
 
+
+_TIMESTAMP = r"(?P<timestamp>[+-]?(?:\d+(?:\.\d*)?|\.\d+))"
+_LONG_FRAME, _COMPACT_FRAME = candump_patterns(CandumpFormat())
 
 @dataclass(frozen=True)
 class Frame:
@@ -159,24 +156,17 @@ class IdStats:
 
 def parse_frame(line: str) -> Frame | None:
     """Parse one common ``candump -ta`` line, or return ``None`` when unsupported."""
-    match = _LONG_FRAME.fullmatch(line)
-    if match:
-        dlc = int(match.group("dlc"), 10)
-        data_text = match.group("data") or ""
-        payload = bytes.fromhex(data_text)
-        if len(payload) != dlc:
-            return None
-    else:
-        match = _COMPACT_FRAME.fullmatch(line)
-        if not match:
-            return None
-        payload = bytes.fromhex(match.group("data"))
+    try:
+        fields = parse_candump_line(line, format=CandumpFormat())
+    except CandumpSyntaxError:
+        return None
+    payload = fields.payload
 
-    timestamp = float(match.group("timestamp"))
+    timestamp = float(fields.timestamp)
     if not math.isfinite(timestamp):
         return None
 
-    can_id_text = match.group("can_id")
+    can_id_text = fields.can_id_text
     can_id = int(can_id_text, 16)
     if can_id > 0x1FFFFFFF:
         return None
@@ -184,10 +174,10 @@ def parse_frame(line: str) -> Frame | None:
     # candump renders an extended frame with eight hexadecimal ID digits.  Numeric IDs above
     # 0x7FF are necessarily extended as well.  Keeping the width signal distinguishes the rare
     # extended frame whose numeric identifier also fits in the standard 11-bit range.
-    id_bits = 29 if len(can_id_text) > 3 or can_id > 0x7FF else 11
+    id_bits = identifier_bits(can_id_text, can_id)
     return Frame(
         timestamp=timestamp,
-        interface=match.group("interface"),
+        interface=fields.interface,
         can_id=can_id,
         id_bits=id_bits,
         payload=payload,
@@ -285,33 +275,8 @@ def summarize_file(
     popen: object = subprocess.Popen,
 ) -> dict[str, object]:
     if path.suffix.lower() == ".zst":
-        try:
-            process = popen(
-                ["zstd", "-dc", "--", str(path)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
-        except OSError as exc:
-            raise OSError(f"cannot start zstd for {path}: {exc}") from exc
-        if process.stdout is None or process.stderr is None:
-            if process.poll() is None:
-                process.kill()
-            process.wait()
-            raise OSError("zstd did not provide stdout/stderr pipes")
-        try:
-            summary = summarize_lines(process.stdout, source=str(path))
-            stderr = process.stderr.read()
-            returncode = process.wait()
-        finally:
-            process.stdout.close()
-            process.stderr.close()
-        if returncode != 0:
-            detail = stderr.strip() or f"exit status {returncode}"
-            raise OSError(f"zstd decompression failed for {path}: {detail}")
-        return summary
+        with zstd_stream(path, popen=popen, error_type=OSError, text=True) as process:
+            return summarize_lines(process.stdout, source=str(path))
 
     with path.open("r", encoding="utf-8", errors="replace") as capture:
         return summarize_lines(capture, source=str(path))

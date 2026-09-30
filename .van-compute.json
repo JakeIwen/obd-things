@@ -754,6 +754,7 @@
         "lib/signal_fields.py",
         "tools/__init__.py",
         "tools/can_capture_summary.py",
+        "lib/candump_io.py",
         "tools/can_cross_bus_speed.py"
       ],
       "minimum_inputs": 2,
@@ -805,6 +806,7 @@
         "lib/signal_fields.py",
         "tools/__init__.py",
         "tools/can_capture_summary.py",
+        "lib/candump_io.py",
         "tools/can_cross_bus_speed.py"
       ],
       "minimum_inputs": 2,
@@ -853,6 +855,7 @@
       "source_paths": [
         "tools/__init__.py",
         "tools/can_capture_summary.py",
+        "lib/candump_io.py",
         "tools/can_event_window.py"
       ],
       "minimum_inputs": 1,
@@ -939,6 +942,7 @@
       "source_paths": [
         "tools/__init__.py",
         "tools/can_capture_summary.py",
+        "lib/candump_io.py",
         "tools/can_event_window.py",
         "tools/can_gear_ratio_analyze.py"
       ],
