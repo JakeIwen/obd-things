@@ -71,10 +71,6 @@ TRANSPORT_LINE_RE = re.compile(
 )
 ELM_SEGMENT_RE = re.compile(r"^([0-9A-Fa-f]):([0-9A-Fa-f]+)$")
 INFO_PARAMETER_ROW_RE = re.compile(r"^\s*([^:\r\n]+?)\s*:\s*(\S.*?)\s*$")
-CANDUMP_RE = re.compile(
-    rb"^\((?P<timestamp>[^)]+)\)\s+(?P<channel>\S+)\s+"
-    rb"(?P<can_id>[0-9A-Fa-f]{3,8})#(?P<data>[0-9A-Fa-f]*)\s*$"
-)
 _CANDUMP_FORMAT = CandumpFormat(
     id_width=(3, 8), long_form=False, timestamp_syntax="float",
     leading_whitespace=False,

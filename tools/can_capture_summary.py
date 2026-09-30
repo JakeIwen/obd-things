@@ -43,13 +43,11 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from lib.candump_io import (
-    CandumpFormat, CandumpSyntaxError, candump_patterns, identifier_bits,
+    CandumpFormat, CandumpSyntaxError, identifier_bits,
     parse_candump_line, zstd_stream,
 )
 
 
-_TIMESTAMP = r"(?P<timestamp>[+-]?(?:\d+(?:\.\d*)?|\.\d+))"
-_LONG_FRAME, _COMPACT_FRAME = candump_patterns(CandumpFormat())
 
 @dataclass(frozen=True)
 class Frame:

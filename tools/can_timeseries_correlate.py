@@ -58,7 +58,7 @@ if str(REPO) not in sys.path:
 
 from lib.modules import MODULES, NORMAL_11BITS, Module
 from lib.candump_io import (
-    CandumpFormat, CandumpSyntaxError, candump_patterns, identifier_bits,
+    CandumpFormat, CandumpSyntaxError, identifier_bits,
     parse_candump_line, zstd_stream,
 )
 from lib.signal_fields import (
@@ -104,8 +104,6 @@ MAX_CAPTURE_FRAMES = 300_000_000
 MAX_CAPTURE_DECOMPRESSED_BYTES = 64 * 1024**3
 MAX_TRACKED_DISTINCT_VALUES = 16
 
-_TIMESTAMP = rb"(?P<timestamp>[+-]?(?:\d+(?:\.\d*)?|\.\d+))"
-_LONG_FRAME, _COMPACT_FRAME = candump_patterns(CandumpFormat(), binary=True)
 _REFERENCE_FIELD_RE = re.compile(
     r"^(byte|[ui]16be|[ui]16le|[ui]32be|[ui]32le):([0-9]{1,4})$"
 )
