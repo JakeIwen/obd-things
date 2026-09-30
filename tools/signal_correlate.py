@@ -38,6 +38,7 @@ import datetime
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, REPO)
+from lib.reports import atomic_json as _atomic_json
 from lib import can_runtime_route, diagnostic_safety, uds
 from lib.modules import get
 from tools.ecu_discover import prearm_conflict_errors, preflight
@@ -313,13 +314,10 @@ def _dump(module, dids, start, samples, outfile, metadata=None):
     }
     directory = os.path.dirname(outfile) or "."
     os.makedirs(directory, exist_ok=True)
-    temporary = f"{outfile}.tmp-{os.getpid()}"
-    with open(temporary, "w") as handle:
-        json.dump(payload, handle)
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temporary, outfile)
+    _atomic_json(
+        outfile, payload, temporary=f"{outfile}.tmp-{os.getpid()}",
+        encoding=None, indent=None, fsync=True, cleanup="none",
+    )
 
 
 # --- analyze (offline) -------------------------------------------------------
