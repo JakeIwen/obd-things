@@ -172,6 +172,52 @@ class ReportsTests(unittest.TestCase):
                             (p.name, p.read_bytes()) for p in path.parent.iterdir())))
                     self.assertEqual(states[0], states[1], site)
 
+    def test_partial_serialization_replace_and_fsync_failures_match(self):
+        for site in SITES:
+            if site == "dtc_inventory":
+                continue
+            current = vars(importlib.import_module(f"tools.{site}"))
+            phases = ["serialization", "replace"]
+            if SITES[site][1].get("fsync"):
+                phases.append("fsync")
+            for phase in phases:
+                with tempfile.TemporaryDirectory() as directory:
+                    states = []
+                    for side, namespace in (("old", legacy_namespace(site)), ("new", current)):
+                        path = Path(directory) / side / "inventory.json"
+                        path.parent.mkdir()
+                        path.write_bytes(b"previous\n")
+                        payload = {"first": "written before error", "sections": [], "metrics": []}
+                        if phase == "serialization":
+                            payload["unserializable"] = object()
+                            context = mock.patch.object(os, "getpid", return_value=123)
+                            error = TypeError
+                        else:
+                            context = mock.patch.object(os, phase, side_effect=OSError(phase))
+                            error = OSError
+                        with context, self.assertRaises(error) as caught:
+                            invoke(site, namespace, path, payload)
+                        states.append((str(caught.exception), sorted(
+                            (p.name, p.read_bytes(), stat.S_IMODE(p.stat().st_mode))
+                            for p in path.parent.iterdir())))
+                    self.assertEqual(states[0], states[1], (site, phase))
+
+    def test_preexisting_deterministic_temporary_mode_is_preserved(self):
+        for site in FIXED_TEMP:
+            with tempfile.TemporaryDirectory() as directory, fixed_umask():
+                states = []
+                for side, namespace in (("old", legacy_namespace(site)),
+                                        ("new", vars(importlib.import_module(f"tools.{site}")))):
+                    path = Path(directory) / side / "inventory.json"
+                    path.parent.mkdir()
+                    temporary = Path(f"{path}.tmp-{os.getpid()}")
+                    temporary.write_bytes(b"interrupted report")
+                    temporary.chmod(0o640)
+                    invoke(site, namespace, path, {"a": 1})
+                    states.append(file_result(path))
+                self.assertEqual(states[0], states[1], site)
+                self.assertEqual(states[0][1], 0o640)
+
     def test_dtc_encoding_and_cleanup_are_the_only_intentional_change(self):
         from tools import dtc_inventory
 
