@@ -774,18 +774,31 @@ def main(argv=None):
 
     gate_result = execution_gate(
         args.execute,
-        dry_run_message='\nDRY RUN: no CAN sockets opened and nothing transmitted. Add --execute only after passive survey.',
+        dry_run_message=(
+            "\nDRY RUN: no CAN sockets opened and nothing transmitted. "
+            "Add --execute only after passive survey."
+        ),
         failures=[
-            (expanded_selection and (not args.confirm_expanded_scan),
-             'ERROR: expanded mode requires --confirm-expanded-scan with --execute'),
-            (args.target and (not args.confirm_custom_physical),
-             'ERROR: live custom targets require --confirm-custom-physical'),
-            (args.profile and (not args.confirm_catalog_candidates),
-             'ERROR: live catalog profile requires --confirm-catalog-candidates'),
-            (args.session is not None and (not args.confirm_session_change),
-             'ERROR: live session selection requires --confirm-session-change'),
-            (not args.confirm_parked or not args.pair or (not args.conditions),
-             'ERROR: --execute requires --confirm-parked, --pair, and --conditions'),
+            (
+                expanded_selection and not args.confirm_expanded_scan,
+                "ERROR: expanded mode requires --confirm-expanded-scan with --execute",
+            ),
+            (
+                args.target and not args.confirm_custom_physical,
+                "ERROR: live custom targets require --confirm-custom-physical",
+            ),
+            (
+                args.profile and not args.confirm_catalog_candidates,
+                "ERROR: live catalog profile requires --confirm-catalog-candidates",
+            ),
+            (
+                args.session is not None and not args.confirm_session_change,
+                "ERROR: live session selection requires --confirm-session-change",
+            ),
+            (
+                not args.confirm_parked or not args.pair or not args.conditions,
+                "ERROR: --execute requires --confirm-parked, --pair, and --conditions",
+            ),
         ],
     )
     if gate_result is not None:

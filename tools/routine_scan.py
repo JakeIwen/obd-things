@@ -458,12 +458,17 @@ def main(argv=None):
     print("Routine start (31 01) and stop (31 02) are not implemented by this tool.")
     gate_result = execution_gate(
         args.execute,
-        dry_run_message='DRY RUN: no preflight, CAN socket, or transmission occurred.',
+        dry_run_message="DRY RUN: no preflight, CAN socket, or transmission occurred.",
         failures=[
-            (not args.confirm_parked or not args.pair or (not args.conditions),
-             'ERROR: --execute requires --confirm-parked, --pair, and --conditions'),
-            (len(rids) > MAX_BOUNDED_RIDS and (not args.confirm_expanded_scan),
-             f'ERROR: {len(rids)} routine IDs exceeds bounded limit {MAX_BOUNDED_RIDS}; add --confirm-expanded-scan'),
+            (
+                not args.confirm_parked or not args.pair or not args.conditions,
+                "ERROR: --execute requires --confirm-parked, --pair, and --conditions",
+            ),
+            (
+                len(rids) > MAX_BOUNDED_RIDS and not args.confirm_expanded_scan,
+             f"ERROR: {len(rids)} routine IDs exceeds bounded limit {MAX_BOUNDED_RIDS}; "
+                   "add --confirm-expanded-scan",
+            ),
         ],
     )
     if gate_result is not None:

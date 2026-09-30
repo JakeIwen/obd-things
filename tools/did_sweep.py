@@ -492,16 +492,25 @@ def main(argv=None):
     )
     gate_result = execution_gate(
         args.execute,
-        dry_run_message='DRY RUN: no report opened, no CAN socket opened, and nothing transmitted.',
+        dry_run_message="DRY RUN: no report opened, no CAN socket opened, and nothing transmitted.",
         failures=[
-            (not args.confirm_parked or not args.pair or (not args.conditions),
-             'ERROR: --execute requires --confirm-parked, --pair, and --conditions'),
-            (selection_mode == 'range' and args.start is None and (not args.full_range),
-             'ERROR: live full range requires explicit --full-range'),
-            (count > MAX_BOUNDED_DIDS and (not args.confirm_expanded_scan),
-             f'ERROR: {count} DIDs exceeds bounded limit {MAX_BOUNDED_DIDS}; add --confirm-expanded-scan'),
-            (args.session is not None and (not args.confirm_session_change),
-             'ERROR: --session requires --confirm-session-change with --execute'),
+            (
+                not args.confirm_parked or not args.pair or not args.conditions,
+                "ERROR: --execute requires --confirm-parked, --pair, and --conditions",
+            ),
+            (
+                selection_mode == "range" and args.start is None and not args.full_range,
+                "ERROR: live full range requires explicit --full-range",
+            ),
+            (
+                count > MAX_BOUNDED_DIDS and not args.confirm_expanded_scan,
+             f"ERROR: {count} DIDs exceeds bounded limit {MAX_BOUNDED_DIDS}; "
+                   "add --confirm-expanded-scan",
+            ),
+            (
+                args.session is not None and not args.confirm_session_change,
+                "ERROR: --session requires --confirm-session-change with --execute",
+            ),
         ],
     )
     if gate_result is not None:

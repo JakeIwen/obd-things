@@ -207,10 +207,12 @@ def main(argv=None):
     print("ClearDiagnosticInformation (14) is not implemented by this tool.")
     gate_result = execution_gate(
         args.execute,
-        dry_run_message='DRY RUN: no CAN socket opened and nothing transmitted.',
+        dry_run_message="DRY RUN: no CAN socket opened and nothing transmitted.",
         failures=[
-            (not args.confirm_parked or not args.pair or (not args.conditions),
-             'ERROR: --execute requires --confirm-parked, --pair, and --conditions'),
+            (
+                not args.confirm_parked or not args.pair or not args.conditions,
+                "ERROR: --execute requires --confirm-parked, --pair, and --conditions",
+            ),
         ],
     )
     if gate_result is not None:

@@ -515,10 +515,18 @@ def main(argv=None):
     print(f"output: {out}")
     gate_result = execution_gate(
         args.execute,
-        dry_run_message='DRY RUN: no directory, checkpoint, preflight, CAN socket, or transmission occurred.',
+        dry_run_message=(
+            "DRY RUN: no directory, checkpoint, preflight, CAN socket, or transmission occurred."
+        ),
         failures=[
-            (not args.confirm_parked or not args.pair or (not args.conditions) or (not args.confirm_session_change) or (not args.confirm_no_active_routine),
-             'ERROR: --execute requires --confirm-parked, --pair, --conditions, --confirm-session-change, and --confirm-no-active-routine'),
+            (not args.confirm_parked
+                or not args.pair
+                or not args.conditions
+                or not args.confirm_session_change
+                or not args.confirm_no_active_routine,
+             "ERROR: --execute requires --confirm-parked, --pair, --conditions, "
+                   "--confirm-session-change, and --confirm-no-active-routine",
+            ),
         ],
     )
     if gate_result is not None:

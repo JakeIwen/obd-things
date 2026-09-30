@@ -168,7 +168,7 @@ def main(argv=None):
     print("required live flags: " + " ".join(required_live_flags(safety_class)))
     gate_result = execution_gate(
         args.execute,
-        dry_run_message='DRY RUN: no preflight, CAN socket, or transmission occurred.',
+        dry_run_message="DRY RUN: no preflight, CAN socket, or transmission occurred.",
         failures=confirmation_failures(args, safety_class),
     )
     if gate_result is not None:
