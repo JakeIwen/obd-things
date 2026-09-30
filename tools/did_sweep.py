@@ -23,6 +23,7 @@ the historical text format under ``tmp/sweeps/`` is generated only after a clean
 
 import argparse
 from collections import Counter
+from dataclasses import dataclass, field
 import datetime
 import json
 import math
@@ -344,19 +345,7 @@ def base_report(
     }
 
 
-def main(argv=None):
-    args = parser().parse_args(argv)
-    module = get(args.module)
-    legacy_pcm_session = is_legacy_pcm_session(module, args.session)
-    try:
-        dids, selection_mode = selected_dids(args)
-    except ValueError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 2
-    count = len(dids)
-    start = min(dids)
-    end = max(dids)
-
+def _validate_sweep_options(args, legacy_pcm_session):
     if not math.isfinite(args.rate) or not MIN_REQUEST_RATE <= args.rate <= MAX_REQUEST_RATE:
         print(
             f"ERROR: --rate must be between {MIN_REQUEST_RATE:g} and {MAX_REQUEST_RATE:g}",
@@ -386,6 +375,8 @@ def main(argv=None):
         )
         return 2
 
+
+def _print_sweep_plan(module, args, dids, selection_mode, start, end, count, legacy_pcm_session):
     estimated = count / args.rate
     selection_text = (
         ",".join(f"{did:04X}" for did in dids)
@@ -410,6 +401,305 @@ def main(argv=None):
             else "inherited/unknown (no 10 or 3E)"
         )
     )
+
+
+@dataclass
+class _SweepState:
+    """Mutable checkpoint shared by requests, signal handling, and cleanup."""
+
+    interval: float
+    last_transmit: float | None = None
+    last_tester_present: float | None = None
+    categories: Counter = field(default_factory=Counter)
+    result_count: int = 0
+    consecutive_shape_failures: int = 0
+    interrupted: bool = False
+    fatal_errors: list = field(default_factory=list)
+    restored_passive: bool = False
+    sock: object = None
+    summary_path: str | None = None
+    results_path: str | None = None
+    started_at: str | None = None
+    report: dict | None = None
+    legacy: str | None = None
+    received_signal: int | None = None
+    cleanup_started: bool = False
+    old_handlers: dict = field(default_factory=dict)
+
+    def wait_for_rate(self):
+        if self.last_transmit is not None:
+            time.sleep(max(0.0, self.interval - (time.monotonic() - self.last_transmit)))
+
+    def send(self, payload, timeout, counter_key):
+        self.wait_for_rate()
+        self.last_transmit = time.monotonic()
+        return request_once(
+            self.sock,
+            payload,
+            timeout,
+            request_attempts=self.report["request_attempts"],
+            responses_received=self.report["responses_received"],
+            counter_key=counter_key,
+        )
+
+    def append_fatal(self, message):
+        self.fatal_errors.append(message)
+        print(f"ERROR: {message}", file=sys.stderr)
+
+    def interrupt_handler(self, signum, _frame):
+        if self.received_signal is None:
+            self.received_signal = signum
+            self.interrupted = True
+            # Repeated INT/TERM/HUP must not interrupt socket close, passive restoration, final
+            # report publication, or lock release. A first signal during cleanup is recorded too.
+            if not self.cleanup_started:
+                raise KeyboardInterrupt
+
+
+def _open_sweep_evidence(state, module, args, dids, selection_mode, legacy_pcm_session):
+    state.summary_path, state.results_path = output_paths(module)
+    state.started_at = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+    state.report = base_report(
+        module,
+        args,
+        dids,
+        selection_mode,
+        state.summary_path,
+        state.results_path,
+        state.started_at,
+    )
+    atomic_json(state.summary_path, state.report)
+    os.makedirs(os.path.dirname(state.results_path), exist_ok=True)
+    state.last_tester_present = time.monotonic()
+    if legacy_pcm_session:
+        state.sock = uds.open_module_socket(
+            module,
+            timeout=args.timeout,
+            tx_padding=LEGACY_PCM_TX_PADDING,
+        )
+    else:
+        state.sock = uds.open_module_socket(module, timeout=args.timeout)
+
+
+def _establish_sweep_session(state, args):
+    if args.session is not None:
+        session_started = time.monotonic()
+        response, status = state.send(
+            bytes((0x10, args.session)), args.timeout, "session_control"
+        )
+        session_category = classify_session_response(args.session, response)
+        state.report["session_response"] = {
+            "request_hex": uds.hx(bytes((0x10, args.session))),
+            "response_hex": uds.hx(response) if response else None,
+            "category": session_category,
+            "validated_echo": session_category == "positive_echo",
+            "status": status,
+            "negative_response": uds.negative_response_details(response),
+            "elapsed_s": round(time.monotonic() - session_started, 3),
+        }
+        if session_category != "positive_echo":
+            raise RuntimeError(
+                f"session 10 {args.session:02X} was not acknowledged with exact "
+                f"50 {args.session:02X} echo ({session_category})"
+            )
+        state.report["session_state"] = "explicit_session_confirmed"
+        state.last_tester_present = time.monotonic()
+
+
+def _read_sweep_dids(state, args, dids, count, legacy_pcm_session):
+    with open(state.results_path, "a", buffering=1, encoding="utf-8") as results_file:
+        for did in dids:
+            if (
+                args.session is not None
+                and not legacy_pcm_session
+                and time.monotonic() - state.last_tester_present >= TESTER_PRESENT_INTERVAL_S
+            ):
+                state.wait_for_rate()
+                state.last_transmit = time.monotonic()
+                try:
+                    tester_present(
+                        state.sock,
+                        min(args.timeout, 0.5),
+                        state.report["request_attempts"],
+                        state.report["responses_received"],
+                        state.report["tester_present_results"],
+                    )
+                except Exception:
+                    state.report["session_state"] = "uncertain_after_tester_present_failure"
+                    raise
+                state.last_tester_present = time.monotonic()
+
+            state.wait_for_rate()
+            state.last_transmit = time.monotonic()
+            result = query_did(
+                state.sock,
+                did,
+                args.timeout,
+                request_attempts=state.report["request_attempts"],
+                responses_received=state.report["responses_received"],
+            )
+            category = result["category"]
+            results_file.write(json.dumps(result, sort_keys=True) + "\n")
+            # Count only records accepted by the evidence file. A completed request whose
+            # write fails remains visible in request_attempts, not results_written.
+            state.result_count += 1
+            state.categories[category] += 1
+            if state.result_count % 64 == 0:
+                results_file.flush()
+                os.fsync(results_file.fileno())
+
+            if category in ("service_not_supported", "subfunction_not_supported", "incorrect_length_or_format"):
+                state.consecutive_shape_failures += 1
+            else:
+                state.consecutive_shape_failures = 0
+            if state.consecutive_shape_failures >= SERVICE_SHAPE_ABORT_COUNT:
+                raise RuntimeError(
+                    f"aborting after {state.consecutive_shape_failures} consecutive service/shape rejections"
+                )
+
+            if category == "positive":
+                print(f"  {did:04X} OK {result['data_hex'] or ''} |{result['ascii'] or ''}|")
+            elif category != "out_of_range_current_session":
+                print(f"  {did:04X} {category}: {result['response_hex'] or result['status']}")
+            elif state.result_count % 256 == 0:
+                print(f"  progress {state.result_count}/{count}; readable={state.categories['positive']}")
+
+
+def _cleanup_sweep(state, ownership, module, selection_mode, start, end, count):
+    try:
+        if state.sock is not None:
+            state.sock.close()
+    except Exception as exc:
+        state.append_fatal(f"socket close failed: {type(exc).__name__}: {exc}")
+    finally:
+        try:
+            state.restored_passive = ownership.release()
+            if not state.restored_passive:
+                state.append_fatal("passive restoration verification failed")
+        except Exception as exc:
+            state.restored_passive = False
+            state.append_fatal(f"passive restoration failed: {type(exc).__name__}: {exc}")
+        finally:
+            complete = (
+                state.report is not None
+                and state.result_count == count
+                and not state.interrupted
+                and not state.fatal_errors
+                and state.restored_passive
+            )
+            if complete and selection_mode == "range":
+                try:
+                    state.legacy = legacy_path(module, start, end)
+                    write_legacy_text(state.legacy, module, start, end, state.results_path)
+                except Exception as exc:
+                    state.append_fatal(f"legacy output failed: {type(exc).__name__}: {exc}")
+                    state.legacy = None
+                    complete = False
+
+            if state.report is not None:
+                # Preserve the older limited field without pretending DID attempts are proven
+                # transmissions. Canonical accounting is request_attempts/responses_received.
+                state.report["transmit_counts"] = {
+                    "session_control": state.report["request_attempts"]["session_control"],
+                    "tester_present": state.report["request_attempts"]["tester_present"],
+                }
+                state.report.update(
+                    {
+                        "status": (
+                            "complete"
+                            if complete
+                            else "interrupted"
+                            if state.interrupted
+                            else "failed"
+                        ),
+                        "completed_at": datetime.datetime.now().astimezone().isoformat(
+                            timespec="seconds"
+                        ),
+                        "results_written": state.result_count,
+                        "category_counts": dict(sorted(state.categories.items())),
+                        "interrupted": state.interrupted,
+                        "interruption_signal": (
+                            signal.Signals(state.received_signal).name
+                            if state.received_signal is not None
+                            else None
+                        ),
+                        "fatal_error": "; ".join(state.fatal_errors) if state.fatal_errors else None,
+                        "fatal_errors": state.fatal_errors,
+                        "restored_passive": state.restored_passive,
+                        "legacy_text": os.path.relpath(state.legacy, REPO) if state.legacy else None,
+                    }
+                )
+                try:
+                    atomic_json(state.summary_path, state.report)
+                except Exception as exc:
+                    state.append_fatal(
+                        f"final summary publication failed: {type(exc).__name__}: {exc}"
+                    )
+
+            try:
+                # Role and channel ownership were released by the exact
+                # passive restoration above.
+                pass
+            except Exception as exc:
+                state.append_fatal(f"diagnostic lock release failed: {type(exc).__name__}: {exc}")
+            finally:
+                for signum, old_handler in state.old_handlers.items():
+                    try:
+                        signal.signal(signum, old_handler)
+                    except Exception as exc:
+                        state.append_fatal(
+                            f"signal handler restore failed for {signum}: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
+
+
+def _run_sweep(args, module, ownership, dids, selection_mode, start, end, count, legacy_pcm_session):
+    state = _SweepState(interval=1.0 / args.rate)
+
+    try:
+        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            state.old_handlers[signum] = signal.signal(signum, state.interrupt_handler)
+        # Every fallible path after lock acquisition lives below this try so setup/write failures
+        # still close, restore passive, publish what evidence is available, and release the lock.
+        _open_sweep_evidence(state, module, args, dids, selection_mode, legacy_pcm_session)
+        _establish_sweep_session(state, args)
+        _read_sweep_dids(state, args, dids, count, legacy_pcm_session)
+    except KeyboardInterrupt:
+        state.interrupted = True
+        print("Interrupted; preserving checkpointed results.", file=sys.stderr)
+    except Exception as exc:
+        state.append_fatal(f"{type(exc).__name__}: {exc}")
+    finally:
+        state.cleanup_started = True
+        _cleanup_sweep(state, ownership, module, selection_mode, start, end, count)
+
+    if state.summary_path is not None:
+        print(f"summary: {state.summary_path}")
+    if state.results_path is not None:
+        print(f"results: {state.results_path}")
+    print(f"adapter restored passive: {'yes' if state.restored_passive else 'NO - CHECK IT NOW'}")
+    if state.fatal_errors or not state.restored_passive:
+        return 1
+    return 130 if state.interrupted else 0
+
+
+def main(argv=None):
+    args = parser().parse_args(argv)
+    module = get(args.module)
+    legacy_pcm_session = is_legacy_pcm_session(module, args.session)
+    try:
+        dids, selection_mode = selected_dids(args)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    count = len(dids)
+    start = min(dids)
+    end = max(dids)
+
+    validation_result = _validate_sweep_options(args, legacy_pcm_session)
+    if validation_result is not None:
+        return validation_result
+    _print_sweep_plan(module, args, dids, selection_mode, start, end, count, legacy_pcm_session)
     gate_result = execution_gate(
         args.execute,
         dry_run_message="DRY RUN: no report opened, no CAN socket opened, and nothing transmitted.",
@@ -451,264 +741,9 @@ def main(argv=None):
             print(f"ERROR: {error}", file=sys.stderr)
         return 2 if ownership.release() else 1
 
-    interval = 1.0 / args.rate
-    last_transmit = None
-    last_tester_present = None
-    categories = Counter()
-    result_count = 0
-    consecutive_shape_failures = 0
-    interrupted = False
-    fatal_errors = []
-    restored_passive = False
-    sock = None
-    summary_path = None
-    results_path = None
-    started_at = None
-    report = None
-    legacy = None
-    received_signal = None
-    cleanup_started = False
-    old_handlers = {}
-
-    def wait_for_rate():
-        nonlocal last_transmit
-        if last_transmit is not None:
-            time.sleep(max(0.0, interval - (time.monotonic() - last_transmit)))
-
-    def send(payload, timeout, counter_key):
-        nonlocal last_transmit
-        wait_for_rate()
-        last_transmit = time.monotonic()
-        return request_once(
-            sock,
-            payload,
-            timeout,
-            request_attempts=report["request_attempts"],
-            responses_received=report["responses_received"],
-            counter_key=counter_key,
-        )
-
-    def append_fatal(message):
-        fatal_errors.append(message)
-        print(f"ERROR: {message}", file=sys.stderr)
-
-    def interrupt_handler(signum, _frame):
-        nonlocal received_signal, interrupted
-        if received_signal is None:
-            received_signal = signum
-            interrupted = True
-            # Repeated INT/TERM/HUP must not interrupt socket close, passive restoration, final
-            # report publication, or lock release. A first signal during cleanup is recorded too.
-            if not cleanup_started:
-                raise KeyboardInterrupt
-
-    try:
-        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
-            old_handlers[signum] = signal.signal(signum, interrupt_handler)
-        # Every fallible path after lock acquisition lives below this try so setup/write failures
-        # still close, restore passive, publish what evidence is available, and release the lock.
-        summary_path, results_path = output_paths(module)
-        started_at = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
-        report = base_report(
-            module,
-            args,
-            dids,
-            selection_mode,
-            summary_path,
-            results_path,
-            started_at,
-        )
-        atomic_json(summary_path, report)
-        os.makedirs(os.path.dirname(results_path), exist_ok=True)
-        last_tester_present = time.monotonic()
-        if legacy_pcm_session:
-            sock = uds.open_module_socket(
-                module,
-                timeout=args.timeout,
-                tx_padding=LEGACY_PCM_TX_PADDING,
-            )
-        else:
-            sock = uds.open_module_socket(module, timeout=args.timeout)
-        if args.session is not None:
-            session_started = time.monotonic()
-            response, status = send(
-                bytes((0x10, args.session)), args.timeout, "session_control"
-            )
-            session_category = classify_session_response(args.session, response)
-            report["session_response"] = {
-                "request_hex": uds.hx(bytes((0x10, args.session))),
-                "response_hex": uds.hx(response) if response else None,
-                "category": session_category,
-                "validated_echo": session_category == "positive_echo",
-                "status": status,
-                "negative_response": uds.negative_response_details(response),
-                "elapsed_s": round(time.monotonic() - session_started, 3),
-            }
-            if session_category != "positive_echo":
-                raise RuntimeError(
-                    f"session 10 {args.session:02X} was not acknowledged with exact "
-                    f"50 {args.session:02X} echo ({session_category})"
-                )
-            report["session_state"] = "explicit_session_confirmed"
-            last_tester_present = time.monotonic()
-
-        with open(results_path, "a", buffering=1, encoding="utf-8") as results_file:
-            for did in dids:
-                if (
-                    args.session is not None
-                    and not legacy_pcm_session
-                    and time.monotonic() - last_tester_present >= TESTER_PRESENT_INTERVAL_S
-                ):
-                    wait_for_rate()
-                    last_transmit = time.monotonic()
-                    try:
-                        tester_present(
-                            sock,
-                            min(args.timeout, 0.5),
-                            report["request_attempts"],
-                            report["responses_received"],
-                            report["tester_present_results"],
-                        )
-                    except Exception:
-                        report["session_state"] = "uncertain_after_tester_present_failure"
-                        raise
-                    last_tester_present = time.monotonic()
-
-                wait_for_rate()
-                last_transmit = time.monotonic()
-                result = query_did(
-                    sock,
-                    did,
-                    args.timeout,
-                    request_attempts=report["request_attempts"],
-                    responses_received=report["responses_received"],
-                )
-                category = result["category"]
-                results_file.write(json.dumps(result, sort_keys=True) + "\n")
-                # Count only records accepted by the evidence file. A completed request whose
-                # write fails remains visible in request_attempts, not results_written.
-                result_count += 1
-                categories[category] += 1
-                if result_count % 64 == 0:
-                    results_file.flush()
-                    os.fsync(results_file.fileno())
-
-                if category in ("service_not_supported", "subfunction_not_supported", "incorrect_length_or_format"):
-                    consecutive_shape_failures += 1
-                else:
-                    consecutive_shape_failures = 0
-                if consecutive_shape_failures >= SERVICE_SHAPE_ABORT_COUNT:
-                    raise RuntimeError(
-                        f"aborting after {consecutive_shape_failures} consecutive service/shape rejections"
-                    )
-
-                if category == "positive":
-                    print(f"  {did:04X} OK {result['data_hex'] or ''} |{result['ascii'] or ''}|")
-                elif category != "out_of_range_current_session":
-                    print(f"  {did:04X} {category}: {result['response_hex'] or result['status']}")
-                elif result_count % 256 == 0:
-                    print(f"  progress {result_count}/{count}; readable={categories['positive']}")
-    except KeyboardInterrupt:
-        interrupted = True
-        print("Interrupted; preserving checkpointed results.", file=sys.stderr)
-    except Exception as exc:
-        append_fatal(f"{type(exc).__name__}: {exc}")
-    finally:
-        cleanup_started = True
-        try:
-            if sock is not None:
-                sock.close()
-        except Exception as exc:
-            append_fatal(f"socket close failed: {type(exc).__name__}: {exc}")
-        finally:
-            try:
-                restored_passive = ownership.release()
-                if not restored_passive:
-                    append_fatal("passive restoration verification failed")
-            except Exception as exc:
-                restored_passive = False
-                append_fatal(f"passive restoration failed: {type(exc).__name__}: {exc}")
-            finally:
-                complete = (
-                    report is not None
-                    and result_count == count
-                    and not interrupted
-                    and not fatal_errors
-                    and restored_passive
-                )
-                if complete and selection_mode == "range":
-                    try:
-                        legacy = legacy_path(module, start, end)
-                        write_legacy_text(legacy, module, start, end, results_path)
-                    except Exception as exc:
-                        append_fatal(f"legacy output failed: {type(exc).__name__}: {exc}")
-                        legacy = None
-                        complete = False
-
-                if report is not None:
-                    # Preserve the older limited field without pretending DID attempts are proven
-                    # transmissions. Canonical accounting is request_attempts/responses_received.
-                    report["transmit_counts"] = {
-                        "session_control": report["request_attempts"]["session_control"],
-                        "tester_present": report["request_attempts"]["tester_present"],
-                    }
-                    report.update(
-                        {
-                            "status": (
-                                "complete"
-                                if complete
-                                else "interrupted"
-                                if interrupted
-                                else "failed"
-                            ),
-                            "completed_at": datetime.datetime.now().astimezone().isoformat(
-                                timespec="seconds"
-                            ),
-                            "results_written": result_count,
-                            "category_counts": dict(sorted(categories.items())),
-                            "interrupted": interrupted,
-                            "interruption_signal": (
-                                signal.Signals(received_signal).name
-                                if received_signal is not None
-                                else None
-                            ),
-                            "fatal_error": "; ".join(fatal_errors) if fatal_errors else None,
-                            "fatal_errors": fatal_errors,
-                            "restored_passive": restored_passive,
-                            "legacy_text": os.path.relpath(legacy, REPO) if legacy else None,
-                        }
-                    )
-                    try:
-                        atomic_json(summary_path, report)
-                    except Exception as exc:
-                        append_fatal(
-                            f"final summary publication failed: {type(exc).__name__}: {exc}"
-                        )
-
-                try:
-                    # Role and channel ownership were released by the exact
-                    # passive restoration above.
-                    pass
-                except Exception as exc:
-                    append_fatal(f"diagnostic lock release failed: {type(exc).__name__}: {exc}")
-                finally:
-                    for signum, old_handler in old_handlers.items():
-                        try:
-                            signal.signal(signum, old_handler)
-                        except Exception as exc:
-                            append_fatal(
-                                f"signal handler restore failed for {signum}: "
-                                f"{type(exc).__name__}: {exc}"
-                            )
-
-    if summary_path is not None:
-        print(f"summary: {summary_path}")
-    if results_path is not None:
-        print(f"results: {results_path}")
-    print(f"adapter restored passive: {'yes' if restored_passive else 'NO - CHECK IT NOW'}")
-    if fatal_errors or not restored_passive:
-        return 1
-    return 130 if interrupted else 0
+    return _run_sweep(
+        args, module, ownership, dids, selection_mode, start, end, count, legacy_pcm_session
+    )
 
 
 if __name__ == "__main__":
