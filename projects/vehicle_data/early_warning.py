@@ -1017,10 +1017,6 @@ def _captured_us(sample: Mapping[str, object]) -> int | None:
     return _to_us(_utc(text))
 
 
-def _iso_us(value: int) -> str:
-    return datetime.fromtimestamp(value / 1_000_000, timezone.utc).isoformat()
-
-
 def _engine(sample: Mapping[str, object]) -> str:
     return str(sample.get("regime") or "").split(":", 1)[0]
 

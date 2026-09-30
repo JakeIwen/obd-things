@@ -2838,27 +2838,6 @@ class TelemetryHistorian:
                     ),
                 )
 
-    def finalize_idle(self, *, at: datetime | str | None = None) -> bool:
-        """Close an open trip once its configured activity grace has elapsed."""
-
-        moment = datetime.now(timezone.utc) if at is None else _utc_datetime(at, "at")
-        at_us = _to_us(moment)
-        idle_us = int(round(self.config.trip_idle_timeout_seconds * MICROSECONDS))
-        with self._lock, self._conn:
-            row = self._conn.execute(
-                "SELECT * FROM trips WHERE ended_us IS NULL ORDER BY id DESC LIMIT 1"
-            ).fetchone()
-            if row is None or at_us - row["last_active_us"] < idle_us:
-                return False
-            self._conn.execute(
-                """
-                UPDATE trips SET ended_us=last_active_us,ended_at=last_active_at,
-                    end_reason='activity_timeout' WHERE id=?
-                """,
-                (row["id"],),
-            )
-            return True
-
     def refresh_rollups(
         self,
         *,
