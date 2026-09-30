@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime
 import hashlib
@@ -41,6 +42,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from lib.modules import MODULES
+from lib.candump_io import CandumpFormat, parse_candump_line, zstd_stream
 from lib.vehicle_can_roles import CAN_ROLE_SPECS, normalize_can_role
 from tools.alfaobd_singleton_campaign import CampaignError, CampaignPlan, load_plan
 
@@ -72,6 +74,10 @@ INFO_PARAMETER_ROW_RE = re.compile(r"^\s*([^:\r\n]+?)\s*:\s*(\S.*?)\s*$")
 CANDUMP_RE = re.compile(
     rb"^\((?P<timestamp>[^)]+)\)\s+(?P<channel>\S+)\s+"
     rb"(?P<can_id>[0-9A-Fa-f]{3,8})#(?P<data>[0-9A-Fa-f]*)\s*$"
+)
+_CANDUMP_FORMAT = CandumpFormat(
+    id_width=(3, 8), long_form=False, timestamp_syntax="float",
+    leading_whitespace=False,
 )
 CHANNEL_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 TOPOLOGY_FINGERPRINT_RE = re.compile(r"^[0-9a-f]{16}$")
@@ -907,14 +913,12 @@ def parse_info_runs(
 
 
 def parse_candump_frame(line: bytes) -> tuple[float, int, bytes, str] | None:
-    match = CANDUMP_RE.fullmatch(line.rstrip(b"\r\n"))
-    if not match:
-        return None
     try:
-        timestamp = float(match.group("timestamp"))
-        can_id = int(match.group("can_id"), 16)
-        data = bytes.fromhex(match.group("data").decode("ascii"))
-        channel = match.group("channel").decode("ascii")
+        fields = parse_candump_line(line.rstrip(b"\r\n"), format=_CANDUMP_FORMAT)
+        timestamp = float(fields.timestamp)
+        can_id = int(fields.can_id_text, 16)
+        data = fields.payload
+        channel = fields.interface.decode("ascii")
     except (ValueError, UnicodeDecodeError):
         return None
     if (
@@ -1114,32 +1118,22 @@ def iter_capture_lines(
     popen: Callable[..., subprocess.Popen] = subprocess.Popen,
 ) -> Iterator[bytes]:
     """Yield plain candump lines from recorder .zst chunks or plain test/import files."""
-    process: subprocess.Popen | None = None
-    completed = False
-    handle: BinaryIO
-    if path.name.endswith(".zst"):
-        executable = shutil.which("zstd")
-        if executable is None:
-            raise JoinError("zstd is required to read passive recorder chunks")
-        try:
-            process = popen(
-                [executable, "-dc", "--", str(path)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-            )
-        except OSError as exc:
-            raise JoinError(f"cannot start zstd for {path}: {exc}") from exc
-        if process.stdout is None:
-            process.kill()
-            process.wait()
-            raise JoinError("zstd stdout pipe was not created")
-        handle = process.stdout
-    else:
-        try:
-            handle = path.open("rb")
-        except OSError as exc:
-            raise JoinError(f"cannot read capture stream {path}: {exc}") from exc
-    try:
+    with ExitStack() as stack:
+        process: subprocess.Popen | None = None
+        if path.name.endswith(".zst"):
+            executable = shutil.which("zstd")
+            if executable is None:
+                raise JoinError("zstd is required to read passive recorder chunks")
+            process = stack.enter_context(zstd_stream(
+                path, executable=executable, popen=popen, error_type=JoinError,
+            ))
+            handle = process.stdout
+        else:
+            try:
+                handle = path.open("rb")
+            except OSError as exc:
+                raise JoinError(f"cannot read capture stream {path}: {exc}") from exc
+            stack.callback(handle.close)
         for line in handle:
             byte_budget[0] += len(line)
             if byte_budget[0] > maximum_bytes:
@@ -1151,22 +1145,6 @@ def iter_capture_lines(
             if len(line) > 4096:
                 raise JoinError(f"unreasonably long candump line in {path}")
             yield line
-        completed = True
-    finally:
-        handle.close()
-        if process is not None:
-            if not completed and process.poll() is None:
-                process.terminate()
-            try:
-                returncode = process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-                returncode = -9
-            if completed and returncode != 0:
-                raise JoinError(
-                    f"zstd failed while reading {path} with status {returncode}"
-                )
 
 
 def _validate_expected_hash(
