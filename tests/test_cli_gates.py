@@ -342,3 +342,47 @@ class RoutineScanCallSequenceTests(unittest.TestCase):
          ('ownership.release', (), {}),
          ('termination.__exit__', (), {})]
         self.assertEqual(record_live_calls("routine_scan"), expected)
+
+
+class EcuDiscoverCallSequenceTests(unittest.TestCase):
+    def test_live_calls_match_390404e(self):
+        expected = [('uds.hx', (('bytes', '1a87'),), {}),
+         ('can_runtime_route.acquire_armed_module_route',
+          (('Module',
+            {'key': 'test',
+             'name': 'Custom candidate test',
+             'txid': 416951025,
+             'rxid': 417001770,
+             'channel': None,
+             'bus': 'c-can',
+             'note': 'Discovery target metadata; source: operator-supplied explicit TX/RX pair',
+             'bitrate': 500000,
+             'addressing_mode': 'normal_29bits'}),),
+          {'asserted_pair': '6/14', 'prearm_check': 'tools.ecu_discover.prearm_conflict_errors'}),
+         ('preflight', ('can9', 500000), {}),
+         ('uds.open_module_socket',
+          (('Module',
+            {'key': 'test',
+             'name': 'Custom candidate test',
+             'txid': 416951025,
+             'rxid': 417001770,
+             'channel': 'can9',
+             'bus': 'c-can',
+             'note': 'Discovery target metadata; source: operator-supplied explicit TX/RX pair',
+             'bitrate': 500000,
+             'addressing_mode': 'normal_29bits'}),),
+          {'timeout': 0.75, 'tx_padding': None}),
+         ('uds.drain', ('<socket>',), {}),
+         ('uds.request', ('<socket>', ('bytes', '1003')), {'timeout': 0.75, 'retries': 0}),
+         ('uds.drain', ('<socket>',), {}),
+         ('uds.request', ('<socket>', ('bytes', '1a87')), {'timeout': 0.75, 'retries': 0}),
+         ('uds.hx', (('bytes', '1003'),), {}),
+         ('uds.hx', (('bytes', '5003'),), {}),
+         ('uds.negative_response_details', (('bytes', '5003'),), {}),
+         ('uds.hx', (('bytes', '1a87'),), {}),
+         ('uds.hx', (('bytes', '5a87'),), {}),
+         ('uds.negative_response_details', (('bytes', '5a87'),), {}),
+         ('socket.close', (), {}),
+         ('ownership.release', (), {}),
+         ('uds.hx', (('bytes', '1a87'),), {})]
+        self.assertEqual(record_live_calls("ecu_discover"), expected)

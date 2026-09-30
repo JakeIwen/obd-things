@@ -89,6 +89,7 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, REPO)
 
 from lib.reports import atomic_json as _atomic_json
+from lib.cli_gates import execution_gate
 from lib import can_runtime_route, canbus, uds
 from lib.modules import MODULES, Module, NORMAL_11BITS, NORMAL_29BITS
 
@@ -771,39 +772,24 @@ def main(argv=None):
             + profile_status
         )
 
-    if not args.execute:
-        print("\nDRY RUN: no CAN sockets opened and nothing transmitted. Add --execute only after passive survey.")
-        return 0
-    if expanded_selection and not args.confirm_expanded_scan:
-        print(
-            "ERROR: expanded mode requires --confirm-expanded-scan with --execute",
-            file=sys.stderr,
-        )
-        return 2
-    if args.target and not args.confirm_custom_physical:
-        print(
-            "ERROR: live custom targets require --confirm-custom-physical",
-            file=sys.stderr,
-        )
-        return 2
-    if args.profile and not args.confirm_catalog_candidates:
-        print(
-            "ERROR: live catalog profile requires --confirm-catalog-candidates",
-            file=sys.stderr,
-        )
-        return 2
-    if args.session is not None and not args.confirm_session_change:
-        print(
-            "ERROR: live session selection requires --confirm-session-change",
-            file=sys.stderr,
-        )
-        return 2
-    if not args.confirm_parked or not args.pair or not args.conditions:
-        print(
-            "ERROR: --execute requires --confirm-parked, --pair, and --conditions",
-            file=sys.stderr,
-        )
-        return 2
+    gate_result = execution_gate(
+        args.execute,
+        dry_run_message='\nDRY RUN: no CAN sockets opened and nothing transmitted. Add --execute only after passive survey.',
+        failures=[
+            (expanded_selection and (not args.confirm_expanded_scan),
+             'ERROR: expanded mode requires --confirm-expanded-scan with --execute'),
+            (args.target and (not args.confirm_custom_physical),
+             'ERROR: live custom targets require --confirm-custom-physical'),
+            (args.profile and (not args.confirm_catalog_candidates),
+             'ERROR: live catalog profile requires --confirm-catalog-candidates'),
+            (args.session is not None and (not args.confirm_session_change),
+             'ERROR: live session selection requires --confirm-session-change'),
+            (not args.confirm_parked or not args.pair or (not args.conditions),
+             'ERROR: --execute requires --confirm-parked, --pair, and --conditions'),
+        ],
+    )
+    if gate_result is not None:
+        return gate_result
     if args.channel is not None:
         print(
             "ERROR: live --channel is no longer supported; select the logical --bus "
