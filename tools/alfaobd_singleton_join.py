@@ -41,7 +41,7 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from lib.modules import MODULES
+from lib.modules import MODULES, Module
 from lib.candump_io import CandumpFormat, parse_candump_line, zstd_stream
 from lib.vehicle_can_roles import CAN_ROLE_SPECS, normalize_can_role
 from lib.alfaobd_common import CampaignPlan
@@ -1272,20 +1272,9 @@ def validate_capture_route_metadata(
     }
 
 
-def validate_capture_evidence(
-    spec: CaptureSpec,
-    *,
-    source_index: int,
-    plan: CampaignPlan,
-    segments: list[SegmentEvidence],
-    maximum_manifest_rows: int,
-    maximum_artifact_bytes: int,
-    maximum_wire_bytes: int,
-    maximum_wire_messages: int,
-    byte_budget: list[int],
-    frame_budget: list[int],
-) -> ValidatedCapture:
-    capture_dir = spec.directory
+def _read_capture_metadata(
+    capture_dir: Path, spec: CaptureSpec, maximum_manifest_rows: int
+) -> tuple[dict, dict, list[dict], str, str, str]:
     if not capture_dir.is_dir():
         raise JoinError(f"passive capture directory does not exist: {capture_dir}")
     run_path = capture_dir / "run.json"
@@ -1316,6 +1305,13 @@ def validate_capture_evidence(
         maximum_rows=maximum_manifest_rows,
         maximum_bytes=64 * 1024**2,
     )
+    return run, checkpoint, manifest, run_hash, checkpoint_hash, manifest_hash
+
+
+def _validate_capture_run(
+    run: dict, checkpoint: dict, manifest: list[dict],
+    spec: CaptureSpec, plan: CampaignPlan,
+) -> tuple[Module, dict[str, object]]:
     if run.get("type") != "run_metadata":
         raise JoinError("passive run.json is not run_metadata")
     if run.get("campaign") != spec.run_id:
@@ -1341,7 +1337,12 @@ def validate_capture_evidence(
         raise JoinError("capture interface provenance does not match module/passive state")
     if checkpoint.get("status") != "complete":
         raise JoinError("passive capture checkpoint is not complete")
+    return module, route_validation
 
+
+def _validate_capture_manifest(
+    run: dict, checkpoint: dict, manifest: list[dict]
+) -> tuple[list[dict], dict, float, float]:
     starts = [row for row in manifest if row.get("type") == "capture_start"]
     ends = [row for row in manifest if row.get("type") == "capture_end"]
     chunks = [row for row in manifest if row.get("type") == "chunk"]
@@ -1414,7 +1415,12 @@ def validate_capture_evidence(
         )
     if any(row.get("type") == "socket_drop" for row in manifest):
         raise JoinError("passive capture manifest contains a socket-drop record")
+    return chunks, end, start_time, end_time
 
+
+def _index_capture_chunks(
+    chunks: list[dict], start_time: float, end_time: float
+) -> tuple[dict[int, dict], dict[int, tuple[float, float, int]]]:
     by_sequence: dict[int, dict] = {}
     coverage_by_sequence: dict[int, tuple[float, float, int]] = {}
     for row in chunks:
@@ -1477,6 +1483,15 @@ def validate_capture_evidence(
             chunk_ended,
             sequence,
         )
+    return by_sequence, coverage_by_sequence
+
+
+def _validate_chunk_coverage(
+    by_sequence: dict[int, dict],
+    coverage_by_sequence: dict[int, tuple[float, float, int]],
+    start_time: float,
+    end_time: float,
+) -> list[int]:
     ordered_sequences = sorted(by_sequence)
     if ordered_sequences != list(range(len(ordered_sequences))):
         raise JoinError("passive chunk sequences are not contiguous from zero")
@@ -1505,7 +1520,15 @@ def validate_capture_evidence(
         raise JoinError(
             "passive chunk coverage does not span the completed capture interval"
         )
+    return ordered_sequences
 
+
+def _select_evidence_chunks(
+    segments: list[SegmentEvidence],
+    by_sequence: dict[int, dict],
+    coverage_by_sequence: dict[int, tuple[float, float, int]],
+    ordered_sequences: list[int],
+) -> tuple[tuple[tuple[float, float, int], ...], float, float, list[dict]]:
     evidence_start = min(segment.before_time for segment in segments)
     evidence_end = max(segment.after_time for segment in segments)
     coverage_intervals = tuple(
@@ -1537,7 +1560,16 @@ def validate_capture_evidence(
     selected_chunks = [
         by_sequence[ordered_sequences[position]] for position in selected_positions
     ]
+    return coverage_intervals, first_frame_timestamp, last_frame_timestamp, selected_chunks
 
+
+def _select_capture_streams(
+    run: dict,
+    module: Module,
+    selected_chunks: list[dict],
+    capture_dir: Path,
+    maximum_artifact_bytes: int,
+) -> tuple[set[int], str, list[Path], list[dict]]:
     raw_priority_ids = run.get("priority_ids")
     if not isinstance(raw_priority_ids, list):
         raise JoinError("run.priority_ids must be a list")
@@ -1602,7 +1634,23 @@ def validate_capture_evidence(
                 "elapsed_seconds": row["elapsed_seconds"],
             }
         )
+    return priority_ids, stream_kind, selected_paths, selected_records
 
+
+def _read_selected_capture_frames(
+    selected_paths: list[Path],
+    selected_chunks: list[dict],
+    spec: CaptureSpec,
+    module: Module,
+    source_index: int,
+    stream_kind: str,
+    priority_ids: set[int],
+    route_validation: dict[str, object],
+    maximum_wire_bytes: int,
+    maximum_wire_messages: int,
+    byte_budget: list[int],
+    frame_budget: list[int],
+) -> tuple[list[WireFrame], int, str, str | None]:
     frames: list[WireFrame] = []
     budget_before = byte_budget[0]
     previous_timestamp: float | None = None
@@ -1681,7 +1729,30 @@ def validate_capture_evidence(
     if not frames:
         raise JoinError("selected passive stream contains no module diagnostic frames")
     assert observed_channel is not None
-    provenance = {
+    return frames, budget_before, observed_channel, declared_channel
+
+
+def _capture_provenance(
+    spec: CaptureSpec,
+    run_hash: str,
+    checkpoint_hash: str,
+    manifest_hash: str,
+    stream_kind: str,
+    byte_budget: list[int],
+    budget_before: int,
+    frames: list[WireFrame],
+    observed_channel: str,
+    route_validation: dict[str, object],
+    declared_channel: str | None,
+    first_frame_timestamp: float,
+    last_frame_timestamp: float,
+    start_time: float,
+    end_time: float,
+    coverage_intervals: tuple[tuple[float, float, int], ...],
+    selected_records: list[dict],
+    end: dict,
+) -> dict[str, object]:
+    return {
         "run_id": spec.run_id,
         "run_sha256": run_hash,
         "checkpoint_sha256": checkpoint_hash,
@@ -1720,6 +1791,71 @@ def validate_capture_evidence(
             "detected_socket_drops": 0,
         },
     }
+
+
+def validate_capture_evidence(
+    spec: CaptureSpec,
+    *,
+    source_index: int,
+    plan: CampaignPlan,
+    segments: list[SegmentEvidence],
+    maximum_manifest_rows: int,
+    maximum_artifact_bytes: int,
+    maximum_wire_bytes: int,
+    maximum_wire_messages: int,
+    byte_budget: list[int],
+    frame_budget: list[int],
+) -> ValidatedCapture:
+    capture_dir = spec.directory
+    run, checkpoint, manifest, run_hash, checkpoint_hash, manifest_hash = (
+        _read_capture_metadata(capture_dir, spec, maximum_manifest_rows)
+    )
+    module, route_validation = _validate_capture_run(run, checkpoint, manifest, spec, plan)
+    chunks, end, start_time, end_time = _validate_capture_manifest(run, checkpoint, manifest)
+    by_sequence, coverage_by_sequence = _index_capture_chunks(chunks, start_time, end_time)
+    ordered_sequences = _validate_chunk_coverage(
+        by_sequence, coverage_by_sequence, start_time, end_time
+    )
+    coverage_intervals, first_frame_timestamp, last_frame_timestamp, selected_chunks = (
+        _select_evidence_chunks(segments, by_sequence, coverage_by_sequence, ordered_sequences)
+    )
+    priority_ids, stream_kind, selected_paths, selected_records = _select_capture_streams(
+        run, module, selected_chunks, capture_dir, maximum_artifact_bytes
+    )
+    frames, budget_before, observed_channel, declared_channel = _read_selected_capture_frames(
+        selected_paths,
+        selected_chunks,
+        spec,
+        module,
+        source_index,
+        stream_kind,
+        priority_ids,
+        route_validation,
+        maximum_wire_bytes,
+        maximum_wire_messages,
+        byte_budget,
+        frame_budget,
+    )
+    provenance = _capture_provenance(
+        spec,
+        run_hash,
+        checkpoint_hash,
+        manifest_hash,
+        stream_kind,
+        byte_budget,
+        budget_before,
+        frames,
+        observed_channel,
+        route_validation,
+        declared_channel,
+        first_frame_timestamp,
+        last_frame_timestamp,
+        start_time,
+        end_time,
+        coverage_intervals,
+        selected_records,
+        end,
+    )
     return ValidatedCapture(
         spec=spec,
         frames=tuple(frames),
