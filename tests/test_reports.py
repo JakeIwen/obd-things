@@ -1,15 +1,12 @@
-"""Byte, permission and failure contracts for the B2 report writers.
+"""Golden byte, permission and failure contracts for the B2 report writers.
 
-The frozen definitions are excerpts from 390404e, not another implementation of
-our helper. Each site is tested against both its helper profile and its public
-wrapper. These tests require neither that commit nor a Git checkout at runtime.
+Expectations are literal public-output contracts, independent of the implementation.
+The tests call each tool's public writer without running live diagnostics.
 """
 
 from __future__ import annotations
 
 from contextlib import contextmanager, redirect_stdout
-import csv
-import datetime
 import importlib
 import io
 import json
@@ -23,7 +20,6 @@ import unittest
 from unittest import mock
 
 from lib import reports
-from tests._reports_legacy import WRITERS
 
 
 SITES = {
@@ -44,8 +40,35 @@ FIXED_TEMP = {
     "did_sweep", "dtc_inventory", "ecu_discover", "identity_inventory",
     "routine_scan", "signal_correlate",
 }
-PREFIXED_TEMP = {"alfaobd_bcm_decode", "alfaobd_catalog"}
-
+# All sites receive exactly this insertion-ordered payload.
+PAYLOAD = {"z": "café 雪", "float": -0.5, "nested": {"b": 1, "a": {"x": True}},
+           "sections": [], "metrics": []}
+ASCII = (b'{\n  "z": "caf\\u00e9 \\u96ea",\n  "float": -0.5,\n  "nested": {\n'
+         b'    "b": 1,\n    "a": {\n      "x": true\n    }\n  },\n'
+         b'  "sections": [],\n  "metrics": []\n}\n')
+SORTED = (b'{\n  "float": -0.5,\n  "metrics": [],\n  "nested": {\n'
+          b'    "a": {\n      "x": true\n    },\n    "b": 1\n  },\n'
+          b'  "sections": [],\n  "z": "caf\\u00e9 \\u96ea"\n}\n')
+UTF8 = (b'{\n  "z": "caf\xc3\xa9 \xe9\x9b\xaa",\n  "float": -0.5,\n  "nested": {\n'
+        b'    "b": 1,\n    "a": {\n      "x": true\n    }\n  },\n'
+        b'  "sections": [],\n  "metrics": []\n}\n')
+COMPACT = (b'{"z": "caf\\u00e9 \\u96ea", "float": -0.5, '
+           b'"nested": {"b": 1, "a": {"x": true}}, "sections": [], "metrics": []}\n')
+GOLDENS = {
+    "alfaobd_bcm_decode": SORTED, "alfaobd_catalog": SORTED,
+    "alfaobd_dat": UTF8, "alfaobd_gauge_join": UTF8, "alfaobd_gauges": UTF8,
+    "did_sweep": ASCII, "dtc_inventory": ASCII, "ecu_discover": ASCII,
+    "identity_inventory": ASCII, "routine_scan": ASCII, "signal_correlate": COMPACT,
+}
+# Only these two public writers intentionally retain failed temporary files.
+RETAIN_TEMP = {"identity_inventory", "signal_correlate"}
+CSV_GOLDENS = {
+    "sections.csv": (b"index,profile,profile_source,profile_marker,date,date_raw,start_line,"
+                     b"header_line,end_line,first_time,last_time,sample_rows,valid_rows,"
+                     b"short_rows,long_rows,metric_count,metrics\r\n"),
+    "metrics.csv": (b"profile,metric,section_count,first_date,last_date,numeric_count,"
+                    b"missing_count,nonnumeric_count,minimum,maximum\r\n"),
+}
 
 @contextmanager
 def fixed_umask():
@@ -54,16 +77,6 @@ def fixed_umask():
         yield
     finally:
         os.umask(previous)
-
-
-def legacy_namespace(site):
-    namespace = {
-        "os": os, "json": json, "tempfile": tempfile, "Path": Path,
-        "datetime": datetime, "csv": csv,
-    }
-    exec(compile("from __future__ import annotations\n" + WRITERS[site],
-                 f"<390404e:{site}>", "exec"), namespace)
-    return namespace
 
 
 def invoke(site, namespace, path, payload):
@@ -85,18 +98,8 @@ def invoke(site, namespace, path, payload):
         function(path, payload)
 
 
-def helper_write(site, path, payload):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    options = dict(SITES[site][1])
-    if site in FIXED_TEMP:
-        options["temporary"] = f"{path}.tmp-{os.getpid()}"
-    elif site in PREFIXED_TEMP:
-        options["prefix"] = f".{path.name}."
-    reports.atomic_json(path, payload, **options)
-
-
 def file_result(path):
-    return path.read_bytes(), stat.S_IMODE(path.stat().st_mode)
+    return path.read_bytes(), path.stat().st_mode
 
 
 class ReportsTests(unittest.TestCase):
@@ -114,109 +117,84 @@ class ReportsTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def check_site(self, site):
-        old = legacy_namespace(site)
         current = vars(importlib.import_module(f"tools.{site}"))
-        # Empty containers, Unicode, ordering, escaping, JSON scalar types,
-        # nested structures and non-finite floats exercise dump's defaults.
-        payloads = [
-            {"sections": [], "metrics": []},
-            {"z": "café 雪\n\\\"", "a": [None, True, False, 12, -0.5],
-             "sections": [], "metrics": [], "nested": {"b": 1, "a": 2}},
-            {"float": [float("nan"), float("inf"), -0.0],
-             "sections": [], "metrics": []},
-        ]
         with tempfile.TemporaryDirectory() as directory, fixed_umask():
-            root = Path(directory)
-            for payload in payloads:
-                paths = [root / name / "inventory.json" for name in ("old", "helper", "new")]
-                for path in paths:
-                    path.parent.mkdir(exist_ok=True)
-                    # Replacing a 0664 destination must use the temporary's
-                    # mode, rather than accidentally preserve the old mode.
-                    path.write_text("previous\n")
-                    path.chmod(0o664)
-                invoke(site, old, paths[0], payload)
-                helper_write(site, paths[1], payload)
-                invoke(site, current, paths[2], payload)
-                expected = file_result(paths[0])
-                self.assertEqual(expected[1], 0o644 if site in FIXED_TEMP else 0o600)
-                self.assertEqual(expected, file_result(paths[1]))
-                self.assertEqual(expected, file_result(paths[2]))
-                self.assertTrue(expected[0].endswith(b"\n"))
-                for path in paths:
-                    self.assertEqual(sorted(p.name for p in path.parent.iterdir()
-                                            if p.suffix != ".csv"), [path.name])
-                if site == "alfaobd_gauges":
-                    for name in ("sections.csv", "metrics.csv"):
-                        self.assertEqual(file_result(paths[0].with_name(name)),
-                                         file_result(paths[2].with_name(name)))
+            path = Path(directory) / "inventory.json"
+            path.write_bytes(b"previous\n")
+            path.chmod(0o664)
+            invoke(site, current, path, PAYLOAD)
+            mode = stat.S_IFREG | (0o644 if site in FIXED_TEMP else 0o600)
+            self.assertEqual(file_result(path), (GOLDENS[site], mode))
+            expected = {path.name}
+            if site == "alfaobd_gauges":
+                for name, contents in CSV_GOLDENS.items():
+                    self.assertEqual(file_result(path.with_name(name)),
+                                     (contents, stat.S_IFREG | 0o600))
+                expected.update(CSV_GOLDENS)
+            self.assertEqual({p.name for p in path.parent.iterdir()}, expected)
 
-    def test_failure_profiles_match_original_writers(self):
+    def test_dump_failure_leftovers(self):
         for site in SITES:
-            if site == "dtc_inventory":
-                continue  # its intentional cleanup change is tested separately
             current = vars(importlib.import_module(f"tools.{site}"))
             for exception in (ValueError("invalid JSON"), OSError("disk full"),
                               KeyboardInterrupt()):
-                with tempfile.TemporaryDirectory() as directory:
-                    paths = [Path(directory) / name / "inventory.json"
-                             for name in ("old", "new")]
-                    states = []
-                    for path, namespace in zip(paths, (legacy_namespace(site), current)):
-                        path.parent.mkdir()
-                        path.write_bytes(b"previous\n")
-                        with mock.patch.object(json, "dump", side_effect=exception):
-                            with self.assertRaises(type(exception)):
-                                invoke(site, namespace, path, {"sections": [], "metrics": []})
-                        states.append((path.read_bytes(), sorted(
-                            (p.name, p.read_bytes()) for p in path.parent.iterdir())))
-                    self.assertEqual(states[0], states[1], site)
+                with self.subTest(site=site, exception=type(exception).__name__), \
+                     tempfile.TemporaryDirectory() as directory, fixed_umask():
+                    path = Path(directory) / "inventory.json"
+                    path.write_bytes(b"previous\n")
+                    with mock.patch.object(json, "dump", side_effect=exception):
+                        with self.assertRaises(type(exception)):
+                            invoke(site, current, path, PAYLOAD)
+                    expected = [(path.name, b"previous\n", stat.S_IFREG | 0o644)]
+                    if site in RETAIN_TEMP:
+                        expected.append((f"{path.name}.tmp-{os.getpid()}", b"",
+                                         stat.S_IFREG | 0o644))
+                    self.assertEqual(sorted((p.name, *file_result(p))
+                                            for p in path.parent.iterdir()), expected)
 
-    def test_partial_serialization_replace_and_fsync_failures_match(self):
+    def test_partial_serialization_replace_and_fsync_leftovers(self):
         for site in SITES:
-            if site == "dtc_inventory":
-                continue
             current = vars(importlib.import_module(f"tools.{site}"))
             phases = ["serialization", "replace"]
             if SITES[site][1].get("fsync"):
                 phases.append("fsync")
             for phase in phases:
-                with tempfile.TemporaryDirectory() as directory:
-                    states = []
-                    for side, namespace in (("old", legacy_namespace(site)), ("new", current)):
-                        path = Path(directory) / side / "inventory.json"
-                        path.parent.mkdir()
-                        path.write_bytes(b"previous\n")
-                        payload = {"first": "written before error", "sections": [], "metrics": []}
-                        if phase == "serialization":
-                            payload["unserializable"] = object()
-                            context = mock.patch.object(os, "getpid", return_value=123)
-                            error = TypeError
-                        else:
-                            context = mock.patch.object(os, phase, side_effect=OSError(phase))
-                            error = OSError
-                        with context, self.assertRaises(error) as caught:
-                            invoke(site, namespace, path, payload)
-                        states.append((str(caught.exception), sorted(
-                            (p.name, p.read_bytes(), stat.S_IMODE(p.stat().st_mode))
-                            for p in path.parent.iterdir())))
-                    self.assertEqual(states[0], states[1], (site, phase))
+                with self.subTest(site=site, phase=phase), \
+                     tempfile.TemporaryDirectory() as directory, fixed_umask():
+                    path = Path(directory) / "inventory.json"
+                    path.write_bytes(b"previous\n")
+                    if phase == "serialization":
+                        payload = {"first": "written", "bad": object()}
+                        context = mock.patch.object(os, "getpid", return_value=123)
+                        error = TypeError
+                        retained = (b'{"first": "written", "bad": ' if site == "signal_correlate"
+                                    else b'{\n  "first": "written",\n  "bad": ')
+                        pid = 123
+                    else:
+                        payload = PAYLOAD
+                        context = mock.patch.object(os, phase, side_effect=OSError(phase))
+                        error = OSError
+                        retained = GOLDENS[site]
+                        pid = os.getpid()
+                    with context, self.assertRaises(error):
+                        invoke(site, current, path, payload)
+                    expected = [(path.name, b"previous\n", stat.S_IFREG | 0o644)]
+                    if site in RETAIN_TEMP:
+                        expected.append((f"{path.name}.tmp-{pid}", retained,
+                                         stat.S_IFREG | 0o644))
+                    self.assertEqual(sorted((p.name, *file_result(p))
+                                            for p in path.parent.iterdir()), expected)
 
     def test_preexisting_deterministic_temporary_mode_is_preserved(self):
         for site in FIXED_TEMP:
-            with tempfile.TemporaryDirectory() as directory, fixed_umask():
-                states = []
-                for side, namespace in (("old", legacy_namespace(site)),
-                                        ("new", vars(importlib.import_module(f"tools.{site}")))):
-                    path = Path(directory) / side / "inventory.json"
-                    path.parent.mkdir()
-                    temporary = Path(f"{path}.tmp-{os.getpid()}")
-                    temporary.write_bytes(b"interrupted report")
-                    temporary.chmod(0o640)
-                    invoke(site, namespace, path, {"a": 1})
-                    states.append(file_result(path))
-                self.assertEqual(states[0], states[1], site)
-                self.assertEqual(states[0][1], 0o640)
+            with self.subTest(site=site), tempfile.TemporaryDirectory() as directory, fixed_umask():
+                path = Path(directory) / "inventory.json"
+                temporary = Path(f"{path}.tmp-{os.getpid()}")
+                temporary.write_bytes(b"interrupted report")
+                temporary.chmod(0o640)
+                invoke(site, vars(importlib.import_module(f"tools.{site}")), path, PAYLOAD)
+                self.assertEqual(file_result(path), (GOLDENS[site], stat.S_IFREG | 0o640))
+                self.assertEqual(list(path.parent.iterdir()), [path])
 
     def test_dtc_encoding_and_cleanup_are_the_only_intentional_change(self):
         from tools import dtc_inventory
@@ -224,31 +202,21 @@ class ReportsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, fixed_umask():
             path = Path(directory) / "inventory.json"
             temporary = f"{path}.tmp-{os.getpid()}"
-            old = legacy_namespace("dtc_inventory")
-            with mock.patch("builtins.open", wraps=open) as opened:
-                invoke("dtc_inventory", old, path, {"text": "café"})
-            opened.assert_called_once_with(temporary, "w")
-            before = file_result(path)
             with mock.patch("builtins.open", wraps=open) as opened, \
                  mock.patch.object(os, "fsync") as synced:
                 dtc_inventory.write_report(path, {"text": "café"})
             opened.assert_called_once_with(temporary, "w", encoding="utf-8", newline=None)
             synced.assert_not_called()  # no extra durability change
-            self.assertEqual(file_result(path), before)
-            self.assertEqual(before[1], 0o644)
+            expected = (b'{\n  "text": "caf\\u00e9"\n}\n', stat.S_IFREG | 0o644)
+            self.assertEqual(file_result(path), expected)
             for target in ("dump", "replace"):
                 module = json if target == "dump" else os
                 for exception in (OSError("failed"), KeyboardInterrupt()):
                     with mock.patch.object(module, target, side_effect=exception):
                         with self.assertRaises(type(exception)):
-                            invoke("dtc_inventory", old, path, {"a": 1})
-                    self.assertTrue(Path(temporary).exists())
-                    Path(temporary).unlink()
-                    with mock.patch.object(module, target, side_effect=exception):
-                        with self.assertRaises(type(exception)):
                             dtc_inventory.write_report(path, {"a": 1})
-                    self.assertFalse(Path(temporary).exists())
-                    self.assertEqual(file_result(path), before)
+                    self.assertEqual(list(path.parent.iterdir()), [path])
+                    self.assertEqual(file_result(path), expected)
 
     def test_replace_failure_preserves_destination(self):
         for cleanup in ("failure", "always-best-effort", "none"):
@@ -314,7 +282,7 @@ class ReportsTests(unittest.TestCase):
                 reports.atomic_json(Path(directory) / "missing" / "report.json", {})
 
 
-# Separate unittest tests make per-site equivalence visible in both runners.
+# Separate unittest tests make each public writer contract visible in both runners.
 for _site in SITES:
     def _test(self, site=_site):
         self.check_site(site)
