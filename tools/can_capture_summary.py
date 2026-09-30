@@ -157,7 +157,7 @@ class IdStats:
 def parse_frame(line: str) -> Frame | None:
     """Parse one common ``candump -ta`` line, or return ``None`` when unsupported."""
     try:
-        fields = parse_candump_line(line, format=CandumpFormat())
+        fields = parse_candump_line(line, format=CandumpFormat(), binary=False)
     except CandumpSyntaxError:
         return None
     payload = fields.payload

@@ -70,6 +70,14 @@ class CandumpParserTests(unittest.TestCase):
             self.assertEqual(text.timestamp, "1.0")
             self.assertEqual(binary.timestamp, b"1.0")
 
+    def test_text_consumer_does_not_start_accepting_bytes(self):
+        for parse in (summary.parse_frame,
+                      lambda line: parse_candump_line(line, binary=False)):
+            with self.assertRaisesRegex(TypeError, "cannot use a string pattern on a bytes-like object"):
+                parse(b"(1.0) can0 123#AA")
+        with self.assertRaisesRegex(TypeError, "cannot use a bytes pattern on a string-like object"):
+            parse_candump_line("(1.0) can0 123#AA", binary=True)
+
     def test_syntax_errors(self):
         for line in ("", "  \n", "can0 123#AA", "(1.0) can0 123#ABC",
                      "(1.0) can0 123#R8", "(1.0) can0 123##1", "(1.0) can0 123#AA junk"):

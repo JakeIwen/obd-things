@@ -74,14 +74,18 @@ def candump_patterns(format: CandumpFormat, *, binary: bool = False) -> tuple:
 
 def parse_candump_line(
     line: str | bytes, *, format: CandumpFormat = CandumpFormat(),
+    binary: bool | None = None,
 ) -> CandumpFields:
     """Parse compact or long syntax without imposing consumer semantic gates.
 
     Nonmatching lines (including blanks) raise CandumpSyntaxError. Payload
     conversion ValueError/UnicodeDecodeError is intentionally not translated:
     text consumers historically expose bytes.fromhex's Unicode-whitespace error.
+    ``binary`` pins the regex input type when a caller must reject the other type.
     """
-    long, compact = candump_patterns(format, binary=isinstance(line, bytes))
+    if binary is None:
+        binary = isinstance(line, (bytes, bytearray))
+    long, compact = candump_patterns(format, binary=binary)
     match_method = "fullmatch" if format.trailing_text == "reject" else "match"
     match = getattr(long, match_method)(line) if format.long_form else None
     if match is None:
