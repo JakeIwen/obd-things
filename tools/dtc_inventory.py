@@ -36,7 +36,7 @@ from lib.dtc import (
     parse_snapshot_identifiers,
 )
 from lib.modules import get
-from tools.ecu_discover import prearm_conflict_errors, preflight
+from lib.diagnostic_preflight import prearm_conflict_errors, preflight
 
 
 MIN_REQUEST_RATE = 0.1

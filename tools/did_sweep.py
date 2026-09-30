@@ -44,8 +44,8 @@ from lib.uds_session import (
     request_once,
     tester_present,
 )
-from tools.ecu_discover import prearm_conflict_errors, preflight
-from tools.identity_inventory import redact_response_vins
+from lib.diagnostic_preflight import prearm_conflict_errors, preflight
+from lib.vin_redaction import redact_response_vins
 
 
 MIN_REQUEST_RATE = 0.1

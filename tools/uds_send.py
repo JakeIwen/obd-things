@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from lib.cli_gates import execution_gate
 from lib import can_runtime_route, diagnostic_safety, uds
 from lib.modules import get
-from tools.ecu_discover import prearm_conflict_errors, preflight
+from lib.diagnostic_preflight import prearm_conflict_errors, preflight
 
 
 MUTATING_SERVICES = {

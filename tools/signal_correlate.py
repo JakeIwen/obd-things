@@ -42,7 +42,7 @@ from lib.reports import atomic_json as _atomic_json
 from lib.cli_gates import execution_gate
 from lib import can_runtime_route, diagnostic_safety, uds
 from lib.modules import get
-from tools.ecu_discover import prearm_conflict_errors, preflight
+from lib.diagnostic_preflight import prearm_conflict_errors, preflight
 
 try:
     import numpy as np

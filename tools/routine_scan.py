@@ -41,7 +41,7 @@ from lib.uds_session import (
     request_once,
     tester_present,
 )
-from tools.ecu_discover import prearm_conflict_errors, preflight
+from lib.diagnostic_preflight import prearm_conflict_errors, preflight
 
 
 DEFAULT_START = 0x0200
