@@ -9,85 +9,8 @@
 
 import { computed, signal } from "@preact/signals";
 import { useEffect, useRef } from "preact/hooks";
-import { Tile } from "../components/Tile.jsx";
-import { TireGrid } from "../components/TireGrid.jsx";
-import { liveValue, obs, isHidden, minuteClock, engineRunning } from "../app/derive.js";
-import { tripDistanceMiles } from "../app/rings.js";
-import * as store from "../store.js";
-import { fmtValue, fmtDuration, DASH } from "../format.js";
 import { settings, saveSettings } from "../settings.js";
 import { DRIVE_PAGE_NAMES, swipeTarget } from "./drivePager.js";
-
-// Sub-lines computed once at module scope (shared by every mount).
-const alternatorSub = computed(() => {
-  const duty = liveValue("generator.field_duty").value;
-  return duty === null ? "" : "alternator " + fmtValue("generator.field_duty", duty) + " %";
-});
-// The cluster's speed limit (page 2 has the sign) as the Speed tile's sub-line.
-const speedSub = computed(() => {
-  const mph = liveValue("vehicle.speed_limit").value;
-  return mph === null ? "" : "limit " + mph + " mph";
-});
-const torqueSub = computed(() => {
-  const t = liveValue("engine.crankshaft_torque").value;
-  return t === null ? "" : fmtValue("engine.crankshaft_torque", t) + " lb-ft";
-});
-// Reserved for a broker gear metric (design section 9); empty until one is live and
-// driver-qualified. The former static app's GEAR tile also accepted these catalog names.
-const GEAR_METRICS = ["transmission.gear_estimate", "transmission.gear", "cluster.actual_gear"];
-const gearText = computed(() => {
-  // Estimated gear (broker metric transmission.gear_estimate, candidate quality): shown with "~"
-  // only while it is fresh; the broker publishes it only while moving (design section 9).
-  const rec = store.metricSignal("transmission.gear_estimate").value;
-  if (!rec || !rec.available || rec.stale || typeof rec.value !== "string") return "";
-  return "~" + rec.value;
-});
-const rpmSub = computed(() => (gearText.value ? "gear " + gearText.value : ""));
-
-const tripRows = computed(() => {
-  void minuteClock.value;
-  const history = store.summary.history.value;
-  const trip = history && history.current_trip ? history.current_trip : null;
-  const running = engineRunning.value;
-  const since = trip ? Date.parse(trip.started_at) : NaN;
-  const duration = running && isFinite(since) ? fmtDuration((Date.now() - since) / 1000) : DASH;
-  const miles = tripDistanceMiles.value;
-  const distance = running && miles !== null ? "≈ " + miles.toFixed(1) + " mi" : DASH;
-  const cmp = history && history.trip_comparison && history.trip_comparison.metrics;
-  const maxOf = (name) => {
-    const cur = cmp && cmp[name] && cmp[name].current_trip;
-    return cur && typeof cur.maximum === "number" ? fmtValue(name, cur.maximum) : null;
-  };
-  const coolMax = maxOf("engine.coolant_temperature");
-  const powerAvg = (() => {
-    const cur = cmp && cmp["engine.crankshaft_power"] && cmp["engine.crankshaft_power"].current_trip;
-    return cur && typeof cur.mean === "number" ? fmtValue("engine.crankshaft_power", cur.mean) : null;
-  })();
-  return [
-    ["Time", duration],
-    ["Distance", distance],
-    ["Coolant max", coolMax ? coolMax + " °F" : DASH],
-    ["Avg power", powerAvg ? powerAvg + " hp" : DASH],
-  ];
-});
-
-function TripTile() {
-  // Four rows of short text; the whole tile re-renders at most once a minute.
-  const rows = tripRows.value;
-  return (
-    <section class="tile area-trip" aria-label="Trip">
-      <div class="tile__label">Trip</div>
-      <div class="trip">
-        {rows.map(([k, v]) => (
-          <div class="trip__row" key={k}>
-            <span>{k}</span>
-            <b class="num">{v}</b>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
 
 /** Drive tile registry: id → element factory (ids are used by the customiser). */
 export const DRIVE_TILES = [
@@ -125,22 +48,17 @@ function setDrivePage(page) {
   if (s.drivePage !== page) saveSettings({ ...s, drivePage: page });
 }
 
-// Page 2 is its own chunk, fetched the first time it is shown.
-let DriveMore = null;
-let moreLoading = false;
-const moreReady = signal(false);
-function loadMore() {
-  if (DriveMore || moreLoading) return;
-  moreLoading = true;
-  import("./DriveMore.jsx")
-    .then((mod) => {
-      DriveMore = mod.default;
-      moreReady.value = true;
-    })
-    .catch((error) => {
-      moreLoading = false;
-      console.error("failed to load Drive page 2", error);
-    });
+// Each page loads once, keeping both gauge additions and sensors out of core.
+const pageViews = { 1: signal(null), 2: signal(null) };
+const loading = {};
+function loadPage(page) {
+  if (pageViews[page].peek() || loading[page]) return;
+  loading[page] = true;
+  const promise = page === 1 ? import("./DriveGauges.jsx") : import("./DriveMore.jsx");
+  promise.then((mod) => { pageViews[page].value = mod.default; }).catch((error) => {
+    loading[page] = false;
+    console.error("failed to load Drive page", page, error);
+  });
 }
 
 /** Passive horizontal-swipe listeners on the Drive view; returns the cleanup. */
@@ -199,32 +117,13 @@ export default function Drive() {
   const ref = useRef(null);
   useEffect(() => attachSwipe(ref.current), []);
   useEffect(() => {
-    if (page === 2) loadMore();
+    loadPage(page);
   }, [page]);
-  const More = page === 2 && moreReady.value ? DriveMore : null;
+  const View = pageViews[page].value;
   return (
     <div class="view view--drive" role="main" ref={ref}>
-      {page === 2 ? More ? <More /> : <div class="drive2" /> : <DriveGauges />}
+      {View ? <View /> : <div class={page === 2 ? "drive2" : "drive"} />}
       <Pager page={page} />
-    </div>
-  );
-}
-
-/** Page 1, unchanged from the single-page Drive view. */
-function DriveGauges() {
-  const show = (id) => !isHidden("drive", id);
-  return (
-    <div class="drive">
-      {show("speed") && <Tile name="vehicle.speed" label="Speed" area="speed" size="hero" sub={speedSub} />}
-      {show("rpm") && <Tile name="engine.rpm" label="RPM" area="rpm" size="large" sub={rpmSub} spark showUnit={false} />}
-      {show("coolant") && <Tile name="engine.coolant_temperature" label="Coolant" area="coolant" band spark />}
-      {show("trans") && <Tile name="transmission.oil_temperature" label="Trans oil" area="trans" band spark />}
-      {show("oilp") && <Tile name="engine.oil_pressure" label="Oil pressure" area="oilp" band spark />}
-      {show("volt") && <Tile name="battery.voltage" label="Voltage" area="volt" band spark sub={alternatorSub} decimals={1} />}
-      {show("power") && <Tile name="engine.crankshaft_power" label="Power" area="power" spark sub={torqueSub} />}
-      {show("oilt") && <Tile name="engine.vvt_oil_temperature" label="Oil temp (VVT)" area="oilt" band spark />}
-      {show("tires") && <TireGrid area="tires" />}
-      {show("trip") && <TripTile />}
     </div>
   );
 }

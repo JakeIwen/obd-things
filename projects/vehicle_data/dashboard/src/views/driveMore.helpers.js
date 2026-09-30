@@ -156,6 +156,7 @@ export function accShownParts(st, shown) {
 export function accTileModel(state, setSpeed, shown) {
   const st = typeof state === "string" && Object.prototype.hasOwnProperty.call(ACC_STATE_WORDS, state) ? state : null;
   if (state === "off") return { value: "Off", unit: "", sub: "", kind: "off" };
+  if (st === null) return { value: DASH, unit: "", sub: "", kind: "off" };
   const extra = accShownParts(st, shown);
   const sub = (first) => [first].concat(extra).join(" · ");
   if (st === "ready") return { value: DASH, unit: "", sub: sub(extra.length ? "ready" : "ready · no set speed"), kind: "off" };

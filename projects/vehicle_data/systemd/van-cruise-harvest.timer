@@ -1,0 +1,11 @@
+[Unit]
+Description=Prepare cruise summaries after completed trips
+
+[Timer]
+OnBootSec=15min
+OnUnitInactiveSec=20min
+RandomizedDelaySec=2min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

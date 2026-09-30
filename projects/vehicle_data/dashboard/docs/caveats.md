@@ -99,7 +99,7 @@ what they meant and where that information lives now.
   one, or keep the previous road's limit. It was checked against the cluster on a September 27
   drive (every noted change matched). The cluster sends 0 when it shows no limit, and the tile
   then reads `—`.
-- **ACC** (Drive page 2): the adaptive-cruise set speed from the cluster frame `0x5A0` (byte 3 in
+- **ACC** (under Speed on Drive page 1, with the full tile on page 2): the adaptive-cruise set speed from the cluster frame `0x5A0` (byte 3 in
   mph, cross-checked against byte 2 in km/h), checked against the cluster display on the same
   drive. The words under it come from the same frame and were checked against the cluster on a
   September 28 drive, where every noted event matched:
@@ -109,7 +109,11 @@ what they meant and where that information lives now.
   - `fixed cruise`, when regular cruise is in use instead of adaptive cruise. This was seen in
     one short episode only.
 
-  In standby the number is dimmed because the speed is only remembered, not being held. The frame
+  Page 1 keeps the speed limit and adds the cruise set speed, state and `vehicle ahead`.
+  `Cruise` means fixed-speed cruise. A missing or expired state hides every
+  cruise detail, even if a set speed remains cached. Off and ready hide set speed;
+  standby labels it as remembered. On page 2 the standby number is also dimmed.
+  The frame
   arrives about once a second, so the tile can take a few seconds to follow a button press or a
   vehicle moving in. `vehicle ahead` is the cluster's icon, not a distance: the van does not put
   the range or closing speed of that vehicle on the buses the Pi listens to. All of it is display
@@ -242,6 +246,22 @@ duty, shaft speeds) is live-only and shows a dash when unavailable, because a st
 could be mistaken for a current one.
 
 ## Trends and trips
+
+Completed-trip cruise summaries come from the saved full drive recording.
+`Cruise engaged` counts the cluster's engaged state; accelerator override is
+separate. `Vehicle ahead` counts the cluster icon while engaged or overriding,
+not a measured following distance. Button cancels require a valid CANC press
+and a transition to standby. `Possible brake` means that transition coincided
+with the still-unverified service-brake bit; it is not a proven brake-cancel
+count. Unknown and simultaneous button/brake events are kept separate.
+
+Set speed is compared with the displayed speed limit only while engaged and
+both values are recorded. The average difference is weighted by time; it is
+not actual road-speed speeding time. A no-limit display contributes no speed
+limit. Coverage and missing time remain explicit: display observations are held
+at most two seconds, speed limits at most half a second, and missing capture
+tails are not extrapolated. `Not recorded` does not mean cruise was unused.
+These summaries never create a warning.
 
 - The History view's trends come from the Pi's historian: 7-day and 30-day low, average and high,
   the typical range of earlier trips, and 24-hour lines built from 15-minute buckets. Missing

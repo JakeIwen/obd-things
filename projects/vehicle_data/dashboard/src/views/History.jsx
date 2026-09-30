@@ -16,6 +16,7 @@ import * as store from "../store.js";
 import { minuteClock, orderedIds, isHidden, monoNow } from "../app/derive.js";
 import { Card, Empty } from "../components/Card.jsx";
 import * as H from "./historySystem.helpers.js";
+import { cruiseLines } from "./cruise.helpers.js";
 
 /** Default History cards (Trips + one per trend metric); System builds the same list for Customise. */
 const cardsGate = H.createStableGate();
@@ -51,7 +52,11 @@ const coverage = computed(() => {
 const tripsGate = H.createStableGate();
 const trips = computed(() => {
   void minuteClock.value;
-  return tripsGate(H.tripsModel(store.summary.history.value, { nowMs: Date.now(), extraMs: sinceGenerated() }));
+  const history = store.summary.history.value;
+  const model = H.tripsModel(history, { nowMs: Date.now(), extraMs: sinceGenerated() });
+  const summaries = new Map((history?.recent_trips || []).map((t) => [String(t.id), t.cruise_summary]));
+  model.rows = model.rows.map((row) => ({...row, cruise: cruiseLines(summaries.get(row.id))}));
+  return tripsGate(model);
 });
 
 const trendCache = new Map();
@@ -122,6 +127,7 @@ function TripsCard() {
               <div class="history-trip__main">
                 <div>{row.when}</div>
                 {row.meta ? <div class="list__meta">{row.meta}</div> : null}
+                {row.cruise.map((line) => <div class="list__meta" key={line}>{line}</div>)}
               </div>
             </li>
           ))}

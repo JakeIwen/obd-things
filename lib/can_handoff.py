@@ -16,6 +16,8 @@ tools remain safely excluded by the existing authoritative role/channel locks.
 from __future__ import annotations
 
 import time
+import fcntl
+from pathlib import Path
 from contextlib import contextmanager
 
 from lib import diagnostic_safety
@@ -40,6 +42,25 @@ def gate_lock_name(bus: str) -> str:
     if role not in CAN_BUS_ROLES:
         raise ValueError(f"{bus!r} is not a connected vehicle bus")
     return f"can-handoff-gate-{role}"
+
+
+def passive_yield_requested(bus: str) -> bool:
+    """Read-only check by a held passive turn for a waiting active owner.
+
+    This grants no ownership. Reuse the existing gate without appending lock
+    metadata at every receive tick. A missing/unreadable gate also yields.
+    """
+    path = Path(diagnostic_safety.LOCK_DIR) / f"active-diagnostics-{gate_lock_name(bus)}.lock"
+    try:
+        with path.open("r") as handle:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return False
+    except OSError:
+        return True
 
 
 @contextmanager
@@ -117,4 +138,5 @@ __all__ = (
     "gate_lock_name",
     "lock_name",
     "passive_turn",
+    "passive_yield_requested",
 )

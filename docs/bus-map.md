@@ -255,6 +255,14 @@ the permanent CAN-CH role remains the documented route.
 | `0x1F7` | bytes4–5 BE u16 | `raw / 2 rpm` | **transmission turbine/input speed**, exact-linked to TCM DID `2102` and its labeled Alfa gauge | ignition ON / running | **observed Alfa scale; receive-only telemetry allowlisted**. Initial 248-sample fit R² 0.99999024; independent blind whole-leg recovery used 2,014 samples, full coverage, rank 4, R² 0.99996705, and the expected approximately `×2` raw relationship; [loaded evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-27_tcm_plots_loaded_drive_mapping.md), [blind benchmark](../projects/ecu_mapping/findings/promaster_2022/2026-07-28_signal_field_engine_benchmark.md) |
 | signature set | — | — | C-CAN identity guard: `0x100 101 103 104 10F 110 116 0EA 0EE 0FA 0FE` (+ `2EF 41A`) | high-rate, ignition-on & in parked wakes | used by `classify_bus()` |
 
+**Display capture timing (September 29):** during the historian trip-67 ACC
+observation gap, the recorder still received 263 `0x5A0` frames in
+00:01:35.582237Z–00:05:22.578330Z with maximum spacing 1.003830 s. A stale
+broker display therefore does not establish that the cluster stopped sending.
+The broker now has a separate continuous, kernel-filtered receiver for
+`0x5A0`/`0x0E0`; real-drive freshness after that change remains to be measured.
+See the [capture audit](../projects/radar/findings/2026-09-28_acc_owner_reference_drive.md#september-29-capture-reliability-audit).
+
 **Exploratory numbered-gear lead (September 22):** C-CAN `0x1F4`, DLC 8,
 byte 4's upper nibble (Motorola start 39, length 4) is `7` in a saved window
 where the established `0x1F7` turbine/output ratio is approximately `0.699`,

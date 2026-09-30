@@ -77,8 +77,48 @@ readings were wrong and are replaced by the table above:
 - The override at 00:06:51Z was a separate 16 s episode right after a SET+ with the accelerator
   still down. The owner's 7:08 override is the one at 00:08:06Z.
 
-The historian remains too coarse for this work. Its `acc.state` series shows no `off` between
-00:04:23Z and 00:04:55Z, where the raw frames have one.
+The historian's `acc.state` series shows no `off` between 00:04:23Z and
+00:04:55Z, where the raw frames have one. The September 29 follow-up established
+that this particular loss is upstream of the five-second historian cadence:
+the broker's saved observation time remained 00:00:40.322708Z, with `engaged`,
+until a new `off` observation at 00:05:22.138837Z.
+
+### September 29 capture reliability audit
+
+Read-only trip-67 queries, restricted to `vehicle_running=1`, reproduced:
+
+| metric | fresh / running snapshots | percent |
+|---|---|---|
+| vehicle speed | 2,239 / 2,239 | 100.000% |
+| oil pressure | 2,239 / 2,239 | 100.000% |
+| speed limit | 1,863 / 2,239 | 83.207% |
+| ACC state | 998 / 2,239 | 44.573% |
+| ACC set speed | 993 / 2,239 | 44.350% |
+
+Among distinct ACC-state observations in those running snapshots there were
+41 gaps over 15 s and 35 over 30 s; the maximum was 1,309.053 s. The earlier
+prompt's 48 gaps over 15 s was not reproduced with this running-only filter.
+`tools/acc_freshness_audit.py --trip 67` reproduces this bounded query and saves
+`tmp/vehicle_data/acc-freshness-trip-67.json`.
+
+Independent raw check: `can-event-window` job `20260929T225356Z-95b780ad`
+read only C-CAN full chunk 5. Its 00:01:35.582237Z–00:05:22.578330Z window
+contains 263 `0x5A0` frames, median spacing 0.999986 s and maximum spacing
+1.003830 s. It includes `off` at 00:04:23.678571Z, fixed-cruise ready at
+00:04:55.959186Z and engaged at 00:05:04.237949Z. The cluster was transmitting
+through the broker's observation gap.
+
+The source code supplies a mechanism for this loss: each active helper cycle
+opens a bounded broadcast socket for at most 0.35 s and is scheduled about once
+per second; `LowRateFrameWait` cannot extend its deadline, and backs off for
+30 s after repeated misses. The raw/historian comparison proves capture loss;
+exact phase locking is a supported explanation rather than a measured helper
+socket trace. Other effects, including the late-drive host stall, are separate.
+
+The September 29 receiver change continuously filters the two display IDs,
+uses actual kernel receipt timestamps, and follows passive lease / armed-owner
+rules. Its synthetic timing tests do not establish real-drive acceptance.
+Post-deployment running-snapshot freshness remains unmeasured until a new drive.
 
 ## `0x2FA` buttons
 

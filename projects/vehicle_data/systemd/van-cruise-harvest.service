@@ -1,0 +1,24 @@
+[Unit]
+Description=Queue and import completed-trip cruise summaries (files only)
+After=local-fs.target
+RequiresMountsFor=/mnt/EXFAT512
+ConditionPathIsMountPoint=/mnt/EXFAT512
+
+[Service]
+Type=oneshot
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/dev/obd-things
+ExecStart=/usr/bin/python3 /home/pi/dev/obd-things/projects/vehicle_data/cruise_harvest.py --execute
+Nice=19
+IOSchedulingClass=idle
+MemoryMax=256M
+TimeoutStartSec=15min
+PrivateTmp=true
+PrivateNetwork=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/mnt/EXFAT512
+ReadWritePaths=/home/pi/dev/obd-things/tmp
+RestrictAddressFamilies=AF_UNIX
+NoNewPrivileges=true

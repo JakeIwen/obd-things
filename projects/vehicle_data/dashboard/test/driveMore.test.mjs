@@ -129,11 +129,11 @@ test("accTileModel: set speed with the state word; Off and ready have no number"
   // A cached set speed never shows once the state says off or ready.
   assert.deepEqual(H.accTileModel("off", 66), { value: "Off", unit: "", sub: "", kind: "off" });
   assert.deepEqual(H.accTileModel("ready", 66), { value: "—", unit: "", sub: "ready · no set speed", kind: "off" });
-  // No current state record: the verified set speed alone, or nothing.
-  assert.deepEqual(H.accTileModel(null, 66), { value: "66", unit: "mph", sub: "set speed", kind: "live" });
+  // No current state record: hide even a still-fresh cached set speed.
+  assert.deepEqual(H.accTileModel(null, 66), { value: "—", unit: "", sub: "", kind: "off" });
   assert.deepEqual(H.accTileModel(null, null), { value: "—", unit: "", sub: "", kind: "off" });
   assert.deepEqual(H.accTileModel("engaged", null), { value: "—", unit: "", sub: "engaged", kind: "off" });
-  assert.deepEqual(H.accTileModel("mystery", 50), { value: "50", unit: "mph", sub: "set speed", kind: "live" });
+  assert.deepEqual(H.accTileModel("mystery", 50), { value: "—", unit: "", sub: "", kind: "off" });
   for (const state of ["off", "ready", "engaged", "override", "standby", null]) {
     const m = H.accTileModel(state, 60);
     for (const t of [m.value, m.sub]) assert.doesNotMatch(t, /candidate|0x5a0|quality|stale/i, t);
@@ -166,7 +166,7 @@ test("accTileModel: vehicle ahead, following distance and fixed cruise (2026-09-
   assert.deepEqual(H.accTileModel("engaged", 66, adaptive(7, false)), { value: "66", unit: "mph", sub: "set · engaged", kind: "live" }, "bars outside 1-4 are not shown");
   assert.deepEqual(H.accTileModel("engaged", 66, adaptive(null, true)), { value: "66", unit: "mph", sub: "engaged · vehicle ahead", kind: "live" });
   // Without a current state nothing beside it is shown either.
-  assert.deepEqual(H.accTileModel(null, 66, adaptive(4, true)), { value: "66", unit: "mph", sub: "set speed", kind: "live" });
+  assert.deepEqual(H.accTileModel(null, 66, adaptive(4, true)), { value: "—", unit: "", sub: "", kind: "off" });
   assert.deepEqual(H.accShownParts("engaged", adaptive(2, true)), ["vehicle ahead", "gap 2 of 4"]);
   assert.deepEqual(H.accShownParts(null, adaptive(2, true)), []);
   for (const st of ["ready", "engaged", "override", "standby"]) {

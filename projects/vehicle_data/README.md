@@ -365,17 +365,52 @@ and the `docs/bus-map.md` rows for `0x0E0` and `0x5A0`):
 
 They are display information only: no warning, notification or safety logic
 uses them. `0x5A0` is sent at 1 Hz plus on change, and `0x0E0` trails the
-required powertrain frames within each 100 ms cycle, so an early-ending
-snapshot would miss both. `ccan_powertrain.LowRateFrameWait`, held by the
-passive reader and by the active helper like the temperature gate, lets a
-snapshot keep listening for a display frame not seen within its refresh
-interval (0x0E0 every snapshot, 0x5A0 after 2 s), bounded by the snapshot's
-existing timeout (0.5 s passive, 0.35 s active). A frame absent through six
-extended waits and ten seconds backs off for 30 s. Values are never carried
-between snapshots, so the broker's receipt timestamp stays honest. Both
-sources are in the broker's `ACTIVE_DRIVE_SOURCES`, and
-`tests/test_display_frames.py` fails if any source the snapshot can emit is
-missing from that allowlist.
+required powertrain frames within each 100 ms cycle. The old
+`ccan_powertrain.LowRateFrameWait` could not bridge the active helper's 0.35 s
+snapshot window against the 1 s display period. Trip 67 had fresh `acc.state`
+in only 998/2,239 running snapshots (44.573%). During one missed interval the
+raw recorder still received 263 ACC frames with a maximum 1.004 s gap.
+
+`display_receiver.py` now owns the production broker's display observations.
+One continuous socket has exact standard-data kernel filters for only `0x0E0`
+and `0x5A0`, a 64 KiB requested receive buffer, and kernel receipt timestamps.
+It publishes each received frame immediately, atomically for all ACC fields.
+Queued frames older than one second, missing timestamps and malformed frames
+are discarded; silence never refreshes a value. Older bounded snapshots cannot
+overwrite its cache. Existing freshness limits and state gates remain intact.
+
+The receiver starts after initial reconciliation. While listen-only it holds
+shared C-CAN role/channel leases and the normal passive scheduling turn. It
+checks the wake admission gate every 250 ms without writing lock metadata and
+releases before the broker starts its helper. While armed, it uses the drive
+recorder's exact broker-owner proof, independently checks the USB role and
+healthy classical-CAN state every second, and takes no competing lease.
+Link loss, identity change, inhibit or ownership loss closes the socket; each
+retry resolves and validates afresh. It never configures a link, sends a frame,
+or changes helper heartbeat/diagnostic behavior. Its state, count and most
+recent frame time are in `/v1/status` → `display_receiver`.
+The kernel mechanisms follow the Linux documentation for
+[CAN receive filters](https://docs.kernel.org/networking/can.html#raw-socket-option-can-raw-filter)
+and [receipt timestamp control messages](https://docs.kernel.org/networking/timestamping.html#control-interfaces).
+
+Both sources remain in `broker.ACTIVE_DRIVE_SOURCES`.
+`tests/test_display_frames.py` covers snapshot source admission, and
+`tests/test_display_receiver.py` exercises all 100 centisecond phases across
+180 seconds, on-change delivery, kernel timestamps, stale queues, route loss,
+passive/armed ownership and cooperative wake handoff. A post-deployment drive
+is still required to measure the >=95% freshness acceptance target. Run the
+bounded read-only audit with the new trip ID:
+
+```bash
+python3 tools/acc_freshness_audit.py --trip TRIP_ID
+```
+
+Deployment on 2026-09-29 at about 23:07Z used the guarded asleep broker restart.
+The receiver entered listen-only reception with zero frames while asleep; all
+three vehicle roles remained healthy/listen-only, the spare stayed down, no
+inhibit was present, and every CAN TX counter was unchanged. Final offline
+validation: 1,523 Python tests passed, 7 skipped, 1,354 subtests; 440 dashboard
+tests passed including bundle budgets. Real-drive acceptance is still pending.
 
 The four TPMS metrics use the wheel map and `raw x 0.1 kPa` pressure scale
 verified by the TPMS project's 2026-07-07 deflate/reinflate test. RF Hub slots
@@ -653,9 +688,10 @@ measurements at 800×1280 and 1280×800.
   ([September 28 drive](../radar/findings/2026-09-28_acc_owner_reference_drive.md)).
   `acc.mode`, `acc.follow_distance` and `acc.lead_vehicle` were added on
   2026-09-29 (catalog 32 metrics) and have not been seen live yet.
-- The historian's 5-second `acc.state` series missed a 32 s `off` interval that
-  the raw frames have (2026-09-29 00:04:23Z). Whether the broker published it
-  is not known.
+- The September 29 audit confirmed the broker missed the 32 s `off` interval
+  at 2026-09-29 00:04:23Z while raw frames continued at about 1 Hz. The new
+  continuous display receiver replaces snapshot timing for display publication;
+  the next drive must establish >=95% fresh `acc.state` running snapshots.
 - The passive collector cycles every ~4.3 s instead of 1 s, giving 2–3.5 s old
   values and `unknown` vehicle-state blips (drive audit 2026-09-24).
 - Parked battery-low (tier 0, S1) needs 3 readings in ~24 s, but parked wakes
@@ -1131,6 +1167,82 @@ nice -n 19 ionice -c3 python3 projects/vehicle_data/van_scan_harvest.py \
 The drive recorder's `run.json` conditions no longer claim "no external diagnostic client". They
 now say that the van's own F1 client may sweep while the Pi is not polling, and that this harvester
 notes it.
+
+### File-only cruise summaries (September 29; processing pending)
+
+`cruise_summary.py` reduces completed C-CAN **full** chunks for one completed
+historian trip. It reuses the verified cluster decode and validates each input's
+manifest size/hash, historical channel and identifier namespace. It integrates
+engaged, override and lead-icon durations, CANC press/standby transitions, and
+time-weighted set speed versus displayed speed limit. State gaps over two seconds
+and speed-limit gaps over half a second become unknown; zero limit is unpaired.
+Unknown raw state 3 contributes unknown time but can bridge a <=0.5 s cancel
+transition. Button frames require correct DLC, trailing byte, counter continuity
+and CRC-8/SAE-J1850. A brake association uses the candidate `0x1FA` byte3 bit1,
+stays explicitly unverified, and renders as `possible brake`; non-button cancels
+are never automatically called brake cancels. Simultaneous evidence is separate.
+
+`cruise_harvest.py` is a small local planner/controller, defaulting to plan-only.
+It reads at most 20 completed trip rows, recorder metadata and compute results;
+it never opens CAN or decompresses a capture. It uses only ended C-CAN campaigns
+and manifest-complete full chunks whose sizes match. Each trip gets immutable
+input metadata under `tmp/vehicle_data/cruise_summaries/manifests/`. Heavy work
+is submitted solely to the proposed named task `cruise-summary-reduce`; state
+in `jobs.json` prevents duplicate jobs, and changed input metadata requires
+review. Completed results must match the exact trip and manifest hash before
+atomic import to `trips/<id>.json`. No historian samples are rewritten.
+
+The broker attaches at most five bounded result files during its history cache
+refresh; ordinary cached GETs and the dashboard remain CAN-free. History shows
+coverage, uncertain cancel attribution and absent evidence explicitly. Units
+`systemd/van-cruise-harvest.{service,timer}` stage a file-only controller every
+20 minutes, with network isolation and low I/O priority. **The compute task is
+awaiting owner registration approval; the timer is not installed/enabled yet.**
+The task proposal is `tmp/vehicle_data/cruise-summary-compute-task.json`.
+
+Validation: 1,535 Python tests passed, 7 skipped, 1,374 subtests (named
+`repo-tests` job `20260929T233425Z-5215d5af`); 443 dashboard tests passed, including
+bundle budgets. The dashboard is built/deployed. Chromium at 800×1096 and
+800×1280 verified the page-1 ACC footer with all ten tiles and no scroll; a
+synthetic History summary rendered its coverage and uncertain attribution.
+Core size is 84,628/92,160 B and the shared warning chunk 46,069/46,080 B.
+Unit syntax passed `systemd-analyze verify`.
+
+The backend history attachment is **not deployed**: the supplied restart guard
+passed its asleep/helper/inhibit preflight, but the agent's new restricted
+execution environment refused sudo (`no new privileges`). From an ordinary
+owner shell, the existing guarded command is:
+
+```bash
+cd /home/pi/dev/obd-things && bash tmp/vehicle_data/restart-broker-parked.sh
+```
+
+It refuses while awake. No inhibit was ended, no helper request was changed,
+and no CAN traffic was sent for this work. Actual trip-67 cruise numbers are
+unmeasured until the new compute task is approved and run; its metadata-only
+plan selects 15 completed full chunks totaling 213,123,565 compressed bytes.
+
+```bash
+# Metadata-only plan for one trip; does not scan/decompress a saved capture:
+python3 projects/vehicle_data/cruise_harvest.py --trip 67
+# After the named task is approved/registered, submit or import its existing job:
+python3 projects/vehicle_data/cruise_harvest.py --trip 67 --execute
+```
+
+After task approval/registration, the proposed timer can be installed from the
+ordinary owner shell with:
+
+```bash
+sudo install -m 0644 projects/vehicle_data/systemd/van-cruise-harvest.service projects/vehicle_data/systemd/van-cruise-harvest.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now van-cruise-harvest.timer
+```
+
+The next-drive [braking callout sheet](../radar/findings/2026-09-29_acc_braking_callouts.md)
+keeps `0x4AF` B3 bit2 at Tier 1. The separate
+[lead-range read proposal](../radar/findings/2026-09-29_lead_vehicle_read_plan.md)
+contains exact candidates, rates, parked prerequisites and requested approval;
+it authorizes no transmission and changes no existing live gate.
 
 ## Local API
 

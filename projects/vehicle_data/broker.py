@@ -578,6 +578,7 @@ class TelemetryBroker:
         collector_interval_seconds: float = 1.0,
         acquisition_wait_seconds: float = 20.0,
         passive_powertrain_reader=None,
+        display_receiver=None,
         active_drive_supervisor=None,
         active_drive_enabled: bool = False,
         auxiliary_drive_supervisor=None,
@@ -605,6 +606,7 @@ class TelemetryBroker:
         if history_interval_seconds <= 0:
             raise ValueError("history interval must be positive")
         self.passive_powertrain_reader = passive_powertrain_reader
+        self.display_receiver = display_receiver
         self.active_drive_supervisor = active_drive_supervisor
         self.active_drive_enabled = bool(
             active_drive_enabled and active_drive_supervisor is not None
@@ -788,7 +790,8 @@ class TelemetryBroker:
                 "detail": "telemetry history is disabled by broker configuration",
             }
         try:
-            return self.insights.history_response()
+            from projects.vehicle_data.cruise_harvest import attach_summaries
+            return attach_summaries(self.insights.history_response())
         except Exception as exc:
             return {
                 "available": False,
@@ -1441,6 +1444,12 @@ class TelemetryBroker:
         value_error = self._value_error(definition, value)
         if value_error is not None:
             raise ValueError(value_error)
+        if self.display_receiver is not None and source_name in {
+            "ccan.broadcast.0x0e0", "ccan.broadcast.0x5a0",
+        }:
+            # The continuous receiver owns these timestamps. A bounded helper
+            # snapshot must not overwrite a newer on-change observation.
+            return
         result = success(
             metric=metric,
             unit=definition.unit,
@@ -1490,6 +1499,39 @@ class TelemetryBroker:
         self._update_vehicle_state(result)
         if metric == "engine.crankshaft_torque":
             self._refresh_derived_power()
+
+    def store_display_frame(self, observations, observed_at, observed_monotonic, mode):
+        """Internal receive callback, never a caller-selectable timestamp API."""
+        from projects.vehicle_data.display_receiver import DISPLAY_SOURCES
+
+        results = []
+        if mode not in {"listen_only", "armed_diagnostic"}:
+            raise ValueError("invalid display receiver interface mode")
+        for observation in observations:
+            if observation.source not in DISPLAY_SOURCES & ACTIVE_DRIVE_SOURCES:
+                raise ValueError("display source is not allowlisted")
+            definition = self.definitions[observation.metric]
+            result = success(
+                metric=observation.metric, unit=observation.unit, value=observation.value,
+                source=observation.source, bus="c-can", acquisition="passive",
+                quality=observation.quality, observed_at=observed_at,
+                observed_monotonic=observed_monotonic, interface_mode=mode,
+                detail="continuous cluster frame, kernel receipt timestamp",
+            )
+            checked = self._validate_acquirer_result(observation.metric, definition, result)
+            if not checked.available:
+                raise ValueError(checked.detail)
+            results.append(result)
+        # All fields of an ACC frame enter the cache together. Unknown fields
+        # remain governed by their existing state/age gates; none is refreshed.
+        with self._lock:
+            for result in results:
+                previous = self._cache.get(result.metric)
+                if (previous is not None and previous.observed_monotonic is not None
+                        and previous.observed_monotonic >= observed_monotonic):
+                    continue
+                self._cache[result.metric] = result
+                self.last_readings.observe(result)
 
     def _refresh_derived_power(self) -> None:
         """Derive ECU-estimated crankshaft horsepower from exact fresh inputs."""
@@ -2385,6 +2427,10 @@ class TelemetryBroker:
                               "storage_error": self.last_readings.storage_error},
             "active_acquisition_permitted": active_permitted,
             "collector": collector,
+            "display_receiver": (
+                self.display_receiver.status() if self.display_receiver is not None
+                else {"state": "disabled"}
+            ),
             "history_recorder": history_recorder,
             "supplemental_cache": supplemental_cache,
             "usb_can_monitor": usb_can_monitor,
@@ -2979,6 +3025,10 @@ class TelemetryBroker:
         accepted = 0
         rpm_evidence = None
         for observation in observations:
+            if self.display_receiver is not None and observation.source in {
+                "ccan.broadcast.0x0e0", "ccan.broadcast.0x5a0",
+            }:
+                continue
             result = self.publish_observation(
                 observation.metric,
                 value=observation.value,
@@ -3158,6 +3208,10 @@ class TelemetryBroker:
                 display_detail,
             )
             return
+        if self.display_receiver is not None and not self.display_receiver.pause_passive():
+            self.display_receiver.resume_passive()
+            self._record_active_failure("can_busy", "display observer is still releasing its lease")
+            return
         with self._lock:
             self._active_drive.update(
                 {
@@ -3260,6 +3314,8 @@ class TelemetryBroker:
         try:
             outcome = self.active_drive_supervisor.run(self._collector_stop)
         finally:
+            if self.display_receiver is not None:
+                self.display_receiver.resume_passive()
             auxiliary_stop.set()
             if self.auxiliary_drive_supervisor is not None:
                 self.auxiliary_drive_supervisor.stop()
@@ -3331,6 +3387,10 @@ class TelemetryBroker:
                         }
                     with self._lock:
                         self._interface_reconcile = reconcile
+                # Initial reconciliation records role topology under exclusive
+                # locks. Do not let a long-lived observer overtake that step.
+                if self.display_receiver is not None:
+                    self.display_receiver.start()
                 result = self.acquire("battery.voltage", "passive")
                 self._collect_passive_powertrain(result)
                 self._update_engine_off_voltage_capture(result)
@@ -3366,6 +3426,8 @@ class TelemetryBroker:
     def stop_collector(self, timeout: float = 10.0) -> None:
         self._collector_stop.set()
         self._history_stop.set()
+        if self.display_receiver is not None:
+            self.display_receiver.stop()
         if self.active_drive_supervisor is not None:
             self.active_drive_supervisor.stop()
         if self.auxiliary_drive_supervisor is not None:
@@ -3630,6 +3692,11 @@ def main(argv=None) -> int:
         last_readings=last_readings,
     )
     broker_holder["broker"] = broker
+    from projects.vehicle_data.display_receiver import DisplayReceiver
+    broker.display_receiver = DisplayReceiver(
+        interface_manager, status_reader=broker.status_response,
+        publish=broker.store_display_frame,
+    )
     broker.start_usb_monitor()
     if not args.no_collector:
         broker.start_collector()

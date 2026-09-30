@@ -297,7 +297,7 @@ tab bar, with 16 px gutters and 12 px gaps.
 
 | row | content |
 |---|---|
-| A | **SPEED** (2 cols, hero numerals, `mph`; sub-line `limit 55 mph` while `vehicle.speed_limit` is live, else empty) · **RPM** (1 col; the unit is in the label; the footer reads `gear 6` once a live gear metric exists and is empty until then; 15-min sparkline) |
+| A | **SPEED** (2 cols, hero numerals, `mph`; two-line footer: `limit 55 mph` while live, then `ACC 66 mph · engaged · vehicle ahead`; regular cruise uses `Cruise`; current off/ready/standby/override states are explicit) · **RPM** (1 col; the unit is in the label; the footer reads `gear 6` once a live gear metric exists and is empty until then; 15-min sparkline) |
 | B | **COOLANT** · **TRANS OIL** · **OIL PRESSURE**: value, unit, band bar, 15-min sparkline |
 | C | **VOLTAGE** (1 decimal; sub-line `alternator 42 %`) · **POWER** (`hp`; sub-line `165 lb-ft`) · **OIL TEMP (VVT)** |
 | D | **TIRES** (2 cols: 2×2 grid FL FR / RL RR) · **TRIP** (Time, Distance `≈ 12.3 mi`, Coolant max, Avg power) |
@@ -311,6 +311,16 @@ with `--large`, `--value` and `--tire` in proportion). Because the rows are frac
 height, type and rows scale together.
 
 Rules for Drive tiles:
+
+- Speed's footer keeps its existing speed limit and adds ACC in the same card;
+  the grid and every other tile remain intact. Both lines are 14 px with 20 px
+  line height. A missing/stale/unknown ACC state hides all cruise details,
+  off/ready hides cached set speed, and `vehicle ahead` requires adaptive
+  engaged/override. Standby explicitly identifies remembered set speed. All
+  ACC information is display-only and cannot cause warnings.
+- Both Drive pages now load lazily. `DriveGauges.jsx` holds page 1's gauges and
+  computed footers; `Drive.jsx` retains the registry, pager and swipe behavior.
+  This makes room for ACC without expanding the boot bundle beyond its budget.
 
 - A live value is white on the flat card. A held value (only metrics in the retention policy) is
   dimmed to 55 % opacity, with its time (`4:25 pm`) in the sub-line in place of the live sub-line. A
@@ -348,8 +358,8 @@ content. Page 2 ("Sensors") uses the same frame and the same no-scrolling gate.
   - The page is remembered per device as `settings.drivePage` (1 or 2; anything else loads page 1).
     Paging never touches automatic view selection.
   - Only the page on screen is mounted, so page-1 tiles and sparklines unmount on page 2.
-    `views/DriveMore.jsx` is a lazy chunk, fetched the first time page 2 is shown. The core bundle
-    grows only by the pager and swipe code (about 2 KB).
+    `views/DriveMore.jsx` and `views/DriveGauges.jsx` are lazy chunks, fetched
+    the first time their page is shown.
 - **Portrait grid** (3 columns; rows `1fr 1fr 1.2fr 1fr 1fr`; the speed-limit/ACC row was added
   on 2026-09-27):
 
@@ -467,6 +477,15 @@ checks when stopped:
 
 - **Trips**: the current trip (if open) and the last five, with duration and end time. Distance and
   max speed appear when per-trip statistics exist (v2.1).
+  Completed trips also accept an offline `cruise_summary`: engaged time (excluding
+  accelerator override), time with the vehicle-ahead icon (including override),
+  CANC button counts, provisional brake associations, unknown/ambiguous cancels,
+  and time-weighted set-speed minus speed-limit comparison. Coverage is explicit;
+  missing summaries say `Cruise summary not recorded`, never zero. The UI calls
+  the candidate brake association `possible brake`. Recording termination/drop
+  faults remain visible. The summary is made from finalized full C-CAN chunks,
+  not the five-second historian metric series. `cruise.helpers.js` stays in the
+  lazy History view and adds no core code or warning behavior.
 - **Trends**: one compact card per history metric, with a plain-English label rather than the raw
   metric name. Each shows the 7-day and 30-day low/average/high, the typical range of prior trips
   (median and spread), and the current-trip difference while driving, plus a 24 h sparkline with a
