@@ -34,6 +34,7 @@ import time
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, REPO)
 
+from lib.reports import atomic_json as _atomic_json
 from lib import can_runtime_route, uds
 from lib.modules import get
 from tools.ecu_discover import prearm_conflict_errors, preflight
@@ -294,20 +295,10 @@ def output_paths(module):
 
 def atomic_json(path, payload):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    temporary = f"{path}.tmp-{os.getpid()}"
-    try:
-        with open(temporary, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        try:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
-        except OSError:
-            pass
+    _atomic_json(
+        path, payload, temporary=f"{path}.tmp-{os.getpid()}",
+        fsync=True, cleanup="always-best-effort",
+    )
 
 
 def legacy_path(module, start, end):
