@@ -431,6 +431,7 @@
       "description": "Export read-only AlfaOBD catalog evidence from a database and label file.",
       "profile": "python-script",
       "source_paths": [
+        "lib/reports.py",
         "tools/alfaobd_catalog.py"
       ],
       "minimum_inputs": 2,

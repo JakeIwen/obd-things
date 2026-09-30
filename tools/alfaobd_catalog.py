@@ -12,13 +12,17 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
-import os
 from pathlib import Path
 import re
 import sqlite3
-import tempfile
+import sys
 from typing import Any
+
+REPO = Path(__file__).resolve().parents[1]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+from lib.reports import atomic_json as _atomic_json
 
 
 CATALOG_TABLES = (
@@ -211,22 +215,10 @@ def main() -> int:
         raise SystemExit("at least one --device-id is required")
     report = build_export(args.database, args.labels, args.model_code, args.device_id)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    temporary_name: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", prefix=f".{args.output.name}.",
-            dir=args.output.parent, delete=False
-        ) as destination:
-            temporary_name = destination.name
-            json.dump(report, destination, indent=2, sort_keys=True)
-            destination.write("\n")
-            destination.flush()
-            os.fsync(destination.fileno())
-        os.replace(temporary_name, args.output)
-        temporary_name = None
-    finally:
-        if temporary_name is not None:
-            Path(temporary_name).unlink(missing_ok=True)
+    _atomic_json(
+        args.output, report, prefix=f".{args.output.name}.",
+        sort_keys=True, fsync=True,
+    )
     print(f"wrote {args.output}")
     return 0
 
