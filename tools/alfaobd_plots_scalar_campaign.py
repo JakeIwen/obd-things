@@ -53,21 +53,21 @@ if str(REPO) not in sys.path:
 
 from tools.alfaobd_plots_catalog import (  # noqa: E402
     AdbClient,
-    CatalogPlan,
-    CatalogInventory,
-    DialogPage,
     _dialog_signature,
     _observe_stable_dialog,
     _swipe_dialog,
     _wait_for_plots_page,
-    catalog_sha256,
     load_plan_bytes as load_catalog_plan_bytes,
     monitor_visual_state,
     parse_dialog_page,
-    plot_labels,
     validate_plots_page,
 )
 from lib.alfaobd_common import (  # noqa: E402
+    CatalogPlan,
+    DialogPage,
+    CatalogInventory,
+    plot_labels,
+    catalog_sha256,
     EventWriter,
     SAFE_ID_PREFIX,
     CAMPAIGN_ID_RE,

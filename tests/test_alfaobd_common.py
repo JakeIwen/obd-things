@@ -50,6 +50,34 @@ class AlfaobdCommonTests(unittest.TestCase):
         self.assertEqual(pickle.loads(pickle.dumps(plan)), plan)
         self.assertEqual(plan.as_dict()["schedule"], list(plan.schedule))
 
+    def test_catalog_records_and_helpers_are_reexported(self):
+        for name in ("CatalogPlan", "DialogPage", "CatalogInventory", "plot_labels", "catalog_sha256"):
+            shared = getattr(alfaobd_common, name)
+            self.assertIs(getattr(catalog, name), shared)
+            self.assertIs(getattr(scalar, name), shared)
+        for name in ("CatalogPlan", "DialogPage", "CatalogInventory"):
+            cls = getattr(alfaobd_common, name)
+            self.assertEqual(cls.__module__, "tools.alfaobd_plots_catalog")
+            self.assertIs(pickle.loads(pickle.dumps(cls)), cls)
+        plan_path = Path(catalog.REPO) / "projects/ecu_mapping/configs/alfaobd_pcm_plots_catalog.json"
+        plan = catalog.load_plan(plan_path)
+        self.assertIs(type(plan), alfaobd_common.CatalogPlan)
+        self.assertEqual(pickle.loads(pickle.dumps(plan)).as_dict(), plan.as_dict())
+
+    def test_catalog_hash_and_label_order(self):
+        import hashlib
+
+        self.assertEqual(alfaobd_common.catalog_sha256(["Speed", "café"]),
+                         hashlib.sha256(b'alfaobd-plots-catalog-v1\x00["Speed","caf\xc3\xa9"]').hexdigest())
+        nodes = [
+            alfaobd_common.UiNode(text, alfaobd_common.SAFE_ID_PREFIX + name,
+                                 "view", "package", False, False, True, True, False,
+                                 alfaobd_common.Bounds(0, 0, 1, 1))
+            for name, text in (("Plot12Title", "  Second "), ("Plot2Title", "First"),
+                               ("Plot1Title", " "), ("labelPar0", "Other"))
+        ]
+        self.assertEqual(alfaobd_common.plot_labels(nodes), ("First", "Second"))
+
     def test_exception_class_stays_in_original_tool(self):
         self.assertEqual(campaign.CampaignError.__module__, "tools.alfaobd_singleton_campaign")
         self.assertEqual(campaign.CampaignError.__qualname__, "CampaignError")

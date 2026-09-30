@@ -7,12 +7,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import tempfile
 import time
+from typing import Iterable
 
 
 PACKAGE = "com.AlfaOBD.AlfaOBD"
@@ -180,3 +182,125 @@ UiNode.__module__ = "tools.alfaobd_singleton_campaign"
 ArtifactStat.__module__ = "tools.alfaobd_singleton_campaign"
 CampaignPlan.__module__ = "tools.alfaobd_singleton_campaign"
 EventWriter.__module__ = "tools.alfaobd_singleton_campaign"
+
+
+CATALOG_HASH_DOMAIN = b"alfaobd-plots-catalog-v1\0"
+
+
+@dataclass(frozen=True)
+class CatalogPlan:
+    campaign_id: str
+    module_key: str
+    expected_app_version: str
+    expected_width: int
+    expected_height: int
+    expected_rotation: int
+    expected_connection_texts: tuple[str, ...]
+    expected_catalog_count: int
+    expected_first_label: str
+    expected_last_label: str
+    required_labels: tuple[str, ...]
+    expected_catalog_sha256: str | None
+    max_pages: int
+    swipe_duration_ms: int
+    settle_seconds: float
+    min_free_bytes: int
+    screenshot_each_page: bool
+
+    def as_dict(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "schema_version": 1,
+            "campaign_id": self.campaign_id,
+            "module_key": self.module_key,
+            "expected_app_version": self.expected_app_version,
+            "expected_screen": {
+                "width": self.expected_width,
+                "height": self.expected_height,
+                "rotation": self.expected_rotation,
+            },
+            "expected_connection_texts": list(self.expected_connection_texts),
+            "expected_catalog_count": self.expected_catalog_count,
+            "expected_first_label": self.expected_first_label,
+            "expected_last_label": self.expected_last_label,
+            "required_labels": list(self.required_labels),
+            "max_pages": self.max_pages,
+            "swipe_duration_ms": self.swipe_duration_ms,
+            "settle_seconds": self.settle_seconds,
+            "min_free_bytes": self.min_free_bytes,
+            "screenshot_each_page": self.screenshot_each_page,
+        }
+        if self.expected_catalog_sha256 is not None:
+            payload["expected_catalog_sha256"] = self.expected_catalog_sha256
+        return payload
+
+
+@dataclass(frozen=True)
+class DialogPage:
+    labels: tuple[str, ...]
+    checked: tuple[bool, ...]
+    list_bounds: Bounds
+    ok: UiNode
+    rows: tuple[UiNode, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "labels": list(self.labels),
+            "checked": list(self.checked),
+            "list_bounds": [
+                self.list_bounds.left,
+                self.list_bounds.top,
+                self.list_bounds.right,
+                self.list_bounds.bottom,
+            ],
+        }
+
+
+@dataclass(frozen=True)
+class CatalogInventory:
+    labels: tuple[str, ...]
+    checked_by_label: dict[str, bool]
+    pages: tuple[dict[str, object], ...]
+    catalog_sha256: str
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "catalog_sha256": self.catalog_sha256,
+            "label_count": len(self.labels),
+            "catalog": [
+                {
+                    "zero_based_index": index,
+                    "display_order_key": index + 1,
+                    "label": label,
+                    "checked": self.checked_by_label[label],
+                }
+                for index, label in enumerate(self.labels)
+            ],
+            "pages": list(self.pages),
+        }
+
+
+def plot_labels(nodes: Iterable[UiNode]) -> tuple[str, ...]:
+    labels: list[tuple[int, str]] = []
+    for node in nodes:
+        match = re.fullmatch(
+            re.escape(SAFE_ID_PREFIX) + r"Plot(\d+)Title",
+            node.resource_id,
+        )
+        if match and node.text.strip():
+            labels.append((int(match.group(1)), node.text.strip()))
+    return tuple(label for _, label in sorted(labels))
+
+
+def catalog_sha256(labels: Iterable[str]) -> str:
+    canonical = json.dumps(
+        list(labels),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(CATALOG_HASH_DOMAIN + canonical).hexdigest()
+
+
+# Preserve the original catalog record identities for pickle compatibility.
+CatalogPlan.__module__ = "tools.alfaobd_plots_catalog"
+DialogPage.__module__ = "tools.alfaobd_plots_catalog"
+CatalogInventory.__module__ = "tools.alfaobd_plots_catalog"

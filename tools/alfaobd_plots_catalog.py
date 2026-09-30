@@ -20,7 +20,7 @@ its hash before using the catalog to select anything.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass, replace
+from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
@@ -37,6 +37,12 @@ if str(REPO) not in sys.path:
 from lib import can_runtime_route, diagnostic_safety  # noqa: E402
 from lib.modules import MODULES  # noqa: E402
 from lib.alfaobd_common import (  # noqa: E402
+    CATALOG_HASH_DOMAIN,
+    CatalogPlan,
+    DialogPage,
+    CatalogInventory,
+    plot_labels,
+    catalog_sha256,
     PACKAGE,
     SAFE_ID_PREFIX,
     CAMPAIGN_ID_RE,
@@ -74,7 +80,6 @@ DIALOG_TITLE = "Select gauges to scan"
 DIALOG_LIST_ID = "android:id/select_dialog_listview"
 DIALOG_ROW_ID = "android:id/text1"
 DIALOG_OK_ID = "android:id/button1"
-CATALOG_HASH_DOMAIN = b"alfaobd-plots-catalog-v1\0"
 MIN_FREE_BYTES = 100 * 1024**2
 MAX_CONNECTION_TEXTS = 8
 MAX_REQUIRED_LABELS = 256
@@ -83,98 +88,6 @@ PAGE_STABLE_SWIPES = 2
 POST_SWIPE_UNCHANGED_OBSERVATIONS = 4
 MAX_STABILITY_OBSERVATIONS = 10
 PLOTS_PAGE_TIMEOUT_SECONDS = 15.0
-
-
-@dataclass(frozen=True)
-class CatalogPlan:
-    campaign_id: str
-    module_key: str
-    expected_app_version: str
-    expected_width: int
-    expected_height: int
-    expected_rotation: int
-    expected_connection_texts: tuple[str, ...]
-    expected_catalog_count: int
-    expected_first_label: str
-    expected_last_label: str
-    required_labels: tuple[str, ...]
-    expected_catalog_sha256: str | None
-    max_pages: int
-    swipe_duration_ms: int
-    settle_seconds: float
-    min_free_bytes: int
-    screenshot_each_page: bool
-
-    def as_dict(self) -> dict[str, object]:
-        payload: dict[str, object] = {
-            "schema_version": 1,
-            "campaign_id": self.campaign_id,
-            "module_key": self.module_key,
-            "expected_app_version": self.expected_app_version,
-            "expected_screen": {
-                "width": self.expected_width,
-                "height": self.expected_height,
-                "rotation": self.expected_rotation,
-            },
-            "expected_connection_texts": list(self.expected_connection_texts),
-            "expected_catalog_count": self.expected_catalog_count,
-            "expected_first_label": self.expected_first_label,
-            "expected_last_label": self.expected_last_label,
-            "required_labels": list(self.required_labels),
-            "max_pages": self.max_pages,
-            "swipe_duration_ms": self.swipe_duration_ms,
-            "settle_seconds": self.settle_seconds,
-            "min_free_bytes": self.min_free_bytes,
-            "screenshot_each_page": self.screenshot_each_page,
-        }
-        if self.expected_catalog_sha256 is not None:
-            payload["expected_catalog_sha256"] = self.expected_catalog_sha256
-        return payload
-
-
-@dataclass(frozen=True)
-class DialogPage:
-    labels: tuple[str, ...]
-    checked: tuple[bool, ...]
-    list_bounds: Bounds
-    ok: UiNode
-    rows: tuple[UiNode, ...]
-
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "labels": list(self.labels),
-            "checked": list(self.checked),
-            "list_bounds": [
-                self.list_bounds.left,
-                self.list_bounds.top,
-                self.list_bounds.right,
-                self.list_bounds.bottom,
-            ],
-        }
-
-
-@dataclass(frozen=True)
-class CatalogInventory:
-    labels: tuple[str, ...]
-    checked_by_label: dict[str, bool]
-    pages: tuple[dict[str, object], ...]
-    catalog_sha256: str
-
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "catalog_sha256": self.catalog_sha256,
-            "label_count": len(self.labels),
-            "catalog": [
-                {
-                    "zero_based_index": index,
-                    "display_order_key": index + 1,
-                    "label": label,
-                    "checked": self.checked_by_label[label],
-                }
-                for index, label in enumerate(self.labels)
-            ],
-            "pages": list(self.pages),
-        }
 
 
 def _strings(
@@ -361,18 +274,6 @@ def _parse_plan_payload(payload: object) -> CatalogPlan:
 
 def _ids(nodes: Iterable[UiNode]) -> set[str]:
     return {node.resource_id for node in nodes}
-
-
-def plot_labels(nodes: Iterable[UiNode]) -> tuple[str, ...]:
-    labels: list[tuple[int, str]] = []
-    for node in nodes:
-        match = re.fullmatch(
-            re.escape(SAFE_ID_PREFIX) + r"Plot(\d+)Title",
-            node.resource_id,
-        )
-        if match and node.text.strip():
-            labels.append((int(match.group(1)), node.text.strip()))
-    return tuple(label for _, label in sorted(labels))
 
 
 def _validate_screen_geometry(
@@ -619,15 +520,6 @@ def merge_preceding_page(
             f"reverse Plots catalog cycled/repeated labels: {duplicate_additions}"
         )
     return additions + accumulated, len(additions)
-
-
-def catalog_sha256(labels: Iterable[str]) -> str:
-    canonical = json.dumps(
-        list(labels),
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(CATALOG_HASH_DOMAIN + canonical).hexdigest()
 
 
 def validate_catalog(
