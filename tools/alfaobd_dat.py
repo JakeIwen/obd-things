@@ -14,14 +14,17 @@ import argparse
 from collections import Counter
 from dataclasses import dataclass
 import hashlib
-import json
 import math
-import os
 from pathlib import Path
 import re
 import sys
-import tempfile
 from typing import Iterable, TextIO
+
+REPO = Path(__file__).resolve().parents[1]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+from lib.reports import atomic_json as _atomic_json
 
 
 _SERIES_ID = re.compile(r"[0-9]+")
@@ -286,18 +289,7 @@ def print_human(report: dict[str, object], output: TextIO | None = None) -> None
 
 def write_json(path: Path, report: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    handle = tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", newline="", dir=path.parent, delete=False
-    )
-    temporary = Path(handle.name)
-    try:
-        with handle:
-            json.dump(report, handle, indent=2, ensure_ascii=False)
-            handle.write("\n")
-        os.replace(temporary, path)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
+    _atomic_json(path, report, ensure_ascii=False, newline="")
 
 
 def parser() -> argparse.ArgumentParser:

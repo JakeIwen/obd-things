@@ -372,6 +372,7 @@
       "description": "Inventory one saved AlfaOBD plot-series DAT file.",
       "profile": "python-script",
       "source_paths": [
+        "lib/reports.py",
         "tools/alfaobd_dat.py"
       ],
       "minimum_inputs": 1,
@@ -391,6 +392,7 @@
       "description": "Compare current and baseline AlfaOBD plot-series DAT files.",
       "profile": "can-log-batch",
       "source_paths": [
+        "lib/reports.py",
         "tools/alfaobd_dat.py"
       ],
       "minimum_inputs": 2,
