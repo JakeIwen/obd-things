@@ -25,7 +25,6 @@ lands under tmp/inventories/<module>/ and must be reviewed/masked before promoti
 """
 import argparse
 import datetime
-import json
 import math
 import os
 import signal
@@ -35,6 +34,7 @@ import time
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, REPO)
 
+from lib.reports import atomic_json as _atomic_json
 from lib import can_runtime_route, uds
 from lib import diagnostic_safety
 from lib.modules import get
@@ -204,11 +204,10 @@ def report_path(module):
 
 def write_report(path, report):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    temporary = f"{path}.tmp-{os.getpid()}"
-    with open(temporary, "w") as handle:
-        json.dump(report, handle, indent=2)
-        handle.write("\n")
-    os.replace(temporary, path)
+    _atomic_json(
+        path, report, temporary=f"{path}.tmp-{os.getpid()}",
+        encoding=None, cleanup="none",
+    )
 
 
 def parser():
