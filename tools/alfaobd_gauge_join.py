@@ -30,6 +30,7 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from lib.reports import atomic_json as _atomic_json
 from projects.ecu_mapping.alfalog import iter_exchanges_detailed
 
 
@@ -886,16 +887,7 @@ def file_sha256(path: Path) -> str:
 
 def atomic_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False)
-    temporary = Path(handle.name)
-    try:
-        with handle:
-            json.dump(value, handle, indent=2, ensure_ascii=False)
-            handle.write("\n")
-        os.replace(temporary, path)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
+    _atomic_json(path, value, ensure_ascii=False)
 
 
 def atomic_jsonl(path: Path, rows: Iterable[dict[str, object]]) -> None:

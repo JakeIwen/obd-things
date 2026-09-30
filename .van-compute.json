@@ -48,6 +48,7 @@
       "description": "Run the dependency-light offline AlfaOBD gauge/debug join regression tests.",
       "profile": "repo-test",
       "source_paths": [
+        "lib/reports.py",
         "tools/alfaobd_gauge_join.py",
         "tools/alfaobd_gauges.py",
         "projects/ecu_mapping/alfalog.py",
