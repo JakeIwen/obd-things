@@ -76,7 +76,6 @@ following identity request is non-mutating; dry-run remains the default.
 """
 import argparse
 import datetime
-import json
 import math
 import os
 import re
@@ -89,6 +88,7 @@ from dataclasses import asdict, dataclass
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, REPO)
 
+from lib.reports import atomic_json as _atomic_json
 from lib import can_runtime_route, canbus, uds
 from lib.modules import MODULES, Module, NORMAL_11BITS, NORMAL_29BITS
 
@@ -582,20 +582,10 @@ def report_path():
 def write_report(path, report):
     """Atomically publish a complete or explicitly partial discovery report."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    temporary = f"{path}.tmp-{os.getpid()}"
-    try:
-        with open(temporary, "w", encoding="utf-8") as handle:
-            json.dump(report, handle, indent=2)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        try:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
-        except OSError:
-            pass
+    _atomic_json(
+        path, report, temporary=f"{path}.tmp-{os.getpid()}",
+        fsync=True, cleanup="always-best-effort",
+    )
 
 
 def parser():
