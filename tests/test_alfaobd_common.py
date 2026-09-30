@@ -15,7 +15,7 @@ from tools import alfaobd_singleton_join as join
 
 
 class AlfaobdCommonTests(unittest.TestCase):
-    def test_original_bindings_and_type_pickle_identity(self):
+    def test_original_bindings(self):
         for name in (
             "PACKAGE", "SAFE_ID_PREFIX", "CAMPAIGN_ID_RE", "ACTIVE_DIAGNOSTIC_IDS",
             "BLOCKING_DIALOG_TEXT", "Bounds", "UiNode", "ArtifactStat", "CampaignPlan",
@@ -26,10 +26,6 @@ class AlfaobdCommonTests(unittest.TestCase):
             self.assertIs(getattr(catalog, name), getattr(alfaobd_common, name))
         self.assertIs(scalar.EventWriter, alfaobd_common.EventWriter)
         self.assertIs(join.CampaignPlan, alfaobd_common.CampaignPlan)
-        for name in ("Bounds", "UiNode", "ArtifactStat", "CampaignPlan", "EventWriter"):
-            cls = getattr(alfaobd_common, name)
-            self.assertEqual(cls.__module__, "tools.alfaobd_singleton_campaign")
-            self.assertIs(pickle.loads(pickle.dumps(cls)), cls)
 
     def test_records_keep_repr_fields_and_pickle_roundtrip(self):
         bounds = alfaobd_common.Bounds(1, 3, 8, 12)
@@ -55,10 +51,6 @@ class AlfaobdCommonTests(unittest.TestCase):
             shared = getattr(alfaobd_common, name)
             self.assertIs(getattr(catalog, name), shared)
             self.assertIs(getattr(scalar, name), shared)
-        for name in ("CatalogPlan", "DialogPage", "CatalogInventory"):
-            cls = getattr(alfaobd_common, name)
-            self.assertEqual(cls.__module__, "tools.alfaobd_plots_catalog")
-            self.assertIs(pickle.loads(pickle.dumps(cls)), cls)
         plan_path = Path(catalog.REPO) / "projects/ecu_mapping/configs/alfaobd_pcm_plots_catalog.json"
         plan = catalog.load_plan(plan_path)
         self.assertIs(type(plan), alfaobd_common.CatalogPlan)
@@ -79,7 +71,6 @@ class AlfaobdCommonTests(unittest.TestCase):
         self.assertEqual(alfaobd_common.plot_labels(nodes), ("First", "Second"))
 
     def test_exception_class_stays_in_original_tool(self):
-        self.assertEqual(campaign.CampaignError.__module__, "tools.alfaobd_singleton_campaign")
         self.assertEqual(campaign.CampaignError.__qualname__, "CampaignError")
         self.assertIs(catalog.CampaignError, campaign.CampaignError)
         self.assertIs(scalar.CampaignError, campaign.CampaignError)
@@ -87,7 +78,6 @@ class AlfaobdCommonTests(unittest.TestCase):
         self.assertFalse(hasattr(alfaobd_common, "CampaignError"))
         error = campaign.CampaignError("fixture")
         self.assertEqual(repr(error), "CampaignError('fixture')")
-        self.assertIs(type(pickle.loads(pickle.dumps(error))), campaign.CampaignError)
 
     def test_event_and_state_exact_bytes_and_fsync(self):
         stamp = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)

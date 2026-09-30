@@ -54,10 +54,3 @@ def preflight(channel, bitrate):
     """Compatibility aggregate for an already-armed active interface."""
 
     return prearm_conflict_errors() + active_interface_errors(channel, bitrate)
-
-
-# Preserve the historical callback identity recorded in route-call diagnostics.
-# ecu_discover re-exports these names, so existing pickle references resolve too.
-prearm_conflict_errors.__module__ = "tools.ecu_discover"
-active_interface_errors.__module__ = "tools.ecu_discover"
-preflight.__module__ = "tools.ecu_discover"

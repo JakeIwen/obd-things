@@ -176,14 +176,6 @@ def _write_text(path: Path, payload: str) -> None:
     _write_bytes(path, payload.encode("utf-8"))
 
 
-# Keep serialized type identities compatible with existing campaign artifacts.
-Bounds.__module__ = "tools.alfaobd_singleton_campaign"
-UiNode.__module__ = "tools.alfaobd_singleton_campaign"
-ArtifactStat.__module__ = "tools.alfaobd_singleton_campaign"
-CampaignPlan.__module__ = "tools.alfaobd_singleton_campaign"
-EventWriter.__module__ = "tools.alfaobd_singleton_campaign"
-
-
 CATALOG_HASH_DOMAIN = b"alfaobd-plots-catalog-v1\0"
 
 
@@ -298,9 +290,3 @@ def catalog_sha256(labels: Iterable[str]) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(CATALOG_HASH_DOMAIN + canonical).hexdigest()
-
-
-# Preserve the original catalog record identities for pickle compatibility.
-CatalogPlan.__module__ = "tools.alfaobd_plots_catalog"
-DialogPage.__module__ = "tools.alfaobd_plots_catalog"
-CatalogInventory.__module__ = "tools.alfaobd_plots_catalog"

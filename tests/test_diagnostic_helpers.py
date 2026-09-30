@@ -1,5 +1,4 @@
 from dataclasses import replace
-import pickle
 import socket
 from types import SimpleNamespace
 import unittest
@@ -16,12 +15,10 @@ class DiagnosticPreflightTests(unittest.TestCase):
         guard.start()
         self.addCleanup(guard.stop)
 
-    def test_reexports_and_callback_identity(self):
+    def test_reexports(self):
         for name in ("prearm_conflict_errors", "active_interface_errors", "preflight"):
             function = getattr(diagnostic_preflight, name)
             self.assertIs(getattr(ecu_discover, name), function)
-            self.assertEqual(function.__module__, "tools.ecu_discover")
-            self.assertIs(pickle.loads(pickle.dumps(function)), function)
 
     def test_prearm_sudo_call_and_failures(self):
         for code in (0, 1, 127):
