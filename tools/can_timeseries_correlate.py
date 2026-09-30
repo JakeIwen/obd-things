@@ -57,6 +57,10 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from lib.modules import MODULES, NORMAL_11BITS, Module
+from lib.candump_io import (
+    CandumpFormat, CandumpSyntaxError, candump_patterns, identifier_bits,
+    parse_candump_line, zstd_stream,
+)
 from lib.signal_fields import (
     BYTE_ORDERS,
     MAX_SIGNAL_BITS,
@@ -101,19 +105,7 @@ MAX_CAPTURE_DECOMPRESSED_BYTES = 64 * 1024**3
 MAX_TRACKED_DISTINCT_VALUES = 16
 
 _TIMESTAMP = rb"(?P<timestamp>[+-]?(?:\d+(?:\.\d*)?|\.\d+))"
-_LONG_FRAME = re.compile(
-    rb"^\s*\(" + _TIMESTAMP + rb"\)\s+"
-    rb"(?P<interface>\S+)\s+"
-    rb"(?P<can_id>[0-9A-Fa-f]{1,8})\s+"
-    rb"\[(?P<dlc>\d{1,2})\]"
-    rb"(?:\s+(?P<data>[0-9A-Fa-f]{2}(?:\s+[0-9A-Fa-f]{2})*))?\s*$"
-)
-_COMPACT_FRAME = re.compile(
-    rb"^\s*\(" + _TIMESTAMP + rb"\)\s+"
-    rb"(?P<interface>\S+)\s+"
-    rb"(?P<can_id>[0-9A-Fa-f]{1,8})#"
-    rb"(?P<data>(?:[0-9A-Fa-f]{2})*)\s*$"
-)
+_LONG_FRAME, _COMPACT_FRAME = candump_patterns(CandumpFormat(), binary=True)
 _REFERENCE_FIELD_RE = re.compile(
     r"^(byte|[ui]16be|[ui]16le|[ui]32be|[ui]32le):([0-9]{1,4})$"
 )
@@ -604,38 +596,11 @@ class CliZstdDecompressor:
 
     @contextmanager
     def open(self, path: Path) -> Iterator[BinaryIO]:
-        try:
-            process = subprocess.Popen(
-                [self.executable, "-dc", "--", str(path)],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-            )
-        except OSError as exc:
-            raise CorrelateError(f"cannot start zstd for {path}: {exc}") from exc
-        if process.stdout is None:
-            process.kill()
-            process.wait()
-            raise CorrelateError("zstd stdout pipe was not created")
-
-        completed = False
-        try:
+        with zstd_stream(
+            path, executable=self.executable, popen=subprocess.Popen,
+            error_type=CorrelateError, stdin=subprocess.DEVNULL,
+        ) as process:
             yield process.stdout
-            completed = True
-        finally:
-            process.stdout.close()
-            if not completed and process.poll() is None:
-                process.terminate()
-            try:
-                returncode = process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-                returncode = -9
-            if completed and returncode != 0:
-                raise CorrelateError(
-                    f"zstd failed while reading {path} with status {returncode}"
-                )
 
 
 def _bounded_lines(handle: BinaryIO, *, maximum_line_bytes: int) -> Iterator[bytes]:
@@ -678,30 +643,18 @@ def parse_candump_frame(
     """Parse one classic-CAN candump line; return ``None`` for a blank line."""
     if not line.strip():
         return None
-    stripped = line.rstrip(b"\r\n")
-    match = _LONG_FRAME.fullmatch(stripped)
-    if match:
-        dlc = int(match.group("dlc"), 10)
-        data_text = match.group("data") or b""
-        try:
-            payload = bytes.fromhex(data_text.decode("ascii"))
-        except (ValueError, UnicodeDecodeError) as exc:
-            raise CorrelateError("candump line has invalid payload hex") from exc
-        if len(payload) != dlc:
-            raise CorrelateError("candump line DLC does not match its payload")
-    else:
-        match = _COMPACT_FRAME.fullmatch(stripped)
-        if match is None:
-            raise CorrelateError("malformed nonempty candump line")
-        try:
-            payload = bytes.fromhex(match.group("data").decode("ascii"))
-        except (ValueError, UnicodeDecodeError) as exc:
-            raise CorrelateError("candump line has invalid payload hex") from exc
+    try:
+        fields = parse_candump_line(line.rstrip(b"\r\n"), format=CandumpFormat())
+    except CandumpSyntaxError as exc:
+        raise CorrelateError(str(exc)) from None
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise CorrelateError("candump line has invalid payload hex") from exc
+    payload = fields.payload
 
     if len(payload) > 8:
         raise CorrelateError("CAN FD payloads are outside this classic-CAN analyzer")
     try:
-        interface = match.group("interface").decode("ascii")
+        interface = fields.interface.decode("ascii")
     except UnicodeDecodeError as exc:
         raise CorrelateError("candump interface is not ASCII") from exc
     if expected_channel is not None and interface != expected_channel:
@@ -709,20 +662,17 @@ def parse_candump_frame(
             f"candump interface must match the declared capture channel "
             f"{expected_channel!r}"
         )
-    can_id_text = match.group("can_id")
+    can_id_text = fields.can_id_text
     can_id = int(can_id_text, 16)
-    if len(can_id_text) == 3 and can_id <= 0x7FF:
-        id_bits = 11
-    elif len(can_id_text) == 8 and can_id <= 0x1FFFFFFF:
-        id_bits = 29
-    else:
+    id_bits = identifier_bits(can_id_text, can_id, strict_width=True)
+    if id_bits is None:
         raise CorrelateError(
             "candump identifier must be exactly three SFF or eight EFF "
             "hexadecimal digits"
         )
     return CanFrame(
         timestamp_us=_timestamp_to_us(
-            match.group("timestamp"), context="candump frame"
+            fields.timestamp, context="candump frame"
         ),
         can_id=can_id,
         id_bits=id_bits,

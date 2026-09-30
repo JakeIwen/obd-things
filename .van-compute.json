@@ -30,6 +30,7 @@
       "profile": "repo-test",
       "source_paths": [
         "lib/modules.py",
+        "lib/candump_io.py",
         "tools/can_timeseries_correlate.py",
         "tools/candump_diagnostic_wire.py",
         "tests/test_candump_diagnostic_wire.py"
