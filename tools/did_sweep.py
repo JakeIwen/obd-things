@@ -714,8 +714,8 @@ def main(argv=None):
             ),
             (
                 count > MAX_BOUNDED_DIDS and not args.confirm_expanded_scan,
-             f"ERROR: {count} DIDs exceeds bounded limit {MAX_BOUNDED_DIDS}; "
-                   "add --confirm-expanded-scan",
+                f"ERROR: {count} DIDs exceeds bounded limit {MAX_BOUNDED_DIDS}; "
+                "add --confirm-expanded-scan",
             ),
             (
                 args.session is not None and not args.confirm_session_change,

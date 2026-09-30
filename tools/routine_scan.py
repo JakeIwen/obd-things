@@ -391,8 +391,8 @@ def main(argv=None):
             ),
             (
                 len(rids) > MAX_BOUNDED_RIDS and not args.confirm_expanded_scan,
-             f"ERROR: {len(rids)} routine IDs exceeds bounded limit {MAX_BOUNDED_RIDS}; "
-                   "add --confirm-expanded-scan",
+                f"ERROR: {len(rids)} routine IDs exceeds bounded limit {MAX_BOUNDED_RIDS}; "
+                "add --confirm-expanded-scan",
             ),
         ],
     )

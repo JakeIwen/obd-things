@@ -524,8 +524,8 @@ def main(argv=None):
                 or not args.conditions
                 or not args.confirm_session_change
                 or not args.confirm_no_active_routine,
-             "ERROR: --execute requires --confirm-parked, --pair, --conditions, "
-                   "--confirm-session-change, and --confirm-no-active-routine",
+                "ERROR: --execute requires --confirm-parked, --pair, --conditions, "
+                "--confirm-session-change, and --confirm-no-active-routine",
             ),
         ],
     )
