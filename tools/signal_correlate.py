@@ -39,6 +39,7 @@ import datetime
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, REPO)
 from lib.reports import atomic_json as _atomic_json
+from lib.cli_gates import execution_gate
 from lib import can_runtime_route, diagnostic_safety, uds
 from lib.modules import get
 from tools.ecu_discover import prearm_conflict_errors, preflight
@@ -512,22 +513,16 @@ def main(argv=None):
         f"duration<={args.seconds:g}s; rate<={args.rate:g}/s; requests<={args.max_requests}"
     )
     print(f"output: {out}")
-    if not args.execute:
-        print("DRY RUN: no directory, checkpoint, preflight, CAN socket, or transmission occurred.")
-        return 0
-    if (
-        not args.confirm_parked
-        or not args.pair
-        or not args.conditions
-        or not args.confirm_session_change
-        or not args.confirm_no_active_routine
-    ):
-        print(
-            "ERROR: --execute requires --confirm-parked, --pair, --conditions, "
-            "--confirm-session-change, and --confirm-no-active-routine",
-            file=sys.stderr,
-        )
-        return 2
+    gate_result = execution_gate(
+        args.execute,
+        dry_run_message='DRY RUN: no directory, checkpoint, preflight, CAN socket, or transmission occurred.',
+        failures=[
+            (not args.confirm_parked or not args.pair or (not args.conditions) or (not args.confirm_session_change) or (not args.confirm_no_active_routine),
+             'ERROR: --execute requires --confirm-parked, --pair, --conditions, --confirm-session-change, and --confirm-no-active-routine'),
+        ],
+    )
+    if gate_result is not None:
+        return gate_result
 
     try:
         final_report = capture(

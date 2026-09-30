@@ -496,3 +496,49 @@ class DtcInventoryCallSequenceTests(unittest.TestCase):
          ('ownership.release', (), {}),
          ('termination.__exit__', (), {})]
         self.assertEqual(record_live_calls("dtc_inventory"), expected)
+
+
+class SignalCorrelateCallSequenceTests(unittest.TestCase):
+    def test_live_calls_match_390404e(self):
+        expected = [('can_runtime_route.acquire_armed_module_route',
+          (('Module',
+            {'key': 'radar_acc',
+             'name': 'Bosch ACC radar (DASM / MRR1evo)',
+             'txid': 416951025,
+             'rxid': 417001770,
+             'channel': None,
+             'bus': 'c-can',
+             'note': 'ACKs frames even with ignition cut mid-sweep; speed only via DID 0x1002 (no OBD PIDs behind '
+                     'SGW).',
+             'bitrate': 500000,
+             'addressing_mode': 'normal_29bits'}),),
+          {'asserted_pair': '6/14', 'prearm_check': 'tools.ecu_discover.prearm_conflict_errors'}),
+         ('preflight', ('can9', 500000), {}),
+         ('diagnostic_safety.interrupt_on_termination', (), {}),
+         ('termination.__enter__', (), {}),
+         ('uds.open_module_socket',
+          (('Module',
+            {'key': 'radar_acc',
+             'name': 'Bosch ACC radar (DASM / MRR1evo)',
+             'txid': 416951025,
+             'rxid': 417001770,
+             'channel': 'can9',
+             'bus': 'c-can',
+             'note': 'ACKs frames even with ignition cut mid-sweep; speed only via DID 0x1002 (no OBD PIDs behind '
+                     'SGW).',
+             'bitrate': 500000,
+             'addressing_mode': 'normal_29bits'}),),
+          {'timeout': 0.75}),
+         ('uds.drain', ('<socket>',), {}),
+         ('uds.request',
+          ('<socket>', ('bytes', '1003')),
+          {'timeout': 0.75, 'retries': 0, 'response_pending_timeout': 5.0, 'max_pending_responses': 32}),
+         ('uds.drain', ('<socket>',), {}),
+         ('uds.request',
+          ('<socket>', ('bytes', '220845')),
+          {'timeout': 0.75, 'retries': 0, 'response_pending_timeout': 5.0, 'max_pending_responses': 32}),
+         ('termination.begin_cleanup', (), {}),
+         ('socket.close', (), {}),
+         ('ownership.release', (), {}),
+         ('termination.__exit__', (), {})]
+        self.assertEqual(record_live_calls("signal_correlate"), expected)
