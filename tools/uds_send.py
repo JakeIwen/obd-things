@@ -19,6 +19,7 @@ import string
 import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from lib.cli_gates import execution_gate
 from lib import can_runtime_route, diagnostic_safety, uds
 from lib.modules import get
 from tools.ecu_discover import prearm_conflict_errors, preflight
@@ -127,6 +128,12 @@ def confirmation_errors(args, safety_class):
     return errors
 
 
+def confirmation_failures(args, safety_class):
+    """Defer the existing ordered missing-flag list until after dry-run handling."""
+    missing = confirmation_errors(args, safety_class)
+    yield missing, "ERROR: live request is missing required confirmation(s): " + ", ".join(missing)
+
+
 def required_live_flags(safety_class):
     """Return the exact flag names the dry-run plan must advertise for this request class."""
     flags = ["--execute", "--confirm-parked", "--pair PAIR", "--conditions DESCRIPTION"]
@@ -159,17 +166,13 @@ def main(argv=None):
     print(f"payload: {uds.hx(payload)}")
     print(f"classification: {safety_class} ({label})")
     print("required live flags: " + " ".join(required_live_flags(safety_class)))
-    if not args.execute:
-        print("DRY RUN: no preflight, CAN socket, or transmission occurred.")
-        return 0
-
-    missing = confirmation_errors(args, safety_class)
-    if missing:
-        print(
-            "ERROR: live request is missing required confirmation(s): " + ", ".join(missing),
-            file=sys.stderr,
-        )
-        return 2
+    gate_result = execution_gate(
+        args.execute,
+        dry_run_message='DRY RUN: no preflight, CAN socket, or transmission occurred.',
+        failures=confirmation_failures(args, safety_class),
+    )
+    if gate_result is not None:
+        return gate_result
 
     try:
         ownership = can_runtime_route.acquire_armed_module_route(
