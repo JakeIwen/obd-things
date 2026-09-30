@@ -29,6 +29,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from tools import can_capture_summary
+from lib.candump_io import zstd_stream
 
 
 MAX_UNFILTERED_WINDOW_SECONDS = 30.0
@@ -90,32 +91,10 @@ def capture_lines(path: Path) -> Iterator[TextIO]:
             yield capture
         return
 
-    try:
-        process = subprocess.Popen(
-            ["zstd", "-dc", "--", str(path)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-    except OSError as exc:
-        raise EventWindowError(f"cannot start zstd for {path}: {exc}") from exc
-    if process.stdout is None or process.stderr is None:
-        if process.poll() is None:
-            process.kill()
-        process.wait()
-        raise EventWindowError("zstd did not provide stdout/stderr pipes")
-    try:
+    with zstd_stream(
+        path, popen=subprocess.Popen, error_type=EventWindowError, text=True,
+    ) as process:
         yield process.stdout
-        stderr = process.stderr.read()
-        returncode = process.wait()
-    finally:
-        process.stdout.close()
-        process.stderr.close()
-    if returncode != 0:
-        detail = stderr.strip() or f"exit status {returncode}"
-        raise EventWindowError(f"zstd decompression failed for {path}: {detail}")
 
 
 def extract_window(
