@@ -2584,18 +2584,9 @@ def _exclusive_write_json(
         raise
 
 
-def run_analysis(
-    *,
-    wire: Path,
-    captures: Sequence[Path],
-    did: int,
-    reference_field: str,
-    config: AnalysisConfig,
-    capture_channel: str,
-    module: Module = DEFAULT_MODULE,
-    decompressor: Decompressor | None = None,
-    allow_van_compute_staging: bool = False,
-) -> dict[str, object]:
+def _config_for_capture_channel(
+    config: AnalysisConfig, capture_channel: str
+) -> AnalysisConfig:
     _validate_capture_channel(capture_channel)
     if config.fixed_formula is not None:
         selector = config.fixed_formula.candidate
@@ -2631,6 +2622,20 @@ def run_analysis(
                 throttle=replace(regime.throttle, channel=capture_channel),
             ),
         )
+    return config
+
+
+def _analyze_evidence(
+    wire: Path,
+    captures: Sequence[Path],
+    did: int,
+    reference_field: str,
+    config: AnalysisConfig,
+    capture_channel: str,
+    module: Module,
+    decompressor: Decompressor | None,
+    allow_van_compute_staging: bool,
+) -> tuple[ReferenceDecoder, StreamStats, list[StreamStats], StreamingCorrelator]:
     _validate_inputs(
         wire,
         captures,
@@ -2664,6 +2669,331 @@ def run_analysis(
             expected_channel=capture_channel,
         ),
         config=config,
+    )
+    return decoder, reference_stats, capture_stats, correlator
+
+
+def _analysis_settings_report(config: AnalysisConfig) -> dict[str, object]:
+    return {
+        "match_mode": config.match_mode,
+        "window_statistic": config.window_statistic,
+        "radius_ms": config.radius_us / 1000.0,
+        "maximum_candidate_staleness_ms": config.radius_us / 1000.0,
+        "staleness_definition": (
+            "absolute candidate-frame delta from the exact "
+            "kernel/candump-observed diagnostic response timestamp on the "
+            "declared capture channel"
+        ),
+        "minimum_samples": config.minimum_samples,
+        "minimum_coverage_ratio": config.minimum_coverage_ratio,
+        "minimum_distinct_values": config.minimum_distinct_values,
+        "top_count": config.top_count,
+        "candidate_filter": {
+            "include_extended": config.include_extended,
+            "include_diagnostic_ids": config.include_diagnostic_ids,
+            "default_standard_diagnostic_ids": [
+                "0x7DF",
+                "0x7E0-0x7EF",
+            ],
+            "default_extended_diagnostic_prefixes": [
+                "0x18DAxxxx",
+                "0x18DBxxxx",
+            ],
+        },
+        "candidate_field_profile": {
+            "default": (
+                "legacy_coarse_bytes_words_and_stellantis_packed_fields"
+            ),
+            "default_dlc8_field_count": len(_legacy_payload_specs(8)),
+            "targeted_bit_search_streams": [
+                (
+                    f"eff:{can_id:08X}:{dlc}"
+                    if id_bits == 29
+                    else f"sff:{can_id:03X}:{dlc}"
+                )
+                for can_id, id_bits, dlc in sorted(
+                    config.bit_search_ids,
+                    key=lambda item: (item[1], item[0], item[2]),
+                )
+            ],
+            "targeted_ids_replace_default_profile": True,
+            "bit_numbering": "DBC/cantools sawtooth",
+            "minimum_bits": config.bit_search_minimum_bits,
+            "maximum_bits": config.bit_search_maximum_bits,
+            "selected_lengths": list(config.bit_search_lengths),
+            "selected_lengths_empty_means_full_configured_range": True,
+            "byte_orders": list(config.bit_search_byte_orders),
+            "signedness": [
+                "signed" if signed else "unsigned"
+                for signed in config.bit_search_signedness
+            ],
+            "equivalent_value_geometries_deduplicated": True,
+        },
+        "candidate_stream_identity": [
+            "channel",
+            "SFF/EFF namespace",
+            "CAN ID",
+            "DLC",
+            "capture source path and decompressed SHA-256",
+        ],
+        "hard_memory_state_caps": {
+            "active_references": MAX_ACTIVE_REFERENCES,
+            "pending_wire_links": MAX_PENDING_WIRE_LINKS,
+            "candidate_ids": MAX_CANDIDATE_IDS,
+            "history_frames": MAX_HISTORY_FRAMES,
+            "active_match_states": MAX_ACTIVE_MATCH_STATES,
+            "active_window_fields": MAX_ACTIVE_WINDOW_FIELDS,
+            "candidate_fields": MAX_CANDIDATE_FIELDS,
+            "bit_search_streams": MAX_BIT_SEARCH_IDENTIFIERS,
+            "bit_search_fields_per_identifier": (
+                MAX_BIT_SEARCH_FIELDS_PER_IDENTIFIER
+            ),
+            "reported_candidates": MAX_TOP_COUNT,
+            "total_reference_samples": MAX_REFERENCE_SAMPLES,
+            "fixed_formula_residuals": MAX_REFERENCE_SAMPLES,
+            "wire_stream_lines": MAX_WIRE_STREAM_LINES,
+            "wire_stream_bytes": MAX_WIRE_STREAM_BYTES,
+            "capture_files": MAX_CAPTURE_FILES,
+            "total_capture_frames": MAX_CAPTURE_FRAMES,
+            "capture_decompressed_bytes": (
+                MAX_CAPTURE_DECOMPRESSED_BYTES
+            ),
+        },
+    }
+
+
+def _reference_evidence_report(
+    module: Module,
+    capture_channel: str,
+    did: int,
+    reference_field: str,
+    decoder: ReferenceDecoder,
+    correlator: StreamingCorrelator,
+    reference_stats: StreamStats,
+) -> dict[str, object]:
+    return {
+        "module": {
+            "key": module.key,
+            "name": module.name,
+            "bus": module.bus,
+            "txid_hex": f"{module.txid:08X}",
+            "rxid_hex": f"{module.rxid:08X}",
+            "addressing_mode": module.addressing_mode,
+        },
+        "capture_channel": capture_channel,
+        "did": f"{did:04X}",
+        "requested_field": reference_field,
+        "resolved_field": decoder.resolved.as_dict(),
+        "sample_count": correlator.reference_count,
+        "global_candump_linkage": {
+            "required": True,
+            "linked_sample_count": correlator.linked_reference_count,
+            "verified_sample_count": correlator.verified_reference_links,
+            "verification_fields": [
+                "raw_line_sequence",
+                "timestamp_epoch_us",
+                "channel",
+                "SFF/EFF namespace",
+                "can_id",
+                "can_data_hex",
+            ],
+        },
+        "timestamp_coverage": {
+            "first_epoch_us": correlator.reference_first_us,
+            "last_epoch_us": correlator.reference_last_us,
+        },
+        "observed_polling_cadence": {
+            "interval_count": correlator.reference_interval_count,
+            "minimum_interval_ms": (
+                None
+                if correlator.reference_interval_minimum_us is None
+                else correlator.reference_interval_minimum_us / 1000.0
+            ),
+            "mean_interval_ms": (
+                None
+                if correlator.reference_interval_count == 0
+                else correlator.reference_interval_total_us
+                / correlator.reference_interval_count
+                / 1000.0
+            ),
+            "maximum_interval_ms": (
+                None
+                if correlator.reference_interval_count == 0
+                else correlator.reference_interval_maximum_us / 1000.0
+            ),
+            "reference_timestamp_source": (
+                "exact kernel/candump-observed diagnostic wire response on "
+                "the declared capture channel"
+            ),
+            "csv_sample_holding_used": False,
+        },
+        "source": reference_stats.as_dict(),
+    }
+
+
+def _capture_evidence_report(
+    capture_stats: Sequence[StreamStats], correlator: StreamingCorrelator
+) -> dict[str, object]:
+    return {
+        "provenance_limits": {
+            "manifest_validated": False,
+            "loss_accounting_validated": False,
+            "campaign_summary_validated": False,
+            "warning": (
+                "This report exact-links selected DID rows to raw frames but "
+                "does not independently validate manifest chunk accounting, "
+                "socket drops, or clean campaign finalization; review the "
+                "completed campaign summary separately."
+            ),
+        },
+        "sources": [item.as_dict() for item in capture_stats],
+        "decompressed_bytes_read": sum(
+            item.bytes_read for item in capture_stats
+        ),
+        "total_frames": correlator.total_capture_frames,
+        "eligible_candidate_frames": correlator.eligible_capture_frames,
+        "excluded_extended_frames": correlator.excluded_extended_frames,
+        "excluded_diagnostic_frames": correlator.excluded_diagnostic_frames,
+        "empty_payload_frames": correlator.empty_payload_frames,
+        "candidate_identifier_count": len(
+            {
+                (channel, can_id, id_bits)
+                for channel, can_id, id_bits, _ in correlator.histories
+            }
+        ),
+        "candidate_stream_count": len(correlator.histories),
+        "candidate_field_state_count": len(correlator.regressions),
+    }
+
+
+def _ranking_report(
+    candidate_rows: list[dict[str, object]],
+    rejected: dict[str, int],
+    correlator: StreamingCorrelator,
+) -> dict[str, object]:
+    return {
+        "reported_candidate_count": len(candidate_rows),
+        "eligible_candidate_maximum_r_squared": (
+            correlator.eligible_candidate_maximum_r_squared
+        ),
+        "unreported_or_rejected_field_counts": rejected,
+        "order": [
+            "r_squared multiplied by coverage_ratio descending",
+            "r_squared descending",
+            "coverage_ratio descending",
+            "sample_count descending",
+            "CAN ID and field deterministic tie-break",
+        ],
+        "candidates": candidate_rows,
+    }
+
+
+def _fixed_formula_report(
+    config: AnalysisConfig, fixed_formula_result: dict[str, object] | None
+) -> dict[str, object]:
+    return (
+        {}
+        if fixed_formula_result is None
+        else {
+            "fixed_formula_evaluation": {
+                "classification": "candidate_only",
+                "evidence_tier": PROXY_EVALUATION_EVIDENCE_TIER,
+                "candidate_only": True,
+                "physical_identity_verified": False,
+                "scale_verified": False,
+                "telemetry_promotion_allowed": False,
+                "purpose": (
+                    "score one predeclared affine formula without "
+                    "refitting it to this capture"
+                ),
+                "semantic_identity_warning": (
+                    "low residual error can reject a poor formula but "
+                    "cannot by itself prove physical signal identity"
+                ),
+                "reference_timestamp_source": (
+                    "exact kernel/candump-observed diagnostic wire response on "
+                    "the declared capture channel"
+                ),
+                "candidate_timestamp_source": (
+                    "nearest eligible passive CAN frame within the "
+                    "configured radius"
+                    if config.match_mode == "nearest"
+                    else (
+                        f"{config.window_statistic} of eligible passive "
+                        "CAN frames in the configured symmetric window"
+                    )
+                ),
+                "result": fixed_formula_result,
+            }
+        }
+    )
+
+
+def _regime_analysis_report(
+    config: AnalysisConfig,
+    correlator: StreamingCorrelator,
+    regime_rows: dict[str, dict[str, object]] | None,
+) -> dict[str, object]:
+    return (
+        {}
+        if config.regime_analysis is None
+        else {
+            "regime_analysis": {
+                "classification": "candidate_only",
+                "evidence_tier": EXPLORATORY_EVIDENCE_TIER,
+                "candidate_only": True,
+                "physical_identity_verified": False,
+                "scale_verified": False,
+                "telemetry_promotion_allowed": False,
+                "purpose": (
+                    "compare shortlisted torque-related passive fields "
+                    "across explicit operating regimes"
+                ),
+                "semantic_identity_warning": (
+                    "regime-dependent covariance can reject a proposed "
+                    "identity but cannot prove actual torque semantics"
+                ),
+                "reference_timestamp_source": (
+                    "exact kernel/candump-observed diagnostic wire response on "
+                    "the declared capture channel"
+                ),
+                "classifier_delta_basis": (
+                    "rate between consecutive exact reference timestamps; "
+                    "no CSV sample holding"
+                ),
+                "config": config.regime_analysis.as_dict(),
+                "classification_counts": (
+                    correlator.regime_classification_counts
+                ),
+                "rankings": regime_rows,
+            }
+        }
+    )
+
+
+def run_analysis(
+    *,
+    wire: Path,
+    captures: Sequence[Path],
+    did: int,
+    reference_field: str,
+    config: AnalysisConfig,
+    capture_channel: str,
+    module: Module = DEFAULT_MODULE,
+    decompressor: Decompressor | None = None,
+    allow_van_compute_staging: bool = False,
+) -> dict[str, object]:
+    config = _config_for_capture_channel(config, capture_channel)
+    decoder, reference_stats, capture_stats, correlator = _analyze_evidence(
+        wire,
+        captures,
+        did,
+        reference_field,
+        config,
+        capture_channel,
+        module,
+        decompressor,
+        allow_van_compute_staging,
     )
     if (
         correlator.linked_reference_count != correlator.reference_count
@@ -2703,266 +3033,20 @@ def run_analysis(
             "reference DID raw value = scale * candidate broadcast raw value "
             "+ intercept"
         ),
-        "analysis": {
-            "match_mode": config.match_mode,
-            "window_statistic": config.window_statistic,
-            "radius_ms": config.radius_us / 1000.0,
-            "maximum_candidate_staleness_ms": config.radius_us / 1000.0,
-            "staleness_definition": (
-                "absolute candidate-frame delta from the exact "
-                "kernel/candump-observed diagnostic response timestamp on the "
-                "declared capture channel"
-            ),
-            "minimum_samples": config.minimum_samples,
-            "minimum_coverage_ratio": config.minimum_coverage_ratio,
-            "minimum_distinct_values": config.minimum_distinct_values,
-            "top_count": config.top_count,
-            "candidate_filter": {
-                "include_extended": config.include_extended,
-                "include_diagnostic_ids": config.include_diagnostic_ids,
-                "default_standard_diagnostic_ids": [
-                    "0x7DF",
-                    "0x7E0-0x7EF",
-                ],
-                "default_extended_diagnostic_prefixes": [
-                    "0x18DAxxxx",
-                    "0x18DBxxxx",
-                ],
-            },
-            "candidate_field_profile": {
-                "default": (
-                    "legacy_coarse_bytes_words_and_stellantis_packed_fields"
-                ),
-                "default_dlc8_field_count": len(_legacy_payload_specs(8)),
-                "targeted_bit_search_streams": [
-                    (
-                        f"eff:{can_id:08X}:{dlc}"
-                        if id_bits == 29
-                        else f"sff:{can_id:03X}:{dlc}"
-                    )
-                    for can_id, id_bits, dlc in sorted(
-                        config.bit_search_ids,
-                        key=lambda item: (item[1], item[0], item[2]),
-                    )
-                ],
-                "targeted_ids_replace_default_profile": True,
-                "bit_numbering": "DBC/cantools sawtooth",
-                "minimum_bits": config.bit_search_minimum_bits,
-                "maximum_bits": config.bit_search_maximum_bits,
-                "selected_lengths": list(config.bit_search_lengths),
-                "selected_lengths_empty_means_full_configured_range": True,
-                "byte_orders": list(config.bit_search_byte_orders),
-                "signedness": [
-                    "signed" if signed else "unsigned"
-                    for signed in config.bit_search_signedness
-                ],
-                "equivalent_value_geometries_deduplicated": True,
-            },
-            "candidate_stream_identity": [
-                "channel",
-                "SFF/EFF namespace",
-                "CAN ID",
-                "DLC",
-                "capture source path and decompressed SHA-256",
-            ],
-            "hard_memory_state_caps": {
-                "active_references": MAX_ACTIVE_REFERENCES,
-                "pending_wire_links": MAX_PENDING_WIRE_LINKS,
-                "candidate_ids": MAX_CANDIDATE_IDS,
-                "history_frames": MAX_HISTORY_FRAMES,
-                "active_match_states": MAX_ACTIVE_MATCH_STATES,
-                "active_window_fields": MAX_ACTIVE_WINDOW_FIELDS,
-                "candidate_fields": MAX_CANDIDATE_FIELDS,
-                "bit_search_streams": MAX_BIT_SEARCH_IDENTIFIERS,
-                "bit_search_fields_per_identifier": (
-                    MAX_BIT_SEARCH_FIELDS_PER_IDENTIFIER
-                ),
-                "reported_candidates": MAX_TOP_COUNT,
-                "total_reference_samples": MAX_REFERENCE_SAMPLES,
-                "fixed_formula_residuals": MAX_REFERENCE_SAMPLES,
-                "wire_stream_lines": MAX_WIRE_STREAM_LINES,
-                "wire_stream_bytes": MAX_WIRE_STREAM_BYTES,
-                "capture_files": MAX_CAPTURE_FILES,
-                "total_capture_frames": MAX_CAPTURE_FRAMES,
-                "capture_decompressed_bytes": (
-                    MAX_CAPTURE_DECOMPRESSED_BYTES
-                ),
-            },
-        },
-        "reference": {
-            "module": {
-                "key": module.key,
-                "name": module.name,
-                "bus": module.bus,
-                "txid_hex": f"{module.txid:08X}",
-                "rxid_hex": f"{module.rxid:08X}",
-                "addressing_mode": module.addressing_mode,
-            },
-            "capture_channel": capture_channel,
-            "did": f"{did:04X}",
-            "requested_field": reference_field,
-            "resolved_field": decoder.resolved.as_dict(),
-            "sample_count": correlator.reference_count,
-            "global_candump_linkage": {
-                "required": True,
-                "linked_sample_count": correlator.linked_reference_count,
-                "verified_sample_count": correlator.verified_reference_links,
-                "verification_fields": [
-                    "raw_line_sequence",
-                    "timestamp_epoch_us",
-                    "channel",
-                    "SFF/EFF namespace",
-                    "can_id",
-                    "can_data_hex",
-                ],
-            },
-            "timestamp_coverage": {
-                "first_epoch_us": correlator.reference_first_us,
-                "last_epoch_us": correlator.reference_last_us,
-            },
-            "observed_polling_cadence": {
-                "interval_count": correlator.reference_interval_count,
-                "minimum_interval_ms": (
-                    None
-                    if correlator.reference_interval_minimum_us is None
-                    else correlator.reference_interval_minimum_us / 1000.0
-                ),
-                "mean_interval_ms": (
-                    None
-                    if correlator.reference_interval_count == 0
-                    else correlator.reference_interval_total_us
-                    / correlator.reference_interval_count
-                    / 1000.0
-                ),
-                "maximum_interval_ms": (
-                    None
-                    if correlator.reference_interval_count == 0
-                    else correlator.reference_interval_maximum_us / 1000.0
-                ),
-                "reference_timestamp_source": (
-                    "exact kernel/candump-observed diagnostic wire response on "
-                    "the declared capture channel"
-                ),
-                "csv_sample_holding_used": False,
-            },
-            "source": reference_stats.as_dict(),
-        },
-        "capture": {
-            "provenance_limits": {
-                "manifest_validated": False,
-                "loss_accounting_validated": False,
-                "campaign_summary_validated": False,
-                "warning": (
-                    "This report exact-links selected DID rows to raw frames but "
-                    "does not independently validate manifest chunk accounting, "
-                    "socket drops, or clean campaign finalization; review the "
-                    "completed campaign summary separately."
-                ),
-            },
-            "sources": [item.as_dict() for item in capture_stats],
-            "decompressed_bytes_read": sum(
-                item.bytes_read for item in capture_stats
-            ),
-            "total_frames": correlator.total_capture_frames,
-            "eligible_candidate_frames": correlator.eligible_capture_frames,
-            "excluded_extended_frames": correlator.excluded_extended_frames,
-            "excluded_diagnostic_frames": correlator.excluded_diagnostic_frames,
-            "empty_payload_frames": correlator.empty_payload_frames,
-            "candidate_identifier_count": len(
-                {
-                    (channel, can_id, id_bits)
-                    for channel, can_id, id_bits, _ in correlator.histories
-                }
-            ),
-            "candidate_stream_count": len(correlator.histories),
-            "candidate_field_state_count": len(correlator.regressions),
-        },
-        "ranking": {
-            "reported_candidate_count": len(candidate_rows),
-            "eligible_candidate_maximum_r_squared": (
-                correlator.eligible_candidate_maximum_r_squared
-            ),
-            "unreported_or_rejected_field_counts": rejected,
-            "order": [
-                "r_squared multiplied by coverage_ratio descending",
-                "r_squared descending",
-                "coverage_ratio descending",
-                "sample_count descending",
-                "CAN ID and field deterministic tie-break",
-            ],
-            "candidates": candidate_rows,
-        },
-        **(
-            {}
-            if fixed_formula_result is None
-            else {
-                "fixed_formula_evaluation": {
-                    "classification": "candidate_only",
-                    "evidence_tier": PROXY_EVALUATION_EVIDENCE_TIER,
-                    "candidate_only": True,
-                    "physical_identity_verified": False,
-                    "scale_verified": False,
-                    "telemetry_promotion_allowed": False,
-                    "purpose": (
-                        "score one predeclared affine formula without "
-                        "refitting it to this capture"
-                    ),
-                    "semantic_identity_warning": (
-                        "low residual error can reject a poor formula but "
-                        "cannot by itself prove physical signal identity"
-                    ),
-                    "reference_timestamp_source": (
-                        "exact kernel/candump-observed diagnostic wire response on "
-                        "the declared capture channel"
-                    ),
-                    "candidate_timestamp_source": (
-                        "nearest eligible passive CAN frame within the "
-                        "configured radius"
-                        if config.match_mode == "nearest"
-                        else (
-                            f"{config.window_statistic} of eligible passive "
-                            "CAN frames in the configured symmetric window"
-                        )
-                    ),
-                    "result": fixed_formula_result,
-                }
-            }
+        "analysis": _analysis_settings_report(config),
+        "reference": _reference_evidence_report(
+            module,
+            capture_channel,
+            did,
+            reference_field,
+            decoder,
+            correlator,
+            reference_stats,
         ),
-        **(
-            {}
-            if config.regime_analysis is None
-            else {
-                "regime_analysis": {
-                    "classification": "candidate_only",
-                    "evidence_tier": EXPLORATORY_EVIDENCE_TIER,
-                    "candidate_only": True,
-                    "physical_identity_verified": False,
-                    "scale_verified": False,
-                    "telemetry_promotion_allowed": False,
-                    "purpose": (
-                        "compare shortlisted torque-related passive fields "
-                        "across explicit operating regimes"
-                    ),
-                    "semantic_identity_warning": (
-                        "regime-dependent covariance can reject a proposed "
-                        "identity but cannot prove actual torque semantics"
-                    ),
-                    "reference_timestamp_source": (
-                        "exact kernel/candump-observed diagnostic wire response on "
-                        "the declared capture channel"
-                    ),
-                    "classifier_delta_basis": (
-                        "rate between consecutive exact reference timestamps; "
-                        "no CSV sample holding"
-                    ),
-                    "config": config.regime_analysis.as_dict(),
-                    "classification_counts": (
-                        correlator.regime_classification_counts
-                    ),
-                    "rankings": regime_rows,
-                }
-            }
-        ),
+        "capture": _capture_evidence_report(capture_stats, correlator),
+        "ranking": _ranking_report(candidate_rows, rejected, correlator),
+        **_fixed_formula_report(config, fixed_formula_result),
+        **_regime_analysis_report(config, correlator, regime_rows),
     }
 
 
