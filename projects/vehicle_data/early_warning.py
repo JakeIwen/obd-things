@@ -71,11 +71,7 @@ RELATIVE_RATE_LIMIT_SECONDS = 30 * 60
 ABSOLUTE_RATE_LIMIT_SECONDS = 30 * 60
 RUNNING_RPM = 400.0
 RUNNING_GRACE_SECONDS = 10.0
-# 2.5 x the p90 8 s observation spacing.  Fresh RPM observations are 10-12 s
-# apart 1-46 times per trip (trips 50-57); a 10 s limit restarted the 10 s
-# startup grace on each, held the coolant 300 s gate on 0-11 % of ticks in
-# trips 50-55 and made the oil-critical rule flap.  A real stop (257 s gap)
-# still breaks the running interval.
+# Rationale: docs/history/early-warning-rationale.md#running-observation-gap
 RUNNING_MAX_GAP_SECONDS = 20.0
 RUNNING_LOOKBACK_SECONDS = 15 * 60
 RPM_MAX_AGE_SECONDS = 10.0
@@ -84,13 +80,7 @@ PARKED_SETTLE_SECONDS = 30.0
 PARKED_ENGINE_STATES = frozenset(("engine_off", "engine_unknown"))
 SLOW_MOTIONS = frozenset(("stationary", "urban"))
 CANDIDATE_MEMORY_WINDOWS = 2
-# The live historian stores a fresh observation about every 6 s, not 5 s
-# (trips 43-57: p50 6.0 s, p90 8.0 s between distinct observations).  A
-# run of N consecutive readings must fit its window, so tier-0 and tier-1
-# windows allow N x 8 s; with N x 5 s the transmission-hot and
-# charging-failure rules (12 obs / 60 s) could never confirm, coolant-hot
-# (6 obs / 30 s) rarely, and no tier-1 run (12/60, 24/120, 60/300) or the
-# pair-asymmetry run (60/300) was reachable at all.
+# Rationale: docs/history/early-warning-rationale.md#persistence-observation-spacing
 OBSERVATION_SPACING_ALLOWANCE_SECONDS = 8.0
 PHASE_INDEX_CACHE_SECONDS = 60.0
 QUALIFIED_QUALITIES = ("verified", "observed_alfa_scale")
@@ -694,14 +684,7 @@ DEFAULT_WARNING_RULES: tuple[WarningRule | TireGroupRule, ...] = (
         persistence_window_seconds=24 * OBSERVATION_SPACING_ALLOWANCE_SECONDS,
         regime_dimensions=("engine", "motion", "rpm"),
         rate_of_rise=(215.0, 0.1, 180.0),
-        # At stationary/urban idle the fan cycles the coolant between 203 and
-        # 221 F.  The deviation bar (median 190.4-192.2 + 13.5-24) sits inside
-        # that band and moves with whichever hot idles are in the baseline:
-        # with the 09-17 bar of 203.9 trip 52 would have held a 133-reading /
-        # 873 s "deviation" through a normal fan cycle.  No rollup bucket in
-        # all 57 trips reaches 222 F (observed max 221; spec provenance:
-        # thermostat fully open near 220), so slow-motion readings count only
-        # from 222 F.  Road and highway keep the plain deviation.
+        # Rationale: docs/history/early-warning-rationale.md#coolant-slow-motion-floor
         slow_motion_floor=222.0,
         group="cooling",
         action="Ease off and watch the gauge.",
@@ -872,12 +855,7 @@ DEFAULT_ABSOLUTE_WARNING_RULES: tuple[AbsoluteOilPressureRule | AbsoluteRule, ..
             ("rr", 68.0, 60.0),
         ),
         clear_margin=2.0,
-        # Tires gain 3.2-4.4 psi (5.9-6.4 %) during a drive (trips 43-57), so
-        # a front that warned at 49 psi cold reads 52-53 psi warm.  Clearing
-        # against the cold limit sent a false "normal" push about 10 minutes
-        # into every drive, and that recovery push ended the group cooldown,
-        # so the next cold morning pushed again.  Warm readings clear only at
-        # 56.2 / 75.6 psi; a cold reading still clears at 52 / 70.
+        # Rationale: docs/history/early-warning-rationale.md#tire-warm-recovery
         warm_clear_fraction=0.08,
         persistence_observations=3,
         persistence_window_seconds=60.0,
@@ -901,11 +879,7 @@ DEFAULT_ABSOLUTE_WARNING_RULES: tuple[AbsoluteOilPressureRule | AbsoluteRule, ..
         persistence_observations=60,
         persistence_window_seconds=60 * OBSERVATION_SPACING_ALLOWANCE_SECONDS,
         max_age_seconds=35.0,
-        # Episode 642 (trip 59) stayed open 17 min while both rear tires read
-        # the same: 60 clear readings, then the default 600 s recovery.  Only
-        # fresh, moving readings count now (PAIR_* below), so a shorter hold
-        # is safe: two rolling TPMS transmission periods (~64 s each).
-        # Re-opening still needs the full 60-reading run, so it cannot flicker.
+        # Rationale: docs/history/early-warning-rationale.md#tire-pair-recovery
         recovery_seconds=120,
         reference_provenance=(
             "mean offsets FL−FR +1.71, RL−RR +0.78 psi; transient excursions to 6 psi"
@@ -921,25 +895,7 @@ PAIR_OFFSET_MINIMUM_BUCKETS = 30
 PAIR_OFFSET_MINIMUM_TRIPS = 3
 PAIR_OFFSET_LOOKBACK_DAYS = 30
 PAIR_COMPANION_MAX_AGE_SECONDS = 35.0
-# Pair asymmetry counts only readings that both sensors sent recently.  The RF
-# hub repeats each wheel's last received value.  A TPMS sensor sends about once
-# every 64 s while rolling: across trips 43-62, the gaps between value changes
-# peak at 64 s and its multiples.  While the van stands, a sensor sends rarely.
-# In trip 59 (episode 642, 2026-09-24) the van idled for about 23 min.  RL
-# reported its cooling tire (79.6 -> 76.0 psi) while RR repeated 79.6.  That
-# made a false 4.4 psi gap, and the warning opened as the van pulled away.
-#   * Stationary gate: a reading counts only when a fresh vehicle.speed of at
-#     least PAIR_MOVING_SPEED_MPH is at most PAIR_SPEED_MAX_AGE_SECONDS older
-#     than it.  Across trips 55-62 that speed-to-tire lag is p99 10 s and at
-#     most 17 s.
-#   * Fresh-transmission gate: after the van starts moving, a wheel counts
-#     once its value has changed since then, or once the van has moved without
-#     a stop for PAIR_ROLLING_TRUST_SECONDS.  By then each sensor has sent at
-#     least twice.  A steady warm tire can hold one value for up to 20 min on
-#     the highway (trips 43-62), so a strict "changed" test would blind the
-#     rule for most of a drive.
-#   * Clearing needs PAIR_CLEAR_OBSERVATIONS fresh, moving readings (8 x ~8 s
-#     is about one rolling transmission period), not 60.
+# Rationale: docs/history/early-warning-rationale.md#tire-pair-transmission-gates
 PAIR_MOVING_SPEED_MPH = 5.0
 PAIR_SPEED_MAX_AGE_SECONDS = 20.0
 PAIR_ROLLING_TRUST_SECONDS = 150.0
@@ -3872,9 +3828,7 @@ class EarlyWarningEvaluator:
             samples[wheel] = (sample, age)
         left_sample, left_age = samples[left]
         right_sample, right_age = samples[right]
-        # The RF hub reports each wheel's last reading from before the trip
-        # until that sensor transmits again; a cached wheel compared with a
-        # live one fabricates an asymmetry (trips 34/36).
+        # Rationale: docs/history/early-warning-rationale.md#tire-pair-cached-readings
         stale = {
             wheel: self._wheel_stale(
                 tick,
@@ -4023,10 +3977,7 @@ class EarlyWarningEvaluator:
         )
         asymmetry = float(left_sample["value"]) - float(right_sample["value"]) - offset
         if abs(asymmetry) < warning:
-            # Never open on a reading pair that is itself inside the limit.
-            # In trip 59 the run's newest reading paired RL with RR's previous,
-            # stale value (4.4 psi), while the two latest readings were 0.4
-            # psi apart.
+            # Rationale: docs/history/early-warning-rationale.md#tire-pair-latest-reading
             runs = {**runs, "escalate": 0, "counted": []}
         lower = left if asymmetry < 0 else right
         return {
