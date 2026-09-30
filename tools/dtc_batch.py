@@ -57,7 +57,8 @@ from lib.modules import bind_channel
 from projects.vehicle_data import ccan_powertrain
 from projects.vehicle_data.api import TelemetryClient
 from projects.vehicle_data.broker import DEFAULT_SOCKET
-from tools.dtc_scan import DEFAULT_CACHE, DEFAULT_DB, load_inventory
+from lib.dtc_reports import load_inventory
+from tools.dtc_scan import DEFAULT_CACHE, DEFAULT_DB
 
 
 DEFAULT_REPORT_ROOT = REPO / "tmp" / "inventories"
