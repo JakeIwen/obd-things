@@ -386,3 +386,46 @@ class EcuDiscoverCallSequenceTests(unittest.TestCase):
          ('ownership.release', (), {}),
          ('uds.hx', (('bytes', '1a87'),), {})]
         self.assertEqual(record_live_calls("ecu_discover"), expected)
+
+
+class IdentityInventoryCallSequenceTests(unittest.TestCase):
+    def test_live_calls_match_390404e(self):
+        expected = [('can_runtime_route.acquire_armed_module_route',
+          (('Module',
+            {'key': 'radar_acc',
+             'name': 'Bosch ACC radar (DASM / MRR1evo)',
+             'txid': 416951025,
+             'rxid': 417001770,
+             'channel': None,
+             'bus': 'c-can',
+             'note': 'ACKs frames even with ignition cut mid-sweep; speed only via DID 0x1002 (no OBD PIDs behind '
+                     'SGW).',
+             'bitrate': 500000,
+             'addressing_mode': 'normal_29bits'}),),
+          {'asserted_pair': '6/14', 'prearm_check': 'tools.ecu_discover.prearm_conflict_errors'}),
+         ('preflight', ('can9', 500000), {}),
+         ('diagnostic_safety.interrupt_on_termination', (), {}),
+         ('termination.__enter__', (), {}),
+         ('uds.open_module_socket',
+          (('Module',
+            {'key': 'radar_acc',
+             'name': 'Bosch ACC radar (DASM / MRR1evo)',
+             'txid': 416951025,
+             'rxid': 417001770,
+             'channel': 'can9',
+             'bus': 'c-can',
+             'note': 'ACKs frames even with ignition cut mid-sweep; speed only via DID 0x1002 (no OBD PIDs behind '
+                     'SGW).',
+             'bitrate': 500000,
+             'addressing_mode': 'normal_29bits'}),),
+          {'timeout': 0.75}),
+         ('uds.drain', ('<socket>',), {}),
+         ('uds.request', ('<socket>', ('bytes', '22f187')), {'timeout': 0.75, 'retries': 0}),
+         ('uds.hx', (('bytes', '62f187'),), {}),
+         ('uds.hx', (('bytes', '22f187'),), {}),
+         ('uds.negative_response_details', (('bytes', '62f187'),), {}),
+         ('termination.begin_cleanup', (), {}),
+         ('socket.close', (), {}),
+         ('ownership.release', (), {}),
+         ('termination.__exit__', (), {})]
+        self.assertEqual(record_live_calls("identity_inventory"), expected)

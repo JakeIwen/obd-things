@@ -35,6 +35,7 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, REPO)
 
 from lib.reports import atomic_json as _atomic_json
+from lib.cli_gates import execution_gate
 from lib import can_runtime_route, uds
 from lib import diagnostic_safety
 from lib.modules import get
@@ -247,15 +248,16 @@ def main(argv=None):
         f"TX={module.txid:X} RX={module.rxid:X}; {len(dids)} physical 22 reads"
     )
     print("DIDs: " + " ".join(f"{did:04X}" for did, _ in dids))
-    if not args.execute:
-        print("DRY RUN: no CAN socket opened and nothing transmitted.")
-        return 0
-    if not args.confirm_parked or not args.pair or not args.conditions:
-        print(
-            "ERROR: --execute requires --confirm-parked, --pair, and --conditions",
-            file=sys.stderr,
-        )
-        return 2
+    gate_result = execution_gate(
+        args.execute,
+        dry_run_message='DRY RUN: no CAN socket opened and nothing transmitted.',
+        failures=[
+            (not args.confirm_parked or not args.pair or (not args.conditions),
+             'ERROR: --execute requires --confirm-parked, --pair, and --conditions'),
+        ],
+    )
+    if gate_result is not None:
+        return gate_result
     try:
         ownership = can_runtime_route.acquire_armed_module_route(
             module,
