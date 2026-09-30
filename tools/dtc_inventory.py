@@ -15,7 +15,6 @@ snapshot/extended-data record contents. Output is per ECU under tmp/inventories/
 """
 import argparse
 import datetime
-import json
 import math
 import os
 import signal
@@ -25,6 +24,7 @@ import time
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, REPO)
 
+from lib.reports import atomic_json as _atomic_json
 from lib import can_operation_state, can_runtime_route, canbus, diagnostic_safety, uds
 from lib.dtc import (
     STATUS_BITS,
@@ -94,11 +94,10 @@ def report_path(module):
 
 def write_report(path, report):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    temporary = f"{path}.tmp-{os.getpid()}"
-    with open(temporary, "w") as handle:
-        json.dump(report, handle, indent=2)
-        handle.write("\n")
-    os.replace(temporary, path)
+    _atomic_json(
+        path, report, temporary=f"{path}.tmp-{os.getpid()}",
+        cleanup="always-best-effort",
+    )
 
 
 def active_inhibit_detail(channel):

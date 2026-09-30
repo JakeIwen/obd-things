@@ -172,6 +172,38 @@ class ReportsTests(unittest.TestCase):
                             (p.name, p.read_bytes()) for p in path.parent.iterdir())))
                     self.assertEqual(states[0], states[1], site)
 
+    def test_dtc_encoding_and_cleanup_are_the_only_intentional_change(self):
+        from tools import dtc_inventory
+
+        with tempfile.TemporaryDirectory() as directory, fixed_umask():
+            path = Path(directory) / "inventory.json"
+            temporary = f"{path}.tmp-{os.getpid()}"
+            old = legacy_namespace("dtc_inventory")
+            with mock.patch("builtins.open", wraps=open) as opened:
+                invoke("dtc_inventory", old, path, {"text": "café"})
+            opened.assert_called_once_with(temporary, "w")
+            before = file_result(path)
+            with mock.patch("builtins.open", wraps=open) as opened, \
+                 mock.patch.object(os, "fsync") as synced:
+                dtc_inventory.write_report(path, {"text": "café"})
+            opened.assert_called_once_with(temporary, "w", encoding="utf-8", newline=None)
+            synced.assert_not_called()  # no extra durability change
+            self.assertEqual(file_result(path), before)
+            self.assertEqual(before[1], 0o644)
+            for target in ("dump", "replace"):
+                module = json if target == "dump" else os
+                for exception in (OSError("failed"), KeyboardInterrupt()):
+                    with mock.patch.object(module, target, side_effect=exception):
+                        with self.assertRaises(type(exception)):
+                            invoke("dtc_inventory", old, path, {"a": 1})
+                    self.assertTrue(Path(temporary).exists())
+                    Path(temporary).unlink()
+                    with mock.patch.object(module, target, side_effect=exception):
+                        with self.assertRaises(type(exception)):
+                            dtc_inventory.write_report(path, {"a": 1})
+                    self.assertFalse(Path(temporary).exists())
+                    self.assertEqual(file_result(path), before)
+
     def test_replace_failure_preserves_destination(self):
         for cleanup in ("failure", "always-best-effort", "none"):
             with tempfile.TemporaryDirectory() as directory:
