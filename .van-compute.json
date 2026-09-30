@@ -415,6 +415,7 @@
       "description": "Inventory an exported AlfaOBD Gauges_Data archive.",
       "profile": "python-script",
       "source_paths": [
+        "lib/reports.py",
         "tools/alfaobd_gauges.py"
       ],
       "minimum_inputs": 1,

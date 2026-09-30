@@ -25,7 +25,6 @@ import csv
 from dataclasses import dataclass, field
 from datetime import datetime
 import hashlib
-import json
 import math
 import os
 from pathlib import Path
@@ -36,6 +35,11 @@ from typing import Iterable, TextIO
 
 
 REPO = Path(__file__).resolve().parents[1]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+from lib.reports import atomic_json as _atomic_json
+
 DEFAULT_OUTPUT_ROOT = REPO / "tmp" / "inventories" / "alfaobd_gauges"
 PROFILE_PREFIX = "Recording data for "
 DATE_PREFIX = "Date (YY/MM/DD):"
@@ -366,10 +370,6 @@ def write_reports(output_dir: Path, inventory: dict[str, object]) -> list[Path]:
     sections_path = output_dir / "sections.csv"
     metrics_path = output_dir / "metrics.csv"
 
-    def json_writer(output: TextIO) -> None:
-        json.dump(inventory, output, indent=2, ensure_ascii=False)
-        output.write("\n")
-
     def sections_writer(output: TextIO) -> None:
         fieldnames = [
             "index", "profile", "profile_source", "profile_marker", "date", "date_raw",
@@ -397,7 +397,8 @@ def write_reports(output_dir: Path, inventory: dict[str, object]) -> list[Path]:
         writer.writeheader()
         writer.writerows(inventory["metrics"])
 
-    _atomic_text(json_path, json_writer)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_json(json_path, inventory, ensure_ascii=False, newline="")
     _atomic_text(sections_path, sections_writer)
     _atomic_text(metrics_path, metrics_writer)
     return [json_path, sections_path, metrics_path]
