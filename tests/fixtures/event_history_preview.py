@@ -9,8 +9,8 @@ import threading
 from datetime import timedelta
 ROOT=Path(__file__).resolve().parents[2]
 sys.path[:0]=[str(ROOT),str(ROOT/'tests'),str(Path(__file__).parent)]
-from test_event_history import coolant, START
-from test_vehicle_historian import definition, available, snapshot
+from tests.test_event_history import coolant, START
+from tests.test_vehicle_historian import definition, available, snapshot
 from projects.vehicle_data.historian import TelemetryHistorian
 from projects.vehicle_data.event_history import EventReader
 from projects.vehicle_data.web import TelemetryWebServer

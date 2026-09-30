@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 
-from test_warning_chat import CachedEvidence
+from tests.test_warning_chat import CachedEvidence
 from projects.vehicle_data.warning_chat import ChatError, ChatHandler, ChatServer, WarningChatManager
 from projects.vehicle_data.web import TelemetryWebHandler, TelemetryWebServer
 
@@ -53,7 +53,7 @@ class FixtureRunner:
         diagnostics.update(outcome="complete", phase="finishing", elapsed_ms=1000, child_cpu_ms=10)
         diagnostics["milestones_ms"].update(first_model_item_ms=500, turn_completed_ms=990, process_exit_ms=1000)
         if context.get("event_kind") == "setup":
-            from test_custom_warnings import RULE
+            from tests.test_custom_warnings import RULE
             return json.dumps({"explanation": "What would you like to monitor?" if len(turns) == 1 else "Proposed low-voltage warning in volts; review before approval.",
                                "proposal": None if len(turns) == 1 else RULE})
         if question == "trigger fixture error" and not self.failed:

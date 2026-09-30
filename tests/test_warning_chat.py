@@ -309,7 +309,7 @@ for event in [
         self.assertEqual(diagnostics["cgroup_throttled_periods"], 2)
 
     def test_setup_proposal_requires_exact_explicit_approval_and_can_be_removed(self):
-        from test_custom_warnings import RULE
+        from tests.test_custom_warnings import RULE
         self.runner.run = lambda *_: json.dumps({"explanation": "Proposed only, in volts", "proposal": RULE})
         with self.manager.lock:
             opened = self.manager.open_chat(self.owner, {"event": {"kind": "setup", "id": "new-warning"}, "request_id": "c" * 32})
