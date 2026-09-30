@@ -21,17 +21,16 @@ from decimal import Decimal, InvalidOperation
 import glob
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
 import sqlite3
 import sys
-import tempfile
 from typing import Any, Iterable, Sequence
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
+from lib.reports import atomic_json as _atomic_json
 from projects.ecu_mapping.alfalog import iter_exchanges
 
 
@@ -1087,25 +1086,9 @@ def build_report(
 
 def write_json_atomic(output: Path, report: dict[str, Any]) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
-    temporary_name: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            prefix=f".{output.name}.",
-            dir=output.parent,
-            delete=False,
-        ) as destination:
-            temporary_name = destination.name
-            json.dump(report, destination, indent=2, sort_keys=True)
-            destination.write("\n")
-            destination.flush()
-            os.fsync(destination.fileno())
-        os.replace(temporary_name, output)
-        temporary_name = None
-    finally:
-        if temporary_name is not None:
-            Path(temporary_name).unlink(missing_ok=True)
+    _atomic_json(
+        output, report, prefix=f".{output.name}.", sort_keys=True, fsync=True,
+    )
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
