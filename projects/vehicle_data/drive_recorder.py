@@ -54,6 +54,7 @@ if str(REPO) not in sys.path:
 from projects.vehicle_data.api import TelemetryClient  # noqa: E402
 from projects.vehicle_data.broker import DEFAULT_SOCKET  # noqa: E402
 from lib.can_role_resolver import SysfsCanRoleResolver  # noqa: E402
+from lib.timeutil import utc_now  # noqa: E402
 from projects.vehicle_data.can_interfaces import (  # noqa: E402
     PassiveInterfaceLease,
     PassiveInterfaceManager,
@@ -126,10 +127,6 @@ class CaptureRoute:
 
     def as_dict(self) -> dict[str, object]:
         return dataclasses.asdict(self)
-
-
-def utc_now() -> str:
-    return dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def campaign_id() -> str:

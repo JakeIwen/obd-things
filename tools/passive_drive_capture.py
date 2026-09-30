@@ -43,6 +43,7 @@ if str(REPO) not in sys.path:
 
 from lib import can_runtime_route
 from lib.modules import MODULES
+from lib.timeutil import utc_now
 
 
 DEFAULT_BUS = "c-can"
@@ -131,10 +132,6 @@ class DiskPolicy:
         if available_bytes <= self.soft_free_bytes:
             return "priority-only"
         return "full"
-
-
-def utc_now() -> str:
-    return dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def campaign_stamp() -> str:

@@ -20,6 +20,7 @@ import time
 from typing import Mapping, Protocol, Sequence
 
 from lib.modules import MODULES
+from lib.timeutil import nonnegative_int as _nonnegative_int
 from projects.vehicle_data import drift_warnings
 from projects.vehicle_data.api import MAX_RESPONSE_BYTES
 from projects.vehicle_data.dtc_descriptions import describe_dtc
@@ -163,10 +164,6 @@ def _unavailable(kind: str, detail: str) -> dict[str, object]:
 
 class DtcCacheValidationError(ValueError):
     """A saved DTC cache does not match the compact schema-v2 contract."""
-
-
-def _nonnegative_int(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def _timestamp_or_none(value: object) -> bool:

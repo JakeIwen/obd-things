@@ -27,6 +27,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from lib.timeutil import finite_number as _finite_number
+
 
 SCHEMA_VERSION = 1
 ADVISORY_SCHEMA_VERSION = 2
@@ -304,14 +306,6 @@ def _iso_from_us(value: int) -> str:
 
 def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat()
-
-
-def _finite_number(value: object) -> bool:
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(float(value))
-    )
 
 
 def _optional_nonnegative_int(value: object, field: str) -> int | None:

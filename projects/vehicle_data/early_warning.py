@@ -29,6 +29,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Mapping, Sequence
 
 from lib.vehicle_can_roles import CAN_BUS_ROLES, CAN_ROLE_SPECS
+from lib.timeutil import finite_number as _numeric
 from projects.vehicle_data import warning_context
 from projects.vehicle_data.historian import (
     REGIME_DIMENSIONS,
@@ -994,14 +995,6 @@ def _utc(value: datetime | str | None) -> datetime:
 
 def _to_us(value: datetime) -> int:
     return int(round(value.timestamp() * 1_000_000))
-
-
-def _numeric(value: object) -> bool:
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(float(value))
-    )
 
 
 def _observed_us(sample: Mapping[str, object]) -> int | None:

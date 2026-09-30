@@ -34,6 +34,7 @@ if str(REPO) not in sys.path:
 
 from lib import can_operation_state, can_runtime_route, canbus, diagnostic_safety  # noqa: E402
 from lib.modules import MODULES  # noqa: E402
+from lib.timeutil import utc_now  # noqa: E402
 from tools import passive_drive_capture as capture  # noqa: E402
 
 
@@ -67,10 +68,6 @@ class BcanRecorderError(RuntimeError):
 
 class BcanStartRace(BcanRecorderError):
     """The verified B-CAN awake interval ended while the recorder was starting."""
-
-
-def utc_now() -> str:
-    return dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def campaign_id() -> str:

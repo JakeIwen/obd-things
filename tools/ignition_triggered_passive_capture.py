@@ -32,6 +32,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from lib import can_runtime_route  # noqa: E402
+from lib.timeutil import utc_now  # noqa: E402
 from tools import passive_drive_capture as passive  # noqa: E402
 
 
@@ -58,10 +59,6 @@ CAN_SFF_MASK = 0x7FF
 
 class ArmError(RuntimeError):
     """The one-shot arm could not safely wait or launch."""
-
-
-def utc_now() -> str:
-    return dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def campaign_id() -> str:

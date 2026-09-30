@@ -25,13 +25,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import statistics
 import threading
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from typing import Mapping, Sequence
 
+from lib.timeutil import finite_number as _number
 from projects.vehicle_data.historian import (
     REGIME_DIMENSIONS,
     BaselineStats,
@@ -121,14 +121,6 @@ def to_us(value: datetime | str) -> int:
 
 def _iso_from_us(value: int) -> str:
     return datetime.fromtimestamp(value / MICROSECONDS, timezone.utc).isoformat()
-
-
-def _number(value: object) -> bool:
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(float(value))
-    )
 
 
 def duty_band(value: object) -> str | None:

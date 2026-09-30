@@ -15,12 +15,13 @@ from __future__ import annotations
 
 import re
 import os
-import math
 import subprocess
 import zoneinfo
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from lib.timeutil import finite_number as _finite
 
 
 NTFY_SEND = Path("/usr/local/bin/ntfy-send")
@@ -107,14 +108,6 @@ def quiet_hours_deferral(event_us: int) -> int | None:
         day.year, day.month, day.day, DIGEST_HOUR, DIGEST_MINUTE, tzinfo=zone
     )
     return (target - _EPOCH) // _MICROSECOND
-
-
-def _finite(value: object) -> bool:
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(float(value))
-    )
 
 
 def _mapping(value: object) -> Mapping[str, object]:
