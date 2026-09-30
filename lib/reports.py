@@ -23,7 +23,7 @@ def atomic_json(
     payload: object,
     *,
     temporary: str | os.PathLike[str] | None = None,
-    prefix: str = "tmp",
+    prefix: str | None = None,
     encoding: str | None = "utf-8",
     newline: str | None = None,
     indent: int | None = 2,

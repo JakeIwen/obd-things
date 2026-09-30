@@ -303,6 +303,10 @@ class ReportsTests(unittest.TestCase):
             source = Path(replaced.call_args.args[0])
             self.assertEqual(source.parent, path.parent)
             self.assertTrue(source.name.startswith(f".{path.name}."))
+            with mock.patch.object(tempfile, "template", "custom-prefix-"), \
+                 mock.patch.object(os, "replace", wraps=real_replace) as replaced:
+                reports.atomic_json(path, {})
+            self.assertTrue(Path(replaced.call_args.args[0]).name.startswith("custom-prefix-"))
 
     def test_helper_does_not_create_parent(self):
         with tempfile.TemporaryDirectory() as directory:
