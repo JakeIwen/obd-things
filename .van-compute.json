@@ -639,6 +639,7 @@
       "description": "Run the dependency-light guarded DID inventory regression tests.",
       "profile": "repo-test",
       "source_paths": [
+        "lib/cli_gates.py",
         "lib/reports.py",
         "lib/__init__.py",
         "lib/canbus.py",
