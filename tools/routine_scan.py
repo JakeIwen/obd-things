@@ -31,6 +31,7 @@ import time
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, REPO)
 
+from lib.reports import atomic_json as _atomic_json
 from lib import can_runtime_route, diagnostic_safety, uds
 from lib.modules import get
 from tools.ecu_discover import prearm_conflict_errors, preflight
@@ -340,19 +341,10 @@ def append_result_checkpoint(path, result):
 def write_report(path, report):
     """Atomically publish a complete or explicitly marked partial JSON report."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    temporary = f"{path}.tmp-{os.getpid()}"
-    try:
-        with open(temporary, "w", encoding="utf-8") as handle:
-            json.dump(report, handle, indent=2)
-            handle.write("\n")
-        os.replace(temporary, path)
-    finally:
-        # os.replace removes the temporary path. Clean it only when an earlier write/replace failed.
-        try:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
-        except OSError:
-            pass
+    _atomic_json(
+        path, report, temporary=f"{path}.tmp-{os.getpid()}",
+        cleanup="always-best-effort",
+    )
 
 
 def parser():
