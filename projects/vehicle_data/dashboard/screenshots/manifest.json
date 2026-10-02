@@ -1,0 +1,153 @@
+{
+  "captured_on": "2026-09-30",
+  "app": "Pi-hosted Van telemetry dashboard",
+  "build": "149aa5bc155f",
+  "viewport": {
+    "width": 800,
+    "height": 1280,
+    "orientation": "portrait",
+    "scale": "CSS pixels"
+  },
+  "tablet_reference": "projects/vehicle_data/dashboard/docs/design.md: portrait-mounted tablet, 800 × 1280 CSS pixels; physical DPR unconfirmed.",
+  "capture_method": "Clean Chromium browser displaying the Pi-hosted production app. Browser-only reactive-store fixtures, canvas/SVG and text changes, and intercepted advisor/scan API responses supplied demo data.",
+  "data_notice": "Portfolio demonstration images combine saved app data with believable synthetic telemetry, charts, trip/cruise summaries and assistant conversations. They are not evidence of an actual drive, diagnosis, model response or service action.",
+  "suggested_public_caption": "Van telemetry dashboard — tablet UI with illustrative demo data.",
+  "safety": "No vehicle actions, scan execution, warning installation, maintenance saves, deployments or service changes. Mutating requests were blocked or fulfilled locally in the capture browser.",
+  "suggested_homepage_images": [
+    "01-drive-gauges.png",
+    "02-drive-sensors.png",
+    "03-parked-battery-tires-and-service.png",
+    "07-history-trips-and-temperature-trends.png",
+    "13-create-custom-early-warning.png"
+  ],
+  "images": [
+    {
+      "file": "01-drive-gauges.png",
+      "caption": "Driving dashboard with speed, RPM, temperatures, oil pressure, voltage, power, tire pressures and trip statistics.",
+      "width": 800,
+      "height": 1280,
+      "bytes": 92445,
+      "sha256": "7859e771c7b897bce5c0cf152a8b3562c353ef748b799c4234018f30cd1c68ff"
+    },
+    {
+      "file": "02-drive-sensors.png",
+      "caption": "Sensors dashboard with adaptive cruise, following distance, estimated gear, radar alignment and transmission shaft speeds.",
+      "width": 800,
+      "height": 1280,
+      "bytes": 87534,
+      "sha256": "875ba305f377e6a6969491cf8d852d8e4e477585428c740f72196bf8564693b5"
+    },
+    {
+      "file": "03-parked-battery-tires-and-service.png",
+      "caption": "Parked overview with battery trend, tire pressures, last trip, maintenance and warning summaries.",
+      "width": 800,
+      "height": 1280,
+      "bytes": 106418,
+      "sha256": "cad5c5f08b3e92fbd9bec01e6ce03eba352450fdc85eaae4e49e50fa85a67b91"
+    },
+    {
+      "file": "04-health-warnings-and-diagnostics.png",
+      "caption": "Health overview with an early warning and diagnostic trouble codes.",
+      "width": 800,
+      "height": 1280,
+      "bytes": 193118,
+      "sha256": "37e5e35f469fec52c4e6407f51c5c66172793709fe1640539113025902a2eef2"
+    },
+    {
+      "file": "05-saved-warning-events.png",
+      "caption": "Searchable saved warning events and lifecycle states.",
+      "width": 800,
+      "height": 1280,
+      "bytes": 132184,
+      "sha256": "066c818722090ab025cdfe87f0af133067fa29a07c5763f870b8126252cea841"
+    },
+    {
+      "file": "06-warning-event-evidence.png",
+      "caption": "Warning evidence with opening readings, baseline comparison, sample chart and event timeline.",
+      "width": 800,
+      "height": 1280,
+      "bytes": 120036,
+      "sha256": "7315c5192b8e13aa447783282cd2b47918ee75185324f25fe3b1dfa528129df7"
+    },
+    {
+      "file": "07-history-trips-and-temperature-trends.png",
+      "caption": "Trip history with cruise-use summaries and temperature trends.",
+      "width": 800,
+      "height": 1280,
+      "bytes": 161516,
+      "sha256": "45693554c7cba7cbbd394e2065507d5f5c1a6597df835cfe893b1d9986ba6002"
+    },
+    {
+      "file": "08-history-pressure-voltage-and-power.png",
+      "caption": "Historical pressure, temperature, voltage, alternator, power and tire trends.",
+      "width": 800,
+      "height": 1280,
+      "bytes": 150058,
+      "sha256": "e63204772c57116116dc2e2ca33fa453474941aca49eafd0b6aef388de711cab"
+    },
+    {
+      "file": "09-system-bus-health-and-radar.png",
+      "caption": "System overview with CAN bus health, broker status and radar alignment.",
+      "width": 800,
+      "height": 1280,
+      "bytes": 136458,
+      "sha256": "a73b18d8ba3b9999ef5eb6b93cb27cb5d3654b025e316776ddeff6b9d1c01ea0"
+    },
+    {
+      "file": "10-system-metric-catalog.png",
+      "caption": "Metric catalog with values, sources, quality and freshness policies.",
+      "width": 800,
+      "height": 1280,
+      "bytes": 142722,
+      "sha256": "8efb34572ee2abf529d22edb5feafdb691e541ab1cc59d0279660a5543e04ad5"
+    },
+    {
+      "file": "11-customise-dashboard-tiles.png",
+      "caption": "Per-device dashboard tile customization.",
+      "width": 800,
+      "height": 1280,
+      "bytes": 120310,
+      "sha256": "81cd26766ea3216a4c852d45777ed0849bdec861024ff309928be5a38627f29b"
+    },
+    {
+      "file": "12-codex-warning-explanation.png",
+      "caption": "Codex explanation of a saved warning, with a simulated conversation.",
+      "width": 800,
+      "height": 1280,
+      "bytes": 155423,
+      "sha256": "dc08f0395f1f9a2b70a9453cc287826a6aca4a44e8e07bb3ffc5e7e3a918945c"
+    },
+    {
+      "file": "13-create-custom-early-warning.png",
+      "caption": "Natural-language custom warning proposal and approval review, with a simulated conversation.",
+      "width": 800,
+      "height": 1280,
+      "bytes": 144326,
+      "sha256": "157fc05500982fde5fe23b24cfad8624393e83e1c3d56dfd71e5df0d13088c4c"
+    },
+    {
+      "file": "14-record-oil-change.png",
+      "caption": "Oil-change entry form filled with an unsaved example service record.",
+      "width": 800,
+      "height": 1280,
+      "bytes": 130932,
+      "sha256": "04a2d18927b8d94a742ccd934cfa1ad42d3f0fb352311f3f7f01b3992874bebc"
+    },
+    {
+      "file": "15-guarded-diagnostic-code-scan.png",
+      "caption": "Guarded parked diagnostic scan controls, shown using a simulated enabled-listener state. No scan was started.",
+      "width": 800,
+      "height": 1280,
+      "bytes": 157575,
+      "sha256": "afc77a1091ad171abbaa4553c36df6d470461d74eeccb69f60c21ddb1e68d509"
+    },
+    {
+      "file": "16-drive-night-dimming.png",
+      "caption": "Driving dashboard with night dimming enabled.",
+      "width": 800,
+      "height": 1280,
+      "bytes": 90598,
+      "sha256": "c15dc08d99f99471583d72ff307d031b08f9b0325b7bc83b936de21bd67fdf9a"
+    }
+  ]
+}
