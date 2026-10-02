@@ -970,6 +970,33 @@
       "outputs": [
         "gear-ratios.json"
       ]
+    },
+    {
+      "name": "cruise-summary-reduce",
+      "description": "Reduce completed C-CAN full recordings into one file-only per-trip cruise summary, with explicit coverage and provisional brake association.",
+      "profile": "can-log-batch",
+      "source_paths": [
+        "projects/vehicle_data/__init__.py",
+        "projects/vehicle_data/cruise_summary.py",
+        "projects/vehicle_data/ccan_powertrain.py",
+        "tools/__init__.py",
+        "tools/can_capture_summary.py",
+        "lib/candump_io.py",
+        "tools/can_event_window.py"
+      ],
+      "minimum_inputs": 2,
+      "maximum_inputs": 128,
+      "argv": [
+        "{source:projects/vehicle_data/cruise_summary.py}",
+        "--manifest",
+        "{input:0}",
+        "--output",
+        "{result:cruise-summary.json}",
+        "{inputs:1}"
+      ],
+      "outputs": [
+        "cruise-summary.json"
+      ]
     }
   ]
 }

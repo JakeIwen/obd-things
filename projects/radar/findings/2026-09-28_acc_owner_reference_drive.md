@@ -118,7 +118,7 @@ socket trace. Other effects, including the late-drive host stall, are separate.
 The September 29 receiver change continuously filters the two display IDs,
 uses actual kernel receipt timestamps, and follows passive lease / armed-owner
 rules. Its synthetic timing tests do not establish real-drive acceptance.
-Post-deployment running-snapshot freshness remains unmeasured until a new drive.
+Measured on the first drives after the change (2026-10-01 and 2026-10-02, historian trips 70, 71 and 72, `tools/acc_freshness_audit.py`): `acc.state` was fresh in 100 % of running snapshots on all three (203, 226 and 57 snapshots), against 44.6 % on trip 67. During the armed helper interval every sample had age 0 s. `acc.set_speed` reads lower (56 %, 67 %, 0 %) only because it is not published while ACC is off.
 
 ## `0x2FA` buttons
 

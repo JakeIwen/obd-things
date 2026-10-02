@@ -260,15 +260,18 @@ observation gap, the recorder still received 263 `0x5A0` frames in
 00:01:35.582237Z–00:05:22.578330Z with maximum spacing 1.003830 s. A stale
 broker display therefore does not establish that the cluster stopped sending.
 The broker now has a separate continuous, kernel-filtered receiver for
-`0x5A0`/`0x0E0`; real-drive freshness after that change remains to be measured.
+`0x5A0`/`0x0E0`. Measured on the first drives after the change (2026-10-01 and 2026-10-02, historian trips 70, 71 and 72, `tools/acc_freshness_audit.py`): `acc.state` was fresh in 100 % of running snapshots on all three (203, 226 and 57 snapshots), against 44.6 % on trip 67. During the armed helper interval every sample had age 0 s. `acc.set_speed` reads lower (56 %, 67 %, 0 %) only because it is not published while ACC is off.
 See the [capture audit](../projects/radar/findings/2026-09-28_acc_owner_reference_drive.md#september-29-capture-reliability-audit).
 
-**Exploratory numbered-gear lead (September 22):** C-CAN `0x1F4`, DLC 8,
-byte 4's upper nibble (Motorola start 39, length 4) is `7` in a saved window
-where the established `0x1F7` turbine/output ratio is approximately `0.699`,
-the exact OEM seventh-gear ratio. This is a single-regime candidate, not a
-qualified gear enum or a PRND decode; no telemetry promotion. Cross-gear and
-independent-leg checks remain. [Evidence and pending offline task](../projects/ecu_mapping/findings/promaster_2022/2026-09-22_gear_and_oil_life_offline.md).
+**Rejected direct numbered-gear interpretation (October 2):** C-CAN `0x1F4`,
+DLC 8, byte 4's upper nibble (Motorola start 39, length 4) is not the current
+gear number. Across a complete independent recording it stayed `7` for all
+14,301 eligible shaft-ratio pairs, including repeated second/third/fourth
+ratios. The original highway chunk also has 6,548 pairs with nibble `8` but
+median ratio 0.699 (seventh, not eighth). This disproves the September 22
+two-second lead; the field's meaning remains unresolved. The established
+`1F7` shaft decodes are unaffected. No gear/PRND telemetry promotion.
+[Full-recording evidence](../projects/ecu_mapping/findings/promaster_2022/2026-09-22_gear_and_oil_life_offline.md#october-2-full-recording-check-reject-this-direct-gear-enum).
 
 **Exact-vehicle sliding-door exception:** the sliding-door ajar circuit has
 been modified to permanently report closed. No factory CAN/BCM value may be

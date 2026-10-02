@@ -410,7 +410,7 @@ The receiver entered listen-only reception with zero frames while asleep; all
 three vehicle roles remained healthy/listen-only, the spare stayed down, no
 inhibit was present, and every CAN TX counter was unchanged. Final offline
 validation: 1,523 Python tests passed, 7 skipped, 1,354 subtests; 440 dashboard
-tests passed including bundle budgets. Real-drive acceptance is still pending.
+tests passed including bundle budgets. Measured on the first drives after the change (2026-10-01 and 2026-10-02, historian trips 70, 71 and 72, `tools/acc_freshness_audit.py`): `acc.state` was fresh in 100 % of running snapshots on all three (203, 226 and 57 snapshots), against 44.6 % on trip 67. During the armed helper interval every sample had age 0 s. `acc.set_speed` reads lower (56 %, 67 %, 0 %) only because it is not published while ACC is off.
 
 The four TPMS metrics use the wheel map and `raw x 0.1 kPa` pressure scale
 verified by the TPMS project's 2026-07-07 deflate/reinflate test. RF Hub slots
@@ -691,7 +691,8 @@ measurements at 800×1280 and 1280×800.
 - The September 29 audit confirmed the broker missed the 32 s `off` interval
   at 2026-09-29 00:04:23Z while raw frames continued at about 1 Hz. The new
   continuous display receiver replaces snapshot timing for display publication;
-  the next drive must establish >=95% fresh `acc.state` running snapshots.
+  trips 70-72 (2026-10-01/02) measured 100 % fresh `acc.state` running snapshots,
+  so the >=95 % acceptance target is met.
 - The passive collector cycles every ~4.3 s instead of 1 s, giving 2–3.5 s old
   values and `unknown` vehicle-state blips (drive audit 2026-09-24).
 - Parked battery-low (tier 0, S1) needs 3 readings in ~24 s, but parked wakes
@@ -1150,7 +1151,7 @@ The drive recorder's `run.json` conditions no longer claim "no external diagnost
 now say that the van's own F1 client may sweep while the Pi is not polling, and that this harvester
 notes it.
 
-### File-only cruise summaries (September 29; processing pending)
+### File-only cruise summaries (September 29; running since October 2)
 
 `cruise_summary.py` reduces completed C-CAN **full** chunks for one completed
 historian trip. It reuses the verified cluster decode and validates each input's
@@ -1178,9 +1179,10 @@ The broker attaches at most five bounded result files during its history cache
 refresh; ordinary cached GETs and the dashboard remain CAN-free. History shows
 coverage, uncertain cancel attribution and absent evidence explicitly. Units
 `systemd/van-cruise-harvest.{service,timer}` stage a file-only controller every
-20 minutes, with network isolation and low I/O priority. **The compute task is
-awaiting owner registration approval; the timer is not installed/enabled yet.**
-The task proposal is `tmp/vehicle_data/cruise-summary-compute-task.json`.
+20 minutes, with network isolation and low I/O priority. The compute task
+`cruise-summary-reduce` was registered in `.van-compute.json` on 2026-10-02 at the
+owner's request, and the timer was installed and enabled the same day. Its first
+run queued the backfill of older completed trips; results import on later runs.
 
 Validation: 1,535 Python tests passed, 7 skipped, 1,374 subtests (named
 `repo-tests` job `20260929T233425Z-5215d5af`); 443 dashboard tests passed, including
@@ -1190,19 +1192,18 @@ synthetic History summary rendered its coverage and uncertain attribution.
 Core size is 84,628/92,160 B and the shared warning chunk 46,069/46,080 B.
 Unit syntax passed `systemd-analyze verify`.
 
-The backend history attachment is **not deployed**: the supplied restart guard
-passed its asleep/helper/inhibit preflight, but the agent's new restricted
-execution environment refused sudo (`no new privileges`). From an ordinary
-owner shell, the existing guarded command is:
+The backend history attachment has been live since the broker restart of
+2026-10-02 02:25 MDT. The earlier blocker was an agent sandbox that refused sudo;
+the guarded command, for future broker changes, is:
 
 ```bash
 cd /home/pi/dev/obd-things && bash tmp/vehicle_data/restart-broker-parked.sh
 ```
 
 It refuses while awake. No inhibit was ended, no helper request was changed,
-and no CAN traffic was sent for this work. Actual trip-67 cruise numbers are
-unmeasured until the new compute task is approved and run; its metadata-only
-plan selects 15 completed full chunks totaling 213,123,565 compressed bytes.
+and no CAN traffic was sent for this work. Trips 67, 70, 71 and 72 were reduced
+on 2026-10-02 (trip 67 from 15 full chunks, 213,123,565 compressed bytes) and
+appear under History with their coverage and cancel attribution.
 
 ```bash
 # Metadata-only plan for one trip; does not scan/decompress a saved capture:
