@@ -2,11 +2,13 @@
 
 import random
 import socket
+import struct
 import unittest
 from types import SimpleNamespace
 from unittest import mock
 
 from lib import can_wake
+from projects.tpms import tpms_logger
 
 
 def legacy_wake_conflicts(frames):
@@ -87,6 +89,79 @@ class WakeBroadcastAdoptionTests(unittest.TestCase):
         self.assertEqual(can_wake._B_CAN_VOLTAGE_ID, 0x46C)
         self.assertEqual(can_wake._C_CAN_ENGINE_SPEED_ID, 0x0FC)
         self.assertEqual(can_wake._C_CAN_IGNITION_GATE_ID, 0x2EF)
+
+
+class ReceiveOnlySocket:
+    def __init__(self, frames):
+        self.frames = iter(frames)
+
+    def recv(self, _size):
+        try:
+            return next(self.frames)
+        except StopIteration:
+            raise socket.timeout
+
+    def setsockopt(self, *_args):
+        pass
+
+    def bind(self, _address):
+        pass
+
+    def settimeout(self, _timeout):
+        pass
+
+    def close(self):
+        pass
+
+    def send(self, _data):
+        raise AssertionError("differential test must never transmit")
+
+
+def legacy_tpms_running(frames):
+    consecutive = 0
+    for frame in frames:
+        if len(frame) != 16:
+            return False
+        can_id, dlc, data = struct.unpack("=IB3x8s", frame)
+        if (
+            can_id & (0x80000000 | 0x40000000 | 0x20000000)
+            or (can_id & 0x7FF) != 0x0FC
+            or not 2 <= dlc <= 8
+        ):
+            continue
+        rpm = (int.from_bytes(data[:2], "big") & 0xFFFC) / 4.0
+        if rpm >= 400.0:
+            consecutive += 1
+            if consecutive >= 3:
+                return True
+        else:
+            consecutive = 0
+    return False
+
+
+class TpmsBroadcastAdoptionTests(unittest.TestCase):
+    def check_frames(self, frames):
+        sock = ReceiveOnlySocket(frames)
+        actual = tpms_logger.engine_running(
+            "offline", socket_factory=lambda *_args: sock, monotonic=lambda: 0.0
+        )
+        self.assertIs(actual, legacy_tpms_running(frames))
+
+    def test_tpms_rpm_exhaustive_and_every_short_dlc(self):
+        with mock.patch.object(socket, "socket", side_effect=AssertionError("no CAN I/O")):
+            for data in rpm_payloads():
+                frame = struct.pack("=IB3x8s", 0x0FC, len(data), data)
+                self.check_frames([frame] * 3)
+            for can_id in (0x0FC, 0x2EF, 0x800000FC, 0x400000FC, 0x200000FC):
+                for dlc in range(256):
+                    self.check_frames([struct.pack("=IB3x8s", can_id, dlc, b"\xff" * 8)] * 3)
+            running = struct.pack("=IB3x8s", 0x0FC, 2, b"\xff\xff")
+            stopped = struct.pack("=IB3x8s", 0x0FC, 2, b"\0\0")
+            self.check_frames([running, running, stopped, running, running])
+            self.check_frames([running, running, stopped, running, running, running])
+            self.check_frames([b"short"])
+        self.assertEqual(tpms_logger.ENGINE_SPEED_ID, 0x0FC)
+        self.assertEqual(tpms_logger.IGN_BCAST, 0x2EF)
 
 
 if __name__ == "__main__":

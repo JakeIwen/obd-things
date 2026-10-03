@@ -50,6 +50,7 @@ from dataclasses import dataclass
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, REPO)
 from lib import can_operation_state, can_runtime_route, canbus, diagnostic_safety, uds
+from lib import broadcast_signals
 from lib.modules import bind_channel, get
 from projects.vehicle_data.api import TelemetryClient
 
@@ -64,7 +65,7 @@ RUNNING_WINDOW_S = 0.75
 RUNNING_SAMPLE_COUNT = 3
 RUNNING_THRESHOLD_RPM = 400.0
 CCAN_PAIR = "6/14"
-ENGINE_SPEED_ID = 0x0FC
+ENGINE_SPEED_ID = broadcast_signals.ENGINE_SPEED.can_id
 AF_CAN = getattr(socket, "AF_CAN", 29)
 CAN_RAW = getattr(socket, "CAN_RAW", 1)
 SOL_CAN_RAW = getattr(socket, "SOL_CAN_RAW", 101)
@@ -470,7 +471,7 @@ def engine_running(
                 or not 2 <= dlc <= 8
             ):
                 continue
-            rpm = (int.from_bytes(data[:2], "big") & 0xFFFC) / 4.0
+            rpm = broadcast_signals.ENGINE_SPEED.decode(data)
             if rpm >= threshold_rpm:
                 consecutive += 1
                 if consecutive >= required_samples:
@@ -617,7 +618,7 @@ def _active_session_gates_hold(
     )
 
 
-IGN_BCAST = 0x2EF   # broadcast only present with ignition ON (see ccan_voltage.py).
+IGN_BCAST = broadcast_signals.IGNITION_ON.can_id   # broadcast only present with ignition ON (see ccan_voltage.py).
                     # Gating on it (not raw frame count) matters: our own diag polling
                     # holds FCA network management awake, so a frame-count gate would
                     # never see the bus go quiet and would drain the battery
