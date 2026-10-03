@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import fcntl
 import hashlib
@@ -1295,17 +1295,26 @@ def _select_singleton(
     return monitor_xml
 
 
-def _run_campaign_locked(
+@dataclass
+class _CampaignRunState:
+    monitoring: bool = False
+    toggle_ambiguous: bool = False
+    ui_reconcile: bool = False
+    abnormal_reconcile: bool = False
+    current_sequence: int = -1
+    current_target: str = ""
+    last_segment_offsets: dict[str, ArtifactStat] | None = None
+
+
+def _campaign_preflight(
     plan: CampaignPlan,
     adb: AdbClient,
     runner: CommandRunner,
     out_root: Path,
     required_mount: Path,
     mount_device: int,
-    conditions: str,
     route_ownership,
-    termination_guard: object | None = None,
-) -> Path:
+) -> tuple[str, bool]:
     require_writable_mount(
         out_root,
         required_mount,
@@ -1328,7 +1337,13 @@ def _run_campaign_locked(
         required_mount,
         expected_device=mount_device,
     )
+    return xml_text, monitor_active
 
+
+def _prepare_campaign_paths(
+    plan: CampaignPlan,
+    out_root: Path,
+) -> tuple[Path, Path, Path]:
     campaign_dir = out_root / plan.campaign_id
     if campaign_dir.exists():
         raise CampaignError(
@@ -1338,6 +1353,850 @@ def _run_campaign_locked(
     pulled_dir = campaign_dir / "android_logs" / "final"
     artifact_dir.mkdir(parents=True)
     pulled_dir.mkdir(parents=True)
+    return campaign_dir, artifact_dir, pulled_dir
+
+
+def _initialize_campaign(
+    plan: CampaignPlan,
+    adb: AdbClient,
+    campaign_dir: Path,
+    artifact_dir: Path,
+    xml_text: str,
+    conditions: str,
+    monitor_active: bool,
+) -> EventWriter:
+    writer = EventWriter(campaign_dir)
+    _write_text(artifact_dir / "initial_monitor.xml", xml_text)
+    _write_text(
+        campaign_dir / "plan.json",
+        json.dumps(plan.as_dict(), indent=2, sort_keys=True) + "\n",
+    )
+    writer.event(
+        "campaign_started",
+        campaign_id=plan.campaign_id,
+        module_key=plan.module_key,
+        serial=adb.serial,
+        conditions=conditions,
+        system_event_monitor_active=monitor_active,
+    )
+    writer.state(
+        {
+            "schema_version": 1,
+            "campaign_id": plan.campaign_id,
+            "phase": "ready",
+            "next_sequence": 0,
+            "manual_reconcile": False,
+        }
+    )
+    return writer
+
+
+def _prepare_campaign_segment(
+    plan: CampaignPlan,
+    adb: AdbClient,
+    writer: EventWriter,
+    artifact_dir: Path,
+    campaign_dir: Path,
+    out_root: Path,
+    required_mount: Path,
+    mount_device: int,
+    route_ownership,
+    state: _CampaignRunState,
+    sequence: int,
+    target: str,
+) -> tuple[dict[str, ArtifactStat], list[UiNode], str]:
+    require_writable_mount(
+        out_root,
+        required_mount,
+        expected_device=mount_device,
+    )
+    try:
+        route_ownership.revalidate()
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise CampaignError(
+            f"CAN role ownership changed during campaign: {exc}"
+        ) from exc
+    state.current_sequence = sequence
+    state.current_target = target
+    free_before = _disk_guard(campaign_dir, plan.min_free_bytes)
+    tablet_free_before = _tablet_disk_guard(plan, adb)
+    writer.event(
+        "segment_preflight",
+        sequence=sequence,
+        gauge=target,
+        free_bytes=free_before,
+        tablet_free_bytes=tablet_free_before,
+    )
+    state.ui_reconcile = True
+    writer.state(
+        {
+            "schema_version": 1,
+            "campaign_id": plan.campaign_id,
+            "phase": "selection_in_progress",
+            "sequence": sequence,
+            "gauge": target,
+            "manual_reconcile": True,
+        }
+    )
+    _select_singleton(plan, adb, writer, target, artifact_dir, sequence)
+    state.ui_reconcile = False
+    before = _artifact_stats(adb, plan)
+    _validate_required_preexisting(plan, before)
+    writer.event(
+        "segment_offsets_before",
+        sequence=sequence,
+        gauge=target,
+        artifacts=_stats_dict(before),
+    )
+    current_xml, nodes = audit_device(plan, adb)
+    validate_monitor_page(
+        current_xml,
+        expected_runtime=plan.expected_runtime,
+        expected_rotation=plan.expected_rotation,
+        expected_width=plan.expected_width,
+        expected_height=plan.expected_height,
+        expected_labels=(target,),
+    )
+    file_label = _filename_label(target)
+    try:
+        before_start_state = _capture_monitor_state(
+            plan,
+            adb,
+            nodes,
+            artifact_dir
+            / f"{sequence:04d}_{file_label}_before_start_stopped.png",
+        )
+    except BaseException:
+        state.abnormal_reconcile = True
+        raise
+    if before_start_state != "stopped":
+        state.abnormal_reconcile = True
+        if before_start_state == "running":
+            state.monitoring = True
+            state.toggle_ambiguous = False
+        raise CampaignError("monitor icon is not stopped immediately before start")
+    return before, nodes, file_label
+
+
+def _wait_for_monitor_activity(
+    plan: CampaignPlan,
+    adb: AdbClient,
+    writer: EventWriter,
+    artifact_dir: Path,
+    target: str,
+    before: dict[str, ArtifactStat],
+) -> dict[str, ArtifactStat]:
+    running_stats: dict[str, ArtifactStat] | None = None
+
+    def activity_grew(_snapshot: GeneralUiSnapshot) -> bool:
+        nonlocal running_stats
+        running_stats = _artifact_stats(adb, plan)
+        return _any_required_artifact_grew(plan, before, running_stats)
+
+    _adaptive_ui_wait(
+        adb=adb,
+        writer=writer,
+        artifact_dir=artifact_dir,
+        operation=f"monitor_log_growth:{target}",
+        timeout_seconds=max(
+            UI_MONITOR_TRANSITION_TIMEOUT_SECONDS,
+            plan.verify_seconds,
+        ),
+        predicate=activity_grew,
+    )
+    if running_stats is None:
+        raise CampaignError("monitor activity matched without artifact statistics")
+    return running_stats
+
+
+def _start_campaign_monitoring(
+    plan: CampaignPlan,
+    adb: AdbClient,
+    writer: EventWriter,
+    artifact_dir: Path,
+    state: _CampaignRunState,
+    sequence: int,
+    target: str,
+    before: dict[str, ArtifactStat],
+    nodes: list[UiNode],
+    file_label: str,
+) -> None:
+    start_stop = _one_by_id(nodes, f"{SAFE_ID_PREFIX}bStartmonitoring")
+    state.toggle_ambiguous = True
+    writer.state(
+        {
+            "schema_version": 1,
+            "campaign_id": plan.campaign_id,
+            "phase": "start_tap_intent",
+            "sequence": sequence,
+            "gauge": target,
+            "manual_reconcile": True,
+        }
+    )
+    monitor_start_tap_s = time.monotonic()
+    _tap_with_intent(
+        adb=adb,
+        writer=writer,
+        purpose=f"start_monitor:{target}",
+        node=start_stop,
+    )
+    started_xml, started_nodes = _wait_for_monitor_visual_state(
+        plan=plan,
+        adb=adb,
+        writer=writer,
+        artifact_dir=artifact_dir,
+        operation=f"monitor_start:{target}",
+        expected_state="running",
+        expected_label=target,
+        timeout_seconds=UI_MONITOR_TRANSITION_TIMEOUT_SECONDS,
+        destination=(
+            artifact_dir / f"{sequence:04d}_{file_label}_after_start_running.png"
+        ),
+    )
+    state.monitoring = True
+    state.toggle_ambiguous = False
+    running_stats = _wait_for_monitor_activity(
+        plan,
+        adb,
+        writer,
+        artifact_dir,
+        target,
+        before,
+    )
+    writer.event(
+        "start_transition_observation",
+        sequence=sequence,
+        gauge=target,
+        artifacts=_stats_dict(running_stats),
+    )
+    writer.state(
+        {
+            "schema_version": 1,
+            "campaign_id": plan.campaign_id,
+            "phase": "monitoring",
+            "sequence": sequence,
+            "gauge": target,
+            "manual_reconcile": True,
+        }
+    )
+    writer.event(
+        "segment_started",
+        sequence=sequence,
+        gauge=target,
+        dwell_seconds=plan.segment_seconds,
+    )
+    remaining = max(
+        0.0,
+        plan.segment_seconds - (time.monotonic() - monitor_start_tap_s),
+    )
+    time.sleep(remaining)
+
+
+def _capture_campaign_segment_end(
+    plan: CampaignPlan,
+    adb: AdbClient,
+    artifact_dir: Path,
+    state: _CampaignRunState,
+    sequence: int,
+    target: str,
+    file_label: str,
+) -> list[UiNode]:
+    end_xml, nodes = audit_device(plan, adb)
+    validate_monitor_page(
+        end_xml,
+        expected_runtime=plan.expected_runtime,
+        expected_rotation=plan.expected_rotation,
+        expected_width=plan.expected_width,
+        expected_height=plan.expected_height,
+        expected_labels=(target,),
+    )
+    _write_text(
+        artifact_dir / f"{sequence:04d}_{file_label}_monitor_end.xml",
+        end_xml,
+    )
+    if plan.screenshot_each_segment:
+        _write_bytes(
+            artifact_dir / f"{sequence:04d}_{file_label}_monitor_end.png",
+            adb.screenshot(),
+        )
+    try:
+        before_stop_state = _capture_monitor_state(
+            plan,
+            adb,
+            nodes,
+            artifact_dir
+            / f"{sequence:04d}_{file_label}_before_stop_running.png",
+        )
+    except BaseException:
+        state.abnormal_reconcile = True
+        raise
+    if before_stop_state != "running":
+        state.abnormal_reconcile = True
+        if before_stop_state == "stopped":
+            state.monitoring = False
+            state.toggle_ambiguous = False
+        raise CampaignError("monitor icon is not running immediately before stop")
+    return nodes
+
+
+def _verify_stopped_artifacts(
+    plan: CampaignPlan,
+    adb: AdbClient,
+    writer: EventWriter,
+    state: _CampaignRunState,
+    sequence: int,
+    target: str,
+    before: dict[str, ArtifactStat],
+) -> dict[str, ArtifactStat]:
+    try:
+        after = _artifact_stats(adb, plan)
+        time.sleep(plan.verify_seconds)
+        stable = _artifact_stats(adb, plan)
+    except BaseException:
+        # A visually stopped icon is insufficient when its configured
+        # stop-stability witnesses could not be observed.
+        state.abnormal_reconcile = True
+        raise
+    writer.event(
+        "stop_transition_observation",
+        sequence=sequence,
+        gauge=target,
+        after_settle=_stats_dict(after),
+        after_verify=_stats_dict(stable),
+    )
+    if not _required_artifacts_stable(plan, after, stable):
+        state.abnormal_reconcile = True
+        raise CampaignError(
+            "required activity artifacts continued changing after the "
+            "stop tap; monitor state is ambiguous"
+        )
+    writer.event("segment_stopped_verified", sequence=sequence, gauge=target)
+    writer.event(
+        "segment_offsets_after",
+        sequence=sequence,
+        gauge=target,
+        artifacts=_stats_dict(stable),
+    )
+    try:
+        _validate_growth(plan, before, stable)
+    except CampaignError:
+        state.abnormal_reconcile = True
+        raise
+    return stable
+
+
+def _stop_campaign_monitoring(
+    plan: CampaignPlan,
+    adb: AdbClient,
+    writer: EventWriter,
+    artifact_dir: Path,
+    state: _CampaignRunState,
+    sequence: int,
+    target: str,
+    before: dict[str, ArtifactStat],
+    nodes: list[UiNode],
+    file_label: str,
+) -> None:
+    start_stop = _one_by_id(nodes, f"{SAFE_ID_PREFIX}bStartmonitoring")
+    state.toggle_ambiguous = True
+    writer.state(
+        {
+            "schema_version": 1,
+            "campaign_id": plan.campaign_id,
+            "phase": "stop_tap_intent",
+            "sequence": sequence,
+            "gauge": target,
+            "manual_reconcile": True,
+        }
+    )
+    writer.event("stop_tap_intent", sequence=sequence, gauge=target)
+    _tap_with_intent(
+        adb=adb,
+        writer=writer,
+        purpose=f"stop_monitor:{target}",
+        node=start_stop,
+    )
+    stopped_xml, stopped_nodes = _wait_for_monitor_visual_state(
+        plan=plan,
+        adb=adb,
+        writer=writer,
+        artifact_dir=artifact_dir,
+        operation=f"monitor_stop:{target}",
+        expected_state="stopped",
+        expected_label=target,
+        timeout_seconds=max(
+            UI_MONITOR_TRANSITION_TIMEOUT_SECONDS,
+            plan.settle_seconds,
+        ),
+        destination=(
+            artifact_dir / f"{sequence:04d}_{file_label}_after_stop_stopped.png"
+        ),
+    )
+    state.monitoring = False
+    state.toggle_ambiguous = False
+    stable = _verify_stopped_artifacts(
+        plan,
+        adb,
+        writer,
+        state,
+        sequence,
+        target,
+        before,
+    )
+    state.last_segment_offsets = stable
+    writer.state(
+        {
+            "schema_version": 1,
+            "campaign_id": plan.campaign_id,
+            "phase": "ready",
+            "next_sequence": sequence + 1,
+            "last_gauge": target,
+            "manual_reconcile": False,
+        }
+    )
+    writer.event("segment_complete", sequence=sequence, gauge=target)
+
+
+def _run_campaign_segments(
+    plan: CampaignPlan,
+    adb: AdbClient,
+    writer: EventWriter,
+    campaign_dir: Path,
+    artifact_dir: Path,
+    out_root: Path,
+    required_mount: Path,
+    mount_device: int,
+    route_ownership,
+    state: _CampaignRunState,
+) -> None:
+    for sequence, target in enumerate(plan.schedule):
+        before, nodes, file_label = _prepare_campaign_segment(
+            plan,
+            adb,
+            writer,
+            artifact_dir,
+            campaign_dir,
+            out_root,
+            required_mount,
+            mount_device,
+            route_ownership,
+            state,
+            sequence,
+            target,
+        )
+        _start_campaign_monitoring(
+            plan,
+            adb,
+            writer,
+            artifact_dir,
+            state,
+            sequence,
+            target,
+            before,
+            nodes,
+            file_label,
+        )
+        nodes = _capture_campaign_segment_end(
+            plan,
+            adb,
+            artifact_dir,
+            state,
+            sequence,
+            target,
+            file_label,
+        )
+        _stop_campaign_monitoring(
+            plan,
+            adb,
+            writer,
+            artifact_dir,
+            state,
+            sequence,
+            target,
+            before,
+            nodes,
+            file_label,
+        )
+
+
+def _reconcile_monitor_after_failure(
+    plan: CampaignPlan,
+    adb: AdbClient,
+    writer: EventWriter,
+    artifact_dir: Path,
+    state: _CampaignRunState,
+) -> None:
+    cleanup_icon_stopped = False
+    if state.monitoring and not state.toggle_ambiguous:
+        try:
+            cleanup_xml, cleanup_nodes = audit_device(plan, adb)
+            validate_monitor_page(
+                cleanup_xml,
+                expected_runtime=plan.expected_runtime,
+                expected_rotation=plan.expected_rotation,
+                expected_width=plan.expected_width,
+                expected_height=plan.expected_height,
+                expected_labels=(state.current_target,),
+            )
+            _write_text(artifact_dir / "cleanup_monitor.xml", cleanup_xml)
+            cleanup_state = _capture_monitor_state(
+                plan,
+                adb,
+                cleanup_nodes,
+                artifact_dir / "cleanup_before_running.png",
+            )
+            if cleanup_state != "running":
+                if cleanup_state == "stopped":
+                    state.abnormal_reconcile = True
+                    state.monitoring = False
+                    state.toggle_ambiguous = False
+                raise CampaignError(
+                    f"cleanup expected running icon, got {cleanup_state}"
+                )
+            stop = _one_by_id(
+                cleanup_nodes, f"{SAFE_ID_PREFIX}bStartmonitoring"
+            )
+            _tap_with_intent(
+                adb=adb,
+                writer=writer,
+                purpose=f"cleanup_stop_monitor:{state.current_target}",
+                node=stop,
+            )
+            state.toggle_ambiguous = True
+            (
+                cleanup_stopped_xml,
+                cleanup_stopped_nodes,
+            ) = _wait_for_monitor_visual_state(
+                plan=plan,
+                adb=adb,
+                writer=writer,
+                artifact_dir=artifact_dir,
+                operation=f"cleanup_monitor_stop:{state.current_target}",
+                expected_state="stopped",
+                expected_label=state.current_target,
+                timeout_seconds=max(
+                    UI_MONITOR_TRANSITION_TIMEOUT_SECONDS,
+                    plan.settle_seconds,
+                ),
+                destination=artifact_dir / "cleanup_after_stopped.png",
+            )
+            state.monitoring = False
+            state.toggle_ambiguous = False
+            cleanup_icon_stopped = True
+            cleanup_after = _artifact_stats(adb, plan)
+            time.sleep(plan.verify_seconds)
+            cleanup_stable = _artifact_stats(adb, plan)
+            if not _required_artifacts_stable(
+                plan, cleanup_after, cleanup_stable
+            ):
+                state.abnormal_reconcile = True
+                raise CampaignError(
+                    "cleanup stop tap was not followed by stable activity artifacts"
+                )
+            writer.event(
+                "cleanup_stop_verified",
+                artifacts=_stats_dict(cleanup_stable),
+            )
+        except BaseException as cleanup_exc:
+            if not cleanup_icon_stopped:
+                state.toggle_ambiguous = True
+            writer.event(
+                "cleanup_ambiguous",
+                error=type(cleanup_exc).__name__,
+                detail=str(cleanup_exc),
+            )
+
+
+def _handle_campaign_failure(
+    plan: CampaignPlan,
+    adb: AdbClient,
+    writer: EventWriter,
+    artifact_dir: Path,
+    state: _CampaignRunState,
+    exc: BaseException,
+    termination_guard: object | None,
+) -> None:
+    if state.monitoring or state.toggle_ambiguous:
+        # A failure observed while the toggle may be active is abnormal even
+        # when the cleanup below later proves that the monitor is stopped.
+        state.abnormal_reconcile = True
+    if termination_guard is not None:
+        termination_guard.begin_cleanup()
+    writer.event(
+        "campaign_error",
+        sequence=state.current_sequence,
+        gauge=state.current_target,
+        error=type(exc).__name__,
+        detail=str(exc),
+        monitoring_assumed=state.monitoring,
+        toggle_ambiguous=state.toggle_ambiguous,
+        abnormal_reconcile=state.abnormal_reconcile,
+    )
+    _reconcile_monitor_after_failure(
+        plan,
+        adb,
+        writer,
+        artifact_dir,
+        state,
+    )
+    writer.state(
+        {
+            "schema_version": 1,
+            "campaign_id": plan.campaign_id,
+            "phase": "failed",
+            "sequence": state.current_sequence,
+            "gauge": state.current_target,
+            "manual_reconcile": _manual_reconcile_required(
+                monitoring=state.monitoring,
+                toggle_ambiguous=state.toggle_ambiguous,
+                ui_reconcile=state.ui_reconcile,
+                abnormal_reconcile=state.abnormal_reconcile,
+            ),
+            "error": str(exc),
+        }
+    )
+
+
+def _pull_final_artifact(
+    plan: CampaignPlan,
+    adb: AdbClient,
+    writer: EventWriter,
+    campaign_dir: Path,
+    pulled_dir: Path,
+    out_root: Path,
+    required_mount: Path,
+    mount_device: int,
+    filename: str,
+    final_source_stats: dict[str, ArtifactStat],
+    last_segment_offsets: dict[str, ArtifactStat],
+) -> None:
+    require_writable_mount(
+        out_root,
+        required_mount,
+        expected_device=mount_device,
+    )
+    source_size = final_source_stats[filename].size
+    last_offset = last_segment_offsets[filename].size
+    if source_size is None:
+        if last_offset is not None:
+            raise CampaignError(
+                f"previously existing Android artifact disappeared "
+                f"before final pull: {filename}"
+            )
+        writer.event(
+            "artifact_pull",
+            filename=filename,
+            source_present=False,
+            pulled=False,
+            size=None,
+            sha256=None,
+        )
+        return
+    if last_offset is not None and source_size < last_offset:
+        raise CampaignError(
+            f"Android artifact {filename} is shorter than its last "
+            f"recorded offset ({source_size} < {last_offset})"
+        )
+    free_before_pull = _disk_guard(campaign_dir, plan.min_free_bytes)
+    if source_size > free_before_pull - plan.min_free_bytes:
+        raise CampaignError(
+            f"not enough host space to pull {filename} while preserving "
+            f"the free-space floor: size={source_size}, "
+            f"free={free_before_pull}, floor={plan.min_free_bytes}"
+        )
+    destination = pulled_dir / filename
+    pulled_size, pull_timeout = adb.pull_artifact(
+        filename,
+        destination,
+        expected_size=source_size,
+    )
+    if last_offset is not None and pulled_size < last_offset:
+        raise CampaignError(
+            f"pulled artifact {filename} is shorter than its last "
+            f"recorded offset ({pulled_size} < {last_offset})"
+        )
+    writer.event(
+        "artifact_pull",
+        filename=filename,
+        source_present=True,
+        pulled=True,
+        source_size_before_pull=source_size,
+        last_segment_offset=last_offset,
+        size=pulled_size,
+        timeout_seconds=pull_timeout,
+        sha256=_sha256_file(destination),
+    )
+
+
+def _finalize_campaign_artifacts(
+    plan: CampaignPlan,
+    adb: AdbClient,
+    writer: EventWriter,
+    campaign_dir: Path,
+    pulled_dir: Path,
+    out_root: Path,
+    required_mount: Path,
+    mount_device: int,
+    state: _CampaignRunState,
+) -> None:
+    require_writable_mount(
+        out_root,
+        required_mount,
+        expected_device=mount_device,
+    )
+    if state.last_segment_offsets is None:
+        raise CampaignError("campaign produced no completed segment offsets")
+    writer.state(
+        {
+            "schema_version": 1,
+            "campaign_id": plan.campaign_id,
+            "phase": "finalizing_artifacts",
+            "next_sequence": len(plan.schedule),
+            "manual_reconcile": False,
+        }
+    )
+    final_source_stats = _artifact_stats(adb, plan)
+    for required_name in plan.required_segment_growth:
+        if final_source_stats[required_name].size is None:
+            raise CampaignError(
+                f"required final Android artifact disappeared: {required_name}"
+            )
+    for filename in plan.artifacts:
+        _pull_final_artifact(
+            plan,
+            adb,
+            writer,
+            campaign_dir,
+            pulled_dir,
+            out_root,
+            required_mount,
+            mount_device,
+            filename,
+            final_source_stats,
+            state.last_segment_offsets,
+        )
+
+
+def _run_campaign_under_lock(
+    plan: CampaignPlan,
+    adb: AdbClient,
+    campaign_dir: Path,
+    artifact_dir: Path,
+    pulled_dir: Path,
+    out_root: Path,
+    required_mount: Path,
+    mount_device: int,
+    conditions: str,
+    route_ownership,
+    xml_text: str,
+    monitor_active: bool,
+    termination_guard: object | None,
+) -> Path:
+    writer = _initialize_campaign(
+        plan,
+        adb,
+        campaign_dir,
+        artifact_dir,
+        xml_text,
+        conditions,
+        monitor_active,
+    )
+    state = _CampaignRunState()
+    try:
+        _run_campaign_segments(
+            plan,
+            adb,
+            writer,
+            campaign_dir,
+            artifact_dir,
+            out_root,
+            required_mount,
+            mount_device,
+            route_ownership,
+            state,
+        )
+    except BaseException as exc:
+        _handle_campaign_failure(
+            plan,
+            adb,
+            writer,
+            artifact_dir,
+            state,
+            exc,
+            termination_guard,
+        )
+        raise
+    try:
+        _finalize_campaign_artifacts(
+            plan,
+            adb,
+            writer,
+            campaign_dir,
+            pulled_dir,
+            out_root,
+            required_mount,
+            mount_device,
+            state,
+        )
+    except BaseException as finalization_exc:
+        try:
+            writer.event(
+                "artifact_finalization_error",
+                error=type(finalization_exc).__name__,
+                detail=str(finalization_exc),
+            )
+            writer.state(
+                {
+                    "schema_version": 1,
+                    "campaign_id": plan.campaign_id,
+                    "phase": "artifact_finalization_failed",
+                    "next_sequence": len(plan.schedule),
+                    "manual_reconcile": False,
+                    "error": str(finalization_exc),
+                }
+            )
+        except OSError:
+            # A disappeared/unwritable required mount may prevent recording the
+            # finalization failure there; the campaign is still never marked complete.
+            pass
+        raise
+    writer.state(
+        {
+            "schema_version": 1,
+            "campaign_id": plan.campaign_id,
+            "phase": "complete",
+            "next_sequence": len(plan.schedule),
+            "manual_reconcile": False,
+        }
+    )
+    writer.event("campaign_complete", segments=len(plan.schedule))
+    return campaign_dir
+
+
+def _run_campaign_locked(
+    plan: CampaignPlan,
+    adb: AdbClient,
+    runner: CommandRunner,
+    out_root: Path,
+    required_mount: Path,
+    mount_device: int,
+    conditions: str,
+    route_ownership,
+    termination_guard: object | None = None,
+) -> Path:
+    xml_text, monitor_active = _campaign_preflight(
+        plan,
+        adb,
+        runner,
+        out_root,
+        required_mount,
+        mount_device,
+        route_ownership,
+    )
+    campaign_dir, artifact_dir, pulled_dir = _prepare_campaign_paths(
+        plan,
+        out_root,
+    )
     lock_path = LOCK_DIR / f"alfaobd-singleton-{plan.campaign_id}.lock"
     LOCK_DIR.mkdir(parents=True, exist_ok=True)
     lock_handle = lock_path.open("a+", encoding="utf-8")
@@ -1346,552 +2205,21 @@ def _run_campaign_locked(
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise CampaignError(f"another supervisor holds {lock_path}") from None
-        writer = EventWriter(campaign_dir)
-        _write_text(artifact_dir / "initial_monitor.xml", xml_text)
-        _write_text(
-            campaign_dir / "plan.json",
-            json.dumps(plan.as_dict(), indent=2, sort_keys=True) + "\n",
+        return _run_campaign_under_lock(
+            plan,
+            adb,
+            campaign_dir,
+            artifact_dir,
+            pulled_dir,
+            out_root,
+            required_mount,
+            mount_device,
+            conditions,
+            route_ownership,
+            xml_text,
+            monitor_active,
+            termination_guard,
         )
-        writer.event(
-            "campaign_started",
-            campaign_id=plan.campaign_id,
-            module_key=plan.module_key,
-            serial=adb.serial,
-            conditions=conditions,
-            system_event_monitor_active=monitor_active,
-        )
-        writer.state(
-            {
-                "schema_version": 1,
-                "campaign_id": plan.campaign_id,
-                "phase": "ready",
-                "next_sequence": 0,
-                "manual_reconcile": False,
-            }
-        )
-
-        monitoring = False
-        toggle_ambiguous = False
-        ui_reconcile = False
-        abnormal_reconcile = False
-        current_sequence = -1
-        current_target = ""
-        last_segment_offsets: dict[str, ArtifactStat] | None = None
-        try:
-            for sequence, target in enumerate(plan.schedule):
-                require_writable_mount(
-                    out_root,
-                    required_mount,
-                    expected_device=mount_device,
-                )
-                try:
-                    route_ownership.revalidate()
-                except (OSError, RuntimeError, ValueError) as exc:
-                    raise CampaignError(
-                        f"CAN role ownership changed during campaign: {exc}"
-                    ) from exc
-                current_sequence = sequence
-                current_target = target
-                free_before = _disk_guard(campaign_dir, plan.min_free_bytes)
-                tablet_free_before = _tablet_disk_guard(plan, adb)
-                writer.event(
-                    "segment_preflight",
-                    sequence=sequence,
-                    gauge=target,
-                    free_bytes=free_before,
-                    tablet_free_bytes=tablet_free_before,
-                )
-                ui_reconcile = True
-                writer.state(
-                    {
-                        "schema_version": 1,
-                        "campaign_id": plan.campaign_id,
-                        "phase": "selection_in_progress",
-                        "sequence": sequence,
-                        "gauge": target,
-                        "manual_reconcile": True,
-                    }
-                )
-                _select_singleton(plan, adb, writer, target, artifact_dir, sequence)
-                ui_reconcile = False
-                before = _artifact_stats(adb, plan)
-                _validate_required_preexisting(plan, before)
-                writer.event(
-                    "segment_offsets_before",
-                    sequence=sequence,
-                    gauge=target,
-                    artifacts=_stats_dict(before),
-                )
-                current_xml, nodes = audit_device(plan, adb)
-                validate_monitor_page(
-                    current_xml,
-                    expected_runtime=plan.expected_runtime,
-                    expected_rotation=plan.expected_rotation,
-                    expected_width=plan.expected_width,
-                    expected_height=plan.expected_height,
-                    expected_labels=(target,),
-                )
-                file_label = _filename_label(target)
-                try:
-                    before_start_state = _capture_monitor_state(
-                        plan,
-                        adb,
-                        nodes,
-                        artifact_dir
-                        / f"{sequence:04d}_{file_label}_before_start_stopped.png",
-                    )
-                except BaseException:
-                    abnormal_reconcile = True
-                    raise
-                if before_start_state != "stopped":
-                    abnormal_reconcile = True
-                    if before_start_state == "running":
-                        monitoring = True
-                        toggle_ambiguous = False
-                    raise CampaignError(
-                        "monitor icon is not stopped immediately before start"
-                    )
-                start_stop = _one_by_id(nodes, f"{SAFE_ID_PREFIX}bStartmonitoring")
-                toggle_ambiguous = True
-                writer.state(
-                    {
-                        "schema_version": 1,
-                        "campaign_id": plan.campaign_id,
-                        "phase": "start_tap_intent",
-                        "sequence": sequence,
-                        "gauge": target,
-                        "manual_reconcile": True,
-                    }
-                )
-                monitor_start_tap_s = time.monotonic()
-                _tap_with_intent(
-                    adb=adb,
-                    writer=writer,
-                    purpose=f"start_monitor:{target}",
-                    node=start_stop,
-                )
-                started_xml, started_nodes = _wait_for_monitor_visual_state(
-                    plan=plan,
-                    adb=adb,
-                    writer=writer,
-                    artifact_dir=artifact_dir,
-                    operation=f"monitor_start:{target}",
-                    expected_state="running",
-                    expected_label=target,
-                    timeout_seconds=UI_MONITOR_TRANSITION_TIMEOUT_SECONDS,
-                    destination=(
-                        artifact_dir
-                        / f"{sequence:04d}_{file_label}_after_start_running.png"
-                    ),
-                )
-                monitoring = True
-                toggle_ambiguous = False
-                running_stats: dict[str, ArtifactStat] | None = None
-
-                def activity_grew(_snapshot: GeneralUiSnapshot) -> bool:
-                    nonlocal running_stats
-                    running_stats = _artifact_stats(adb, plan)
-                    return _any_required_artifact_grew(
-                        plan, before, running_stats
-                    )
-
-                _adaptive_ui_wait(
-                    adb=adb,
-                    writer=writer,
-                    artifact_dir=artifact_dir,
-                    operation=f"monitor_log_growth:{target}",
-                    timeout_seconds=max(
-                        UI_MONITOR_TRANSITION_TIMEOUT_SECONDS,
-                        plan.verify_seconds,
-                    ),
-                    predicate=activity_grew,
-                )
-                if running_stats is None:
-                    raise CampaignError(
-                        "monitor activity matched without artifact statistics"
-                    )
-                writer.event(
-                    "start_transition_observation",
-                    sequence=sequence,
-                    gauge=target,
-                    artifacts=_stats_dict(running_stats),
-                )
-                writer.state(
-                    {
-                        "schema_version": 1,
-                        "campaign_id": plan.campaign_id,
-                        "phase": "monitoring",
-                        "sequence": sequence,
-                        "gauge": target,
-                        "manual_reconcile": True,
-                    }
-                )
-                writer.event(
-                    "segment_started",
-                    sequence=sequence,
-                    gauge=target,
-                    dwell_seconds=plan.segment_seconds,
-                )
-                remaining = max(
-                    0.0,
-                    plan.segment_seconds
-                    - (time.monotonic() - monitor_start_tap_s),
-                )
-                time.sleep(remaining)
-
-                end_xml, nodes = audit_device(plan, adb)
-                validate_monitor_page(
-                    end_xml,
-                    expected_runtime=plan.expected_runtime,
-                    expected_rotation=plan.expected_rotation,
-                    expected_width=plan.expected_width,
-                    expected_height=plan.expected_height,
-                    expected_labels=(target,),
-                )
-                _write_text(
-                    artifact_dir / f"{sequence:04d}_{file_label}_monitor_end.xml",
-                    end_xml,
-                )
-                if plan.screenshot_each_segment:
-                    _write_bytes(
-                        artifact_dir / f"{sequence:04d}_{file_label}_monitor_end.png",
-                        adb.screenshot(),
-                    )
-                try:
-                    before_stop_state = _capture_monitor_state(
-                        plan,
-                        adb,
-                        nodes,
-                        artifact_dir
-                        / f"{sequence:04d}_{file_label}_before_stop_running.png",
-                    )
-                except BaseException:
-                    abnormal_reconcile = True
-                    raise
-                if before_stop_state != "running":
-                    abnormal_reconcile = True
-                    if before_stop_state == "stopped":
-                        monitoring = False
-                        toggle_ambiguous = False
-                    raise CampaignError(
-                        "monitor icon is not running immediately before stop"
-                    )
-                start_stop = _one_by_id(nodes, f"{SAFE_ID_PREFIX}bStartmonitoring")
-                toggle_ambiguous = True
-                writer.state(
-                    {
-                        "schema_version": 1,
-                        "campaign_id": plan.campaign_id,
-                        "phase": "stop_tap_intent",
-                        "sequence": sequence,
-                        "gauge": target,
-                        "manual_reconcile": True,
-                    }
-                )
-                writer.event(
-                    "stop_tap_intent", sequence=sequence, gauge=target
-                )
-                _tap_with_intent(
-                    adb=adb,
-                    writer=writer,
-                    purpose=f"stop_monitor:{target}",
-                    node=start_stop,
-                )
-                stopped_xml, stopped_nodes = _wait_for_monitor_visual_state(
-                    plan=plan,
-                    adb=adb,
-                    writer=writer,
-                    artifact_dir=artifact_dir,
-                    operation=f"monitor_stop:{target}",
-                    expected_state="stopped",
-                    expected_label=target,
-                    timeout_seconds=max(
-                        UI_MONITOR_TRANSITION_TIMEOUT_SECONDS,
-                        plan.settle_seconds,
-                    ),
-                    destination=(
-                        artifact_dir
-                        / f"{sequence:04d}_{file_label}_after_stop_stopped.png"
-                    ),
-                )
-                monitoring = False
-                toggle_ambiguous = False
-                try:
-                    after = _artifact_stats(adb, plan)
-                    time.sleep(plan.verify_seconds)
-                    stable = _artifact_stats(adb, plan)
-                except BaseException:
-                    # A visually stopped icon is insufficient when its configured
-                    # stop-stability witnesses could not be observed.
-                    abnormal_reconcile = True
-                    raise
-                writer.event(
-                    "stop_transition_observation",
-                    sequence=sequence,
-                    gauge=target,
-                    after_settle=_stats_dict(after),
-                    after_verify=_stats_dict(stable),
-                )
-                if not _required_artifacts_stable(plan, after, stable):
-                    abnormal_reconcile = True
-                    raise CampaignError(
-                        "required activity artifacts continued changing after the "
-                        "stop tap; monitor state is ambiguous"
-                    )
-                writer.event("segment_stopped_verified", sequence=sequence, gauge=target)
-                writer.event(
-                    "segment_offsets_after",
-                    sequence=sequence,
-                    gauge=target,
-                    artifacts=_stats_dict(stable),
-                )
-                try:
-                    _validate_growth(plan, before, stable)
-                except CampaignError:
-                    abnormal_reconcile = True
-                    raise
-                last_segment_offsets = stable
-                writer.state(
-                    {
-                        "schema_version": 1,
-                        "campaign_id": plan.campaign_id,
-                        "phase": "ready",
-                        "next_sequence": sequence + 1,
-                        "last_gauge": target,
-                        "manual_reconcile": False,
-                    }
-                )
-                writer.event("segment_complete", sequence=sequence, gauge=target)
-        except BaseException as exc:
-            if monitoring or toggle_ambiguous:
-                # A failure observed while the toggle may be active is abnormal even
-                # when the cleanup below later proves that the monitor is stopped.
-                abnormal_reconcile = True
-            if termination_guard is not None:
-                termination_guard.begin_cleanup()
-            writer.event(
-                "campaign_error",
-                sequence=current_sequence,
-                gauge=current_target,
-                error=type(exc).__name__,
-                detail=str(exc),
-                monitoring_assumed=monitoring,
-                toggle_ambiguous=toggle_ambiguous,
-                abnormal_reconcile=abnormal_reconcile,
-            )
-            cleanup_icon_stopped = False
-            if monitoring and not toggle_ambiguous:
-                try:
-                    cleanup_xml, cleanup_nodes = audit_device(plan, adb)
-                    validate_monitor_page(
-                        cleanup_xml,
-                        expected_runtime=plan.expected_runtime,
-                        expected_rotation=plan.expected_rotation,
-                        expected_width=plan.expected_width,
-                        expected_height=plan.expected_height,
-                        expected_labels=(current_target,),
-                    )
-                    _write_text(artifact_dir / "cleanup_monitor.xml", cleanup_xml)
-                    cleanup_state = _capture_monitor_state(
-                        plan,
-                        adb,
-                        cleanup_nodes,
-                        artifact_dir / "cleanup_before_running.png",
-                    )
-                    if cleanup_state != "running":
-                        if cleanup_state == "stopped":
-                            abnormal_reconcile = True
-                            monitoring = False
-                            toggle_ambiguous = False
-                        raise CampaignError(
-                            f"cleanup expected running icon, got {cleanup_state}"
-                        )
-                    stop = _one_by_id(
-                        cleanup_nodes, f"{SAFE_ID_PREFIX}bStartmonitoring"
-                    )
-                    _tap_with_intent(
-                        adb=adb,
-                        writer=writer,
-                        purpose=f"cleanup_stop_monitor:{current_target}",
-                        node=stop,
-                    )
-                    toggle_ambiguous = True
-                    (
-                        cleanup_stopped_xml,
-                        cleanup_stopped_nodes,
-                    ) = _wait_for_monitor_visual_state(
-                        plan=plan,
-                        adb=adb,
-                        writer=writer,
-                        artifact_dir=artifact_dir,
-                        operation=f"cleanup_monitor_stop:{current_target}",
-                        expected_state="stopped",
-                        expected_label=current_target,
-                        timeout_seconds=max(
-                            UI_MONITOR_TRANSITION_TIMEOUT_SECONDS,
-                            plan.settle_seconds,
-                        ),
-                        destination=artifact_dir / "cleanup_after_stopped.png",
-                    )
-                    monitoring = False
-                    toggle_ambiguous = False
-                    cleanup_icon_stopped = True
-                    cleanup_after = _artifact_stats(adb, plan)
-                    time.sleep(plan.verify_seconds)
-                    cleanup_stable = _artifact_stats(adb, plan)
-                    if not _required_artifacts_stable(
-                        plan, cleanup_after, cleanup_stable
-                    ):
-                        abnormal_reconcile = True
-                        raise CampaignError(
-                            "cleanup stop tap was not followed by stable activity artifacts"
-                        )
-                    writer.event(
-                        "cleanup_stop_verified",
-                        artifacts=_stats_dict(cleanup_stable),
-                    )
-                except BaseException as cleanup_exc:
-                    if not cleanup_icon_stopped:
-                        toggle_ambiguous = True
-                    writer.event(
-                        "cleanup_ambiguous",
-                        error=type(cleanup_exc).__name__,
-                        detail=str(cleanup_exc),
-                    )
-            writer.state(
-                {
-                    "schema_version": 1,
-                    "campaign_id": plan.campaign_id,
-                    "phase": "failed",
-                    "sequence": current_sequence,
-                    "gauge": current_target,
-                    "manual_reconcile": _manual_reconcile_required(
-                        monitoring=monitoring,
-                        toggle_ambiguous=toggle_ambiguous,
-                        ui_reconcile=ui_reconcile,
-                        abnormal_reconcile=abnormal_reconcile,
-                    ),
-                    "error": str(exc),
-                }
-            )
-            raise
-
-        try:
-            require_writable_mount(
-                out_root,
-                required_mount,
-                expected_device=mount_device,
-            )
-            if last_segment_offsets is None:
-                raise CampaignError("campaign produced no completed segment offsets")
-            writer.state(
-                {
-                    "schema_version": 1,
-                    "campaign_id": plan.campaign_id,
-                    "phase": "finalizing_artifacts",
-                    "next_sequence": len(plan.schedule),
-                    "manual_reconcile": False,
-                }
-            )
-            final_source_stats = _artifact_stats(adb, plan)
-            for required_name in plan.required_segment_growth:
-                if final_source_stats[required_name].size is None:
-                    raise CampaignError(
-                        f"required final Android artifact disappeared: {required_name}"
-                    )
-
-            for filename in plan.artifacts:
-                require_writable_mount(
-                    out_root,
-                    required_mount,
-                    expected_device=mount_device,
-                )
-                source_size = final_source_stats[filename].size
-                last_offset = last_segment_offsets[filename].size
-                if source_size is None:
-                    if last_offset is not None:
-                        raise CampaignError(
-                            f"previously existing Android artifact disappeared "
-                            f"before final pull: {filename}"
-                        )
-                    writer.event(
-                        "artifact_pull",
-                        filename=filename,
-                        source_present=False,
-                        pulled=False,
-                        size=None,
-                        sha256=None,
-                    )
-                    continue
-                if last_offset is not None and source_size < last_offset:
-                    raise CampaignError(
-                        f"Android artifact {filename} is shorter than its last "
-                        f"recorded offset ({source_size} < {last_offset})"
-                    )
-                free_before_pull = _disk_guard(
-                    campaign_dir, plan.min_free_bytes
-                )
-                if source_size > free_before_pull - plan.min_free_bytes:
-                    raise CampaignError(
-                        f"not enough host space to pull {filename} while preserving "
-                        f"the free-space floor: size={source_size}, "
-                        f"free={free_before_pull}, floor={plan.min_free_bytes}"
-                    )
-                destination = pulled_dir / filename
-                pulled_size, pull_timeout = adb.pull_artifact(
-                    filename,
-                    destination,
-                    expected_size=source_size,
-                )
-                if last_offset is not None and pulled_size < last_offset:
-                    raise CampaignError(
-                        f"pulled artifact {filename} is shorter than its last "
-                        f"recorded offset ({pulled_size} < {last_offset})"
-                    )
-                writer.event(
-                    "artifact_pull",
-                    filename=filename,
-                    source_present=True,
-                    pulled=True,
-                    source_size_before_pull=source_size,
-                    last_segment_offset=last_offset,
-                    size=pulled_size,
-                    timeout_seconds=pull_timeout,
-                    sha256=_sha256_file(destination),
-                )
-        except BaseException as finalization_exc:
-            try:
-                writer.event(
-                    "artifact_finalization_error",
-                    error=type(finalization_exc).__name__,
-                    detail=str(finalization_exc),
-                )
-                writer.state(
-                    {
-                        "schema_version": 1,
-                        "campaign_id": plan.campaign_id,
-                        "phase": "artifact_finalization_failed",
-                        "next_sequence": len(plan.schedule),
-                        "manual_reconcile": False,
-                        "error": str(finalization_exc),
-                    }
-                )
-            except OSError:
-                # A disappeared/unwritable required mount may prevent recording the
-                # finalization failure there; the campaign is still never marked complete.
-                pass
-            raise
-        writer.state(
-            {
-                "schema_version": 1,
-                "campaign_id": plan.campaign_id,
-                "phase": "complete",
-                "next_sequence": len(plan.schedule),
-                "manual_reconcile": False,
-            }
-        )
-        writer.event("campaign_complete", segments=len(plan.schedule))
-        return campaign_dir
     finally:
         try:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
