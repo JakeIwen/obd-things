@@ -38,6 +38,7 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from lib.capture_pipeline import candump_command as _candump_command
 from lib.vehicle_can_roles import CAN_BUS_ROLES
 from projects.vehicle_data.can_interfaces import (
     PassiveInterfaceLease,
@@ -354,11 +355,11 @@ def candump_command(
     *,
     receive_buffer_bytes: int | None,
 ) -> list[str]:
-    command = [executable, "-L", "-d"]
-    if receive_buffer_bytes is not None:
-        command.extend(("-r", str(receive_buffer_bytes)))
-    command.append(lease.channel)
-    return command
+    return _candump_command(
+        executable,
+        lease.channel,
+        receive_buffer_bytes=receive_buffer_bytes,
+    )
 
 
 def available_bytes(
