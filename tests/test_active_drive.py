@@ -131,6 +131,7 @@ class FakePcmPoller:
         result=None,
         torque_result=None,
         temperature_result=None,
+        oil_life_result=None,
         exception=None,
         events=None,
     ):
@@ -160,6 +161,12 @@ class FakePcmPoller:
             quality="observed_alfa_scale", detail="exact 62 069F replay",
         )
         self.temperature_poll_count = 0
+        self.oil_life_result = oil_life_result or pcm_electrical.PcmElectricalResult(
+            available=True, metric="engine.oil_life_remaining", value=82,
+            unit="%", source="pcm.did.2185", bus="c-can",
+            quality="observed_alfa_scale", detail="exact 62 2185 replay",
+        )
+        self.oil_life_poll_count = 0
         self.exception = exception
         self.events = events
         self.poll_count = 0
@@ -197,6 +204,13 @@ class FakePcmPoller:
         if self.events is not None:
             self.events.append("pcm_close")
 
+    def poll_oil_life(self, permit):
+        self.poll_count += 1
+        self.oil_life_poll_count += 1
+        self.permits.append(permit)
+        if self.events is not None:
+            self.events.append("pcm_oil_life_poll")
+        return self.oil_life_result
 
 class FakeTpmsPoller:
     def __init__(self, events=None):
@@ -310,6 +324,53 @@ class FakeBackend:
 
 
 class ActiveSessionTests(unittest.TestCase):
+    def test_old_broker_without_feature_handshake_never_polls_oil_life(self):
+        backend = FakeBackend(snapshots=[snapshot((750, 751, 752), rpm_observation())
+                                         for _ in range(3)]
+                              + [snapshot((0, 0, 0), rpm_observation(0))])
+        outcome, emitted, _ = self.run_session(backend, enable_oil_life=False)
+        self.assertTrue(outcome.restored)
+        self.assertEqual(backend.pcm.oil_life_poll_count, 0)
+        self.assertFalse(any(e.get("metric") == "engine.oil_life_remaining" for e in emitted))
+
+    def test_oil_life_minute_cadence_and_epoch_failure_isolation(self):
+        for failed in (False, True):
+            with self.subTest(failed=failed):
+                result = (pcm_electrical.PcmElectricalResult(
+                    metric="engine.oil_life_remaining", available=False, unit="%",
+                    source="pcm.did.2185", bus="c-can", quality="observed_alfa_scale",
+                    reason="session_required", detail="NRC 7E; no session change",
+                ) if failed else None)
+                events = []
+                poller = FakePcmPoller(oil_life_result=result, events=events)
+                backend = FakeBackend(snapshots=[snapshot((750, 751, 752), rpm_observation())
+                                                for _ in range(125)]
+                                      + [snapshot((0, 0, 0), rpm_observation(0))],
+                                      pcm=poller, events=events)
+                clock = [100.0]
+                backend.monotonic = lambda: clock[0]
+                backend.sleep = lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+                read = backend.broadcast_snapshot
+                backend.broadcast_snapshot = lambda timeout: replace(
+                    read(timeout), completed_monotonic=clock[0])
+                times = []
+                poll = poller.poll_oil_life
+
+                def oil_poll(permit):
+                    times.append(clock[0])
+                    self.assertEqual(events[-1], "pcm_vvt_temperature_poll")
+                    return poll(permit)
+
+                poller.poll_oil_life = oil_poll
+                outcome, emitted, _inhibit = self.run_session(backend)
+                self.assertTrue(outcome.restored)
+                self.assertEqual(outcome.reason, "engine_not_running")
+                self.assertEqual(times, [100.0] if failed else [100.0, 160.0, 220.0])
+                self.assertGreater(backend.tpms.poll_count, 120)
+                oil_events = [e for e in emitted if e.get("metric") == "engine.oil_life_remaining"]
+                self.assertEqual(len(oil_events), 1 if failed else 3)
+                self.assertEqual(oil_events[0]["type"], "metric_failure" if failed else "observation")
+
     def test_vvt_temperature_uses_five_second_cadence_after_tpms(self):
         events = []
         backend = FakeBackend(
@@ -373,7 +434,7 @@ class ActiveSessionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Guarded engine-running", result.stdout)
 
-    def run_session(self, backend):
+    def run_session(self, backend, *, enable_oil_life=True):
         sink = EventSink()
         events = backend.events
         with (
@@ -404,6 +465,7 @@ class ActiveSessionTests(unittest.TestCase):
                 backend,
                 sink,
                 termination_guard=guard,
+                enable_oil_life=enable_oil_life,
             )
         return outcome, sink.events, begin_inhibit
 
@@ -432,7 +494,7 @@ class ActiveSessionTests(unittest.TestCase):
 
         self.assertEqual(outcome.reason, "engine_not_running")
         self.assertTrue(outcome.restored)
-        self.assertEqual(pcm.poll_count, 3)
+        self.assertEqual(pcm.poll_count, 4)
         self.assertEqual(tpms.poll_count, 1)
         self.assertIsNot(pcm.permits[0], pcm.permits[1])
         self.assertIsNot(pcm.permits[1], tpms.permits[0])
@@ -456,6 +518,7 @@ class ActiveSessionTests(unittest.TestCase):
                 "generator.field_duty",
                 "engine.crankshaft_torque",
                 "engine.vvt_oil_temperature",
+                "engine.oil_life_remaining",
                 "tire.pressure.fl",
             },
         )
@@ -498,7 +561,7 @@ class ActiveSessionTests(unittest.TestCase):
 
         self.assertEqual(outcome.reason, "engine_not_running")
         self.assertTrue(outcome.restored)
-        self.assertEqual(pcm.poll_count, 3)
+        self.assertEqual(pcm.poll_count, 4)
         self.assertEqual(tpms.poll_count, 1)
         failures = [
             event
@@ -536,14 +599,14 @@ class ActiveSessionTests(unittest.TestCase):
         with mock.patch.object(
             active_drive.transmit_permit,
             "issue",
-            side_effect=(stale, object(), object(), object(), object()),
+            side_effect=(stale, object(), object(), object(), object(), object()),
         ) as issue:
             outcome, _emitted, _inhibit = self.run_session(backend)
 
         self.assertEqual(outcome.reason, "engine_not_running")
         self.assertTrue(outcome.restored)
-        self.assertEqual(issue.call_count, 5)
-        self.assertEqual(backend.pcm.poll_count, 3)
+        self.assertEqual(issue.call_count, 6)
+        self.assertEqual(backend.pcm.poll_count, 4)
         self.assertEqual(backend.tpms.poll_count, 1)
 
         fatal_backend = FakeBackend(
@@ -1102,8 +1165,10 @@ class ParentDeathHandshakeTests(unittest.TestCase):
                 "expected_usb_serial",
                 "expected_dev_id",
                 "expected_parent_pid",
+                "enable_oil_life",
             },
         )
+        self.assertFalse(actions["enable_oil_life"].default)
         self.assertIsNone(actions["channel"].choices)
         self.assertTrue(actions["channel"].required)
         self.assertTrue(actions["expected_usb_serial"].required)
@@ -1450,6 +1515,34 @@ class PressureWireTests(unittest.TestCase):
 
 
 class BrokerActiveDriveTests(unittest.TestCase):
+    def test_oil_life_optional_failure_stop_and_ttl_preserve_dated_value(self):
+        broker, clock = self.make_broker()
+        observation = {
+            "type": "observation", "metric": "engine.oil_life_remaining",
+            "value": 82, "unit": "%", "source": "pcm.did.2185", "bus": "c-can",
+            "quality": "observed_alfa_scale", "interface_mode": "armed_diagnostic",
+        }
+        broker.handle_active_drive_event(observation)
+        self.assertEqual(broker.metric_response("engine.oil_life_remaining")["value"], 82)
+        self.assertTrue(broker.maintenance_response()["oil_life"]["available"])
+        self.assertNotIn("value", broker.maintenance_response()["oil_life"])
+        clock.value = 279
+        self.assertFalse(broker.metric_response("engine.oil_life_remaining")["stale"])
+        clock.value = 281
+        self.assertTrue(broker.metric_response("engine.oil_life_remaining")["stale"])
+        broker.handle_active_drive_event({**observation, "type": "metric_failure",
+                                         "reason": "session_required", "detail": "NRC 7E"})
+        unavailable = broker.metric_response("engine.oil_life_remaining")
+        self.assertFalse(unavailable["available"])
+        self.assertEqual(unavailable["last_recorded"]["value"], 82)
+        broker.handle_active_drive_event({**observation, "value": 81})
+        broker.handle_active_drive_event({"type": "final", "state": "idle",
+            "reason": "engine_not_running", "detail": "stopped", "restored": True,
+            "interface_mode": "listen_only"})
+        stopped = broker.metric_response("engine.oil_life_remaining")
+        self.assertFalse(stopped["available"])
+        self.assertEqual(stopped["last_recorded"]["value"], 81)
+
     class Clock:
         def __init__(self):
             self.value = 100.0
@@ -2213,6 +2306,7 @@ class BrokerActiveDriveTests(unittest.TestCase):
                 TEST_SERIAL,
                 "--expected-dev-id",
                 hex(TEST_DEV_ID),
+                "--enable-oil-life",
             ],
         )
 
@@ -2248,12 +2342,13 @@ class BrokerActiveDriveTests(unittest.TestCase):
             supervisor.run(threading.Event())
 
         self.assertEqual(
-            commands[0][-4:],
+            commands[0][-5:],
             [
                 "--expected-usb-serial",
                 TEST_SERIAL,
                 "--expected-dev-id",
                 hex(TEST_DEV_ID),
+                "--enable-oil-life",
             ],
         )
 

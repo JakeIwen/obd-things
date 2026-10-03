@@ -10,6 +10,21 @@ from projects.vehicle_data.models import success, failure
 
 
 class LastReadingsTests(unittest.TestCase):
+    def test_oil_life_survives_restart_without_becoming_live_or_resetting(self):
+        name = "engine.oil_life_remaining"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "last.json"
+            store = LastReadings(METRICS, path)
+            sample = self.sample(name, 82)
+            self.assertTrue(store.remember(name, sample))
+            for value in (-1, 101, 255, 82.5, True):
+                self.assertFalse(store.remember(name, {**sample, "value": value}))
+            store.flush()
+            restored = LastReadings(METRICS, path).get(name)
+            self.assertEqual(restored["value"], 82)
+            self.assertEqual(restored["observed_at"], sample["observed_at"])
+            self.assertNotIn("available", restored)
+
     def sample(self, name="battery.voltage", value=12.3):
         definition = METRICS[name]
         source = definition.sources[0]

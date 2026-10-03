@@ -56,6 +56,7 @@ PASSIVE_GATE_SECONDS = 0.5
 ACTIVE_SNAPSHOT_SECONDS = 0.35
 POLL_INTERVAL_SECONDS = 1.0
 VVT_TEMPERATURE_INTERVAL_SECONDS = 5.0
+OIL_LIFE_INTERVAL_SECONDS = 60.0
 REQUEST_TIMEOUT_SECONDS = 0.45
 RESTORATION_INHIBIT = "vehicle-data-restoration-failed"
 
@@ -712,6 +713,7 @@ def run_active_session(
     sink: JsonEventSink,
     *,
     termination_guard=None,
+    enable_oil_life: bool = False,
 ) -> SessionOutcome:
     """Run one engine-running ownership interval and always restore before unlock."""
     lock_handle = None
@@ -780,7 +782,7 @@ def run_active_session(
             reason="running_gate_satisfied",
             detail=(
                 "exclusive C-CAN owner is armed; broadcast telemetry, PCM "
-                "generator duty/current torque/VVT oil temperature, and fixed "
+                "generator duty/current torque/VVT oil temperature/oil life, and fixed "
                 "RF Hub pressures "
                 "share this interval"
             ),
@@ -792,6 +794,11 @@ def run_active_session(
         torque_enabled = True
         vvt_temperature_enabled = True
         next_vvt_temperature = next_cycle
+        # Old running brokers do not know this metric. Only a newly loaded
+        # broker advertises support through the fixed CLI flag, so an old
+        # process launching updated source cannot receive an unknown event.
+        oil_life_enabled = enable_oil_life
+        next_oil_life = next_cycle
         next_radar = next_cycle
         radar_enabled = radar_poller is not None
         while True:
@@ -1027,6 +1034,46 @@ def run_active_session(
                         interface_mode="armed_diagnostic",
                     )
 
+            # Maintenance data is slow. Wait for preceding PCM/TPMS replies,
+            # require a new one-use permit, and never retry a failed epoch.
+            if oil_life_enabled and backend.monotonic() >= next_oil_life:
+                gate_failure = _active_gate(backend, initial)
+                if gate_failure is not None:
+                    outcome = gate_failure
+                    break
+                try:
+                    oil_permit = transmit_permit.issue(
+                        lock_handle, snapshot,
+                        purpose=transmit_permit.PCM_OIL_LIFE,
+                        channel=backend.channel, monotonic=backend.monotonic,
+                    )
+                except transmit_permit.StaleTransmitEvidenceError:
+                    next_cycle = _wait_for_next_cycle(backend, next_cycle, cycle_started)
+                    continue
+                oil_result = pcm_poller.poll_oil_life(oil_permit)
+                if oil_result.reason == "transmit_permit_expired":
+                    next_cycle = _wait_for_next_cycle(backend, next_cycle, cycle_started)
+                    continue
+                next_oil_life = backend.monotonic() + OIL_LIFE_INTERVAL_SECONDS
+                failed = _pcm_outcome(oil_result)
+                if failed is not None:
+                    oil_life_enabled = False
+                    sink.emit(
+                        "metric_failure", metric=oil_result.metric,
+                        unit=oil_result.unit, source=oil_result.source,
+                        bus=oil_result.bus, quality=oil_result.quality,
+                        reason=failed.reason, detail=failed.detail,
+                        interface_mode="armed_diagnostic",
+                    )
+                else:
+                    sink.emit(
+                        "observation", metric=oil_result.metric,
+                        value=oil_result.value, unit=oil_result.unit,
+                        source=oil_result.source, bus=oil_result.bus,
+                        quality=oil_result.quality, detail=oil_result.detail,
+                        interface_mode="armed_diagnostic",
+                    )
+
             if radar_enabled and backend.monotonic() >= next_radar:
                 # Radar replies are segmented. Take new running evidence so
                 # the two independently permitted sends do not inherit time
@@ -1209,6 +1256,8 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     parser.add_argument("--expected-parent-pid", type=int, required=True)
+    parser.add_argument("--enable-oil-life", action="store_true",
+                        help="broker accepts the fixed oil-life metric (rolling-deploy handshake)")
     return parser
 
 
@@ -1239,6 +1288,7 @@ def main(argv=None) -> int:
             backend,
             sink,
             termination_guard=termination,
+            enable_oil_life=args.enable_oil_life,
         )
     return 0 if outcome.restored is not False else 2
 

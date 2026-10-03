@@ -94,6 +94,33 @@ def authorization(
 
 
 class PcmElectricalProfileTests(unittest.TestCase):
+    def test_oil_life_fixed_wire_percent_range_and_permit(self):
+        for raw in (0, 17, 82, 100, 101, 255):
+            with self.subTest(raw=raw):
+                sock = FakeSocket(response_frame(bytes((4, 0x62, 0x21, 0x85, raw))))
+                poller = pcm.PcmElectricalPoller(TEST_CHANNEL, socket_factory=lambda *_: sock)
+                rejected = poller.poll_oil_life(authorization())
+                self.assertFalse(rejected.available)
+                self.assertEqual(sock.sent, [])
+                result = poller.poll_oil_life(authorization(purpose=transmit_permit.PCM_OIL_LIFE))
+                self.assertEqual(sock.sent, [pcm.OIL_LIFE_PROFILE.request_frame])
+                self.assertEqual(pcm.OIL_LIFE_PROFILE.request_data,
+                                 bytes.fromhex("03 22 21 85 00 00 00 00"))
+                self.assertEqual(result.available, raw <= 100)
+                if raw <= 100:
+                    self.assertEqual(result.value, raw)
+                    self.assertIsInstance(result.value, int)
+                    self.assertEqual(result.unit, "%")
+                    self.assertEqual(result.source, "pcm.did.2185")
+                else:
+                    self.assertEqual(result.reason, "response_rejected")
+        for data in ("05 62 21 85 52 00", "04 62 21 84 52", "10 08 62 21 85 52 00 00"):
+            self.assertEqual(pcm._decode_wire_response(pcm.OIL_LIFE_PROFILE,
+                             response_frame(bytes.fromhex(data))).reason, "malformed_response")
+        negative = pcm._decode_wire_response(pcm.OIL_LIFE_PROFILE,
+                                             response_frame(bytes.fromhex("03 7F 22 7E")))
+        self.assertEqual(negative.reason, "session_required")
+
     def test_vvt_temperature_fixed_wire_scale_and_response_shape(self):
         for raw, expected_f in ((0, -83.2), (64, 32.0), (119, 131.0), (160, 204.8), (255, 375.8)):
             with self.subTest(raw=raw):
@@ -129,10 +156,11 @@ class PcmElectricalProfileTests(unittest.TestCase):
         self.assertIn("NRC 12", result.detail)
         self.assertEqual(len(sock.sent), 1)
 
-    def test_registry_has_three_immutable_reviewed_profiles(self):
+    def test_registry_has_four_immutable_reviewed_profiles(self):
         self.assertEqual(
             tuple(pcm.PCM_ELECTRICAL_PROFILES),
-            ("generator.field_duty", "engine.crankshaft_torque", "engine.vvt_oil_temperature"),
+            ("generator.field_duty", "engine.crankshaft_torque", "engine.vvt_oil_temperature",
+             "engine.oil_life_remaining"),
         )
         profile = pcm.PCM_ELECTRICAL_PROFILES["generator.field_duty"]
         torque = pcm.PCM_ELECTRICAL_PROFILES["engine.crankshaft_torque"]

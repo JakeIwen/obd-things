@@ -480,6 +480,107 @@ ownership before arming and again before each request. Results and exact
 restoration status go under `tmp/inventories/pcm/`. F45C is a standardized
 candidate only and is not added to production polling by this check.
 
+The same guarded tool now offers a separate **`--profile oil-life`** check
+for the historically mapped PCM `2185`. It sends only one fixed padded
+`03 22 21 85 00 00 00 00` frame, never the temperature requests. Its 0.75 s
+timeout, no retries/session/TesterPresent/FlowControl, fresh ignition-on,
+three zero-RPM samples, zero-speed gate, role ownership, and passive cleanup
+are unchanged. It accepts only the exact one-byte positive echo with raw
+percent in `0..100`; other values are rejected, not clamped. Reports use
+`tmp/inventories/pcm/oil-life-support-*.json`; nothing is published to telemetry.
+
+```bash
+python3 projects/vehicle_data/pcm_temperature_support.py --profile oil-life
+# Only while parked, ignition ON and engine OFF, in a shell with working sudo:
+python3 projects/vehicle_data/pcm_temperature_support.py --profile oil-life --execute --confirm-parked-ignition-on-engine-off
+```
+
+October 2 preparation passed 6 tests plus 6 subtests in job
+`20261002T232716Z-96511136`. The agent's live attempt stopped at the host
+privilege check (`no new privileges`, sudo unavailable) before arming or
+transmission; the successful owner-shell check below supersedes that blocker
+for live validation. This tool does not enable production polling.
+
+The first owner-shell oil-life attempt (`20261002T233039010556Z`) was blocked
+before arming by the broker display receiver's shared C-CAN lease. The support
+tool now reserves `can_handoff.active_turn("c-can")` before the authoritative
+role/channel locks and holds that scheduling turn through passive restoration
+and lock release. Admission waits at most 1.25 seconds; this is not a request
+retry or a lock bypass. Cooperating broker receivers yield without a service
+restart. Regression job `20261003T002824Z-20e79287` passed 23 tests and 124
+subtests across the support tool, handoff locks, and display receiver.
+
+Owner-shell validation at `2026-10-03T00:30:15Z` succeeded: `62 21 85 52`
+decoded to **82% oil life remaining**, with `restored_passive: true` and no
+error. C-CAN TX rose by exactly one, all vehicle interfaces read back healthy
+and passive, and the continuous display receiver resumed with unchanged
+broker/recorder PIDs and zero restarts. No session-control, TesterPresent,
+retry or reset was sent; the inherited session is not identified. Evidence:
+`tmp/inventories/pcm/oil-life-support-20261003T003014137255Z.json` and the
+[oil-life finding](../ecu_mapping/findings/promaster_2022/2026-09-22_gear_and_oil_life_offline.md).
+The successful standalone check itself does not publish a dashboard value.
+
+`engine.oil_life_remaining` is now implemented as the fourth closed PCM profile,
+`pcm.did.2185`, integer percent `0..100`, quality `observed_alfa_scale`. It is
+an ECU maintenance estimate, not measured oil quality or service history. The
+coordinated running helper reads it immediately when first due and no more
+often than every **60 seconds**, after the preceding PCM/TPMS replies. It
+requires its own fresh one-use permit and the unchanged running/identity/
+inhibit/lock/interface gates. It never sends session control, TesterPresent,
+FlowControl, a retry, or reset. An oil-life response failure disables only
+this optional metric for the running epoch; existing telemetry and recording
+continue. Loss of the owner immediately invalidates the live value despite
+its 180-second freshness limit. The generic last-reading store preserves a
+dated value independently of the live cache and recovers it across restarts.
+
+The existing Service card in Parked and Health now has a registered source:
+`/v1/maintenance.oil_life.available` describes **source availability**, not a
+fresh measurement. The card reads the live/dated metric separately, showing
+`—` before the first automatic sample. The public catalog supplies provenance,
+units and limits. Oil-change records still cannot reset the PCM; there are no
+new warning thresholds or public acquisition/publisher permissions.
+
+Rolling-deploy compatibility is explicit: the helper defaults oil life off
+unless its supervising broker passes `--enable-oil-life`. The updated C-CAN
+supervisor passes that fixed flag; B-CAN does not. Thus the old running broker
+may launch updated helper source without receiving an unknown metric before
+its restart.
+
+Implementation verification on October 3: **1,631 Python tests, 2,059 subtests
+passed; 6 skipped** (`20261003T013845Z-1e242336`), including cadence, permit
+isolation, invalid percentages/echoes, optional failures, stop/TTL retention,
+restart persistence and the actual Service-card view-model. The separate
+dashboard build passed **443 Node tests** (`20261003T013727Z-8f1f455d`). Build
+`2c99f40ec884` was published atomically without deleting old hashed assets;
+its index and updated oil-life caveat were read back over LAN HTTP. The prior
+build is recoverable from `tmp/vehicle_data/dashboard-before-oil-life-20261003T0142.tar.gz`.
+
+**Enabled, owner-verified 2026-10-03 at 01:47:39Z:** the owner ran the guarded
+restart from a normal shell because the agent cannot elevate. The helper
+checked fresh stopped/asleep state and idle healthy owners, restarted the
+broker, then confirmed the new catalog/source and enabled active-drive policy.
+Independent post-deployment API checks confirm the new metric, 60-second
+engine-running policy, Service-card source availability and persistent
+last-reading store with no storage error. All four broker/recorder/web services
+are active with zero crash restarts. The recorder PID remained unchanged.
+
+The vehicle was asleep, so the helper stayed idle and **no automatic oil-life
+sample has been observed yet**. `engine_not_running`/no cached reading is
+expected, not a deployment failure. All three CAN roles remained classical,
+listen-only, ERROR-ACTIVE, `restart-ms 0`, with zero RX/TX errors. TX counters
+stayed C/B/CH **127234/10846/0**, so activation added no CAN traffic. The first
+automatic sample waits for the next qualified engine-running interval; no
+special engine start or further command is needed for activation.
+
+Recorded owner-shell activation command (already completed):
+
+```bash
+python3 /home/pi/dev/obd-things/tmp/vehicle_data/enable-oil-life.py --execute --confirm-parked-engine-off
+```
+
+No earlier 17% or 82% report was injected as a new live reading. Edits remain
+unstaged; no commit/push was requested.
+
 The raw rows preserve the original cluster evidence without presenting
 unverified speed, gear, or temperature conversions as facts. The separately
 qualified passive `engine.rpm` metric supersedes the need to interpret raw

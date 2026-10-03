@@ -90,7 +90,17 @@ For DID-to-passive mapping, use this staged offline workflow:
 5. When semantically different torque stages remain highly correlated, use the correlator's opt-in `--regime-analysis` on no more than four exact shortlisted streams. Make the speed/RPM/throttle fields and raw-unit classifier thresholds explicit, derive them on the development leg, and freeze them before holdout use.
 6. Follow `docs/can-evidence-tiers.md`. A frozen formula may qualify as an `operational_proxy` only for a declared non-critical use and explicit whole-leg error tolerances. It remains physically unverified and cannot enter the ordinary verified telemetry allowlist. Require counterexamples, physical plausibility, and independent scaling evidence only for `verified_decode` promotion.
 
-Use `tools/signal_correlate.py` for offline DID-to-DID relationships. Keep `tools/can_field_finder.py` as a bounded exploratory aid, not as the provenance or promotion authority. Submit full saved-log searches through an existing named `pi_compute` task; do not run them on vanpi. Obtain owner approval before adding or changing a `.van-compute.json` task.
+Use `tools/signal_correlate.py` for offline DID-to-DID relationships. Keep `tools/can_field_finder.py` as a bounded exploratory aid, not as the provenance or promotion authority. Submit full saved-log searches through a named `pi_compute` task; do not run them directly on vanpi.
+
+Within owner-requested work, agents have standing approval to use this skill
+for offline research/analysis and to add, change, and run bounded offline
+`.van-compute.json` tasks without a separate approval question. Keep saved
+inputs read-only, preserve unrelated task definitions, and write generated
+outputs under approved `tmp/` or compute-result locations. This does not
+authorize new live CAN traffic, device/service changes, destructive storage
+operations, paid resources, or expansion beyond the requested work. All live
+vehicle authorization and restoration requirements above still apply, as do
+the execution environment's permissions.
 
 This workflow accelerates field layout, scaling, and DID-to-broadcast correlation. It does not discover which DID addresses exist; use ECU-scoped catalogs, wire mining, and bounded DID scanners for that separate task.
 

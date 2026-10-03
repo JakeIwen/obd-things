@@ -65,6 +65,7 @@ ACTIVE_DRIVE_SOURCES = frozenset(
         "pcm.did.01a1",
         "pcm.did.06da",
         "pcm.did.069f",
+        "pcm.did.2185",
         "rf_hub.did.31d0",
         "rf_hub.did.31d1",
         "rf_hub.did.31d2",
@@ -74,7 +75,8 @@ ACTIVE_DRIVE_SOURCES = frozenset(
     }
 )
 ACTIVE_DRIVE_OPTIONAL_METRICS = frozenset(
-    {"engine.crankshaft_torque", "engine.vvt_oil_temperature", *RADAR_METRICS}
+    {"engine.crankshaft_torque", "engine.vvt_oil_temperature",
+     "engine.oil_life_remaining", *RADAR_METRICS}
 )
 DERIVED_POWER_METRIC = "engine.crankshaft_power"
 DERIVED_POWER_SOURCE = "derived.pcm_06da_x_ccan_0x0fc"
@@ -280,6 +282,8 @@ class ActiveDriveSupervisor:
                 hex(self.expected_dev_id),
             ]
         )
+        if self.helper_path == ACTIVE_DRIVE_HELPER:
+            command.append("--enable-oil-life")
         try:
             process = self.popen_factory(
                 command,
@@ -803,8 +807,11 @@ class TelemetryBroker:
         result = self.maintenance.snapshot()
         result["odometer"] = self.metric_response("vehicle.odometer")
         result["oil_life"] = {
-            "available": False,
-            "detail": "Oil-life percentage was observed in AlfaOBD, but its exact current-vehicle DID/scale is not yet established for telemetry.",
+            # Source availability, not a live reading. The dashboard consumes
+            # the separately timestamped metric/last_recorded observation.
+            "available": "engine.oil_life_remaining" in self.definitions,
+            "metric": "engine.oil_life_remaining",
+            "detail": "PCM oil-life maintenance estimate; sampled once per minute while running. Dated last readings are not live. Recording an oil change does not reset the PCM.",
         }
         return result
 
@@ -1693,6 +1700,7 @@ class TelemetryBroker:
                 "generator.field_duty",
                 "engine.crankshaft_torque",
                 "engine.vvt_oil_temperature",
+                "engine.oil_life_remaining",
                 *RADAR_METRICS,
                 DERIVED_POWER_METRIC,
             ):

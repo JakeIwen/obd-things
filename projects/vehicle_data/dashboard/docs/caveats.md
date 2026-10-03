@@ -217,8 +217,11 @@ what they meant and where that information lives now.
   source as the odometer reading (for example, both from the ICS estimate). Mixing the cluster
   reading with the ICS estimate would be off by about 11 miles, so otherwise the line is left out.
   "Check the entry" means the recorded service mileage is higher than the odometer.
-- **Oil life**: no source exists on this van yet, so the row is hidden (the old dashboard showed
-  `UNMAPPED`). A historical AlfaOBD reading of 17 % is not a live value and is not shown.
+- **Oil life**: the PCM's remaining-life estimate, from identifier `2185`, one byte directly in
+  percent. It is read once per minute while the engine runs. The Service card shows a fresh value,
+  a dated last reading after shutdown, or a dash before the first reading. It is a maintenance
+  estimate, not a measurement of oil quality or an inferred oil-change date. Reading it never
+  resets the vehicle's indicator; neither does saving an oil-change record here.
 - **Oil-change records** are stored on the Pi in `maintenance.json` and are shared by all your
   devices. Recording one never resets the vehicle's own oil-change indicator, and earlier records
   are kept.

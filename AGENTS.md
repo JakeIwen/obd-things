@@ -50,6 +50,15 @@ class and provides the `/v1` JSON API. The MacBook-managed Van Dashboard reads
 `projects/vehicle_data/README.md` section "Telemetry dashboard" and
 `projects/vehicle_data/dashboard/docs/design.md`.
 
+Oil-life telemetry is enabled (owner activation 2026-10-03):
+`engine.oil_life_remaining` is PCM DID `2185`, unsigned percent, polled at
+most once per minute during qualified engine-running intervals. The Service
+card retains dated readings after shutdown; service records never reset the
+PCM. The helper's `--enable-oil-life` broker handshake protects rolling
+deployments. See the vehicle-data README and the September 22 gear/oil-life
+finding for validation, test and deployment evidence; do not inject the
+manual 82% support-check result as a new live observation.
+
 ## MacBook-managed `~/scripts` tree
 
 `/home/pi/scripts` (equivalently `~/scripts`) is managed from Jacob's MacBook,

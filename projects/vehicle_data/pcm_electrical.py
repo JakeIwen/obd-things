@@ -2,7 +2,7 @@
 
 This module deliberately is not a general UDS transport.  Its public poller can
 send only the reviewed, physical, 29-bit SocketCAN frames for generator field
-duty, current crankshaft torque, and VVT oil temperature. Responses are single-frame,
+duty, current crankshaft torque, VVT oil temperature, and oil life remaining. Responses are single-frame,
 so a raw CAN socket is used instead of an ISO-TP socket: malformed multi-frame
 traffic is rejected without any possibility of transmitting an ISO-TP
 FlowControl frame.
@@ -53,6 +53,8 @@ CRANKSHAFT_TORQUE_REQUEST_DATA = bytes.fromhex(
 CRANKSHAFT_TORQUE_POSITIVE_ECHO = bytes.fromhex("62 06 DA")
 VVT_OIL_TEMPERATURE_REQUEST_DATA = bytes.fromhex("03 22 06 9F 00 00 00 00")
 VVT_OIL_TEMPERATURE_POSITIVE_ECHO = bytes.fromhex("62 06 9F")
+OIL_LIFE_REQUEST_DATA = bytes.fromhex("03 22 21 85 00 00 00 00")
+OIL_LIFE_POSITIVE_ECHO = bytes.fromhex("62 21 85")
 NM_TO_LB_FT = 0.7375621492772656
 SESSION_REQUIRED_NRCS = frozenset((0x7E, 0x7F))
 
@@ -171,6 +173,25 @@ _VVT_OIL_TEMPERATURE_PROFILE = PcmElectricalProfile(
     maximum=375.8,
 )
 VVT_OIL_TEMPERATURE_PROFILE = _VVT_OIL_TEMPERATURE_PROFILE
+_OIL_LIFE_PROFILE = PcmElectricalProfile(
+    metric="engine.oil_life_remaining",
+    did=0x2185,
+    unit="%",
+    source="pcm.did.2185",
+    bus="c-can",
+    quality="observed_alfa_scale",
+    acquisition_class="physical_read_data_by_identifier",
+    bitrate=_PCM.bitrate,
+    addressing_mode=_PCM.addressing_mode,
+    request_id=_PCM.txid,
+    response_id=_PCM.rxid,
+    request_data=OIL_LIFE_REQUEST_DATA,
+    positive_echo=OIL_LIFE_POSITIVE_ECHO,
+    response_data_length=1,
+    minimum=0,
+    maximum=100,
+)
+OIL_LIFE_PROFILE = _OIL_LIFE_PROFILE
 
 # MappingProxyType plus a frozen value makes the reviewed registry immutable at
 # runtime.  No function below accepts a profile name, DID, CAN ID, or payload.
@@ -179,6 +200,7 @@ PCM_ELECTRICAL_PROFILES = MappingProxyType(
         _GENERATOR_FIELD_DUTY_PROFILE.metric: _GENERATOR_FIELD_DUTY_PROFILE,
         _CRANKSHAFT_TORQUE_PROFILE.metric: _CRANKSHAFT_TORQUE_PROFILE,
         _VVT_OIL_TEMPERATURE_PROFILE.metric: _VVT_OIL_TEMPERATURE_PROFILE,
+        _OIL_LIFE_PROFILE.metric: _OIL_LIFE_PROFILE,
     }
 )
 
@@ -188,9 +210,10 @@ def _validate_closed_registry() -> None:
         "generator.field_duty",
         "engine.crankshaft_torque",
         "engine.vvt_oil_temperature",
+        "engine.oil_life_remaining",
     ):
         raise RuntimeError(
-            "PCM engine-running allowlist must contain exactly the three "
+            "PCM engine-running allowlist must contain exactly the four "
             "reviewed metrics"
         )
     expected_module = (
@@ -240,6 +263,13 @@ def _validate_closed_registry() -> None:
         or _VVT_OIL_TEMPERATURE_PROFILE.response_data_length != 1
     ):
         raise RuntimeError("VVT oil temperature wire profile changed")
+    if (
+        _OIL_LIFE_PROFILE.did != 0x2185
+        or _OIL_LIFE_PROFILE.request_data != bytes.fromhex("03 22 21 85 00 00 00 00")
+        or _OIL_LIFE_PROFILE.positive_echo != bytes.fromhex("62 21 85")
+        or _OIL_LIFE_PROFILE.response_data_length != 1
+    ):
+        raise RuntimeError("Oil life wire profile changed")
 
 
 _validate_closed_registry()
@@ -359,6 +389,10 @@ def _decode_response(
         raw_value = payload[3]
         value = (raw_value - 64) * 1.8 + 32
         decode_detail = "u8 - 64 °C, converted to °F; VVT oil temperature"
+    elif profile is _OIL_LIFE_PROFILE:
+        raw_value = payload[3]
+        value = raw_value
+        decode_detail = "u8 percent; PCM oil-life maintenance estimate, not measured oil quality"
     else:
         raise RuntimeError("unreviewed PCM profile reached the decoder")
     if (
@@ -546,6 +580,10 @@ class PcmElectricalPoller:
             transmit_permit.PCM_VVT_OIL_TEMPERATURE,
             permit,
         )
+
+    def poll_oil_life(self, permit: object) -> PcmElectricalResult:
+        """Consume one oil-life permit and send only physical PCM ``22 2185``."""
+        return self._poll(_OIL_LIFE_PROFILE, transmit_permit.PCM_OIL_LIFE, permit)
 
     def _poll(
         self,

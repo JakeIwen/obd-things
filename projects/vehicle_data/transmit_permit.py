@@ -23,11 +23,12 @@ from projects.vehicle_data import ccan_powertrain
 PCM_GENERATOR_DUTY = "pcm.generator_field_duty"
 PCM_CRANKSHAFT_TORQUE = "pcm.crankshaft_torque"
 PCM_VVT_OIL_TEMPERATURE = "pcm.vvt_oil_temperature"
+PCM_OIL_LIFE = "pcm.oil_life_remaining"
 RF_HUB_PRESSURE = "rf_hub.pressure"
 RADAR_ALIGNMENT = "radar_acc.alignment"
 RADAR_ALIGNMENT_FLOW = "radar_acc.alignment_flow_control"
 ALLOWED_PURPOSES = frozenset(
-    (PCM_GENERATOR_DUTY, PCM_CRANKSHAFT_TORQUE, PCM_VVT_OIL_TEMPERATURE,
+    (PCM_GENERATOR_DUTY, PCM_CRANKSHAFT_TORQUE, PCM_VVT_OIL_TEMPERATURE, PCM_OIL_LIFE,
      RF_HUB_PRESSURE, RADAR_ALIGNMENT, RADAR_ALIGNMENT_FLOW)
 )
 RUNNING_RPM = 400.0

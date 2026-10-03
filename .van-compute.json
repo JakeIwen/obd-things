@@ -2,6 +2,25 @@
   "schema_version": 1,
   "tasks": [
     {
+      "name": "dashboard-test-build",
+      "description": "Install pinned dashboard dependencies without lifecycle scripts, run Node regressions, and build returned assets; no CAN or deployment.",
+      "profile": "python-script",
+      "source_paths": [
+        "tools/dashboard_build.py",
+        "projects/vehicle_data/dashboard/src",
+        "projects/vehicle_data/dashboard/docs",
+        "projects/vehicle_data/dashboard/test",
+        "projects/vehicle_data/dashboard/tools",
+        "projects/vehicle_data/dashboard/package.json",
+        "projects/vehicle_data/dashboard/package-lock.json",
+        "projects/vehicle_data/dashboard/.npmrc"
+      ],
+      "minimum_inputs": 0,
+      "maximum_inputs": 0,
+      "argv": ["{source:tools/dashboard_build.py}", "--output", "{result:dashboard-dist}"],
+      "outputs": ["dashboard-dist"]
+    },
+    {
       "name": "repo-tests",
       "description": "Run the portable offline obd-things test suite, optionally filtered by pytest arguments.",
       "profile": "repo-test",

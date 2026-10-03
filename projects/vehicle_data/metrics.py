@@ -333,6 +333,38 @@ VVT_OIL_TEMPERATURE = MetricDefinition(
 )
 
 
+OIL_LIFE_REMAINING = MetricDefinition(
+    name="engine.oil_life_remaining",
+    unit="%",
+    value_type="integer",
+    stale_after_seconds=180.0,
+    passive_min_interval_seconds=0.0,
+    minimum=0,
+    maximum=100,
+    sources=(
+        SourceDefinition(
+            name="pcm.did.2185",
+            bus="c-can",
+            bitrate=500000,
+            acquisition_class="physical_read_data_by_identifier",
+            quality="observed_alfa_scale",
+            provenance=(
+                "projects/ecu_mapping/findings/promaster_2022/"
+                "2026-09-22_gear_and_oil_life_offline.md; "
+                "Alfa decoder u8 percent; direct padded 22 2185 -> 62 21 85 52 "
+                "(82%) parked 2026-10-03 without session control; "
+                "PCM maintenance estimate, not measured oil condition"
+            ),
+            side_effects=(
+                "engine-running-only fixed physical 22 2185 in the sequential "
+                "C-CAN interval; at most once per minute, no session change "
+                "or oil-life reset"
+            ),
+        ),
+    ),
+)
+
+
 ESTIMATED_CRANKSHAFT_POWER = MetricDefinition(
     name="engine.crankshaft_power",
     unit="hp",
@@ -811,6 +843,7 @@ METRICS = {
         TARGET_CRANKSHAFT_TORQUE,
         CRANKSHAFT_TORQUE,
         VVT_OIL_TEMPERATURE,
+        OIL_LIFE_REMAINING,
         ESTIMATED_CRANKSHAFT_POWER,
         TRANSMISSION_OUTPUT_SPEED,
         TRANSMISSION_OIL_TEMPERATURE,

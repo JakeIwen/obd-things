@@ -174,6 +174,7 @@ class SourceTests(unittest.TestCase):
                 "engine.crankshaft_torque",
                 "generator.field_duty",
                 "engine.oil_pressure",
+                "engine.oil_life_remaining",
                 "engine.vvt_oil_temperature",
                 "engine.rpm",
                 "engine.target_crankshaft_torque",

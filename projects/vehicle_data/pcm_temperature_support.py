@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One parked, fixed PCM F45C/069F support check; dry-run by default.
+"""Parked fixed PCM temperature or oil-life support check; dry-run by default.
 
 At most two padded physical SingleFrame requests, no retry, session control,
 TesterPresent, wake, or ISO-TP FlowControl. Uses the reviewed role owner and
@@ -22,13 +22,14 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from lib import can_operation_state, can_runtime_route, canbus, diagnostic_safety
+from lib import can_handoff, can_operation_state, can_runtime_route, canbus, diagnostic_safety
 from lib.modules import MODULES
 from projects.vehicle_data import ccan_powertrain, pcm_electrical as pcm
 from tools.ecu_discover import prearm_conflict_errors
 from tools.passive_drive_capture import atomic_write_json
 
 CHECK_DIDS = (0xF45C, 0x069F)
+CHECK_PROFILES = {"temperature": CHECK_DIDS, "oil-life": (0x2185,)}
 TIMEOUT_SECONDS = 0.75
 
 
@@ -52,6 +53,8 @@ def vehicle_gate(route) -> list[str]:
 
 
 def decode_reply(did: int, frame: bytes) -> dict:
+    if did not in (*CHECK_DIDS, 0x2185):
+        raise ValueError("DID is outside the fixed support-check profiles")
     if len(frame) != pcm.CAN_FRAME_SIZE:
         raise ValueError("malformed SocketCAN response length")
     can_id, dlc, padded = struct.unpack(pcm.CAN_FRAME_FORMAT, frame)
@@ -66,6 +69,12 @@ def decode_reply(did: int, frame: bytes) -> dict:
                 "response_hex": payload.hex(" ").upper()}
     if payload[:3] != bytes((0x62, did >> 8, did & 255)) or length != 4:
         raise ValueError("response does not match the exact requested DID and one-byte shape")
+    if did == 0x2185:
+        if payload[3] > 100:
+            raise ValueError("oil-life byte is outside 0..100 percent; not clamped")
+        return {"status": "positive", "response_hex": payload.hex(" ").upper(),
+                "raw": payload[3], "value_percent": payload[3],
+                "scale_basis": "observed_alfa_scale"}
     value_c = payload[3] - (64 if did == 0x069F else 40)
     return {"status": "positive", "response_hex": payload.hex(" ").upper(),
             "raw": payload[3], "value_c": value_c, "value_f": value_c * 1.8 + 32,
@@ -74,14 +83,18 @@ def decode_reply(did: int, frame: bytes) -> dict:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--profile", choices=tuple(CHECK_PROFILES), default="temperature")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--confirm-parked-ignition-on-engine-off", action="store_true")
     args = parser.parse_args(argv)
-    plan = {"module": "pcm", "bus": "c-can", "pair": "6/14",
+    dids = CHECK_PROFILES[args.profile]
+    plan = {"profile": args.profile, "module": "pcm", "bus": "c-can", "pair": "6/14",
             "request_id": "18DA10F1", "response_id": "18DAF110",
-            "requests": ["03 22 F4 5C 00 00 00 00", "03 22 06 9F 00 00 00 00"],
-            "maximum_requests": 2, "timeout_seconds": TIMEOUT_SECONDS,
-            "retries": 0, "session_change": False, "flow_control": False}
+            "requests": [bytes((3, 0x22, did >> 8, did & 255, 0, 0, 0, 0)).hex(" ").upper()
+                         for did in dids],
+            "maximum_requests": len(dids), "timeout_seconds": TIMEOUT_SECONDS,
+            "retries": 0, "session_change": False, "flow_control": False,
+            "handoff_wait_seconds": can_handoff.ACTIVE_WAIT_SECONDS}
     if not args.execute:
         print(json.dumps({"dry_run": True, **plan}, indent=2))
         return 0
@@ -90,12 +103,18 @@ def main(argv=None) -> int:
     report = {**plan, "started_at": datetime.now(timezone.utc).isoformat(),
               "results": [], "restored_passive": None, "error": None}
     output = REPO / "tmp" / "inventories" / "pcm" / (
-        "temperature-support-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + ".json"
+        args.profile + "-support-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + ".json"
     )
     atomic_write_json(output, report)
     owner = None
     try:
-        with diagnostic_safety.interrupt_on_termination() as termination:
+        # Let cooperating continuous/bounded broker observers release their
+        # shared leases before taking the authoritative role/channel locks.
+        # Keep admission closed until passive restoration and lock release.
+        with (
+            diagnostic_safety.interrupt_on_termination() as termination,
+            can_handoff.active_turn(MODULES["pcm"].bus),
+        ):
             try:
                 owner = can_runtime_route.acquire_armed_bus_route(
                     MODULES["pcm"].bus, asserted_pair="6/14",
@@ -106,7 +125,7 @@ def main(argv=None) -> int:
                     sock.setsockopt(pcm.SOL_CAN_RAW, pcm.CAN_RAW_FILTER,
                                     pcm.VVT_OIL_TEMPERATURE_PROFILE.response_filter)
                     sock.bind((owner.route.channel,))
-                    for index, did in enumerate(CHECK_DIDS):
+                    for index, did in enumerate(dids):
                         if index:
                             time.sleep(1.0)
                         errors = vehicle_gate(owner.route)

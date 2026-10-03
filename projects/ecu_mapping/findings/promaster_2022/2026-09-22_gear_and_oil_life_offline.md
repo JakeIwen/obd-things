@@ -1,8 +1,14 @@
 # Gear and oil-life offline follow-up — September 22, 2026
 
-Scope: saved current-vehicle captures, the owner-supplied AlfaOBD APK, and
+Initial September 22 scope: saved current-vehicle captures, the owner-supplied AlfaOBD APK, and
 the exact-vehicle OEM service-document mirror. No live CAN access, service
-changes, diagnostic requests, or telemetry promotion occurred.
+changes, diagnostic requests, or telemetry promotion occurred in that offline
+phase. Subsequent owner-run parked checks are documented below. The latest
+successful check returned **82% oil life remaining** without sending a
+session-change request and verified passive restoration. Production oil-life
+integration is now implemented/tested and enabled: dashboard assets are
+published and the owner activated the broker at 2026-10-03 01:47:39Z. No
+automatic engine-running sample has been observed at this deployment checkpoint.
 
 ## Gear: a concrete passive candidate, not a qualified enum
 
@@ -44,9 +50,65 @@ It requires the recorded channel, DLC 8, both shafts at least 200 RPM, and
 a preceding candidate frame no older than 100 ms; it rejects socket-loss
 markers and never assigns gear labels. Three tests passed in
 `20260922T223509Z-8bc25c2f` using an isolated source snapshot.
-The new compute-task proposal remains under
-`tmp/ecu_mapping/gear-ratio-compute-task-proposal.json`, pending explicit
-owner approval; `.van-compute.json` has not been changed.
+The September 22 proposal was saved under
+`tmp/ecu_mapping/gear-ratio-compute-task-proposal.json`. The owner approved
+the offline run on October 2; its task was already registered in the newer
+repository state and was reused without changing other task definitions.
+
+### October 2 full-recording check: reject this direct gear enum
+
+Task `can-gear-ratio-analyze`, job **`20261002T102715Z-2e91f024`**, completed
+on the remote worker using the unchanged field and shaft formulas above.
+It scanned **4,187,827 frames**, yielding **42,574** eligible, fresh pairs:
+all two chunks of the September 17 recording plus the first ten-minute
+chunk of the original September 21 local-time highway recording. This is
+one complete independent recording and one development chunk, not two
+complete drives. Both source manifests report full-stream completion and
+zero detected socket drops. Eligible pairs use the recorded `can0`, standard
+IDs, DLC 8, both shafts at least 200 RPM, and a preceding `1F4` no older
+than 100 ms. Compressed input hashes agree with the recording manifests.
+
+| Recording / full chunk | Eligible pairs | Byte 4 high nibble | Shaft-ratio evidence |
+|---|---:|---|---|
+| `20260917T190516494149` / 0 | 2,842 | Always `7` | Median 1.912; repeated modes near 2.844, 1.910, 1.382 |
+| `20260917T190516494149` / 1 | 11,459 | Always `7` | Median 1.386; repeated modes near 1.382 and 1.910 |
+| `20260922T042152731314` / 0 | 28,273 | `7` for 21,725; `8` for 6,548 | Both groups have median 0.699; `8` has 4,384 samples in the 0.699 bin |
+
+Ratios near 2.842, 1.909, and 1.382 are the established OEM second,
+third, and fourth ratios, not seventh (0.699). In the development chunk,
+the proposed `8` also occurs overwhelmingly around seventh's ratio, not
+eighth's 0.580. These are repeated steady-ratio counterexamples, not just
+instantaneous clutch transitions or a strict statistical threshold.
+
+**Conclusion:** reject `gear = (0x1F4.byte4 >> 4)` and any universal
+engaged-gear lookup using that nibble alone. The original two-second match
+was insufficient and does not generalize. This does not identify the actual
+meaning of that field, reject the entire `1F4` frame, or invalidate the
+already-established `1F7` shaft decodes. No need to scan more highway chunks
+to repeat this counterexample. Do not promote this nibble to telemetry.
+
+Input provenance (under
+`/mnt/EXFAT512/obd-things/tmp/captures/three_bus_drive/broker-drive/`):
+
+- `broker-drive-20260917T190516494149/c-can/chunk_000000_full.candump.zst`:
+  `7516ec32582ad7f3a36f85e63df2a6c732760c923d8d46b4e2e91361bf20d4fc`;
+- `broker-drive-20260917T190516494149/c-can/chunk_000001_full.candump.zst`:
+  `a655acf8d826c48e315573e1a20a37ab30c5a64b8d4cd553a3ee896b7895cf23`;
+- `broker-drive-20260922T042152731314/c-can/chunk_000000_full.candump.zst`:
+  `b025379e7c62362ca06887ee0395b901368493129fda70ea4b66aa808ea8e6da`.
+
+Result: `tmp/compute/done/20261002T102715Z-2e91f024/result/gear-ratios.json`,
+SHA-256 `eb0356e67d68534eb620c4f28eed038572a7b154a79c257191e9a8e9f79b9011`.
+Current regression run `20261002T102732Z-1fda3355`: **3 passed**, isolated
+source snapshot including the newer `lib/candump_io.py` dependency.
+
+The separate shaft-ratio estimator remains useful research. Existing jobs
+`20260924T184026Z-535a73a1` and `20260924T184133Z-8efb31d7` fit then score
+a frozen lookup; the latter reports 99.02% of 191,211 qualifying samples
+inside its bands. This is supporting ratio-estimator evidence, not an
+independently labeled gear/PRND decode or automatic telemetry promotion;
+standstill, transitions, reverse direction, and unobserved gears still need
+explicit treatment before a non-critical approximate display is integrated.
 
 ## Oil-life label lookup: the missing language-table split is resolved
 
@@ -136,16 +198,138 @@ and owner-entered service records. No reset action is in scope.
 
 ### Integration boundary and next step
 
-Do not replay the historical session entry or add a production poller yet.
-The saved success occurred after acknowledged session `92`; default-session
-or no-session-change support has not been established for `2185`. Next is
-one owner-authorized parked, ignition-on/engine-off physical `22 2185` read
-through a reviewed role-aware path, with exact echo/length checks, fixed
-padding, a bounded timeout, and passive restoration. If it succeeds, compare
-the current oil-life display when available and integrate a slow maintenance
-poll into the existing sequential scheduler; there is no need for 1 Hz.
+The owner-run check at 2026-10-03 00:30Z now verifies a direct padded `2185`
+read without sending session control or TesterPresent. The inherited session
+was not independently identified; do not call this a positively proven default
+session, or replay historical `10 92`. No further broad support scan is needed.
+Next is deliberate integration of this fixed maintenance read into the
+existing sequential scheduler at slow cadence; there is no need for 1 Hz.
+Keep the exact oil-life label separate from physical oil quality and the
+owner-entered service journal. A current cluster-display comparison is useful
+additional corroboration when available, not grounds to discard the observed
+vendor decoder and successful direct response.
 Values outside `0..100` should be unavailable, not clamped into a percentage.
 Do not refresh the dashboard with the July snapshot.
+
+### October 2 parked-check preparation: host permission blocker, no TX
+
+After the owner reported ignition on, the broker's fresh passive cache showed
+ignition true, engine RPM 0, and road speed 0. Both active helpers were idle;
+TPMS fallback remained disabled/inactive. The serial resolver identified the
+expected C-CAN Board A CAN1 role on pins 6/14. All three vehicle interfaces
+were classical listen-only, ERROR-ACTIVE, `restart-ms 0`, with zero RX/TX
+errors; the spare was down. The C-CAN RX-drop counter was already 43, so do
+not call the host's cumulative receive history loss-free.
+
+The sandbox's `sudo -n true` failed because `no new privileges` prevents
+elevation. No active tool was executed and no arming, request, service stop,
+or restart was attempted. C/B/CH TX counters remained 127233/10771/0 across
+the checks. This is an execution-environment blocker, not a PCM timeout,
+negative response, or failed restoration.
+
+The existing guarded `projects/vehicle_data/pcm_temperature_support.py` now
+has a fixed `--profile oil-life`: one padded `22 2185`, exact single-byte
+response validation, unsigned percent `0..100`, and the unchanged stationarity,
+ownership, inhibit, interface, and cleanup gates. Default temperature behavior
+is preserved. Dry-run advertises one request and no session, retry, or flow
+control. Offline regression job `20261002T232716Z-96511136` passed **6 tests
+and 6 subtests**, including both profiles, failed vehicle gates, failed
+restoration, bad echoes/lengths, and out-of-range oil-life values.
+
+Next, from the owner's normal vanpi shell while parked/ignition-on/engine-off:
+
+```bash
+python3 /home/pi/dev/obd-things/projects/vehicle_data/pcm_temperature_support.py --profile oil-life --execute --confirm-parked-ignition-on-engine-off
+```
+
+Inspect the returned `report_path`, exact `response_hex`/`value_percent`,
+and `restored_passive` before documenting success. Reports stay under
+`tmp/inventories/pcm/`. No successful live read or current percentage is
+claimed at this preparation checkpoint.
+
+### Owner-run lock refusal and cooperative handoff fix
+
+Owner report `tmp/inventories/pcm/oil-life-support-20261002T233039010556Z.json`
+contains an empty result list, `restored_passive: null`, and `ChannelLockError`
+for `can-role-c-can`. It failed before ownership/arming/transmission; null is
+not evidence of restoration failure. The broker PID recorded in the observer
+lock metadata matched its live service PID, and `/v1/status` showed the
+continuous display receiver receiving in listen-only mode while active-drive
+was idle. That receiver intentionally retains a shared role/channel lease
+and checks the cooperative handoff gate every 250 ms.
+
+The support check omitted that admission step. It now acquires the existing
+bounded C-CAN `active_turn` before the real role/channel locks and retains it
+until passive restoration and release finish. The maximum admission wait is
+1.25 seconds; all vehicle-state, physical-route, privilege, inhibit, and
+interface checks remain. No service stop/restart, lock deletion, lock bypass,
+or additional diagnostic request was introduced.
+
+On resumption at 2026-10-03 00:27Z, the broker again reported fresh ignition
+on, zero RPM, and zero road speed. All three interfaces were passive and
+ERROR-ACTIVE; the same sandbox privilege restriction remained. Regression
+job `20261003T002824Z-20e79287` passed **23 tests and 124 subtests**, covering
+the support check plus handoff/display-receiver regressions. New assertions
+require handoff before arming and restoration before handoff release, and
+prove that busy admission causes no CAN socket or route acquisition.
+
+Use the same owner-shell command above to retry while parked/ignition-on/
+engine-off. The handoff fix has not yet produced a live `2185` reply at this
+checkpoint, and no current oil-life value is asserted.
+
+### Successful owner-run validation — October 3, 2026 00:30Z
+
+The corrected command completed while the owner reported parked, ignition on,
+engine off. Report:
+`tmp/inventories/pcm/oil-life-support-20261003T003014137255Z.json`, SHA-256
+`a951e3ff22ed38c874175de38f4491065afaf48118791321afb31641b65d8818`.
+
+- Started `00:30:14.136988Z`; request attempted `00:30:15.369855Z`;
+  completed `00:30:15.905124Z`.
+- One fixed-DLC-8 request `03 22 21 85 00 00 00 00`, physical PCM
+  `18DA10F1 -> 18DAF110`, resolved C-CAN pins 6/14.
+- Exact positive UDS response **`62 21 85 52`**; unsigned `0x52 = 82`:
+  **PCM-reported oil life remaining 82%**.
+- No session-change, TesterPresent, retry, FlowControl, or reset command.
+- `restored_passive: true`, `error: null`.
+
+Independent post-check interface inspection confirmed all three roles
+classical/listen-only, ERROR-ACTIVE, `restart-ms 0`, fixed rates, and zero RX/TX
+error counters. C-CAN TX increased **127233 -> 127234**; B-CAN stayed 10846
+and CAN-CH stayed 0. The broker display receiver resumed `receiving` with
+fresh timestamps in listen-only mode. Broker PID 3446533 and recorder PID
+3447949 remained active with `NRestarts=0`; no service stop/restart was needed.
+
+This live-validates both the cooperative handoff fix and this single parked
+no-session-change read. It does not activate a recurring poll, publish the
+value to the dashboard, measure physical oil condition, or establish the
+inherited diagnostic session. The validation is complete; the vehicle does
+not need to remain ignition-on for this work.
+
+### Production integration implementation — October 3
+
+At the owner's request, the closed running scheduler now supports
+`engine.oil_life_remaining` / `pcm.did.2185`, integer percent `0..100`, at
+most once per 60 seconds. It has a separate one-use permit, sequential
+response-before-next-request execution, optional per-epoch failure isolation,
+and immediate invalidation on owner stop. No session, retry, wake or reset
+path was added. A separate broker/helper feature flag prevents old broker
+processes from receiving an unregistered metric during rolling deployment.
+
+The existing Service card and dated-last-reading policy are connected to the
+new registry source; saved service records are unaffected. No historical 82%
+was republished as live. Python regression `20261003T013845Z-1e242336` passed
+1,631 tests / 2,059 subtests (6 skipped); dashboard regression/build
+`20261003T013727Z-8f1f455d` passed 443 tests. Dashboard build `2c99f40ec884` is
+published and HTTP-verified. The owner completed the guarded broker restart
+at `2026-10-03T01:47:39.555359+00:00`. Independent snapshot/catalog and LAN
+`/v2/summary` checks confirm registration and Service-card source availability;
+active-drive is enabled, the persistent last-reading store reports no error,
+and the broker, recorder and both web listeners are active. All roles remained
+passive/ERROR-ACTIVE, with TX counters unchanged at C/B/CH 127234/10846/0 and
+zero RX/TX errors. The asleep vehicle correctly produced no cached oil-life
+value. Activation is complete, but this is not yet a production-poll observation;
+that will come from the next normal engine-running interval.
 
 ### Related runtime field reveals a decoder caveat
 

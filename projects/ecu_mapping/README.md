@@ -37,12 +37,24 @@ FlowControl; (b) tester identity confirmation from a Uconnect/Mopar Vehicle Heal
 2026-08-30 about 20:26–20:56 MDT or 2026-09-24 about 15:12–15:27 MDT.
 
 The [September 22 gear/oil-life offline follow-up](findings/promaster_2022/2026-09-22_gear_and_oil_life_offline.md)
-shortlists `0x1F4` byte 4's upper nibble against established transmission-shaft
-speeds and the exact OEM ratios. It also resolves AlfaOBD's separate enum/plain
+initially shortlisted `0x1F4` byte 4's upper nibble, but the October 2
+full-recording check rejects it as a current-gear enum: it stays `7` through
+multiple lower shaft ratios, and also shows `8` at seventh's ratio. The
+established shaft-speed decodes and a separate ratio estimator remain useful.
+The finding also resolves AlfaOBD's separate enum/plain
 language-table indexing and establishes PCM `2185` as oil life remaining:
 one unsigned percentage byte, with saved `62 21 85 11` matching the July 17%
-display. Session-free support still needs a bounded parked check; neither
-result currently changes the live telemetry allowlist.
+display. An owner-run parked ignition-on/engine-off check on October 3 at
+00:30Z returned `62 21 85 52` (**82%**) with no session-change/TesterPresent
+request and verified passive restoration. The inherited session was not
+identified. The read and cooperative broker handoff are live-validated.
+Production integration is implemented as `engine.oil_life_remaining`, a
+60-second engine-running read with dated parked retention and the existing
+Service-card display. Tests/build passed; dashboard build `2c99f40ec884` and
+the owner-restarted broker are enabled as of October 3 at 01:47:39Z. API and
+passive-state checks passed with no activation-time CAN traffic. The first
+automatic sample awaits the next normal engine-running interval; no parked
+manual value was injected as live. See the vehicle-data README for details.
 
 The [September 5 drive review](findings/promaster_2022/2026-09-05_drive_inventory_oil_candidates.md)
 found 14 new three-bus intervals with about 3.75 hours per role and zero

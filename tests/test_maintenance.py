@@ -3,10 +3,13 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import shutil
+import subprocess
 from unittest import mock
 
 from projects.vehicle_data.maintenance import MaintenanceStore
 from projects.vehicle_data.models import success
+from projects.vehicle_data.broker import TelemetryBroker
 from tests import test_vehicle_data as api_fixtures
 
 
@@ -17,6 +20,32 @@ def entry(**changes):
 
 
 class MaintenanceTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("node"), "Node required for dashboard view-model check")
+    def test_registered_oil_source_activates_existing_dashboard_row(self):
+        # Pure frontend helper: no node_modules/build/browser or CAN access.
+        helper = (Path(__file__).resolve().parents[1] / "projects/vehicle_data/dashboard/src/views/parked.helpers.js")
+        payload = TelemetryBroker(acquirer=api_fixtures.FakeAcquirer()).maintenance_response()
+        script = """
+            const {oilLifeView} = await import(process.argv[1]);
+            const m = JSON.parse(process.argv[2]);
+            const now = Date.parse('2026-10-03T01:00:00Z');
+            console.log(JSON.stringify([
+                oilLifeView(m, {kind:'off', value:null}, now),
+                oilLifeView(m, {kind:'live', value:82}, now),
+                oilLifeView(m, {kind:'held', value:81,
+                    retained:{observed_at:'2026-10-03T00:30:15Z'}}, now)
+            ]));
+        """
+        result = subprocess.run(["node", "--input-type=module", "-e", script,
+                                 helper.as_uri(), json.dumps(payload)],
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        empty, live, held = json.loads(result.stdout)
+        self.assertEqual(empty["text"], "—")
+        self.assertEqual(live, {"text": "82 %", "sub": ""})
+        self.assertEqual(held["text"], "81 %")
+        self.assertTrue(held["sub"].startswith("last read "))
+
     def test_service_log_survives_restart_and_retries_are_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "maintenance.json"
@@ -103,7 +132,9 @@ class MaintenanceApiTests(unittest.TestCase):
         code, response = self.client.request("GET", "/v1/maintenance")
         self.assertEqual(code, 200)
         self.assertEqual(response["record_count"], 1)
-        self.assertFalse(response["oil_life"]["available"])
+        self.assertTrue(response["oil_life"]["available"])
+        self.assertEqual(response["oil_life"]["metric"], "engine.oil_life_remaining")
+        self.assertNotIn("value", response["oil_life"])
         self.assertEqual(self.acquirer.calls, [])
 
 
