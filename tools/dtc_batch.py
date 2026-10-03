@@ -887,6 +887,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     job_id = args.job_id or _job_id()
     store = JobStore(job_root, job_id)
     try:
+        # Record every attempt before the non-blocking lock so refused runs stay auditable.
         store.create(plan, command=list(argv if argv is not None else sys.argv[1:]))
     except (OSError, ValueError) as exc:
         print(f"ERROR: could not create job: {exc}", file=sys.stderr)
