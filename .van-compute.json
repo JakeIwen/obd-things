@@ -998,6 +998,8 @@
         "projects/vehicle_data/__init__.py",
         "projects/vehicle_data/cruise_summary.py",
         "projects/vehicle_data/ccan_powertrain.py",
+        "lib/broadcast_signals.py",
+        "lib/signal_fields.py",
         "tools/__init__.py",
         "tools/can_capture_summary.py",
         "lib/candump_io.py",

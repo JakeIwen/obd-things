@@ -20,6 +20,8 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
+from lib import broadcast_signals
+
 # Linux SocketCAN numeric constants keep fake-socket offline tests portable to
 # Python builds that do not expose AF_CAN/CAN_RAW (for example macOS workers).
 # Real CAN access still fails normally on a host without SocketCAN.
@@ -37,14 +39,14 @@ FRAME_TYPE_FLAGS = CAN_EFF_FLAG | CAN_RTR_FLAG | CAN_ERR_FLAG
 # EFF/RTR still constrain the kernel filter, and decode_frame's caller rejects
 # every frame carrying any FRAME_TYPE_FLAGS before decoding.
 FILTER_MASK = SFF_MASK | CAN_EFF_FLAG | CAN_RTR_FLAG
-OIL_PRESSURE_ID = 0x41D
-COOLANT_TEMPERATURE_ID = 0x2ED
-ENGINE_SPEED_ID = 0x0FC
-TARGET_CRANK_TORQUE_ID = 0x100
-VEHICLE_SPEED_ID = 0x101
-TRANSMISSION_SHAFT_SPEED_ID = 0x1F7
-IGNITION_ON_ID = 0x2EF
-SYSTEM_VOLTAGE_ID = 0x41A
+OIL_PRESSURE_ID = broadcast_signals.OIL_PRESSURE.can_id
+COOLANT_TEMPERATURE_ID = broadcast_signals.COOLANT_TEMPERATURE.can_id
+ENGINE_SPEED_ID = broadcast_signals.ENGINE_SPEED.can_id
+TARGET_CRANK_TORQUE_ID = broadcast_signals.TARGET_CRANK_TORQUE.can_id
+VEHICLE_SPEED_ID = broadcast_signals.VEHICLE_SPEED.can_id
+TRANSMISSION_SHAFT_SPEED_ID = broadcast_signals.TRANSMISSION_OUTPUT_SPEED.can_id
+IGNITION_ON_ID = broadcast_signals.IGNITION_ON.can_id
+SYSTEM_VOLTAGE_ID = broadcast_signals.SYSTEM_VOLTAGE.can_id
 # Owner-referenced cluster display frames (2026-09-27 and 2026-09-28 drives):
 # 0x0E0 B0 is the traffic-sign speed limit in mph (10 Hz); 0x5A0 is the
 # cluster ACC frame (1 Hz plus on change) whose B3 is the set speed in mph and
@@ -355,137 +357,18 @@ def decode_frame_observations(
     can_id: int, data: bytes
 ) -> tuple[PassiveObservation, ...]:
     """Decode every allowlisted observation in one C-CAN frame."""
-    if can_id == SYSTEM_VOLTAGE_ID and data:
-        return (
+    decoded = broadcast_signals.decode(can_id, data)
+    if decoded:
+        return tuple(
             PassiveObservation(
-                metric="battery.voltage",
-                value=4.0 + float(data[0]) * 0.05,
-                unit="V",
-                source="ccan.broadcast.0x41a",
-                quality="verified",
-                detail="0x41A byte 0 x 0.05 V + 4.0 V",
-            ),
-        )
-    if can_id == OIL_PRESSURE_ID and len(data) >= 3:
-        native_kpa = float(data[2] * 4)
-        return (
-            PassiveObservation(
-                metric="engine.oil_pressure",
-                value=native_kpa * KPA_TO_PSI,
-                unit="psi",
-                source="ccan.broadcast.0x41d",
-                quality="observed_alfa_scale",
-                detail=(
-                    "0x41D byte 2 x 4 kPa, converted to psi for telemetry"
-                ),
-            ),
-        )
-    if can_id == COOLANT_TEMPERATURE_ID and data:
-        native_celsius = float(data[0] - 40)
-        return (
-            PassiveObservation(
-                metric="engine.coolant_temperature",
-                value=native_celsius * 9.0 / 5.0 + 32.0,
-                unit="°F",
-                source="ccan.broadcast.0x2ed",
-                quality="observed_alfa_scale",
-                detail=(
-                    "0x2ED byte 0 - 40 °C, converted to °F for telemetry"
-                ),
-            ),
-        )
-    if can_id == ENGINE_SPEED_ID and len(data) >= 2:
-        native_rpm = float(
-            (int.from_bytes(data[:2], "big") & 0xFFFC) / 4.0
-        )
-        return (
-            PassiveObservation(
-                metric="engine.rpm",
-                value=native_rpm,
-                unit="rpm",
-                source="ccan.broadcast.0x0fc",
-                quality="observed_alfa_scale",
-                detail=(
-                    "0x0FC bytes 0-1 big-endian, low 2 bits masked, / 4 rpm"
-                ),
-            ),
-        )
-    if can_id == TARGET_CRANK_TORQUE_ID and len(data) >= 5:
-        native_nm = float((int.from_bytes(data[3:5], "big") >> 5) - 500)
-        return (
-            PassiveObservation(
-                metric="engine.target_crankshaft_torque",
-                value=native_nm * NM_TO_LB_FT,
-                unit="lb-ft",
-                source="ccan.broadcast.0x100",
-                quality="observed_alfa_scale",
-                detail=(
-                    "0x100 bytes 3-4 big-endian >> 5, then -500 Nm; "
-                    "TCM target, not measured output; converted to lb-ft"
-                ),
-            ),
-        )
-    if can_id == VEHICLE_SPEED_ID and len(data) >= 3:
-        native_kmh = float(
-            (
-                ((data[0] & 0x01) << 11)
-                | (data[1] << 3)
-                | (data[2] >> 5)
+                metric=signal.metric,
+                value=value,
+                unit=signal.units,
+                source=signal.source,
+                quality=signal.quality,
+                detail=signal.provenance,
             )
-            / 16.0
-        )
-        return (
-            PassiveObservation(
-                metric="vehicle.speed",
-                value=native_kmh * KMH_TO_MPH,
-                unit="mph",
-                source="ccan.broadcast.0x101",
-                quality="observed_alfa_scale",
-                detail=(
-                    "0x101 packed 12-bit speed / 16 km/h, converted to mph"
-                ),
-            ),
-        )
-    if can_id == TRANSMISSION_SHAFT_SPEED_ID and len(data) >= 6:
-        output_raw = (
-            ((data[0] & 0x01) << 16)
-            | int.from_bytes(data[1:3], "big")
-        )
-        output_rpm = float(output_raw / 32.0)
-        oil_raw = int.from_bytes(data[3:4], "big", signed=True)
-        oil_celsius = float(oil_raw * 0.375 + 57.0)
-        turbine_rpm = float(int.from_bytes(data[4:6], "big") / 2.0)
-        return (
-            PassiveObservation(
-                metric="transmission.output_speed",
-                value=output_rpm,
-                unit="rpm",
-                source="ccan.broadcast.0x1f7",
-                quality="observed_alfa_scale",
-                detail=(
-                    "0x1F7 packed 17-bit output speed "
-                    "(byte0 bit0, then bytes 1-2) / 32 rpm"
-                ),
-            ),
-            PassiveObservation(
-                metric="transmission.oil_temperature",
-                value=oil_celsius * 9.0 / 5.0 + 32.0,
-                unit="°F",
-                source="ccan.broadcast.0x1f7",
-                quality="observed_alfa_scale",
-                detail=(
-                    "0x1F7 byte 3 signed x 0.375 + 57 °C, converted to °F "
-                    "for telemetry"
-                ),
-            ),
-            PassiveObservation(
-                metric="transmission.turbine_speed",
-                value=turbine_rpm,
-                unit="rpm",
-                source="ccan.broadcast.0x1f7",
-                quality="observed_alfa_scale",
-                detail="0x1F7 bytes 4-5 big-endian / 2 rpm",
-            ),
+            for signal, value in decoded
         )
     if can_id == SPEED_LIMIT_ID and data:
         limit = int(data[0])
@@ -505,17 +388,6 @@ def decode_frame_observations(
         )
     if can_id == ACC_DISPLAY_ID and len(data) >= 8:
         return _decode_acc_display(data)
-    if can_id == IGNITION_ON_ID:
-        return (
-            PassiveObservation(
-                metric="vehicle.ignition_on",
-                value=True,
-                unit="boolean",
-                source="ccan.broadcast.0x2ef",
-                quality="verified",
-                detail="0x2EF ignition-on presence gate observed",
-            ),
-        )
     return ()
 
 

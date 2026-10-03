@@ -223,6 +223,31 @@ class BroadcastSignalsTests(unittest.TestCase):
         self.assertEqual(repr(actual), repr(expected), (can_id, data.hex()))
         self.assertEqual(repr(cp.decode_frame_observations(can_id, data)), repr(expected))
 
+    def test_powertrain_identifier_exports(self):
+        expected = {
+            "OIL_PRESSURE_ID": 0x41D,
+            "COOLANT_TEMPERATURE_ID": 0x2ED,
+            "ENGINE_SPEED_ID": 0x0FC,
+            "TARGET_CRANK_TORQUE_ID": 0x100,
+            "VEHICLE_SPEED_ID": 0x101,
+            "TRANSMISSION_SHAFT_SPEED_ID": 0x1F7,
+            "IGNITION_ON_ID": 0x2EF,
+            "SYSTEM_VOLTAGE_ID": 0x41A,
+        }
+        for name, value in expected.items():
+            self.assertEqual(getattr(cp, name), value)
+
+    def test_powertrain_retains_display_dispatch(self):
+        rng = random.Random(0x5A0)
+        for length in range(9):
+            for _ in range(256):
+                data = rng.randbytes(length)
+                for can_id in (0x0E0, 0x5A0):
+                    self.assertEqual(
+                        repr(cp.decode_frame_observations(can_id, data)),
+                        repr(legacy_observations(can_id, data)),
+                    )
+
     def test_frozen_rows_and_unique_keys(self):
         self.assertEqual(len(bs.SIGNALS), 11)
         self.assertEqual(len({(s.bus, s.can_id, s.metric) for s in bs.SIGNALS}), 11)
