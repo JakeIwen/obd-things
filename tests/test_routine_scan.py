@@ -157,6 +157,31 @@ class RoutineCliSafetyTests(unittest.TestCase):
                 self.assertEqual(result, 2)
                 preflight.assert_not_called()
 
+    def test_default_live_scan_fits_bounded_limit_and_reaches_route_gate(self):
+        self.assertEqual(
+            len(routine_scan.build_rids(routine_scan.DEFAULT_START, routine_scan.DEFAULT_END)),
+            routine_scan.MAX_BOUNDED_RIDS,
+        )
+        route_error = RuntimeError("route sentinel")
+        with (
+            mock.patch.object(
+                routine_scan.can_runtime_route,
+                "acquire_armed_module_route",
+                side_effect=route_error,
+            ) as acquire_route,
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            result = routine_scan.main(
+                [
+                    "radar_acc", "--execute", "--confirm-parked", "--pair", "X",
+                    "--conditions", "Y",
+                ]
+            )
+
+        self.assertEqual(result, 2)
+        acquire_route.assert_called_once()
+
     def test_session_requires_both_separate_confirmations(self):
         cases = (
             ["radar_acc", "--session", "03"],
