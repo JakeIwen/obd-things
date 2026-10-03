@@ -21,6 +21,7 @@ import time
 from typing import Callable, Iterable
 
 from lib import (
+    broadcast_signals,
     can_handoff,
     can_operation_state,
     can_runtime_route,
@@ -42,7 +43,7 @@ CAN_RAW_FILTER = getattr(socket, "CAN_RAW_FILTER", 1)
 _B_CAN_WAKE_ID = 0x7FF
 _B_CAN_WAKE_ATTEMPTS = 75
 _B_CAN_WAKE_GAP_SECONDS = 0.02
-_B_CAN_VOLTAGE_ID = 0x46C
+_B_CAN_VOLTAGE_ID = broadcast_signals.B_CAN_VOLTAGE.can_id
 _B_CAN_VOLTAGE_MASK = 0x1FFF
 _B_CAN_VOLTAGE_DIVISOR = 400.0
 _B_CAN_SANE_VOLTAGE = (6.0, 18.0)
@@ -55,8 +56,8 @@ _C_CAN_WAKE_RESPONSE_PREFIX = bytes.fromhex("62 FE FF")
 _C_CAN_WAKE_RESPONSE_LENGTH = 7
 _C_CAN_WAKE_ATTEMPTS = 10
 _C_CAN_WAKE_RETRY_SECONDS = 0.02
-_C_CAN_ENGINE_SPEED_ID = 0x0FC
-_C_CAN_IGNITION_GATE_ID = 0x2EF
+_C_CAN_ENGINE_SPEED_ID = broadcast_signals.ENGINE_SPEED.can_id
+_C_CAN_IGNITION_GATE_ID = broadcast_signals.IGNITION_ON.can_id
 _C_CAN_RUNNING_RPM = 400.0
 
 
@@ -185,7 +186,7 @@ def _c_can_safety_conflicts(route) -> tuple[str, ...]:
     for can_id, data in frames:
         if can_id != _C_CAN_ENGINE_SPEED_ID or len(data) < 2:
             continue
-        rpm = (int.from_bytes(data[:2], "big") & 0xFFFC) / 4.0
+        rpm = broadcast_signals.ENGINE_SPEED.decode(data)
         if rpm >= _C_CAN_RUNNING_RPM:
             return (f"verified C-CAN engine speed is {rpm:.0f} rpm",)
     return ()
@@ -593,7 +594,7 @@ class _WakeSession:
                 role=route.role,
             ) from exc
         rpms = [
-            (int.from_bytes(data[:2], "big") & 0xFFFC) / 4.0
+            broadcast_signals.ENGINE_SPEED.decode(data)
             for _can_id, data in frames
             if len(data) >= 2
         ]
