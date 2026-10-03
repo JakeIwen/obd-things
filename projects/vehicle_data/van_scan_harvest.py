@@ -228,19 +228,35 @@ def iter_chunk_frames(path: Path) -> Iterator[Frame]:
     """Stream diagnostic frames from one completed zstd chunk (``zstd`` + ``grep`` do the work)."""
 
     env = dict(os.environ, LC_ALL="C")
-    zstd = subprocess.Popen(
-        ["zstd", "-dcq", "--", str(path)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=env,
-    )
-    grep = subprocess.Popen(
-        ["grep", "-F", " 18DA"],
-        stdin=zstd.stdout,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        env=env,
-    )
+    try:
+        zstd = subprocess.Popen(
+            ["zstd", "-dcq", "--", str(path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+        )
+    except OSError as exc:
+        raise HarvestError(f"cannot start zstd for {path}: {exc}") from exc
+    try:
+        grep = subprocess.Popen(
+            ["grep", "-F", " 18DA"],
+            stdin=zstd.stdout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=env,
+        )
+    except OSError as exc:
+        try:
+            zstd.kill()
+        except ProcessLookupError:
+            pass
+        finally:
+            zstd.wait()
+        if zstd.stdout is not None:
+            zstd.stdout.close()
+        if zstd.stderr is not None:
+            zstd.stderr.close()
+        raise HarvestError(f"cannot start grep for {path}: {exc}") from exc
     assert zstd.stdout is not None and grep.stdout is not None
     zstd.stdout.close()
     try:

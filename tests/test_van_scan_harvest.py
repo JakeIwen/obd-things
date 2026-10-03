@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 from pathlib import Path
 import sqlite3
@@ -171,6 +172,87 @@ class PiRequestSetSyncTests(unittest.TestCase):
         for _, request in dtc_inventory.DEFAULT_REQUESTS + (dtc_inventory.SUPPORTED_DTCS_REQUEST,):
             self.assertIn(request, harvest.PI_DTC_TOOL_REQUESTS)
         self.assertNotIn(harvest.VAN_DTC_REQUEST, harvest.PI_DTC_TOOL_REQUESTS)
+
+
+class ChunkProcessTests(unittest.TestCase):
+    def test_missing_zstd_is_harvest_error(self):
+        path = Path("/captures/chunk.candump.zst")
+        missing = FileNotFoundError(2, "No such file or directory", "zstd")
+        with mock.patch.object(harvest.subprocess, "Popen", side_effect=missing):
+            with self.assertRaises(harvest.HarvestError) as raised:
+                list(harvest.iter_chunk_frames(path))
+
+        self.assertIs(raised.exception.__cause__, missing)
+        self.assertIn(f"cannot start zstd for {path}", str(raised.exception))
+
+    def test_missing_grep_is_harvest_error_and_kills_zstd(self):
+        path = Path("/captures/chunk.candump.zst")
+        zstd = mock.Mock()
+        zstd.stdout = mock.Mock()
+        zstd.stderr = mock.Mock()
+        missing = FileNotFoundError(2, "No such file or directory", "grep")
+        with mock.patch.object(
+            harvest.subprocess,
+            "Popen",
+            side_effect=[zstd, missing],
+        ):
+            with self.assertRaises(harvest.HarvestError) as raised:
+                list(harvest.iter_chunk_frames(path))
+
+        self.assertIs(raised.exception.__cause__, missing)
+        self.assertIn(f"cannot start grep for {path}", str(raised.exception))
+        zstd.kill.assert_called_once_with()
+        zstd.wait.assert_called_once_with()
+
+    def test_public_entry_point_records_missing_zstd_as_chunk_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "captures"
+            campaign = root / "broker-drive-test"
+            bus_dir = campaign / "c-can"
+            bus_dir.mkdir(parents=True)
+            chunk = bus_dir / "chunk_000000_full.candump.zst"
+            chunk.write_bytes(b"not zstd")
+            (bus_dir / "manifest.jsonl").write_text(
+                json.dumps(
+                    {
+                        "type": "chunk",
+                        "complete": True,
+                        "sequence": 0,
+                        "last_frame_timestamp": 1.0,
+                        "streams": {
+                            "full": {
+                                "complete": True,
+                                "path": str(chunk),
+                                "compressed_bytes": chunk.stat().st_size,
+                            }
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            out_dir = Path(tmp) / "out"
+            missing = FileNotFoundError(2, "No such file or directory", "zstd")
+            with (
+                mock.patch.object(harvest.subprocess, "Popen", side_effect=missing),
+                mock.patch("sys.stdout", new_callable=io.StringIO),
+                mock.patch("sys.stderr", new_callable=io.StringIO),
+            ):
+                result = harvest.main(
+                    [
+                        "--capture-root", str(root), "--out-dir", str(out_dir),
+                        "--no-import", "--quiet",
+                    ]
+                )
+
+            state = json.loads(
+                (out_dir / "state" / "broker-drive-test.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(state["buses"]["c-can"]["chunks"][chunk.name]["error"], str(
+            harvest.HarvestError(f"cannot start zstd for {chunk}: {missing}")
+        ))
 
 
 def van_sweep(t):
