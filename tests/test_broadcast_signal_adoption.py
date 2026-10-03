@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from lib import can_wake
+from projects.ecu_mapping import rke_front_unlock as rke
 from projects.tpms import tpms_logger
 
 
@@ -162,6 +163,38 @@ class TpmsBroadcastAdoptionTests(unittest.TestCase):
             self.check_frames([b"short"])
         self.assertEqual(tpms_logger.ENGINE_SPEED_ID, 0x0FC)
         self.assertEqual(tpms_logger.IGN_BCAST, 0x2EF)
+
+
+def legacy_rke_rpm_rejection(can_id, data):
+    if can_id == 0x2EF:
+        raise rke.ReplayError("ignition witness 0x2EF appeared during synchronization")
+    if can_id == 0x0FC and len(data) >= 2:
+        rpm = (int.from_bytes(data[:2], "big") & 0xFFFC) / 4.0
+        if rpm >= 400.0:
+            raise rke.ReplayError(f"engine speed became {rpm:.0f} rpm")
+    raise rke.ReplayError("no three-frame CRC-valid sequential 0x1EF streak before timeout")
+
+
+class RkeBroadcastAdoptionTests(unittest.TestCase):
+    def check_rejection(self, can_id, data):
+        sock = ReceiveOnlySocket([struct.pack("=IB3x8s", can_id, len(data), data)])
+        with self.assertRaises(rke.ReplayError) as expected:
+            legacy_rke_rpm_rejection(can_id, data)
+        with self.assertRaises(rke.ReplayError) as actual:
+            rke.synchronize_and_send(sock, clock=lambda: 0.0)
+        self.assertIs(type(actual.exception), type(expected.exception))
+        self.assertEqual(str(actual.exception), str(expected.exception))
+
+    def test_rke_rpm_exhaustive_and_every_short_frame(self):
+        with mock.patch.object(socket, "socket", side_effect=AssertionError("no CAN I/O")):
+            for data in rpm_payloads():
+                self.check_rejection(0x0FC, data)
+            for length in range(9):
+                self.check_rejection(0x2EF, bytes(length))
+                self.check_rejection(0x123, bytes(length))
+        self.assertEqual(rke.IGNITION_ID, 0x2EF)
+        self.assertEqual(rke.RPM_ID, 0x0FC)
+        self.assertEqual(rke.B_CAN_ACCESS_IDS, (0x46C, 0x5B2, 0x5E2))
 
 
 if __name__ == "__main__":

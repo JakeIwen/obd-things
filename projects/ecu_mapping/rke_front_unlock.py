@@ -25,6 +25,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from lib import (  # noqa: E402
+    broadcast_signals,
     can_handoff,
     can_operation_state,
     can_runtime_route,
@@ -47,8 +48,8 @@ ACTION_PREFIXES = {
 }
 ACTION_PREFIX = ACTION_PREFIXES["unlock_front"]
 ORDINARY_PREFIX = bytes.fromhex("42 00 00 00 00 00")
-IGNITION_ID = 0x2EF
-RPM_ID = 0x0FC
+IGNITION_ID = broadcast_signals.IGNITION_ON.can_id
+RPM_ID = broadcast_signals.ENGINE_SPEED.can_id
 RPM_LIMIT = 400.0
 REQUIRED_STREAK = 3
 SYNC_TIMEOUT_SECONDS = 1.5
@@ -59,7 +60,7 @@ OUT_DIR = REPO / "tmp" / "ecu_mapping" / "rke_front_unlock"
 ACCESS_STATE_SAMPLE_SECONDS = 1.0
 B_CAN_ACCESS_SAMPLE_SECONDS = 2.5
 MIN_LOCK_DOMAIN_SAMPLES = 2
-B_CAN_ACCESS_IDS = (0x46C, 0x5B2, 0x5E2)
+B_CAN_ACCESS_IDS = (broadcast_signals.B_CAN_VOLTAGE.can_id, 0x5B2, 0x5E2)
 C_CAN_DOOR_CANDIDATE_IDS = (0x419, 0x4B1)
 BCM_DOOR_INPUT_DID = 0x0130
 BCM_DOOR_INPUT_REQUEST = bytes.fromhex("22 01 30")
@@ -143,7 +144,7 @@ def synchronize_and_send(
         if can_id == IGNITION_ID:
             raise ReplayError("ignition witness 0x2EF appeared during synchronization")
         if can_id == RPM_ID and len(data) >= 2:
-            rpm = (int.from_bytes(data[:2], "big") & 0xFFFC) / 4.0
+            rpm = broadcast_signals.ENGINE_SPEED.decode(data)
             if rpm >= RPM_LIMIT:
                 raise ReplayError(f"engine speed became {rpm:.0f} rpm")
             continue
