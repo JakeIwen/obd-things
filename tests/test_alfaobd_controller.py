@@ -1,8 +1,10 @@
+import contextlib
+import io
 from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-from lib.alfaobd_adb import UiState, WaitOutcome
+from lib.alfaobd_adb import SAFE_ACTIONS, UiState, WaitOutcome
 from tools import alfaobd_controller as controller
 
 
@@ -87,6 +89,84 @@ class AlfaCampaignGateTests(unittest.TestCase):
             )
 
         self.assertEqual(events, ["inhibit", "adb"])
+
+    def test_unconfirmed_diagnostic_action_refuses_before_inhibit_or_adb(self):
+        names = sorted(
+            name for name, spec in SAFE_ACTIONS.items() if spec.diagnostic_confirmation
+        )
+        self.assertIn("connect", names)
+        for name in names:
+            with self.subTest(action=name):
+                stderr = io.StringIO()
+                with (
+                    mock.patch.object(
+                        controller.can_operation_state, "begin_inhibit"
+                    ) as begin,
+                    mock.patch.object(controller, "_live_objects") as live,
+                    contextlib.redirect_stderr(stderr),
+                ):
+                    self.assertEqual(
+                        controller.main(["action", name, "--execute"]), 2
+                    )
+
+                begin.assert_not_called()
+                live.assert_not_called()
+                self.assertEqual(
+                    stderr.getvalue(),
+                    f"ERROR: {name} requires explicit read-only diagnostic confirmation\n",
+                )
+
+    def test_confirmed_diagnostic_action_creates_inhibit_before_live_objects(self):
+        events = []
+        snapshot = SimpleNamespace(
+            primary=UiState.CONNECTED,
+            states=frozenset((UiState.CONNECTED,)),
+        )
+        result = SimpleNamespace(
+            outcome=WaitOutcome.MATCHED,
+            attempts=1,
+            elapsed_seconds=0.1,
+            evidence_prefix=None,
+            snapshot=snapshot,
+        )
+
+        def begin(*_args, **_kwargs):
+            events.append("inhibit")
+            return {}
+
+        def live(_args):
+            events.append("adb")
+            return "serial", object(), object()
+
+        with (
+            mock.patch.object(
+                controller.can_operation_state,
+                "begin_inhibit",
+                side_effect=begin,
+            ),
+            mock.patch.object(controller, "_live_objects", side_effect=live),
+            mock.patch.object(
+                controller.GuardedController,
+                "perform",
+                return_value=result,
+            ) as perform,
+        ):
+            self.assertEqual(
+                controller.main(
+                    [
+                        "action",
+                        "connect",
+                        "--execute",
+                        "--confirm-read-only-diagnostics",
+                    ]
+                ),
+                0,
+            )
+
+        self.assertEqual(events, ["inhibit", "adb"])
+        perform.assert_called_once_with(
+            "connect", confirmed_read_only_diagnostics=True
+        )
 
     def test_adapter_prompt_sets_global_inhibit_without_topology_stamp(self):
         snapshot = SimpleNamespace(states=frozenset((UiState.ADAPTER_PROMPT,)))

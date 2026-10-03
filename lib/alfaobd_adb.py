@@ -732,6 +732,14 @@ SAFE_ACTIONS: dict[str, SafeAction] = {
 }
 
 
+def require_diagnostic_confirmation(action: SafeAction, confirmed: bool) -> None:
+    """Refuse an action that can cause diagnostic traffic unless it was confirmed."""
+    if action.diagnostic_confirmation and not confirmed:
+        raise AlfaUiError(
+            f"{action.name} requires explicit read-only diagnostic confirmation"
+        )
+
+
 class GuardedController:
     """State-check, single-tap, state-wait controller for allowlisted actions."""
 
@@ -762,10 +770,7 @@ class GuardedController:
             action = SAFE_ACTIONS[action_name]
         except KeyError as exc:
             raise AlfaUiError(f"unsupported/unsafe action {action_name!r}") from exc
-        if action.diagnostic_confirmation and not confirmed_read_only_diagnostics:
-            raise AlfaUiError(
-                f"{action_name} requires explicit read-only diagnostic confirmation"
-            )
+        require_diagnostic_confirmation(action, confirmed_read_only_diagnostics)
         before = self.poller.observe()
         if action.forbidden_if_present & before.states:
             raise AlfaUiError(

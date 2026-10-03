@@ -29,6 +29,7 @@ from lib.alfaobd_adb import (  # noqa: E402
     UiPoller,
     UiState,
     WaitOutcome,
+    require_diagnostic_confirmation,
 )
 from lib import can_operation_state  # noqa: E402
 
@@ -245,6 +246,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "action":
+            # Refuse before the inhibit file or ADB is touched; perform() checks again.
+            require_diagnostic_confirmation(
+                SAFE_ACTIONS[args.name], args.confirm_read_only_diagnostics
+            )
             can_operation_state.begin_inhibit(
                 ALFA_INHIBIT_NAME,
                 channel="*",
