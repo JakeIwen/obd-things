@@ -15,7 +15,7 @@ By default the ECU's inherited session is left untouched and no TesterPresent is
 explicit ``--session HEX`` sends one DiagnosticSessionControl request before the scan and then
 bounded TesterPresent messages to hold that explicitly selected session. It is separately gated
 because changing/re-entering a session can discard an active routine's state. There is no socket
-recovery or session replay. Live plans above 512 unique RIDs additionally require
+recovery or session replay. Live plans above 516 unique RIDs additionally require
 ``--confirm-expanded-scan``. Each completed result is durably checkpointed to JSONL before the
 next RID is attempted.
 """
