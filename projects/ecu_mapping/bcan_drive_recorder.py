@@ -35,7 +35,7 @@ if str(REPO) not in sys.path:
 from lib import can_operation_state, can_runtime_route, canbus, diagnostic_safety  # noqa: E402
 from lib.modules import MODULES  # noqa: E402
 from lib.timeutil import utc_now  # noqa: E402
-from tools import passive_drive_capture as capture  # noqa: E402
+from lib import capture_pipeline as capture  # noqa: E402
 
 
 CHANNEL: str | None = None

@@ -217,19 +217,23 @@ class Environment:
 
     @contextmanager
     def installed(self):
-        original_recorder = passive.Recorder
+        capture_modules = tuple(dict.fromkeys((passive, bcan.capture, drive.capture)))
 
-        def recorder(*args, **kwargs):
-            kwargs.update(popen=self.popen, runner=self.run, disk_free=self.disk_free)
-            return original_recorder(*args, **kwargs)
+        def recorder_factory(original_recorder):
+            def recorder(*args, **kwargs):
+                kwargs.update(popen=self.popen, runner=self.run, disk_free=self.disk_free)
+                return original_recorder(*args, **kwargs)
+            return recorder
 
         with ExitStack() as stack:
-            for module in (passive, bcan, drive, ignition):
-                stack.enter_context(mock.patch.object(module, "utc_now", lambda: UTC))
-            stack.enter_context(mock.patch.object(passive, "Recorder", recorder))
-            stack.enter_context(mock.patch.object(passive, "require_writable_mount", self.mount))
-            stack.enter_context(mock.patch.object(passive, "read_rmem_max", self.rmem))
-            stack.enter_context(mock.patch.object(passive, "campaign_file_lock", self.lock))
+            for module in dict.fromkeys((*capture_modules, bcan, drive, ignition)):
+                if hasattr(module, "utc_now"):
+                    stack.enter_context(mock.patch.object(module, "utc_now", lambda: UTC))
+            for module in capture_modules:
+                stack.enter_context(mock.patch.object(module, "Recorder", recorder_factory(module.Recorder)))
+                stack.enter_context(mock.patch.object(module, "require_writable_mount", self.mount))
+                stack.enter_context(mock.patch.object(module, "read_rmem_max", self.rmem))
+                stack.enter_context(mock.patch.object(module, "campaign_file_lock", self.lock))
             stack.enter_context(mock.patch.object(passive.time, "monotonic", lambda: self.now))
             stack.enter_context(mock.patch.object(passive.selectors, "DefaultSelector", lambda: ScriptedSelector(self)))
             stack.enter_context(mock.patch.object(passive.concurrent.futures, "ThreadPoolExecutor", InlineFinalizer))
