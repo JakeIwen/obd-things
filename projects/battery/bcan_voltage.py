@@ -37,12 +37,12 @@ _ROOT = os.path.dirname(os.path.abspath(__file__))
 while _ROOT != os.path.dirname(_ROOT) and not os.path.isdir(os.path.join(_ROOT, "lib")):
     _ROOT = os.path.dirname(_ROOT)
 sys.path.insert(0, _ROOT)
-from lib import can_runtime_route, canbus             # noqa: E402
+from lib import broadcast_signals, can_runtime_route, canbus  # noqa: E402
 from lib.canbus import append_csv                     # noqa: E402,F401  re-exported for callers
 CSV_PATH = os.path.join(_ROOT, "tmp", "battery", "bcan_voltage.csv")
 
 BUS = "b-can"
-VOLT_ID = 0x46C           # BCM broadcast frame carrying system voltage
+VOLT_ID = broadcast_signals.B_CAN_VOLTAGE.can_id
 SFF_MASK = 0x7FF          # standard 11-bit id mask
 DIVISOR = 400.0           # voltage = (word & VOLT_MASK) / 400 (verified 2026-06-26; recal vs multimeter)
 VOLT_MASK = 0x1FFF        # 0x46C byte[4] HIGH bits are status flags (saw bit6=0x4000 set -> phantom +51 V);
