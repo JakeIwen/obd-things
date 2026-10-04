@@ -164,6 +164,47 @@ class ValidationMixin:
         return definitions
 
     @staticmethod
+    def _parse_metric_value(
+        name: str,
+        payload: Mapping[str, object],
+        definition: _MetricDefinition,
+    ) -> tuple[str, float | None, str | None, int | None]:
+        value = payload.get("value")
+        if definition.value_type == "boolean":
+            if type(value) is not bool:
+                raise SnapshotValidationError(f"metric {name!r} value must be boolean")
+            value_kind, value_num, value_text, value_bool = (
+                "boolean",
+                None,
+                None,
+                int(value),
+            )
+        elif definition.value_type in ("number", "integer"):
+            valid = _finite_number(value)
+            if definition.value_type == "integer":
+                valid = isinstance(value, int) and not isinstance(value, bool)
+            if not valid:
+                raise SnapshotValidationError(
+                    f"metric {name!r} value must be a finite {definition.value_type}"
+                )
+            value_kind, value_num, value_text, value_bool = (
+                "number",
+                float(value),
+                None,
+                None,
+            )
+        else:
+            if not isinstance(value, str):
+                raise SnapshotValidationError(f"metric {name!r} value must be text")
+            value_kind, value_num, value_text, value_bool = (
+                "string",
+                None,
+                value,
+                None,
+            )
+        return value_kind, value_num, value_text, value_bool
+
+    @staticmethod
     def _parse_metric(
         name: str,
         payload: Mapping[str, object],
@@ -199,39 +240,9 @@ class ValidationMixin:
                 f"metric {name!r} bus/quality does not match catalog source {source_name!r}"
             )
 
-        value = payload.get("value")
-        if definition.value_type == "boolean":
-            if type(value) is not bool:
-                raise SnapshotValidationError(f"metric {name!r} value must be boolean")
-            value_kind, value_num, value_text, value_bool = (
-                "boolean",
-                None,
-                None,
-                int(value),
-            )
-        elif definition.value_type in ("number", "integer"):
-            valid = _finite_number(value)
-            if definition.value_type == "integer":
-                valid = isinstance(value, int) and not isinstance(value, bool)
-            if not valid:
-                raise SnapshotValidationError(
-                    f"metric {name!r} value must be a finite {definition.value_type}"
-                )
-            value_kind, value_num, value_text, value_bool = (
-                "number",
-                float(value),
-                None,
-                None,
-            )
-        else:
-            if not isinstance(value, str):
-                raise SnapshotValidationError(f"metric {name!r} value must be text")
-            value_kind, value_num, value_text, value_bool = (
-                "string",
-                None,
-                value,
-                None,
-            )
+        value_kind, value_num, value_text, value_bool = (
+            ValidationMixin._parse_metric_value(name, payload, definition)
+        )
 
         observed = payload.get("observed_at")
         if observed is None:
