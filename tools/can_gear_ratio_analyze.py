@@ -21,8 +21,9 @@ if str(REPO) not in sys.path:
 
 from tools.can_capture_summary import parse_frame
 from tools.can_event_window import capture_lines
+from lib import broadcast_signals
 
-SHAFT_ID = 0x1F7
+SHAFT_ID = broadcast_signals.TRANSMISSION_OUTPUT_SPEED.can_id
 CANDIDATE_ID = 0x1F4
 MAX_AGE_SECONDS = 0.1
 MIN_SHAFT_RPM = 200
