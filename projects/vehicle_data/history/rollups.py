@@ -47,17 +47,13 @@ class RollupMixin:
                 limit=limit,
             )
 
-    def _refresh_rollups_locked(
+    def _rollup_start_locked(
         self,
         *,
         complete_end: int,
-        limit: int,
-    ) -> dict[str, object]:
-        """Advance completed rollups while the caller owns lock/transaction."""
-
-        bucket_seconds = self.config.rollup_seconds
-        bucket_us = bucket_seconds * MICROSECONDS
-        state_key = f"rollup_through_us:{bucket_seconds}"
+        bucket_us: int,
+        state_key: str,
+    ) -> tuple[int, dict[str, object] | None]:
         state = self._conn.execute(
             "SELECT value FROM historian_meta WHERE key=?", (state_key,)
         ).fetchone()
@@ -70,7 +66,7 @@ class RollupMixin:
             ).fetchone()[0]
             if first is None:
                 self._set_meta_locked(state_key, str(complete_end))
-                return {
+                return complete_end, {
                     "buckets": 0,
                     "rows": 0,
                     "through": _iso_from_us(complete_end),
@@ -85,13 +81,16 @@ class RollupMixin:
                 self._set_meta_locked(state_key, str(complete_end))
         else:
             start = int(state[0])
-        if complete_end <= start:
-            return {
-                "buckets": 0,
-                "rows": 0,
-                "through": _iso_from_us(start),
-                "backlog": False,
-            }
+        return start, None
+
+    def _rollup_bucket_starts_locked(
+        self,
+        *,
+        bucket_us: int,
+        start: int,
+        complete_end: int,
+        limit: int,
+    ) -> tuple[list[int], bool]:
         bucket_rows = self._conn.execute(
             """
             SELECT DISTINCT (sample.captured_us / ?) * ? AS bucket_us
@@ -123,16 +122,15 @@ class RollupMixin:
         ).fetchall()
         selected = [int(row["bucket_us"]) for row in bucket_rows[:limit]]
         backlog = len(bucket_rows) > limit
-        if not selected:
-            self._set_meta_locked(state_key, str(complete_end))
-            return {
-                "buckets": 0,
-                "rows": 0,
-                "through": _iso_from_us(complete_end),
-                "backlog": False,
-            }
-        query_start = selected[0]
-        query_end = selected[-1] + bucket_us
+        return selected, backlog
+
+    def _rollup_groups_locked(
+        self,
+        *,
+        bucket_us: int,
+        query_start: int,
+        query_end: int,
+    ) -> dict[tuple[object, ...], list[tuple[int, float]]]:
         rows = self._conn.execute(
             """
             SELECT sample.captured_us,coalesce(sample.trip_id,0) AS trip_key,
@@ -178,6 +176,14 @@ class RollupMixin:
                 row["provenance"],
             )
             groups.setdefault(key, []).append((row["captured_us"], row["value_num"]))
+        return groups
+
+    def _write_rollup_groups_locked(
+        self,
+        groups: Mapping[tuple[object, ...], list[tuple[int, float]]],
+        *,
+        bucket_seconds: int,
+    ) -> None:
         for key, points in groups.items():
             values = [float(point[1]) for point in points]
             median, mad = _median_mad(values)
@@ -203,6 +209,57 @@ class RollupMixin:
                     points[-1][0],
                 ),
             )
+
+    def _refresh_rollups_locked(
+        self,
+        *,
+        complete_end: int,
+        limit: int,
+    ) -> dict[str, object]:
+        """Advance completed rollups while the caller owns lock/transaction."""
+
+        bucket_seconds = self.config.rollup_seconds
+        bucket_us = bucket_seconds * MICROSECONDS
+        state_key = f"rollup_through_us:{bucket_seconds}"
+        start, empty_result = self._rollup_start_locked(
+            complete_end=complete_end,
+            bucket_us=bucket_us,
+            state_key=state_key,
+        )
+        if empty_result is not None:
+            return empty_result
+        if complete_end <= start:
+            return {
+                "buckets": 0,
+                "rows": 0,
+                "through": _iso_from_us(start),
+                "backlog": False,
+            }
+        selected, backlog = self._rollup_bucket_starts_locked(
+            bucket_us=bucket_us,
+            start=start,
+            complete_end=complete_end,
+            limit=limit,
+        )
+        if not selected:
+            self._set_meta_locked(state_key, str(complete_end))
+            return {
+                "buckets": 0,
+                "rows": 0,
+                "through": _iso_from_us(complete_end),
+                "backlog": False,
+            }
+        query_start = selected[0]
+        query_end = selected[-1] + bucket_us
+        groups = self._rollup_groups_locked(
+            bucket_us=bucket_us,
+            query_start=query_start,
+            query_end=query_end,
+        )
+        self._write_rollup_groups_locked(
+            groups,
+            bucket_seconds=bucket_seconds,
+        )
         cursor = query_end if backlog else complete_end
         self._set_meta_locked(state_key, str(cursor))
         return {
