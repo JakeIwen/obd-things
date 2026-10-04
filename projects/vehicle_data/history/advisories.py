@@ -507,6 +507,39 @@ class AdvisoryMixin:
         ):
             counters["notifications_capped"] += 1
             return
+        self._enqueue_tiered_notification_locked(
+            episode=episode,
+            episode_id=episode_id,
+            event_id=event_id,
+            event_us=event_us,
+            fingerprint=fingerprint,
+            assessment=assessment,
+            assessment_json=assessment_json,
+            policy=policy,
+            counters=counters,
+            cooldown=cooldown,
+            critical=critical,
+            group=group,
+        )
+
+    def _enqueue_tiered_notification_locked(
+        self,
+        *,
+        episode: sqlite3.Row,
+        episode_id: int,
+        event_id: int | None,
+        event_us: int,
+        fingerprint: str,
+        assessment: Mapping[str, object],
+        assessment_json: str,
+        policy: Mapping[str, object],
+        counters: dict[str, int],
+        cooldown: float,
+        critical: bool,
+        group: object,
+    ) -> None:
+        """Apply delivery timing and enqueue a tiered warning that passed policy."""
+
         eligible_after_us = event_us
         # A tier-1 warning raised while a trip is open is not deferred: the
         # owner is driving (trips 50-55 ran until 23:27 local), so holding it
