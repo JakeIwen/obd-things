@@ -31,6 +31,7 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from lib import broadcast_signals  # noqa: E402
 from lib import can_runtime_route  # noqa: E402
 from lib.timeutil import utc_now  # noqa: E402
 from tools import passive_drive_capture as passive  # noqa: E402
@@ -38,7 +39,7 @@ from tools import passive_drive_capture as passive  # noqa: E402
 
 CHANNEL: str | None = None
 C_CAN_BITRATE = 500_000
-IGNITION_ID = 0x2EF
+IGNITION_ID = broadcast_signals.IGNITION_ON.can_id
 DEFAULT_OUT_ROOT = (
     Path("/mnt/EXFAT512")
     / "obd-things"
