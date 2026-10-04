@@ -53,21 +53,24 @@ if str(REPO) not in sys.path:
 
 from projects.vehicle_data.api import TelemetryClient  # noqa: E402
 from projects.vehicle_data.broker import DEFAULT_SOCKET  # noqa: E402
+from lib import capture_pipeline as capture  # noqa: E402
+from lib.broadcast_signals import B_CAN_VOLTAGE, IGNITION_ON  # noqa: E402
 from lib.can_role_resolver import SysfsCanRoleResolver  # noqa: E402
+from lib.modules import MODULES  # noqa: E402
 from lib.timeutil import utc_now  # noqa: E402
 from projects.vehicle_data.can_interfaces import (  # noqa: E402
     PassiveInterfaceLease,
     PassiveInterfaceManager,
     PassiveInterfaceUnavailable,
 )
-from tools import passive_drive_capture as capture  # noqa: E402
+from tools.passive_drive_capture import CCAN_CORRELATION_BROADCAST_IDS  # noqa: E402
 
 
 BITRATE = 500_000
-IGNITION_ID = 0x2EF
+IGNITION_ID = IGNITION_ON.can_id
 PAIR = "6/14"
 SECONDARY_ROLES = ("b-can", "can-ch")
-SECONDARY_START_IDS = {"b-can": 0x46C, "can-ch": 0x0DA}
+SECONDARY_START_IDS = {"b-can": B_CAN_VOLTAGE.can_id, "can-ch": 0x0DA}
 SECONDARY_START_TIMEOUT_SECONDS = 5.0
 SECONDARY_START_WAIT_SECONDS = 8.0
 SECONDARY_JOIN_TIMEOUT_SECONDS = 150.0
@@ -944,9 +947,13 @@ class SecondaryRoleSupervisor:
 
 
 def priority_ids() -> frozenset[int]:
-    parser = capture.build_parser()
-    args = parser.parse_args(["--out-root", "/tmp/plan"])
-    return capture.resolved_priority_ids(args)
+    # The recorder always uses the CLI's default ccan-correlation profile.
+    # Keep its broadcast table authoritative without depending on its parser.
+    selected = set(CCAN_CORRELATION_BROADCAST_IDS)
+    for module in MODULES.values():
+        if module.bus == "c-can":
+            selected.update((module.txid, module.rxid))
+    return frozenset(selected)
 
 
 def validate_dependencies(
