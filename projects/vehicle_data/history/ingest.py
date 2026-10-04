@@ -595,6 +595,95 @@ class IngestMixin(ValidationMixin):
             )
         return previously_seen - placeholders
 
+    def _ingest_interface(
+        self,
+        *,
+        role: str,
+        payload: Mapping[str, object],
+        captured_us: int,
+        snapshot_id: int,
+    ) -> None:
+        topology = payload.get("topology")
+        topology = topology if isinstance(topology, Mapping) else {}
+        health, reason = self._interface_health(payload)
+        bitrate = payload.get("bitrate")
+        if not isinstance(bitrate, int) or isinstance(bitrate, bool) or bitrate <= 0:
+            bitrate = None
+        self._conn.execute(
+            """
+            INSERT INTO interface_samples(
+                snapshot_id,role,captured_us,channel,usb_serial,bus,
+                adapter_present,up,bitrate,listen_only,controller_state,
+                topology_usable,health,reason
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                snapshot_id,
+                role,
+                captured_us,
+                payload.get("channel") if isinstance(payload.get("channel"), str) else None,
+                payload.get("usb_serial") if isinstance(payload.get("usb_serial"), str) else None,
+                topology.get("bus") if isinstance(topology.get("bus"), str) else None,
+                _bool_db(payload.get("adapter_present")),
+                _bool_db(payload.get("up")),
+                bitrate,
+                _bool_db(payload.get("listen_only")),
+                (
+                    payload.get("controller_state")
+                    if isinstance(payload.get("controller_state"), str)
+                    else None
+                ),
+                _bool_db(topology.get("usable")),
+                health,
+                reason,
+            ),
+        )
+        dev_id = payload.get("usb_dev_id")
+        if not isinstance(dev_id, int) or isinstance(dev_id, bool) or dev_id < 0:
+            dev_id = None
+        self._conn.execute(
+            """
+            INSERT INTO interface_role_details(
+                snapshot_id,role,resolution,role_reason,detail,usb_dev_id,
+                topology_generation
+            ) VALUES(?,?,?,?,?,?,?)
+            """,
+            (
+                snapshot_id,
+                role,
+                (
+                    payload.get("resolution")
+                    if isinstance(payload.get("resolution"), str)
+                    else None
+                ),
+                (
+                    payload.get("role_reason")
+                    if isinstance(payload.get("role_reason"), str)
+                    else None
+                ),
+                (
+                    payload.get("detail")
+                    if isinstance(payload.get("detail"), str)
+                    else None
+                ),
+                dev_id,
+                (
+                    payload.get("topology_generation")
+                    if isinstance(payload.get("topology_generation"), str)
+                    else None
+                ),
+            ),
+        )
+        gap = None if health == "healthy" else (health, reason)
+        self._update_gap(
+            table="interface_gaps",
+            key_column="role",
+            key=role,
+            gap=gap,
+            captured_us=captured_us,
+            snapshot_id=snapshot_id,
+        )
+
     def _ingest_interfaces(
         self,
         snapshot: Mapping[str, object],
@@ -643,83 +732,9 @@ class IngestMixin(ValidationMixin):
                 snapshot_id=snapshot_id,
             )
         for role, payload in interfaces.items():
-            topology = payload.get("topology")
-            topology = topology if isinstance(topology, Mapping) else {}
-            health, reason = self._interface_health(payload)
-            bitrate = payload.get("bitrate")
-            if not isinstance(bitrate, int) or isinstance(bitrate, bool) or bitrate <= 0:
-                bitrate = None
-            self._conn.execute(
-                """
-                INSERT INTO interface_samples(
-                    snapshot_id,role,captured_us,channel,usb_serial,bus,
-                    adapter_present,up,bitrate,listen_only,controller_state,
-                    topology_usable,health,reason
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                """,
-                (
-                    snapshot_id,
-                    role,
-                    captured_us,
-                    payload.get("channel") if isinstance(payload.get("channel"), str) else None,
-                    payload.get("usb_serial") if isinstance(payload.get("usb_serial"), str) else None,
-                    topology.get("bus") if isinstance(topology.get("bus"), str) else None,
-                    _bool_db(payload.get("adapter_present")),
-                    _bool_db(payload.get("up")),
-                    bitrate,
-                    _bool_db(payload.get("listen_only")),
-                    (
-                        payload.get("controller_state")
-                        if isinstance(payload.get("controller_state"), str)
-                        else None
-                    ),
-                    _bool_db(topology.get("usable")),
-                    health,
-                    reason,
-                ),
-            )
-            dev_id = payload.get("usb_dev_id")
-            if not isinstance(dev_id, int) or isinstance(dev_id, bool) or dev_id < 0:
-                dev_id = None
-            self._conn.execute(
-                """
-                INSERT INTO interface_role_details(
-                    snapshot_id,role,resolution,role_reason,detail,usb_dev_id,
-                    topology_generation
-                ) VALUES(?,?,?,?,?,?,?)
-                """,
-                (
-                    snapshot_id,
-                    role,
-                    (
-                        payload.get("resolution")
-                        if isinstance(payload.get("resolution"), str)
-                        else None
-                    ),
-                    (
-                        payload.get("role_reason")
-                        if isinstance(payload.get("role_reason"), str)
-                        else None
-                    ),
-                    (
-                        payload.get("detail")
-                        if isinstance(payload.get("detail"), str)
-                        else None
-                    ),
-                    dev_id,
-                    (
-                        payload.get("topology_generation")
-                        if isinstance(payload.get("topology_generation"), str)
-                        else None
-                    ),
-                ),
-            )
-            gap = None if health == "healthy" else (health, reason)
-            self._update_gap(
-                table="interface_gaps",
-                key_column="role",
-                key=role,
-                gap=gap,
+            self._ingest_interface(
+                role=role,
+                payload=payload,
                 captured_us=captured_us,
                 snapshot_id=snapshot_id,
             )
