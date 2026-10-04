@@ -350,18 +350,8 @@ class RelativeMixin:
             },
         }
 
-    def _relative_core(
-        self,
-        rule: WarningRule,
-        tick: _Tick,
-        *,
-        refresh: bool,
-    ) -> dict[str, object]:
-        """Evidence for one relative rule; the caller decides the state."""
-
-        at = tick.at
-        base = self._base(rule)
-        empty = {
+    def _relative_empty(self, rule: WarningRule) -> dict[str, object]:
+        return {
             "baseline_regime": None,
             "regime_dimensions": self._dimension_names(rule),
             "baseline": None,
@@ -378,6 +368,14 @@ class RelativeMixin:
             },
             "corroborators": [],
         }
+
+    def _relative_sample_context(
+        self,
+        rule: WarningRule,
+        tick: _Tick,
+        base: Mapping[str, object], empty: Mapping[str, object],
+    ) -> dict[str, object]:
+        at = tick.at
         sample = self._latest(tick, rule.metric)
         if sample is None or not _numeric(sample.get("value")):
             return {"terminal": {
@@ -463,36 +461,26 @@ class RelativeMixin:
                 "regime": sample.get("regime"),
                 "plausibility": plausibility,
             }, "sample": sample}
-        # Only completed buckets before the current time can train a baseline.
-        # The current trip is filtered again by the baseline query.
-        if refresh:
-            self.historian.refresh_rollups(through=at)
-        ror = (
-            self._rate_of_rise(rule, sample, series)
-            if rule.rate_of_rise is not None
-            else None
-        )
-        baseline, conditioning = self._relative_baseline(
-            rule, sample, tick, phase=phase, phase_index=phase_index
-        )
-        result: dict[str, object] = {
+        return {
             "sample": sample,
             "current": current,
             "phase": phase,
+            "phase_index": phase_index,
+            "series": series,
             "plausibility": plausibility,
-            "ror": ror,
-            "baseline": baseline,
-            "conditioning": conditioning,
         }
-        shortfall = self._baseline_shortfall(
-            baseline,
-            buckets=rule.minimum_baseline_buckets,
-            trips=rule.minimum_baseline_trips,
-        )
-        if shortfall is not None:
-            result.update(kind="insufficient", shortfall=shortfall)
-            return result
-        assert baseline is not None
+
+    def _relative_evaluated_core(
+        self,
+        rule: WarningRule,
+        tick: _Tick,
+        context: Mapping[str, object],
+        result: dict[str, object],
+        baseline: BaselineStats,
+    ) -> dict[str, object]:
+        sample = context["sample"]
+        series = context["series"]
+        phase_index = context["phase_index"]
         threshold = _threshold(
             baseline,
             mad_multiplier=rule.mad_multiplier,
@@ -536,7 +524,7 @@ class RelativeMixin:
             self._corroborate(
                 definition,
                 primary_regime=str(sample["regime"]),
-                at=at,
+                at=tick.at,
                 lookback_days=rule.lookback_days,
                 minimum_baseline_buckets=rule.minimum_baseline_buckets,
                 minimum_baseline_trips=rule.minimum_baseline_trips,
@@ -559,6 +547,68 @@ class RelativeMixin:
             **runs,
         )
         return result
+
+    def _relative_baseline_core(
+        self,
+        rule: WarningRule,
+        tick: _Tick,
+        context: Mapping[str, object],
+        *,
+        refresh: bool,
+    ) -> dict[str, object]:
+        sample = context["sample"]
+        series = context["series"]
+        phase = context["phase"]
+        phase_index = context["phase_index"]
+        # Only completed buckets before the current time can train a baseline.
+        # The current trip is filtered again by the baseline query.
+        if refresh:
+            self.historian.refresh_rollups(through=tick.at)
+        ror = (
+            self._rate_of_rise(rule, sample, series)
+            if rule.rate_of_rise is not None
+            else None
+        )
+        baseline, conditioning = self._relative_baseline(
+            rule, sample, tick, phase=phase, phase_index=phase_index
+        )
+        result: dict[str, object] = {
+            "sample": sample,
+            "current": context["current"],
+            "phase": phase,
+            "plausibility": context["plausibility"],
+            "ror": ror,
+            "baseline": baseline,
+            "conditioning": conditioning,
+        }
+        shortfall = self._baseline_shortfall(
+            baseline,
+            buckets=rule.minimum_baseline_buckets,
+            trips=rule.minimum_baseline_trips,
+        )
+        if shortfall is not None:
+            result.update(kind="insufficient", shortfall=shortfall)
+            return result
+        assert baseline is not None
+        return self._relative_evaluated_core(rule, tick, context, result, baseline)
+
+    def _relative_core(
+        self,
+        rule: WarningRule,
+        tick: _Tick,
+        *,
+        refresh: bool,
+    ) -> dict[str, object]:
+        """Evidence for one relative rule; the caller decides the state."""
+
+        base = self._base(rule)
+        empty = self._relative_empty(rule)
+        context = self._relative_sample_context(rule, tick, base, empty)
+        if "terminal" in context:
+            return context
+        return self._relative_baseline_core(
+            rule, tick, context, refresh=refresh
+        )
 
     def _relative_payload(
         self,
