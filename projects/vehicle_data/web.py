@@ -29,7 +29,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from projects.vehicle_data.api import MAX_REQUEST_BYTES, TelemetryClient
-from projects.vehicle_data.http_common import broker_unavailable, stream_snapshots, web_flags
+from projects.vehicle_data.http_common import broker_unavailable, route_name, stream_snapshots, web_flags
 from projects.vehicle_data.warning_chat import (
     DEFAULT_SOCKET as DEFAULT_WARNING_CHAT_SOCKET, MAX_BODY as MAX_WARNING_CHAT_BYTES,
 )
@@ -112,77 +112,83 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
                 response["status"]["web"] = web_status
         return self._json(status, response)
 
-    def do_GET(self):
-        path = self.path.split("?", 1)[0]
-        if path.startswith("/v1/assistant/"):
-            return self._assistant_request("GET", path)
-        if path == "/v1/events" or path.startswith("/v1/events/"):
-            return self._broker_request("GET", self.path)
-        if path in (
-            "/v1/status",
-            "/v1/snapshot",
-            "/v1/history",
-            "/v1/health",
-            "/v1/diagnostics/dtcs",
-            "/v1/maintenance",
-        ):
-            return self._broker_request("GET", path)
-        metric_prefix = "/v1/metrics/"
-        if (
-            path == "/v1/metrics"
-            or (
-                path.startswith(metric_prefix)
-                and path[len(metric_prefix):]
-                and "/" not in path[len(metric_prefix):]
-            )
-        ):
-            return self._broker_request("GET", path)
-        if path == "/v1/stream":
-            return self._stream()
-        if path == "/v1/diagnostics/dtc-jobs/current":
-            if self.server.dtc_controller is None:
-                return self._json(
-                    403,
-                    {
-                        "available": False,
-                        "reason": "dtc_jobs_disabled",
-                        "detail": "this listener is cache-only",
-                    },
-                )
-            try:
-                return self._json(200, self.server.dtc_controller.status())
-            except (OSError, RuntimeError, ValueError) as exc:
-                return self._json(
-                    503,
-                    {
-                        "available": False,
-                        "reason": "dtc_job_status_unavailable",
-                        "detail": str(exc),
-                    },
-                )
+    GET_ROUTES = (
+        (r"/v1/assistant/.*", "_assistant_get"),
+        (r"/v1/events(?:/.*)?", "_event_get"),
+        (r"/v1/(?:status|snapshot|history|health|diagnostics/dtcs|maintenance)", "_proxy_get"),
+        (r"/v1/metrics(?:/[^/]+)?", "_proxy_get"),
+        (r"/v1/stream", "_stream_get"),
+        (r"/v1/diagnostics/dtc-jobs/current", "_dtc_current"),
+    )
+    POST_ROUTES = (
+        (r"/v1/assistant/.*", "_assistant_post"),
+        (r"/v1/events/.*", "_event_post"),
+        (r"/v1/maintenance/oil-changes", "_maintenance_post"),
+        (r"/v1/diagnostics/dtc-jobs(?:/current/cancel)?", "_dtc_job_post"),
+        (r"/v1/acquisitions/battery\.voltage", "_acquisition_post"),
+    )
+
+    def _not_found(self, path: str) -> None:
         return self._json(
             404,
             {"available": False, "reason": "not_found", "detail": path},
         )
 
+    def do_GET(self):
+        path = self.path.split("?", 1)[0]
+        name = route_name(path, self.GET_ROUTES)
+        if name is None:
+            return self._not_found(path)
+        return getattr(self, name)(path)
+
+    def _proxy_get(self, path: str) -> None:
+        return self._broker_request("GET", path)
+
+    def _event_get(self, path: str) -> None:
+        return self._broker_request("GET", self.path)
+
+    def _assistant_get(self, path: str) -> None:
+        return self._assistant_request("GET", path)
+
+    def _stream_get(self, path: str) -> None:
+        return self._stream()
+
+    def _dtc_current(self, path: str) -> None:
+        if self.server.dtc_controller is None:
+            return self._json(
+                403,
+                {
+                    "available": False,
+                    "reason": "dtc_jobs_disabled",
+                    "detail": "this listener is cache-only",
+                },
+            )
+        try:
+            return self._json(200, self.server.dtc_controller.status())
+        except (OSError, RuntimeError, ValueError) as exc:
+            return self._json(
+                503,
+                {
+                    "available": False,
+                    "reason": "dtc_job_status_unavailable",
+                    "detail": str(exc),
+                },
+            )
+
     def do_POST(self):
         path = self.path.split("?", 1)[0]
-        if path.startswith("/v1/assistant/"):
-            return self._assistant_request("POST", path)
-        if path.startswith("/v1/events/"):
-            return self._maintenance_post(self.path)
-        if path == "/v1/maintenance/oil-changes":
-            return self._maintenance_post(path)
-        if path in (
-            "/v1/diagnostics/dtc-jobs",
-            "/v1/diagnostics/dtc-jobs/current/cancel",
-        ):
-            return self._dtc_job_post(path)
-        if path != "/v1/acquisitions/battery.voltage":
-            return self._json(
-                404,
-                {"available": False, "reason": "not_found", "detail": path},
-            )
+        name = route_name(path, self.POST_ROUTES)
+        if name is None:
+            return self._not_found(path)
+        return getattr(self, name)(path)
+
+    def _assistant_post(self, path: str) -> None:
+        return self._assistant_request("POST", path)
+
+    def _event_post(self, path: str) -> None:
+        return self._maintenance_post(self.path)
+
+    def _acquisition_post(self, path: str) -> None:
         if not self.server.allow_acquisitions:
             return self._json(
                 403,

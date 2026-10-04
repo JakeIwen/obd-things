@@ -46,7 +46,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from projects.vehicle_data import web as base  # noqa: E402
-from projects.vehicle_data.http_common import broker_unavailable, stream_snapshots, web_flags
+from projects.vehicle_data.http_common import broker_unavailable, route_name, stream_snapshots, web_flags
 
 DEFAULT_STATIC_ROOT = pathlib.Path(__file__).with_name("dashboard") / "dist"
 DEFAULT_PORT = 8765
@@ -577,18 +577,32 @@ class DashboardHandler(base.TelemetryWebHandler):
 
     # -- routes ----------------------------------------------------------
 
+    DASHBOARD_GET_ROUTES = (
+        (r"/v2/stream", "_lite_stream_get"),
+        (r"/v2/summary", "_summary_get"),
+        (r"/v1/snapshot", "_snapshot_get"),
+        (r"/v[12]/.*", "_base_get"),
+    )
+
     def do_GET(self):
         self._note_user_agent()
         path = self.path.split("?", 1)[0]
-        if path == "/v2/stream":
-            return self._stream_lite()
-        if path == "/v2/summary":
-            return self._summary()
-        if path == "/v1/snapshot":
-            return self._snapshot()
-        if path.startswith("/v1/") or path.startswith("/v2/"):
-            return super().do_GET()
-        return self._serve_static(path)
+        name = route_name(path, self.DASHBOARD_GET_ROUTES)
+        if name is None:
+            return self._serve_static(path)
+        return getattr(self, name)(path)
+
+    def _lite_stream_get(self, path: str) -> None:
+        return self._stream_lite()
+
+    def _summary_get(self, path: str) -> None:
+        return self._summary()
+
+    def _snapshot_get(self, path: str) -> None:
+        return self._snapshot()
+
+    def _base_get(self, path: str) -> None:
+        return super().do_GET()
 
     def do_HEAD(self):
         self._note_user_agent()

@@ -18,6 +18,7 @@ from projects.vehicle_data.http_common import (
     MAX_REQUEST_BYTES,
     MAX_OBSERVATION_QUEUE_SECONDS,
     OBSERVATION_DEADLINE_HEADER,
+    route_name,
 )
 
 
@@ -43,64 +44,59 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
             return
 
-    def do_GET(self):
-        path = self.path.split("?", 1)[0]
-        if path == "/v1/events" or path.startswith("/v1/events/"):
-            return self._json(*self.broker.event_request("GET", self.path))
-        if path == "/v1/status":
-            return self._json(200, self.broker.status_response())
-        if path == "/v1/snapshot":
-            return self._json(200, self.broker.snapshot_response())
-        if path == "/v1/history":
-            return self._json(200, self.broker.cached_history_response())
-        if path == "/v1/health":
-            return self._json(200, self.broker.cached_health_response())
-        if path == "/v1/diagnostics/dtcs":
-            return self._json(200, self.broker.cached_dtc_response())
-        if path == "/v1/maintenance":
-            return self._json(200, self.broker.maintenance_response())
-        if path == "/v1/metrics":
-            return self._json(200, self.broker.list_metrics())
-        prefix = "/v1/metrics/"
-        if path.startswith(prefix) and "/" not in path[len(prefix):]:
-            metric = path[len(prefix):]
-            payload = self.broker.metric_response(metric)
-            return self._json(
-                200 if payload.get("reason") != "unknown_metric" else 404,
-                payload,
-            )
+    GET_PRODUCTS = {
+        "/v1/status": "status_response",
+        "/v1/snapshot": "snapshot_response",
+        "/v1/history": "cached_history_response",
+        "/v1/health": "cached_health_response",
+        "/v1/diagnostics/dtcs": "cached_dtc_response",
+        "/v1/maintenance": "maintenance_response",
+        "/v1/metrics": "list_metrics",
+    }
+    GET_ROUTES = (
+        (r"/v1/events(?:/.*)?", "_event_get"),
+        # The broker (unlike the web proxy) accepts an empty metric name.
+        (r"/v1/metrics/[^/]*", "_metric_get"),
+    )
+    POST_ROUTES = (
+        (r"/v1/events/.*", "_event_post"),
+        (r"/v1/acquisitions/[^/]+", "_acquisition_post"),
+        (r"/v1/observations/[^/]+", "_observation_post"),
+        (r"/v1/maintenance/oil-changes", "_oil_change_post"),
+    )
+
+    def _not_found(self, path: str) -> None:
         return self._json(
             404,
             {"available": False, "reason": "not_found", "detail": path},
         )
 
+    def do_GET(self):
+        path = self.path.split("?", 1)[0]
+        product = self.GET_PRODUCTS.get(path)
+        if product is not None:
+            return self._json(200, getattr(self.broker, product)())
+        name = route_name(path, self.GET_ROUTES)
+        if name is None:
+            return self._not_found(path)
+        return getattr(self, name)(path)
+
+    def _event_get(self, path: str) -> None:
+        return self._json(*self.broker.event_request("GET", self.path))
+
+    def _metric_get(self, path: str) -> None:
+        metric = path[len("/v1/metrics/"):]
+        payload = self.broker.metric_response(metric)
+        return self._json(
+            200 if payload.get("reason") != "unknown_metric" else 404,
+            payload,
+        )
+
     def do_POST(self):
         path = self.path.split("?", 1)[0]
-        acquisition_prefix = "/v1/acquisitions/"
-        observation_prefix = "/v1/observations/"
-        if path.startswith("/v1/events/"):
-            request_kind = "event"
-        elif (
-            path.startswith(acquisition_prefix)
-            and path[len(acquisition_prefix):]
-            and "/" not in path[len(acquisition_prefix):]
-        ):
-            request_kind = "acquisition"
-            metric = path[len(acquisition_prefix):]
-        elif (
-            path.startswith(observation_prefix)
-            and path[len(observation_prefix):]
-            and "/" not in path[len(observation_prefix):]
-        ):
-            request_kind = "observation"
-            metric = path[len(observation_prefix):]
-        elif path == "/v1/maintenance/oil-changes":
-            request_kind = "oil_change"
-        else:
-            return self._json(
-                404,
-                {"available": False, "reason": "not_found", "detail": path},
-            )
+        name = route_name(path, self.POST_ROUTES)
+        if name is None:
+            return self._not_found(path)
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -132,102 +128,113 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
                     "detail": "body must be one JSON object",
                 },
             )
-        if request_kind == "event":
-            return self._json(*self.broker.event_request("POST", self.path, payload))
-        if request_kind == "oil_change":
-            try:
-                record = self.broker.record_oil_change(payload)
-                return self._json(201, {"available": True, "record": record})
-            except (TypeError, ValueError) as exc:
-                return self._json(400, {"available": False, "detail": str(exc)})
-            except OSError as exc:
-                return self._json(503, {"available": False, "detail": f"Service record was not saved: {exc}"})
-        if request_kind == "acquisition":
-            allowed_mode = (
-                isinstance(payload, dict)
-                and set(payload) == {"mode"}
-                and (
-                    payload.get("mode") == "passive"
-                    or (
-                        metric == "battery.voltage"
-                        and payload.get("mode") == "wake_if_asleep"
-                    )
+        return getattr(self, name)(path, payload)
+
+    def _event_post(self, path: str, payload: Any) -> None:
+        return self._json(*self.broker.event_request("POST", self.path, payload))
+
+    def _oil_change_post(self, path: str, payload: Any) -> None:
+        try:
+            record = self.broker.record_oil_change(payload)
+            return self._json(201, {"available": True, "record": record})
+        except (TypeError, ValueError) as exc:
+            return self._json(400, {"available": False, "detail": str(exc)})
+        except OSError as exc:
+            return self._json(503, {"available": False, "detail": f"Service record was not saved: {exc}"})
+
+    def _acquisition_post(self, path: str, payload: Any) -> None:
+        metric = path[len("/v1/acquisitions/"):]
+        allowed_mode = (
+            isinstance(payload, dict)
+            and set(payload) == {"mode"}
+            and (
+                payload.get("mode") == "passive"
+                or (
+                    metric == "battery.voltage"
+                    and payload.get("mode") == "wake_if_asleep"
                 )
             )
-            if (
-                not allowed_mode
-            ):
-                return self._json(
-                    400,
-                    {
-                        "available": False,
-                        "reason": "invalid_request",
-                        "detail": (
-                            "body must contain one approved local acquisition "
-                            "mode; wake_if_asleep is restricted to battery.voltage"
-                        ),
-                    },
-                )
-            result = self.broker.acquire(metric, payload["mode"])
-        else:
-            required = {"value", "unit", "source", "bus", "quality"}
-            if not isinstance(payload, dict) or set(payload) != required:
-                return self._json(
-                    400,
-                    {
-                        "available": False,
-                        "reason": "invalid_request",
-                        "detail": (
-                            "observation body must contain exactly value, "
-                            "unit, source, bus, and quality"
-                        ),
-                    },
-                )
-            raw_deadline = self.headers.get(OBSERVATION_DEADLINE_HEADER)
-            try:
-                deadline = float(raw_deadline) if raw_deadline is not None else math.nan
-            except ValueError:
-                deadline = math.nan
-            now = time.monotonic()
-            if not math.isfinite(deadline):
-                return self._json(
-                    400,
-                    {
-                        "available": False,
-                        "reason": "invalid_request",
-                        "detail": (
-                            f"{OBSERVATION_DEADLINE_HEADER} must contain one "
-                            "finite local monotonic deadline"
-                        ),
-                    },
-                )
-            if deadline < now:
-                return self._json(
-                    408,
-                    {
-                        "metric": metric,
-                        "available": False,
-                        "reason": "observation_expired",
-                        "detail": (
-                            "the local publication waited too long before the "
-                            "serialized broker could receive it"
-                        ),
-                    },
-                )
-            if deadline - now > MAX_OBSERVATION_QUEUE_SECONDS:
-                return self._json(
-                    400,
-                    {
-                        "metric": metric,
-                        "available": False,
-                        "reason": "invalid_request",
-                        "detail": (
-                            "observation deadline exceeds the broker's bounded "
-                            "local queue allowance"
-                        ),
-                    },
-                )
-            result = self.broker.publish_observation(metric, **payload)
+        )
+        if (
+            not allowed_mode
+        ):
+            return self._json(
+                400,
+                {
+                    "available": False,
+                    "reason": "invalid_request",
+                    "detail": (
+                        "body must contain one approved local acquisition "
+                        "mode; wake_if_asleep is restricted to battery.voltage"
+                    ),
+                },
+            )
+        result = self.broker.acquire(metric, payload["mode"])
+        return self._acquisition_response(metric, result)
+
+    def _observation_post(self, path: str, payload: Any) -> None:
+        metric = path[len("/v1/observations/"):]
+        required = {"value", "unit", "source", "bus", "quality"}
+        if not isinstance(payload, dict) or set(payload) != required:
+            return self._json(
+                400,
+                {
+                    "available": False,
+                    "reason": "invalid_request",
+                    "detail": (
+                        "observation body must contain exactly value, "
+                        "unit, source, bus, and quality"
+                    ),
+                },
+            )
+        raw_deadline = self.headers.get(OBSERVATION_DEADLINE_HEADER)
+        try:
+            deadline = float(raw_deadline) if raw_deadline is not None else math.nan
+        except ValueError:
+            deadline = math.nan
+        now = time.monotonic()
+        if not math.isfinite(deadline):
+            return self._json(
+                400,
+                {
+                    "available": False,
+                    "reason": "invalid_request",
+                    "detail": (
+                        f"{OBSERVATION_DEADLINE_HEADER} must contain one "
+                        "finite local monotonic deadline"
+                    ),
+                },
+            )
+        if deadline < now:
+            return self._json(
+                408,
+                {
+                    "metric": metric,
+                    "available": False,
+                    "reason": "observation_expired",
+                    "detail": (
+                        "the local publication waited too long before the "
+                        "serialized broker could receive it"
+                    ),
+                },
+            )
+        if deadline - now > MAX_OBSERVATION_QUEUE_SECONDS:
+            return self._json(
+                400,
+                {
+                    "metric": metric,
+                    "available": False,
+                    "reason": "invalid_request",
+                    "detail": (
+                        "observation deadline exceeds the broker's bounded "
+                        "local queue allowance"
+                    ),
+                },
+            )
+        result = self.broker.publish_observation(metric, **payload)
+        return self._acquisition_response(metric, result)
+
+    def _acquisition_response(self, metric: str, result) -> None:
         definition = self.broker.definitions.get(metric)
         stale_after = definition.stale_after_seconds if definition else 0
         response = result.as_dict(
