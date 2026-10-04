@@ -189,21 +189,12 @@ class IngestMixin(ValidationMixin):
             )
         return int(row["id"])
 
-    def ingest_snapshot(
+    def _snapshot_ingest_context(
         self,
         snapshot: Mapping[str, object],
-        *,
-        captured_at: datetime | str | None = None,
-        ingest_key: str | None = None,
-    ) -> IngestResult:
-        """Validate and atomically ingest one broker snapshot.
-
-        ``captured_at`` is the historian receipt/generation time, never a
-        substitute for each metric's own ``observed_at``.  When omitted, the
-        web-delivery wall timestamp is used; a direct broker snapshot falls
-        back to the current UTC time.
-        """
-
+        captured_at: datetime | str | None,
+        ingest_key: str | None,
+    ) -> tuple[str | None, int | None, int, str, str]:
         if not isinstance(snapshot, Mapping):
             raise SnapshotValidationError("snapshot must be an object")
         instance, sequence, generated_ms = self._delivery(snapshot)
@@ -223,8 +214,16 @@ class IngestMixin(ValidationMixin):
                 ingest_key = f"captured:{captured_us}"
         if not isinstance(ingest_key, str) or not ingest_key.strip():
             raise SnapshotValidationError("ingest_key must be a nonempty string")
+        return instance, sequence, captured_us, captured_iso, ingest_key
 
-        definitions = self._parse_catalog(snapshot)
+    def _parse_snapshot_metrics(
+        self,
+        snapshot: Mapping[str, object],
+        definitions: Mapping[str, _MetricDefinition],
+    ) -> tuple[
+        dict[str, _MetricSample],
+        dict[str, tuple[str, str, str] | None],
+    ]:
         metrics_payload = snapshot.get("metrics")
         if not isinstance(metrics_payload, Mapping):
             raise SnapshotValidationError("snapshot.metrics must be an object")
@@ -265,6 +264,138 @@ class IngestMixin(ValidationMixin):
                     "observation_time_unavailable",
                     "the value lacks a valid observation time or age",
                 )
+        return samples, gap_states
+
+    def _insert_snapshot(
+        self,
+        *,
+        captured_us: int,
+        captured_iso: str,
+        ingest_key: str,
+        instance: str | None,
+        sequence: int | None,
+        definitions: Mapping[str, _MetricDefinition],
+        active: bool,
+        activity_basis: str,
+        vehicle: Mapping[str, object],
+        regime: str,
+    ) -> tuple[int | None, int]:
+        latest = self._conn.execute(
+            "SELECT captured_us FROM snapshots ORDER BY captured_us DESC LIMIT 1"
+        ).fetchone()
+        if latest is not None and captured_us <= latest["captured_us"]:
+            raise OutOfOrderSnapshotError(
+                "snapshot time must be newer than the latest successful ingest"
+            )
+        self._store_catalog(definitions, captured_us)
+        trip_id = self._resolve_trip(captured_us, active, activity_basis)
+        cursor = self._conn.execute(
+            """
+            INSERT INTO snapshots(
+                ingest_key,captured_us,captured_at,source_instance,source_sequence,
+                vehicle_state,vehicle_running,vehicle_confidence,vehicle_basis,
+                vehicle_observed_at,vehicle_age_ms,regime,trip_id
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                ingest_key,
+                captured_us,
+                captured_iso,
+                instance,
+                sequence,
+                vehicle["state"],
+                vehicle["running"],
+                vehicle["confidence"],
+                vehicle["basis"],
+                vehicle["observed_at"],
+                vehicle["age_ms"],
+                regime,
+                trip_id,
+            ),
+        )
+        snapshot_id = int(cursor.lastrowid)
+        return trip_id, snapshot_id
+
+    def _store_metric_samples(
+        self,
+        *,
+        snapshot_id: int,
+        trip_id: int | None,
+        captured_us: int,
+        samples: Mapping[str, _MetricSample],
+        regime: str,
+    ) -> None:
+        for sample in samples.values():
+            self._conn.execute(
+                """
+                INSERT INTO metric_samples(
+                    snapshot_id,trip_id,captured_us,metric,value_kind,value_num,
+                    value_text,value_bool,unit,source,bus,acquisition,interface_mode,
+                    quality,provenance,observed_us,observed_at,source_age_ms,
+                    reported_stale,freshness,regime
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    snapshot_id,
+                    trip_id,
+                    captured_us,
+                    sample.metric,
+                    sample.value_kind,
+                    sample.value_num,
+                    sample.value_text,
+                    sample.value_bool,
+                    sample.unit,
+                    sample.source,
+                    sample.bus,
+                    sample.acquisition,
+                    sample.interface_mode,
+                    sample.quality,
+                    sample.provenance,
+                    sample.observed_us,
+                    sample.observed_at,
+                    sample.source_age_ms,
+                    sample.reported_stale,
+                    sample.freshness,
+                    regime,
+                ),
+            )
+
+    def _update_metric_gaps(
+        self,
+        gap_states: Mapping[str, tuple[str, str, str] | None],
+        captured_us: int,
+        snapshot_id: int,
+    ) -> None:
+        for metric, gap in gap_states.items():
+            self._update_gap(
+                table="metric_gaps",
+                key_column="metric",
+                key=metric,
+                gap=gap,
+                captured_us=captured_us,
+                snapshot_id=snapshot_id,
+            )
+
+    def ingest_snapshot(
+        self,
+        snapshot: Mapping[str, object],
+        *,
+        captured_at: datetime | str | None = None,
+        ingest_key: str | None = None,
+    ) -> IngestResult:
+        """Validate and atomically ingest one broker snapshot.
+
+        ``captured_at`` is the historian receipt/generation time, never a
+        substitute for each metric's own ``observed_at``.  When omitted, the
+        web-delivery wall timestamp is used; a direct broker snapshot falls
+        back to the current UTC time.
+        """
+
+        instance, sequence, captured_us, captured_iso, ingest_key = (
+            self._snapshot_ingest_context(snapshot, captured_at, ingest_key)
+        )
+        definitions = self._parse_catalog(snapshot)
+        samples, gap_states = self._parse_snapshot_metrics(snapshot, definitions)
         vehicle = self._vehicle_fields(snapshot)
         active, activity_basis = self._activity_basis(samples, vehicle)
         regime = self._classify_regime(samples)
@@ -284,83 +415,26 @@ class IngestMixin(ValidationMixin):
                     metric_gap_count=self._active_gap_count("metric_gaps"),
                     interface_gap_count=self._active_gap_count("interface_gaps"),
                 )
-            latest = self._conn.execute(
-                "SELECT captured_us FROM snapshots ORDER BY captured_us DESC LIMIT 1"
-            ).fetchone()
-            if latest is not None and captured_us <= latest["captured_us"]:
-                raise OutOfOrderSnapshotError(
-                    "snapshot time must be newer than the latest successful ingest"
-                )
-            self._store_catalog(definitions, captured_us)
-            trip_id = self._resolve_trip(captured_us, active, activity_basis)
-            cursor = self._conn.execute(
-                """
-                INSERT INTO snapshots(
-                    ingest_key,captured_us,captured_at,source_instance,source_sequence,
-                    vehicle_state,vehicle_running,vehicle_confidence,vehicle_basis,
-                    vehicle_observed_at,vehicle_age_ms,regime,trip_id
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
-                """,
-                (
-                    ingest_key,
-                    captured_us,
-                    captured_iso,
-                    instance,
-                    sequence,
-                    vehicle["state"],
-                    vehicle["running"],
-                    vehicle["confidence"],
-                    vehicle["basis"],
-                    vehicle["observed_at"],
-                    vehicle["age_ms"],
-                    regime,
-                    trip_id,
-                ),
+            trip_id, snapshot_id = self._insert_snapshot(
+                captured_us=captured_us,
+                captured_iso=captured_iso,
+                ingest_key=ingest_key,
+                instance=instance,
+                sequence=sequence,
+                definitions=definitions,
+                active=active,
+                activity_basis=activity_basis,
+                vehicle=vehicle,
+                regime=regime,
             )
-            snapshot_id = int(cursor.lastrowid)
-            for sample in samples.values():
-                self._conn.execute(
-                    """
-                    INSERT INTO metric_samples(
-                        snapshot_id,trip_id,captured_us,metric,value_kind,value_num,
-                        value_text,value_bool,unit,source,bus,acquisition,interface_mode,
-                        quality,provenance,observed_us,observed_at,source_age_ms,
-                        reported_stale,freshness,regime
-                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    """,
-                    (
-                        snapshot_id,
-                        trip_id,
-                        captured_us,
-                        sample.metric,
-                        sample.value_kind,
-                        sample.value_num,
-                        sample.value_text,
-                        sample.value_bool,
-                        sample.unit,
-                        sample.source,
-                        sample.bus,
-                        sample.acquisition,
-                        sample.interface_mode,
-                        sample.quality,
-                        sample.provenance,
-                        sample.observed_us,
-                        sample.observed_at,
-                        sample.source_age_ms,
-                        sample.reported_stale,
-                        sample.freshness,
-                        regime,
-                    ),
-                )
-            for metric, gap in gap_states.items():
-                self._update_gap(
-                    table="metric_gaps",
-                    key_column="metric",
-                    key=metric,
-                    gap=gap,
-                    captured_us=captured_us,
-                    snapshot_id=snapshot_id,
-                )
+            self._store_metric_samples(
+                snapshot_id=snapshot_id,
+                trip_id=trip_id,
+                captured_us=captured_us,
+                samples=samples,
+                regime=regime,
+            )
+            self._update_metric_gaps(gap_states, captured_us, snapshot_id)
             self._ingest_interfaces(snapshot, captured_us, snapshot_id)
             self._ingest_system_health(snapshot, captured_us, snapshot_id)
             self._ingest_usb_can_monitor(snapshot, captured_us, snapshot_id)
