@@ -15,7 +15,6 @@ import argparse
 import http.server
 import ipaddress
 import json
-import os
 import pathlib
 import re
 import sys
@@ -34,9 +33,8 @@ from projects.vehicle_data.warning_chat import (
     DEFAULT_SOCKET as DEFAULT_WARNING_CHAT_SOCKET, MAX_BODY as MAX_WARNING_CHAT_BYTES,
 )
 from projects.vehicle_data.broker import DEFAULT_SOCKET
-from lib.dtc_batch import FINAL_JOB_STATES, JobStore, atomic_json
 from lib.dtc_web import (
-    ArmTokenStore,
+    DtcWebController,
     DEFAULT_ARM_PATH,
     DEFAULT_CANCEL_DIR,
     DEFAULT_CURRENT_PATH,
@@ -44,11 +42,6 @@ from lib.dtc_web import (
     DEFAULT_REQUEST_PATH,
     DtcWebAuthorizationError,
     DtcWebRequestError,
-    build_request,
-    cancel_path_for_job,
-    queue_cancel_request,
-    queue_request,
-    read_cancel_request,
 )
 
 
@@ -57,241 +50,6 @@ DEFAULT_STREAM_INTERVAL_SECONDS = 1.0
 LOOPBACK_BINDS = frozenset(("127.0.0.1", "::1", "localhost"))
 TAILSCALE_IPV4 = ipaddress.ip_network("100.64.0.0/10")
 TAILSCALE_IPV6 = ipaddress.ip_network("fd7a:115c:a1e0::/48")
-CURRENT_JOB_ID_RE = re.compile(r"dtc-web-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\Z")
-
-
-class DtcWebController:
-    """Queue and observe one fixed batch without holding active CAN privileges."""
-
-    def __init__(
-        self,
-        *,
-        arm_path: str | pathlib.Path = DEFAULT_ARM_PATH,
-        request_path: str | pathlib.Path = DEFAULT_REQUEST_PATH,
-        current_path: str | pathlib.Path = DEFAULT_CURRENT_PATH,
-        cancel_dir: str | pathlib.Path = DEFAULT_CANCEL_DIR,
-        job_root: str | pathlib.Path = DEFAULT_JOB_ROOT,
-    ) -> None:
-        self.arm_store = ArmTokenStore(arm_path)
-        self.request_path = pathlib.Path(request_path)
-        self.current_path = pathlib.Path(current_path)
-        self.cancel_dir = pathlib.Path(cancel_dir)
-        self.cancel_dir.mkdir(mode=0o700, parents=False, exist_ok=True)
-        cancel_dir_info = self.cancel_dir.stat()
-        if cancel_dir_info.st_uid != os.geteuid() or cancel_dir_info.st_mode & 0o007:
-            raise DtcWebRequestError(
-                "DTC cancel directory must be owned by the web user and private"
-            )
-        self.job_root = pathlib.Path(job_root)
-        self._lock = threading.Lock()
-
-    @staticmethod
-    def _public_job(record: dict[str, Any]) -> dict[str, Any]:
-        modules = []
-        for row in record.get("modules", []):
-            if not isinstance(row, dict):
-                continue
-            modules.append(
-                {
-                    key: row.get(key)
-                    for key in (
-                        "module_key",
-                        "logical_bus",
-                        "state",
-                        "reason",
-                        "outcome",
-                        "dtc_count",
-                    )
-                }
-            )
-        return {
-            key: record.get(key)
-            for key in (
-                "schema_version",
-                "job_id",
-                "state",
-                "created_at",
-                "updated_at",
-                "started_at",
-                "completed_at",
-                "current_bus",
-                "current_module",
-                "cancel_requested",
-                "failure",
-                "restoration_failure",
-                "progress",
-            )
-        } | {"modules": modules}
-
-    def _pointer(self) -> dict[str, Any] | None:
-        try:
-            raw = self.current_path.read_bytes()
-        except FileNotFoundError:
-            return None
-        if len(raw) > 4096:
-            raise DtcWebRequestError("current DTC job pointer is oversized")
-        try:
-            payload = json.loads(raw)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise DtcWebRequestError("current DTC job pointer is malformed") from exc
-        if not isinstance(payload, dict):
-            raise DtcWebRequestError("current DTC job pointer is malformed")
-        job_id = payload.get("job_id")
-        if not isinstance(job_id, str) or CURRENT_JOB_ID_RE.fullmatch(job_id) is None:
-            raise DtcWebRequestError("current DTC job id is invalid")
-        return payload
-
-    def _cancel_path(self, job_id: str) -> pathlib.Path:
-        return cancel_path_for_job(self.cancel_dir, job_id)
-
-    def status(self) -> dict[str, Any]:
-        with self._lock:
-            pointer = self._pointer()
-            if pointer is None:
-                return {"available": True, "enabled": True, "state": "idle", "job": None}
-            store = JobStore(self.job_root, str(pointer["job_id"]))
-            try:
-                record = store.read()
-            except FileNotFoundError:
-                record = pointer
-            if record.get("state") not in FINAL_JOB_STATES:
-                try:
-                    read_cancel_request(
-                        self._cancel_path(str(pointer["job_id"])),
-                        expected_job_id=str(pointer["job_id"]),
-                    )
-                except FileNotFoundError:
-                    pass
-                else:
-                    record = {**record, "cancel_requested": True}
-            return {
-                "available": True,
-                "enabled": True,
-                "state": record.get("state", "starting"),
-                "job": self._public_job(record),
-            }
-
-    def start(self, token: str | None = None) -> dict[str, Any]:
-        with self._lock:
-            current = self._pointer()
-            if current is not None:
-                try:
-                    state = JobStore(
-                        self.job_root, str(current["job_id"])
-                    ).read().get("state")
-                except FileNotFoundError:
-                    state = current.get("state")
-                if state == "restoration_failed":
-                    raise DtcWebRequestError(
-                        "the previous job has an unverified restoration; inspect all "
-                        "roles and clear the same-boot inhibit locally before manually "
-                        "retiring the current-job pointer"
-                    )
-                if state not in FINAL_JOB_STATES:
-                    raise DtcWebRequestError("a DTC batch is already queued or running")
-            if self.request_path.exists():
-                raise DtcWebRequestError("a DTC batch request is already queued")
-            # Origin-restricted UI confirmation authorizes the guarded request.
-            # A local arm remains optional for compatibility with older clients.
-            if token is not None:
-                self.arm_store.consume(token)
-            stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-            job_id = f"dtc-web-{stamp}-{uuid.uuid4().hex[:8]}"
-            request = build_request(job_id)
-            pointer = {
-                "schema_version": 1,
-                "job_id": job_id,
-                "state": "queued",
-                "created_at_epoch": request["created_at_epoch"],
-            }
-            atomic_json(self.current_path, pointer)
-            try:
-                queue_request(self.request_path, request)
-            except BaseException as exc:
-                atomic_json(
-                    self.current_path,
-                    {
-                        **pointer,
-                        "state": "failed",
-                        "failure": f"request queue failed: {type(exc).__name__}: {exc}",
-                    },
-                )
-                raise
-            return {
-                "available": True,
-                "enabled": True,
-                "state": "queued",
-                "job": self._public_job(pointer),
-            }
-
-    def cancel(self) -> dict[str, Any]:
-        with self._lock:
-            current = self._pointer()
-            if current is None:
-                raise DtcWebRequestError("there is no current DTC batch")
-            # If systemd has not claimed the request yet, atomically move it
-            # out of the watched name. A concurrently claimed request simply
-            # falls through to the worker's cooperative cancel flag.
-            if self.request_path.exists():
-                cancelled_path = self.request_path.with_name(
-                    f"{self.request_path.name}.cancelled-{current['job_id']}"
-                )
-                try:
-                    os.replace(self.request_path, cancelled_path)
-                except FileNotFoundError:
-                    pass
-                else:
-                    cancelled = {
-                        **current,
-                        "state": "cancelled",
-                        "cancel_requested": True,
-                        "failure": "cancelled before the worker claimed the request",
-                    }
-                    atomic_json(self.current_path, cancelled)
-                    return {
-                        "available": True,
-                        "enabled": True,
-                        "state": "cancelled",
-                        "job": self._public_job(cancelled),
-                    }
-            store = JobStore(self.job_root, str(current["job_id"]))
-            try:
-                record = store.read()
-            except FileNotFoundError:
-                queue_cancel_request(
-                    self._cancel_path(str(current["job_id"])),
-                    str(current["job_id"]),
-                )
-                return {
-                    "available": True,
-                    "enabled": True,
-                    "state": current.get("state", "starting"),
-                    "job": self._public_job(
-                        {**current, "cancel_requested": True}
-                    ),
-                }
-            if record.get("state") in FINAL_JOB_STATES:
-                raise DtcWebRequestError(f"DTC batch is already {record.get('state')}")
-            try:
-                queue_cancel_request(
-                    self._cancel_path(str(current["job_id"])),
-                    str(current["job_id"]),
-                )
-            except DtcWebRequestError:
-                # An existing request for this same job is idempotent; any
-                # malformed/stale record remains a hard failure.
-                read_cancel_request(
-                    self._cancel_path(str(current["job_id"])),
-                    expected_job_id=str(current["job_id"]),
-                )
-            return {
-                "available": True,
-                "enabled": True,
-                "state": record.get("state"),
-                "job": self._public_job(
-                    {**store.read(), "cancel_requested": True}
-                ),
-            }
 
 
 class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
