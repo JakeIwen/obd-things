@@ -30,10 +30,11 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from tools.can_capture_summary import Frame, parse_frame
+from lib import broadcast_signals
 from lib.signal_fields import SignalField, SignalFieldError
 
 
-REFERENCE_ID = 0x101
+REFERENCE_ID = broadcast_signals.VEHICLE_SPEED.can_id
 MAX_INPUT_BYTES = 2 * 1024 * 1024 * 1024
 MAX_INPUT_LINES = 20_000_000
 MAX_DISTINCT_VALUES = 4096
