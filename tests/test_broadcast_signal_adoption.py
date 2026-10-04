@@ -8,8 +8,12 @@ from types import SimpleNamespace
 from unittest import mock
 
 from lib import can_wake
+from projects.battery import bcan_voltage, ccan_voltage
+from projects.ecu_mapping import bcan_drive_recorder
 from projects.ecu_mapping import rke_front_unlock as rke
-from projects.tpms import tpms_logger
+from projects.tpms import drive_sniff, tpms_logger
+from tools import can_cross_bus_speed, can_gear_ratio_analyze
+from tools import ignition_triggered_passive_capture
 
 
 def legacy_wake_conflicts(frames):
@@ -43,6 +47,21 @@ def rpm_payloads():
     for length in range(9):
         for _ in range(256):
             yield rng.randbytes(length)
+
+
+class BroadcastConstantAdoptionTests(unittest.TestCase):
+    def test_converted_constants_retain_baseline_ids(self):
+        expected = (
+            (ccan_voltage.VOLT_ID, 0x41A),
+            (bcan_voltage.VOLT_ID, 0x46C),
+            (ignition_triggered_passive_capture.IGNITION_ID, 0x2EF),
+            (drive_sniff.IGN_BCAST, 0x2EF),
+            (bcan_drive_recorder.TRACKED_ID, 0x46C),
+            (can_gear_ratio_analyze.SHAFT_ID, 0x1F7),
+            (can_cross_bus_speed.REFERENCE_ID, 0x101),
+        )
+        for actual, baseline in expected:
+            self.assertEqual(actual, baseline)
 
 
 class WakeBroadcastAdoptionTests(unittest.TestCase):
