@@ -433,107 +433,104 @@ class RollupMixin:
             (cutoff_us,),
         ).fetchone()[0] == 1
 
-    def run_maintenance(
+    def _maintenance_not_due_result(
         self,
         *,
-        now: datetime | str | None = None,
-        force: bool = False,
-        max_rollup_passes: int | None = None,
+        now_dt: datetime,
+        retention_cutoff: int,
+        delete_before: int,
     ) -> MaintenanceResult:
-        """Roll up, then transactionally prune only cursor-covered raw rows.
-
-        A partial rollup never permits deletion.  Each raw table and the orphan
-        snapshot sweep has a hard row cap; a capped deletion reports ``partial``
-        and remains due for the next inexpensive cadence check.
-        """
-
-        now_dt = datetime.now(timezone.utc) if now is None else _utc_datetime(now, "now")
-        now_us = _to_us(now_dt)
-        retention_cutoff, delete_before = self._maintenance_cutoffs(now_us)
-        passes_limit = (
-            self.config.maintenance_max_rollup_passes
-            if max_rollup_passes is None
-            else max_rollup_passes
+        return MaintenanceResult(
+            status="not_due",
+            attempted_at=_iso(now_dt),
+            retention_cutoff_at=_iso_from_us(retention_cutoff),
+            delete_before_at=_iso_from_us(delete_before),
+            rollup_passes=0,
+            rollup_buckets=0,
+            rollup_rows=0,
+            deleted_metric_samples=0,
+            deleted_interface_samples=0,
+            deleted_snapshots=0,
+            raw_backlog=False,
+            detail="Daily raw-retention cadence has not elapsed.",
         )
-        if (
-            not isinstance(passes_limit, int)
-            or isinstance(passes_limit, bool)
-            or not 1 <= passes_limit <= 10_000
-        ):
-            raise ValueError("max_rollup_passes must be between 1 and 10000")
-        deleted = {
-            "metric_samples": 0,
-            "interface_samples": 0,
-            "snapshots": 0,
-        }
-        rollup_passes = 0
-        rollup_buckets = 0
-        rollup_rows = 0
-        with self._lock:
-            if not force and not self._maintenance_due_locked(now_us):
-                return MaintenanceResult(
-                    status="not_due",
-                    attempted_at=_iso(now_dt),
-                    retention_cutoff_at=_iso_from_us(retention_cutoff),
-                    delete_before_at=_iso_from_us(delete_before),
-                    rollup_passes=0,
-                    rollup_buckets=0,
-                    rollup_rows=0,
-                    deleted_metric_samples=0,
-                    deleted_interface_samples=0,
-                    deleted_snapshots=0,
-                    raw_backlog=False,
-                    detail="Daily raw-retention cadence has not elapsed.",
-                )
-            with self._conn:
-                state_key = f"rollup_through_us:{self.config.rollup_seconds}"
-                cursor_text = self._meta_locked(state_key)
-                cursor_us = int(cursor_text) if cursor_text is not None else None
-                while (cursor_us is None or cursor_us < delete_before) and (
-                    rollup_passes < passes_limit
-                ):
-                    rollup = self._refresh_rollups_locked(
-                        complete_end=delete_before,
-                        limit=self.config.rollup_max_buckets_per_call,
-                    )
-                    rollup_passes += 1
-                    rollup_buckets += int(rollup["buckets"])
-                    rollup_rows += int(rollup["rows"])
-                    next_cursor_text = self._meta_locked(state_key)
-                    next_cursor = (
-                        int(next_cursor_text) if next_cursor_text is not None else None
-                    )
-                    if next_cursor == cursor_us:
-                        break
-                    cursor_us = next_cursor
-                if cursor_us is None or cursor_us < delete_before:
-                    self._record_maintenance_locked(
-                        now_us=now_us,
-                        delete_before=delete_before,
-                        status="blocked_rollup_backlog",
-                        deleted=deleted,
-                        completed=False,
-                    )
-                    return MaintenanceResult(
-                        status="blocked_rollup_backlog",
-                        attempted_at=_iso(now_dt),
-                        retention_cutoff_at=_iso_from_us(retention_cutoff),
-                        delete_before_at=_iso_from_us(delete_before),
-                        rollup_passes=rollup_passes,
-                        rollup_buckets=rollup_buckets,
-                        rollup_rows=rollup_rows,
-                        deleted_metric_samples=0,
-                        deleted_interface_samples=0,
-                        deleted_snapshots=0,
-                        raw_backlog=True,
-                        detail=(
-                            "Persisted rollup cursor is short of the retention "
-                            "boundary; no raw rows were deleted."
-                        ),
-                    )
 
-                limit = self.config.maintenance_max_delete_rows_per_table
-                metric_cursor = self._conn.execute(
+    def _advance_maintenance_rollups_locked(
+        self,
+        *,
+        delete_before: int,
+        passes_limit: int,
+        rollup_passes: int,
+        rollup_buckets: int,
+        rollup_rows: int,
+    ) -> tuple[int | None, int, int, int]:
+        state_key = f"rollup_through_us:{self.config.rollup_seconds}"
+        cursor_text = self._meta_locked(state_key)
+        cursor_us = int(cursor_text) if cursor_text is not None else None
+        while (cursor_us is None or cursor_us < delete_before) and (
+            rollup_passes < passes_limit
+        ):
+            rollup = self._refresh_rollups_locked(
+                complete_end=delete_before,
+                limit=self.config.rollup_max_buckets_per_call,
+            )
+            rollup_passes += 1
+            rollup_buckets += int(rollup["buckets"])
+            rollup_rows += int(rollup["rows"])
+            next_cursor_text = self._meta_locked(state_key)
+            next_cursor = (
+                int(next_cursor_text) if next_cursor_text is not None else None
+            )
+            if next_cursor == cursor_us:
+                break
+            cursor_us = next_cursor
+        return cursor_us, rollup_passes, rollup_buckets, rollup_rows
+
+    def _blocked_rollup_maintenance_result_locked(
+        self,
+        *,
+        now_dt: datetime,
+        now_us: int,
+        retention_cutoff: int,
+        delete_before: int,
+        deleted: Mapping[str, int],
+        rollup_passes: int,
+        rollup_buckets: int,
+        rollup_rows: int,
+    ) -> MaintenanceResult:
+        self._record_maintenance_locked(
+            now_us=now_us,
+            delete_before=delete_before,
+            status="blocked_rollup_backlog",
+            deleted=deleted,
+            completed=False,
+        )
+        return MaintenanceResult(
+            status="blocked_rollup_backlog",
+            attempted_at=_iso(now_dt),
+            retention_cutoff_at=_iso_from_us(retention_cutoff),
+            delete_before_at=_iso_from_us(delete_before),
+            rollup_passes=rollup_passes,
+            rollup_buckets=rollup_buckets,
+            rollup_rows=rollup_rows,
+            deleted_metric_samples=0,
+            deleted_interface_samples=0,
+            deleted_snapshots=0,
+            raw_backlog=True,
+            detail=(
+                "Persisted rollup cursor is short of the retention "
+                "boundary; no raw rows were deleted."
+            ),
+        )
+
+    def _delete_raw_history_locked(
+        self,
+        *,
+        delete_before: int,
+        limit: int,
+        deleted: dict[str, int],
+    ) -> None:
+        metric_cursor = self._conn.execute(
                     """
                     DELETE FROM metric_samples WHERE id IN (
                         SELECT candidate.id FROM metric_samples AS candidate
@@ -578,8 +575,8 @@ class RollupMixin:
                     """,
                     (delete_before, delete_before, limit),
                 )
-                deleted["metric_samples"] = max(0, metric_cursor.rowcount)
-                interface_cursor = self._conn.execute(
+        deleted["metric_samples"] = max(0, metric_cursor.rowcount)
+        interface_cursor = self._conn.execute(
                     """
                     DELETE FROM interface_samples WHERE rowid IN (
                         SELECT rowid FROM interface_samples
@@ -588,14 +585,16 @@ class RollupMixin:
                     """,
                     (delete_before, limit),
                 )
-                deleted["interface_samples"] = max(
-                    0, interface_cursor.rowcount
-                )
-                deleted["snapshots"] = self._delete_orphan_snapshots_locked(
-                    delete_before,
-                    limit,
-                )
-                metric_backlog = bool(
+        deleted["interface_samples"] = max(
+            0, interface_cursor.rowcount
+        )
+        deleted["snapshots"] = self._delete_orphan_snapshots_locked(
+            delete_before,
+            limit,
+        )
+
+    def _raw_history_backlog_locked(self, delete_before: int) -> bool:
+        metric_backlog = bool(
                     self._conn.execute(
                         """
                         SELECT EXISTS(
@@ -642,45 +641,146 @@ class RollupMixin:
                         (delete_before, delete_before),
                     ).fetchone()[0]
                 )
-                interface_backlog = bool(
+        interface_backlog = bool(
                     self._conn.execute(
                         "SELECT EXISTS(SELECT 1 FROM interface_samples "
                         "WHERE captured_us<? LIMIT 1)",
                         (delete_before,),
                     ).fetchone()[0]
                 )
-                raw_backlog = (
-                    metric_backlog
-                    or interface_backlog
-                    or self._has_orphan_snapshots_locked(delete_before)
-                )
-                status = "partial" if raw_backlog else "completed"
-                self._record_maintenance_locked(
-                    now_us=now_us,
+        return (
+            metric_backlog
+            or interface_backlog
+            or self._has_orphan_snapshots_locked(delete_before)
+        )
+
+    def _finished_maintenance_result_locked(
+        self,
+        *,
+        now_dt: datetime,
+        now_us: int,
+        retention_cutoff: int,
+        delete_before: int,
+        deleted: Mapping[str, int],
+        rollup_passes: int,
+        rollup_buckets: int,
+        rollup_rows: int,
+        raw_backlog: bool,
+    ) -> MaintenanceResult:
+        status = "partial" if raw_backlog else "completed"
+        self._record_maintenance_locked(
+            now_us=now_us,
+            delete_before=delete_before,
+            status=status,
+            deleted=deleted,
+            completed=not raw_backlog,
+        )
+        detail = (
+            "Deletion cap reached; remaining cursor-covered raw rows "
+            "will be handled on the next cadence check."
+            if raw_backlog
+            else "Completed rollups cover all pruned raw rows."
+        )
+        return MaintenanceResult(
+            status=status,
+            attempted_at=_iso(now_dt),
+            retention_cutoff_at=_iso_from_us(retention_cutoff),
+            delete_before_at=_iso_from_us(delete_before),
+            rollup_passes=rollup_passes,
+            rollup_buckets=rollup_buckets,
+            rollup_rows=rollup_rows,
+            deleted_metric_samples=deleted["metric_samples"],
+            deleted_interface_samples=deleted["interface_samples"],
+            deleted_snapshots=deleted["snapshots"],
+            raw_backlog=raw_backlog,
+            detail=detail,
+        )
+
+    def run_maintenance(
+        self,
+        *,
+        now: datetime | str | None = None,
+        force: bool = False,
+        max_rollup_passes: int | None = None,
+    ) -> MaintenanceResult:
+        """Roll up, then transactionally prune only cursor-covered raw rows.
+
+        A partial rollup never permits deletion.  Each raw table and the orphan
+        snapshot sweep has a hard row cap; a capped deletion reports ``partial``
+        and remains due for the next inexpensive cadence check.
+        """
+
+        now_dt = datetime.now(timezone.utc) if now is None else _utc_datetime(now, "now")
+        now_us = _to_us(now_dt)
+        retention_cutoff, delete_before = self._maintenance_cutoffs(now_us)
+        passes_limit = (
+            self.config.maintenance_max_rollup_passes
+            if max_rollup_passes is None
+            else max_rollup_passes
+        )
+        if (
+            not isinstance(passes_limit, int)
+            or isinstance(passes_limit, bool)
+            or not 1 <= passes_limit <= 10_000
+        ):
+            raise ValueError("max_rollup_passes must be between 1 and 10000")
+        deleted = {
+            "metric_samples": 0,
+            "interface_samples": 0,
+            "snapshots": 0,
+        }
+        rollup_passes = 0
+        rollup_buckets = 0
+        rollup_rows = 0
+        with self._lock:
+            if not force and not self._maintenance_due_locked(now_us):
+                return self._maintenance_not_due_result(
+                    now_dt=now_dt,
+                    retention_cutoff=retention_cutoff,
                     delete_before=delete_before,
-                    status=status,
-                    deleted=deleted,
-                    completed=not raw_backlog,
                 )
-                detail = (
-                    "Deletion cap reached; remaining cursor-covered raw rows "
-                    "will be handled on the next cadence check."
-                    if raw_backlog
-                    else "Completed rollups cover all pruned raw rows."
-                )
-                return MaintenanceResult(
-                    status=status,
-                    attempted_at=_iso(now_dt),
-                    retention_cutoff_at=_iso_from_us(retention_cutoff),
-                    delete_before_at=_iso_from_us(delete_before),
+            with self._conn:
+                (
+                    cursor_us,
+                    rollup_passes,
+                    rollup_buckets,
+                    rollup_rows,
+                ) = self._advance_maintenance_rollups_locked(
+                    delete_before=delete_before,
+                    passes_limit=passes_limit,
                     rollup_passes=rollup_passes,
                     rollup_buckets=rollup_buckets,
                     rollup_rows=rollup_rows,
-                    deleted_metric_samples=deleted["metric_samples"],
-                    deleted_interface_samples=deleted["interface_samples"],
-                    deleted_snapshots=deleted["snapshots"],
+                )
+                if cursor_us is None or cursor_us < delete_before:
+                    return self._blocked_rollup_maintenance_result_locked(
+                        now_dt=now_dt,
+                        now_us=now_us,
+                        retention_cutoff=retention_cutoff,
+                        delete_before=delete_before,
+                        deleted=deleted,
+                        rollup_passes=rollup_passes,
+                        rollup_buckets=rollup_buckets,
+                        rollup_rows=rollup_rows,
+                    )
+
+                limit = self.config.maintenance_max_delete_rows_per_table
+                self._delete_raw_history_locked(
+                    delete_before=delete_before,
+                    limit=limit,
+                    deleted=deleted,
+                )
+                raw_backlog = self._raw_history_backlog_locked(delete_before)
+                return self._finished_maintenance_result_locked(
+                    now_dt=now_dt,
+                    now_us=now_us,
+                    retention_cutoff=retention_cutoff,
+                    delete_before=delete_before,
+                    deleted=deleted,
+                    rollup_passes=rollup_passes,
+                    rollup_buckets=rollup_buckets,
+                    rollup_rows=rollup_rows,
                     raw_backlog=raw_backlog,
-                    detail=detail,
                 )
 
     def maybe_run_maintenance(
