@@ -39,6 +39,7 @@ if str(REPO) not in sys.path:
 
 from lib import can_operation_state, canbus, diagnostic_safety
 from lib.can_role_resolver import SysfsCanRoleResolver
+from lib.can_runtime_route import LinkExpectation, NetdevIdentityExpectation
 from lib.modules import MODULES
 from projects.vehicle_data import (
     ccan_powertrain,
@@ -163,19 +164,11 @@ class SystemBackend:
         ):
             return False
         inventory, _issues = self.role_resolver.inventory(drivers=("gs_usb",))
-        matches = [
-            item
-            for item in inventory
-            if item.driver == "gs_usb"
-            and item.usb_vid == "1d50"
-            and item.usb_pid == "606f"
-            and item.usb_serial == self.expected_usb_serial
-            and item.dev_id == self.expected_dev_id
-        ]
-        return bool(
-            len(matches) == 1
-            and matches[0].channel == self.channel
-        )
+        return NetdevIdentityExpectation(
+            self.channel,
+            self.expected_usb_serial,
+            self.expected_dev_id,
+        ).matches_inventory(inventory)
 
     def topology(self):
         return can_operation_state.load_topology(self.channel)
@@ -210,16 +203,9 @@ class SystemBackend:
         ):
             return False
         state = self.interface_state()
-        return bool(
-            state.present
-            and state.up
-            and state.bitrate == BITRATE
-            and state.fd_enabled is False
-            and state.one_shot is False
-            and not state.listen_only
-            and state.controller_state == "ERROR-ACTIVE"
-            and state.restart_ms == restart_ms
-        )
+        return LinkExpectation(
+            BITRATE, listen_only=False, restart_ms=restart_ms,
+        ).matches(state, require_interface_state=False)
 
     def restore(self, initial: canbus.InterfaceState) -> bool:
         # A hub reset may reuse the same canN for another adapter channel.
@@ -254,17 +240,7 @@ class SystemBackend:
 
 
 def _safe_passive_state(state: object) -> bool:
-    return bool(
-        isinstance(state, canbus.InterfaceState)
-        and state.present
-        and state.up
-        and state.bitrate == BITRATE
-        and state.fd_enabled is False
-        and state.one_shot is False
-        and state.listen_only
-        and state.controller_state == "ERROR-ACTIVE"
-        and state.restart_ms == 0
-    )
+    return LinkExpectation(BITRATE, listen_only=True).matches(state)
 
 
 def _safe_active_state(state: object, initial: canbus.InterfaceState) -> bool:

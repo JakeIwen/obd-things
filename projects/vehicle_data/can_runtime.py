@@ -25,6 +25,7 @@ from typing import Callable
 
 from lib import can_handoff, can_operation_state, can_wake, canbus, diagnostic_safety
 from lib.can_role_resolver import CanRoleResolutionError
+from lib.can_runtime_route import LinkExpectation
 from projects.vehicle_data import ccan_powertrain
 from projects.vehicle_data.can_interfaces import (
     ALL_CAN_ROLES,
@@ -93,15 +94,8 @@ def configure_classical_listen_only(
         if completed.returncode != 0:
             return False
     state = canbus.interface_state(channel)
-    return bool(
-        state.present
-        and state.up
-        and state.bitrate == bitrate
-        and state.fd_enabled is False
-        and state.one_shot is False
-        and state.listen_only
-        and state.controller_state == "ERROR-ACTIVE"
-        and state.restart_ms == 0
+    return LinkExpectation(bitrate, listen_only=True).matches(
+        state, require_interface_state=False,
     )
 
 

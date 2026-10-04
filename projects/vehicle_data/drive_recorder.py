@@ -56,6 +56,7 @@ from projects.vehicle_data.broker import DEFAULT_SOCKET  # noqa: E402
 from lib import capture_pipeline as capture  # noqa: E402
 from lib.broadcast_signals import B_CAN_VOLTAGE, IGNITION_ON  # noqa: E402
 from lib.can_role_resolver import SysfsCanRoleResolver  # noqa: E402
+from lib.can_runtime_route import NetdevIdentityExpectation  # noqa: E402
 from lib.modules import MODULES  # noqa: E402
 from lib.timeutil import utc_now  # noqa: E402
 from projects.vehicle_data.can_interfaces import (  # noqa: E402
@@ -448,18 +449,12 @@ def query_interface(
     if expected_usb_serial is not None:
         resolver = role_resolver or SysfsCanRoleResolver()
         inventory, _issues = resolver.inventory(drivers=("gs_usb",))
-        matches = [
-            item
-            for item in inventory
-            if item.usb_vid == "1d50"
-            and item.usb_pid == "606f"
-            and item.usb_serial == expected_usb_serial
-            and item.dev_id == expected_dev_id
-        ]
-        if not (
-            len(matches) == 1
-            and matches[0].channel == channel
-        ):
+        if not NetdevIdentityExpectation(
+            channel,
+            expected_usb_serial,
+            expected_dev_id,
+            driver=None,  # Preserve reliance on inventory(drivers=("gs_usb",)).
+        ).matches_inventory(inventory):
             raise DriveRecorderError(
                 f"{channel} no longer matches the broker-proven {role} USB identity"
             )
