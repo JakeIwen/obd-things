@@ -15,7 +15,7 @@ import { computed } from "@preact/signals";
 import * as store from "../store.js";
 import { minuteClock, orderedIds, isHidden, monoNow } from "../app/derive.js";
 import { Card, Empty } from "../components/Card.jsx";
-import * as H from "./historySystem.helpers.js";
+import * as H from "./history.helpers.js";
 import { cruiseLines } from "./cruise.helpers.js";
 
 /** Default History cards (Trips + one per trend metric); System builds the same list for Customise. */

@@ -7,7 +7,7 @@
   "scripts": {
     "build": "node tools/build.mjs",
     "watch": "node tools/build.mjs --watch",
-    "test": "node --test test/",
+    "test": "node --test test/*.test.mjs",
     "measure": "node --experimental-websocket tools/measure.mjs"
   },
   "engines": {

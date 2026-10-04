@@ -33,7 +33,8 @@ import { Card, Empty } from "../components/Card.jsx";
 import { DRIVE_TILES } from "./Drive.jsx";
 import { PARKED_CARDS } from "./parked.helpers.js";
 import { HEALTH_CARDS } from "./health.helpers.js";
-import * as H from "./historySystem.helpers.js";
+import * as H from "./system.helpers.js";
+import { historyCards as buildHistoryCards } from "./history.helpers.js";
 
 export const SYSTEM_CARDS = H.SYSTEM_CARDS;
 
@@ -328,7 +329,7 @@ function CatalogCard() {
 // customise (fixed card)
 
 const historyCardsGate = H.createStableGate();
-const historyCards = computed(() => historyCardsGate(H.historyCards(store.summary.history.value)));
+const historyCards = computed(() => historyCardsGate(buildHistoryCards(store.summary.history.value)));
 
 /** Card lists per view, in each view's default order (ids are what the customiser stores). */
 const viewCards = computed(() => ({

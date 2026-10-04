@@ -168,6 +168,20 @@ tablet browser ──HTTP/SSE──▶ web_v2.py (:8765, subclass of web.py)
 
 ### 2.2 Frontend: Preact + signals, esbuild, no framework re-renders on the hot path
 
+History and System view models live in `src/views/history.helpers.js` and
+`src/views/system.helpers.js`; their small shared presentation utilities live in
+`src/views/view.helpers.js`. `historySystem.helpers.js` only re-exports the
+original API for existing consumers and the unchanged Node regressions.
+
+`npm test` expands `test/*.test.mjs` explicitly so Node 20 and Node 22 discover
+all tests. For a differential refactor check against another checkout, run
+`node tools/refactor-oracle.mjs OLD_CHECKOUT NEW_CHECKOUT TRACE_JSON` from the
+dashboard directory. It compares every exported History/System helper and
+formatter, pure link helpers, and the complete fake-transport callback/state
+trace; both checkouts need their pinned dependencies installed. It never
+opens a network or CAN connection. `TRACE_JSON` is optional; keep it under
+`tmp/` or the session scratch directory.
+
 - **Build.** Sources are under `dashboard/src/` and output goes to `dashboard/dist/`.
   - `dist/` is **gitignored build output**, and **`npm ci && npm run build` is the deploy step**. Node
     20 and the esbuild arm64 binary run on the Pi. `node_modules/` is gitignored.
