@@ -1013,23 +1013,13 @@ class IngestMixin(ValidationMixin):
                 snapshot_id=snapshot_id,
             )
 
-    def _ingest_usb_can_monitor(
+    def _ingest_usb_can_monitor_batch(
         self,
         snapshot: Mapping[str, object],
+        monitor: object,
         captured_us: int,
         snapshot_id: int,
-    ) -> None:
-        """Persist sub-snapshot kernel edges by stable identity.
-
-        The broker acknowledges its bounded in-memory queue only after this
-        surrounding snapshot transaction commits.  Replayed kernel events are
-        therefore harmless: ``event_id`` is immutable and the first snapshot
-        remains the authority for whether an advisory has already observed it.
-        """
-
-        monitor = snapshot.get("_usb_can_monitor")
-        if monitor is None:
-            return
+    ) -> tuple[str, str, list[object], list[object]]:
         if not isinstance(monitor, Mapping):
             raise SnapshotValidationError("_usb_can_monitor must be an object")
         if monitor.get("schema_version") != 1:
@@ -1093,7 +1083,192 @@ class IngestMixin(ValidationMixin):
                 len(events),
             ),
         )
+        return producer_instance, boot_id, events, incidents
 
+    def _usb_can_event_fields(
+        self,
+        item: object,
+        index: int,
+        boot_id: str,
+        seen_event_ids: set[str],
+        allowed_event_kinds: set[str],
+    ) -> tuple[
+        str, str, str, str, str, str, str, str, int, str, list[str], str | None
+    ]:
+        prefix = f"_usb_can_monitor.events[{index}]"
+        if not isinstance(item, Mapping):
+            raise SnapshotValidationError(f"{prefix} must be an object")
+        if item.get("schema_version") != 1:
+            raise SnapshotValidationError(f"{prefix} has unsupported schema")
+        if item.get("receive_only") is not True or item.get("hardware_action") is not False:
+            raise SnapshotValidationError(
+                f"{prefix} does not prove receive-only/no-action semantics"
+            )
+        event_id = _required_text(item.get("event_id"), f"{prefix}.event_id")
+        if (
+            not event_id.startswith("usb-can-event-v1:")
+            or len(event_id) > 128
+            or event_id in seen_event_ids
+        ):
+            raise SnapshotValidationError(f"{prefix}.event_id is invalid or repeated")
+        seen_event_ids.add(event_id)
+        kind = _required_text(item.get("kind"), f"{prefix}.kind")
+        if kind not in allowed_event_kinds:
+            raise SnapshotValidationError(f"{prefix}.kind is not allowlisted")
+        action = _required_text(item.get("action"), f"{prefix}.action")
+        if action not in ("add", "remove", "reconcile"):
+            raise SnapshotValidationError(f"{prefix}.action is invalid")
+        event_boot_id = _required_text(
+            item.get("boot_id"), f"{prefix}.boot_id"
+        )
+        if event_boot_id != boot_id:
+            raise SnapshotValidationError(
+                f"{prefix}.boot_id does not match its producer batch"
+            )
+        scope = _required_text(item.get("scope"), f"{prefix}.scope")
+        devpath = _required_text(item.get("devpath"), f"{prefix}.devpath")
+        event_source = _required_text(item.get("source"), f"{prefix}.source")
+        if event_source not in (
+            "kernel_kobject_uevent",
+            "serial_role_reconciliation",
+        ):
+            raise SnapshotValidationError(f"{prefix}.source is not allowlisted")
+        if any(
+            len(value) > maximum
+            for value, maximum in (
+                (event_boot_id, 128),
+                (scope, 320),
+                (devpath, 4096),
+                (event_source, 128),
+            )
+        ):
+            raise SnapshotValidationError(f"{prefix} contains oversized text")
+        occurred_us, occurred_at = self._usb_can_time(
+            item.get("occurred_at"), f"{prefix}.occurred_at"
+        )
+        affected = self._usb_can_serials(
+            item.get("affected_serials", []), f"{prefix}.affected_serials"
+        )
+        observed_monotonic = item.get("observed_monotonic")
+        if (
+            not isinstance(observed_monotonic, (int, float))
+            or isinstance(observed_monotonic, bool)
+            or not math.isfinite(float(observed_monotonic))
+            or float(observed_monotonic) < 0
+        ):
+            raise SnapshotValidationError(
+                f"{prefix}.observed_monotonic must be finite and non-negative"
+            )
+        kernel_seqnum = item.get("kernel_seqnum")
+        if kernel_seqnum is not None:
+            kernel_seqnum = _required_text(
+                kernel_seqnum, f"{prefix}.kernel_seqnum"
+            )
+            if len(kernel_seqnum) > 64:
+                raise SnapshotValidationError(
+                    f"{prefix}.kernel_seqnum is oversized"
+                )
+        return (
+            prefix, event_id, kind, action, event_boot_id, scope, devpath,
+            event_source, occurred_us, occurred_at, affected, kernel_seqnum,
+        )
+
+    def _usb_can_event_payload(
+        self,
+        item: Mapping[str, object],
+        prefix: str,
+    ) -> tuple[dict[str, str | None], str]:
+        optional: dict[str, str | None] = {}
+        for field, maximum in (
+            ("usb_vid", 4),
+            ("usb_pid", 4),
+            ("usb_serial", 256),
+        ):
+            value = item.get(field)
+            if value is not None:
+                value = _required_text(value, f"{prefix}.{field}")
+                if len(value) > maximum:
+                    raise SnapshotValidationError(f"{prefix}.{field} is oversized")
+            optional[field] = value
+        try:
+            payload_json = json.dumps(
+                item,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        except (TypeError, ValueError) as exc:
+            raise SnapshotValidationError(
+                f"{prefix} is not bounded JSON data: {exc}"
+            ) from None
+        if len(payload_json.encode("utf-8")) > 16 * 1024:
+            raise SnapshotValidationError(f"{prefix} JSON payload is oversized")
+        return optional, payload_json
+
+    def _store_usb_can_event(
+        self,
+        *,
+        event_id: str,
+        occurred_us: int,
+        occurred_at: str,
+        event_boot_id: str,
+        kernel_seqnum: str | None,
+        kind: str,
+        action: str,
+        scope: str,
+        devpath: str,
+        optional: Mapping[str, str | None],
+        affected: list[str],
+        event_source: str,
+        payload_json: str,
+        snapshot_id: int,
+    ) -> None:
+        existing = self._conn.execute(
+            "SELECT payload_json FROM usb_can_events WHERE event_id=?",
+            (event_id,),
+        ).fetchone()
+        if existing is not None and existing["payload_json"] != payload_json:
+            raise SnapshotValidationError(
+                f"event identity collision for {event_id!r}"
+            )
+        self._conn.execute(
+            """
+            INSERT INTO usb_can_events(
+                event_id,occurred_us,occurred_at,boot_id,kernel_seqnum,kind,
+                action,scope,devpath,usb_vid,usb_pid,usb_serial,
+                affected_serials_json,source,payload_json,
+                first_snapshot_id,last_snapshot_id
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(event_id) DO UPDATE SET
+                last_snapshot_id=excluded.last_snapshot_id
+            """,
+            (
+                event_id,
+                occurred_us,
+                occurred_at,
+                event_boot_id,
+                kernel_seqnum,
+                kind,
+                action,
+                scope,
+                devpath,
+                optional["usb_vid"],
+                optional["usb_pid"],
+                optional["usb_serial"],
+                json.dumps(affected, separators=(",", ":")),
+                event_source,
+                payload_json,
+                snapshot_id,
+                snapshot_id,
+            ),
+        )
+
+    def _ingest_usb_can_events(
+        self,
+        events: list[object],
+        boot_id: str,
+        snapshot_id: int,
+    ) -> None:
         allowed_event_kinds = {
             "usb_parent_hub_removed",
             "usb_parent_hub_added",
@@ -1105,343 +1280,348 @@ class IngestMixin(ValidationMixin):
         }
         seen_event_ids: set[str] = set()
         for index, item in enumerate(events):
-            prefix = f"_usb_can_monitor.events[{index}]"
-            if not isinstance(item, Mapping):
-                raise SnapshotValidationError(f"{prefix} must be an object")
-            if item.get("schema_version") != 1:
-                raise SnapshotValidationError(f"{prefix} has unsupported schema")
-            if item.get("receive_only") is not True or item.get("hardware_action") is not False:
-                raise SnapshotValidationError(
-                    f"{prefix} does not prove receive-only/no-action semantics"
-                )
-            event_id = _required_text(item.get("event_id"), f"{prefix}.event_id")
-            if (
-                not event_id.startswith("usb-can-event-v1:")
-                or len(event_id) > 128
-                or event_id in seen_event_ids
-            ):
-                raise SnapshotValidationError(f"{prefix}.event_id is invalid or repeated")
-            seen_event_ids.add(event_id)
-            kind = _required_text(item.get("kind"), f"{prefix}.kind")
-            if kind not in allowed_event_kinds:
-                raise SnapshotValidationError(f"{prefix}.kind is not allowlisted")
-            action = _required_text(item.get("action"), f"{prefix}.action")
-            if action not in ("add", "remove", "reconcile"):
-                raise SnapshotValidationError(f"{prefix}.action is invalid")
-            event_boot_id = _required_text(
-                item.get("boot_id"), f"{prefix}.boot_id"
+            (
+                prefix, event_id, kind, action, event_boot_id, scope, devpath,
+                event_source, occurred_us, occurred_at, affected, kernel_seqnum,
+            ) = self._usb_can_event_fields(
+                item, index, boot_id, seen_event_ids, allowed_event_kinds
             )
-            if event_boot_id != boot_id:
-                raise SnapshotValidationError(
-                    f"{prefix}.boot_id does not match its producer batch"
-                )
-            scope = _required_text(item.get("scope"), f"{prefix}.scope")
-            devpath = _required_text(item.get("devpath"), f"{prefix}.devpath")
-            event_source = _required_text(item.get("source"), f"{prefix}.source")
-            if event_source not in (
-                "kernel_kobject_uevent",
-                "serial_role_reconciliation",
-            ):
-                raise SnapshotValidationError(f"{prefix}.source is not allowlisted")
-            if any(
-                len(value) > maximum
-                for value, maximum in (
-                    (event_boot_id, 128),
-                    (scope, 320),
-                    (devpath, 4096),
-                    (event_source, 128),
-                )
-            ):
-                raise SnapshotValidationError(f"{prefix} contains oversized text")
-            occurred_us, occurred_at = self._usb_can_time(
-                item.get("occurred_at"), f"{prefix}.occurred_at"
-            )
-            affected = self._usb_can_serials(
-                item.get("affected_serials", []), f"{prefix}.affected_serials"
-            )
-            observed_monotonic = item.get("observed_monotonic")
-            if (
-                not isinstance(observed_monotonic, (int, float))
-                or isinstance(observed_monotonic, bool)
-                or not math.isfinite(float(observed_monotonic))
-                or float(observed_monotonic) < 0
-            ):
-                raise SnapshotValidationError(
-                    f"{prefix}.observed_monotonic must be finite and non-negative"
-                )
-            kernel_seqnum = item.get("kernel_seqnum")
-            if kernel_seqnum is not None:
-                kernel_seqnum = _required_text(
-                    kernel_seqnum, f"{prefix}.kernel_seqnum"
-                )
-                if len(kernel_seqnum) > 64:
-                    raise SnapshotValidationError(
-                        f"{prefix}.kernel_seqnum is oversized"
-                    )
-            optional: dict[str, str | None] = {}
-            for field, maximum in (
-                ("usb_vid", 4),
-                ("usb_pid", 4),
-                ("usb_serial", 256),
-            ):
-                value = item.get(field)
-                if value is not None:
-                    value = _required_text(value, f"{prefix}.{field}")
-                    if len(value) > maximum:
-                        raise SnapshotValidationError(f"{prefix}.{field} is oversized")
-                optional[field] = value
-            try:
-                payload_json = json.dumps(
-                    item,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    allow_nan=False,
-                )
-            except (TypeError, ValueError) as exc:
-                raise SnapshotValidationError(
-                    f"{prefix} is not bounded JSON data: {exc}"
-                ) from None
-            if len(payload_json.encode("utf-8")) > 16 * 1024:
-                raise SnapshotValidationError(f"{prefix} JSON payload is oversized")
-            existing = self._conn.execute(
-                "SELECT payload_json FROM usb_can_events WHERE event_id=?",
-                (event_id,),
-            ).fetchone()
-            if existing is not None and existing["payload_json"] != payload_json:
-                raise SnapshotValidationError(
-                    f"event identity collision for {event_id!r}"
-                )
-            self._conn.execute(
-                """
-                INSERT INTO usb_can_events(
-                    event_id,occurred_us,occurred_at,boot_id,kernel_seqnum,kind,
-                    action,scope,devpath,usb_vid,usb_pid,usb_serial,
-                    affected_serials_json,source,payload_json,
-                    first_snapshot_id,last_snapshot_id
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(event_id) DO UPDATE SET
-                    last_snapshot_id=excluded.last_snapshot_id
-                """,
-                (
-                    event_id,
-                    occurred_us,
-                    occurred_at,
-                    event_boot_id,
-                    kernel_seqnum,
-                    kind,
-                    action,
-                    scope,
-                    devpath,
-                    optional["usb_vid"],
-                    optional["usb_pid"],
-                    optional["usb_serial"],
-                    json.dumps(affected, separators=(",", ":")),
-                    event_source,
-                    payload_json,
-                    snapshot_id,
-                    snapshot_id,
-                ),
+            optional, payload_json = self._usb_can_event_payload(item, prefix)
+            self._store_usb_can_event(
+                event_id=event_id,
+                occurred_us=occurred_us,
+                occurred_at=occurred_at,
+                event_boot_id=event_boot_id,
+                kernel_seqnum=kernel_seqnum,
+                kind=kind,
+                action=action,
+                scope=scope,
+                devpath=devpath,
+                optional=optional,
+                affected=affected,
+                event_source=event_source,
+                payload_json=payload_json,
+                snapshot_id=snapshot_id,
             )
 
+    def _usb_can_incident_identity(
+        self,
+        item: object,
+        index: int,
+        producer_instance: str,
+        seen_incident_ids: set[str],
+        current_active_incident_ids: set[str],
+    ) -> tuple[
+        str, str, str, str, str, str, str, str, str, list[str], int, str, int, str
+    ]:
+        prefix = f"_usb_can_monitor.incidents[{index}]"
+        if not isinstance(item, Mapping):
+            raise SnapshotValidationError(f"{prefix} must be an object")
+        if item.get("schema_version") != 1:
+            raise SnapshotValidationError(f"{prefix} has unsupported schema")
+        incident_id = _required_text(
+            item.get("incident_id"), f"{prefix}.incident_id"
+        )
+        if (
+            not incident_id.startswith("usb-can-incident-v1:")
+            or len(incident_id) > 128
+            or incident_id in seen_incident_ids
+        ):
+            raise SnapshotValidationError(
+                f"{prefix}.incident_id is invalid or repeated"
+            )
+        seen_incident_ids.add(incident_id)
+        state = _required_text(item.get("state"), f"{prefix}.state")
+        if state not in ("active", "resolved"):
+            raise SnapshotValidationError(f"{prefix}.state is invalid")
+        if state == "active":
+            current_active_incident_ids.add(incident_id)
+        kind = _required_text(item.get("kind"), f"{prefix}.kind")
+        if kind not in (
+            "usb_parent_hub_removed",
+            "usb_can_adapter_removed",
+            "usb_can_netdev_removed",
+        ):
+            raise SnapshotValidationError(f"{prefix}.kind is invalid")
+        scope = _required_text(item.get("scope"), f"{prefix}.scope")
+        incident_source = _required_text(
+            item.get("source"), f"{prefix}.source"
+        )
+        if incident_source != "kernel_kobject_uevent":
+            raise SnapshotValidationError(f"{prefix}.source is invalid")
+        incident_producer = _required_text(
+            item.get("producer_instance"), f"{prefix}.producer_instance"
+        )
+        if incident_producer != producer_instance:
+            raise SnapshotValidationError(
+                f"{prefix}.producer_instance does not match its snapshot"
+            )
+        opened_event_id = _required_text(
+            item.get("opened_event_id"), f"{prefix}.opened_event_id"
+        )
+        last_event_id = _required_text(
+            item.get("last_event_id"), f"{prefix}.last_event_id"
+        )
+        affected = self._usb_can_serials(
+            item.get("affected_serials", []), f"{prefix}.affected_serials"
+        )
+        opened_us, opened_at = self._usb_can_time(
+            item.get("opened_at"), f"{prefix}.opened_at"
+        )
+        last_seen_us, last_seen_at = self._usb_can_time(
+            item.get("last_seen_at"), f"{prefix}.last_seen_at"
+        )
+        return (
+            prefix, incident_id, state, kind, scope, incident_source,
+            incident_producer, opened_event_id, last_event_id, affected,
+            opened_us, opened_at, last_seen_us, last_seen_at,
+        )
+
+    def _usb_can_incident_state(
+        self,
+        item: Mapping[str, object],
+        prefix: str,
+        state: str,
+        opened_us: int,
+        last_seen_us: int,
+    ) -> tuple[int | None, str | None, str | None, str | None, int, int, str]:
+        if last_seen_us < opened_us:
+            raise SnapshotValidationError(f"{prefix} predates its opening")
+        resolved_at_value = item.get("resolved_at")
+        if resolved_at_value is None:
+            resolved_us = None
+            resolved_at = None
+        else:
+            resolved_us, resolved_at = self._usb_can_time(
+                resolved_at_value, f"{prefix}.resolved_at"
+            )
+        resolution = item.get("resolution")
+        resolved_event_id = item.get("resolved_event_id")
+        if state == "resolved":
+            resolution = _required_text(resolution, f"{prefix}.resolution")
+            resolved_event_id = _required_text(
+                resolved_event_id, f"{prefix}.resolved_event_id"
+            )
+            if resolved_us is None or resolved_us < opened_us:
+                raise SnapshotValidationError(
+                    f"{prefix}.resolved_at is invalid"
+                )
+        elif any(
+            value is not None
+            for value in (resolved_us, resolution, resolved_event_id)
+        ):
+            raise SnapshotValidationError(
+                f"{prefix} active incident carries resolution fields"
+            )
+        notification_eligible = item.get("notification_eligible")
+        if type(notification_eligible) is not bool or notification_eligible != (
+            state == "active"
+        ):
+            raise SnapshotValidationError(
+                f"{prefix}.notification_eligible is inconsistent"
+            )
+        event_count = item.get("event_count")
+        reappearance_count = item.get("reappearance_count", 0)
+        if (
+            not isinstance(event_count, int)
+            or isinstance(event_count, bool)
+            or event_count < 1
+            or not isinstance(reappearance_count, int)
+            or isinstance(reappearance_count, bool)
+            or reappearance_count < 0
+        ):
+            raise SnapshotValidationError(f"{prefix} counters are invalid")
+        try:
+            payload_json = json.dumps(
+                item,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        except (TypeError, ValueError) as exc:
+            raise SnapshotValidationError(
+                f"{prefix} is not bounded JSON data: {exc}"
+            ) from None
+        if len(payload_json.encode("utf-8")) > 16 * 1024:
+            raise SnapshotValidationError(f"{prefix} JSON payload is oversized")
+        return (
+            resolved_us, resolved_at, resolution, resolved_event_id,
+            event_count, reappearance_count, payload_json,
+        )
+
+    def _store_usb_can_incident(
+        self,
+        *,
+        incident_id: str, state: str, kind: str, scope: str,
+        opened_us: int, opened_at: str,
+        last_seen_us: int, last_seen_at: str,
+        resolved_us: int | None, resolved_at: str | None,
+        resolution: str | None, affected: list[str],
+        event_count: int, reappearance_count: int,
+        opened_event_id: str, last_event_id: str,
+        resolved_event_id: str | None,
+        incident_source: str, incident_producer: str,
+        payload_json: str, snapshot_id: int, prefix: str,
+    ) -> None:
+        existing = self._conn.execute(
+            """
+            SELECT scope,opened_us,opened_event_id,affected_serials_json
+            FROM usb_can_incidents WHERE incident_id=?
+            """,
+            (incident_id,),
+        ).fetchone()
+        if existing is not None and (
+            existing["scope"] != scope
+            or int(existing["opened_us"]) != opened_us
+            or existing["opened_event_id"] != opened_event_id
+            or existing["affected_serials_json"]
+            != json.dumps(affected, separators=(",", ":"))
+        ):
+            raise SnapshotValidationError(
+                f"incident identity collision for {incident_id!r}"
+            )
+        self._conn.execute(
+            """
+            INSERT INTO usb_can_incidents(
+                incident_id,state,kind,scope,opened_us,opened_at,last_seen_us,
+                last_seen_at,resolved_us,resolved_at,resolution,
+                affected_serials_json,event_count,reappearance_count,
+                opened_event_id,last_event_id,resolved_event_id,source,
+                producer_instance,payload_json,first_snapshot_id,last_snapshot_id
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(incident_id) DO UPDATE SET
+                state=CASE
+                    WHEN usb_can_incidents.state='resolved' THEN 'resolved'
+                    ELSE excluded.state
+                END,
+                last_seen_us=MAX(usb_can_incidents.last_seen_us,excluded.last_seen_us),
+                last_seen_at=CASE
+                    WHEN excluded.last_seen_us >= usb_can_incidents.last_seen_us
+                    THEN excluded.last_seen_at ELSE usb_can_incidents.last_seen_at
+                END,
+                resolved_us=COALESCE(usb_can_incidents.resolved_us,excluded.resolved_us),
+                resolved_at=COALESCE(usb_can_incidents.resolved_at,excluded.resolved_at),
+                resolution=COALESCE(usb_can_incidents.resolution,excluded.resolution),
+                event_count=MAX(usb_can_incidents.event_count,excluded.event_count),
+                reappearance_count=MAX(
+                    usb_can_incidents.reappearance_count,
+                    excluded.reappearance_count
+                ),
+                last_event_id=excluded.last_event_id,
+                resolved_event_id=COALESCE(
+                    usb_can_incidents.resolved_event_id,
+                    excluded.resolved_event_id
+                ),
+                payload_json=CASE
+                    WHEN usb_can_incidents.state='resolved'
+                    THEN usb_can_incidents.payload_json ELSE excluded.payload_json
+                END,
+                last_snapshot_id=excluded.last_snapshot_id
+            """,
+            (
+                incident_id,
+                state,
+                kind,
+                scope,
+                opened_us,
+                opened_at,
+                last_seen_us,
+                last_seen_at,
+                resolved_us,
+                resolved_at,
+                resolution,
+                json.dumps(affected, separators=(",", ":")),
+                event_count,
+                reappearance_count,
+                opened_event_id,
+                last_event_id,
+                resolved_event_id,
+                incident_source,
+                incident_producer,
+                payload_json,
+                snapshot_id,
+                snapshot_id,
+            ),
+        )
+
+    def _ingest_usb_can_incidents(
+        self,
+        incidents: list[object],
+        producer_instance: str,
+        snapshot_id: int,
+    ) -> set[str]:
         seen_incident_ids: set[str] = set()
         current_active_incident_ids: set[str] = set()
         for index, item in enumerate(incidents):
-            prefix = f"_usb_can_monitor.incidents[{index}]"
-            if not isinstance(item, Mapping):
-                raise SnapshotValidationError(f"{prefix} must be an object")
-            if item.get("schema_version") != 1:
-                raise SnapshotValidationError(f"{prefix} has unsupported schema")
-            incident_id = _required_text(
-                item.get("incident_id"), f"{prefix}.incident_id"
+            (
+                prefix, incident_id, state, kind, scope, incident_source,
+                incident_producer, opened_event_id, last_event_id, affected,
+                opened_us, opened_at, last_seen_us, last_seen_at,
+            ) = self._usb_can_incident_identity(
+                item,
+                index,
+                producer_instance,
+                seen_incident_ids,
+                current_active_incident_ids,
             )
-            if (
-                not incident_id.startswith("usb-can-incident-v1:")
-                or len(incident_id) > 128
-                or incident_id in seen_incident_ids
-            ):
-                raise SnapshotValidationError(
-                    f"{prefix}.incident_id is invalid or repeated"
-                )
-            seen_incident_ids.add(incident_id)
-            state = _required_text(item.get("state"), f"{prefix}.state")
-            if state not in ("active", "resolved"):
-                raise SnapshotValidationError(f"{prefix}.state is invalid")
-            if state == "active":
-                current_active_incident_ids.add(incident_id)
-            kind = _required_text(item.get("kind"), f"{prefix}.kind")
-            if kind not in (
-                "usb_parent_hub_removed",
-                "usb_can_adapter_removed",
-                "usb_can_netdev_removed",
-            ):
-                raise SnapshotValidationError(f"{prefix}.kind is invalid")
-            scope = _required_text(item.get("scope"), f"{prefix}.scope")
-            incident_source = _required_text(
-                item.get("source"), f"{prefix}.source"
+            (
+                resolved_us, resolved_at, resolution, resolved_event_id,
+                event_count, reappearance_count, payload_json,
+            ) = self._usb_can_incident_state(
+                item, prefix, state, opened_us, last_seen_us
             )
-            if incident_source != "kernel_kobject_uevent":
-                raise SnapshotValidationError(f"{prefix}.source is invalid")
-            incident_producer = _required_text(
-                item.get("producer_instance"), f"{prefix}.producer_instance"
+            self._store_usb_can_incident(
+                incident_id=incident_id,
+                state=state,
+                kind=kind,
+                scope=scope,
+                opened_us=opened_us,
+                opened_at=opened_at,
+                last_seen_us=last_seen_us,
+                last_seen_at=last_seen_at,
+                resolved_us=resolved_us,
+                resolved_at=resolved_at,
+                resolution=resolution,
+                affected=affected,
+                event_count=event_count,
+                reappearance_count=reappearance_count,
+                opened_event_id=opened_event_id,
+                last_event_id=last_event_id,
+                resolved_event_id=resolved_event_id,
+                incident_source=incident_source,
+                incident_producer=incident_producer,
+                payload_json=payload_json,
+                snapshot_id=snapshot_id,
+                prefix=prefix,
             )
-            if incident_producer != producer_instance:
-                raise SnapshotValidationError(
-                    f"{prefix}.producer_instance does not match its snapshot"
-                )
-            opened_event_id = _required_text(
-                item.get("opened_event_id"), f"{prefix}.opened_event_id"
+        return current_active_incident_ids
+
+    def _ingest_usb_can_monitor(
+        self,
+        snapshot: Mapping[str, object],
+        captured_us: int,
+        snapshot_id: int,
+    ) -> None:
+        """Persist sub-snapshot kernel edges by stable identity.
+
+        The broker acknowledges its bounded in-memory queue only after this
+        surrounding snapshot transaction commits.  Replayed kernel events are
+        therefore harmless: ``event_id`` is immutable and the first snapshot
+        remains the authority for whether an advisory has already observed it.
+        """
+
+        monitor = snapshot.get("_usb_can_monitor")
+        if monitor is None:
+            return
+        producer_instance, boot_id, events, incidents = (
+            self._ingest_usb_can_monitor_batch(
+                snapshot, monitor, captured_us, snapshot_id
             )
-            last_event_id = _required_text(
-                item.get("last_event_id"), f"{prefix}.last_event_id"
-            )
-            affected = self._usb_can_serials(
-                item.get("affected_serials", []), f"{prefix}.affected_serials"
-            )
-            opened_us, opened_at = self._usb_can_time(
-                item.get("opened_at"), f"{prefix}.opened_at"
-            )
-            last_seen_us, last_seen_at = self._usb_can_time(
-                item.get("last_seen_at"), f"{prefix}.last_seen_at"
-            )
-            if last_seen_us < opened_us:
-                raise SnapshotValidationError(f"{prefix} predates its opening")
-            resolved_at_value = item.get("resolved_at")
-            if resolved_at_value is None:
-                resolved_us = None
-                resolved_at = None
-            else:
-                resolved_us, resolved_at = self._usb_can_time(
-                    resolved_at_value, f"{prefix}.resolved_at"
-                )
-            resolution = item.get("resolution")
-            resolved_event_id = item.get("resolved_event_id")
-            if state == "resolved":
-                resolution = _required_text(resolution, f"{prefix}.resolution")
-                resolved_event_id = _required_text(
-                    resolved_event_id, f"{prefix}.resolved_event_id"
-                )
-                if resolved_us is None or resolved_us < opened_us:
-                    raise SnapshotValidationError(
-                        f"{prefix}.resolved_at is invalid"
-                    )
-            elif any(
-                value is not None
-                for value in (resolved_us, resolution, resolved_event_id)
-            ):
-                raise SnapshotValidationError(
-                    f"{prefix} active incident carries resolution fields"
-                )
-            notification_eligible = item.get("notification_eligible")
-            if type(notification_eligible) is not bool or notification_eligible != (
-                state == "active"
-            ):
-                raise SnapshotValidationError(
-                    f"{prefix}.notification_eligible is inconsistent"
-                )
-            event_count = item.get("event_count")
-            reappearance_count = item.get("reappearance_count", 0)
-            if (
-                not isinstance(event_count, int)
-                or isinstance(event_count, bool)
-                or event_count < 1
-                or not isinstance(reappearance_count, int)
-                or isinstance(reappearance_count, bool)
-                or reappearance_count < 0
-            ):
-                raise SnapshotValidationError(f"{prefix} counters are invalid")
-            try:
-                payload_json = json.dumps(
-                    item,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    allow_nan=False,
-                )
-            except (TypeError, ValueError) as exc:
-                raise SnapshotValidationError(
-                    f"{prefix} is not bounded JSON data: {exc}"
-                ) from None
-            if len(payload_json.encode("utf-8")) > 16 * 1024:
-                raise SnapshotValidationError(f"{prefix} JSON payload is oversized")
-            existing = self._conn.execute(
-                """
-                SELECT scope,opened_us,opened_event_id,affected_serials_json
-                FROM usb_can_incidents WHERE incident_id=?
-                """,
-                (incident_id,),
-            ).fetchone()
-            if existing is not None and (
-                existing["scope"] != scope
-                or int(existing["opened_us"]) != opened_us
-                or existing["opened_event_id"] != opened_event_id
-                or existing["affected_serials_json"]
-                != json.dumps(affected, separators=(",", ":"))
-            ):
-                raise SnapshotValidationError(
-                    f"incident identity collision for {incident_id!r}"
-                )
-            self._conn.execute(
-                """
-                INSERT INTO usb_can_incidents(
-                    incident_id,state,kind,scope,opened_us,opened_at,last_seen_us,
-                    last_seen_at,resolved_us,resolved_at,resolution,
-                    affected_serials_json,event_count,reappearance_count,
-                    opened_event_id,last_event_id,resolved_event_id,source,
-                    producer_instance,payload_json,first_snapshot_id,last_snapshot_id
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(incident_id) DO UPDATE SET
-                    state=CASE
-                        WHEN usb_can_incidents.state='resolved' THEN 'resolved'
-                        ELSE excluded.state
-                    END,
-                    last_seen_us=MAX(usb_can_incidents.last_seen_us,excluded.last_seen_us),
-                    last_seen_at=CASE
-                        WHEN excluded.last_seen_us >= usb_can_incidents.last_seen_us
-                        THEN excluded.last_seen_at ELSE usb_can_incidents.last_seen_at
-                    END,
-                    resolved_us=COALESCE(usb_can_incidents.resolved_us,excluded.resolved_us),
-                    resolved_at=COALESCE(usb_can_incidents.resolved_at,excluded.resolved_at),
-                    resolution=COALESCE(usb_can_incidents.resolution,excluded.resolution),
-                    event_count=MAX(usb_can_incidents.event_count,excluded.event_count),
-                    reappearance_count=MAX(
-                        usb_can_incidents.reappearance_count,
-                        excluded.reappearance_count
-                    ),
-                    last_event_id=excluded.last_event_id,
-                    resolved_event_id=COALESCE(
-                        usb_can_incidents.resolved_event_id,
-                        excluded.resolved_event_id
-                    ),
-                    payload_json=CASE
-                        WHEN usb_can_incidents.state='resolved'
-                        THEN usb_can_incidents.payload_json ELSE excluded.payload_json
-                    END,
-                    last_snapshot_id=excluded.last_snapshot_id
-                """,
-                (
-                    incident_id,
-                    state,
-                    kind,
-                    scope,
-                    opened_us,
-                    opened_at,
-                    last_seen_us,
-                    last_seen_at,
-                    resolved_us,
-                    resolved_at,
-                    resolution,
-                    json.dumps(affected, separators=(",", ":")),
-                    event_count,
-                    reappearance_count,
-                    opened_event_id,
-                    last_event_id,
-                    resolved_event_id,
-                    incident_source,
-                    incident_producer,
-                    payload_json,
-                    snapshot_id,
-                    snapshot_id,
-                ),
-            )
+        )
+        self._ingest_usb_can_events(events, boot_id, snapshot_id)
+        current_active_incident_ids = self._ingest_usb_can_incidents(
+            incidents, producer_instance, snapshot_id
+        )
         self._resolve_previous_usb_can_incidents(
             snapshot,
             captured_us=captured_us,
