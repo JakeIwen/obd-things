@@ -85,11 +85,13 @@ class BrokerPureTests(unittest.TestCase):
                     self.assertEqual(before, encode(asdict(snapshot)))
 
     def test_real_status_web_delivery_bytes_match_baseline(self):
-        # Captured independently by running delivery_rows against bc94da0.
+        # Captured independently by running delivery_rows against bc94da0, then
+        # re-pinned after the reviewed removal of the dtc_jobs_require_local_one_use_arm
+        # web flag (the only difference across all 425 delivery cases).
         data = (encode(delivery_rows()) + "\n").encode()
         self.assertEqual(
             hashlib.sha256(data).hexdigest(),
-            "1b340b2f73666b7b63c799a6531b0c1f447f534eed9e021850deb69e38e216f9",
+            "f91ba5d9224e965ccee1a0f8c15cdbb0989eb331b8b41a674776af71a27a0b9d",
         )
 
     def test_status_byte_baseline(self):
