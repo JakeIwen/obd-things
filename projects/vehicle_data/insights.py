@@ -195,6 +195,161 @@ def _exact_keys(value: object, expected: frozenset[str], label: str) -> Mapping:
     return value
 
 
+def _validate_module_identity(
+    row: Mapping,
+    *,
+    index: int,
+    expected_modules: frozenset[str],
+    by_key: Mapping[str, Mapping],
+) -> str:
+    module_key = row["module_key"]
+    if not isinstance(module_key, str) or module_key not in expected_modules:
+        raise DtcCacheValidationError(
+            f"modules[{index}].module_key is not a registry module"
+        )
+    if module_key in by_key:
+        raise DtcCacheValidationError(f"duplicate module row {module_key!r}")
+    registry = MODULES[module_key]
+    if row["logical_bus"] != registry.bus or row["bitrate"] != registry.bitrate:
+        raise DtcCacheValidationError(
+            f"module row {module_key!r} does not match registry bus/bitrate"
+        )
+    if not isinstance(row["module_name"], str) or not row["module_name"].strip():
+        raise DtcCacheValidationError(f"module row {module_key!r} has no name")
+    if row["resolved_channel"] is not None and (
+        not isinstance(row["resolved_channel"], str)
+        or not row["resolved_channel"]
+    ):
+        raise DtcCacheValidationError(
+            f"module row {module_key!r} has an invalid resolved channel"
+        )
+    return module_key
+
+
+def _validate_module_result_fields(
+    row: Mapping,
+    *,
+    module_key: str,
+) -> tuple[object, object, object, object, object]:
+    availability = row["availability"]
+    result_state = row["result_state"]
+    if availability not in DTC_AVAILABILITY or result_state not in DTC_RESULT_STATES:
+        raise DtcCacheValidationError(
+            f"module row {module_key!r} has an unknown availability/result state"
+        )
+    expected_results = {
+        "never_scanned": {"never_scanned"},
+        "unavailable": {"unavailable"},
+        "available": {
+            "dtcs_present",
+            "no_dtcs",
+            "status_coverage_incomplete",
+        },
+    }
+    if result_state not in expected_results[availability]:
+        raise DtcCacheValidationError(
+            f"module row {module_key!r} has inconsistent availability/result state"
+        )
+    for field in (
+        "successful_scans",
+        "unavailable_scans",
+        "consecutive_unavailable",
+    ):
+        if not _nonnegative_int(row[field]):
+            raise DtcCacheValidationError(
+                f"module row {module_key!r}.{field} must be nonnegative"
+            )
+    if not _timestamp_or_none(row["last_attempt_at"]) or not _timestamp_or_none(
+        row["last_success_at"]
+    ):
+        raise DtcCacheValidationError(
+            f"module row {module_key!r} has an invalid timestamp"
+        )
+    dtc_count = row["last_success_dtc_count"]
+    if dtc_count is not None and not _nonnegative_int(dtc_count):
+        raise DtcCacheValidationError(
+            f"module row {module_key!r} has an invalid last DTC count"
+        )
+    mask = row["status_availability_mask"]
+    if mask is not None and (
+        not isinstance(mask, str) or _HEX_BYTE.fullmatch(mask) is None
+    ):
+        raise DtcCacheValidationError(
+            f"module row {module_key!r} has an invalid status mask"
+        )
+    if not isinstance(row["absence_authoritative"], bool):
+        raise DtcCacheValidationError(
+            f"module row {module_key!r}.absence_authoritative must be boolean"
+        )
+    return availability, result_state, dtc_count, mask, row["successful_scans"]
+
+
+def _validate_module_state_consistency(
+    row: Mapping,
+    *,
+    module_key: str,
+    availability: object,
+    result_state: object,
+    dtc_count: object,
+    mask: object,
+    successful_scans: object,
+) -> None:
+    if successful_scans == 0:
+        if row["last_success_at"] is not None or dtc_count is not None or mask is not None:
+            raise DtcCacheValidationError(
+                f"module row {module_key!r} claims success fields without a success"
+            )
+    elif row["last_success_at"] is None or mask is None or dtc_count is None:
+        raise DtcCacheValidationError(
+            f"module row {module_key!r} is missing its successful result fields"
+        )
+    if availability == "never_scanned":
+        if (
+            row["last_attempt_at"] is not None
+            or successful_scans != 0
+            or row["unavailable_scans"] != 0
+            or row["unavailable_reason"] is not None
+            or row["absence_authoritative"]
+        ):
+            raise DtcCacheValidationError(
+                f"never-scanned module row {module_key!r} contains scan state"
+            )
+    else:
+        if row["last_attempt_at"] is None:
+            raise DtcCacheValidationError(
+                f"module row {module_key!r} has no latest attempt timestamp"
+            )
+        if availability == "unavailable":
+            if not isinstance(row["unavailable_reason"], str) or not row[
+                "unavailable_reason"
+            ]:
+                raise DtcCacheValidationError(
+                    f"unavailable module row {module_key!r} has no reason"
+                )
+        elif row["unavailable_reason"] is not None:
+            raise DtcCacheValidationError(
+                f"available module row {module_key!r} has an unavailable reason"
+            )
+    if result_state == "no_dtcs" and (
+        dtc_count != 0 or not row["absence_authoritative"]
+    ):
+        raise DtcCacheValidationError(
+            f"module row {module_key!r} does not prove authoritative zero DTCs"
+        )
+    if result_state == "status_coverage_incomplete" and (
+        dtc_count != 0 or row["absence_authoritative"]
+    ):
+        raise DtcCacheValidationError(
+            f"module row {module_key!r} misstates incomplete status coverage"
+        )
+    if result_state == "dtcs_present" and (
+        not isinstance(dtc_count, int) or dtc_count <= 0
+    ):
+        raise DtcCacheValidationError(
+            f"module row {module_key!r} has no positive DTC count"
+        )
+
+
 def _validate_module_rows(rows: object) -> dict[str, Mapping]:
     if not isinstance(rows, list):
         raise DtcCacheValidationError("modules must be an array")
@@ -206,145 +361,37 @@ def _validate_module_rows(rows: object) -> dict[str, Mapping]:
     by_key: dict[str, Mapping] = {}
     for index, candidate in enumerate(rows):
         row = _exact_keys(candidate, _MODULE_KEYS, f"modules[{index}]")
-        module_key = row["module_key"]
-        if not isinstance(module_key, str) or module_key not in expected_modules:
-            raise DtcCacheValidationError(
-                f"modules[{index}].module_key is not a registry module"
-            )
-        if module_key in by_key:
-            raise DtcCacheValidationError(f"duplicate module row {module_key!r}")
-        registry = MODULES[module_key]
-        if row["logical_bus"] != registry.bus or row["bitrate"] != registry.bitrate:
-            raise DtcCacheValidationError(
-                f"module row {module_key!r} does not match registry bus/bitrate"
-            )
-        if not isinstance(row["module_name"], str) or not row["module_name"].strip():
-            raise DtcCacheValidationError(f"module row {module_key!r} has no name")
-        if row["resolved_channel"] is not None and (
-            not isinstance(row["resolved_channel"], str)
-            or not row["resolved_channel"]
-        ):
-            raise DtcCacheValidationError(
-                f"module row {module_key!r} has an invalid resolved channel"
-            )
-        availability = row["availability"]
-        result_state = row["result_state"]
-        if availability not in DTC_AVAILABILITY or result_state not in DTC_RESULT_STATES:
-            raise DtcCacheValidationError(
-                f"module row {module_key!r} has an unknown availability/result state"
-            )
-        expected_results = {
-            "never_scanned": {"never_scanned"},
-            "unavailable": {"unavailable"},
-            "available": {
-                "dtcs_present",
-                "no_dtcs",
-                "status_coverage_incomplete",
-            },
-        }
-        if result_state not in expected_results[availability]:
-            raise DtcCacheValidationError(
-                f"module row {module_key!r} has inconsistent availability/result state"
-            )
-        for field in (
-            "successful_scans",
-            "unavailable_scans",
-            "consecutive_unavailable",
-        ):
-            if not _nonnegative_int(row[field]):
-                raise DtcCacheValidationError(
-                    f"module row {module_key!r}.{field} must be nonnegative"
-                )
-        if not _timestamp_or_none(row["last_attempt_at"]) or not _timestamp_or_none(
-            row["last_success_at"]
-        ):
-            raise DtcCacheValidationError(
-                f"module row {module_key!r} has an invalid timestamp"
-            )
-        dtc_count = row["last_success_dtc_count"]
-        if dtc_count is not None and not _nonnegative_int(dtc_count):
-            raise DtcCacheValidationError(
-                f"module row {module_key!r} has an invalid last DTC count"
-            )
-        mask = row["status_availability_mask"]
-        if mask is not None and (
-            not isinstance(mask, str) or _HEX_BYTE.fullmatch(mask) is None
-        ):
-            raise DtcCacheValidationError(
-                f"module row {module_key!r} has an invalid status mask"
-            )
-        if not isinstance(row["absence_authoritative"], bool):
-            raise DtcCacheValidationError(
-                f"module row {module_key!r}.absence_authoritative must be boolean"
-            )
-        successful_scans = row["successful_scans"]
-        if successful_scans == 0:
-            if row["last_success_at"] is not None or dtc_count is not None or mask is not None:
-                raise DtcCacheValidationError(
-                    f"module row {module_key!r} claims success fields without a success"
-                )
-        elif row["last_success_at"] is None or mask is None or dtc_count is None:
-            raise DtcCacheValidationError(
-                f"module row {module_key!r} is missing its successful result fields"
-            )
-        if availability == "never_scanned":
-            if (
-                row["last_attempt_at"] is not None
-                or successful_scans != 0
-                or row["unavailable_scans"] != 0
-                or row["unavailable_reason"] is not None
-                or row["absence_authoritative"]
-            ):
-                raise DtcCacheValidationError(
-                    f"never-scanned module row {module_key!r} contains scan state"
-                )
-        else:
-            if row["last_attempt_at"] is None:
-                raise DtcCacheValidationError(
-                    f"module row {module_key!r} has no latest attempt timestamp"
-                )
-            if availability == "unavailable":
-                if not isinstance(row["unavailable_reason"], str) or not row[
-                    "unavailable_reason"
-                ]:
-                    raise DtcCacheValidationError(
-                        f"unavailable module row {module_key!r} has no reason"
-                    )
-            elif row["unavailable_reason"] is not None:
-                raise DtcCacheValidationError(
-                    f"available module row {module_key!r} has an unavailable reason"
-                )
-        if result_state == "no_dtcs" and (
-            dtc_count != 0 or not row["absence_authoritative"]
-        ):
-            raise DtcCacheValidationError(
-                f"module row {module_key!r} does not prove authoritative zero DTCs"
-            )
-        if result_state == "status_coverage_incomplete" and (
-            dtc_count != 0 or row["absence_authoritative"]
-        ):
-            raise DtcCacheValidationError(
-                f"module row {module_key!r} misstates incomplete status coverage"
-            )
-        if result_state == "dtcs_present" and (
-            not isinstance(dtc_count, int) or dtc_count <= 0
-        ):
-            raise DtcCacheValidationError(
-                f"module row {module_key!r} has no positive DTC count"
-            )
+        module_key = _validate_module_identity(
+            row,
+            index=index,
+            expected_modules=expected_modules,
+            by_key=by_key,
+        )
+        availability, result_state, dtc_count, mask, successful_scans = (
+            _validate_module_result_fields(row, module_key=module_key)
+        )
+        _validate_module_state_consistency(
+            row,
+            module_key=module_key,
+            availability=availability,
+            result_state=result_state,
+            dtc_count=dtc_count,
+            mask=mask,
+            successful_scans=successful_scans,
+        )
         by_key[module_key] = row
     if frozenset(by_key) != expected_modules:
         raise DtcCacheValidationError("modules do not cover the complete registry")
     return by_key
 
 
-def _validate_dtc_record(
+def _validated_dtc_record_module(
     candidate: object,
     *,
     group: str,
     index: int,
     modules: Mapping[str, Mapping],
-) -> None:
+) -> tuple[Mapping, Mapping]:
     record = _exact_keys(candidate, _DTC_RECORD_KEYS, f"groups.{group}[{index}]")
     module_key = record["module_key"]
     module = modules.get(module_key) if isinstance(module_key, str) else None
@@ -371,6 +418,10 @@ def _validate_dtc_record(
         raise DtcCacheValidationError(
             f"groups.{group}[{index}] has inconsistent latest-attempt state"
         )
+    return record, module
+
+
+def _validate_dtc_status_fields(record: Mapping, *, group: str, index: int) -> None:
     if not isinstance(record["raw_dtc"], str) or _RAW_DTC.fullmatch(
         record["raw_dtc"]
     ) is None:
@@ -403,6 +454,15 @@ def _validate_dtc_record(
         raise DtcCacheValidationError(
             f"groups.{group}[{index}] is not a present saved state"
         )
+
+
+def _validate_dtc_observation_state(
+    record: Mapping,
+    module: Mapping,
+    *,
+    group: str,
+    index: int,
+) -> None:
     observation_state = record["observation_state"]
     if observation_state not in DTC_OBSERVATION_STATES:
         raise DtcCacheValidationError(
@@ -420,6 +480,9 @@ def _validate_dtc_record(
         raise DtcCacheValidationError(
             f"groups.{group}[{index}] observation state requires an available module"
         )
+
+
+def _validate_dtc_grouping(record: Mapping, *, group: str, index: int) -> None:
     expected_display_group = group if group != "other" else None
     if expected_display_group is not None and record["display_group"] != expected_display_group:
         raise DtcCacheValidationError(
@@ -439,6 +502,9 @@ def _validate_dtc_record(
         raise DtcCacheValidationError(
             f"groups.{group}[{index}] lacks its grouping status bit"
         )
+
+
+def _validate_dtc_history_fields(record: Mapping, *, group: str, index: int) -> None:
     mask = record["status_availability_mask"]
     if not isinstance(mask, str) or _HEX_BYTE.fullmatch(mask) is None:
         raise DtcCacheValidationError(
@@ -460,7 +526,31 @@ def _validate_dtc_record(
             )
 
 
-def _validate_dtc_cache(payload: object) -> dict[str, object]:
+def _validate_dtc_record(
+    candidate: object,
+    *,
+    group: str,
+    index: int,
+    modules: Mapping[str, Mapping],
+) -> None:
+    record, module = _validated_dtc_record_module(
+        candidate,
+        group=group,
+        index=index,
+        modules=modules,
+    )
+    _validate_dtc_status_fields(record, group=group, index=index)
+    _validate_dtc_observation_state(
+        record,
+        module,
+        group=group,
+        index=index,
+    )
+    _validate_dtc_grouping(record, group=group, index=index)
+    _validate_dtc_history_fields(record, group=group, index=index)
+
+
+def _validated_dtc_cache_header(payload: object) -> tuple[dict, int]:
     if not isinstance(payload, dict):
         raise DtcCacheValidationError("saved DTC cache root is not a JSON object")
     required_top_level = frozenset(
@@ -488,7 +578,14 @@ def _validate_dtc_cache(payload: object) -> dict[str, object]:
     limit = payload["per_group_limit"]
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1000:
         raise DtcCacheValidationError("saved DTC cache has an invalid group limit")
+    return payload, limit
 
+
+def _validated_dtc_groups(
+    payload: Mapping,
+    *,
+    limit: int,
+) -> tuple[Mapping, Mapping, Mapping, dict[str, Mapping]]:
     groups = _exact_keys(payload["groups"], frozenset(DTC_GROUPS), "groups")
     counts = _exact_keys(
         payload["group_counts"], frozenset(DTC_GROUPS), "group_counts"
@@ -516,7 +613,15 @@ def _validate_dtc_cache(payload: object) -> dict[str, object]:
         "groups_truncated"
     ] != expected_truncated:
         raise DtcCacheValidationError("groups_truncated does not match group counts")
+    return groups, counts, returned, modules
 
+
+def _validate_dtc_coverage(
+    payload: Mapping,
+    *,
+    groups: Mapping,
+    modules: Mapping[str, Mapping],
+) -> None:
     coverage = _exact_keys(payload["coverage"], _COVERAGE_KEYS, "coverage")
     for field in _COVERAGE_KEYS - {"last_attempt_at", "last_success_at"}:
         if not _nonnegative_int(coverage[field]):
@@ -569,7 +674,20 @@ def _validate_dtc_cache(payload: object) -> dict[str, object]:
         raise DtcCacheValidationError(
             "returned DTC records exceed modules with last-known DTC state"
         )
-    return payload
+
+
+def _validate_dtc_cache(payload: object) -> dict[str, object]:
+    validated, limit = _validated_dtc_cache_header(payload)
+    groups, _counts, _returned, modules = _validated_dtc_groups(
+        validated,
+        limit=limit,
+    )
+    _validate_dtc_coverage(
+        validated,
+        groups=groups,
+        modules=modules,
+    )
+    return validated
 
 
 MAX_VAN_SCAN_CACHE_BYTES = 256 * 1024
