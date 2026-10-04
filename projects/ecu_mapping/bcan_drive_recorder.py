@@ -35,13 +35,14 @@ if str(REPO) not in sys.path:
 from lib import can_operation_state, can_runtime_route, canbus, diagnostic_safety  # noqa: E402
 from lib.modules import MODULES  # noqa: E402
 from lib.timeutil import utc_now  # noqa: E402
+from lib import broadcast_signals  # noqa: E402
 from lib import capture_pipeline as capture  # noqa: E402
 
 
 CHANNEL: str | None = None
 BITRATE = canbus.BITRATE_BCAN
 PAIR = "3/11"
-TRACKED_ID = 0x46C
+TRACKED_ID = broadcast_signals.B_CAN_VOLTAGE.can_id
 MIN_SIGNATURE_HITS = 3
 DEFAULT_PROBE_SECONDS = 3.0
 DEFAULT_RETRY_SECONDS = 5.0
