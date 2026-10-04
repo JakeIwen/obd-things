@@ -36,11 +36,12 @@ import datetime
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, REPO)
+from lib import broadcast_signals  # noqa: E402
 from lib import can_runtime_route  # noqa: E402
 
 OUT_DIR = os.path.join(REPO, "tmp", "tpms", "captures")
 BUS = "c-can"
-IGN_BCAST = 0x2EF          # ignition-on gate; same one tpms_logger uses
+IGN_BCAST = broadcast_signals.IGNITION_ON.can_id
 DECIM_S = 2.0              # keep <=1 frame per CAN id per this many seconds
 MIN_KEEP_MIN = 10          # discard a session shorter than this (not enough thermal rise)
 CAP_BYTES = 400 * 1024**2  # stop starting NEW sessions once captures/ exceeds this
