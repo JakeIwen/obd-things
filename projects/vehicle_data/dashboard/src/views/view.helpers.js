@@ -91,4 +91,3 @@ export function agoText(ms) {
   if (v < 60000) return "just now";
   return fmtAgeCoarse(v) + " ago";
 }
-

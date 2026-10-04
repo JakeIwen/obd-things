@@ -303,4 +303,3 @@ export function createLink(deps) {
 
   return { start, stop, resync, state, fetchSummary };
 }
-

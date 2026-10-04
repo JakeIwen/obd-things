@@ -404,4 +404,3 @@ export function trendModel(metric, trend, ctx) {
     emptyText,
   };
 }
-
