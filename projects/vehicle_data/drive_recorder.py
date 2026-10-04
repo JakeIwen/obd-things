@@ -1006,6 +1006,530 @@ def write_state(path: Path, **payload: object) -> None:
     )
 
 
+def _admit_interval_secondaries(
+    initial_status: dict[str, object],
+    client: TelemetryClient,
+    interface_manager: PassiveInterfaceManager,
+    lease_stack: ExitStack,
+) -> tuple[
+    dict[str, AdmittedRoute], dict[str, str], dict[str, capture.InterfaceState]
+]:
+    admitted: dict[str, AdmittedRoute] = {}
+    admission_detail: dict[str, str] = {}
+    secondary_interfaces: dict[str, capture.InterfaceState] = {}
+    for role in SECONDARY_ROLES:
+        try:
+            item, secondary_interfaces[role] = admit_secondary_route(
+                role, initial_status, client, interface_manager
+            )
+        except BrokerOwnershipLost as exc:
+            # The primary C-CAN evidence does not wait for a secondary.
+            admission_detail[role] = str(exc)
+            continue
+        lease_stack.callback(item[2].close)
+        admitted[role] = item
+    return admitted, admission_detail, secondary_interfaces
+
+
+def _refresh_interval_routes(
+    client: TelemetryClient,
+    channel: str,
+    admitted: dict[str, AdmittedRoute],
+    secondary_interfaces: dict[str, capture.InterfaceState],
+    admission_detail: dict[str, str],
+) -> None:
+    refreshed_status = read_broker_status(client)
+    if not broker_armed_ready(refreshed_status, expected_channel=channel):
+        raise BrokerOwnershipLost(
+            "broker ownership disappeared during raw capture preflight"
+        )
+    for role in list(admitted):
+        try:
+            current = broker_secondary_route(refreshed_status, role)
+        except BrokerOwnershipLost as exc:
+            current, detail = None, str(exc)
+        else:
+            detail = f"broker {role} route changed during raw capture preflight"
+        if current != admitted[role][0]:
+            admitted.pop(role)[2].close()
+            secondary_interfaces.pop(role, None)
+            admission_detail[role] = detail
+
+
+def _create_interval_directories(
+    args: argparse.Namespace,
+) -> tuple[str, Path, dict[str, Path], Path]:
+    args.out_root.mkdir(parents=True, exist_ok=True)
+    run_id = campaign_id()
+    run_dir = args.out_root / run_id
+    if run_dir.exists():
+        raise DriveRecorderError(f"campaign directory already exists: {run_dir}")
+    run_dir.mkdir()
+    role_dirs = {role: run_dir / role for role in ("c-can", *SECONDARY_ROLES)}
+    # Secondary directories appear with their first admitted segment, so a
+    # never-proven role leaves no empty, never-ending bus directory.
+    role_dirs["c-can"].mkdir()
+    events_path = run_dir / ROUTE_EVENTS_NAME
+    return run_id, run_dir, role_dirs, events_path
+
+
+def _interval_routes(
+    channel: str,
+    usb_serial: str,
+    dev_id: int,
+    admitted: dict[str, AdmittedRoute],
+) -> dict[str, CaptureRoute]:
+    routes = {
+        "c-can": CaptureRoute(
+            role="c-can",
+            channel=channel,
+            usb_serial=usb_serial,
+            dev_id=dev_id,
+            bitrate=BITRATE,
+            pair=PAIR,
+            ownership="broker_active_drive_companion",
+        ),
+        **{role: item[0] for role, item in admitted.items()},
+    }
+    return routes
+
+
+def _write_interval_metadata(
+    args: argparse.Namespace,
+    policy: capture.DiskPolicy,
+    initial_status: dict[str, object],
+    interface: capture.InterfaceState,
+    free: int,
+    run_id: str,
+    run_dir: Path,
+    selected_ids: frozenset[int],
+    routes: dict[str, CaptureRoute],
+    admitted: dict[str, AdmittedRoute],
+    admission_detail: dict[str, str],
+    secondary_interfaces: dict[str, capture.InterfaceState],
+) -> None:
+    metadata = {
+        "type": "run_metadata",
+        "created_utc": utc_now(),
+        "campaign": run_id,
+        "conditions": args.conditions.strip(),
+        "interaction": "synchronized_three_bus_receive_only_companion",
+        "roles_required": ["c-can"],
+        "secondary_roles": list(SECONDARY_ROLES),
+        "secondary_policy": (
+            "best-effort segments: a secondary records only while its exact "
+            "route is proven; a loss ends that segment only and the role is "
+            f"re-admitted after re-proof; see {ROUTE_EVENTS_NAME}"
+        ),
+        "secondary_admission": {
+            role: (
+                "admitted"
+                if role in admitted
+                else f"awaiting_route: {admission_detail.get(role)}"
+            )
+            for role in SECONDARY_ROLES
+        },
+        "routes": {role: route.as_dict() for role, route in routes.items()},
+        "initial_interfaces": {
+            "c-can": dataclasses.asdict(interface),
+            **{
+                role: dataclasses.asdict(state)
+                for role, state in secondary_interfaces.items()
+            },
+        },
+        "initial_broker_status": initial_status,
+        "capture_started_mid_running_epoch": True,
+        "required_mount": str(args.require_mount.resolve()),
+        "free_bytes_at_preflight": free,
+        "rotation_seconds": args.rotation_seconds,
+        "duration_seconds": args.duration_seconds,
+        "c_can_stop_after_id": f"0x{IGNITION_ID:X}",
+        "c_can_stop_after_id_absence_seconds": args.ignition_absence_seconds,
+        "secondary_required_start_ids": {
+            role: f"0x{SECONDARY_START_IDS[role]:X}"
+            for role in SECONDARY_ROLES
+        },
+        "secondary_required_start_timeout_seconds": (
+            SECONDARY_START_TIMEOUT_SECONDS
+        ),
+        "c_can_priority_profile": "ccan-correlation",
+        "c_can_priority_ids": [
+            f"0x{value:X}" for value in sorted(selected_ids)
+        ],
+        "secondary_priority_streams": False,
+        "soft_free_bytes": policy.soft_free_bytes,
+        "hard_free_bytes": policy.hard_free_bytes,
+        "net_core_rmem_max": capture.read_rmem_max(),
+        "does_not": [
+            "configure or restore CAN",
+            "acquire exclusive B-CAN or CAN-CH ownership",
+            "transmit CAN",
+            "control the telemetry broker",
+        ],
+    }
+    capture.atomic_write_json(run_dir / "run.json", metadata)
+
+
+def _interval_state_publisher(
+    args: argparse.Namespace,
+    run_id: str,
+    run_dir: Path,
+    interface: capture.InterfaceState,
+    supervisors: dict[str, SecondaryRoleSupervisor],
+    state_lock,
+) -> Callable[[], None]:
+    def publish_state() -> None:
+        with state_lock:
+            recording = [
+                role
+                for role, supervisor in supervisors.items()
+                if supervisor.state == "recording"
+            ]
+            awaiting = [
+                role
+                for role, supervisor in supervisors.items()
+                if supervisor.state == "awaiting_route"
+            ]
+            write_state(
+                args.state_path,
+                status="recording",
+                campaign=run_id,
+                capture_dir=str(run_dir),
+                roles_recording=["c-can", *recording],
+                roles_awaiting_route=awaiting,
+                c_can_interface_mode=(
+                    "listen_only" if interface.listen_only else "armed_diagnostic"
+                ),
+            )
+    return publish_state
+
+
+def _secondary_recorder_factory(
+    role: str,
+    args: argparse.Namespace,
+    policy: capture.DiskPolicy,
+    role_dirs: dict[str, Path],
+    mount_check: Callable[[], object],
+    zstd: str,
+    candump: str,
+    stop_secondaries: threading.Event,
+    secondary_settled: dict[str, threading.Event],
+) -> Callable[[CaptureRoute, Callable[[], capture.InterfaceState], int], capture.Recorder]:
+    def build(
+        route: CaptureRoute,
+        check: Callable[[], capture.InterfaceState],
+        sequence_start: int,
+    ) -> capture.Recorder:
+        role_dirs[role].mkdir(exist_ok=True)
+        return capture.Recorder(
+            role_dirs[role],
+            frozenset(),
+            args.rotation_seconds,
+            args.duration_seconds,
+            policy,
+            required_start_id=SECONDARY_START_IDS[role],
+            required_start_id_timeout_seconds=SECONDARY_START_TIMEOUT_SECONDS,
+            safety_check=check,
+            mount_check=mount_check,
+            zstd=zstd,
+            candump=candump,
+            candump_extra_args=("-D",),
+            external_stop_requested=stop_secondaries.is_set,
+            started_callback=secondary_settled[role].set,
+            install_signal_handlers=False,
+            channel=route.channel,
+            bitrate=route.bitrate,
+            sequence_start=sequence_start,
+        )
+
+    return build
+
+
+def _secondary_thread_target(
+    supervisors: dict[str, SecondaryRoleSupervisor],
+    secondary_errors: dict[str, BaseException],
+    secondary_error_lock,
+) -> Callable[[str], None]:
+    def run_secondary(role: str) -> None:
+        try:
+            supervisors[role].run()
+        except BaseException as exc:
+            with secondary_error_lock:
+                secondary_errors[role] = exc
+    return run_secondary
+
+
+def _secondary_health_checker(
+    secondary_errors: dict[str, BaseException],
+    secondary_error_lock,
+    secondary_threads: dict[str, threading.Thread],
+    stop_secondaries: threading.Event,
+) -> Callable[[], None]:
+    def secondary_health_check() -> None:
+        # Route loss is handled inside each supervisor; only a failure that
+        # would compromise the whole evidence set (storage, compression,
+        # drop accounting, cleanup) reaches this point.
+        with secondary_error_lock:
+            failures = dict(secondary_errors)
+        if failures:
+            detail = "; ".join(
+                f"{role}: {type(exc).__name__}: {exc}"
+                for role, exc in sorted(failures.items())
+            )
+            if all(isinstance(exc, BrokerOwnershipLost) for exc in failures.values()):
+                raise BrokerOwnershipLost("secondary ownership lost: " + detail)
+            raise DriveRecorderError(
+                "required secondary recorder failed: " + detail
+            )
+        stopped = [
+            role
+            for role, thread in secondary_threads.items()
+            if not thread.is_alive() and not stop_secondaries.is_set()
+        ]
+        if stopped:
+            raise DriveRecorderError(
+                "required secondary recorder stopped unexpectedly: "
+                + ", ".join(sorted(stopped))
+            )
+    return secondary_health_check
+
+
+def _primary_recorder(
+    args: argparse.Namespace,
+    policy: capture.DiskPolicy,
+    role_dirs: dict[str, Path],
+    selected_ids: frozenset[int],
+    client: TelemetryClient,
+    channel: str,
+    usb_serial: str,
+    dev_id: int,
+    mount_check: Callable[[], object],
+    zstd: str,
+    candump: str,
+    secondary_health_check: Callable[[], None],
+) -> capture.Recorder:
+    c_can_recorder = capture.Recorder(
+        role_dirs["c-can"],
+        selected_ids,
+        args.rotation_seconds,
+        args.duration_seconds,
+        policy,
+        stop_after_id=IGNITION_ID,
+        stop_after_id_absence_seconds=args.ignition_absence_seconds,
+        required_start_id=IGNITION_ID,
+        required_start_id_timeout_seconds=5.0,
+        safety_check=InitialArmedSafetyCheck(
+            client,
+            channel=channel,
+            expected_usb_serial=usb_serial,
+            expected_dev_id=dev_id,
+        ),
+        mount_check=mount_check,
+        zstd=zstd,
+        candump=candump,
+        candump_extra_args=("-D",),
+        health_check=secondary_health_check,
+        channel=channel,
+        bitrate=BITRATE,
+    )
+    return c_can_recorder
+
+
+@dataclasses.dataclass(frozen=True)
+class _IntervalRecorders:
+    """Keep the prepared workers and their shared callbacks together through cleanup."""
+
+    primary: capture.Recorder
+    supervisors: dict[str, SecondaryRoleSupervisor]
+    threads: dict[str, threading.Thread]
+    settled: dict[str, threading.Event]
+    stop: threading.Event
+    health_check: Callable[[], None]
+
+
+def _prepare_interval_recorders(
+    args: argparse.Namespace,
+    policy: capture.DiskPolicy,
+    client: TelemetryClient,
+    interface_manager: PassiveInterfaceManager,
+    mount_device: int,
+    interface: capture.InterfaceState,
+    run_id: str,
+    run_dir: Path,
+    role_dirs: dict[str, Path],
+    events_path: Path,
+    admitted: dict[str, AdmittedRoute],
+    admission_detail: dict[str, str],
+    channel: str,
+    usb_serial: str,
+    dev_id: int,
+    selected_ids: frozenset[int],
+) -> _IntervalRecorders:
+    supervisors: dict[str, SecondaryRoleSupervisor] = {}
+    state_lock = threading.Lock()
+
+    publish_state = _interval_state_publisher(
+        args, run_id, run_dir, interface, supervisors, state_lock
+    )
+
+    mount_check = lambda: capture.require_writable_mount(
+        args.out_root,
+        args.require_mount,
+        expected_device=mount_device,
+    )
+    zstd = shutil.which("zstd") or "zstd"
+    candump = shutil.which("candump") or "candump"
+    stop_secondaries = threading.Event()
+    secondary_settled = {
+        role: threading.Event() for role in SECONDARY_ROLES
+    }
+    secondary_errors: dict[str, BaseException] = {}
+    secondary_error_lock = threading.Lock()
+    secondary_threads: dict[str, threading.Thread] = {}
+
+    for role in SECONDARY_ROLES:
+        supervisors[role] = SecondaryRoleSupervisor(
+            role=role,
+            role_dir=role_dirs[role],
+            client=client,
+            interface_manager=interface_manager,
+            recorder_factory=_secondary_recorder_factory(
+                role, args, policy, role_dirs, mount_check, zstd, candump,
+                stop_secondaries, secondary_settled,
+            ),
+            stop_event=stop_secondaries,
+            settled_event=secondary_settled[role],
+            events_path=events_path,
+            admitted=admitted.get(role),
+            admission_detail=admission_detail.get(role),
+            on_change=publish_state,
+        )
+    publish_state()
+
+    run_secondary = _secondary_thread_target(
+        supervisors, secondary_errors, secondary_error_lock
+    )
+
+    for role in SECONDARY_ROLES:
+        secondary_threads[role] = threading.Thread(
+            name=f"broker-drive-recorder-{role}",
+            target=run_secondary,
+            args=(role,),
+        )
+
+    secondary_health_check = _secondary_health_checker(
+        secondary_errors, secondary_error_lock, secondary_threads,
+        stop_secondaries,
+    )
+
+    c_can_recorder = _primary_recorder(
+        args, policy, role_dirs, selected_ids, client, channel, usb_serial,
+        dev_id, mount_check, zstd, candump, secondary_health_check,
+    )
+    return _IntervalRecorders(
+        c_can_recorder, supervisors, secondary_threads, secondary_settled,
+        stop_secondaries, secondary_health_check,
+    )
+
+
+def _run_interval_recorders(run_dir: Path, recorders: _IntervalRecorders) -> None:
+    c_can_recorder = recorders.primary
+    secondary_threads = recorders.threads
+    secondary_settled = recorders.settled
+    stop_secondaries = recorders.stop
+    secondary_health_check = recorders.health_check
+    main_error: BaseException | None = None
+    try:
+        with capture.campaign_file_lock(run_dir):
+            for thread in secondary_threads.values():
+                thread.start()
+            deadline = time.monotonic() + SECONDARY_START_WAIT_SECONDS
+            for role in SECONDARY_ROLES:
+                remaining = max(0.0, deadline - time.monotonic())
+                if not secondary_settled[role].wait(remaining):
+                    secondary_health_check()
+                    raise DriveRecorderError(
+                        f"required {role} recorder did not start within "
+                        f"{SECONDARY_START_WAIT_SECONDS:.1f} seconds"
+                    )
+            secondary_health_check()
+            c_can_recorder.run()
+    except BaseException as exc:
+        main_error = exc
+    finally:
+        stop_secondaries.set()
+        for thread in secondary_threads.values():
+            if thread.ident is not None:
+                thread.join(SECONDARY_JOIN_TIMEOUT_SECONDS)
+
+    alive = [
+        role for role, thread in secondary_threads.items() if thread.is_alive()
+    ]
+    if alive:
+        raise DriveRecorderError(
+            "secondary recorder cleanup timed out: " + ", ".join(alive)
+        )
+    if main_error is not None:
+        if isinstance(main_error, BrokerOwnershipLost):
+            # A concurrent secondary storage/cleanup failure remains fatal.
+            secondary_health_check()
+        if isinstance(main_error, capture.CaptureError) and (
+            "required start CAN ID" in str(main_error)
+        ):
+            raise BrokerOwnershipLost(str(main_error)) from main_error
+        raise main_error
+    secondary_health_check()
+
+
+def _write_capture_set(
+    run_id: str,
+    run_dir: Path,
+    role_dirs: dict[str, Path],
+    events_path: Path,
+    routes: dict[str, CaptureRoute],
+    supervisors: dict[str, SecondaryRoleSupervisor],
+) -> None:
+    continuous = {
+        role: supervisor.continuous()
+        for role, supervisor in supervisors.items()
+    }
+    capture.atomic_write_json(
+        run_dir / "capture-set.json",
+        {
+            "type": "synchronized_three_bus_capture_set",
+            "completed_utc": utc_now(),
+            "campaign": run_id,
+            # True only when every role recorded one uninterrupted segment
+            # for the whole interval, as before the segmented policy.
+            "complete": all(continuous.values()),
+            "primary_complete": True,
+            "route_events": str(events_path),
+            "roles": {
+                "c-can": {
+                    "route": routes["c-can"].as_dict(),
+                    "capture_dir": str(role_dirs["c-can"]),
+                    "checkpoint": str(role_dirs["c-can"] / "checkpoint.json"),
+                    "manifest": str(role_dirs["c-can"] / "manifest.jsonl"),
+                    "continuous": True,
+                },
+                **{
+                    role: {
+                        "route": (
+                            routes[role].as_dict() if role in routes else None
+                        ),
+                        "capture_dir": str(role_dirs[role]),
+                        "checkpoint": str(role_dirs[role] / "checkpoint.json"),
+                        "manifest": str(role_dirs[role] / "manifest.jsonl"),
+                        "continuous": continuous[role],
+                        "segments": supervisor.segments,
+                    }
+                    for role, supervisor in supervisors.items()
+                },
+            },
+        },
+    )
+
+
 def record_one_interval(
     args: argparse.Namespace,
     policy: capture.DiskPolicy,
@@ -1051,356 +1575,27 @@ def record_one_interval(
         expected_device=mount_device,
     )
     with ExitStack() as lease_stack:
-        admitted: dict[str, AdmittedRoute] = {}
-        admission_detail: dict[str, str] = {}
-        secondary_interfaces: dict[str, capture.InterfaceState] = {}
-        for role in SECONDARY_ROLES:
-            try:
-                item, secondary_interfaces[role] = admit_secondary_route(
-                    role, initial_status, client, interface_manager
-                )
-            except BrokerOwnershipLost as exc:
-                # The primary C-CAN evidence does not wait for a secondary.
-                admission_detail[role] = str(exc)
-                continue
-            lease_stack.callback(item[2].close)
-            admitted[role] = item
-
-        refreshed_status = read_broker_status(client)
-        if not broker_armed_ready(refreshed_status, expected_channel=channel):
-            raise BrokerOwnershipLost(
-                "broker ownership disappeared during raw capture preflight"
-            )
-        for role in list(admitted):
-            try:
-                current = broker_secondary_route(refreshed_status, role)
-            except BrokerOwnershipLost as exc:
-                current, detail = None, str(exc)
-            else:
-                detail = f"broker {role} route changed during raw capture preflight"
-            if current != admitted[role][0]:
-                admitted.pop(role)[2].close()
-                secondary_interfaces.pop(role, None)
-                admission_detail[role] = detail
-
-        args.out_root.mkdir(parents=True, exist_ok=True)
-        run_id = campaign_id()
-        run_dir = args.out_root / run_id
-        if run_dir.exists():
-            raise DriveRecorderError(f"campaign directory already exists: {run_dir}")
-        run_dir.mkdir()
-        role_dirs = {role: run_dir / role for role in ("c-can", *SECONDARY_ROLES)}
-        # Secondary directories appear with their first admitted segment, so a
-        # never-proven role leaves no empty, never-ending bus directory.
-        role_dirs["c-can"].mkdir()
-        events_path = run_dir / ROUTE_EVENTS_NAME
+        admitted, admission_detail, secondary_interfaces = _admit_interval_secondaries(
+            initial_status, client, interface_manager, lease_stack
+        )
+        _refresh_interval_routes(
+            client, channel, admitted, secondary_interfaces, admission_detail
+        )
+        run_id, run_dir, role_dirs, events_path = _create_interval_directories(args)
         selected_ids = priority_ids()
-        routes = {
-            "c-can": CaptureRoute(
-                role="c-can",
-                channel=channel,
-                usb_serial=usb_serial,
-                dev_id=dev_id,
-                bitrate=BITRATE,
-                pair=PAIR,
-                ownership="broker_active_drive_companion",
-            ),
-            **{role: item[0] for role, item in admitted.items()},
-        }
-        metadata = {
-            "type": "run_metadata",
-            "created_utc": utc_now(),
-            "campaign": run_id,
-            "conditions": args.conditions.strip(),
-            "interaction": "synchronized_three_bus_receive_only_companion",
-            "roles_required": ["c-can"],
-            "secondary_roles": list(SECONDARY_ROLES),
-            "secondary_policy": (
-                "best-effort segments: a secondary records only while its exact "
-                "route is proven; a loss ends that segment only and the role is "
-                f"re-admitted after re-proof; see {ROUTE_EVENTS_NAME}"
-            ),
-            "secondary_admission": {
-                role: (
-                    "admitted"
-                    if role in admitted
-                    else f"awaiting_route: {admission_detail.get(role)}"
-                )
-                for role in SECONDARY_ROLES
-            },
-            "routes": {role: route.as_dict() for role, route in routes.items()},
-            "initial_interfaces": {
-                "c-can": dataclasses.asdict(interface),
-                **{
-                    role: dataclasses.asdict(state)
-                    for role, state in secondary_interfaces.items()
-                },
-            },
-            "initial_broker_status": initial_status,
-            "capture_started_mid_running_epoch": True,
-            "required_mount": str(args.require_mount.resolve()),
-            "free_bytes_at_preflight": free,
-            "rotation_seconds": args.rotation_seconds,
-            "duration_seconds": args.duration_seconds,
-            "c_can_stop_after_id": f"0x{IGNITION_ID:X}",
-            "c_can_stop_after_id_absence_seconds": args.ignition_absence_seconds,
-            "secondary_required_start_ids": {
-                role: f"0x{SECONDARY_START_IDS[role]:X}"
-                for role in SECONDARY_ROLES
-            },
-            "secondary_required_start_timeout_seconds": (
-                SECONDARY_START_TIMEOUT_SECONDS
-            ),
-            "c_can_priority_profile": "ccan-correlation",
-            "c_can_priority_ids": [
-                f"0x{value:X}" for value in sorted(selected_ids)
-            ],
-            "secondary_priority_streams": False,
-            "soft_free_bytes": policy.soft_free_bytes,
-            "hard_free_bytes": policy.hard_free_bytes,
-            "net_core_rmem_max": capture.read_rmem_max(),
-            "does_not": [
-                "configure or restore CAN",
-                "acquire exclusive B-CAN or CAN-CH ownership",
-                "transmit CAN",
-                "control the telemetry broker",
-            ],
-        }
-        capture.atomic_write_json(run_dir / "run.json", metadata)
-
-        supervisors: dict[str, SecondaryRoleSupervisor] = {}
-        state_lock = threading.Lock()
-
-        def publish_state() -> None:
-            with state_lock:
-                recording = [
-                    role
-                    for role, supervisor in supervisors.items()
-                    if supervisor.state == "recording"
-                ]
-                awaiting = [
-                    role
-                    for role, supervisor in supervisors.items()
-                    if supervisor.state == "awaiting_route"
-                ]
-                write_state(
-                    args.state_path,
-                    status="recording",
-                    campaign=run_id,
-                    capture_dir=str(run_dir),
-                    roles_recording=["c-can", *recording],
-                    roles_awaiting_route=awaiting,
-                    c_can_interface_mode=(
-                        "listen_only" if interface.listen_only else "armed_diagnostic"
-                    ),
-                )
-
-        mount_check = lambda: capture.require_writable_mount(
-            args.out_root,
-            args.require_mount,
-            expected_device=mount_device,
+        routes = _interval_routes(channel, usb_serial, dev_id, admitted)
+        _write_interval_metadata(
+            args, policy, initial_status, interface, free, run_id, run_dir,
+            selected_ids, routes, admitted, admission_detail, secondary_interfaces,
         )
-        zstd = shutil.which("zstd") or "zstd"
-        candump = shutil.which("candump") or "candump"
-        stop_secondaries = threading.Event()
-        secondary_settled = {
-            role: threading.Event() for role in SECONDARY_ROLES
-        }
-        secondary_errors: dict[str, BaseException] = {}
-        secondary_error_lock = threading.Lock()
-        secondary_threads: dict[str, threading.Thread] = {}
-
-        def recorder_factory(role: str):
-            def build(
-                route: CaptureRoute,
-                check: Callable[[], capture.InterfaceState],
-                sequence_start: int,
-            ) -> capture.Recorder:
-                role_dirs[role].mkdir(exist_ok=True)
-                return capture.Recorder(
-                    role_dirs[role],
-                    frozenset(),
-                    args.rotation_seconds,
-                    args.duration_seconds,
-                    policy,
-                    required_start_id=SECONDARY_START_IDS[role],
-                    required_start_id_timeout_seconds=SECONDARY_START_TIMEOUT_SECONDS,
-                    safety_check=check,
-                    mount_check=mount_check,
-                    zstd=zstd,
-                    candump=candump,
-                    candump_extra_args=("-D",),
-                    external_stop_requested=stop_secondaries.is_set,
-                    started_callback=secondary_settled[role].set,
-                    install_signal_handlers=False,
-                    channel=route.channel,
-                    bitrate=route.bitrate,
-                    sequence_start=sequence_start,
-                )
-
-            return build
-
-        for role in SECONDARY_ROLES:
-            supervisors[role] = SecondaryRoleSupervisor(
-                role=role,
-                role_dir=role_dirs[role],
-                client=client,
-                interface_manager=interface_manager,
-                recorder_factory=recorder_factory(role),
-                stop_event=stop_secondaries,
-                settled_event=secondary_settled[role],
-                events_path=events_path,
-                admitted=admitted.get(role),
-                admission_detail=admission_detail.get(role),
-                on_change=publish_state,
-            )
-        publish_state()
-
-        def run_secondary(role: str) -> None:
-            try:
-                supervisors[role].run()
-            except BaseException as exc:
-                with secondary_error_lock:
-                    secondary_errors[role] = exc
-
-        for role in SECONDARY_ROLES:
-            secondary_threads[role] = threading.Thread(
-                name=f"broker-drive-recorder-{role}",
-                target=run_secondary,
-                args=(role,),
-            )
-
-        def secondary_health_check() -> None:
-            # Route loss is handled inside each supervisor; only a failure that
-            # would compromise the whole evidence set (storage, compression,
-            # drop accounting, cleanup) reaches this point.
-            with secondary_error_lock:
-                failures = dict(secondary_errors)
-            if failures:
-                detail = "; ".join(
-                    f"{role}: {type(exc).__name__}: {exc}"
-                    for role, exc in sorted(failures.items())
-                )
-                if all(isinstance(exc, BrokerOwnershipLost) for exc in failures.values()):
-                    raise BrokerOwnershipLost("secondary ownership lost: " + detail)
-                raise DriveRecorderError(
-                    "required secondary recorder failed: " + detail
-                )
-            stopped = [
-                role
-                for role, thread in secondary_threads.items()
-                if not thread.is_alive() and not stop_secondaries.is_set()
-            ]
-            if stopped:
-                raise DriveRecorderError(
-                    "required secondary recorder stopped unexpectedly: "
-                    + ", ".join(sorted(stopped))
-                )
-
-        c_can_recorder = capture.Recorder(
-            role_dirs["c-can"],
-            selected_ids,
-            args.rotation_seconds,
-            args.duration_seconds,
-            policy,
-            stop_after_id=IGNITION_ID,
-            stop_after_id_absence_seconds=args.ignition_absence_seconds,
-            required_start_id=IGNITION_ID,
-            required_start_id_timeout_seconds=5.0,
-            safety_check=InitialArmedSafetyCheck(
-                client,
-                channel=channel,
-                expected_usb_serial=usb_serial,
-                expected_dev_id=dev_id,
-            ),
-            mount_check=mount_check,
-            zstd=zstd,
-            candump=candump,
-            candump_extra_args=("-D",),
-            health_check=secondary_health_check,
-            channel=channel,
-            bitrate=BITRATE,
+        recorders = _prepare_interval_recorders(
+            args, policy, client, interface_manager, mount_device, interface,
+            run_id, run_dir, role_dirs, events_path, admitted, admission_detail,
+            channel, usb_serial, dev_id, selected_ids,
         )
-
-        main_error: BaseException | None = None
-        try:
-            with capture.campaign_file_lock(run_dir):
-                for thread in secondary_threads.values():
-                    thread.start()
-                deadline = time.monotonic() + SECONDARY_START_WAIT_SECONDS
-                for role in SECONDARY_ROLES:
-                    remaining = max(0.0, deadline - time.monotonic())
-                    if not secondary_settled[role].wait(remaining):
-                        secondary_health_check()
-                        raise DriveRecorderError(
-                            f"required {role} recorder did not start within "
-                            f"{SECONDARY_START_WAIT_SECONDS:.1f} seconds"
-                        )
-                secondary_health_check()
-                c_can_recorder.run()
-        except BaseException as exc:
-            main_error = exc
-        finally:
-            stop_secondaries.set()
-            for thread in secondary_threads.values():
-                if thread.ident is not None:
-                    thread.join(SECONDARY_JOIN_TIMEOUT_SECONDS)
-
-        alive = [
-            role for role, thread in secondary_threads.items() if thread.is_alive()
-        ]
-        if alive:
-            raise DriveRecorderError(
-                "secondary recorder cleanup timed out: " + ", ".join(alive)
-            )
-        if main_error is not None:
-            if isinstance(main_error, BrokerOwnershipLost):
-                # A concurrent secondary storage/cleanup failure remains fatal.
-                secondary_health_check()
-            if isinstance(main_error, capture.CaptureError) and (
-                "required start CAN ID" in str(main_error)
-            ):
-                raise BrokerOwnershipLost(str(main_error)) from main_error
-            raise main_error
-        secondary_health_check()
-        continuous = {
-            role: supervisor.continuous()
-            for role, supervisor in supervisors.items()
-        }
-        capture.atomic_write_json(
-            run_dir / "capture-set.json",
-            {
-                "type": "synchronized_three_bus_capture_set",
-                "completed_utc": utc_now(),
-                "campaign": run_id,
-                # True only when every role recorded one uninterrupted segment
-                # for the whole interval, as before the segmented policy.
-                "complete": all(continuous.values()),
-                "primary_complete": True,
-                "route_events": str(events_path),
-                "roles": {
-                    "c-can": {
-                        "route": routes["c-can"].as_dict(),
-                        "capture_dir": str(role_dirs["c-can"]),
-                        "checkpoint": str(role_dirs["c-can"] / "checkpoint.json"),
-                        "manifest": str(role_dirs["c-can"] / "manifest.jsonl"),
-                        "continuous": True,
-                    },
-                    **{
-                        role: {
-                            "route": (
-                                routes[role].as_dict() if role in routes else None
-                            ),
-                            "capture_dir": str(role_dirs[role]),
-                            "checkpoint": str(role_dirs[role] / "checkpoint.json"),
-                            "manifest": str(role_dirs[role] / "manifest.jsonl"),
-                            "continuous": continuous[role],
-                            "segments": supervisor.segments,
-                        }
-                        for role, supervisor in supervisors.items()
-                    },
-                },
-            },
+        _run_interval_recorders(run_dir, recorders)
+        _write_capture_set(
+            run_id, run_dir, role_dirs, events_path, routes, recorders.supervisors
         )
         return run_dir
 
