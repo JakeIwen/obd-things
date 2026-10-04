@@ -168,6 +168,24 @@ tablet browser ──HTTP/SSE──▶ web_v2.py (:8765, subclass of web.py)
 
 ### 2.2 Frontend: Preact + signals, esbuild, no framework re-renders on the hot path
 
+`src/link.js::createLink` coordinates page lifecycle, resync and the watchdog.
+Its baseline, EventSource and supplemental request owners are respectively
+`link.baseline.js`, `link.stream.js` and `link.summary.js`, with explicit state
+objects and one shared delivery record. Pure acceptance rules in
+`link.protocol.js` remain exported through `link.js`. Store callbacks still run
+before the accepted-delivery cursor advances; generation counters still reject
+obsolete callbacks. The independent freshness checks in link/store/settings
+remain independent (freshness contract rule 17).
+
+`format.js` intentionally keeps its display-unit tables. They are presentation
+policy, not a complete copy of the catalog: for example, an observation missing
+its unit for `engine.oil_life_remaining`, `vehicle.speed_limit` or `acc.set_speed`
+currently formats with no unit, whereas catalog-derived fallbacks would add `%`
+or `mph`. The catalog also cannot supply legacy `F`/`degF`/`degrees` aliases.
+Using a live catalog would additionally change output before its first load.
+Do not replace these tables without approving those string changes; the
+refactor oracle checks explicit and missing-unit inputs independently.
+
 History and System view models live in `src/views/history.helpers.js` and
 `src/views/system.helpers.js`; their small shared presentation utilities live in
 `src/views/view.helpers.js`. `historySystem.helpers.js` only re-exports the
