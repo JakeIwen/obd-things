@@ -780,6 +780,150 @@ class IngestMixin(ValidationMixin):
             ),
         )
 
+    def _record_usb_can_recovery_event(
+        self,
+        *,
+        row: Mapping[str, object],
+        incident_id: str,
+        affected: list[str],
+        producer_instance: str,
+        boot_id: str,
+        generation: str,
+        resolved_at: str,
+        captured_us: int,
+        snapshot_id: int,
+    ) -> str:
+        event_identity = {
+            "incident_id": incident_id,
+            "producer_instance": producer_instance,
+            "topology_generation": generation,
+            "resolution": "authoritative_healthy_exact_roles_after_monitor_restart",
+        }
+        event_id = "usb-can-event-v1:" + hashlib.sha256(
+            json.dumps(
+                event_identity,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        recovery = {
+            "schema_version": 1,
+            "event_id": event_id,
+            "boot_id": boot_id,
+            "kernel_seqnum": None,
+            "kind": "usb_can_recovered",
+            "action": "reconcile",
+            "scope": row["scope"],
+            "devpath": row["scope"],
+            "usb_vid": "1d50",
+            "usb_pid": "606f",
+            "usb_serial": None,
+            "affected_serials": affected,
+            "occurred_at": resolved_at,
+            "observed_monotonic": 0.0,
+            "monotonic_timestamp_available": False,
+            "source": "serial_role_reconciliation",
+            "receive_only": True,
+            "hardware_action": False,
+            "recovery_basis": (
+                "authoritative healthy exact-role snapshot after monitor restart"
+            ),
+            "producer_instance": producer_instance,
+        }
+        recovery_json = json.dumps(
+            recovery,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        self._conn.execute(
+            """
+            INSERT INTO usb_can_events(
+                event_id,occurred_us,occurred_at,boot_id,kernel_seqnum,kind,
+                action,scope,devpath,usb_vid,usb_pid,usb_serial,
+                affected_serials_json,source,payload_json,
+                first_snapshot_id,last_snapshot_id
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(event_id) DO UPDATE SET
+                last_snapshot_id=excluded.last_snapshot_id
+            """,
+            (
+                event_id,
+                captured_us,
+                resolved_at,
+                boot_id,
+                None,
+                "usb_can_recovered",
+                "reconcile",
+                row["scope"],
+                row["scope"],
+                "1d50",
+                "606f",
+                None,
+                json.dumps(affected, separators=(",", ":")),
+                "serial_role_reconciliation",
+                recovery_json,
+                snapshot_id,
+                snapshot_id,
+            ),
+        )
+        return event_id
+
+    def _resolve_usb_can_incident(
+        self,
+        *,
+        row: Mapping[str, object],
+        incident_id: str,
+        event_id: str,
+        resolved_at: str,
+        captured_us: int,
+        producer_instance: str,
+        snapshot_id: int,
+    ) -> None:
+        incident = self._usb_can_payload(row)
+        incident.update(
+            {
+                "state": "resolved",
+                "last_event_id": event_id,
+                "last_seen_at": resolved_at,
+                "resolved_event_id": event_id,
+                "resolved_at": resolved_at,
+                "resolution": (
+                    "authoritative_healthy_exact_roles_after_monitor_restart"
+                ),
+                "notification_eligible": False,
+                "event_count": int(row["event_count"]) + 1,
+                "resolved_by_producer_instance": producer_instance,
+            }
+        )
+        self._conn.execute(
+            """
+            UPDATE usb_can_incidents
+            SET state='resolved',last_seen_us=?,last_seen_at=?,resolved_us=?,
+                resolved_at=?,resolution=?,event_count=event_count+1,
+                last_event_id=?,resolved_event_id=?,payload_json=?,
+                last_snapshot_id=?
+            WHERE incident_id=? AND state='active'
+            """,
+            (
+                captured_us,
+                resolved_at,
+                captured_us,
+                resolved_at,
+                "authoritative_healthy_exact_roles_after_monitor_restart",
+                event_id,
+                event_id,
+                json.dumps(
+                    incident,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ),
+                snapshot_id,
+                incident_id,
+            ),
+        )
+
     def _resolve_previous_usb_can_incidents(
         self,
         snapshot: Mapping[str, object],
@@ -848,122 +992,25 @@ class IngestMixin(ValidationMixin):
                 for serial in affected
             ):
                 continue
-            event_identity = {
-                "incident_id": incident_id,
-                "producer_instance": producer_instance,
-                "topology_generation": generation,
-                "resolution": "authoritative_healthy_exact_roles_after_monitor_restart",
-            }
-            event_id = "usb-can-event-v1:" + hashlib.sha256(
-                json.dumps(
-                    event_identity,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ).hexdigest()
-            recovery = {
-                "schema_version": 1,
-                "event_id": event_id,
-                "boot_id": boot_id,
-                "kernel_seqnum": None,
-                "kind": "usb_can_recovered",
-                "action": "reconcile",
-                "scope": row["scope"],
-                "devpath": row["scope"],
-                "usb_vid": "1d50",
-                "usb_pid": "606f",
-                "usb_serial": None,
-                "affected_serials": affected,
-                "occurred_at": resolved_at,
-                "observed_monotonic": 0.0,
-                "monotonic_timestamp_available": False,
-                "source": "serial_role_reconciliation",
-                "receive_only": True,
-                "hardware_action": False,
-                "recovery_basis": (
-                    "authoritative healthy exact-role snapshot after monitor restart"
-                ),
-                "producer_instance": producer_instance,
-            }
-            recovery_json = json.dumps(
-                recovery,
-                sort_keys=True,
-                separators=(",", ":"),
-                allow_nan=False,
+            event_id = self._record_usb_can_recovery_event(
+                row=row,
+                incident_id=incident_id,
+                affected=affected,
+                producer_instance=producer_instance,
+                boot_id=boot_id,
+                generation=generation,
+                resolved_at=resolved_at,
+                captured_us=captured_us,
+                snapshot_id=snapshot_id,
             )
-            self._conn.execute(
-                """
-                INSERT INTO usb_can_events(
-                    event_id,occurred_us,occurred_at,boot_id,kernel_seqnum,kind,
-                    action,scope,devpath,usb_vid,usb_pid,usb_serial,
-                    affected_serials_json,source,payload_json,
-                    first_snapshot_id,last_snapshot_id
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(event_id) DO UPDATE SET
-                    last_snapshot_id=excluded.last_snapshot_id
-                """,
-                (
-                    event_id,
-                    captured_us,
-                    resolved_at,
-                    boot_id,
-                    None,
-                    "usb_can_recovered",
-                    "reconcile",
-                    row["scope"],
-                    row["scope"],
-                    "1d50",
-                    "606f",
-                    None,
-                    json.dumps(affected, separators=(",", ":")),
-                    "serial_role_reconciliation",
-                    recovery_json,
-                    snapshot_id,
-                    snapshot_id,
-                ),
-            )
-            incident = self._usb_can_payload(row)
-            incident.update(
-                {
-                    "state": "resolved",
-                    "last_event_id": event_id,
-                    "last_seen_at": resolved_at,
-                    "resolved_event_id": event_id,
-                    "resolved_at": resolved_at,
-                    "resolution": (
-                        "authoritative_healthy_exact_roles_after_monitor_restart"
-                    ),
-                    "notification_eligible": False,
-                    "event_count": int(row["event_count"]) + 1,
-                    "resolved_by_producer_instance": producer_instance,
-                }
-            )
-            self._conn.execute(
-                """
-                UPDATE usb_can_incidents
-                SET state='resolved',last_seen_us=?,last_seen_at=?,resolved_us=?,
-                    resolved_at=?,resolution=?,event_count=event_count+1,
-                    last_event_id=?,resolved_event_id=?,payload_json=?,
-                    last_snapshot_id=?
-                WHERE incident_id=? AND state='active'
-                """,
-                (
-                    captured_us,
-                    resolved_at,
-                    captured_us,
-                    resolved_at,
-                    "authoritative_healthy_exact_roles_after_monitor_restart",
-                    event_id,
-                    event_id,
-                    json.dumps(
-                        incident,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                        allow_nan=False,
-                    ),
-                    snapshot_id,
-                    incident_id,
-                ),
+            self._resolve_usb_can_incident(
+                row=row,
+                incident_id=incident_id,
+                event_id=event_id,
+                resolved_at=resolved_at,
+                captured_us=captured_us,
+                producer_instance=producer_instance,
+                snapshot_id=snapshot_id,
             )
 
     def _ingest_usb_can_monitor(
