@@ -2,8 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as H from "../src/components/dtcScan.helpers.js";
 
-const TOKEN = "a".repeat(40);
-
 function reply(status, data, { json = true } = {}) {
   return {
     status,
@@ -94,7 +92,7 @@ async function flush() {
   for (let i = 0; i < 10; i += 1) await Promise.resolve();
 }
 
-const ENABLED = { dtc_jobs_enabled: true, dtc_jobs_require_local_one_use_arm: false };
+const ENABLED = { dtc_jobs_enabled: true };
 
 async function enabledHarness(first, options = {}) {
   const env = harness({ replies: [reply(200, first)], ...options });
@@ -112,23 +110,14 @@ test("start body is exactly the three parked confirmations", () => {
   assert.deepEqual(Object.keys(body).sort(), ["confirm_ignition_on_engine_off", "confirm_park_gear", "confirm_parked"]);
 });
 
-test("a token is sent only when the listener requires the legacy one-use arm", () => {
-  const s = { ...H.initialState(), enabled: true, confirmed: true, token: "  " + TOKEN + " " };
-  assert.equal("token" in H.startBody(s), false, "not required: never sent");
-  assert.equal(H.startBody({ ...s, tokenRequired: true }).token, TOKEN, "required: trimmed token sent");
-  assert.equal("token" in H.startBody({ ...s, tokenRequired: true, token: "short" }), false, "invalid token never sent");
+test("legacy panel state cannot add fields to the fixed start body", () => {
+  assert.deepEqual(H.startBody({ token: "a".repeat(40), tokenRequired: true }), H.startBody());
+  assert.equal("token" in H.initialState(), false);
+  assert.equal("tokenRequired" in H.viewModel(H.initialState()), false);
 });
 
 test("cancel body is exactly {action: 'cancel'}", () => {
   assert.deepEqual(H.cancelBody(), { action: "cancel" });
-});
-
-test("token validity follows the arm-store length bounds", () => {
-  assert.equal(H.tokenValid("x".repeat(31)), false);
-  assert.equal(H.tokenValid("x".repeat(32)), true);
-  assert.equal(H.tokenValid("x".repeat(128)), true);
-  assert.equal(H.tokenValid("x".repeat(129)), false);
-  assert.equal(H.tokenValid(null), false);
 });
 
 test("every Scan gate blocks in order and names its reason", () => {
@@ -143,8 +132,6 @@ test("every Scan gate blocks in order and names its reason", () => {
   }
   assert.equal(H.startBlock({ ...ready, state: "restoration_failed" }), "lockout");
   assert.equal(H.startBlock({ ...ready, confirmed: false }), "confirm");
-  assert.equal(H.startBlock({ ...ready, tokenRequired: true }), "token");
-  assert.equal(H.startBlock({ ...ready, tokenRequired: true, token: TOKEN }), null);
   for (const state of ["completed", "cancelled", "failed", null]) {
     assert.equal(H.startBlock({ ...ready, state }), null, String(state));
   }
@@ -166,7 +153,6 @@ test("view model hints and lockout", () => {
   const s = { ...H.initialState(), enabled: true, state: "idle" };
   assert.equal(H.viewModel(s).hint, H.TEXT.hintConfirm);
   assert.equal(H.viewModel({ ...s, state: "running" }).hint, H.TEXT.hintActive);
-  assert.equal(H.viewModel({ ...s, confirmed: true, tokenRequired: true }).hint, H.TEXT.hintToken);
   const locked = H.viewModel({ ...s, confirmed: true, state: "restoration_failed" });
   assert.equal(locked.lockout, true);
   assert.equal(locked.canStart, false);
@@ -458,28 +444,6 @@ test("Cancel is not offered for idle or finished jobs", async () => {
   const env = await enabledHarness(idle);
   assert.equal(await env.ctrl.cancel(), false);
   assert.equal(env.calls.length, 1);
-});
-
-test("the legacy arm token gates Scan and is sent only when required", async () => {
-  const env = harness({ replies: [reply(200, idle)] });
-  env.ctrl.configure({ dtc_jobs_enabled: true, dtc_jobs_require_local_one_use_arm: true });
-  await flush();
-  env.ctrl.setConfirmed(true);
-  assert.equal(env.ctrl.snapshot().tokenRequired, true);
-  assert.equal(env.ctrl.snapshot().canStart, false);
-  assert.equal(env.ctrl.snapshot().hint, H.TEXT.hintToken);
-  env.ctrl.setToken("too-short");
-  assert.equal(await env.ctrl.start(), false);
-  env.ctrl.setToken(TOKEN);
-  env.queue.push(reply(202, { state: "queued", job: { state: "queued" } }));
-  assert.equal(await env.ctrl.start(), true);
-  assert.deepEqual(JSON.parse(env.calls[1].init.body), {
-    confirm_parked: true,
-    confirm_park_gear: true,
-    confirm_ignition_on_engine_off: true,
-    token: TOKEN,
-  });
-  assert.equal(env.ctrl.snapshot().token, "", "a one-use token is cleared after use");
 });
 
 test("disabling the listener stops polling, resets the panel and drops late replies", async () => {

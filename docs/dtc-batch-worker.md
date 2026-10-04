@@ -176,12 +176,13 @@ the Tailscale unit, verify the current Tailscale IPv4 address and create
 `/etc/van-telemetry/tailscale-web.env` from the tracked example with both the
 exact bind and matching `http://<address>:8765` origin.
 
-For older clients, `tools/dtc_web_arm.py` and optional token validation remain
-compatible. Only the legacy token digest is stored, in a mode-0600 file under
-`/run/van-telemetry`; the plaintext token exists only in the terminal and the
-legacy browser password field. It expires after five minutes and is deleted before a
-request is queued, including when later queueing fails. New clients omit the
-token field entirely. The POST must come
+The legacy arm-token feature, its generator tool and `--dtc-arm-file` web
+option have been removed. The start body contains exactly
+`confirm_parked`, `confirm_park_gear` and `confirm_ignition_on_engine_off`, all
+JSON `true`. An old client that still sends `token` receives HTTP 409 with
+`reason: "dtc_job_rejected"` and `detail: "DTC start request schema is not exact"`;
+nothing is queued. Omit that field and repeat the explicit confirmations.
+Tokens are neither consumed nor silently ignored. The POST must come
 from the exact configured Tailscale origin and repeats the three operator
 confirmations. It accepts no module list, CAN IDs, payload, session, clear
 option, channel, command, or filesystem path.
@@ -194,6 +195,6 @@ worker, not the web request thread, owns the CAN operation and its termination
 guards. Status is a bounded projection of the atomic job ledger. Cancellation
 only creates the existing cooperative cancel flag; it cannot retract an
 in-flight transport request. A `restoration_failed` job is sticky at the web
-boundary: neither a tokenless start nor a new legacy token can start another job. Inspect the exact roles and
+boundary: no new start can queue another job. Inspect the exact roles and
 same-boot inhibit locally; only after deliberate repair may the operator
 manually retire the current-job pointer. No DTC clear endpoint exists.

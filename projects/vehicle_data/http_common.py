@@ -39,7 +39,6 @@ def web_flags(server, *, include_bind: bool = True, include_build: bool = False)
         "warning_chat_enabled": server.warning_chat_socket is not None,
         "active_acquisition_enabled": server.allow_acquisitions,
         "dtc_jobs_enabled": server.dtc_controller is not None,
-        "dtc_jobs_require_local_one_use_arm": False,
     }
     if include_bind:
         flags["bind"] = f"{server.server_address[0]}:{server.server_address[1]}"

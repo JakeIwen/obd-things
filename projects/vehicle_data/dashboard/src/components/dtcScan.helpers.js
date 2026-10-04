@@ -6,10 +6,9 @@
  * #dtc-scan-controls handlers):
  *
  * - Scan needs the listener's `dtc_jobs_enabled`, the parked-confirmation checkbox, no active job,
- *   no `restoration_failed` lockout, no request in flight, a confirm() dialog, and (only when the
- *   listener still sets `dtc_jobs_require_local_one_use_arm`) a one-use arm token.
+ *   no `restoration_failed` lockout, no request in flight, and a confirm() dialog.
  * - POST /v1/diagnostics/dtc-jobs with exactly {confirm_parked, confirm_park_gear,
- *   confirm_ignition_on_engine_off} (all true), plus `token` only when the listener requires it.
+ *   confirm_ignition_on_engine_off} (all true).
  * - Cancel: POST /v1/diagnostics/dtc-jobs/current/cancel with exactly {action: "cancel"} while the
  *   job is queued, starting, created or running and no cancel is pending.
  * - Poll GET /v1/diagnostics/dtc-jobs/current every 2 s while a job is active and the page is
@@ -35,10 +34,6 @@ export const ACTIVE_STATES = new Set(["queued", "starting", "created", "running"
 /** Terminal job states (lib/dtc_batch.FINAL_JOB_STATES). */
 export const FINAL_STATES = new Set(["completed", "cancelled", "failed", "restoration_failed"]);
 
-/** Length bounds of a legacy one-use arm token (lib/dtc_web.ArmTokenStore.consume). */
-export const TOKEN_MIN = 32;
-export const TOKEN_MAX = 128;
-
 /** On-screen copy; the component only renders these. */
 export const TEXT = Object.freeze({
   summary: "Parked code scan",
@@ -46,8 +41,6 @@ export const TEXT = Object.freeze({
     "Reads the saved codes from 15 modules with one fixed, read-only request each. It never clears a code, " +
     "and the PCM is not included. Before every request the scanner re-checks ignition, engine speed and vehicle speed.",
   confirmLabel: "I confirm the van is stationary, selector in Park, ignition ON, and engine OFF.",
-  tokenLabel: "One-use arm token",
-  tokenHint: "This listener still asks for a local token. Create one on the Pi with python3 tools/dtc_web_arm.py.",
   start: "Scan modules",
   starting: "Queuing…",
   cancel: "Cancel scan",
@@ -59,7 +52,6 @@ export const TEXT = Object.freeze({
   lockout: "Restoration unverified — inspect before retry. The last scan could not confirm the CAN adapters were put back; check them before scanning again.",
   hintConfirm: "Tick the parked confirmation to enable Scan.",
   hintActive: "A scan is already queued or running.",
-  hintToken: "Enter the one-use arm token to enable Scan.",
   statusError: "Scan status unavailable: ",
   startError: "The scan was not queued: ",
   cancelError: "Cancel was not accepted: ",
@@ -107,13 +99,6 @@ export function stateWord(state) {
   return STATE_WORDS[state] || humanize(state);
 }
 
-/** A legacy arm token of plausible length (whitespace around it is ignored). */
-export function tokenValid(token) {
-  if (typeof token !== "string") return false;
-  const t = token.trim();
-  return t.length >= TOKEN_MIN && t.length <= TOKEN_MAX;
-}
-
 /** Job state from a status/start/cancel reply (`state`, else `job.state`, else idle). */
 export function jobState(payload) {
   const p = obj(payload) || {};
@@ -125,9 +110,7 @@ export function jobState(payload) {
 export function initialState() {
   return {
     enabled: false,
-    tokenRequired: false,
     confirmed: false,
-    token: "",
     state: null,
     job: null,
     cancelRequested: false,
@@ -140,7 +123,7 @@ export function initialState() {
 /**
  * Why Scan is disabled, or null when it may be pressed. Order matters: the first gate that fails
  * decides the hint shown under the buttons.
- * @returns {null|'disabled'|'busy'|'active'|'lockout'|'confirm'|'token'}
+ * @returns {null|'disabled'|'busy'|'active'|'lockout'|'confirm'}
  */
 export function startBlock(s) {
   if (!s.enabled) return "disabled";
@@ -148,7 +131,6 @@ export function startBlock(s) {
   if (isActive(s.state)) return "active";
   if (s.state === "restoration_failed") return "lockout";
   if (!s.confirmed) return "confirm";
-  if (s.tokenRequired && !tokenValid(s.token)) return "token";
   return null;
 }
 
@@ -161,11 +143,9 @@ export function canCancel(s) {
   return s.enabled && isActive(s.state) && !s.cancelRequested && !s.busy;
 }
 
-/** The exact start body the listener accepts (token only when the listener requires one). */
-export function startBody(s) {
-  const body = { confirm_parked: true, confirm_park_gear: true, confirm_ignition_on_engine_off: true };
-  if (s && s.tokenRequired && tokenValid(s.token)) body.token = s.token.trim();
-  return body;
+/** The exact start body the listener accepts. */
+export function startBody() {
+  return { confirm_parked: true, confirm_park_gear: true, confirm_ignition_on_engine_off: true };
 }
 
 /** The exact cancel body. */
@@ -240,7 +220,7 @@ export function nextPollDelay(s, hadError) {
   return isActive(s.state) ? POLL_ACTIVE_MS : null;
 }
 
-const HINTS = { confirm: TEXT.hintConfirm, active: TEXT.hintActive, token: TEXT.hintToken };
+const HINTS = { confirm: TEXT.hintConfirm, active: TEXT.hintActive };
 
 /** Everything the component renders, as plain values. */
 export function viewModel(s) {
@@ -248,8 +228,6 @@ export function viewModel(s) {
   return {
     enabled: s.enabled,
     confirmed: s.confirmed,
-    token: s.token,
-    tokenRequired: s.tokenRequired,
     active: isActive(s.state),
     busy: s.busy,
     canStart: block === null,
@@ -374,8 +352,6 @@ export function createDtcScanController(deps) {
   function configure(web) {
     const w = obj(web) || {};
     const enabled = w.dtc_jobs_enabled === true;
-    const tokenRequired = w.dtc_jobs_require_local_one_use_arm === true;
-    if (tokenRequired !== s.tokenRequired) set({ ...s, tokenRequired });
     if (enabled === s.enabled) {
       if (enabled && isActive(s.state) && timer === null && statusInFlight === 0) refresh();
       return;
@@ -383,7 +359,7 @@ export function createDtcScanController(deps) {
     if (!enabled) {
       generation += 1;
       clear();
-      set({ ...initialState(), tokenRequired });
+      set(initialState());
       return;
     }
     set({ ...s, enabled: true, statusText: TEXT.checking });
@@ -394,7 +370,7 @@ export function createDtcScanController(deps) {
     if (!canStart(s)) return false;
     if (!d.confirm(TEXT.confirmPrompt)) return false;
     if (!canStart(s)) return false; // the job or the flags may have changed behind the dialog
-    const body = startBody(s);
+    const body = startBody();
     const seq = ++issued;
     const gen = generation;
     set({ ...s, busy: "start" });
@@ -407,8 +383,8 @@ export function createDtcScanController(deps) {
       });
       const payload = await readReply(response);
       if (disposed || gen !== generation) return false;
-      // A queued scan needs a fresh confirmation (and token) before the next one.
-      const base = { ...s, busy: null, confirmed: false, token: "" };
+      // A queued scan needs a fresh confirmation before the next one.
+      const base = { ...s, busy: null, confirmed: false };
       if (current(seq, gen)) accept(base, payload);
       else set(base);
       return true;
@@ -455,11 +431,6 @@ export function createDtcScanController(deps) {
     if (confirmed !== s.confirmed) set({ ...s, confirmed });
   }
 
-  function setToken(value) {
-    const token = typeof value === "string" ? value : "";
-    if (token !== s.token) set({ ...s, token });
-  }
-
   function dispose() {
     disposed = true;
     generation += 1;
@@ -473,7 +444,6 @@ export function createDtcScanController(deps) {
     cancel,
     resume,
     setConfirmed,
-    setToken,
     dispose,
     snapshot: () => viewModel(s),
     state: () => s,

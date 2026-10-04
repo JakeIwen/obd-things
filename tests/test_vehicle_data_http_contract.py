@@ -42,7 +42,7 @@ class HttpContractTests(unittest.TestCase):
         full = http_common.web_flags(server)
         self.assertEqual(list(full), [
             "warning_chat_enabled", "active_acquisition_enabled", "dtc_jobs_enabled",
-            "dtc_jobs_require_local_one_use_arm", "bind",
+            "bind",
         ])
         self.assertEqual(full["bind"], "127.0.0.1:8765")
         stream = http_common.web_flags(server, include_bind=False)
@@ -50,7 +50,7 @@ class HttpContractTests(unittest.TestCase):
         dashboard = http_common.web_flags(server, include_build=True)
         self.assertEqual(list(dashboard), sorted([*full, "build"]))
         self.assertIsNone(dashboard["build"])
-        self.assertFalse(dashboard["dtc_jobs_require_local_one_use_arm"])
+        self.assertNotIn("dtc_jobs_require_local_one_use_arm", dashboard)
 
     def test_schema_names_actual_broker_and_catalog_keys(self):
         broker = TelemetryBroker(acquirer=FakeAcquirer(), monotonic=FakeClock())

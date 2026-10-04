@@ -1,17 +1,11 @@
-"""Fixed request records and optional legacy local arming for DTC jobs.
+"""Fixed request records for guarded DTC jobs.
 
 This module performs no CAN or network I/O. The origin-restricted web listener
-queues one closed-schema request after explicit parked confirmations. Legacy
-clients may still supply a short-lived local token whose digest is stored under
-``/run``; the token is no longer required by the maintained dashboard.
+queues one closed-schema request after explicit parked confirmations.
 """
 
 from __future__ import annotations
 
-from contextlib import contextmanager
-import fcntl
-import hashlib
-import hmac
 import json
 import math
 import os
@@ -23,14 +17,12 @@ import tempfile
 import threading
 import time
 import uuid
-from typing import Any, Iterator, Mapping
+from typing import Any, Mapping
 
 from lib.dtc_batch import FINAL_JOB_STATES, JOB_ID_RE, JobStore, atomic_json
 
 
-ARM_SCHEMA_VERSION = 1
 REQUEST_SCHEMA_VERSION = 1
-DEFAULT_ARM_PATH = Path("/run/van-telemetry/dtc-web-arm.json")
 DEFAULT_REQUEST_PATH = Path("/run/van-telemetry/dtc-batch.request.json")
 DEFAULT_CURRENT_PATH = Path("/run/van-telemetry/dtc-batch-current.json")
 DEFAULT_CANCEL_DIR = Path("/run/van-telemetry/dtc-batch-cancel")
@@ -40,13 +32,8 @@ DEFAULT_JOB_ROOT = (
     / "inventories"
     / "dtc-batch"
 )
-DEFAULT_ARM_TTL_SECONDS = 5 * 60
 MAX_RECORD_BYTES = 4096
 CURRENT_JOB_ID_RE = re.compile(r"dtc-web-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\Z")
-
-
-class DtcWebAuthorizationError(RuntimeError):
-    """A one-use local authorization is absent, expired, or invalid."""
 
 
 class DtcWebRequestError(RuntimeError):
@@ -69,27 +56,6 @@ def _require_runtime_parent(path: Path) -> None:
             f"runtime directory {path.parent} must be owned by the worker user "
             "and inaccessible to other users"
         )
-
-
-def _atomic_replace_json(path: Path, payload: Mapping[str, object]) -> None:
-    _require_runtime_parent(path)
-    descriptor, temporary = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    try:
-        os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    except BaseException:
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
-        raise
 
 
 def _atomic_create_json(path: Path, payload: Mapping[str, object]) -> None:
@@ -146,97 +112,6 @@ def _read_private_json(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise DtcWebRequestError(f"{path} must contain a JSON object")
     return payload
-
-
-class ArmTokenStore:
-    def __init__(self, path: str | Path = DEFAULT_ARM_PATH) -> None:
-        self.path = Path(path)
-        self.lock_path = self.path.with_name(f".{self.path.name}.lock")
-
-    @contextmanager
-    def _locked(self) -> Iterator[None]:
-        _require_runtime_parent(self.path)
-        descriptor = os.open(
-            self.lock_path,
-            os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0),
-            0o600,
-        )
-        try:
-            os.fchmod(descriptor, 0o600)
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
-            yield
-        finally:
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
-            os.close(descriptor)
-
-    def issue(
-        self,
-        *,
-        ttl_seconds: int = DEFAULT_ARM_TTL_SECONDS,
-        now: float | None = None,
-    ) -> dict[str, object]:
-        if (
-            not isinstance(ttl_seconds, int)
-            or isinstance(ttl_seconds, bool)
-            or not 30 <= ttl_seconds <= 15 * 60
-        ):
-            raise ValueError("DTC web arm TTL must be 30..900 seconds")
-        issued_at = time.time() if now is None else float(now)
-        if not math.isfinite(issued_at):
-            raise ValueError("DTC web arm time must be finite")
-        token = secrets.token_urlsafe(32)
-        record = {
-            "schema_version": ARM_SCHEMA_VERSION,
-            "token_sha256": hashlib.sha256(token.encode()).hexdigest(),
-            "issued_at_epoch": issued_at,
-            "expires_at_epoch": issued_at + ttl_seconds,
-            "purpose": "scan_registered_dtcs_once",
-        }
-        with self._locked():
-            _atomic_replace_json(self.path, record)
-        return {
-            "token": token,
-            "expires_at_epoch": record["expires_at_epoch"],
-            "ttl_seconds": ttl_seconds,
-        }
-
-    def consume(self, token: str, *, now: float | None = None) -> None:
-        if not isinstance(token, str) or not 32 <= len(token) <= 128:
-            raise DtcWebAuthorizationError("DTC arm token is invalid")
-        checked_at = time.time() if now is None else float(now)
-        if not math.isfinite(checked_at):
-            raise DtcWebAuthorizationError("DTC arm check time is invalid")
-        with self._locked():
-            try:
-                record = _read_private_json(self.path)
-            except FileNotFoundError as exc:
-                raise DtcWebAuthorizationError(
-                    "no local DTC authorization is armed"
-                ) from exc
-            try:
-                valid_shape = (
-                    record.get("schema_version") == ARM_SCHEMA_VERSION
-                    and record.get("purpose") == "scan_registered_dtcs_once"
-                    and isinstance(record.get("token_sha256"), str)
-                    and isinstance(record.get("expires_at_epoch"), (int, float))
-                    and not isinstance(record.get("expires_at_epoch"), bool)
-                )
-            except Exception:
-                valid_shape = False
-            if not valid_shape:
-                raise DtcWebAuthorizationError("DTC arm record is malformed")
-            if (
-                not math.isfinite(float(record["expires_at_epoch"]))
-                or checked_at >= float(record["expires_at_epoch"])
-            ):
-                self.path.unlink(missing_ok=True)
-                raise DtcWebAuthorizationError("DTC arm token has expired")
-            presented = hashlib.sha256(token.encode()).hexdigest()
-            if not hmac.compare_digest(presented, str(record["token_sha256"])):
-                raise DtcWebAuthorizationError("DTC arm token is invalid")
-            # Consume before queuing. A queue failure cannot leave a reusable
-            # network authorization behind; the operator must arm again.
-            self.path.unlink()
 
 
 def build_request(job_id: str, *, now: float | None = None) -> dict[str, object]:
@@ -424,13 +299,11 @@ class DtcWebController:
     def __init__(
         self,
         *,
-        arm_path: str | Path = DEFAULT_ARM_PATH,
         request_path: str | Path = DEFAULT_REQUEST_PATH,
         current_path: str | Path = DEFAULT_CURRENT_PATH,
         cancel_dir: str | Path = DEFAULT_CANCEL_DIR,
         job_root: str | Path = DEFAULT_JOB_ROOT,
     ) -> None:
-        self.arm_store = ArmTokenStore(arm_path)
         self.request_path = Path(request_path)
         self.current_path = Path(current_path)
         self.cancel_dir = Path(cancel_dir)
@@ -529,7 +402,7 @@ class DtcWebController:
                 "job": self._public_job(record),
             }
 
-    def start(self, token: str | None = None) -> dict[str, Any]:
+    def start(self) -> dict[str, Any]:
         with self._lock:
             current = self._pointer()
             if current is not None:
@@ -550,9 +423,6 @@ class DtcWebController:
             if self.request_path.exists():
                 raise DtcWebRequestError("a DTC batch request is already queued")
             # Origin-restricted UI confirmation authorizes the guarded request.
-            # A local arm remains optional for compatibility with older clients.
-            if token is not None:
-                self.arm_store.consume(token)
             stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
             job_id = f"dtc-web-{stamp}-{uuid.uuid4().hex[:8]}"
             request = build_request(job_id)
@@ -654,13 +524,10 @@ class DtcWebController:
 
 __all__ = [
     "DtcWebController",
-    "ArmTokenStore",
-    "DEFAULT_ARM_PATH",
     "DEFAULT_CANCEL_DIR",
     "DEFAULT_CURRENT_PATH",
     "DEFAULT_JOB_ROOT",
     "DEFAULT_REQUEST_PATH",
-    "DtcWebAuthorizationError",
     "DtcWebRequestError",
     "build_request",
     "build_cancel_request",

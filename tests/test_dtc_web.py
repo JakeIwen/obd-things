@@ -5,8 +5,6 @@ import tempfile
 import unittest
 
 from lib.dtc_web import (
-    ArmTokenStore,
-    DtcWebAuthorizationError,
     DtcWebRequestError,
     build_request,
     claim_request,
@@ -27,30 +25,6 @@ class DtcWebBoundaryTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-
-    def test_arm_token_is_hashed_private_expiring_and_one_use(self):
-        path = self.root / "arm.json"
-        store = ArmTokenStore(path)
-        issued = store.issue(ttl_seconds=60, now=100.0)
-        raw = path.read_text()
-        self.assertNotIn(str(issued["token"]), raw)
-        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
-
-        store.consume(str(issued["token"]), now=159.0)
-        self.assertFalse(path.exists())
-        with self.assertRaisesRegex(DtcWebAuthorizationError, "no local"):
-            store.consume(str(issued["token"]), now=159.0)
-
-    def test_bad_token_does_not_consume_but_expired_token_does(self):
-        path = self.root / "arm.json"
-        store = ArmTokenStore(path)
-        issued = store.issue(ttl_seconds=60, now=100.0)
-        with self.assertRaisesRegex(DtcWebAuthorizationError, "invalid"):
-            store.consume("x" * 43, now=110.0)
-        self.assertTrue(path.exists())
-        with self.assertRaisesRegex(DtcWebAuthorizationError, "expired"):
-            store.consume(str(issued["token"]), now=160.0)
-        self.assertFalse(path.exists())
 
     def test_fixed_request_is_exclusive_private_and_claimed(self):
         path = self.root / "request.json"
@@ -112,25 +86,21 @@ class DtcWebBoundaryTests(unittest.TestCase):
         with self.assertRaises(DtcWebRequestError):
             queue_cancel_request(path.with_name("nan.json"), "dtc-web-test", now=float("nan"))
 
-    def test_controller_consumes_arm_and_queues_single_job(self):
-        arm = self.root / "arm.json"
+    def test_controller_queues_and_cancels_single_job(self):
         request = self.root / "request.json"
         current = self.root / "current.json"
         controller = DtcWebController(
-            arm_path=arm,
             request_path=request,
             current_path=current,
             cancel_dir=self.root / "cancel",
             job_root=self.root / "jobs",
         )
-        issued = controller.arm_store.issue(ttl_seconds=60)
-        queued = controller.start(str(issued["token"]))
+        queued = controller.start()
         self.assertEqual(queued["state"], "queued")
         self.assertTrue(request.is_file())
-        self.assertFalse(arm.exists())
         self.assertEqual(controller.status()["state"], "queued")
         with self.assertRaisesRegex(DtcWebRequestError, "already"):
-            controller.start(str(issued["token"]))
+            controller.start()
 
         cancelled = controller.cancel()
         self.assertEqual(cancelled["state"], "cancelled")
@@ -139,15 +109,13 @@ class DtcWebBoundaryTests(unittest.TestCase):
             next(self.root.glob("request.json.cancelled-dtc-web-*"), None)
         )
 
-    def test_controller_queues_fixed_request_without_local_token(self):
-        arm = self.root / "arm.json"
+    def test_controller_queues_fixed_request(self):
         request = self.root / "request.json"
-        controller = DtcWebController(arm_path=arm, request_path=request,
+        controller = DtcWebController(request_path=request,
             current_path=self.root / "current.json", cancel_dir=self.root / "cancel",
             job_root=self.root / "jobs")
         result = controller.start()
         self.assertEqual(result["state"], "queued")
-        self.assertFalse(arm.exists())
         payload = validate_request(json.loads(request.read_text()))
         self.assertEqual(payload["request_hex"], "19 02 FF")
         self.assertFalse(payload["clear_requested"])
@@ -156,8 +124,8 @@ class DtcWebBoundaryTests(unittest.TestCase):
         with self.assertRaisesRegex(DtcWebRequestError, "already"):
             controller.start()
 
-    def test_tokenless_request_cannot_bypass_restoration_failure(self):
-        controller = DtcWebController(arm_path=self.root / "arm.json",
+    def test_start_request_cannot_bypass_restoration_failure(self):
+        controller = DtcWebController(
             request_path=self.root / "request.json", current_path=self.root / "current.json",
             cancel_dir=self.root / "cancel", job_root=self.root / "jobs")
         (self.root / "current.json").write_text(json.dumps({
@@ -204,7 +172,6 @@ class DtcWebBoundaryTests(unittest.TestCase):
         current = self.root / "current.json"
         jobs = self.root / "jobs"
         controller = DtcWebController(
-            arm_path=self.root / "arm.json",
             request_path=self.root / "request.json",
             current_path=current,
             cancel_dir=self.root / "cancel",
@@ -235,10 +202,8 @@ class DtcWebBoundaryTests(unittest.TestCase):
             )
         )
         current.chmod(0o600)
-        issued = controller.arm_store.issue(ttl_seconds=60)
         with self.assertRaisesRegex(DtcWebRequestError, "unverified restoration"):
-            controller.start(str(issued["token"]))
-        self.assertTrue((self.root / "arm.json").is_file())
+            controller.start()
 
 
 if __name__ == "__main__":

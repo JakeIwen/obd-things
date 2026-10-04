@@ -5,7 +5,7 @@
  * view model and forwards taps. The only timer is the controller's documented job poll (2 s while
  * active and visible, 5 s after an error); it stops when the panel unmounts.
  *
- * Props: { web } — the store's web flags (`dtc_jobs_enabled`, `dtc_jobs_require_local_one_use_arm`).
+ * Props: { web } — the store's web flags (`dtc_jobs_enabled`).
  */
 
 import { useEffect, useRef, useState } from "preact/hooks";
@@ -34,11 +34,10 @@ function useScanController() {
 export default function DtcScan({ web }) {
   const [ctrl, vm] = useScanController();
   const enabled = Boolean(web && web.dtc_jobs_enabled === true);
-  const tokenRequired = Boolean(web && web.dtc_jobs_require_local_one_use_arm === true);
 
   useEffect(() => {
-    ctrl.configure({ dtc_jobs_enabled: enabled, dtc_jobs_require_local_one_use_arm: tokenRequired });
-  }, [enabled, tokenRequired]);
+    ctrl.configure({ dtc_jobs_enabled: enabled });
+  }, [enabled]);
 
   useEffect(() => {
     const onVisibility = () => {
@@ -64,20 +63,6 @@ export default function DtcScan({ web }) {
           />
           <span>{H.TEXT.confirmLabel}</span>
         </label>
-        {vm.tokenRequired ? (
-          <label class="field">
-            {H.TEXT.tokenLabel}
-            <input
-              class="input"
-              type="password"
-              autocomplete="off"
-              maxLength={H.TOKEN_MAX}
-              value={vm.token}
-              onInput={(e) => ctrl.setToken(e.currentTarget.value)}
-            />
-            <span class="health-scan__hint">{H.TEXT.tokenHint}</span>
-          </label>
-        ) : null}
         <div class="btn-row">
           <button type="button" class="btn btn--primary" disabled={!vm.canStart} onClick={() => ctrl.start()}>
             {vm.startLabel}

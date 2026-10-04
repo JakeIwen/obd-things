@@ -782,7 +782,6 @@ def main(argv=None) -> int:
             args.dtc_trusted_origin, bind=args.bind, port=args.port
         )
         dtc_controller = base.DtcWebController(
-            arm_path=args.dtc_arm_file,
             request_path=args.dtc_request_file,
             current_path=args.dtc_current_file,
             cancel_dir=args.dtc_cancel_dir,

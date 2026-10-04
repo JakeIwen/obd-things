@@ -1954,14 +1954,14 @@ class WebTests(unittest.TestCase):
 
         class FakeController:
             def __init__(self):
-                self.started = []
+                self.started = 0
                 self.cancelled = 0
 
             def status(self):
                 return {"available": True, "state": "idle", "job": None}
 
-            def start(self, token):
-                self.started.append(token)
+            def start(self):
+                self.started += 1
                 return {"available": True, "state": "queued", "job": {"job_id": "dtc-web-test"}}
 
             def cancel(self):
@@ -1978,7 +1978,6 @@ class WebTests(unittest.TestCase):
         self.assertEqual(json.loads(raw)["state"], "idle")
 
         request = {
-            "token": "x" * 43,
             "confirm_parked": True,
             "confirm_park_gear": True,
             "confirm_ignition_on_engine_off": True,
@@ -1999,6 +1998,28 @@ class WebTests(unittest.TestCase):
         self.assertEqual(status, 409)
         self.assertFalse(controller.started)
 
+        # Legacy clients must drop the token, not have it silently ignored. No
+        # token shape may queue a job, even with a trusted Origin and confirmations.
+        for token in ("x" * 43, "bad", "", None, 42):
+            status, raw = self.request(
+                "POST", "/v1/diagnostics/dtc-jobs", {**request, "token": token},
+                headers={"Origin": origin},
+            )
+            self.assertEqual(status, 409)
+            self.assertEqual(json.loads(raw), {
+                "available": False, "reason": "dtc_job_rejected",
+                "detail": "DTC start request schema is not exact",
+            })
+        self.assertFalse(controller.started)
+        for rejected_origin in ("http://evil.invalid", "null"):
+            status, raw = self.request(
+                "POST", "/v1/diagnostics/dtc-jobs", request,
+                headers={"Origin": rejected_origin},
+            )
+            self.assertEqual(status, 403)
+            self.assertEqual(json.loads(raw)["reason"], "origin_rejected")
+        self.assertFalse(controller.started)
+
         status, raw = self.request(
             "POST",
             "/v1/diagnostics/dtc-jobs",
@@ -2006,22 +2027,24 @@ class WebTests(unittest.TestCase):
             headers={"Origin": origin},
         )
         self.assertEqual(status, 202)
-        self.assertEqual(controller.started, ["x" * 43])
+        self.assertEqual(controller.started, 1)
         self.assertEqual(json.loads(raw)["state"], "queued")
 
-        tokenless = {key: value for key, value in request.items() if key != "token"}
         for field in ("confirm_parked", "confirm_park_gear", "confirm_ignition_on_engine_off"):
+            status, _ = self.request("POST", "/v1/diagnostics/dtc-jobs",
+                {key: value for key, value in request.items() if key != field}, headers={"Origin": origin})
+            self.assertEqual(status, 409)
             for bad in (False, 1, "true", None):
                 status, _ = self.request("POST", "/v1/diagnostics/dtc-jobs",
-                    {**tokenless, field: bad}, headers={"Origin": origin})
+                    {**request, field: bad}, headers={"Origin": origin})
                 self.assertEqual(status, 409)
-        self.assertEqual(controller.started, ["x" * 43])
-        status, raw = self.request("POST", "/v1/diagnostics/dtc-jobs", tokenless,
+        self.assertEqual(controller.started, 1)
+        status, raw = self.request("POST", "/v1/diagnostics/dtc-jobs", request,
                                    headers={"Origin": origin})
         self.assertEqual(status, 202)
-        self.assertEqual(controller.started, ["x" * 43, None])
+        self.assertEqual(controller.started, 2)
         status, raw = self.request("GET", "/v1/snapshot")
-        self.assertFalse(json.loads(raw)["web"]["dtc_jobs_require_local_one_use_arm"])
+        self.assertNotIn("dtc_jobs_require_local_one_use_arm", json.loads(raw)["web"])
 
         status, raw = self.request(
             "POST",

@@ -59,7 +59,6 @@ tools/                     GENERIC, module-agnostic CLI tools (take a module key
   dtc_inventory.py           non-clearing per-ECU DTC inventory -> tmp/inventories/<key>/
   dtc_scan.py                offline multi-module DTC plan + saved-report import; no CAN access
   dtc_batch.py               guarded fixed 19 02 FF batch for 15 reviewed modules
-  dtc_web_arm.py             optional legacy local authorization for older DTC UI clients
   can_capture_summary.py     interface-preserving offline candump/.zst summary (`--snapshot` bounds growing logs)
   can_event_window.py        bounded exact saved-log frame windows + optional CRC-8/SAE-J1850 audit
   three_bus_capture.py       cooperative receive-only three-role chunks -> tmp/captures/three_bus_drive/

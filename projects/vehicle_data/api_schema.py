@@ -44,7 +44,6 @@ class WebFlags(TypedDict):
     warning_chat_enabled: bool
     active_acquisition_enabled: bool
     dtc_jobs_enabled: bool
-    dtc_jobs_require_local_one_use_arm: Literal[False]
     # Missing on /v1/stream, including the dashboard listener's full stream.
     bind: NotRequired[str]
     # Only dashboard /v1/snapshot and /v2 products; null when no build is known.

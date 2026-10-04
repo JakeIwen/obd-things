@@ -37,12 +37,10 @@ from projects.vehicle_data.warning_chat import (
 from projects.vehicle_data.broker import DEFAULT_SOCKET
 from lib.dtc_web import (
     DtcWebController,
-    DEFAULT_ARM_PATH,
     DEFAULT_CANCEL_DIR,
     DEFAULT_CURRENT_PATH,
     DEFAULT_JOB_ROOT,
     DEFAULT_REQUEST_PATH,
-    DtcWebAuthorizationError,
     DtcWebRequestError,
 )
 
@@ -348,19 +346,13 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
                 }
                 if (
                     not isinstance(payload, dict)
-                    or set(payload) not in (expected, expected | {"token"})
+                    or set(payload) != expected
                     or payload.get("confirm_parked") is not True
                     or payload.get("confirm_park_gear") is not True
                     or payload.get("confirm_ignition_on_engine_off") is not True
-                    or ("token" in payload and not isinstance(payload["token"], str))
                 ):
                     raise DtcWebRequestError("DTC start request schema is not exact")
-                result = controller.start(payload.get("token"))
-        except DtcWebAuthorizationError as exc:
-            return self._json(
-                403,
-                {"available": False, "reason": "local_arm_rejected", "detail": str(exc)},
-            )
+                result = controller.start()
         except (DtcWebRequestError, OSError, RuntimeError, ValueError) as exc:
             return self._json(
                 409,
@@ -477,7 +469,6 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--dtc-trusted-origin")
-    parser.add_argument("--dtc-arm-file", default=str(DEFAULT_ARM_PATH))
     parser.add_argument("--dtc-request-file", default=str(DEFAULT_REQUEST_PATH))
     parser.add_argument("--dtc-current-file", default=str(DEFAULT_CURRENT_PATH))
     parser.add_argument("--dtc-cancel-dir", default=str(DEFAULT_CANCEL_DIR))
@@ -549,7 +540,6 @@ def main(argv=None) -> int:
             port=args.port,
         )
         dtc_controller = DtcWebController(
-            arm_path=args.dtc_arm_file,
             request_path=args.dtc_request_file,
             current_path=args.dtc_current_file,
             cancel_dir=args.dtc_cancel_dir,

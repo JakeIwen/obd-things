@@ -495,9 +495,11 @@ checks when stopped:
   listener):
   - A parked-confirmation checkbox gates `Scan`.
   - Scan also requires: no active job; `state !== "restoration_failed"` (otherwise it shows
-    "restoration unverified — inspect before retry"); a legacy one-use arm token when
-    `dtc_jobs_require_local_one_use_arm` is set; and a confirm dialog.
-  - The POST body is exactly `{confirm_parked, confirm_park_gear, confirm_ignition_on_engine_off}`.
+    "restoration unverified — inspect before retry"); and a confirm dialog.
+  - The POST body is exactly `{confirm_parked, confirm_park_gear, confirm_ignition_on_engine_off}`,
+    all `true`. Legacy arm-token UI, flag and validation are removed. An old
+    client sending `token` gets HTTP 409 (`dtc_job_rejected`, exact-schema
+    error); the server never silently ignores it or queues that request.
   - `Cancel` is available while the job is queued, starting, created or running.
   - The status line shows the state, bus/module, imported count, cancellation and failure.
   - `/v1/diagnostics/dtc-jobs/current` is polled every 2 s while a job is active and the page is

@@ -1480,10 +1480,12 @@ under `/run`, and `van-dtc-batch.path` starts the separate non-networked
 oneshot worker. As requested on September 20, the browser no longer needs a
 locally generated token. The exact configured Origin, explicit confirmations,
 single-job exclusion, sticky restoration-failure block and every worker-side
-live state/identity/transport check remain. Legacy clients may still supply a
-valid optional token; it is consumed as before. The updated UI stays disabled
-against an older web process still advertising a required token, until that
-listener is restarted. No DTC scan was run while implementing this change.
+live state/identity/transport check remain. Legacy arm-token support and the
+`--dtc-arm-file` web option have been removed. A start body carrying `token`
+is now rejected with HTTP 409 (`dtc_job_rejected`, exact-schema error), without
+queuing a job; clients must send only the three true confirmations. Rebuild
+`dashboard/dist` and restart both web listeners when deploying this removal.
+No DTC scan was run while implementing this change.
 
 The one-module reader remains useful for an explicitly scoped investigation
 and is dry-run by default:
