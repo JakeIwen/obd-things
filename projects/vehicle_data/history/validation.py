@@ -341,6 +341,81 @@ class ValidationMixin:
         return instance, sequence, generated_ms
 
     @staticmethod
+    def _normalize_multiple_interfaces(
+        multiple: Mapping[object, object],
+    ) -> dict[str, Mapping[str, object]]:
+        normalized_multiple: dict[str, Mapping[str, object]] = {}
+        for key, payload in multiple.items():
+            if not isinstance(payload, Mapping):
+                continue
+            role = key
+            if _is_placeholder_interface_role(role):
+                topology = payload.get("topology")
+                topology = topology if isinstance(topology, Mapping) else {}
+                role = topology.get("bus") or payload.get("role")
+            if (
+                not isinstance(role, str)
+                or not role
+                or _is_placeholder_interface_role(role)
+            ):
+                continue
+            normalized_multiple[role] = payload
+        return normalized_multiple
+
+    @staticmethod
+    def _normalize_role_interfaces(
+        role_snapshot: Mapping[str, object],
+        role_payloads: Mapping[object, object],
+    ) -> dict[str, Mapping[str, object]]:
+        normalized: dict[str, Mapping[str, object]] = {}
+        for role, payload in role_payloads.items():
+            if (
+                not isinstance(role, str)
+                or not role
+                or _is_placeholder_interface_role(role)
+                or not isinstance(payload, Mapping)
+            ):
+                continue
+            expected = payload.get("expected")
+            expected = expected if isinstance(expected, Mapping) else {}
+            if expected.get("passive_required") is not True:
+                continue
+            actual = payload.get("actual")
+            actual = actual if isinstance(actual, Mapping) else {}
+            operating_mode = payload.get("operating_mode")
+            topology_usable = payload.get("topology_usable")
+            if type(topology_usable) is not bool:
+                topology_usable = payload.get("passive_ready")
+            normalized[role] = {
+                "resolution": payload.get("resolution"),
+                "role_reason": payload.get("reason"),
+                "detail": payload.get("detail"),
+                "channel": payload.get("channel"),
+                "usb_serial": expected.get("usb_serial"),
+                "usb_dev_id": expected.get("dev_id"),
+                "topology_generation": role_snapshot.get("generation"),
+                "adapter_present": payload.get("resolution") == "resolved",
+                "up": actual.get("up"),
+                "bitrate": actual.get("bitrate"),
+                "listen_only": actual.get("listen_only"),
+                "controller_state": actual.get("controller_state"),
+                "receive_silent": (
+                    payload.get("receive_watch", {}).get("receive_silent") is True
+                    if isinstance(payload.get("receive_watch"), Mapping)
+                    else False
+                ),
+                "mode": operating_mode,
+                # Set by the broker only for its own verified armed owner
+                # ("broker_active_drive" / "broker_auxiliary_drive").
+                "armed_owner": payload.get("armed_owner"),
+                "topology": {
+                    "bus": role,
+                    "usable": topology_usable,
+                },
+            }
+        return normalized
+
+    @staticmethod
     def _interface_payloads(
         snapshot: Mapping[str, object],
     ) -> dict[str, Mapping[str, object]]:
@@ -349,22 +424,9 @@ class ValidationMixin:
             return {}
         multiple = status.get("interfaces")
         if isinstance(multiple, Mapping):
-            normalized_multiple: dict[str, Mapping[str, object]] = {}
-            for key, payload in multiple.items():
-                if not isinstance(payload, Mapping):
-                    continue
-                role = key
-                if _is_placeholder_interface_role(role):
-                    topology = payload.get("topology")
-                    topology = topology if isinstance(topology, Mapping) else {}
-                    role = topology.get("bus") or payload.get("role")
-                if (
-                    not isinstance(role, str)
-                    or not role
-                    or _is_placeholder_interface_role(role)
-                ):
-                    continue
-                normalized_multiple[role] = payload
+            normalized_multiple = ValidationMixin._normalize_multiple_interfaces(
+                multiple
+            )
             if normalized_multiple:
                 return normalized_multiple
         single = status.get("interface")
@@ -377,52 +439,9 @@ class ValidationMixin:
             role_payloads = role_snapshot.get("roles")
             if not isinstance(role_payloads, Mapping):
                 return {}
-            normalized: dict[str, Mapping[str, object]] = {}
-            for role, payload in role_payloads.items():
-                if (
-                    not isinstance(role, str)
-                    or not role
-                    or _is_placeholder_interface_role(role)
-                    or not isinstance(payload, Mapping)
-                ):
-                    continue
-                expected = payload.get("expected")
-                expected = expected if isinstance(expected, Mapping) else {}
-                if expected.get("passive_required") is not True:
-                    continue
-                actual = payload.get("actual")
-                actual = actual if isinstance(actual, Mapping) else {}
-                operating_mode = payload.get("operating_mode")
-                topology_usable = payload.get("topology_usable")
-                if type(topology_usable) is not bool:
-                    topology_usable = payload.get("passive_ready")
-                normalized[role] = {
-                    "resolution": payload.get("resolution"),
-                    "role_reason": payload.get("reason"),
-                    "detail": payload.get("detail"),
-                    "channel": payload.get("channel"),
-                    "usb_serial": expected.get("usb_serial"),
-                    "usb_dev_id": expected.get("dev_id"),
-                    "topology_generation": role_snapshot.get("generation"),
-                    "adapter_present": payload.get("resolution") == "resolved",
-                    "up": actual.get("up"),
-                    "bitrate": actual.get("bitrate"),
-                    "listen_only": actual.get("listen_only"),
-                    "controller_state": actual.get("controller_state"),
-                    "receive_silent": (
-                        payload.get("receive_watch", {}).get("receive_silent") is True
-                        if isinstance(payload.get("receive_watch"), Mapping)
-                        else False
-                    ),
-                    "mode": operating_mode,
-                    # Set by the broker only for its own verified armed owner
-                    # ("broker_active_drive" / "broker_auxiliary_drive").
-                    "armed_owner": payload.get("armed_owner"),
-                    "topology": {
-                        "bus": role,
-                        "usable": topology_usable,
-                    },
-                }
+            normalized = ValidationMixin._normalize_role_interfaces(
+                role_snapshot, role_payloads
+            )
             # Presence of the role-aware shape is authoritative even before
             # reconciliation has populated a usable vehicle role.  Falling
             # through here used to promote its transient top-level ``canN``
