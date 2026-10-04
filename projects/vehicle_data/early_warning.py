@@ -1570,6 +1570,12 @@ class EarlyWarningEvaluator:
             int(trip_id) if trip_id is not None else f"hour:{_to_us(at) // 3_600_000_000}",
         )
 
+    @staticmethod
+    def memo_key_lookback_days(key: tuple) -> int:
+        """Read the lookback from the unchanged baseline-memo key contract."""
+
+        return int(key[7])
+
     def _baseline_for(
         self,
         *,

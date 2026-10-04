@@ -48,6 +48,7 @@ import sqlite3
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 
 REPO = Path(__file__).resolve().parents[1]
@@ -55,6 +56,10 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 import projects.vehicle_data.historian as historian_module  # noqa: E402
+from projects.vehicle_data.early_warning import (  # noqa: E402
+    DEFAULT_EVALUATION_RULES,
+    EarlyWarningEvaluator,
+)
 from projects.vehicle_data.historian import (  # noqa: E402
     REGIME_DIMENSIONS,
     BaselineStats,
@@ -66,6 +71,7 @@ DEFAULT_DATABASE = Path("/var/lib/van-telemetry/history.sqlite3")
 OUT_DIR = REPO / "tmp" / "vehicle_data" / "warning_replay"
 DEFAULT_EXPORT = OUT_DIR / "export.sqlite3"
 EVALUATOR_PATH = "projects/vehicle_data/early_warning.py"
+EVALUATOR_PACKAGE = "projects/vehicle_data/warning_engine"
 RULE_METRICS = (
     "engine.rpm",
     "vehicle.speed",
@@ -696,8 +702,6 @@ class EdgeAwareMemo(dict):
     historian memo's parked key.
     """
 
-    LOOKBACK_INDEX = 7  # position of lookback_days in EarlyWarningEvaluator._memo_key
-
     def __init__(self) -> None:
         super().__init__()
         self.now_us: int | None = None
@@ -711,7 +715,7 @@ class EdgeAwareMemo(dict):
         if earliest is None:
             return stored_us is not None and stored_us // HOUR_US != self.now_us // HOUR_US
         try:
-            lookback = int(key[self.LOOKBACK_INDEX])  # type: ignore[index]
+            lookback = EarlyWarningEvaluator.memo_key_lookback_days(key)
         except (TypeError, ValueError, IndexError):
             return True
         return self.now_us - lookback * DAY_US > earliest
@@ -1015,40 +1019,78 @@ class ReplayHistorian(TelemetryHistorian):
         self.baseline_memo.clear()
 
 
-def load_current_evaluator(ref: str = "HEAD", *, out_dir: str | Path = OUT_DIR):
-    """Import ``early_warning.py`` exactly as stored at a git ref."""
+def _evaluator_digest(sources: dict[str, str]) -> str:
+    """Fingerprint the shim and package, including filenames, for resume checks."""
 
-    blob = _git("rev-parse", f"{ref}:{EVALUATOR_PATH}")
-    if blob is None:
-        raise RuntimeError(f"git cannot resolve {ref}:{EVALUATOR_PATH}")
-    source = _git("show", f"{ref}:{EVALUATOR_PATH}", strip=False)
+    digest = hashlib.sha256()
+    for path, source in sorted(sources.items()):
+        digest.update(path.encode("utf-8") + b"\0")
+        digest.update(source.encode("utf-8") + b"\0")
+    return digest.hexdigest()
+
+
+def _ref_evaluator_sources(commit: str) -> dict[str, str]:
+    source = _git("show", f"{commit}:{EVALUATOR_PATH}", strip=False)
     if source is None:
-        raise RuntimeError(f"git show {ref}:{EVALUATOR_PATH} failed")
+        raise RuntimeError(f"git show {commit}:{EVALUATOR_PATH} failed")
+    sources = {EVALUATOR_PATH: source}
+    paths = _git("ls-tree", "-r", "--name-only", commit, "--", EVALUATOR_PACKAGE)
+    if paths is None:
+        raise RuntimeError(f"git cannot list {commit}:{EVALUATOR_PACKAGE}")
+    for path in paths.splitlines():
+        source = _git("show", f"{commit}:{path}", strip=False)
+        if source is None:
+            raise RuntimeError(f"git show {commit}:{path} failed")
+        sources[path] = source
+    return sources
+
+
+def load_current_evaluator(ref: str = "HEAD", *, out_dir: str | Path = OUT_DIR):
+    """Import the ref's monolith or shim plus complete, isolated evaluator package.
+
+    Only shared historian/context dependencies resolve from the worktree.  The
+    shim is loaded as a package so its relative imports stay in the saved ref,
+    never in ``projects.vehicle_data``.  Drop the previous private module tree
+    before importing another ref; a failed import restores it in full.
+    """
+
+    commit = _git("rev-parse", ref)
+    blob = _git("rev-parse", f"{ref}:{EVALUATOR_PATH}")
+    if commit is None or blob is None:
+        raise RuntimeError(f"git cannot resolve {ref}:{EVALUATOR_PATH}")
+    sources = _ref_evaluator_sources(commit)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", ref)
-    path = out_dir / f"early_warning_{safe}.py"
-    path.write_text(source, encoding="utf-8")
+    directory = Path(tempfile.mkdtemp(prefix=f"early_warning_{safe}_", dir=out_dir))
+    for source_path, source in sources.items():
+        target = directory / Path(source_path).relative_to("projects/vehicle_data")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(source, encoding="utf-8")
+    path = directory / "early_warning.py"
     name = "early_warning_replay_current"
-    spec = importlib.util.spec_from_file_location(name, path)
+    spec = importlib.util.spec_from_file_location(name, path, submodule_search_locations=[str(directory)])
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot import {path}")
     module = importlib.util.module_from_spec(spec)
-    previous = sys.modules.get(name)
+    previous = {key: value for key, value in sys.modules.items() if key == name or key.startswith(name + ".")}
+    for key in previous:
+        del sys.modules[key]
     sys.modules[name] = module  # dataclasses resolve string annotations here
     try:
         spec.loader.exec_module(module)
     except BaseException:
-        if previous is None:
-            sys.modules.pop(name, None)
-        else:
-            sys.modules[name] = previous
+        for key in list(sys.modules):
+            if key == name or key.startswith(name + "."):
+                del sys.modules[key]
+        sys.modules.update(previous)
         raise
     info = {
         "source": "git",
         "ref": ref,
-        "commit": _git("rev-parse", ref),
+        "commit": commit,
         "blob": blob,
+        "evaluator_digest": _evaluator_digest(sources),
         "module_path": str(path),
     }
     return module, info
@@ -1058,12 +1100,23 @@ def load_worktree_evaluator():
     module = importlib.import_module("projects.vehicle_data.early_warning")
     path = REPO / EVALUATOR_PATH
     blob = _git("hash-object", str(path))
-    head_blob = _git("rev-parse", f"HEAD:{EVALUATOR_PATH}")
+    sources = {EVALUATOR_PATH: path.read_text(encoding="utf-8")}
+    package = REPO / EVALUATOR_PACKAGE
+    if package.is_dir():
+        for item in sorted(package.rglob("*")):
+            if item.is_file() and "__pycache__" not in item.parts:
+                sources[item.relative_to(REPO).as_posix()] = item.read_text(encoding="utf-8")
+    digest = _evaluator_digest(sources)
+    try:
+        head_digest = _evaluator_digest(_ref_evaluator_sources("HEAD"))
+    except RuntimeError:
+        head_digest = None
     return module, {
         "source": "worktree",
         "module_path": str(path),
         "blob": blob,
-        "matches_head": blob is not None and blob == head_blob,
+        "evaluator_digest": digest,
+        "matches_head": digest == head_digest,
     }
 
 
@@ -1473,10 +1526,12 @@ def replay(
             module, info = load_worktree_evaluator()
             ev = module.EarlyWarningEvaluator(historian)
         if previous is not None:
-            before_blob = (previous.get("evaluator_info") or {}).get("blob")
-            if info.get("blob") != before_blob:
+            previous_info = previous.get("evaluator_info") or {}
+            identity = "evaluator_digest" if "evaluator_digest" in previous_info else "blob"
+            before_blob = previous_info.get(identity)
+            if info.get(identity) != before_blob:
                 raise RuntimeError(
-                    f"evaluator changed since the run being resumed ({before_blob} -> {info.get('blob')}); "
+                    f"evaluator changed since the run being resumed ({before_blob} -> {info.get(identity)}); "
                     "start a new replay instead"
                 )
         caches = pure_function_caches(*(m for m in (sys.modules.get(getattr(type(ev), "__module__", "")),) if m))
@@ -1823,6 +1878,16 @@ def coarse(
         if old is None or (value > old if high else value < old):
             extremes[trip][name] = round(float(value), 2)
 
+    rules = {rule.key: rule for rule in DEFAULT_EVALUATION_RULES}
+    coolant = rules["engine_coolant_temperature_hot"]
+    transmission = rules["transmission_oil_temperature_hot"]
+    oil_critical = rules["engine_oil_pressure_absolute_critical"]
+    oil_bands = rules["engine_oil_pressure_below_band"]
+    charging = rules["battery_voltage_charging_failure"]
+    parked = rules["battery_voltage_low_parked"]
+    tires = rules["tire_pressure_low_absolute"]
+    pair = rules["tire_pressure_pair_asymmetry"]
+
     for bucket, trip, regime, minimum, maximum, _median, _n in rows["engine.coolant_temperature"]:
         engine = _regime_parts(regime)[0]
         if trip and engine == "engine_running":
@@ -1830,22 +1895,24 @@ def coarse(
             for level in (215, 220, 225):
                 if maximum >= level:
                     near[trip][f"coolant_ge_{level}"] += 1
-            if maximum >= 230:
+            if maximum >= coolant.warning_threshold:
                 hits["engine_coolant_temperature_hot"][trip].append(bucket)
-            if maximum >= 240:
+            if maximum >= coolant.critical_threshold:
                 critical["engine_coolant_temperature_hot"][trip].add(bucket)
     for bucket, trip, regime, minimum, maximum, _median, _n in rows["transmission.oil_temperature"]:
         if trip and _regime_parts(regime)[0] == "engine_running":
             extreme(trip, "transmission_max", maximum, True)
-            if maximum >= 230:
+            if maximum >= transmission.warning_threshold:
                 hits["transmission_oil_temperature_hot"][trip].append(bucket)
-    bands = {"rpm_idle": 15.0, "rpm_low": 22.0, "rpm_mid": 22.0, "rpm_high": 55.0}
+    # Preserve the coarse categorical approximation of the three RPM bands.
+    idle, middle, high = (row[2] for row in oil_bands.bands)
+    bands = {"rpm_idle": idle, "rpm_low": middle, "rpm_mid": middle, "rpm_high": high}
     for bucket, trip, regime, minimum, maximum, _median, _n in rows["engine.oil_pressure"]:
         engine, _motion, rpm, thermal = _regime_parts(regime)
         if not trip or engine != "engine_running":
             continue
         extreme(trip, "oil_min_running", minimum, False)
-        if minimum < 12.0:
+        if minimum < oil_critical.minimum_pressure_psi:
             hits["engine_oil_pressure_absolute_critical"][trip].append(bucket)
             critical["engine_oil_pressure_absolute_critical"][trip].add(bucket)
         if thermal in ("warm", "hot") and rpm in bands and minimum < bands[rpm]:
@@ -1859,12 +1926,12 @@ def coarse(
         engine, _motion, rpm, _thermal = _regime_parts(regime)
         if trip and engine == "engine_running":
             extreme(trip, "battery_min_running", minimum, False)
-        if trip and rpm in ("rpm_low", "rpm_mid", "rpm_high") and minimum < 12.0:
-            if duty_max.get((trip, bucket), float("-inf")) >= 90.0:
+        if trip and rpm in ("rpm_low", "rpm_mid", "rpm_high") and minimum < charging.warning_threshold:
+            if duty_max.get((trip, bucket), float("-inf")) >= charging.companion[1]:
                 hits["battery_voltage_charging_failure"][trip].append(bucket)
-        if trip == 0 and engine in ("engine_off", "engine_unknown") and minimum < 11.8:
+        if trip == 0 and engine in ("engine_off", "engine_unknown") and minimum < parked.warning_threshold:
             hits["battery_voltage_low_parked"][0].append(bucket)
-            if minimum < 11.5:
+            if minimum < parked.critical_threshold:
                 critical["battery_voltage_low_parked"][0].add(bucket)
             after = [tid for tid, start in starts.items() if start <= bucket]
             parked_events.append(
@@ -1875,7 +1942,7 @@ def coarse(
                     "after_trip": max(after, key=lambda tid: starts[tid]) if after else None,
                 }
             )
-    limits = {"fl": (50.0, 45.0), "fr": (50.0, 45.0), "rl": (68.0, 60.0), "rr": (68.0, 60.0)}
+    limits = {wheel: (warning, critical) for wheel, warning, critical in tires.wheel_thresholds}
     wheel_median: dict[str, dict[tuple[int, int], tuple[float, int]]] = {}
     for wheel, (warn, crit) in limits.items():
         per_bucket: dict[tuple[int, int], list[tuple[float, int]]] = defaultdict(list)
@@ -1904,7 +1971,7 @@ def coarse(
         offsets[axle] = {"offset_psi": round(offset, 3), "paired_buckets_30d": len(recent)}
         flagged: dict[int, list[int]] = defaultdict(list)
         for (trip, bucket), difference in pairs.items():
-            if abs(difference - offset) > 3.0:
+            if abs(difference - offset) > pair.warning_threshold:
                 flagged[trip].append(bucket)
         for trip, buckets in flagged.items():
             for run in _runs(buckets):
