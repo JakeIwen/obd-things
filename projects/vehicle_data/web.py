@@ -29,6 +29,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from projects.vehicle_data.api import MAX_REQUEST_BYTES, TelemetryClient
+from projects.vehicle_data.http_common import broker_unavailable, stream_snapshots, web_flags
 from projects.vehicle_data.warning_chat import (
     DEFAULT_SOCKET as DEFAULT_WARNING_CHAT_SOCKET, MAX_BODY as MAX_WARNING_CHAT_BYTES,
 )
@@ -98,22 +99,8 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
         try:
             status, response = self.client.request(method, path, payload)
         except (OSError, RuntimeError, json.JSONDecodeError) as exc:
-            return self._json(
-                503,
-                {
-                    "available": False,
-                    "reason": "broker_unavailable",
-                    "detail": str(exc),
-                },
-            )
-        web_status = {
-            "warning_chat_enabled": self.server.warning_chat_socket is not None,
-            "active_acquisition_enabled": self.server.allow_acquisitions,
-            "dtc_jobs_enabled": self.server.dtc_controller is not None,
-            "dtc_jobs_require_local_one_use_arm": False,
-            "bind": f"{self.server.server_address[0]}:"
-            f"{self.server.server_address[1]}",
-        }
+            return self._json(503, broker_unavailable(exc))
+        web_status = web_flags(self.server)
         if path == "/v1/status":
             response["web"] = web_status
         elif path == "/v1/snapshot":
@@ -375,72 +362,17 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
         return self._json(202, result)
 
     def _stream(self) -> None:
-        try:
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Connection", "keep-alive")
-            self.send_header("X-Accel-Buffering", "no")
-            self._common_headers()
-            self.end_headers()
-        except (
-            BrokenPipeError,
-            ConnectionAbortedError,
-            ConnectionResetError,
-        ):
-            return
-        deadline = time.monotonic() + self.server.stream_max_seconds
-        while time.monotonic() < deadline:
-            try:
-                status_code, payload = self.client.request(
-                    "GET", "/v1/snapshot"
-                )
-                web_status = {
-                    "warning_chat_enabled": self.server.warning_chat_socket is not None,
-                    "active_acquisition_enabled":
-                    self.server.allow_acquisitions,
-                    "dtc_jobs_enabled": self.server.dtc_controller is not None,
-                    "dtc_jobs_require_local_one_use_arm": False,
-                }
-                payload["status_code"] = status_code
-                payload["web"] = web_status
-                delivery = self.server.next_snapshot_delivery()
-                payload["web_delivery"] = delivery
-                if isinstance(payload.get("status"), dict):
-                    payload["status"]["web"] = web_status
-                body = json.dumps(payload, separators=(",", ":"))
-                event_id = (
-                    f"{delivery['instance_id']}:{delivery['sequence']}"
-                )
-                self.wfile.write(
-                    (
-                        f"id: {event_id}\n"
-                        f"event: snapshot\ndata: {body}\n\n"
-                    ).encode()
-                )
-                self.wfile.flush()
-            except (
-                BrokenPipeError,
-                ConnectionAbortedError,
-                ConnectionResetError,
-            ):
-                return
-            except (OSError, RuntimeError, json.JSONDecodeError) as exc:
-                body = json.dumps(
-                    {"reason": "broker_unavailable", "detail": str(exc)},
-                    separators=(",", ":"),
-                )
-                try:
-                    self.wfile.write(
-                        f"event: error\ndata: {body}\n\n".encode()
-                    )
-                    self.wfile.flush()
-                except (
-                    BrokenPipeError,
-                    ConnectionAbortedError,
-                    ConnectionResetError,
-                ):
-                    return
-            time.sleep(self.server.stream_interval_seconds)
+        return stream_snapshots(self, self._stream_event)
+
+    def _stream_event(self, status_code: int, payload: dict[str, Any]) -> dict[str, Any]:
+        web_status = web_flags(self.server, include_bind=False)
+        payload["status_code"] = status_code
+        payload["web"] = web_status
+        delivery = self.server.next_snapshot_delivery()
+        payload["web_delivery"] = delivery
+        if isinstance(payload.get("status"), dict):
+            payload["status"]["web"] = web_status
+        return payload
 
 
 class TelemetryWebServer(http.server.ThreadingHTTPServer):

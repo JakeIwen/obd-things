@@ -46,6 +46,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from projects.vehicle_data import web as base  # noqa: E402
+from projects.vehicle_data.http_common import broker_unavailable, stream_snapshots, web_flags
 
 DEFAULT_STATIC_ROOT = pathlib.Path(__file__).with_name("dashboard") / "dist"
 DEFAULT_PORT = 8765
@@ -421,11 +422,7 @@ def build_summary(fetch, web_status: dict[str, Any]) -> tuple[int, dict[str, Any
     try:
         status_code, status = fetch("/v1/status")
     except (OSError, RuntimeError, json.JSONDecodeError) as exc:
-        return 503, {
-            "available": False,
-            "reason": "broker_unavailable",
-            "detail": str(exc),
-        }
+        return 503, broker_unavailable(exc)
     summary["status_full"] = status if status_code == 200 else {
         "available": False,
         "reason": "status_unavailable",
@@ -443,11 +440,7 @@ def build_summary(fetch, web_status: dict[str, Any]) -> tuple[int, dict[str, Any
         try:
             status_code, payload = fetch(path)
         except (OSError, RuntimeError, json.JSONDecodeError) as exc:
-            summary[key] = {
-                "available": False,
-                "reason": "broker_unavailable",
-                "detail": str(exc),
-            }
+            summary[key] = broker_unavailable(exc)
             continue
         if not isinstance(payload, dict):
             summary[key] = {"available": False, "reason": "malformed_response"}
@@ -526,16 +519,7 @@ class DashboardHandler(base.TelemetryWebHandler):
         string comparison does not see a change on every resync.
         """
 
-        host, port = self.server.server_address[:2]
-        flags = {
-            "active_acquisition_enabled": self.server.allow_acquisitions,
-            "bind": f"{host}:{port}",
-            "build": self.server.build_id(),
-            "dtc_jobs_enabled": self.server.dtc_controller is not None,
-            "dtc_jobs_require_local_one_use_arm": False,
-            "warning_chat_enabled": self.server.warning_chat_socket is not None,
-        }
-        return dict(sorted(flags.items()))
+        return web_flags(self.server, include_build=True)
 
     def _note_user_agent(self) -> None:
         self.server.note_user_agent(
@@ -628,14 +612,7 @@ class DashboardHandler(base.TelemetryWebHandler):
         try:
             status, response = self.client.request("GET", "/v1/snapshot")
         except (OSError, RuntimeError, json.JSONDecodeError) as exc:
-            return self._json(
-                503,
-                {
-                    "available": False,
-                    "reason": "broker_unavailable",
-                    "detail": str(exc),
-                },
-            )
+            return self._json(503, broker_unavailable(exc))
         if not isinstance(response, dict):
             return self._json(502, {"available": False, "reason": "malformed_response"})
         web_status = self._web_status()
@@ -656,46 +633,18 @@ class DashboardHandler(base.TelemetryWebHandler):
         return self._json(status, payload)
 
     def _stream_lite(self) -> None:
-        try:
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Connection", "keep-alive")
-            self.send_header("X-Accel-Buffering", "no")
-            self._common_headers()
-            self.end_headers()
-        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
-            return
-        deadline = time.monotonic() + self.server.stream_max_seconds
-        while time.monotonic() < deadline:
-            try:
-                status_code, payload = self.client.request("GET", "/v1/snapshot")
-                web_status = self._web_status()
-                event = lite_snapshot(payload if isinstance(payload, dict) else {})
-                event["status_code"] = status_code
-                event["web"] = web_status
-                delivery = self.server.next_snapshot_delivery()
-                event["web_delivery"] = delivery
-                if isinstance(event.get("status"), dict):
-                    event["status"]["web"] = web_status
-                body = json.dumps(event, separators=(",", ":"))
-                event_id = f"{delivery['instance_id']}:{delivery['sequence']}"
-                self.wfile.write(
-                    f"id: {event_id}\nevent: snapshot\ndata: {body}\n\n".encode()
-                )
-                self.wfile.flush()
-            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
-                return
-            except (OSError, RuntimeError, json.JSONDecodeError) as exc:
-                body = json.dumps(
-                    {"reason": "broker_unavailable", "detail": str(exc)},
-                    separators=(",", ":"),
-                )
-                try:
-                    self.wfile.write(f"event: error\ndata: {body}\n\n".encode())
-                    self.wfile.flush()
-                except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
-                    return
-            time.sleep(self.server.stream_interval_seconds)
+        return stream_snapshots(self, self._stream_lite_event)
+
+    def _stream_lite_event(self, status_code: int, payload: dict[str, Any]) -> dict[str, Any]:
+        web_status = self._web_status()
+        event = lite_snapshot(payload if isinstance(payload, dict) else {})
+        event["status_code"] = status_code
+        event["web"] = web_status
+        delivery = self.server.next_snapshot_delivery()
+        event["web_delivery"] = delivery
+        if isinstance(event.get("status"), dict):
+            event["status"]["web"] = web_status
+        return event
 
 
 class DashboardServer(base.TelemetryWebServer):
