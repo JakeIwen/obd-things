@@ -575,6 +575,234 @@ def _median_observation(
     )
 
 
+@dataclass
+class _SnapshotReadState:
+    samples: dict[str, list[PassiveObservation]]
+    quality_events: dict[tuple[str, str, str], DataQualityEvent]
+    rpm_samples: list[float]
+    frame_count: int
+    display_latest: dict[int, tuple[PassiveObservation, ...]]
+    display_counts: dict[int, int]
+    display_seen: dict[int, float]
+
+
+def _new_snapshot_read_state() -> _SnapshotReadState:
+    return _SnapshotReadState(
+        samples={},
+        quality_events={},
+        rpm_samples=[],
+        frame_count=0,
+        # Display frames keep only their latest frame's observations, so a state
+        # change inside the window cannot pair a new state with an old set speed.
+        display_latest={},
+        display_counts={},
+        display_seen={},
+    )
+
+
+def _validate_snapshot_request(timeout: float, required_rpm_samples: int) -> None:
+    if timeout <= 0:
+        raise ValueError("timeout must be positive")
+    if (
+        not isinstance(required_rpm_samples, int)
+        or isinstance(required_rpm_samples, bool)
+        or required_rpm_samples < 1
+    ):
+        raise ValueError("required_rpm_samples must be a positive integer")
+
+
+def _configure_snapshot_socket(
+    sock: socket.socket,
+    channel: str,
+    *,
+    include_battery: bool,
+) -> None:
+    filter_ids = ACTIVE_FILTER_IDS if include_battery else FILTER_IDS
+    filters = b"".join(
+        struct.pack("=II", can_id, FILTER_MASK) for can_id in filter_ids
+    )
+    sock.setsockopt(SOL_CAN_RAW, CAN_RAW_FILTER, filters)
+    sock.bind((channel,))
+
+
+def _record_quality_event(
+    state: _SnapshotReadState,
+    rejection: DataQualityEvent,
+) -> None:
+    key = (
+        rejection.metric,
+        rejection.source,
+        rejection.reason,
+    )
+    previous_event = state.quality_events.get(key)
+    state.quality_events[key] = (
+        rejection
+        if previous_event is None
+        else previous_event.coalesced_with(rejection)
+    )
+
+
+def _record_received_frame(
+    state: _SnapshotReadState,
+    frame: bytes,
+    *,
+    monotonic: Callable[[], float],
+    temperature_gate: TransmissionTemperaturePlausibilityGate | None,
+) -> bool:
+    if len(frame) != 16:
+        raise RuntimeError(
+            f"raw SocketCAN broadcast frame length {len(frame)} is not 16"
+        )
+    can_id, dlc, raw_data = struct.unpack("=IB3x8s", frame)
+    if dlc > 8:
+        raise RuntimeError(
+            f"classic CAN broadcast DLC {dlc} exceeds 8"
+        )
+    if can_id & FRAME_TYPE_FLAGS:
+        return False
+    state.frame_count += 1
+    frame_observed_monotonic = monotonic()
+    standard_id = can_id & SFF_MASK
+    observations = decode_frame_observations(
+        standard_id, raw_data[: min(dlc, 8)]
+    )
+    if standard_id in DISPLAY_FRAME_IDS:
+        state.display_seen[standard_id] = frame_observed_monotonic
+        state.display_counts[standard_id] = (
+            state.display_counts.get(standard_id, 0) + 1
+        )
+        state.display_latest[standard_id] = observations
+        observations = ()
+    for observation in observations:
+        if (
+            temperature_gate is not None
+            and observation.metric == TRANSMISSION_TEMPERATURE_METRIC
+            and observation.source == TRANSMISSION_TEMPERATURE_SOURCE
+        ):
+            value_c = (float(observation.value) - 32.0) * 5.0 / 9.0
+            rejection = temperature_gate.evaluate(
+                value_c,
+                frame_observed_monotonic,
+            )
+            if rejection is not None:
+                _record_quality_event(state, rejection)
+                # The two shaft-speed observations from this same 0x1F7
+                # frame remain valid and continue through aggregation.
+                continue
+        state.samples.setdefault(observation.metric, []).append(observation)
+        if observation.metric == "engine.rpm":
+            state.rpm_samples.append(float(observation.value))
+    return True
+
+
+def _snapshot_is_complete(
+    state: _SnapshotReadState,
+    *,
+    include_battery: bool,
+    required_rpm_samples: int,
+) -> bool:
+    required_metrics = (
+        "engine.oil_pressure",
+        "engine.coolant_temperature",
+        "engine.rpm",
+        "engine.target_crankshaft_torque",
+        "vehicle.speed",
+        "transmission.output_speed",
+        "transmission.oil_temperature",
+        "transmission.turbine_speed",
+        "vehicle.ignition_on",
+    ) + (("battery.voltage",) if include_battery else ())
+    return len(state.rpm_samples) >= required_rpm_samples and all(
+        metric in state.samples for metric in required_metrics
+    )
+
+
+def _receive_snapshot_frames(
+    sock: socket.socket,
+    state: _SnapshotReadState,
+    *,
+    deadline: float,
+    include_battery: bool,
+    required_rpm_samples: int,
+    wanted_display: frozenset[int],
+    monotonic: Callable[[], float],
+    temperature_gate: TransmissionTemperaturePlausibilityGate | None,
+) -> bool:
+    extended_for_display = False
+    while monotonic() < deadline:
+        remaining = max(0.01, deadline - monotonic())
+        sock.settimeout(remaining)
+        try:
+            frame = sock.recv(16)
+        except socket.timeout:
+            break
+        except OSError as exc:
+            if exc.errno == errno.ENETDOWN:
+                break
+            raise
+        if not _record_received_frame(
+            state,
+            frame,
+            monotonic=monotonic,
+            temperature_gate=temperature_gate,
+        ):
+            continue
+        if _snapshot_is_complete(
+            state,
+            include_battery=include_battery,
+            required_rpm_samples=required_rpm_samples,
+        ):
+            if wanted_display.issubset(state.display_seen):
+                extended_for_display = False
+                break
+            extended_for_display = True
+    return extended_for_display
+
+
+def _finalize_snapshot(
+    state: _SnapshotReadState,
+    *,
+    wanted_display: frozenset[int],
+    extended_for_display: bool,
+    monotonic: Callable[[], float],
+    display_wait: LowRateFrameWait | None,
+) -> BroadcastSnapshot:
+    medians = tuple(
+        _median_observation(state.samples[metric]) for metric in sorted(state.samples)
+    )
+    gear = gear_estimate(medians)
+    display = tuple(
+        PassiveObservation(
+            metric=observation.metric,
+            value=observation.value,
+            unit=observation.unit,
+            source=observation.source,
+            quality=observation.quality,
+            detail=(
+                f"{observation.detail}; latest of "
+                f"{state.display_counts[can_id]} frame(s)"
+            ),
+        )
+        for can_id in sorted(state.display_latest)
+        for observation in state.display_latest[can_id]
+    )
+    completed = monotonic()
+    if display_wait is not None:
+        display_wait.finish(
+            wanted_display,
+            state.display_seen,
+            extended_to_deadline=extended_for_display,
+            now=completed,
+        )
+    return BroadcastSnapshot(
+        observations=medians + ((gear,) if gear is not None else ()) + display,
+        rpm_samples=tuple(state.rpm_samples),
+        frame_count=state.frame_count,
+        completed_monotonic=completed,
+        quality_events=tuple(state.quality_events.values()),
+    )
+
+
 def read_broadcast_snapshot(
     channel: str,
     *,
@@ -597,153 +825,37 @@ def read_broadcast_snapshot(
     only when they arrive before the powertrain set completes. With it, the
     snapshot may keep listening for them, bounded by ``timeout``.
     """
-    if timeout <= 0:
-        raise ValueError("timeout must be positive")
-    if (
-        not isinstance(required_rpm_samples, int)
-        or isinstance(required_rpm_samples, bool)
-        or required_rpm_samples < 1
-    ):
-        raise ValueError("required_rpm_samples must be a positive integer")
+    _validate_snapshot_request(timeout, required_rpm_samples)
     sock = socket_factory(AF_CAN, socket.SOCK_RAW, CAN_RAW)
-    samples: dict[str, list[PassiveObservation]] = {}
-    quality_events: dict[tuple[str, str, str], DataQualityEvent] = {}
-    rpm_samples: list[float] = []
-    frame_count = 0
-    # Display frames keep only their latest frame's observations, so a state
-    # change inside the window cannot pair a new state with an old set speed.
-    display_latest: dict[int, tuple[PassiveObservation, ...]] = {}
-    display_counts: dict[int, int] = {}
-    display_seen: dict[int, float] = {}
+    state = _new_snapshot_read_state()
     wanted_display = (
         display_wait.wanted(monotonic()) if display_wait is not None else frozenset()
     )
-    # Only a snapshot that had everything else and still listened to its
-    # deadline is evidence that a wanted display frame is absent.
-    extended_for_display = False
     try:
-        filter_ids = ACTIVE_FILTER_IDS if include_battery else FILTER_IDS
-        filters = b"".join(
-            struct.pack("=II", can_id, FILTER_MASK) for can_id in filter_ids
+        _configure_snapshot_socket(
+            sock,
+            channel,
+            include_battery=include_battery,
         )
-        sock.setsockopt(SOL_CAN_RAW, CAN_RAW_FILTER, filters)
-        sock.bind((channel,))
         deadline = monotonic() + timeout
-        while monotonic() < deadline:
-            remaining = max(0.01, deadline - monotonic())
-            sock.settimeout(remaining)
-            try:
-                frame = sock.recv(16)
-            except socket.timeout:
-                break
-            except OSError as exc:
-                if exc.errno == errno.ENETDOWN:
-                    break
-                raise
-            if len(frame) != 16:
-                raise RuntimeError(
-                    f"raw SocketCAN broadcast frame length {len(frame)} is not 16"
-                )
-            can_id, dlc, raw_data = struct.unpack("=IB3x8s", frame)
-            if dlc > 8:
-                raise RuntimeError(
-                    f"classic CAN broadcast DLC {dlc} exceeds 8"
-                )
-            if can_id & FRAME_TYPE_FLAGS:
-                continue
-            frame_count += 1
-            frame_observed_monotonic = monotonic()
-            standard_id = can_id & SFF_MASK
-            observations = decode_frame_observations(
-                standard_id, raw_data[: min(dlc, 8)]
-            )
-            if standard_id in DISPLAY_FRAME_IDS:
-                display_seen[standard_id] = frame_observed_monotonic
-                display_counts[standard_id] = (
-                    display_counts.get(standard_id, 0) + 1
-                )
-                display_latest[standard_id] = observations
-                observations = ()
-            for observation in observations:
-                if (
-                    temperature_gate is not None
-                    and observation.metric == TRANSMISSION_TEMPERATURE_METRIC
-                    and observation.source == TRANSMISSION_TEMPERATURE_SOURCE
-                ):
-                    value_c = (float(observation.value) - 32.0) * 5.0 / 9.0
-                    rejection = temperature_gate.evaluate(
-                        value_c,
-                        frame_observed_monotonic,
-                    )
-                    if rejection is not None:
-                        key = (
-                            rejection.metric,
-                            rejection.source,
-                            rejection.reason,
-                        )
-                        previous_event = quality_events.get(key)
-                        quality_events[key] = (
-                            rejection
-                            if previous_event is None
-                            else previous_event.coalesced_with(rejection)
-                        )
-                        # The two shaft-speed observations from this same 0x1F7
-                        # frame remain valid and continue through aggregation.
-                        continue
-                samples.setdefault(observation.metric, []).append(observation)
-                if observation.metric == "engine.rpm":
-                    rpm_samples.append(float(observation.value))
-            required_metrics = (
-                "engine.oil_pressure",
-                "engine.coolant_temperature",
-                "engine.rpm",
-                "engine.target_crankshaft_torque",
-                "vehicle.speed",
-                "transmission.output_speed",
-                "transmission.oil_temperature",
-                "transmission.turbine_speed",
-                "vehicle.ignition_on",
-            ) + (("battery.voltage",) if include_battery else ())
-            if len(rpm_samples) >= required_rpm_samples and all(
-                metric in samples for metric in required_metrics
-            ):
-                if wanted_display.issubset(display_seen):
-                    extended_for_display = False
-                    break
-                extended_for_display = True
+        extended_for_display = _receive_snapshot_frames(
+            sock,
+            state,
+            deadline=deadline,
+            include_battery=include_battery,
+            required_rpm_samples=required_rpm_samples,
+            wanted_display=wanted_display,
+            monotonic=monotonic,
+            temperature_gate=temperature_gate,
+        )
     finally:
         sock.close()
-    medians = tuple(_median_observation(samples[metric]) for metric in sorted(samples))
-    gear = gear_estimate(medians)
-    display = tuple(
-        PassiveObservation(
-            metric=observation.metric,
-            value=observation.value,
-            unit=observation.unit,
-            source=observation.source,
-            quality=observation.quality,
-            detail=(
-                f"{observation.detail}; latest of "
-                f"{display_counts[can_id]} frame(s)"
-            ),
-        )
-        for can_id in sorted(display_latest)
-        for observation in display_latest[can_id]
-    )
-    completed = monotonic()
-    if display_wait is not None:
-        display_wait.finish(
-            wanted_display,
-            display_seen,
-            extended_to_deadline=extended_for_display,
-            now=completed,
-        )
-    return BroadcastSnapshot(
-        observations=medians + ((gear,) if gear is not None else ()) + display,
-        rpm_samples=tuple(rpm_samples),
-        frame_count=frame_count,
-        completed_monotonic=completed,
-        quality_events=tuple(quality_events.values()),
+    return _finalize_snapshot(
+        state,
+        wanted_display=wanted_display,
+        extended_for_display=extended_for_display,
+        monotonic=monotonic,
+        display_wait=display_wait,
     )
 
 
