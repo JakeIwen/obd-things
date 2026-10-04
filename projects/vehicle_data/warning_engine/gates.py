@@ -1,7 +1,7 @@
 """Applicability gates for absolute warning rules."""
 from __future__ import annotations
 
-from typing import Mapping
+from typing import Callable, Mapping
 
 from lib.timeutil import finite_number as _numeric
 
@@ -110,71 +110,114 @@ class GatesMixin:
         tick.conditions[key] = result
         return result
 
-    def _absolute_gate(
+    def _absolute_parked_gate(
         self,
         rule: AbsoluteRule,
         tick: _Tick,
         sample: dict[str, object],
+        warning: float | None,
+        critical: float | None,
     ) -> dict[str, object]:
-        """Gate for the newest sample plus a per-sample ``accept`` function."""
+        rpm = self._latest(tick, "engine.rpm")
+        rpm_age = (
+            _sample_age_seconds(rpm, tick.at)
+            if isinstance(rpm, dict) and _numeric(rpm.get("value"))
+            else None
+        )
+        trip = self._last_trip(tick)
+        last_active_us = None
+        if isinstance(trip, Mapping) and isinstance(trip.get("last_active_at"), str):
+            last_active_us = _to_us(_utc(str(trip["last_active_at"])))
+        evidence = {
+            "rpm": None if rpm is None or rpm_age is None else self._current_payload(rpm, rpm_age),
+            "last_trip_id": trip.get("id") if isinstance(trip, Mapping) else None,
+            "last_active_at": trip.get("last_active_at") if isinstance(trip, Mapping) else None,
+            "settle_seconds": PARKED_SETTLE_SECONDS,
+            "engine_states": sorted(PARKED_ENGINE_STATES),
+        }
+        if (
+            rpm_age is not None
+            and rpm_age <= PARKED_SETTLE_SECONDS
+            and float(rpm["value"]) >= RUNNING_RPM  # type: ignore[index]
+        ):
+            return {"ok": False, "state": "not_applicable",
+                    "reason": "engine is running", "evidence": evidence}
+        if _engine(sample) not in PARKED_ENGINE_STATES:
+            return {"ok": False, "state": "not_applicable",
+                    "reason": "reading was not taken with the engine off", "evidence": evidence}
+        captured = _captured_us(sample)
+        if (
+            last_active_us is not None
+            and captured is not None
+            and captured - last_active_us < PARKED_SETTLE_SECONDS * 1_000_000
+        ):
+            return {"ok": False, "state": "not_applicable",
+                    "reason": "battery reading is still settling after the last drive",
+                    "evidence": evidence}
 
-        warning = rule.warning_threshold
-        critical = rule.critical_threshold
-        if warning is None and critical is not None:
-            warning = critical
-        lookback = _rule_lookbacks(rule).get(rule.metric, 120.0)
-        if rule.gate == "parked":
-            rpm = self._latest(tick, "engine.rpm")
-            rpm_age = (
-                _sample_age_seconds(rpm, tick.at)
-                if isinstance(rpm, dict) and _numeric(rpm.get("value"))
-                else None
-            )
-            trip = self._last_trip(tick)
-            last_active_us = None
-            if isinstance(trip, Mapping) and isinstance(trip.get("last_active_at"), str):
-                last_active_us = _to_us(_utc(str(trip["last_active_at"])))
-            evidence = {
-                "rpm": None if rpm is None or rpm_age is None else self._current_payload(rpm, rpm_age),
-                "last_trip_id": trip.get("id") if isinstance(trip, Mapping) else None,
-                "last_active_at": trip.get("last_active_at") if isinstance(trip, Mapping) else None,
-                "settle_seconds": PARKED_SETTLE_SECONDS,
-                "engine_states": sorted(PARKED_ENGINE_STATES),
-            }
-            if (
-                rpm_age is not None
-                and rpm_age <= PARKED_SETTLE_SECONDS
-                and float(rpm["value"]) >= RUNNING_RPM  # type: ignore[index]
-            ):
-                return {"ok": False, "state": "not_applicable",
-                        "reason": "engine is running", "evidence": evidence}
-            if _engine(sample) not in PARKED_ENGINE_STATES:
-                return {"ok": False, "state": "not_applicable",
-                        "reason": "reading was not taken with the engine off", "evidence": evidence}
-            captured = _captured_us(sample)
-            if (
-                last_active_us is not None
-                and captured is not None
-                and captured - last_active_us < PARKED_SETTLE_SECONDS * 1_000_000
-            ):
-                return {"ok": False, "state": "not_applicable",
-                        "reason": "battery reading is still settling after the last drive",
-                        "evidence": evidence}
-
-            def accept_parked(point: Mapping[str, object]) -> tuple:
-                point_captured = _captured_us(point)
-                ok = (
-                    _engine(point) in PARKED_ENGINE_STATES
-                    and point_captured is not None
-                    and (
-                        last_active_us is None
-                        or point_captured - last_active_us >= PARKED_SETTLE_SECONDS * 1_000_000
-                    )
+        def accept_parked(point: Mapping[str, object]) -> tuple:
+            point_captured = _captured_us(point)
+            ok = (
+                _engine(point) in PARKED_ENGINE_STATES
+                and point_captured is not None
+                and (
+                    last_active_us is None
+                    or point_captured - last_active_us >= PARKED_SETTLE_SECONDS * 1_000_000
                 )
-                return ("ok" if ok else "fail", warning, critical, float(point["value"]))
+            )
+            return ("ok" if ok else "fail", warning, critical, float(point["value"]))
 
-            return {"ok": True, "accept": accept_parked, "evidence": evidence}
+        return {"ok": True, "accept": accept_parked, "evidence": evidence}
 
+    @staticmethod
+    def _absolute_running_accept(
+        rule: AbsoluteRule,
+        *,
+        start_us: int,
+        warning: float | None,
+        critical: float | None,
+        rpm_values: list[tuple[int, float]],
+        minimum_rpm: float | None,
+        companion_values: list[tuple[int, float]],
+    ) -> Callable[[Mapping[str, object]], tuple]:
+        def accept_running(point: Mapping[str, object]) -> tuple:
+            point_us = _observed_us(point)
+            value = float(point["value"])
+            if point_us is None:
+                return ("fail", warning, critical, value)
+            status = "ok" if point_us - start_us >= RUNNING_GRACE_SECONDS * 1_000_000 else "fail"
+            threshold = warning
+            if rule.bands or minimum_rpm is not None:
+                rpm = _companion_at(rpm_values, point_us, RPM_MAX_AGE_SECONDS)
+                if rpm is None:
+                    return ("gap", None if rule.bands else threshold, critical, value)
+                if rule.bands:
+                    threshold = _band_floor(rpm, rule.bands)
+                    if threshold is None:
+                        return ("skip", None, None, value)
+                if minimum_rpm is not None and rpm < minimum_rpm:
+                    status = "fail"
+            if rule.companion is not None and status != "fail":
+                companion = _companion_at(
+                    companion_values, point_us, float(rule.companion[2])
+                )
+                if companion is None:
+                    status = "gap"
+                elif companion < float(rule.companion[1]):
+                    status = "fail"
+            return (status, threshold, critical, value)
+
+        return accept_running
+
+    def _absolute_running_gate(
+        self,
+        rule: AbsoluteRule,
+        tick: _Tick,
+        sample: dict[str, object],
+        warning: float | None,
+        critical: float | None,
+        lookback: float,
+    ) -> dict[str, object]:
         running = self._running_gate(tick)
         if not running["ok"]:
             return {
@@ -239,37 +282,39 @@ class GatesMixin:
                 "max_age_seconds": companion_age,
                 "current": companion_values[0][1] if companion_values else None,
             }
-
-        def accept_running(point: Mapping[str, object]) -> tuple:
-            point_us = _observed_us(point)
-            value = float(point["value"])
-            if point_us is None:
-                return ("fail", warning, critical, value)
-            status = "ok" if point_us - start_us >= RUNNING_GRACE_SECONDS * 1_000_000 else "fail"
-            threshold = warning
-            if rule.bands or minimum_rpm is not None:
-                rpm = _companion_at(rpm_values, point_us, RPM_MAX_AGE_SECONDS)
-                if rpm is None:
-                    return ("gap", None if rule.bands else threshold, critical, value)
-                if rule.bands:
-                    threshold = _band_floor(rpm, rule.bands)
-                    if threshold is None:
-                        return ("skip", None, None, value)
-                if minimum_rpm is not None and rpm < minimum_rpm:
-                    status = "fail"
-            if rule.companion is not None and status != "fail":
-                companion = _companion_at(
-                    companion_values, point_us, float(rule.companion[2])
-                )
-                if companion is None:
-                    status = "gap"
-                elif companion < float(rule.companion[1]):
-                    status = "fail"
-            return (status, threshold, critical, value)
-
+        accept_running = self._absolute_running_accept(
+            rule,
+            start_us=start_us,
+            warning=warning,
+            critical=critical,
+            rpm_values=rpm_values,
+            minimum_rpm=minimum_rpm,
+            companion_values=companion_values,
+        )
         return {
             "ok": True,
             "accept": accept_running,
             "evidence": evidence,
             "running_evidence": running["evidence"],
         }
+
+    def _absolute_gate(
+        self,
+        rule: AbsoluteRule,
+        tick: _Tick,
+        sample: dict[str, object],
+    ) -> dict[str, object]:
+        """Gate for the newest sample plus a per-sample ``accept`` function."""
+
+        warning = rule.warning_threshold
+        critical = rule.critical_threshold
+        if warning is None and critical is not None:
+            warning = critical
+        lookback = _rule_lookbacks(rule).get(rule.metric, 120.0)
+        if rule.gate == "parked":
+            return self._absolute_parked_gate(
+                rule, tick, sample, warning, critical
+            )
+        return self._absolute_running_gate(
+            rule, tick, sample, warning, critical, lookback
+        )
