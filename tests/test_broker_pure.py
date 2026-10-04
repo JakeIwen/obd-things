@@ -252,6 +252,58 @@ def event_rows():
 
 
 class BrokerPureTests(unittest.TestCase):
+    def test_status_keeps_copies_serialization_and_clocks_in_original_lock_scope(self):
+        with fixed_time():
+            broker = make_broker()
+            broker._vehicle_state.update(basis="qualified_ccan_0x0fc_engine_speed")
+            broker._vehicle_state_observed_monotonic = 99
+            broker._cache["battery.voltage"] = broker.acquirer.acquire("passive")
+            clock_locks = []
+            copy_locks = []
+            component_locks = []
+            dumps = json.dumps
+
+            def clock():
+                clock_locks.append(broker._lock._is_owned())
+                return 100.0
+
+            def copy_json(*args, **kwargs):
+                copy_locks.append(broker._lock._is_owned())
+                return dumps(*args, **kwargs)
+
+            def component_status():
+                component_locks.append(broker._lock._is_owned())
+                return {"state": "ready"}
+
+            broker.monotonic = clock
+            broker.usb_can_monitor = SimpleNamespace(status_snapshot=component_status)
+            broker.engine_off_voltage_capture = SimpleNamespace(status_snapshot=component_status)
+            broker.display_receiver = SimpleNamespace(status=component_status)
+            with mock.patch.object(broker_module.json, "dumps", side_effect=copy_json):
+                broker.status_response()
+            # Nine broker copies plus AlignmentHistory.summary's JSON copy.
+            self.assertEqual(copy_locks, [True] * 10)
+            self.assertEqual(clock_locks, [True, True, True, False, False])
+            self.assertEqual(component_locks, [False, False, False])
+
+    def test_status_builders_do_not_mutate_snapshot(self):
+        from dataclasses import asdict
+        from projects.vehicle_data.status_view import build_interface_view, build_vehicle_state
+
+        with fixed_time():
+            for label, configure in status_cases():
+                with self.subTest(case=label):
+                    broker = make_broker()
+                    configure(broker)
+                    snapshot = broker._status_snapshot()
+                    before = encode(asdict(snapshot))
+                    build_interface_view(
+                        snapshot, auxiliary_drive_enabled=broker.auxiliary_drive_enabled,
+                        auxiliary_restoration_latched=broker._auxiliary_drive_restoration_latched,
+                    )
+                    build_vehicle_state(snapshot, age_ms=1000, ignition_stale=True, rpm_stale=False)
+                    self.assertEqual(before, encode(asdict(snapshot)))
+
     def test_status_byte_baseline(self):
         expected = json.loads(Path(__file__).with_name("broker_status_hashes.json").read_text())
         actual = {row["case"]: hashlib.sha256(encode(row).encode()).hexdigest() for row in status_rows()}
