@@ -726,113 +726,220 @@ class AdvisoryMixin:
         }
         seen: set[str] = set()
         with self._lock, self._conn:
-            for index, assessment in enumerate(assessments):
-                if not isinstance(assessment, Mapping):
-                    raise ValueError(f"assessment[{index}] must be an object")
-                rule_key = assessment.get("rule")
-                title = assessment.get("title")
-                state = assessment.get("state")
-                if not isinstance(rule_key, str) or not rule_key:
-                    raise ValueError(f"assessment[{index}].rule must be text")
-                if rule_key in seen:
-                    raise ValueError(f"duplicate advisory rule {rule_key!r}")
-                seen.add(rule_key)
-                if not isinstance(title, str) or not title:
-                    raise ValueError(f"assessment[{index}].title must be text")
-                allowed_states = (
-                    ADVISORY_ACTIVE_STATES
-                    | ADVISORY_RESOLVING_STATES
-                    | ADVISORY_INCONCLUSIVE_STATES
+            self._record_advisory_batch_locked(
+                assessments, event_us, counters, seen,
+                stamp, recovery_gate, checkpoint, archive_baselines,
+                archive_interrupted_watch, archive_parked_episode,
+            )
+            self._retire_absent_advisories_locked(
+                authoritative_rules, seen, event_us, counters
+            )
+            finish_windows(self._conn, event_us)
+        return AdvisoryPersistenceResult(
+            evaluated_at=_iso(moment),
+            **counters,
+        )
+
+    def _record_advisory_batch_locked(
+        self, assessments: Sequence[Mapping[str, object]], event_us: int,
+        counters: dict[str, int], seen: set[str],
+        stamp, recovery_gate, checkpoint, archive_baselines,
+        archive_interrupted_watch, archive_parked_episode,
+    ) -> None:
+        """Process assessments under the caller's lock and transaction.
+
+        Event-history steps are passed from the entry point to preserve its
+        import order before validation and before entering the transaction.
+        """
+
+        for index, assessment in enumerate(assessments):
+            rule_key, title, state, category = self._validate_advisory_assessment(
+                assessment, index, seen
+            )
+            episode = self._load_open_advisory_locked(rule_key)
+
+            # Ignore duplicated or late evaluations before any counter/outbox mutation.
+            if episode is not None and event_us <= episode["last_evaluated_us"]:
+                continue
+            episode, assessment, state, assessment_json, fingerprint = (
+                self._prepare_advisory_evidence_locked(
+                    episode, assessment, state, event_us, counters,
+                    stamp, recovery_gate, checkpoint, archive_baselines,
+                    archive_interrupted_watch, archive_parked_episode,
                 )
-                if state not in allowed_states:
-                    raise ValueError(
-                        f"assessment[{index}].state {state!r} is unsupported"
-                    )
-                category = assessment.get("category", "vehicle_health")
-                if not isinstance(category, str) or not category:
-                    raise ValueError(f"assessment[{index}].category must be text")
-                if assessment.get("advisory") is not True:
-                    raise ValueError(f"assessment[{index}] must remain advisory")
-                episode = self._conn.execute(
-                    """
-                    SELECT * FROM advisory_episodes
-                    WHERE rule_key=? AND status='open'
-                    """,
-                    (rule_key,),
-                ).fetchone()
+            )
 
-                # Ignore duplicated or late evaluations before any counter/outbox mutation.
-                if episode is not None and event_us <= episode["last_evaluated_us"]:
+            if state in ADVISORY_INCONCLUSIVE_STATES:
+                counters["inconclusive"] += 1
+                if episode is None:
                     continue
-                if episode is not None and assessment.get("rule_revision"):
-                    opening = json.loads(episode["first_assessment_json"])
-                    prior_revision = opening.get("rule_revision")
-                    if prior_revision and prior_revision != assessment["rule_revision"]:
-                        retired = json.loads(episode["latest_assessment_json"])
-                        retired.update(state="suppressed", notification_eligible=False,
-                                       reason="rule revision replaced; administrative closure, recovery not established")
-                        self._conn.execute("UPDATE advisory_episodes SET status='resolved',current_state='suppressed',evidence_state='suppressed',resolved_us=?,resolved_at=?,resolution_reason=? WHERE id=?",
-                                           (event_us,_iso_from_us(event_us),retired["reason"],episode["id"]))
-                        self._insert_advisory_event_locked(episode_id=episode["id"],event_us=event_us,event_type="rule_replaced",previous_state=episode["current_state"],new_state="suppressed",context_fingerprint=self._advisory_context_fingerprint(retired),assessment_json=self._advisory_json(retired))
-                        self._conn.execute("UPDATE advisory_notification_outbox SET status='cancelled',last_error='rule replaced before delivery' WHERE episode_id=? AND status='pending'",(episode["id"],))
-                        counters["resolved"] += 1
-                        episode = None
-                if archive_interrupted_watch(self._conn, episode, assessment, event_us):
-                    counters["resolved"] += 1
-                    episode = None
-                if archive_parked_episode(self._conn, episode, assessment, event_us):
-                    counters["resolved"] += 1
-                    episode = None
-                assessment = recovery_gate(self._conn, episode, assessment, event_us)
-                if episode is not None or state in ADVISORY_ACTIVE_STATES:
-                    archive_baselines(self._conn, assessment, self._baseline_inputs)
-                assessment = stamp(assessment, _iso_from_us(event_us))
-                state = assessment["state"]
-                assessment_json = self._advisory_json(assessment)
-                fingerprint = self._advisory_context_fingerprint(assessment)
-                if episode is not None:
-                    checkpoint(self._conn, episode, assessment, event_us)
+                self._record_inconclusive_advisory_locked(
+                    episode=episode, state=state, event_us=event_us,
+                    assessment_json=assessment_json, fingerprint=fingerprint,
+                    counters=counters,
+                )
+                continue
 
-                if state in ADVISORY_INCONCLUSIVE_STATES:
-                    counters["inconclusive"] += 1
-                    if episode is None:
-                        continue
-                    prior_evidence = str(episode["evidence_state"])
-                    self._conn.execute(
-                        """
+            if state in ADVISORY_RESOLVING_STATES:
+                if episode is None:
+                    continue
+                self._resolve_advisory_locked(
+                    episode=episode, state=state, event_us=event_us,
+                    assessment_json=assessment_json, fingerprint=fingerprint,
+                    counters=counters, assessment=assessment,
+                )
+                continue
+
+            assert state in ADVISORY_ACTIVE_STATES
+            event_id: int | None = None
+            if episode is None:
+                episode, event_id = self._open_advisory_locked(
+                    rule_key, category, title, state, event_us,
+                    assessment_json, fingerprint,
+                )
+                checkpoint(self._conn, episode, assessment, event_us)
+                counters["opened"] += 1
+            else:
+                episode, event_id = self._update_active_advisory_locked(
+                    episode=episode, state=state, event_us=event_us,
+                    assessment_json=assessment_json, fingerprint=fingerprint,
+                    counters=counters, category=category, title=title, event_id=event_id,
+                )
+
+            policy = self._notification_policy(assessment)
+            if not policy.get("legacy"):
+                self._record_tiered_notification_locked(
+                    episode=episode,
+                    event_id=event_id,
+                    event_us=event_us,
+                    fingerprint=fingerprint,
+                    assessment=assessment,
+                    assessment_json=assessment_json,
+                    policy=policy,
+                    counters=counters,
+                )
+                continue
+            notification_eligible = (
+                state == "warning"
+                and assessment.get("notification_eligible") is True
+                and episode["acknowledged_us"] is None
+                and assessment.get("category") not in SYSTEM_NOTE_CATEGORIES
+            )
+            if notification_eligible:
+                rate_limit = self._notification_rate_limit(assessment)
+                if not self._notification_due_locked(
+                    episode_id=int(episode["id"]),
+                    rule_key=rule_key,
+                    event_us=event_us,
+                    rate_limit_seconds=rate_limit,
+                ):
+                    continue
+                self._enqueue_legacy_advisory_locked(
+                    episode=episode, state=state, event_us=event_us,
+                    assessment_json=assessment_json, fingerprint=fingerprint,
+                    counters=counters, assessment=assessment, event_id=event_id,
+                )
+
+    @staticmethod
+    def _validate_advisory_assessment(
+        assessment: Mapping[str, object], index: int, seen: set[str]
+    ) -> tuple[str, str, object, str]:
+        """Validate one assessment in batch order and reserve its rule key."""
+
+        if not isinstance(assessment, Mapping):
+            raise ValueError(f"assessment[{index}] must be an object")
+        rule_key = assessment.get("rule")
+        title = assessment.get("title")
+        state = assessment.get("state")
+        if not isinstance(rule_key, str) or not rule_key:
+            raise ValueError(f"assessment[{index}].rule must be text")
+        if rule_key in seen:
+            raise ValueError(f"duplicate advisory rule {rule_key!r}")
+        seen.add(rule_key)
+        if not isinstance(title, str) or not title:
+            raise ValueError(f"assessment[{index}].title must be text")
+        allowed_states = (
+            ADVISORY_ACTIVE_STATES
+            | ADVISORY_RESOLVING_STATES
+            | ADVISORY_INCONCLUSIVE_STATES
+        )
+        if state not in allowed_states:
+            raise ValueError(
+                f"assessment[{index}].state {state!r} is unsupported"
+            )
+        category = assessment.get("category", "vehicle_health")
+        if not isinstance(category, str) or not category:
+            raise ValueError(f"assessment[{index}].category must be text")
+        if assessment.get("advisory") is not True:
+            raise ValueError(f"assessment[{index}] must remain advisory")
+        return rule_key, title, state, category
+
+    def _retire_revised_advisory_locked(
+        self, episode: sqlite3.Row | None, assessment: Mapping[str, object],
+        event_us: int, counters: dict[str, int],
+    ) -> sqlite3.Row | None:
+        """Administratively close an episode whose opening revision changed."""
+
+        if episode is not None and assessment.get("rule_revision"):
+            opening = json.loads(episode["first_assessment_json"])
+            prior_revision = opening.get("rule_revision")
+            if prior_revision and prior_revision != assessment["rule_revision"]:
+                retired = json.loads(episode["latest_assessment_json"])
+                retired.update(state="suppressed", notification_eligible=False,
+                               reason="rule revision replaced; administrative closure, recovery not established")
+                self._conn.execute("UPDATE advisory_episodes SET status='resolved',current_state='suppressed',evidence_state='suppressed',resolved_us=?,resolved_at=?,resolution_reason=? WHERE id=?",
+                                   (event_us,_iso_from_us(event_us),retired["reason"],episode["id"]))
+                self._insert_advisory_event_locked(episode_id=episode["id"],event_us=event_us,event_type="rule_replaced",previous_state=episode["current_state"],new_state="suppressed",context_fingerprint=self._advisory_context_fingerprint(retired),assessment_json=self._advisory_json(retired))
+                self._conn.execute("UPDATE advisory_notification_outbox SET status='cancelled',last_error='rule replaced before delivery' WHERE episode_id=? AND status='pending'",(episode["id"],))
+                counters["resolved"] += 1
+                episode = None
+        return episode
+
+    def _record_inconclusive_advisory_locked(
+        self, *, episode: sqlite3.Row, state: object, event_us: int,
+        assessment_json: str, fingerprint: str, counters: dict[str, int],
+    ) -> None:
+        """Retain the episode while updating its inconclusive evidence."""
+
+        prior_evidence = str(episode["evidence_state"])
+        self._conn.execute(
+            """
                         UPDATE advisory_episodes
                         SET evidence_state=?,last_evaluated_us=?,
                             last_evaluated_at=?,latest_assessment_json=?,
                             latest_context_fingerprint=?,update_count=update_count+1
                         WHERE id=?
                         """,
-                        (
-                            state,
-                            event_us,
-                            _iso_from_us(event_us),
-                            assessment_json,
-                            fingerprint,
-                            episode["id"],
-                        ),
-                    )
-                    if prior_evidence != state:
-                        self._insert_advisory_event_locked(
-                            episode_id=int(episode["id"]),
-                            event_us=event_us,
-                            event_type="evidence_inconclusive",
-                            previous_state=prior_evidence,
-                            new_state=str(state),
-                            context_fingerprint=fingerprint,
-                            assessment_json=assessment_json,
-                        )
-                    counters["updated"] += 1
-                    continue
+            (
+                state,
+                event_us,
+                _iso_from_us(event_us),
+                assessment_json,
+                fingerprint,
+                episode["id"],
+            ),
+        )
+        if prior_evidence != state:
+            self._insert_advisory_event_locked(
+                episode_id=int(episode["id"]),
+                event_us=event_us,
+                event_type="evidence_inconclusive",
+                previous_state=prior_evidence,
+                new_state=str(state),
+                context_fingerprint=fingerprint,
+                assessment_json=assessment_json,
+            )
+        counters["updated"] += 1
 
-                if state in ADVISORY_RESOLVING_STATES:
-                    if episode is None:
-                        continue
-                    self._conn.execute(
-                        """
+    def _resolve_advisory_locked(
+        self, *, episode: sqlite3.Row, state: object, event_us: int,
+        assessment_json: str, fingerprint: str, counters: dict[str, int],
+        assessment: Mapping[str, object],
+    ) -> None:
+        """Resolve, cancel pending warnings, then enqueue any recovery push."""
+
+        self._conn.execute(
+            """
                         UPDATE advisory_episodes
                         SET status='resolved',current_state=?,evidence_state=?,
                             last_evaluated_us=?,
@@ -842,54 +949,56 @@ class AdvisoryMixin:
                             transition_count=transition_count+1
                         WHERE id=?
                         """,
-                        (
-                            state,
-                            state,
-                            event_us,
-                            _iso_from_us(event_us),
-                            event_us,
-                            _iso_from_us(event_us),
-                            assessment.get("reason") or f"assessment became {state}",
-                            assessment_json,
-                            fingerprint,
-                            episode["id"],
-                        ),
-                    )
-                    resolved_event_id = self._insert_advisory_event_locked(
-                        episode_id=int(episode["id"]),
-                        event_us=event_us,
-                        event_type="resolved",
-                        previous_state=str(episode["current_state"]),
-                        new_state=str(state),
-                        context_fingerprint=fingerprint,
-                        assessment_json=assessment_json,
-                    )
-                    self._conn.execute(
-                        """
+            (
+                state,
+                state,
+                event_us,
+                _iso_from_us(event_us),
+                event_us,
+                _iso_from_us(event_us),
+                assessment.get("reason") or f"assessment became {state}",
+                assessment_json,
+                fingerprint,
+                episode["id"],
+            ),
+        )
+        resolved_event_id = self._insert_advisory_event_locked(
+            episode_id=int(episode["id"]),
+            event_us=event_us,
+            event_type="resolved",
+            previous_state=str(episode["current_state"]),
+            new_state=str(state),
+            context_fingerprint=fingerprint,
+            assessment_json=assessment_json,
+        )
+        self._conn.execute(
+            """
                         UPDATE advisory_notification_outbox
                         SET status='cancelled',last_error='episode resolved before delivery'
                         WHERE episode_id=? AND status='pending'
                         """,
-                        (episode["id"],),
-                    )
-                    # After the cancel above, so the new row survives it.
-                    if self._enqueue_recovery_notification_locked(
-                        episode=episode,
-                        event_id=resolved_event_id,
-                        event_us=event_us,
-                        fingerprint=fingerprint,
-                        assessment=assessment,
-                        assessment_json=assessment_json,
-                    ):
-                        counters["notifications_enqueued"] += 1
-                    counters["resolved"] += 1
-                    continue
+            (episode["id"],),
+        )
+        # After the cancel above, so the new row survives it.
+        if self._enqueue_recovery_notification_locked(
+            episode=episode,
+            event_id=resolved_event_id,
+            event_us=event_us,
+            fingerprint=fingerprint,
+            assessment=assessment,
+            assessment_json=assessment_json,
+        ):
+            counters["notifications_enqueued"] += 1
+        counters["resolved"] += 1
 
-                assert state in ADVISORY_ACTIVE_STATES
-                event_id: int | None = None
-                if episode is None:
-                    cursor = self._conn.execute(
-                        """
+    def _open_advisory_locked(
+        self, rule_key: str, category: str, title: str, state: object,
+        event_us: int, assessment_json: str, fingerprint: str,
+    ) -> tuple[sqlite3.Row, int]:
+        """Insert the opening episode and event, then fetch the stored row."""
+
+        cursor = self._conn.execute(
+            """
                         INSERT INTO advisory_episodes(
                             rule_key,category,title,advisory,status,current_state,
                             evidence_state,opened_us,opened_at,last_evaluated_us,
@@ -898,48 +1007,54 @@ class AdvisoryMixin:
                             latest_context_fingerprint
                         ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                         """,
-                        (
-                            rule_key,
-                            category,
-                            title,
-                            1,
-                            "open",
-                            state,
-                            state,
-                            event_us,
-                            _iso_from_us(event_us),
-                            event_us,
-                            _iso_from_us(event_us),
-                            event_us,
-                            _iso_from_us(event_us),
-                            assessment_json,
-                            assessment_json,
-                            fingerprint,
-                        ),
-                    )
-                    episode_id = int(cursor.lastrowid)
-                    event_id = self._insert_advisory_event_locked(
-                        episode_id=episode_id,
-                        event_us=event_us,
-                        event_type="opened",
-                        previous_state=None,
-                        new_state=str(state),
-                        context_fingerprint=fingerprint,
-                        assessment_json=assessment_json,
-                    )
-                    episode = self._conn.execute(
-                        "SELECT * FROM advisory_episodes WHERE id=?",
-                        (episode_id,),
-                    ).fetchone()
-                    checkpoint(self._conn, episode, assessment, event_us)
-                    counters["opened"] += 1
-                else:
-                    previous_state = str(episode["current_state"])
-                    prior_evidence = str(episode["evidence_state"])
-                    previous_fingerprint = str(episode["latest_context_fingerprint"])
-                    transitions = int(previous_state != state)
-                    self._conn.execute(
-                        """
+            (
+                rule_key,
+                category,
+                title,
+                1,
+                "open",
+                state,
+                state,
+                event_us,
+                _iso_from_us(event_us),
+                event_us,
+                _iso_from_us(event_us),
+                event_us,
+                _iso_from_us(event_us),
+                assessment_json,
+                assessment_json,
+                fingerprint,
+            ),
+        )
+        episode_id = int(cursor.lastrowid)
+        event_id = self._insert_advisory_event_locked(
+            episode_id=episode_id,
+            event_us=event_us,
+            event_type="opened",
+            previous_state=None,
+            new_state=str(state),
+            context_fingerprint=fingerprint,
+            assessment_json=assessment_json,
+        )
+        episode = self._conn.execute(
+            "SELECT * FROM advisory_episodes WHERE id=?",
+            (episode_id,),
+        ).fetchone()
+        return episode, event_id
+
+    def _update_active_advisory_locked(
+        self, *, episode: sqlite3.Row, state: object, event_us: int,
+        assessment_json: str, fingerprint: str, counters: dict[str, int],
+        category: str, title: str, event_id: int | None,
+    ) -> tuple[sqlite3.Row, int | None]:
+        """Update an active episode and record a material state/context event."""
+
+        previous_state = str(episode["current_state"])
+        prior_evidence = str(episode["evidence_state"])
+        previous_fingerprint = str(episode["latest_context_fingerprint"])
+        transitions = int(previous_state != state)
+        self._conn.execute(
+            """
                         UPDATE advisory_episodes
                         SET category=?,title=?,current_state=?,evidence_state=?,
                             last_evaluated_us=?,last_evaluated_at=?,
@@ -950,131 +1065,118 @@ class AdvisoryMixin:
                             latest_assessment_json=?,latest_context_fingerprint=?
                         WHERE id=?
                         """,
-                        (
-                            category,
-                            title,
-                            state,
-                            state,
-                            event_us,
-                            _iso_from_us(event_us),
-                            event_us,
-                            _iso_from_us(event_us),
-                            transitions,
-                            assessment_json,
-                            fingerprint,
-                            episode["id"],
-                        ),
-                    )
-                    if previous_state != state:
-                        event_type = (
-                            "escalated" if state == "warning" else "deescalated"
-                        )
-                    elif prior_evidence in ADVISORY_INCONCLUSIVE_STATES:
-                        event_type = "evidence_restored"
-                    elif previous_fingerprint != fingerprint:
-                        event_type = "context_updated"
-                    else:
-                        event_type = ""
-                    if event_type:
-                        event_id = self._insert_advisory_event_locked(
-                            episode_id=int(episode["id"]),
-                            event_us=event_us,
-                            event_type=event_type,
-                            previous_state=previous_state,
-                            new_state=str(state),
-                            context_fingerprint=fingerprint,
-                            assessment_json=assessment_json,
-                        )
-                    episode = self._conn.execute(
-                        "SELECT * FROM advisory_episodes WHERE id=?",
-                        (episode["id"],),
-                    ).fetchone()
-                    counters["updated"] += 1
+            (
+                category,
+                title,
+                state,
+                state,
+                event_us,
+                _iso_from_us(event_us),
+                event_us,
+                _iso_from_us(event_us),
+                transitions,
+                assessment_json,
+                fingerprint,
+                episode["id"],
+            ),
+        )
+        if previous_state != state:
+            event_type = (
+                "escalated" if state == "warning" else "deescalated"
+            )
+        elif prior_evidence in ADVISORY_INCONCLUSIVE_STATES:
+            event_type = "evidence_restored"
+        elif previous_fingerprint != fingerprint:
+            event_type = "context_updated"
+        else:
+            event_type = ""
+        if event_type:
+            event_id = self._insert_advisory_event_locked(
+                episode_id=int(episode["id"]),
+                event_us=event_us,
+                event_type=event_type,
+                previous_state=previous_state,
+                new_state=str(state),
+                context_fingerprint=fingerprint,
+                assessment_json=assessment_json,
+            )
+        episode = self._conn.execute(
+            "SELECT * FROM advisory_episodes WHERE id=?",
+            (episode["id"],),
+        ).fetchone()
+        counters["updated"] += 1
+        return episode, event_id
 
-                policy = self._notification_policy(assessment)
-                if not policy.get("legacy"):
-                    self._record_tiered_notification_locked(
-                        episode=episode,
-                        event_id=event_id,
-                        event_us=event_us,
-                        fingerprint=fingerprint,
-                        assessment=assessment,
-                        assessment_json=assessment_json,
-                        policy=policy,
-                        counters=counters,
-                    )
-                    continue
-                notification_eligible = (
-                    state == "warning"
-                    and assessment.get("notification_eligible") is True
-                    and episode["acknowledged_us"] is None
-                    and assessment.get("category") not in SYSTEM_NOTE_CATEGORIES
+    def _enqueue_legacy_advisory_locked(
+        self, *, episode: sqlite3.Row, state: object, event_us: int,
+        assessment_json: str, fingerprint: str, counters: dict[str, int],
+        assessment: Mapping[str, object], event_id: int | None,
+    ) -> None:
+        """Record a legacy reminder event if needed, then enqueue its push."""
+
+        if event_id is None:
+            event_id = self._insert_advisory_event_locked(
+                episode_id=int(episode["id"]),
+                event_us=event_us,
+                event_type="notification_repeat_due",
+                previous_state=str(state),
+                new_state=str(state),
+                context_fingerprint=fingerprint,
+                assessment_json=assessment_json,
+            )
+        if self._enqueue_advisory_notification_locked(
+            episode=episode,
+            event_id=event_id,
+            event_us=event_us,
+            context_fingerprint=fingerprint,
+            assessment=assessment,
+            assessment_json=assessment_json,
+        ):
+            counters["notifications_enqueued"] += 1
+
+    def _retire_absent_advisories_locked(
+        self, authoritative_rules: set[str] | None, seen: set[str],
+        event_us: int, counters: dict[str, int],
+    ) -> None:
+        """Validate the authoritative catalog and retire absent open rules."""
+
+        if authoritative_rules is not None:
+            if seen != authoritative_rules:
+                raise ValueError(
+                    "authoritative_rule_keys must exactly match the evaluated assessments"
                 )
-                if notification_eligible:
-                    rate_limit = self._notification_rate_limit(assessment)
-                    if not self._notification_due_locked(
-                        episode_id=int(episode["id"]),
-                        rule_key=rule_key,
-                        event_us=event_us,
-                        rate_limit_seconds=rate_limit,
-                    ):
-                        continue
-                    if event_id is None:
-                        event_id = self._insert_advisory_event_locked(
-                            episode_id=int(episode["id"]),
-                            event_us=event_us,
-                            event_type="notification_repeat_due",
-                            previous_state=str(state),
-                            new_state=str(state),
-                            context_fingerprint=fingerprint,
-                            assessment_json=assessment_json,
-                        )
-                    if self._enqueue_advisory_notification_locked(
-                        episode=episode,
-                        event_id=event_id,
-                        event_us=event_us,
-                        context_fingerprint=fingerprint,
-                        assessment=assessment,
-                        assessment_json=assessment_json,
-                    ):
-                        counters["notifications_enqueued"] += 1
-            if authoritative_rules is not None:
-                if seen != authoritative_rules:
-                    raise ValueError(
-                        "authoritative_rule_keys must exactly match the evaluated assessments"
+            open_rows = self._conn.execute(
+                "SELECT * FROM advisory_episodes WHERE status='open'"
+            ).fetchall()
+            for episode in open_rows:
+                if str(episode["rule_key"]) in authoritative_rules:
+                    continue
+                reason = "rule retired from authoritative evaluator catalog"
+                try:
+                    retired_assessment = json.loads(
+                        episode["latest_assessment_json"]
                     )
-                open_rows = self._conn.execute(
-                    "SELECT * FROM advisory_episodes WHERE status='open'"
-                ).fetchall()
-                for episode in open_rows:
-                    if str(episode["rule_key"]) in authoritative_rules:
-                        continue
-                    reason = "rule retired from authoritative evaluator catalog"
-                    try:
-                        retired_assessment = json.loads(
-                            episode["latest_assessment_json"]
-                        )
-                    except (TypeError, json.JSONDecodeError):
-                        retired_assessment = {}
-                    if not isinstance(retired_assessment, dict):
-                        retired_assessment = {}
-                    retired_assessment.update(
-                        {
-                            "rule": episode["rule_key"],
-                            "title": episode["title"],
-                            "category": episode["category"],
-                            "advisory": True,
-                            "state": "suppressed",
-                            "reason": reason,
-                            "notification_eligible": False,
-                        }
-                    )
-                    assessment_json = self._advisory_json(retired_assessment)
-                    fingerprint = self._advisory_context_fingerprint(
-                        retired_assessment
-                    )
-                    self._conn.execute(
-                        """
+                except (TypeError, json.JSONDecodeError):
+                    retired_assessment = {}
+                if not isinstance(retired_assessment, dict):
+                    retired_assessment = {}
+                retired_assessment.update(
+                    {
+                        "rule": episode["rule_key"],
+                        "title": episode["title"],
+                        "category": episode["category"],
+                        "advisory": True,
+                        "state": "suppressed",
+                        "reason": reason,
+                        "notification_eligible": False,
+                    }
+                )
+                assessment_json = self._advisory_json(retired_assessment)
+                fingerprint = self._advisory_context_fingerprint(
+                    retired_assessment
+                )
+                self._conn.execute(
+                    """
                         UPDATE advisory_episodes
                         SET status='resolved',current_state='suppressed',
                             evidence_state='suppressed',
@@ -1085,41 +1187,76 @@ class AdvisoryMixin:
                             transition_count=transition_count+1
                         WHERE id=? AND status='open'
                         """,
-                        (
-                            event_us,
-                            _iso_from_us(event_us),
-                            event_us,
-                            _iso_from_us(event_us),
-                            reason,
-                            assessment_json,
-                            fingerprint,
-                            episode["id"],
-                        ),
-                    )
-                    self._insert_advisory_event_locked(
-                        episode_id=int(episode["id"]),
-                        event_us=event_us,
-                        event_type="rule_retired",
-                        previous_state=str(episode["current_state"]),
-                        new_state="suppressed",
-                        context_fingerprint=fingerprint,
-                        assessment_json=assessment_json,
-                    )
-                    self._conn.execute(
-                        """
+                    (
+                        event_us,
+                        _iso_from_us(event_us),
+                        event_us,
+                        _iso_from_us(event_us),
+                        reason,
+                        assessment_json,
+                        fingerprint,
+                        episode["id"],
+                    ),
+                )
+                self._insert_advisory_event_locked(
+                    episode_id=int(episode["id"]),
+                    event_us=event_us,
+                    event_type="rule_retired",
+                    previous_state=str(episode["current_state"]),
+                    new_state="suppressed",
+                    context_fingerprint=fingerprint,
+                    assessment_json=assessment_json,
+                )
+                self._conn.execute(
+                    """
                         UPDATE advisory_notification_outbox
                         SET status='cancelled',
                             last_error='rule retired before delivery'
                         WHERE episode_id=? AND status='pending'
                         """,
-                        (episode["id"],),
-                    )
-                    counters["resolved"] += 1
-            finish_windows(self._conn, event_us)
-        return AdvisoryPersistenceResult(
-            evaluated_at=_iso(moment),
-            **counters,
+                    (episode["id"],),
+                )
+                counters["resolved"] += 1
+
+    def _load_open_advisory_locked(self, rule_key: str) -> sqlite3.Row | None:
+        """Load the current open episode before the duplicate-evaluation guard."""
+
+        episode = self._conn.execute(
+            """
+                    SELECT * FROM advisory_episodes
+                    WHERE rule_key=? AND status='open'
+                    """,
+            (rule_key,),
+        ).fetchone()
+        return episode
+
+    def _prepare_advisory_evidence_locked(
+        self, episode: sqlite3.Row | None, assessment: Mapping[str, object],
+        state: object, event_us: int, counters: dict[str, int],
+        stamp, recovery_gate, checkpoint, archive_baselines,
+        archive_interrupted_watch, archive_parked_episode,
+    ) -> tuple[sqlite3.Row | None, Mapping[str, object], object, str, str]:
+        """Apply archival/recovery gates and freeze and checkpoint the evidence."""
+
+        episode = self._retire_revised_advisory_locked(
+            episode, assessment, event_us, counters
         )
+        if archive_interrupted_watch(self._conn, episode, assessment, event_us):
+            counters["resolved"] += 1
+            episode = None
+        if archive_parked_episode(self._conn, episode, assessment, event_us):
+            counters["resolved"] += 1
+            episode = None
+        assessment = recovery_gate(self._conn, episode, assessment, event_us)
+        if episode is not None or state in ADVISORY_ACTIVE_STATES:
+            archive_baselines(self._conn, assessment, self._baseline_inputs)
+        assessment = stamp(assessment, _iso_from_us(event_us))
+        state = assessment["state"]
+        assessment_json = self._advisory_json(assessment)
+        fingerprint = self._advisory_context_fingerprint(assessment)
+        if episode is not None:
+            checkpoint(self._conn, episode, assessment, event_us)
+        return episode, assessment, state, assessment_json, fingerprint
 
     @staticmethod
     def _advisory_episode_dict(row: sqlite3.Row, now_us: int) -> dict[str, object]:
