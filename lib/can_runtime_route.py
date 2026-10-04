@@ -15,13 +15,82 @@ locks through the operation and exactly restores the passive baseline.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Iterable
 
 from lib import can_operation_state, canbus, diagnostic_safety
+from lib.can_role_resolver import NetdevIdentity
 from lib.modules import Module, bind_channel
 
 
 class RuntimeRouteError(RuntimeError):
     """A module could not be bound to one stable installed CAN role."""
+
+
+@dataclass(frozen=True)
+class LinkExpectation:
+    """Pure exact classical-CAN check, without acquiring or inspecting a link.
+
+    A missing ``channel`` deliberately omits name comparison. Some existing
+    readback sites accept duck-typed states rather than checking InterfaceState;
+    they must explicitly retain that policy with ``require_interface_state=False``.
+    FD/ONE-SHOT use identity comparisons; restart timing uses equality, including
+    None. Listen-only retains the existing truth-value check, not ``is True``.
+    """
+
+    bitrate: int
+    listen_only: bool
+    restart_ms: int | None = 0
+    channel: str | None = None
+    one_shot: bool = False
+
+    def matches(
+        self,
+        state: canbus.InterfaceState,
+        *,
+        require_interface_state: bool = True,
+    ) -> bool:
+        return bool(
+            (not require_interface_state or isinstance(state, canbus.InterfaceState))
+            and (self.channel is None or state.channel == self.channel)
+            and state.present
+            and state.up
+            and state.bitrate == self.bitrate
+            and state.fd_enabled is False
+            and state.one_shot is self.one_shot
+            and (state.listen_only if self.listen_only else not state.listen_only)
+            and state.controller_state == "ERROR-ACTIVE"
+            and state.restart_ms == self.restart_ms
+        )
+
+
+@dataclass(frozen=True)
+class NetdevIdentityExpectation:
+    """Match exactly one inventory device, then its current channel name.
+
+    This performs no sysfs reads and ignores no duplicate matches. ``driver=None``
+    preserves callers that trust the inventory's driver filter instead of
+    independently checking each item's driver. Input validation stays with the
+    caller so its error behavior and ordering are unchanged.
+    """
+
+    channel: str
+    usb_serial: str
+    dev_id: int
+    driver: str | None = "gs_usb"
+    usb_vid: str = "1d50"
+    usb_pid: str = "606f"
+
+    def matches_inventory(self, inventory: Iterable[NetdevIdentity]) -> bool:
+        matches = [
+            item
+            for item in inventory
+            if (self.driver is None or item.driver == self.driver)
+            and item.usb_vid == self.usb_vid
+            and item.usb_pid == self.usb_pid
+            and item.usb_serial == self.usb_serial
+            and item.dev_id == self.dev_id
+        ]
+        return bool(len(matches) == 1 and matches[0].channel == self.channel)
 
 
 @dataclass(frozen=True)
