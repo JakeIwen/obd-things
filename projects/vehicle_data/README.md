@@ -1330,6 +1330,19 @@ it authorizes no transmission and changes no existing live gate.
 
 ## Local API
 
+The HTTP implementation is split by responsibility: `api_server.py` owns the
+serialized Unix server, `api_client.py` owns `TelemetryClient`, and `api.py`
+re-exports the existing imports (including `_prepare_socket_path`). Shared wire
+constants, listener flags, broker-unavailable envelopes, route matching and SSE
+transport live in `http_common.py`. `DtcWebController` lives in `lib/dtc_web.py`
+and remains importable from `web.py`; the optional legacy arm path is retained.
+`api_schema.py` documents the existing `/v1` payloads with TypedDicts only, with
+no runtime validation or changes to serialization. Contract regressions live in
+`tests/test_vehicle_data_http_contract.py` alongside the existing HTTP tests.
+`web_v2.py` remains the service entrypoint; neither unit arguments nor origin
+checks change. The full `/v1/stream` still omits `bind` from its flags, whereas
+the dashboard snapshot and lite stream keep their sorted flags and build id.
+
 The default Unix socket is `/run/van-telemetry/api.sock`.
 
 ```text

@@ -7,6 +7,8 @@ import re
 import time
 from typing import Any, Callable
 
+from projects.vehicle_data.api_schema import ErrorResponse
+
 
 MAX_REQUEST_BYTES = 4096
 MAX_RESPONSE_BYTES = 1024 * 1024
@@ -47,7 +49,7 @@ def web_flags(server, *, include_bind: bool = True, include_build: bool = False)
     return flags
 
 
-def broker_unavailable(exc: Exception) -> dict[str, Any]:
+def broker_unavailable(exc: Exception) -> ErrorResponse:
     return {"available": False, "reason": "broker_unavailable", "detail": str(exc)}
 
 

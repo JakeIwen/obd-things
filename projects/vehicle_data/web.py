@@ -29,6 +29,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from projects.vehicle_data.api import MAX_REQUEST_BYTES, TelemetryClient
+from projects.vehicle_data.api_schema import SnapshotDelivery
 from projects.vehicle_data.http_common import broker_unavailable, route_name, stream_snapshots, web_flags
 from projects.vehicle_data.warning_chat import (
     DEFAULT_SOCKET as DEFAULT_WARNING_CHAT_SOCKET, MAX_BODY as MAX_WARNING_CHAT_BYTES,
@@ -416,7 +417,7 @@ class TelemetryWebServer(http.server.ThreadingHTTPServer):
         self._snapshot_sequence = 0
         self._snapshot_sequence_lock = threading.Lock()
 
-    def next_snapshot_delivery(self) -> dict[str, int | str]:
+    def next_snapshot_delivery(self) -> SnapshotDelivery:
         """Return process-scoped ordering and generation metadata."""
 
         with self._snapshot_sequence_lock:

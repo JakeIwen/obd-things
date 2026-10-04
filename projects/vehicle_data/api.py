@@ -5,6 +5,13 @@ Existing callers (including the broker's function-local import) keep this path.
 This module has no command-line interface.
 """
 
+import pathlib
+import sys
+
+REPO = pathlib.Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
 from projects.vehicle_data.api_client import TelemetryClient, UnixHTTPConnection
 from projects.vehicle_data.api_server import (
     TelemetryApiHandler,
