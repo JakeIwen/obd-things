@@ -129,6 +129,70 @@ class QueryMixin:
             ).fetchone()
         return self._sample_dict(row) if row is not None else None
 
+    @staticmethod
+    def _validate_continuous_condition_limits(
+        *,
+        minimum: float,
+        max_gap_seconds: float,
+        max_lookback_seconds: float,
+    ) -> None:
+        for name, value in (
+            ("minimum", minimum),
+            ("max_gap_seconds", max_gap_seconds),
+            ("max_lookback_seconds", max_lookback_seconds),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+            ):
+                raise ValueError(f"{name} must be finite")
+        if max_gap_seconds <= 0 or max_lookback_seconds <= 0:
+            raise ValueError("condition gap and lookback must be positive")
+
+    @staticmethod
+    def _continuous_condition_result(
+        rows: Sequence[sqlite3.Row],
+        *,
+        metric: str,
+        minimum: float,
+        max_gap_seconds: float,
+        source: str,
+        quality: str,
+        provenance: str,
+        trip_id: int | None,
+        at_us: int,
+    ) -> dict[str, object] | None:
+        if not rows or float(rows[0]["value_num"]) < float(minimum):
+            return None
+        newest_us = int(rows[0]["observed_us"])
+        oldest_us = newest_us
+        newer_us = newest_us
+        count = 0
+        max_gap_us = int(round(max_gap_seconds * MICROSECONDS))
+        for row in rows:
+            observed_us = int(row["observed_us"])
+            if newer_us - observed_us > max_gap_us:
+                break
+            if float(row["value_num"]) < float(minimum):
+                break
+            oldest_us = observed_us
+            newer_us = observed_us
+            count += 1
+        return {
+            "metric": metric,
+            "minimum": float(minimum),
+            "started_at": _iso_from_us(oldest_us),
+            "latest_observed_at": _iso_from_us(newest_us),
+            "duration_seconds": max(0.0, (at_us - oldest_us) / MICROSECONDS),
+            "observation_count": count,
+            "max_gap_seconds": float(max_gap_seconds),
+            "source": source,
+            "quality": quality,
+            "provenance": provenance,
+            "trip_id": trip_id,
+        }
+
     def continuous_numeric_condition(
         self,
         metric: str,
@@ -151,19 +215,11 @@ class QueryMixin:
         infer running from voltage or mere bus activity.
         """
 
-        for name, value in (
-            ("minimum", minimum),
-            ("max_gap_seconds", max_gap_seconds),
-            ("max_lookback_seconds", max_lookback_seconds),
-        ):
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not math.isfinite(float(value))
-            ):
-                raise ValueError(f"{name} must be finite")
-        if max_gap_seconds <= 0 or max_lookback_seconds <= 0:
-            raise ValueError("condition gap and lookback must be positive")
+        self._validate_continuous_condition_limits(
+            minimum=minimum,
+            max_gap_seconds=max_gap_seconds,
+            max_lookback_seconds=max_lookback_seconds,
+        )
         at_us = _to_us(_utc_datetime(at, "at"))
         start_us = at_us - int(round(max_lookback_seconds * MICROSECONDS))
         clauses = [
@@ -216,35 +272,17 @@ class QueryMixin:
                 "ORDER BY sample.observed_us DESC,sample.captured_us DESC LIMIT 1000",
                 args,
             ).fetchall()
-        if not rows or float(rows[0]["value_num"]) < float(minimum):
-            return None
-        newest_us = int(rows[0]["observed_us"])
-        oldest_us = newest_us
-        newer_us = newest_us
-        count = 0
-        max_gap_us = int(round(max_gap_seconds * MICROSECONDS))
-        for row in rows:
-            observed_us = int(row["observed_us"])
-            if newer_us - observed_us > max_gap_us:
-                break
-            if float(row["value_num"]) < float(minimum):
-                break
-            oldest_us = observed_us
-            newer_us = observed_us
-            count += 1
-        return {
-            "metric": metric,
-            "minimum": float(minimum),
-            "started_at": _iso_from_us(oldest_us),
-            "latest_observed_at": _iso_from_us(newest_us),
-            "duration_seconds": max(0.0, (at_us - oldest_us) / MICROSECONDS),
-            "observation_count": count,
-            "max_gap_seconds": float(max_gap_seconds),
-            "source": source,
-            "quality": quality,
-            "provenance": provenance,
-            "trip_id": trip_id,
-        }
+        return self._continuous_condition_result(
+            rows,
+            metric=metric,
+            minimum=minimum,
+            max_gap_seconds=max_gap_seconds,
+            source=source,
+            quality=quality,
+            provenance=provenance,
+            trip_id=trip_id,
+            at_us=at_us,
+        )
 
     def system_health_context(self, snapshot_id: int) -> dict[str, object]:
         """Return persisted role/topology facts for one stored snapshot."""
