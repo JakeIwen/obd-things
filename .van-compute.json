@@ -52,7 +52,8 @@
         "lib/candump_io.py",
         "tools/can_timeseries_correlate.py",
         "tools/candump_diagnostic_wire.py",
-        "tests/test_candump_diagnostic_wire.py"
+        "tests/test_candump_diagnostic_wire.py",
+        "lib/signal_fields.py"
       ],
       "minimum_inputs": 0,
       "maximum_inputs": 0,
@@ -658,16 +659,7 @@
       "description": "Run the dependency-light guarded DID inventory regression tests.",
       "profile": "repo-test",
       "source_paths": [
-        "lib/diagnostic_preflight.py",
-        "lib/vin_redaction.py",
-        "lib/uds_session.py",
-        "lib/cli_gates.py",
-        "lib/reports.py",
-        "lib/__init__.py",
-        "lib/canbus.py",
-        "lib/diagnostic_safety.py",
-        "lib/modules.py",
-        "lib/uds.py",
+        "lib",
         "tools/__init__.py",
         "tools/did_sweep.py",
         "tools/ecu_discover.py",
@@ -785,7 +777,8 @@
         "tools/__init__.py",
         "tools/can_capture_summary.py",
         "lib/candump_io.py",
-        "tools/can_cross_bus_speed.py"
+        "tools/can_cross_bus_speed.py",
+        "lib/broadcast_signals.py"
       ],
       "minimum_inputs": 2,
       "maximum_inputs": 2,
@@ -837,7 +830,8 @@
         "tools/__init__.py",
         "tools/can_capture_summary.py",
         "lib/candump_io.py",
-        "tools/can_cross_bus_speed.py"
+        "tools/can_cross_bus_speed.py",
+        "lib/broadcast_signals.py"
       ],
       "minimum_inputs": 2,
       "maximum_inputs": 2,
@@ -974,7 +968,9 @@
         "tools/can_capture_summary.py",
         "lib/candump_io.py",
         "tools/can_event_window.py",
-        "tools/can_gear_ratio_analyze.py"
+        "tools/can_gear_ratio_analyze.py",
+        "lib/broadcast_signals.py",
+        "lib/signal_fields.py"
       ],
       "minimum_inputs": 1,
       "maximum_inputs": 4,
