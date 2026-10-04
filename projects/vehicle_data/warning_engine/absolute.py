@@ -236,16 +236,23 @@ class AbsoluteMixin:
             payload["candidate"] = candidate
         return payload
 
-    def _evaluate_absolute_oil_rule(
+    @staticmethod
+    def _absolute_oil_persistence(
+        rule: AbsoluteOilPressureRule,
+    ) -> dict[str, object]:
+        return {
+            "required": rule.persistence_observations,
+            "observed": 0,
+            "window_seconds": rule.persistence_window_seconds,
+        }
+
+    def _absolute_oil_rpm_context(
         self,
         rule: AbsoluteOilPressureRule,
-        *,
+        tick: _Tick,
         at: datetime,
-        tick: _Tick | None = None,
+        base: Mapping[str, object],
     ) -> dict[str, object]:
-        if tick is None:
-            tick = _Tick(at)
-        base = self._absolute_base(rule)
         rpm = self._latest(tick, rule.running_metric)
         rpm_age = (
             _sample_age_seconds(rpm, at)
@@ -254,18 +261,14 @@ class AbsoluteMixin:
             else None
         )
         if rpm_age is None or rpm_age > rule.max_age_seconds:
-            return {
+            return {"terminal": {
                 **base,
                 "state": "unavailable",
                 "reason": "fresh positive RPM evidence is unavailable",
                 "current": None,
                 "running_evidence": None,
-                "persistence": {
-                    "required": rule.persistence_observations,
-                    "observed": 0,
-                    "window_seconds": rule.persistence_window_seconds,
-                },
-            }
+                "persistence": self._absolute_oil_persistence(rule),
+            }}
         assert rpm is not None
         rpm_payload = self._current_payload(rpm, rpm_age)
         if (
@@ -273,7 +276,7 @@ class AbsoluteMixin:
             or rpm.get("quality") != rule.running_quality
             or rpm.get("unit") != rule.running_unit
         ):
-            return {
+            return {"terminal": {
                 **base,
                 "state": "unavailable",
                 "reason": (
@@ -290,14 +293,10 @@ class AbsoluteMixin:
                         "unit": rule.running_unit,
                     },
                 },
-                "persistence": {
-                    "required": rule.persistence_observations,
-                    "observed": 0,
-                    "window_seconds": rule.persistence_window_seconds,
-                },
-            }
+                "persistence": self._absolute_oil_persistence(rule),
+            }}
         if float(rpm["value"]) < rule.running_rpm_threshold:
-            return {
+            return {"terminal": {
                 **base,
                 # Not "suppressed": that state resolves an open episode, so
                 # stopping the engine (the rule's own advice) would close a
@@ -311,12 +310,18 @@ class AbsoluteMixin:
                     "rpm": rpm_payload,
                     "minimum_rpm": rule.running_rpm_threshold,
                 },
-                "persistence": {
-                    "required": rule.persistence_observations,
-                    "observed": 0,
-                    "window_seconds": rule.persistence_window_seconds,
-                },
-            }
+                "persistence": self._absolute_oil_persistence(rule),
+            }}
+        return {"rpm": rpm, "rpm_payload": rpm_payload}
+
+    def _absolute_oil_running_context(
+        self,
+        rule: AbsoluteOilPressureRule,
+        tick: _Tick,
+        base: Mapping[str, object],
+        rpm: Mapping[str, object],
+        rpm_payload: Mapping[str, object],
+    ) -> dict[str, object]:
         running = self._continuous(
             tick,
             rpm,
@@ -325,7 +330,7 @@ class AbsoluteMixin:
             max_gap=rule.running_max_gap_seconds,
         )
         if running is None or float(running["duration_seconds"]) < rule.startup_grace_seconds:
-            return {
+            return {"terminal": {
                 **base,
                 "state": "not_applicable",
                 "reason": "engine is inside the defined startup/cranking grace period",
@@ -336,12 +341,19 @@ class AbsoluteMixin:
                     "continuous_interval": running,
                     "startup_grace_seconds": rule.startup_grace_seconds,
                 },
-                "persistence": {
-                    "required": rule.persistence_observations,
-                    "observed": 0,
-                    "window_seconds": rule.persistence_window_seconds,
-                },
-            }
+                "persistence": self._absolute_oil_persistence(rule),
+            }}
+        return {"running": running}
+
+    def _absolute_oil_sample_context(
+        self,
+        rule: AbsoluteOilPressureRule,
+        tick: _Tick,
+        at: datetime,
+        base: Mapping[str, object],
+        rpm_payload: Mapping[str, object],
+        running: Mapping[str, object],
+    ) -> dict[str, object]:
         oil = self._latest(tick, rule.metric)
         oil_age = (
             _sample_age_seconds(oil, at)
@@ -356,25 +368,21 @@ class AbsoluteMixin:
             "startup_grace_seconds": rule.startup_grace_seconds,
         }
         if oil_age is None or oil_age > rule.max_age_seconds or oil is None:
-            return {
+            return {"terminal": {
                 **base,
                 "state": "unavailable",
                 "reason": "fresh oil-pressure evidence is unavailable",
                 "current": None,
                 "running_evidence": running_evidence,
-                "persistence": {
-                    "required": rule.persistence_observations,
-                    "observed": 0,
-                    "window_seconds": rule.persistence_window_seconds,
-                },
-            }
+                "persistence": self._absolute_oil_persistence(rule),
+            }}
         current = self._current_payload(oil, oil_age)
         if (
             oil.get("source") != rule.pressure_source
             or oil.get("quality") != rule.pressure_quality
             or oil.get("unit") != rule.pressure_unit
         ):
-            return {
+            return {"terminal": {
                 **base,
                 "state": "unavailable",
                 "reason": (
@@ -383,12 +391,21 @@ class AbsoluteMixin:
                 ),
                 "current": current,
                 "running_evidence": running_evidence,
-                "persistence": {
-                    "required": rule.persistence_observations,
-                    "observed": 0,
-                    "window_seconds": rule.persistence_window_seconds,
-                },
-            }
+                "persistence": self._absolute_oil_persistence(rule),
+            }}
+        return {
+            "oil": oil,
+            "current": current,
+            "running_evidence": running_evidence,
+        }
+
+    def _absolute_oil_runs(
+        self,
+        rule: AbsoluteOilPressureRule,
+        tick: _Tick,
+        oil: Mapping[str, object],
+        running: Mapping[str, object],
+    ) -> dict[str, object]:
         running_start = _to_us(_utc(str(running["started_at"])))
         engine = _engine(oil)
         grace_us = rule.startup_grace_seconds * 1_000_000
@@ -403,7 +420,7 @@ class AbsoluteMixin:
             return ("ok", rule.minimum_pressure_psi, None, value)
 
         newest_us = _observed_us(oil)
-        runs = _absolute_runs(
+        return _absolute_runs(
             self._series(
                 tick, rule.metric, oil,
                 lookback=_rule_lookbacks(rule).get(rule.metric, 0.0),
@@ -414,6 +431,17 @@ class AbsoluteMixin:
             window_seconds=rule.persistence_window_seconds,
             clear_margin=rule.clear_margin,
         )
+
+    def _absolute_oil_payload(
+        self,
+        rule: AbsoluteOilPressureRule,
+        tick: _Tick,
+        base: Mapping[str, object],
+        oil: Mapping[str, object],
+        current: Mapping[str, object],
+        running_evidence: Mapping[str, object],
+        runs: Mapping[str, object],
+    ) -> dict[str, object]:
         below = float(oil["value"]) < rule.minimum_pressure_psi
         observed = int(runs["escalate"]) if below else 0
         persistent = observed >= rule.persistence_observations
@@ -484,3 +512,44 @@ class AbsoluteMixin:
         if candidate is not None:
             payload["candidate"] = candidate
         return payload
+
+    def _evaluate_absolute_oil_rule(
+        self,
+        rule: AbsoluteOilPressureRule,
+        *,
+        at: datetime,
+        tick: _Tick | None = None,
+    ) -> dict[str, object]:
+        if tick is None:
+            tick = _Tick(at)
+        base = self._absolute_base(rule)
+        rpm_context = self._absolute_oil_rpm_context(rule, tick, at, base)
+        if "terminal" in rpm_context:
+            return rpm_context["terminal"]
+        running_context = self._absolute_oil_running_context(
+            rule, tick, base, rpm_context["rpm"], rpm_context["rpm_payload"]
+        )
+        if "terminal" in running_context:
+            return running_context["terminal"]
+        sample_context = self._absolute_oil_sample_context(
+            rule,
+            tick,
+            at,
+            base,
+            rpm_context["rpm_payload"],
+            running_context["running"],
+        )
+        if "terminal" in sample_context:
+            return sample_context["terminal"]
+        runs = self._absolute_oil_runs(
+            rule, tick, sample_context["oil"], running_context["running"]
+        )
+        return self._absolute_oil_payload(
+            rule,
+            tick,
+            base,
+            sample_context["oil"],
+            sample_context["current"],
+            sample_context["running_evidence"],
+            runs,
+        )
