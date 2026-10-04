@@ -106,20 +106,13 @@ class TiresMixin:
                 return state, states[state]
         return "unavailable", None
 
-    def _evaluate_tire_group(
+    def _tire_group_results(
         self,
         rule: TireGroupRule,
         tick: _Tick,
-        *,
-        refresh: bool,
+        prior: set[object],
+        required: int,
     ) -> dict[str, object]:
-        if refresh:
-            self.historian.refresh_rollups(through=tick.at)
-        group_base = self._tire_base(rule)
-        open_info = self._open_info(tick, rule.key)
-        sticky = open_info.get("state") == "warning"
-        prior = set(open_info.get("held") or ())
-        required = rule.persistence_observations
         results = {
             wheel: self._relative_core(rule.wheel_rule(wheel), tick, refresh=False)
             for wheel in rule.wheels
@@ -161,6 +154,35 @@ class TiresMixin:
             wheel for wheel in rule.wheels
             if wheel in prior and wheel not in evaluated
         ]
+        return {
+            "results": results,
+            "evaluated": evaluated,
+            "by_ratio": by_ratio,
+            "persistent": persistent,
+            "past": past,
+            "holding": holding,
+            "prior_order": prior_order,
+            "recovering_prior": recovering_prior,
+            "cleared_prior": cleared_prior,
+            "evaluated_prior": evaluated_prior,
+            "inconclusive_prior": inconclusive_prior,
+        }
+
+    def _tire_group_state(
+        self,
+        *,
+        sticky: bool,
+        results: Mapping[str, Mapping[str, object]],
+        evaluated: Mapping[str, Mapping[str, object]],
+        by_ratio: Sequence[str],
+        persistent: Sequence[str],
+        past: Sequence[str],
+        holding: Sequence[str],
+        recovering_prior: Sequence[str],
+        cleared_prior: Sequence[str],
+        evaluated_prior: Sequence[str],
+        inconclusive_prior: Sequence[str],
+    ) -> tuple[str, list[str], str]:
         named: list[str] = []
         if sticky and (persistent or holding):
             state = "warning"
@@ -183,7 +205,7 @@ class TiresMixin:
             reason = "the tire that raised the warning cannot be compared right now"
         elif not sticky and persistent:
             state = "warning"
-            named = persistent
+            named = list(persistent)
             reason = "stayed below its usual pressure for this trip phase long enough to confirm"
         elif evaluated:
             state = "normal"
@@ -195,8 +217,22 @@ class TiresMixin:
         else:
             state, _wheel = self._inconclusive_state(results)
             reason = "no tire could be compared with its usual pressure"
+        return state, named, reason
 
-        worst: str | None
+    def _tire_group_worst(
+        self,
+        rule: TireGroupRule,
+        open_info: Mapping[str, object],
+        results: Mapping[str, Mapping[str, object]],
+        *,
+        sticky: bool,
+        state: str,
+        named: Sequence[str],
+        prior_order: Sequence[str],
+        inconclusive_prior: Sequence[str],
+        past: Sequence[str],
+        by_ratio: Sequence[str],
+    ) -> str | None:
         opened = open_info.get("opened") or {}
         opened_wheel = opened.get("wheel") if isinstance(opened, Mapping) else None
         if named:
@@ -222,7 +258,16 @@ class TiresMixin:
                 (wheel for wheel in rule.wheels if results[wheel].get("sample") is not None),
                 None,
             )
+        return worst
 
+    def _tire_group_assessments(
+        self,
+        rule: TireGroupRule,
+        results: Mapping[str, Mapping[str, object]],
+        evaluated: Mapping[str, Mapping[str, object]],
+        named: Sequence[str],
+        required: int,
+    ) -> dict[str, dict[str, object]]:
         wheel_states = {
             wheel: ("warning" if wheel in named else None) for wheel in rule.wheels
         }
@@ -234,7 +279,17 @@ class TiresMixin:
             wheel_assessments[wheel]["persistence"]["satisfied"] = (  # type: ignore[index]
                 int(evaluated[wheel]["escalate"]) >= required
             )
-        action_wheels = named or (past if state == "normal" else [])
+        return wheel_assessments
+
+    def _tire_group_candidate(
+        self,
+        rule: TireGroupRule,
+        tick: _Tick,
+        state: str,
+        past: Sequence[str],
+        evaluated: Mapping[str, Mapping[str, object]],
+        required: int,
+    ) -> tuple[dict[str, object] | None, str | None]:
         candidate = None
         confidence = None
         if state == "warning":
@@ -253,7 +308,29 @@ class TiresMixin:
                 window_seconds=rule.persistence_window_seconds,
             )
             confidence = "low"
+        return candidate, confidence
 
+    def _tire_group_payload(
+        self,
+        rule: TireGroupRule,
+        group_base: Mapping[str, object],
+        results: Mapping[str, Mapping[str, object]],
+        evaluated: Mapping[str, Mapping[str, object]],
+        *,
+        state: str,
+        reason: str,
+        sticky: bool,
+        worst: str | None,
+        named: Sequence[str],
+        past: Sequence[str],
+        prior_order: Sequence[str],
+        persistent: Sequence[str],
+        action_wheels: Sequence[str],
+        wheel_assessments: Mapping[str, Mapping[str, object]],
+        candidate: dict[str, object] | None,
+        confidence: str | None,
+        required: int,
+    ) -> dict[str, object]:
         if worst is not None and results[worst].get("kind") in ("evaluated", "insufficient"):
             core = results[worst]
             wheel_rule = rule.wheel_rule(worst)
@@ -310,14 +387,10 @@ class TiresMixin:
         payload["confidence"] = confidence
         payload["regime_dimensions"] = [*rule.regime_dimensions, rule.phase_dimension]
         payload["wheel"] = worst
-        payload["phase"] = (
-            results[worst].get("phase")
-            if worst is not None
-            else None
-        )
-        payload["wheels_past_threshold"] = past
-        payload["action_wheels"] = action_wheels
-        payload["held_keys"] = named if state == "warning" else (prior_order if sticky else [])
+        payload["phase"] = results[worst].get("phase") if worst is not None else None
+        payload["wheels_past_threshold"] = list(past)
+        payload["action_wheels"] = list(action_wheels)
+        payload["held_keys"] = list(named) if state == "warning" else (list(prior_order) if sticky else [])
         payload["wheel_assessments"] = wheel_assessments
         if action_wheels:
             labels = _labels(action_wheels)
@@ -328,6 +401,75 @@ class TiresMixin:
         else:
             payload.pop("candidate", None)
         return payload
+
+    def _evaluate_tire_group(
+        self,
+        rule: TireGroupRule,
+        tick: _Tick,
+        *,
+        refresh: bool,
+    ) -> dict[str, object]:
+        if refresh:
+            self.historian.refresh_rollups(through=tick.at)
+        group_base = self._tire_base(rule)
+        open_info = self._open_info(tick, rule.key)
+        sticky = open_info.get("state") == "warning"
+        prior = set(open_info.get("held") or ())
+        required = rule.persistence_observations
+        compared = self._tire_group_results(rule, tick, prior, required)
+        results = compared["results"]
+        evaluated = compared["evaluated"]
+        state, named, reason = self._tire_group_state(
+            sticky=sticky,
+            results=results,
+            evaluated=evaluated,
+            by_ratio=compared["by_ratio"],
+            persistent=compared["persistent"],
+            past=compared["past"],
+            holding=compared["holding"],
+            recovering_prior=compared["recovering_prior"],
+            cleared_prior=compared["cleared_prior"],
+            evaluated_prior=compared["evaluated_prior"],
+            inconclusive_prior=compared["inconclusive_prior"],
+        )
+        worst = self._tire_group_worst(
+            rule,
+            open_info,
+            results,
+            sticky=sticky,
+            state=state,
+            named=named,
+            prior_order=compared["prior_order"],
+            inconclusive_prior=compared["inconclusive_prior"],
+            past=compared["past"],
+            by_ratio=compared["by_ratio"],
+        )
+        wheel_assessments = self._tire_group_assessments(
+            rule, results, evaluated, named, required
+        )
+        action_wheels = named or (compared["past"] if state == "normal" else [])
+        candidate, confidence = self._tire_group_candidate(
+            rule, tick, state, compared["past"], evaluated, required
+        )
+        return self._tire_group_payload(
+            rule,
+            group_base,
+            results,
+            evaluated,
+            state=state,
+            reason=reason,
+            sticky=sticky,
+            worst=worst,
+            named=named,
+            past=compared["past"],
+            prior_order=compared["prior_order"],
+            persistent=compared["persistent"],
+            action_wheels=action_wheels,
+            wheel_assessments=wheel_assessments,
+            candidate=candidate,
+            confidence=confidence,
+            required=required,
+        )
 
     def _wheel_absolute(
         self,
