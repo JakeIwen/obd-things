@@ -118,32 +118,46 @@ class TirePairsMixin:
             abs(value - reference) >= 0.05 for value in inside
         )
 
-    def _pair_axle(
+    def _pair_samples(
         self,
         rule: AbsoluteRule,
         tick: _Tick,
         left: str,
         right: str,
-    ) -> dict[str, object]:
-        left_metric = f"{rule.metric}.{left}"
-        right_metric = f"{rule.metric}.{right}"
+        left_metric: str,
+        right_metric: str,
+    ) -> tuple[dict[str, tuple[dict[str, object], float]], dict[str, object] | None]:
         samples = {}
         for wheel, metric in ((left, left_metric), (right, right_metric)):
             sample = self._latest(tick, metric)
             if sample is None or not _numeric(sample.get("value")):
-                return {"state": "unavailable", "reason": f"no fresh {WHEEL_LABELS[wheel]} reading"}
+                return samples, {
+                    "state": "unavailable",
+                    "reason": f"no fresh {WHEEL_LABELS[wheel]} reading",
+                }
             age = _sample_age_seconds(sample, tick.at)
             if age is None or age > rule.max_age_seconds:
-                return {"state": "unavailable",
-                        "reason": f"the {WHEEL_LABELS[wheel]} reading is too old"}
+                return samples, {
+                    "state": "unavailable",
+                    "reason": f"the {WHEEL_LABELS[wheel]} reading is too old",
+                }
             if sample.get("unit") != rule.unit or sample.get("quality") not in rule.qualities:
-                return {"state": "unavailable",
-                        "reason": f"the {WHEEL_LABELS[wheel]} reading is not from a qualified decode"}
+                return samples, {
+                    "state": "unavailable",
+                    "reason": f"the {WHEEL_LABELS[wheel]} reading is not from a qualified decode",
+                }
             samples[wheel] = (sample, age)
-        left_sample, left_age = samples[left]
-        right_sample, right_age = samples[right]
+        return samples, None
+
+    def _pair_stale_evidence(
+        self,
+        rule: AbsoluteRule,
+        tick: _Tick,
+        samples: Mapping[str, tuple[dict[str, object], float]],
+        wheels: Sequence[tuple[str, str]],
+    ) -> dict[str, dict[str, object]]:
         # Rationale: docs/history/early-warning-rationale.md#tire-pair-cached-readings
-        stale = {
+        return {
             wheel: self._wheel_stale(
                 tick,
                 metric,
@@ -153,24 +167,20 @@ class TirePairsMixin:
                     lookback=_rule_lookbacks(rule).get(metric, 0.0),
                 ),
             )
-            for wheel, metric in ((left, left_metric), (right, right_metric))
+            for wheel, metric in wheels
         }
-        cached = [wheel for wheel in (left, right) if stale[wheel]["stale"]]
-        if cached:
-            return {
-                "state": "not_applicable",
-                "reason": (
-                    f"the {WHEEL_LABELS[cached[0]]} tire reading has not updated "
-                    "since the last drive"
-                ),
-                "left": left,
-                "right": right,
-                "axle": AXLE_NAMES.get((left, right), f"{left}-{right}"),
-                "sample": left_sample,
-                "current": self._current_payload(left_sample, left_age),
-                "samples": samples,
-                "stale": stale,
-            }
+
+    def _pair_motion_context(
+        self,
+        rule: AbsoluteRule,
+        tick: _Tick,
+        left: str,
+        right: str,
+        left_metric: str,
+        right_metric: str,
+        left_sample: Mapping[str, object],
+        right_sample: Mapping[str, object],
+    ) -> dict[str, object]:
         # Stationary and fresh-transmission gates (see the PAIR_* constants).
         right_values = self._companion_values(
             tick, right_metric, left_sample,
@@ -210,26 +220,30 @@ class TirePairsMixin:
             ),
             "fresh": fresh,
         }
-        waiting = [wheel for wheel in (left, right) if not fresh[wheel]]
-        if motion is None or waiting:
-            return {
-                "state": "not_applicable",
-                "reason": (
-                    "the van is stopped or its speed is not current; tire sensors "
-                    "report rarely while it stands"
-                    if motion is None
-                    else f"the {WHEEL_LABELS[waiting[0]]} tire has not reported since "
-                    "the van started moving"
-                ),
-                "left": left,
-                "right": right,
-                "axle": AXLE_NAMES.get((left, right), f"{left}-{right}"),
-                "sample": left_sample,
-                "current": self._current_payload(left_sample, left_age),
-                "samples": samples,
-                "stale": stale,
-                "motion": motion_info,
-            }
+        return {
+            "right_values": right_values,
+            "left_series": left_series,
+            "motion_at": motion_at,
+            "fresh_at": fresh_at,
+            "motion": motion,
+            "motion_info": motion_info,
+            "waiting": [wheel for wheel in (left, right) if not fresh[wheel]],
+        }
+
+    def _pair_baselines(
+        self,
+        rule: AbsoluteRule,
+        tick: _Tick,
+        left: str,
+        right: str,
+        left_metric: str,
+        right_metric: str,
+        left_sample: dict[str, object],
+        right_sample: dict[str, object],
+        left_age: float,
+        samples: Mapping[str, tuple[dict[str, object], float]],
+        stale: Mapping[str, Mapping[str, object]],
+    ) -> tuple[dict[str, object], dict[str, object] | None]:
         # Both offsets are conditioned on the same (engine, motion) regime.
         right_probe = {**right_sample, "regime": left_sample["regime"],
                        "trip_id": left_sample.get("trip_id")}
@@ -251,7 +265,7 @@ class TirePairsMixin:
                 trips=PAIR_OFFSET_MINIMUM_TRIPS,
             )
             if shortfall is not None:
-                return {
+                return baselines, {
                     "state": "insufficient_history",
                     "reason": f"{WHEEL_LABELS[wheel]}: {shortfall}",
                     "sample": left_sample,
@@ -261,8 +275,26 @@ class TirePairsMixin:
                     "stale": stale,
                 }
             baselines[wheel] = baseline
+        return baselines, None
+
+    def _pair_evaluated(
+        self,
+        rule: AbsoluteRule,
+        tick: _Tick,
+        left: str,
+        right: str,
+        samples: Mapping[str, tuple[dict[str, object], float]],
+        stale: Mapping[str, Mapping[str, object]],
+        baselines: Mapping[str, object],
+        motion_context: Mapping[str, object],
+    ) -> dict[str, object]:
+        left_sample, _left_age = samples[left]
+        right_sample, _right_age = samples[right]
         offset = baselines[left].median - baselines[right].median
         warning = float(rule.warning_threshold)  # type: ignore[arg-type]
+        right_values = motion_context["right_values"]
+        motion_at = motion_context["motion_at"]
+        fresh_at = motion_context["fresh_at"]
 
         def accept(point: Mapping[str, object]) -> tuple:
             point_us = _observed_us(point)
@@ -282,7 +314,7 @@ class TirePairsMixin:
 
         newest_us = _observed_us(left_sample)
         runs = _absolute_runs(
-            left_series,
+            motion_context["left_series"],
             newest_us=newest_us if newest_us is not None else tick.at_us,
             accept=accept,
             direction="high",
@@ -311,10 +343,79 @@ class TirePairsMixin:
             "right_value": float(right_sample["value"]),
             "samples": samples,
             "stale": stale,
-            "motion": motion_info,
+            "motion": motion_context["motion_info"],
             **runs,
             "runs": runs,
         }
+
+    def _pair_axle(
+        self,
+        rule: AbsoluteRule,
+        tick: _Tick,
+        left: str,
+        right: str,
+    ) -> dict[str, object]:
+        left_metric = f"{rule.metric}.{left}"
+        right_metric = f"{rule.metric}.{right}"
+        samples, failure = self._pair_samples(
+            rule, tick, left, right, left_metric, right_metric
+        )
+        if failure is not None:
+            return failure
+        left_sample, left_age = samples[left]
+        right_sample, right_age = samples[right]
+        wheels = ((left, left_metric), (right, right_metric))
+        stale = self._pair_stale_evidence(rule, tick, samples, wheels)
+        cached = [wheel for wheel in (left, right) if stale[wheel]["stale"]]
+        if cached:
+            return {
+                "state": "not_applicable",
+                "reason": (
+                    f"the {WHEEL_LABELS[cached[0]]} tire reading has not updated "
+                    "since the last drive"
+                ),
+                "left": left,
+                "right": right,
+                "axle": AXLE_NAMES.get((left, right), f"{left}-{right}"),
+                "sample": left_sample,
+                "current": self._current_payload(left_sample, left_age),
+                "samples": samples,
+                "stale": stale,
+            }
+        motion_context = self._pair_motion_context(
+            rule, tick, left, right, left_metric, right_metric,
+            left_sample, right_sample,
+        )
+        motion = motion_context["motion"]
+        waiting = motion_context["waiting"]
+        if motion is None or waiting:
+            return {
+                "state": "not_applicable",
+                "reason": (
+                    "the van is stopped or its speed is not current; tire sensors "
+                    "report rarely while it stands"
+                    if motion is None
+                    else f"the {WHEEL_LABELS[waiting[0]]} tire has not reported since "
+                    "the van started moving"
+                ),
+                "left": left,
+                "right": right,
+                "axle": AXLE_NAMES.get((left, right), f"{left}-{right}"),
+                "sample": left_sample,
+                "current": self._current_payload(left_sample, left_age),
+                "samples": samples,
+                "stale": stale,
+                "motion": motion_context["motion_info"],
+            }
+        baselines, failure = self._pair_baselines(
+            rule, tick, left, right, left_metric, right_metric,
+            left_sample, right_sample, left_age, samples, stale,
+        )
+        if failure is not None:
+            return failure
+        return self._pair_evaluated(
+            rule, tick, left, right, samples, stale, baselines, motion_context
+        )
 
     def _evaluate_tire_pair(
         self,
