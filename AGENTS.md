@@ -54,9 +54,10 @@ Broker pure internals are split into `projects/vehicle_data/status_view.py`
 (snapshot-only status builders), `vehicle_state.py` (passive evidence conclusions),
 and `helper_events.py` (bus-parameterized status-event validation). Locks, clocks,
 component calls and all helper/CAN lifecycle effects remain in `broker.py`.
-`tests/test_broker_pure.py` pins baseline status bytes and compares generated
-helper/state cases against frozen `bc94da0` methods in `tests/broker_reference.py`;
-keep that reference independent of production refactors.
+`tests/test_broker_pure.py` pins status bytes and directly tests the bus-specific
+helper contracts. `tests/broker_pure_oracle.py` captures generated helper/state
+cases against whichever checkout `--repo-root` selects; compare old/new output
+rather than keeping a frozen broker implementation in the permanent tests.
 
 Oil-life telemetry is enabled (owner activation 2026-10-03):
 `engine.oil_life_remaining` is PCM DID `2185`, unsigned percent, polled at
