@@ -50,6 +50,14 @@ class and provides the `/v1` JSON API. The MacBook-managed Van Dashboard reads
 `projects/vehicle_data/README.md` section "Telemetry dashboard" and
 `projects/vehicle_data/dashboard/docs/design.md`.
 
+Broker pure internals are split into `projects/vehicle_data/status_view.py`
+(snapshot-only status builders), `vehicle_state.py` (passive evidence conclusions),
+and `helper_events.py` (bus-parameterized status-event validation). Locks, clocks,
+component calls and all helper/CAN lifecycle effects remain in `broker.py`.
+`tests/test_broker_pure.py` pins baseline status bytes and compares generated
+helper/state cases against frozen `bc94da0` methods in `tests/broker_reference.py`;
+keep that reference independent of production refactors.
+
 Oil-life telemetry is enabled (owner activation 2026-10-03):
 `engine.oil_life_remaining` is PCM DID `2185`, unsigned percent, polled at
 most once per minute during qualified engine-running intervals. The Service

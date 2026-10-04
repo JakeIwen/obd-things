@@ -170,6 +170,44 @@ def status_rows():
     return rows
 
 
+def delivery_rows():
+    """Pass real broker statuses through the unchanged HTTP/SSE injectors."""
+    from projects.vehicle_data.web import TelemetryWebHandler
+    from projects.vehicle_data.web_v2 import DashboardHandler
+
+    rows = []
+    for row in status_rows():
+        if "bytes" not in row:
+            continue
+        status = json.loads(row["bytes"])
+        snapshot = {"status": status, "catalog": [], "metrics": {}}
+
+        def request(method, path, payload=None):
+            return 200, deepcopy(status if path == "/v1/status" else snapshot)
+
+        server = SimpleNamespace(
+            telemetry_client=SimpleNamespace(request=request),
+            warning_chat_socket=None, allow_acquisitions=True, dtc_controller=None,
+            server_address=("127.0.0.1", 8765), build_id=lambda: "oracle-build",
+            next_snapshot_delivery=lambda: {"instance_id": "oracle", "sequence": 1},
+        )
+        for kind, cls in (("web", TelemetryWebHandler), ("dashboard", DashboardHandler)):
+            handler = object.__new__(cls)
+            handler.server = server
+            handler._json = lambda code, payload: rows.append(
+                [row["case"], kind, code, encode(payload)]
+            )
+            if kind == "web":
+                handler._broker_request("GET", "/v1/status")
+                handler._broker_request("GET", "/v1/snapshot")
+                event = handler._stream_event(200, deepcopy(snapshot))
+            else:
+                handler._snapshot()
+                event = handler._stream_lite_event(200, deepcopy(snapshot))
+            rows.append([row["case"], kind + "-stream", 200, encode(event)])
+    return rows
+
+
 def event_corpus():
     seeds = [
         {"type": "status", "state": "armed_diagnostic", "reason": "running_gate_satisfied",
@@ -304,6 +342,14 @@ class BrokerPureTests(unittest.TestCase):
                     build_vehicle_state(snapshot, age_ms=1000, ignition_stale=True, rpm_stale=False)
                     self.assertEqual(before, encode(asdict(snapshot)))
 
+    def test_real_status_web_delivery_bytes_match_baseline(self):
+        # Captured independently by running delivery_rows against bc94da0.
+        data = (encode(delivery_rows()) + "\n").encode()
+        self.assertEqual(
+            hashlib.sha256(data).hexdigest(),
+            "1b340b2f73666b7b63c799a6531b0c1f447f534eed9e021850deb69e38e216f9",
+        )
+
     def test_status_byte_baseline(self):
         expected = json.loads(Path(__file__).with_name("broker_status_hashes.json").read_text())
         actual = {row["case"]: hashlib.sha256(encode(row).encode()).hexdigest() for row in status_rows()}
@@ -323,6 +369,34 @@ class BrokerPureTests(unittest.TestCase):
                             expected = event_outcome(brokers[0], getattr(ReferenceMethods, method), event, inhibit_fails=latched)
                             actual = event_outcome(brokers[1], getattr(TelemetryBroker, method), event, inhibit_fails=latched)
                             self.assertEqual(encode(expected), encode(actual))
+
+    def test_vehicle_metadata_and_clock_locking_match_original(self):
+        with fixed_time():
+            for metric, source, acquisition, observed, monotonic, value in itertools.product(
+                ("battery.voltage", "engine.rpm", "vehicle.ignition_on"),
+                (None, "other", "ccan.broadcast.0x0fc"),
+                (None, "physical_read_data_by_identifier"),
+                (None, NOW), (None, 87.5), (0, True, 751, float("nan")),
+            ):
+                result = AcquisitionResult(
+                    metric=metric, available=True, unit="test", value=value,
+                    source=source, acquisition=acquisition,
+                    observed_at=observed, observed_monotonic=monotonic,
+                )
+                with self.subTest(result=result):
+                    outcomes = []
+                    for implementation in (ReferenceMethods, TelemetryBroker):
+                        broker = make_broker()
+                        calls = []
+
+                        def clock():
+                            calls.append(broker._lock._is_owned())
+                            return 100.0 + len(calls) * 0.001
+
+                        broker.monotonic = clock
+                        implementation._update_vehicle_state(broker, result)
+                        outcomes.append((broker._vehicle_state, broker._vehicle_state_observed_monotonic, calls))
+                    self.assertEqual(outcomes[0], outcomes[1])
 
     def test_generated_vehicle_states_match_original(self):
         with fixed_time():

@@ -328,4 +328,3 @@ def build_status(
         "last_acquisition_errors": snapshot.last_errors,
         "cached_metrics": snapshot.cached,
     }
-

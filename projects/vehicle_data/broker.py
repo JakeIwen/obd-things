@@ -22,6 +22,7 @@ if str(REPO) not in sys.path:
 
 from lib import can_operation_state, diagnostic_safety
 from projects.vehicle_data.engine_off_voltage import EngineOffVoltageCapture
+from projects.vehicle_data.helper_events import validate_helper_status
 from projects.vehicle_data.maintenance import MaintenanceStore
 from projects.vehicle_data.last_readings import LastReadings
 from projects.vehicle_data.radar_alignment import (
@@ -29,6 +30,10 @@ from projects.vehicle_data.radar_alignment import (
 )
 from projects.vehicle_data.metrics import METRICS, MetricDefinition
 from projects.vehicle_data.receive_watch import ReceiveSilenceWatch
+from projects.vehicle_data.vehicle_state import (
+    accepts_state_observation, needs_current_authority, passive_vehicle_state,
+    preservation_authority, qualified_engine_state,
+)
 from projects.vehicle_data.status_view import (
     StatusSnapshot, build_interface_view, build_status, build_vehicle_state,
 )
@@ -1797,58 +1802,13 @@ class TelemetryBroker:
         if event_type == "quality_event":
             self._handle_data_quality_event(event)
             return
-        if event_type not in ("status", "failure", "final"):
-            raise ValueError("unsupported active-drive event type")
-        reason = event.get("reason")
-        detail = event.get("detail")
-        if not isinstance(reason, str) or not isinstance(detail, str):
-            raise ValueError("active-drive status reason/detail must be strings")
-        interface_mode = event.get("interface_mode", "listen_only")
-        if interface_mode not in (
-            "listen_only",
-            "armed_diagnostic",
-            "unknown",
-        ):
-            raise ValueError("invalid active-drive interface mode")
-        state = event.get("state")
-        if state is None:
-            state = (
-                "restoration_failed"
-                if reason == "restoration_failed"
-                else ("idle" if event_type == "final" else event_type)
-            )
-        if not isinstance(state, str):
-            raise ValueError("active-drive state must be a string")
-        if event_type == "status":
-            if (
-                state != "armed_diagnostic"
-                or reason != "running_gate_satisfied"
-                or interface_mode != "armed_diagnostic"
-            ):
-                raise ValueError("active-drive armed status is inconsistent")
-        elif event_type == "failure":
-            if reason not in ACTIVE_DRIVE_FAILURE_REASONS:
-                raise ValueError("active-drive failure reason is not allowlisted")
-        else:
-            restored = event.get("restored")
-            if restored is not None and type(restored) is not bool:
-                raise ValueError("active-drive final restored must be boolean or null")
-            if reason not in ACTIVE_DRIVE_FAILURE_REASONS:
-                raise ValueError("active-drive final reason is not allowlisted")
-            if state not in ("idle", "restoration_failed"):
-                raise ValueError("active-drive final state is invalid")
-            if restored is True and interface_mode != "listen_only":
-                raise ValueError("restored final must report listen_only mode")
-            if restored is False and (
-                reason != "restoration_failed"
-                or state != "restoration_failed"
-                or interface_mode != "armed_diagnostic"
-            ):
-                raise ValueError("failed restoration final is inconsistent")
-            if reason == "restoration_failed" and restored is not False:
-                raise ValueError("restoration failure must carry restored=false")
-            if restored is None and interface_mode == "armed_diagnostic":
-                raise ValueError("unverified final cannot claim armed ownership")
+        status = validate_helper_status(
+            event, bus="c-can", failure_reasons=ACTIVE_DRIVE_FAILURE_REASONS,
+        )
+        state = status.state
+        reason = status.reason
+        detail = status.detail
+        interface_mode = status.interface_mode
         with self._lock:
             self._active_drive.update(
                 {
@@ -1931,40 +1891,13 @@ class TelemetryBroker:
                 raise ValueError("B-CAN auxiliary observation is outside its fixed profile")
             self._store_active_observation(event)
             return
-        if event_type not in ("status", "failure", "final"):
-            raise ValueError("unsupported B-CAN auxiliary event type")
-        reason = event.get("reason")
-        detail = event.get("detail")
-        if not isinstance(reason, str) or not isinstance(detail, str):
-            raise ValueError("B-CAN auxiliary reason/detail is invalid")
-        interface_mode = event.get("interface_mode", "listen_only")
-        if interface_mode not in ("listen_only", "armed_diagnostic", "unknown"):
-            raise ValueError("invalid B-CAN auxiliary interface mode")
-        state = event.get("state")
-        if not isinstance(state, str):
-            raise ValueError("B-CAN auxiliary state must be a string")
-        if event_type == "status" and (
-            state != "armed_diagnostic"
-            or reason != "running_gate_satisfied"
-            or interface_mode != "armed_diagnostic"
-        ):
-            raise ValueError("B-CAN auxiliary armed status is inconsistent")
-        if event_type in ("failure", "final") and reason not in ACTIVE_DRIVE_FAILURE_REASONS:
-            raise ValueError("B-CAN auxiliary failure reason is not allowlisted")
-        if event_type == "final":
-            restored = event.get("restored")
-            if restored is not None and type(restored) is not bool:
-                raise ValueError("B-CAN auxiliary restored must be boolean or null")
-            if state not in ("idle", "restoration_failed"):
-                raise ValueError("B-CAN auxiliary final state is invalid")
-            if restored is True and interface_mode != "listen_only":
-                raise ValueError("restored B-CAN final must report listen_only")
-            if restored is False and (
-                state != "restoration_failed"
-                or reason != "restoration_failed"
-                or interface_mode != "armed_diagnostic"
-            ):
-                raise ValueError("failed B-CAN restoration final is inconsistent")
+        status = validate_helper_status(
+            event, bus="b-can", failure_reasons=ACTIVE_DRIVE_FAILURE_REASONS,
+        )
+        state = status.state
+        reason = status.reason
+        detail = status.detail
+        interface_mode = status.interface_mode
         owner_route = None
         if event_type == "status":
             supervisor = self.auxiliary_drive_supervisor
@@ -2253,173 +2186,33 @@ class TelemetryBroker:
         )
 
     def _update_vehicle_state(self, result: AcquisitionResult) -> None:
-        """Record only state conclusions supported by passive acquisition.
-
-        Awake traffic does not distinguish an idling engine from ignition-on,
-        a fob wake, or a charger-powered module wake. In particular, battery
-        voltage is never used as an engine-running heuristic.
-        """
-        if result.metric not in (
-            "battery.voltage",
-            "engine.rpm",
-            "vehicle.ignition_on",
-        ):
+        """Record supported passive conclusions, retaining clock/lock ordering."""
+        if not accepts_state_observation(result):
             return
-        if (
-            result.metric == "engine.rpm"
-            and result.available
-            and result.source == "ccan.broadcast.0x0fc"
-            and isinstance(result.value, (int, float))
-            and not isinstance(result.value, bool)
-        ):
-            running = float(result.value) >= 400.0
-            state = {
-                "state": "running" if running else "ignition_on",
-                "running": running,
-                "confidence": "verified",
-                "basis": "qualified_ccan_0x0fc_engine_speed",
-                "detail": (
-                    f"qualified passive 0x0FC engine speed is "
-                    f"{float(result.value):.0f} rpm"
+        state = qualified_engine_state(result)
+        if state is None:
+            if needs_current_authority(result):
+                with self._lock:
+                    current_basis = self._vehicle_state.get("basis")
+                    current_observed = self._vehicle_state_observed_monotonic
+                metric, eligible = preservation_authority(result, current_basis)
+                definition = self.definitions.get(metric)
+                if (
+                    eligible
+                    and current_observed is not None
+                    and definition is not None
+                    and self.monotonic() - current_observed
+                    <= definition.stale_after_seconds
+                ):
+                    return
+            state = passive_vehicle_state(
+                result,
+                ccan_silent=(
+                    not result.available
+                    and result.reason == "bus_asleep"
+                    and "c-can" in self._receive_silent_roles_snapshot()
                 ),
-                "observed_at": (
-                    result.observed_at.isoformat()
-                    if result.observed_at is not None
-                    else datetime.now(timezone.utc).isoformat()
-                ),
-            }
-            with self._lock:
-                self._vehicle_state = state
-                self._vehicle_state_observed_monotonic = (
-                    result.observed_monotonic
-                    if result.observed_monotonic is not None
-                    else self.monotonic()
-                )
-            return
-        if (
-            result.metric == "battery.voltage"
-            and result.acquisition == "physical_read_data_by_identifier"
-        ):
-            # A solicited cluster response proves neither passive bus activity
-            # nor current ignition state. The separate verified 0x2EF
-            # observation is the authority during a cluster logger run.
-            return
-        if result.metric == "battery.voltage":
-            with self._lock:
-                current_basis = self._vehicle_state.get("basis")
-                current_observed = self._vehicle_state_observed_monotonic
-            authoritative_metric = {
-                "qualified_ccan_0x0fc_engine_speed": "engine.rpm",
-                "ccan_0x2ef_ignition_gate": "vehicle.ignition_on",
-            }.get(str(current_basis))
-            authoritative_definition = self.definitions.get(
-                authoritative_metric or ""
             )
-            if (
-                authoritative_metric is not None
-                and current_observed is not None
-                and authoritative_definition is not None
-                and self.monotonic() - current_observed
-                <= authoritative_definition.stale_after_seconds
-            ):
-                # Generic voltage/bus activity cannot downgrade a fresher
-                # verified RPM or ignition conclusion. Once that stronger
-                # evidence expires, this observation may establish Awake.
-                return
-        if (
-            result.available
-            and result.metric == "vehicle.ignition_on"
-            and result.value is True
-        ):
-            with self._lock:
-                current_basis = self._vehicle_state.get("basis")
-                current_observed = self._vehicle_state_observed_monotonic
-            rpm_definition = self.definitions.get("engine.rpm")
-            if (
-                current_basis == "qualified_ccan_0x0fc_engine_speed"
-                and current_observed is not None
-                and rpm_definition is not None
-                and self.monotonic() - current_observed
-                <= rpm_definition.stale_after_seconds
-            ):
-                # 0x2EF proves ignition presence, but fresh qualified RPM
-                # evidence is stronger and has already distinguished running
-                # from ignition-on/engine-off.
-                return
-        state = None
-        if result.available and result.metric == "vehicle.ignition_on":
-            ignition_on = result.value is True
-            state = {
-                "state": "ignition_on" if ignition_on else "parked",
-                "running": None if ignition_on else False,
-                "confidence": "verified",
-                "basis": "ccan_0x2ef_ignition_gate",
-                "detail": (
-                    "verified C-CAN ignition-on gate is present"
-                    if ignition_on
-                    else "verified C-CAN ignition-on gate is absent"
-                ),
-            }
-        elif result.available:
-            state = {
-                "state": "awake",
-                "running": None,
-                "confidence": "observed",
-                "basis": "passive_bus_activity",
-                "detail": (
-                    f"{result.bus or 'vehicle bus'} traffic is present; "
-                    "running versus ignition-on versus a temporary wake is "
-                    "not yet distinguished"
-                ),
-            }
-        elif result.reason == "bus_asleep" and "c-can" in self._receive_silent_roles_snapshot():
-            # The C-CAN leg is silent but CAN-CH has been busy for minutes: the
-            # van is awake and the C-CAN adapter is deaf (2026-09-22 incident).
-            state = {
-                "state": "awake",
-                "running": None,
-                "confidence": "inferred",
-                "basis": "passive_can_ch_activity_c_can_silent",
-                "detail": (
-                    "CAN-CH traffic is present but the C-CAN adapter has "
-                    "received nothing for minutes; replug its USB cable or "
-                    "reboot the Pi"
-                ),
-            }
-        elif result.reason == "bus_asleep":
-            state = {
-                "state": "asleep",
-                "running": False,
-                "confidence": "inferred",
-                "basis": "passive_bus_silence",
-                "detail": (
-                    "no frames arrived at the approved bitrate; this is "
-                    "consistent with a sleeping vehicle, but an unplugged "
-                    "physical leg is not distinguishable from silence"
-                ),
-            }
-        elif result.bus == "can-ch":
-            state = {
-                "state": "awake",
-                "running": None,
-                "confidence": "observed",
-                "basis": "passive_can_ch_activity",
-                "detail": (
-                    "CAN-CH traffic is present; no verified running-state "
-                    "metric is available on this branch"
-                ),
-            }
-        elif result.bus == "wrong-rate":
-            state = {
-                "state": "awake",
-                "running": None,
-                "confidence": "inferred",
-                "basis": "wrong_rate_rx_activity",
-                "detail": (
-                    "RX errors show traffic at another bitrate; vehicle "
-                    "running state cannot be determined"
-                ),
-            }
         if state is None:
             return
         state["observed_at"] = (
