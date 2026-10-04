@@ -80,6 +80,31 @@ class HistoryPackageTests(unittest.TestCase):
             with self.subTest(name=name):
                 typing.get_type_hints(method)
 
+    def test_connection_accessors_preserve_identity_and_transaction_scope(self):
+        with historian.TelemetryHistorian(":memory:") as history:
+            self.assertIs(history.connection, history._conn)
+            self.assertIs(history.connection_lock, history._lock)
+            self.assertFalse(history.connection.in_transaction)
+            with history.connection_lock:
+                # The accessor is a lock, not a connection context manager:
+                # leaving this block must not commit the caller's transaction.
+                history.connection.execute(
+                    "INSERT INTO historian_meta(key,value) VALUES('accessor-test','pending')"
+                )
+            self.assertTrue(history.connection.in_transaction)
+            history.connection.rollback()
+            self.assertIsNone(history.connection.execute(
+                "SELECT value FROM historian_meta WHERE key='accessor-test'"
+            ).fetchone())
+
+    def test_drift_reader_uses_the_same_connection_and_lock(self):
+        from projects.vehicle_data.drift_warnings import _Reader
+
+        with historian.TelemetryHistorian(":memory:") as history:
+            reader = _Reader(history, 0)
+            self.assertIs(reader.conn, history._conn)
+            self.assertIs(reader.lock, history._lock)
+
     def test_store_lifetime_preserves_context_manager_identity(self):
         with historian.TelemetryHistorian(":memory:") as history:
             self.assertIs(history.__enter__(), history)

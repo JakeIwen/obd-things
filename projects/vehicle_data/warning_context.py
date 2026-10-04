@@ -2,7 +2,7 @@
 
 This module follows the ``event_history.py`` precedent of running bounded
 SELECTs on the historian connection.  Every query runs inside
-``historian._lock`` on ``historian._conn``, uses indexed predicates only, and
+``historian.connection_lock`` on ``historian.connection``, uses indexed predicates only, and
 reads ``metric_samples`` only with ``metric=``/``trip_id=`` equality plus
 ``captured_us`` bounds.  Nothing here writes to the database; the only side
 effect is registering baseline inputs in ``historian._baseline_inputs`` exactly
@@ -248,13 +248,13 @@ def trip_phase_index(historian, *, at: datetime | str) -> dict[int, dict[str, ob
 
     at_us = to_us(at)
     lower_us = at_us - PHASE_INDEX_LOOKBACK_DAYS * 24 * 60 * 60 * MICROSECONDS
-    with historian._lock:
-        trips = historian._conn.execute(
+    with historian.connection_lock:
+        trips = historian.connection.execute(
             "SELECT id,started_us,last_active_us,ended_us FROM trips "
             "WHERE started_us<=? ORDER BY started_us,id",
             (at_us,),
         ).fetchall()
-        moving = historian._conn.execute(
+        moving = historian.connection.execute(
             """
             SELECT trip_key,min(bucket_us) FROM metric_rollups
             WHERE metric='vehicle.speed' AND regime NOT LIKE '%:stationary:%'
@@ -298,8 +298,8 @@ def refine_open_trips(historian, index: dict[int, dict[str, object]], *, at: int
         if not info.get("open") or info.get("refined"):
             continue
         started = int(info["started_us"])
-        with historian._lock:
-            row = historian._conn.execute(
+        with historian.connection_lock:
+            row = historian.connection.execute(
                 """
                 SELECT min(captured_us) FROM metric_samples
                 WHERE trip_id=? AND metric='vehicle.speed'
@@ -416,8 +416,8 @@ def rollup_baseline(
         suffix.append(f"{companion_metric}={float(low):g}..{float(high):g}")
     if windows is not None:
         clauses.append("r.trip_key!=0")
-    with historian._lock:
-        cursor = historian._conn.cursor()
+    with historian.connection_lock:
+        cursor = historian.connection.cursor()
         cursor.row_factory = None  # plain tuples: cheaper than sqlite3.Row here
         rows = cursor.execute(
             f"SELECT {_BASELINE_COLUMNS} FROM metric_rollups AS r "
@@ -474,7 +474,7 @@ def _register_inputs(historian, digest: str, inputs: list) -> None:
 
     store = getattr(historian, "_baseline_inputs", None)
     if isinstance(store, dict):
-        with historian._lock:
+        with historian.connection_lock:
             store[digest] = inputs
             while len(store) > BASELINE_INPUT_LIMIT:
                 store.pop(next(iter(store)))
@@ -569,8 +569,8 @@ def recent_series(
         clauses.append("sample.trip_id=?")
         args.append(int(trip_id))
     args.append(SERIES_ROW_LIMIT)
-    with historian._lock:
-        rows = historian._conn.execute(
+    with historian.connection_lock:
+        rows = historian.connection.execute(
             f"SELECT sample.* FROM metric_samples AS sample "
             f"WHERE {' AND '.join(clauses)} "
             "ORDER BY sample.observed_us DESC,sample.captured_us DESC LIMIT ?",

@@ -45,6 +45,18 @@ class HistorianStore(SchemaMixin):
         with self._lock, self._conn:
             self._conn.executescript(event_schema)
 
+    @property
+    def connection(self) -> sqlite3.Connection:
+        """Return the existing connection; callers must hold connection_lock."""
+
+        return self._conn
+
+    @property
+    def connection_lock(self):
+        """Return the existing RLock without acquiring it or opening a transaction."""
+
+        return self._lock
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()

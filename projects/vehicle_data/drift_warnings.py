@@ -440,8 +440,8 @@ class _Reader:
     """Every query holds the historian lock only for its own duration."""
 
     def __init__(self, historian: object, at_us: int) -> None:
-        self.conn = historian._conn  # noqa: SLF001 - event_history.py precedent
-        self.lock = historian._lock  # noqa: SLF001
+        self.conn = historian.connection
+        self.lock = historian.connection_lock
         config = getattr(historian, "config", None)
         seconds = getattr(config, "rollup_seconds", ROLLUP_SECONDS)
         self.bucket_seconds = seconds if isinstance(seconds, int) else ROLLUP_SECONDS
