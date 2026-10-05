@@ -1,5 +1,5 @@
 [Unit]
-Description=Tailscale van telemetry dashboard (port 8765) with locally armed DTC jobs
+Description=Tailscale van telemetry dashboard (port 8765) with guarded DTC jobs
 After=network-online.target tailscaled.service van-telemetry.service van-dtc-batch.path
 Wants=network-online.target tailscaled.service
 Requires=van-telemetry.service van-dtc-batch.path

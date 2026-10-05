@@ -1,5 +1,5 @@
 [Unit]
-Description=Watch for a locally armed fixed DTC batch request
+Description=Watch for a fixed DTC batch request file under /run
 After=van-telemetry.service
 Requires=van-telemetry.service
 PartOf=van-telemetry.service
