@@ -284,6 +284,80 @@ class QueryMixin:
             at_us=at_us,
         )
 
+    @staticmethod
+    def _active_interface_gap_payloads(
+        gap_rows: Sequence[sqlite3.Row],
+    ) -> dict[str, dict[str, object]]:
+        return {
+            row["role"]: {
+                "state": row["state"],
+                "reason": row["reason"],
+                "observation_count": row["observation_count"],
+                "started_at": row["started_at"],
+                "last_seen_at": row["last_seen_at"],
+            }
+            for row in gap_rows
+        }
+
+    @staticmethod
+    def _system_health_role_payloads(
+        role_rows: Sequence[sqlite3.Row],
+        gaps: dict[str, dict[str, object]],
+    ) -> dict[str, dict[str, object]]:
+        return {
+            row["role"]: {
+                "role": row["role"],
+                "channel": row["channel"],
+                "usb_serial": row["usb_serial"],
+                "usb_dev_id": row["usb_dev_id"],
+                "bus": row["bus"],
+                "resolution": row["resolution"],
+                "role_reason": row["role_reason"],
+                "detail": row["detail"],
+                "adapter_present": (
+                    bool(row["adapter_present"])
+                    if row["adapter_present"] is not None
+                    else None
+                ),
+                "up": bool(row["up"]) if row["up"] is not None else None,
+                "bitrate": row["bitrate"],
+                "listen_only": (
+                    bool(row["listen_only"])
+                    if row["listen_only"] is not None
+                    else None
+                ),
+                "controller_state": row["controller_state"],
+                "topology_usable": (
+                    bool(row["topology_usable"])
+                    if row["topology_usable"] is not None
+                    else None
+                ),
+                "topology_generation": row["topology_generation"],
+                "health": row["health"],
+                "reason": row["reason"],
+                "active_gap": gaps.get(row["role"]),
+            }
+            for row in role_rows
+        }
+
+    @staticmethod
+    def _system_health_lists(
+        system: sqlite3.Row | None,
+    ) -> tuple[list[object], list[object]]:
+        issues: list[object] = []
+        inhibits: list[object] = []
+        if system is not None:
+            try:
+                decoded_issues = json.loads(system["issues_json"])
+                decoded_inhibits = json.loads(system["active_inhibits_json"])
+                if isinstance(decoded_issues, list):
+                    issues = decoded_issues
+                if isinstance(decoded_inhibits, list):
+                    inhibits = decoded_inhibits
+            except (TypeError, json.JSONDecodeError):
+                pass
+        return issues, inhibits
+
     def system_health_context(self, snapshot_id: int) -> dict[str, object]:
         """Return persisted role/topology facts for one stored snapshot."""
 
@@ -333,63 +407,9 @@ class QueryMixin:
                 """,
                 (snapshot_id,),
             ).fetchone()
-        gaps = {
-            row["role"]: {
-                "state": row["state"],
-                "reason": row["reason"],
-                "observation_count": row["observation_count"],
-                "started_at": row["started_at"],
-                "last_seen_at": row["last_seen_at"],
-            }
-            for row in gap_rows
-        }
-        roles = {
-            row["role"]: {
-                "role": row["role"],
-                "channel": row["channel"],
-                "usb_serial": row["usb_serial"],
-                "usb_dev_id": row["usb_dev_id"],
-                "bus": row["bus"],
-                "resolution": row["resolution"],
-                "role_reason": row["role_reason"],
-                "detail": row["detail"],
-                "adapter_present": (
-                    bool(row["adapter_present"])
-                    if row["adapter_present"] is not None
-                    else None
-                ),
-                "up": bool(row["up"]) if row["up"] is not None else None,
-                "bitrate": row["bitrate"],
-                "listen_only": (
-                    bool(row["listen_only"])
-                    if row["listen_only"] is not None
-                    else None
-                ),
-                "controller_state": row["controller_state"],
-                "topology_usable": (
-                    bool(row["topology_usable"])
-                    if row["topology_usable"] is not None
-                    else None
-                ),
-                "topology_generation": row["topology_generation"],
-                "health": row["health"],
-                "reason": row["reason"],
-                "active_gap": gaps.get(row["role"]),
-            }
-            for row in role_rows
-        }
-        issues: list[object] = []
-        inhibits: list[object] = []
-        if system is not None:
-            try:
-                decoded_issues = json.loads(system["issues_json"])
-                decoded_inhibits = json.loads(system["active_inhibits_json"])
-                if isinstance(decoded_issues, list):
-                    issues = decoded_issues
-                if isinstance(decoded_inhibits, list):
-                    inhibits = decoded_inhibits
-            except (TypeError, json.JSONDecodeError):
-                pass
+        gaps = self._active_interface_gap_payloads(gap_rows)
+        roles = self._system_health_role_payloads(role_rows, gaps)
+        issues, inhibits = self._system_health_lists(system)
         return {
             "snapshot_id": snapshot_id,
             "captured_at": snapshot["captured_at"],
