@@ -85,6 +85,36 @@ code without changing behaviour. Old import paths remain as shims, so existing i
     advisory lifecycle.
   - Use `tools/warning_replay.py` against an exported history for evaluator changes. `lib/uds.py`, the safety core and the
   protected DDL (`history/schema.py::_create_schema`) were deliberately left unchanged.
+  - A read-only history export for replays is at vanpi
+    `tmp/vehicle_data/warning_replay/export-20261003.sqlite3`. It has no opened episodes, so pair
+    it with the advisory lifecycle oracle.
+- Running the tests on the Mac:
+  - System Python lacks `can-isotp` and pytest, so use a venv with both.
+  - Point `TMPDIR` at a path that isn't a symlink. The `test_required_mount_*` tests fail under
+    macOS's symlinked `/var/folders` temp dir.
+  - Gate and oracle runs need `tmp/` and `tmp/ecu_mapping/` in the checkout.
+- Deliberately not done:
+  - Moving `active_drive` onto `acquire_active_bus_route`. It would change the lock order,
+    parent/child role ownership, restore revalidation and the `ip` argv, so it needs its own
+    design and on-vehicle validation.
+  - Collapsing `projects/battery/*_voltage.py`. They use different transports.
+  - Deriving the `format.js` unit tables from the catalog. It would change rendering.
+- Known gate inconsistencies, left as they are by owner decision:
+  - `dtc_batch.py` writes `job.json` before taking its non-blocking lock, so refused runs stay
+    auditable.
+  - `routine_scan` checks the session before the dry run; `did_sweep` checks it after
+    `--execute`.
+  - `ecu_discover` accepts session bytes 0x80–0xFF.
+  - `live_data` and `ignition_triggered_passive_capture` exit 1 on a gate failure; the other
+    tools exit 2.
+  - The `alfaobd_controller` subcommands `observe`/`wait` and the campaign/catalog `audit`
+    subcommands are ungated.
+- Open follow-ups:
+  - The Tailscale web unit and `van-dtc-batch.path` descriptions still say "locally armed". The
+    arm-token feature is gone, and a DTC start carrying `token` now gets 409.
+  - The broker's single-threaded Unix API blocks status reads for seconds during a CAN
+    acquisition. This is mitigated, not removed: the drive recorder's idle wait uses a 20 s
+    status timeout, and `voltage_mon` skips its tick while the engine runs.
 
 ## MacBook-managed `~/scripts` tree
 
