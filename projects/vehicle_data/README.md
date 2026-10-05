@@ -1184,11 +1184,19 @@ cross-role fallback, or caller-selected channel/payload. The reconciler records
 each resolved role's topology after verified passive setup, and every wake
 rechecks that same-boot role/pair record under exclusive ownership.
 
-The Unix HTTP transport itself is serialized so active CAN cleanup remains on
-the process main thread, where the existing termination-signal guard is valid.
-Consequently a cache GET can wait behind one bounded active acquisition, but it
-cannot interrupt it or create concurrent CAN work. The unprivileged web process
-is threaded independently.
+The Unix HTTP transport executes every POST on its serving thread (the process
+main thread in production), where the existing termination-signal guard remains
+valid. Eight bounded daemon transport workers can answer cache GETs during an
+acquisition; POSTs execute one at a time in ready-request FIFO order. This does
+not change CAN ownership, acquisition order within the source, or cleanup.
+Excess connections remain in the kernel backlog (64); eight occupied connection
+slots can still delay reads. A five-second absolute timeout bounds each HTTP
+input/output phase, not queueing or CAN work. Expired input cannot dispatch a
+mutation. The unprivileged web processes remain independently threaded.
+This O2 implementation has not been activated on the Pi by this change.
+Each `UnixHTTPServer` instance serves one lifetime; construct a fresh instance
+rather than restarting `serve_forever()` on a stopped object. `serve_unix()`
+already creates a fresh server on every invocation.
 
 ### Passive harvest of the van's own health checks (2026-09-24)
 
@@ -1331,8 +1339,9 @@ it authorizes no transmission and changes no existing live gate.
 ## Local API
 
 The HTTP implementation is split by responsibility: `api_server.py` owns the
-serialized Unix server, `api_client.py` owns `TelemetryClient`, and `api.py`
-re-exports the existing imports (including `_prepare_socket_path`). Shared wire
+bounded concurrent-read Unix server and main-thread POST executor, `api_client.py`
+owns `TelemetryClient`, and `api.py` re-exports the existing imports (including
+`_prepare_socket_path`). Shared wire
 constants, listener flags, broker-unavailable envelopes, route matching and SSE
 transport live in `http_common.py`. `DtcWebController` lives in `lib/dtc_web.py`
 and remains importable from `web.py`; the optional legacy arm path is retained.
@@ -1418,11 +1427,11 @@ page is visible; `/v1/history`, `/v1/health` and `/v1/diagnostics/dtcs` remain
 available to other clients. This prevents the compact but substantially larger diagnostic cache
 from being duplicated into every live telemetry event.
 
-Those dedicated GETs are also memory-only at the serialized Unix API. The
-broker primes their cache before opening its listener, refreshes it once per
-minute from the existing history thread, and exposes refresh state in
+Those dedicated GETs are also memory-only at the Unix API. The broker primes
+their cache before opening its listener, refreshes it once per minute from the
+existing history thread, and exposes refresh state in
 `status.supplemental_cache`. SQLite history/health queries and DTC-file reads
-therefore cannot queue ahead of live snapshots. This boundary was added after
+therefore stay off HTTP workers. This boundary was added after
 two simultaneous dashboard clients caused repeat 5–10 second snapshot 503
 bursts whenever their history/health/DTC refreshes overlapped; the browser's
 five-second freshness fail-safe correctly rendered `Unknown`, but the source
@@ -2061,10 +2070,12 @@ mutating alert state.
 Since 2026-10-04 the monitor first reads `/v1/status` and skips the tick (exit 0,
 no CSV row, alert state untouched) when `vehicle_state.running` is true: the
 broker already records running voltage passively. Unknown or unreachable status
-keeps the old behaviour. The broker's Unix API serves one request at a time, so a
-parked wake-assisted read occupies it for several seconds; the drive recorder's
-idle wait therefore uses a 20 s status timeout (in-interval checks keep 2 s), which
-removed the two-hourly "broker status unavailable … TimeoutError" lines.
+keeps the old behaviour. The drive recorder's idle wait retains its 20 s status
+timeout (in-interval checks keep 2 s). It originally removed the two-hourly
+"broker status unavailable … TimeoutError" lines caused by the serialized Unix
+API. O2's concurrent cache reads remove that ordinary acquisition-induced delay,
+but not overload, host stalls or component-lock waits. Both the idle timeout and
+the running-voltage skip deliberately remain; neither is globally redundant.
 
 The broker also retains one explicit engine-off baseline without transmitting.
 After a qualified running epoch ends with exact helper restoration, it observes

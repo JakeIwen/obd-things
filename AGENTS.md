@@ -89,10 +89,16 @@ code without changing behaviour. Old import paths remain as shims, so existing i
     `tmp/vehicle_data/warning_replay/export-20261003.sqlite3`. It has no opened episodes, so pair
     it with the advisory lifecycle oracle.
 - Running the tests on the Mac:
-  - System Python lacks `can-isotp` and pytest, so use a venv with both.
+  - System Python lacks `can-isotp` and pytest, so use an isolated venv with both
+    plus `numpy` (required by the signal-correlate tests). Install `cantools` for
+    the optional signal-field cross-checks. Verify the venv still has its packages;
+    shared scratch environments may be removed by another session.
   - Point `TMPDIR` at a path that isn't a symlink. The `test_required_mount_*` tests fail under
     macOS's symlinked `/var/folders` temp dir.
   - Gate and oracle runs need `tmp/` and `tmp/ecu_mapping/` in the checkout.
+    For byte-identical gate captures, keep the interpreter and venv outside both
+    target roots: the gate harness redirects module constants beneath a repo's
+    `tmp/`, including interpreter paths if the runtime itself lives there.
 - Deliberately not done:
   - Moving `active_drive` onto `acquire_active_bus_route`. It would change the lock order,
     parent/child role ownership, restore revalidation and the `ip` argv, so it needs its own
@@ -109,12 +115,17 @@ code without changing behaviour. Old import paths remain as shims, so existing i
     tools exit 2.
   - The `alfaobd_controller` subcommands `observe`/`wait` and the campaign/catalog `audit`
     subcommands are ungated.
-- Open follow-ups:
-  - The Tailscale web unit and `van-dtc-batch.path` descriptions still say "locally armed". The
-    arm-token feature is gone, and a DTC start carrying `token` now gets 409.
-  - The broker's single-threaded Unix API blocks status reads for seconds during a CAN
-    acquisition. This is mitigated, not removed: the drive recorder's idle wait uses a 20 s
-    status timeout, and `voltage_mon` skips its tick while the engine runs.
+- Follow-up status:
+  - O1 (`0c93cd2`) removed the stale "locally armed" descriptions from the
+    Tailscale web unit and `van-dtc-batch.path`. On 2026-10-05, read-only Pi checks
+    confirmed installed files byte-identical to master and `NeedDaemonReload=no`.
+  - O2 adds bounded concurrent Unix API GETs while every POST still executes on
+    the serving/main thread. This branch is not a live activation. Retain the
+    drive recorder's 20 s idle status timeout and `voltage_mon`'s running skip:
+    saturation, host stalls and component-lock waits remain possible. Shutdown
+    must preserve uncaught `KeyboardInterrupt`/SIGINT and unlink before broker
+    close; the 2026-10-04 Pi journal confirms that path (~1.25 s stop).
+    Cross-family review and an authorized parked deployment remain outstanding.
 
 ## MacBook-managed `~/scripts` tree
 
