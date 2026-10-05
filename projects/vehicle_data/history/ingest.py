@@ -1631,19 +1631,10 @@ class IngestMixin(ValidationMixin):
             current_incident_ids=current_active_incident_ids,
         )
 
-    def _ingest_data_quality(
+    def _data_quality_batch(
         self,
-        snapshot: Mapping[str, object],
-        captured_us: int,
-        snapshot_id: int,
-    ) -> None:
-        """Upsert the broker's bounded recent quality incidents by stable id."""
-
-        status = snapshot.get("status")
-        status = status if isinstance(status, Mapping) else {}
-        quality_status = status.get("data_quality")
-        if quality_status is None:
-            return
+        quality_status: object,
+    ) -> tuple[str, list[object]]:
         if not isinstance(quality_status, Mapping):
             raise SnapshotValidationError("status.data_quality must be an object")
         producer_instance = _required_text(
@@ -1659,194 +1650,281 @@ class IngestMixin(ValidationMixin):
             raise SnapshotValidationError(
                 "status.data_quality.recent must contain at most 32 events"
             )
+        return producer_instance, recent
+
+    def _data_quality_incident_identity(
+        self,
+        item: object,
+        index: int,
+        producer_instance: str,
+        seen_ids: set[str],
+    ) -> tuple[str, str, str, str, str, str, str, str, str, str, int]:
+        prefix = f"status.data_quality.recent[{index}]"
+        if not isinstance(item, Mapping):
+            raise SnapshotValidationError(f"{prefix} must be an object")
+        incident_id = _required_text(
+            item.get("incident_id"), f"{prefix}.incident_id"
+        )
+        event_producer = _required_text(
+            item.get("producer_instance"), f"{prefix}.producer_instance"
+        )
+        if event_producer != producer_instance:
+            raise SnapshotValidationError(
+                f"{prefix}.producer_instance does not match its snapshot"
+            )
+        metric = _required_text(item.get("metric"), f"{prefix}.metric")
+        source = _required_text(item.get("source"), f"{prefix}.source")
+        bus = _required_text(item.get("bus"), f"{prefix}.bus")
+        quality = _required_text(item.get("quality"), f"{prefix}.quality")
+        reason = _required_text(item.get("reason"), f"{prefix}.reason")
+        detail = _required_text(item.get("detail"), f"{prefix}.detail")
+        if incident_id in seen_ids:
+            raise SnapshotValidationError(
+                f"status.data_quality repeats incident {incident_id!r}"
+            )
+        seen_ids.add(incident_id)
+        if len(incident_id) > 300 or any(
+            len(value) > 4000
+            for value in (metric, source, bus, quality, reason, detail)
+        ):
+            raise SnapshotValidationError(f"{prefix} contains oversized text")
+        if reason != "implausible_transition":
+            raise SnapshotValidationError(
+                f"{prefix}.reason is not an admitted quality event"
+            )
+        event_status = item.get("status")
+        if event_status not in ("active", "resolved"):
+            raise SnapshotValidationError(
+                f"{prefix}.status must be active or resolved"
+            )
+        interface_mode = item.get("interface_mode")
+        if interface_mode not in ("listen_only", "armed_diagnostic"):
+            raise SnapshotValidationError(
+                f"{prefix}.interface_mode is invalid"
+            )
+        rejection_count = item.get("rejection_count")
+        if (
+            not isinstance(rejection_count, int)
+            or isinstance(rejection_count, bool)
+            or not 1 <= rejection_count <= 1_000_000_000
+        ):
+            raise SnapshotValidationError(
+                f"{prefix}.rejection_count must be a positive integer"
+            )
+        if item.get("notification_eligible") is not False:
+            raise SnapshotValidationError(
+                f"{prefix} must be explicitly ineligible for notifications"
+            )
+        return (
+            prefix, incident_id, metric, source, bus, quality, reason, detail,
+            event_status, interface_mode, rejection_count,
+        )
+
+    def _data_quality_incident_evidence(
+        self,
+        item: Mapping[str, object],
+        prefix: str,
+        event_status: str,
+    ) -> tuple[
+        datetime, datetime, int, int, datetime | None, int | None, str | None, str
+    ]:
+        first_dt = _utc_datetime(
+            item.get("first_seen_at"), f"{prefix}.first_seen_at"
+        )
+        last_dt = _utc_datetime(
+            item.get("last_seen_at"), f"{prefix}.last_seen_at"
+        )
+        first_us = _to_us(first_dt)
+        last_us = _to_us(last_dt)
+        if last_us < first_us:
+            raise SnapshotValidationError(
+                f"{prefix}.last_seen_at predates first_seen_at"
+            )
+        resolved_at = item.get("resolved_at")
+        resolved_dt = (
+            None
+            if resolved_at is None
+            else _utc_datetime(resolved_at, f"{prefix}.resolved_at")
+        )
+        resolved_us = None if resolved_dt is None else _to_us(resolved_dt)
+        if event_status == "active" and resolved_dt is not None:
+            raise SnapshotValidationError(
+                f"{prefix} active incident cannot have resolved_at"
+            )
+        if event_status == "resolved" and (
+            resolved_dt is None or resolved_us < last_us
+        ):
+            raise SnapshotValidationError(
+                f"{prefix} resolved incident requires a valid resolved_at"
+            )
+        resolution_reason = item.get("resolution_reason")
+        if resolution_reason is not None and (
+            not isinstance(resolution_reason, str)
+            or not resolution_reason
+            or len(resolution_reason) > 500
+        ):
+            raise SnapshotValidationError(
+                f"{prefix}.resolution_reason must be bounded text or null"
+            )
+        if event_status == "active" and resolution_reason is not None:
+            raise SnapshotValidationError(
+                f"{prefix} active incident cannot have a resolution reason"
+            )
+        evidence = item.get("evidence")
+        if not isinstance(evidence, Mapping):
+            raise SnapshotValidationError(f"{prefix}.evidence must be an object")
+        try:
+            evidence_json = json.dumps(
+                dict(evidence),
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        except (TypeError, ValueError) as exc:
+            raise SnapshotValidationError(
+                f"{prefix}.evidence must be finite JSON data"
+            ) from exc
+        if len(evidence_json.encode("utf-8")) > 16_384:
+            raise SnapshotValidationError(f"{prefix}.evidence is oversized")
+        return (
+            first_dt, last_dt, first_us, last_us, resolved_dt, resolved_us,
+            resolution_reason, evidence_json,
+        )
+
+    def _store_data_quality_incident(
+        self,
+        *,
+        prefix: str, incident_id: str, producer_instance: str,
+        metric: str, source: str, bus: str, quality: str, reason: str,
+        detail: str, event_status: str, interface_mode: str,
+        rejection_count: int, first_dt: datetime, last_dt: datetime,
+        first_us: int, last_us: int, resolved_dt: datetime | None,
+        resolved_us: int | None, resolution_reason: str | None,
+        evidence_json: str, snapshot_id: int,
+    ) -> None:
+        existing = self._conn.execute(
+            "SELECT * FROM data_quality_events WHERE incident_id=?",
+            (incident_id,),
+        ).fetchone()
+        if existing is not None and any(
+            existing[field] != expected
+            for field, expected in (
+                ("producer_instance", producer_instance),
+                ("metric", metric),
+                ("source", source),
+                ("bus", bus),
+                ("quality", quality),
+                ("reason", reason),
+                ("first_seen_us", first_us),
+            )
+        ):
+            raise SnapshotValidationError(
+                f"{prefix} changes immutable incident identity"
+            )
+        self._conn.execute(
+            """
+            INSERT INTO data_quality_events(
+                incident_id,producer_instance,metric,source,bus,quality,reason,status,
+                first_seen_us,first_seen_at,last_seen_us,last_seen_at,
+                resolved_us,resolved_at,resolution_reason,rejection_count,detail,
+                interface_mode,evidence_json,first_snapshot_id,
+                last_snapshot_id,notification_eligible
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)
+            ON CONFLICT(incident_id) DO UPDATE SET
+                status=excluded.status,
+                last_seen_us=max(data_quality_events.last_seen_us,excluded.last_seen_us),
+                last_seen_at=CASE
+                    WHEN excluded.last_seen_us >= data_quality_events.last_seen_us
+                    THEN excluded.last_seen_at ELSE data_quality_events.last_seen_at END,
+                resolved_us=excluded.resolved_us,
+                resolved_at=excluded.resolved_at,
+                resolution_reason=excluded.resolution_reason,
+                rejection_count=max(
+                    data_quality_events.rejection_count,
+                    excluded.rejection_count
+                ),
+                detail=excluded.detail,
+                interface_mode=excluded.interface_mode,
+                evidence_json=excluded.evidence_json,
+                last_snapshot_id=excluded.last_snapshot_id
+            """,
+            (
+                incident_id,
+                producer_instance,
+                metric,
+                source,
+                bus,
+                quality,
+                reason,
+                event_status,
+                first_us,
+                _iso(first_dt),
+                last_us,
+                _iso(last_dt),
+                resolved_us,
+                None if resolved_dt is None else _iso(resolved_dt),
+                resolution_reason,
+                rejection_count,
+                detail,
+                interface_mode,
+                evidence_json,
+                snapshot_id,
+                snapshot_id,
+            ),
+        )
+
+    def _ingest_data_quality_incidents(
+        self,
+        recent: list[object],
+        producer_instance: str,
+        snapshot_id: int,
+    ) -> None:
         seen_ids: set[str] = set()
         for index, item in enumerate(recent):
-            prefix = f"status.data_quality.recent[{index}]"
-            if not isinstance(item, Mapping):
-                raise SnapshotValidationError(f"{prefix} must be an object")
-            incident_id = _required_text(
-                item.get("incident_id"), f"{prefix}.incident_id"
+            (
+                prefix, incident_id, metric, source, bus, quality, reason, detail,
+                event_status, interface_mode, rejection_count,
+            ) = self._data_quality_incident_identity(
+                item, index, producer_instance, seen_ids
             )
-            event_producer = _required_text(
-                item.get("producer_instance"), f"{prefix}.producer_instance"
+            (
+                first_dt, last_dt, first_us, last_us, resolved_dt, resolved_us,
+                resolution_reason, evidence_json,
+            ) = self._data_quality_incident_evidence(
+                item, prefix, event_status
             )
-            if event_producer != producer_instance:
-                raise SnapshotValidationError(
-                    f"{prefix}.producer_instance does not match its snapshot"
-                )
-            metric = _required_text(item.get("metric"), f"{prefix}.metric")
-            source = _required_text(item.get("source"), f"{prefix}.source")
-            bus = _required_text(item.get("bus"), f"{prefix}.bus")
-            quality = _required_text(item.get("quality"), f"{prefix}.quality")
-            reason = _required_text(item.get("reason"), f"{prefix}.reason")
-            detail = _required_text(item.get("detail"), f"{prefix}.detail")
-            if incident_id in seen_ids:
-                raise SnapshotValidationError(
-                    f"status.data_quality repeats incident {incident_id!r}"
-                )
-            seen_ids.add(incident_id)
-            if len(incident_id) > 300 or any(
-                len(value) > 4000
-                for value in (metric, source, bus, quality, reason, detail)
-            ):
-                raise SnapshotValidationError(f"{prefix} contains oversized text")
-            if reason != "implausible_transition":
-                raise SnapshotValidationError(
-                    f"{prefix}.reason is not an admitted quality event"
-                )
-            event_status = item.get("status")
-            if event_status not in ("active", "resolved"):
-                raise SnapshotValidationError(
-                    f"{prefix}.status must be active or resolved"
-                )
-            interface_mode = item.get("interface_mode")
-            if interface_mode not in ("listen_only", "armed_diagnostic"):
-                raise SnapshotValidationError(
-                    f"{prefix}.interface_mode is invalid"
-                )
-            rejection_count = item.get("rejection_count")
-            if (
-                not isinstance(rejection_count, int)
-                or isinstance(rejection_count, bool)
-                or not 1 <= rejection_count <= 1_000_000_000
-            ):
-                raise SnapshotValidationError(
-                    f"{prefix}.rejection_count must be a positive integer"
-                )
-            if item.get("notification_eligible") is not False:
-                raise SnapshotValidationError(
-                    f"{prefix} must be explicitly ineligible for notifications"
-                )
-            first_dt = _utc_datetime(
-                item.get("first_seen_at"), f"{prefix}.first_seen_at"
-            )
-            last_dt = _utc_datetime(
-                item.get("last_seen_at"), f"{prefix}.last_seen_at"
-            )
-            first_us = _to_us(first_dt)
-            last_us = _to_us(last_dt)
-            if last_us < first_us:
-                raise SnapshotValidationError(
-                    f"{prefix}.last_seen_at predates first_seen_at"
-                )
-            resolved_at = item.get("resolved_at")
-            resolved_dt = (
-                None
-                if resolved_at is None
-                else _utc_datetime(resolved_at, f"{prefix}.resolved_at")
-            )
-            resolved_us = None if resolved_dt is None else _to_us(resolved_dt)
-            if event_status == "active" and resolved_dt is not None:
-                raise SnapshotValidationError(
-                    f"{prefix} active incident cannot have resolved_at"
-                )
-            if event_status == "resolved" and (
-                resolved_dt is None or resolved_us < last_us
-            ):
-                raise SnapshotValidationError(
-                    f"{prefix} resolved incident requires a valid resolved_at"
-                )
-            resolution_reason = item.get("resolution_reason")
-            if resolution_reason is not None and (
-                not isinstance(resolution_reason, str)
-                or not resolution_reason
-                or len(resolution_reason) > 500
-            ):
-                raise SnapshotValidationError(
-                    f"{prefix}.resolution_reason must be bounded text or null"
-                )
-            if event_status == "active" and resolution_reason is not None:
-                raise SnapshotValidationError(
-                    f"{prefix} active incident cannot have a resolution reason"
-                )
-            evidence = item.get("evidence")
-            if not isinstance(evidence, Mapping):
-                raise SnapshotValidationError(f"{prefix}.evidence must be an object")
-            try:
-                evidence_json = json.dumps(
-                    dict(evidence),
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    allow_nan=False,
-                )
-            except (TypeError, ValueError) as exc:
-                raise SnapshotValidationError(
-                    f"{prefix}.evidence must be finite JSON data"
-                ) from exc
-            if len(evidence_json.encode("utf-8")) > 16_384:
-                raise SnapshotValidationError(f"{prefix}.evidence is oversized")
-
-            existing = self._conn.execute(
-                "SELECT * FROM data_quality_events WHERE incident_id=?",
-                (incident_id,),
-            ).fetchone()
-            if existing is not None and any(
-                existing[field] != expected
-                for field, expected in (
-                    ("producer_instance", producer_instance),
-                    ("metric", metric),
-                    ("source", source),
-                    ("bus", bus),
-                    ("quality", quality),
-                    ("reason", reason),
-                    ("first_seen_us", first_us),
-                )
-            ):
-                raise SnapshotValidationError(
-                    f"{prefix} changes immutable incident identity"
-                )
-            self._conn.execute(
-                """
-                INSERT INTO data_quality_events(
-                    incident_id,producer_instance,metric,source,bus,quality,reason,status,
-                    first_seen_us,first_seen_at,last_seen_us,last_seen_at,
-                    resolved_us,resolved_at,resolution_reason,rejection_count,detail,
-                    interface_mode,evidence_json,first_snapshot_id,
-                    last_snapshot_id,notification_eligible
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)
-                ON CONFLICT(incident_id) DO UPDATE SET
-                    status=excluded.status,
-                    last_seen_us=max(data_quality_events.last_seen_us,excluded.last_seen_us),
-                    last_seen_at=CASE
-                        WHEN excluded.last_seen_us >= data_quality_events.last_seen_us
-                        THEN excluded.last_seen_at ELSE data_quality_events.last_seen_at END,
-                    resolved_us=excluded.resolved_us,
-                    resolved_at=excluded.resolved_at,
-                    resolution_reason=excluded.resolution_reason,
-                    rejection_count=max(
-                        data_quality_events.rejection_count,
-                        excluded.rejection_count
-                    ),
-                    detail=excluded.detail,
-                    interface_mode=excluded.interface_mode,
-                    evidence_json=excluded.evidence_json,
-                    last_snapshot_id=excluded.last_snapshot_id
-                """,
-                (
-                    incident_id,
-                    producer_instance,
-                    metric,
-                    source,
-                    bus,
-                    quality,
-                    reason,
-                    event_status,
-                    first_us,
-                    _iso(first_dt),
-                    last_us,
-                    _iso(last_dt),
-                    resolved_us,
-                    None if resolved_dt is None else _iso(resolved_dt),
-                    resolution_reason,
-                    rejection_count,
-                    detail,
-                    interface_mode,
-                    evidence_json,
-                    snapshot_id,
-                    snapshot_id,
-                ),
+            self._store_data_quality_incident(
+                prefix=prefix,
+                incident_id=incident_id,
+                producer_instance=producer_instance,
+                metric=metric,
+                source=source,
+                bus=bus,
+                quality=quality,
+                reason=reason,
+                detail=detail,
+                event_status=event_status,
+                interface_mode=interface_mode,
+                rejection_count=rejection_count,
+                first_dt=first_dt,
+                last_dt=last_dt,
+                first_us=first_us,
+                last_us=last_us,
+                resolved_dt=resolved_dt,
+                resolved_us=resolved_us,
+                resolution_reason=resolution_reason,
+                evidence_json=evidence_json,
+                snapshot_id=snapshot_id,
             )
 
+    def _resolve_restarted_data_quality_incidents(
+        self,
+        quality_status: Mapping[str, object],
+        recent: list[object],
+        producer_instance: str,
+        captured_us: int,
+        snapshot_id: int,
+    ) -> None:
         authoritative_good = quality_status.get("authoritative_good", [])
         if (
             not isinstance(authoritative_good, list)
@@ -1910,3 +1988,28 @@ class IngestMixin(ValidationMixin):
                         row["incident_id"],
                     ),
                 )
+
+    def _ingest_data_quality(
+        self,
+        snapshot: Mapping[str, object],
+        captured_us: int,
+        snapshot_id: int,
+    ) -> None:
+        """Upsert the broker's bounded recent quality incidents by stable id."""
+
+        status = snapshot.get("status")
+        status = status if isinstance(status, Mapping) else {}
+        quality_status = status.get("data_quality")
+        if quality_status is None:
+            return
+        producer_instance, recent = self._data_quality_batch(quality_status)
+        self._ingest_data_quality_incidents(
+            recent, producer_instance, snapshot_id
+        )
+        self._resolve_restarted_data_quality_incidents(
+            quality_status,
+            recent,
+            producer_instance,
+            captured_us,
+            snapshot_id,
+        )
