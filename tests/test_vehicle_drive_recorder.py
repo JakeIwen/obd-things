@@ -496,6 +496,38 @@ class DriveRecorderTests(unittest.TestCase):
         ):
             check()
 
+    def test_daemon_idle_wait_tolerates_a_busy_broker_but_recording_does_not(self):
+        idle = mock.Mock()
+        idle.request.return_value = (200, ready_status())
+        interval = mock.Mock()
+        clients = {
+            drive_recorder.STATUS_TIMEOUT_SECONDS: interval,
+            drive_recorder.IDLE_STATUS_TIMEOUT_SECONDS: idle,
+        }
+        args = SimpleNamespace(
+            socket="/unused.sock",
+            state_path=Path("/unused-state.json"),
+            out_root=Path("/unused-output"),
+        )
+        with (
+            mock.patch.object(
+                drive_recorder,
+                "TelemetryClient",
+                side_effect=lambda _socket, *, timeout: clients[timeout],
+            ),
+            mock.patch.object(
+                drive_recorder, "record_one_interval", side_effect=KeyboardInterrupt
+            ) as record,
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            drive_recorder.run_daemon(args, capture.DiskPolicy(300, 200), sleep=mock.Mock())
+
+        self.assertGreater(drive_recorder.IDLE_STATUS_TIMEOUT_SECONDS, 10.0)
+        self.assertEqual(drive_recorder.STATUS_TIMEOUT_SECONDS, 2.0)
+        idle.request.assert_called_once_with("GET", "/v1/status")
+        self.assertIs(record.call_args.args[3], interval)
+        interval.request.assert_not_called()
+
     def test_daemon_waits_after_ownership_loss_instead_of_crashing(self):
         client = mock.Mock()
         client.request.return_value = (200, ready_status())

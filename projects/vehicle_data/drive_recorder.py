@@ -98,6 +98,9 @@ DEFAULT_CONDITIONS = (
 )
 WAIT_SECONDS = 1.0
 STATUS_TIMEOUT_SECONDS = 2.0
+# The broker serves one request at a time; a parked wake-assisted voltage read keeps it busy
+# for several seconds. Waiting between intervals tolerates that instead of timing out.
+IDLE_STATUS_TIMEOUT_SECONDS = 20.0
 BROKER_STATUS_RETRY_ATTEMPTS = 5
 BROKER_STATUS_RETRY_DEADLINE_SECONDS = 5.0
 BROKER_STATUS_RETRY_DELAYS_SECONDS = (0.05, 0.1, 0.25, 0.5)
@@ -1600,16 +1603,20 @@ def run_daemon(
     policy: capture.DiskPolicy,
     *,
     client: TelemetryClient | None = None,
+    idle_client: TelemetryClient | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> int:
-    client = client or TelemetryClient(
-        args.socket,
-        timeout=STATUS_TIMEOUT_SECONDS,
-    )
+    if client is None:
+        client = TelemetryClient(args.socket, timeout=STATUS_TIMEOUT_SECONDS)
+        idle_client = idle_client or TelemetryClient(
+            args.socket,
+            timeout=IDLE_STATUS_TIMEOUT_SECONDS,
+        )
+    idle_client = idle_client or client
     last_wait_detail = None
     while True:
         try:
-            status = read_broker_status(client)
+            status = read_broker_status(idle_client)
             ready = broker_armed_ready(status)
             detail = (
                 "waiting for reviewed broker active-drive ownership"
