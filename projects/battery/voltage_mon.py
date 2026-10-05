@@ -180,6 +180,20 @@ def have_connectivity(url=NTFY_VOLTAGE_URL, timeout=6):
         return False
 
 
+def vehicle_running():
+    """True only when the broker reports the engine running; unknown counts as not running."""
+    if not BROKER_SOCKET.is_socket():
+        return False
+    try:
+        status_code, payload = TelemetryClient(str(BROKER_SOCKET), timeout=10.0).request(
+            "GET", "/v1/status"
+        )
+    except (OSError, RuntimeError, json.JSONDecodeError):
+        return False
+    vehicle = payload.get("vehicle_state") if status_code == 200 and isinstance(payload, dict) else None
+    return isinstance(vehicle, dict) and vehicle.get("running") is True
+
+
 def main():
     allow_send = not ("--no-notify" in sys.argv or "--no-sms" in sys.argv)
     os.makedirs(os.path.dirname(LOCK), exist_ok=True)
@@ -188,6 +202,12 @@ def main():
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         log("another voltage_mon instance is running; skipping this tick")
+        return
+
+    # A broker acquisition blocks its single-threaded API for seconds, which can stall the
+    # drive recorder mid-drive; while running, the broker already records voltage passively.
+    if vehicle_running():
+        log("vehicle is running; skipping this tick (the broker records running voltage)")
         return
 
     notification_reachable = True

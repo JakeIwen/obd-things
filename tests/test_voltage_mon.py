@@ -147,5 +147,64 @@ class SharedAcquireTests(unittest.TestCase):
         acquire.assert_called_once_with(passive_only=True)
         maybe_alert.assert_not_called()
 
+    def test_running_vehicle_skips_the_tick_without_sampling(self):
+        with (
+            mock.patch.object(voltage_mon.sys, "argv", ["voltage_mon.py"]),
+            mock.patch.object(voltage_mon, "vehicle_running", return_value=True),
+            mock.patch.object(voltage_mon, "acquire") as acquire,
+            mock.patch.object(voltage_mon.bv, "append_csv") as append_csv,
+            mock.patch.object(voltage_mon, "maybe_alert") as maybe_alert,
+            mock.patch.object(voltage_mon, "have_connectivity") as connectivity,
+            mock.patch.object(voltage_mon.os, "makedirs"),
+            mock.patch("builtins.open", mock.mock_open()),
+            mock.patch.object(voltage_mon.fcntl, "flock"),
+        ):
+            self.assertIsNone(voltage_mon.main())
+
+        acquire.assert_not_called()
+        append_csv.assert_not_called()
+        maybe_alert.assert_not_called()
+        connectivity.assert_not_called()
+
+
+class VehicleRunningTests(unittest.TestCase):
+    def _check(self, response=None, error=None, is_socket=True):
+        client = mock.Mock()
+        if error is not None:
+            client.request.side_effect = error
+        else:
+            client.request.return_value = response
+        broker_path = SimpleNamespace(
+            is_socket=lambda: is_socket,
+            __str__=lambda _self: "/run/van-telemetry/api.sock",
+        )
+        with (
+            mock.patch.object(voltage_mon, "BROKER_SOCKET", broker_path),
+            mock.patch.object(voltage_mon, "TelemetryClient", return_value=client),
+        ):
+            return voltage_mon.vehicle_running(), client
+
+    def test_only_an_explicit_running_engine_counts(self):
+        cases = (
+            ({"vehicle_state": {"state": "running", "running": True}}, True),
+            ({"vehicle_state": {"state": "asleep", "running": False}}, False),
+            ({"vehicle_state": {"state": "unknown", "running": None}}, False),
+            ({"vehicle_state": "running"}, False),
+            ({}, False),
+        )
+        for payload, expected in cases:
+            with self.subTest(payload=payload):
+                running, client = self._check(response=(200, payload))
+                self.assertIs(running, expected)
+                client.request.assert_called_once_with("GET", "/v1/status")
+
+    def test_unavailable_status_keeps_sampling(self):
+        self.assertFalse(self._check(response=(503, {"vehicle_state": {"running": True}}))[0])
+        self.assertFalse(self._check(error=OSError("connection refused"))[0])
+        running, client = self._check(is_socket=False)
+        self.assertFalse(running)
+        client.request.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
