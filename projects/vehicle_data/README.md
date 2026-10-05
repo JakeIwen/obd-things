@@ -1193,7 +1193,15 @@ Excess connections remain in the kernel backlog (64); eight occupied connection
 slots can still delay reads. A five-second absolute timeout bounds each HTTP
 input/output phase, not queueing or CAN work. Expired input cannot dispatch a
 mutation. The unprivileged web processes remain independently threaded.
-This O2 implementation has not been activated on the Pi by this change.
+Activated parked/asleep on 2026-10-05 at broker instance
+`2026-10-05T12:10:03.822520Z` (`21523ec`), after cross-family deployment approval.
+The restart added no CAN TX. Matched wake-assisted battery measurements reduced
+maximum in-command `/v1/status` latency from 7,821.107 ms to 20.590 ms, with all
+requests returning 200 and exactly 75 B-CAN frames per approved read (zero C/CH
+TX). Units stayed active with zero crash restarts; final passive/quiet checks
+and journals were clean. The first natural drive is still outstanding; the
+[deployment handoff](../../.agent/handoffs/broker-api-concurrency.md) preserves
+measurement caveats, rollback and timestamp-anchored first-drive checks.
 Each `UnixHTTPServer` instance serves one lifetime; construct a fresh instance
 rather than restarting `serve_forever()` on a stopped object. `serve_unix()`
 already creates a fresh server on every invocation.

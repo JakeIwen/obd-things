@@ -115,17 +115,23 @@ code without changing behaviour. Old import paths remain as shims, so existing i
     tools exit 2.
   - The `alfaobd_controller` subcommands `observe`/`wait` and the campaign/catalog `audit`
     subcommands are ungated.
-- Follow-up status:
+- Deployment status and open follow-ups:
   - O1 (`0c93cd2`) removed the stale "locally armed" descriptions from the
     Tailscale web unit and `van-dtc-batch.path`. On 2026-10-05, read-only Pi checks
     confirmed installed files byte-identical to master and `NeedDaemonReload=no`.
-  - O2 adds bounded concurrent Unix API GETs while every POST still executes on
-    the serving/main thread. This branch is not a live activation. Retain the
-    drive recorder's 20 s idle status timeout and `voltage_mon`'s running skip:
-    saturation, host stalls and component-lock waits remain possible. Shutdown
-    must preserve uncaught `KeyboardInterrupt`/SIGINT and unlink before broker
-    close; the 2026-10-04 Pi journal confirms that path (~1.25 s stop).
-    Cross-family review and an authorized parked deployment remain outstanding.
+  - O2 (`21523ec`) was deployed parked/asleep on 2026-10-05; broker instance
+    `2026-10-05T12:10:03.822520Z`. Bounded GET workers leave every POST on the
+    serving/main thread. Fable's cross-family review approved deployment.
+    Matching wake-assisted battery reads reduced maximum in-command status
+    latency from 7,821.107 ms to 20.590 ms; both sent exactly 75 B-CAN frames,
+    no C/CH TX, and all status reads returned 200. Restart itself added no TX.
+    All relevant units were active with zero restarts; final journals were clean
+    and all three vehicle roles were healthy/listen-only with static counters.
+    Retain the recorder's 20 s idle timeout and `voltage_mon` running skip:
+    eight occupied POST slots can still starve GET admission, and GIL contention
+    has not been isolated or validated over a drive. The first natural drive is
+    still outstanding; see [.agent/handoffs/broker-api-concurrency.md](.agent/handoffs/broker-api-concurrency.md)
+    for latency evidence, the rollback SHA/command and timestamp-anchored checks.
 
 ## MacBook-managed `~/scripts` tree
 
