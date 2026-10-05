@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "title": "Synthetic fixture · a field and its reference",
+  "summary": "Software verification only: a known ramp, a constant recording, a time gap, and deliberately distinct channels, identifier widths, and payload lengths. These are not vehicle findings.",
+  "questions": ["Does the frozen affine formula track the independently specified synthetic reference?", "Why does the constant recording provide no evidence for correlation?"],
+  "next_checks": ["Regenerate with --capture ramp --field ramp --window 0 2.", "Inspect the imported correlator report and its reference provenance before interpreting any fitted scale."],
+  "captures": [
+    {"name": "ramp", "path": "ramp.candump", "channels": {"can0": "synthetic-a", "can1": "synthetic-b"}, "conditions": "Synthetic ramp with a 3-second gap; reference is an explicit known equation."},
+    {"name": "constant", "path": "constant.candump", "channels": {"can0": "synthetic-a"}, "conditions": "Synthetic constant field, no reference observations."}
+  ],
+  "fields": [
+    {"name": "ramp", "bus": "synthetic-a", "channel": "can0", "can_id": "123", "id_bits": 11, "dlc": 1, "field": {"dbc_start_bit": 0, "length_bits": 8, "byte_order": "little", "signed": false}, "scale": 2, "offset": 5, "unit": "synthetic units", "evidence_tier": "exploratory_candidate", "provenance": "Synthetic fixture: input bytes 2,4,7,9,12; expected y=2x+5. No physical meaning.", "supporting_evidence": ["Known independently specified test equation."], "contradicting_evidence": ["Constant data cannot establish correlation; a gap must remain visible."]},
+    {"name": "absent", "bus": "synthetic-a", "channel": "can0", "can_id": "456", "id_bits": 11, "dlc": 1, "field": {"dbc_start_bit": 0, "length_bits": 8, "byte_order": "little", "signed": false}, "scale": 1, "offset": 0, "unit": "raw", "evidence_tier": "exploratory_candidate", "provenance": "Intentionally absent stream; verifies missing-data display."}
+  ],
+  "references": ["reference.json"],
+  "analyses": ["correlation.json"]
+}

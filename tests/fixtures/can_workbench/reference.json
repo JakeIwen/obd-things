@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "name": "Synthetic expected equation",
+  "capture": "ramp",
+  "field": "ramp",
+  "unit": "synthetic units",
+  "timestamp_basis": "capture_clock",
+  "provenance": "Independently specified synthetic values y=2x+5 at the exact fixture timestamps. This checks software extraction, not a vehicle measurement.",
+  "observations": [
+    {"timestamp": "1.000000000001", "value": 9},
+    {"timestamp": "2.000000000001", "value": 13},
+    {"timestamp": "3.000000000001", "value": 19},
+    {"timestamp": "6.000000000001", "value": 23},
+    {"timestamp": "7.000000000001", "value": 29}
+  ]
+}

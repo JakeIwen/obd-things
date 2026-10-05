@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<title>CAN investigation</title>
+<style>
+:root{color-scheme:light;--ink:#172e35;--muted:#526770;--line:#cddbdc;--paper:#f4f7f5;--teal:#006b69;--orange:#b75b16}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.6 system-ui,sans-serif}header{background:#163b40;color:#f5faf8;padding:34px max(24px,calc((100% - 1160px)/2)) 28px}header p{max-width:850px;color:#d5e4e4}.eyebrow{text-transform:uppercase;letter-spacing:.16em;font-size:12px;font-weight:700;color:#a7d9cf}h1{font-size:clamp(25px,4vw,38px);line-height:1.2;margin:10px 0 16px}h2{font-size:21px;margin:0 0 16px}h3{font-size:16px}nav{display:flex;gap:20px;flex-wrap:wrap}nav a{color:#c4eee5}main{max-width:1208px;margin:auto;padding:28px 24px 60px}section{margin-bottom:24px;background:white;border:1px solid var(--line);border-radius:12px;padding:24px}.controls{display:flex;gap:16px;flex-wrap:wrap;align-items:end}label{display:flex;flex-direction:column;gap:4px;color:var(--muted);font-size:13px}select,input,button{font:inherit;color:var(--ink);border:1px solid #9fb5b7;border-radius:6px;padding:9px;background:white;max-width:100%}input{width:145px}button{cursor:pointer;background:#e4f2ec;font-weight:600}button:hover{background:#cde7df}select{min-width:160px}#capture-select{max-width:320px}a{color:var(--teal)}.muted{color:var(--muted)}.notice{background:#f1f5f3;border-left:3px solid #398b7d;padding:10px 14px}.badge{display:inline-block;border:1px solid #d8c5a7;background:#fcf5e8;border-radius:30px;padding:2px 10px;font-size:12px}.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:12px;margin:18px 0}.metric{background:var(--paper);padding:10px 14px;border-radius:6px}.metric strong{display:block;font-size:21px}.metric span{font-size:12px;color:var(--muted)}.plot{width:100%;display:block;min-width:0}.plot text{font:12px system-ui;fill:var(--muted)}.plot line{stroke:#dce5e4;stroke-width:1}.plot path{fill:none;stroke-width:2;stroke:var(--teal)}.plot circle{fill:var(--teal)}.plot .reference{stroke:var(--orange);fill:var(--orange)}.legend{display:flex;gap:20px;flex-wrap:wrap;font-size:13px}.legend .candidate{color:var(--teal)}.legend .ref{color:var(--orange)}.empty{border:1px dashed #9db3b3;padding:30px;text-align:center;color:var(--muted);margin:16px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f4f6f5;padding:14px;border-radius:6px;font-size:12px;max-height:420px;overflow:auto}details{border-top:1px solid var(--line);padding:12px 0}summary{cursor:pointer;font-weight:600}table{border-collapse:collapse;width:100%;font-size:13px}th,td{text-align:left;padding:9px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted)}.table-wrap{overflow-x:auto}td,li,p{overflow-wrap:anywhere}#window-error{color:#9c351b}footer{color:var(--muted);font-size:12px} @media(max-width:600px){main{padding:16px 10px}section{padding:16px}header{padding:25px 18px}nav{gap:12px}.controls>*{width:100%}select,input{width:100%;max-width:none!important}.metrics{grid-template-columns:1fr 1fr}.plot{min-height:210px}}
+</style>
+</head>
+<body>
+<header><div class="eyebrow">Saved evidence / Offline CAN workbench</div><h1 id="title"></h1><p id="summary"></p><nav><a href="#recordings">Recordings</a><a href="#fields">Field plots</a><a href="#evidence">Candidate evidence</a><a href="#reproduce">Reproduce & export</a></nav></header>
+<main>
+<section id="recordings"><h2>Recordings & conditions</h2><p class="notice">Each recording retains its own clock and bus identity. Elapsed-time comparisons do not establish synchronization.</p><div id="capture-table" class="table-wrap"></div><div id="comparisons"></div></section>
+<section id="fields"><h2>Inspect a field</h2><div class="controls"><label>Recording<select id="capture-select"></select></label><label>Field<select id="field-select"></select></label><label>From elapsed seconds<input id="start" type="number" step="any" placeholder="start"></label><label>To elapsed seconds<input id="end" type="number" step="any" placeholder="end"></label><button id="reset">Reset window</button></div><p id="window-error" role="status"></p><p id="field-description"></p><div id="metrics" class="metrics"></div><div id="chart"></div><div id="legend" class="legend"></div><p id="plot-note" class="muted"></p><div id="field-details"></div></section>
+<section id="evidence"><h2>Candidate evidence</h2><p class="notice">Correlation suggests a relationship. It does not establish physical identity or units. Imported candidates remain exploratory.</p><div id="analyses"></div><h3>Unresolved questions</h3><ul id="questions"></ul><h3>Reproducible next checks</h3><ul id="next-checks"></ul></section>
+<section id="reproduce"><h2>Reproduce & export</h2><p>This HTML contains its data and viewer. It works directly from disk without a server or network connection. The companion bundle preserves the versioned inputs, settings, and analysis evidence.</p><a href="bundle.json" download="bundle.json">Download JSON bundle</a><div id="provenance"></div></section>
+<footer>Offline analysis only · No live vehicle connection · Review source paths and raw statistics before sharing.</footer>
+</main>
+<script id="bundle" type="application/json">__BUNDLE_JSON__</script>
+<script>
+'use strict';
+const bundle=JSON.parse(document.getElementById('bundle').textContent);
+const $=id=>document.getElementById(id);
+function node(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;}
+function detail(parent,title,value){const d=node('details');d.append(node('summary',title),node('pre',JSON.stringify(value,null,2)));parent.append(d);}
+function table(parent,heads,rows){const t=node('table'),h=node('tr');heads.forEach(s=>h.append(node('th',s)));t.append(h);rows.forEach(row=>{const r=node('tr');row.forEach(s=>r.append(node('td',s)));t.append(r);});parent.append(t);}
+function pretty(value){return value===null||value===undefined?'—':typeof value==='number'?value.toLocaleString(undefined,{maximumFractionDigits:6}):String(value);}
+function options(target,rows){rows.forEach(r=>{const o=node('option',r.name);o.value=r.name;target.append(o);});}
+$('title').textContent=bundle.title;document.title=bundle.title+' · CAN workbench';$('summary').textContent=bundle.summary;
+table($('capture-table'),['Recording / conditions','Channel → bus','Frames in range','Exact source coverage'],bundle.captures.map(c=>[c.name+' — '+c.conditions,Object.entries(c.channels).map(([ch,b])=>ch+' → '+b).join(', '),pretty(c.summary.total_frames),c.coverage.first_timestamp===null?'No valid frames':c.coverage.first_timestamp+' → '+c.coverage.last_timestamp]));
+bundle.captures.forEach(c=>{if(c.coverage.malformed_lines||c.coverage.unterminated_lines)$('capture-table').append(node('p',c.name+': '+c.coverage.malformed_lines+' malformed lines skipped; '+c.coverage.unterminated_lines+' unterminated lines (syntactically complete frames retained).','notice'));detail($('capture-table'),c.name+' · source, coverage and summary',{source:c.source,coverage:c.coverage,summary:c.summary});});
+bundle.comparisons.forEach(c=>{if(c.result){$('comparisons').append(node('h3',c.baseline+' → '+c.current));table($('comparisons'),['New streams','Missing streams','Changed streams','Matched channels'],[[c.result.new_ids.length,c.result.missing_ids.length,c.result.significantly_changed_ids.length,c.matched_channels.join(', ')]]);}detail($('comparisons'),c.baseline+' → '+c.current+' · inventory comparison'+(c.result?'':' · no comparable mapped channels'),c);});
+options($('capture-select'),bundle.captures);options($('field-select'),bundle.fields);
+const NS='http://www.w3.org/2000/svg';
+function svgNode(tag,attrs,text){const n=document.createElementNS(NS,tag);Object.entries(attrs).forEach(([k,v])=>n.setAttribute(k,v));if(text!==undefined)n.textContent=text;return n;}
+function draw(series,start,end,unit){
+ const all=series.flatMap(s=>s.points.filter(p=>p.seconds>=start&&p.seconds<=end));
+ if(!all.length){$('chart').append(node('div','No plotted observations in this window. Review full-range counts or regenerate with a narrower --window.', 'empty'));return;}
+ let xmin=Infinity,xmax=-Infinity,ymin=Infinity,ymax=-Infinity;
+ all.forEach(p=>{xmin=Math.min(xmin,p.seconds);xmax=Math.max(xmax,p.seconds);ymin=Math.min(ymin,p.value);ymax=Math.max(ymax,p.value);});
+ if(xmin===xmax){xmin-=.5;xmax+=.5;}let pad=(ymax-ymin)*.1||1;ymin-=pad;ymax+=pad;
+ const W=Math.max(320,$('chart').clientWidth),H=320,L=68,R=25,T=20,B=52,x=t=>L+(t-xmin)/(xmax-xmin)*(W-L-R),y=v=>H-B-(v-ymin)/(ymax-ymin)*(H-T-B);
+ const svg=svgNode('svg',{viewBox:`0 0 ${W} ${H}`,class:'plot',role:'img','aria-label':unit+' versus elapsed seconds, with discontinuities at recorded gaps'});
+ for(let i=0;i<=4;i++){let v=ymin+(ymax-ymin)*i/4;svg.append(svgNode('line',{x1:L,x2:W-R,y1:y(v),y2:y(v)}),svgNode('text',{x:L-8,y:y(v)+4,'text-anchor':'end'},Number(v.toPrecision(4))));let t=xmin+(xmax-xmin)*i/4;svg.append(svgNode('text',{x:x(t),y:H-28,'text-anchor':'middle'},Number(t.toPrecision(4))));}
+ svg.append(svgNode('text',{x:L,y:13},unit),svgNode('text',{x:W/2,y:H-5,'text-anchor':'middle'},'Elapsed seconds · recording clock'));
+ series.forEach((s,index)=>{let path='',previous=null;const visible=s.points.filter(p=>p.seconds>=start&&p.seconds<=end);visible.forEach(p=>{path+=(previous&&previous.segment===p.segment?' L':' M')+x(p.seconds)+' '+y(p.value);previous=p;});svg.append(svgNode('path',{d:path,class:index?'reference':''}));visible.forEach(p=>{const dot=svgNode('circle',{cx:x(p.seconds),cy:y(p.value),r:index?3:2,class:index?'reference':''});dot.append(svgNode('title',{},s.name+' · '+p.timestamp+' · '+pretty(p.value)+' '+unit));svg.append(dot);});});$('chart').append(svg);
+}
+function update(){
+ const capture=bundle.captures.find(c=>c.name===$('capture-select').value),field=bundle.fields.find(f=>f.name===$('field-select').value),s=capture.series[field.name];
+ const start=$('start').value===''?-Infinity:Number($('start').value),end=$('end').value===''?Infinity:Number($('end').value);
+ $('window-error').textContent=start>end?'Start must not exceed end.':'';
+ ['metrics','chart','legend','field-details'].forEach(id=>$(id).replaceChildren());
+ $('field-description').replaceChildren(node('span',field.evidence_tier.replaceAll('_',' '),'badge'),document.createTextNode('  '+field.bus+' / '+field.channel+' / 0x'+field.can_id+' / '+field.id_bits+'-bit / DLC '+field.dlc));
+ detail($('field-details'),'Definition, provenance and evidence limits',field);
+ if(!s){$('chart').append(node('div','This field’s exact bus/channel is not mapped in this recording.','empty'));$('plot-note').textContent='No cross-bus substitution is performed.';return;}
+ for(const [label,value] of [['Observations',s.count],['Status',s.status],['Minimum · '+field.unit,s.minimum],['Maximum · '+field.unit,s.maximum],['Gaps > '+s.gap_threshold_s+' s',s.gap_count],['Plot points',s.points.length]]){const m=node('div',undefined,'metric');m.append(node('strong',pretty(value)),node('span',label));$('metrics').append(m);}
+ const refs=bundle.references.filter(r=>r.capture===capture.name&&r.field===field.name);
+ const plotSeries=[{name:field.name,points:s.points},...refs.map(r=>({name:r.name,points:r.series.points}))];
+ if(start<=end)draw(plotSeries,start,end,field.unit);
+ $('legend').append(node('span','● '+field.name,'candidate'));
+ refs.forEach(r=>{$('legend').append(node('span','● '+r.name+' ('+r.series.status+')','ref'));detail($('field-details'),'Reference · '+r.name,{...r,series:{...r.series,points:undefined}});});
+ if(!refs.length)$('legend').append(node('span','No independent reference supplied.','muted'));
+ $('plot-note').textContent='Counts and extrema cover the entire generated range; the visual window filters plotted points only. '+s.downsampling+' (stride '+s.decimation_stride+'). '+(s.status==='constant'?'A constant field cannot establish correlation.':s.status==='insufficient'?'One observation is insufficient to assess a relationship.':'');
+}
+$('capture-select').addEventListener('change',()=>{$('start').value='';$('end').value='';update();});
+['field-select','start','end'].forEach(id=>$(id).addEventListener('change',update));
+['start','end'].forEach(id=>$(id).addEventListener('input',update));
+window.addEventListener('resize',update);
+$('reset').addEventListener('click',()=>{$('start').value='';$('end').value='';update();});
+if(!bundle.analyses.length)$('analyses').append(node('p','No candidate analysis report supplied. Field definitions alone do not constitute validation.','muted'));
+bundle.analyses.forEach((a,index)=>{const report=a.report;$('analyses').append(node('h3','Analysis '+(index+1)+' · exploratory candidate'));
+detail($('analyses'),'Reference, source hashes, settings and limitations',{source:a.source,reference:report.reference,capture:report.capture,analysis:report.analysis,reason:report.candidate_only_reason,affine_orientation:report.affine_orientation});
+if(!report.ranking.candidates.length)$('analyses').append(node('p','No eligible candidates. Inspect rejection counts; absence is not a zero-valued signal.'));
+report.ranking.candidates.forEach((c,i)=>detail($('analyses'),'Candidate '+(i+1)+' · '+c.channel+' / 0x'+(c.can_id_hex||c.can_id.toString(16))+' / '+c.id_bits+'-bit / DLC '+c.dlc,c));
+detail($('analyses'),'Complete imported report, including rejections and contradictory evidence',report);});
+for(const [id,values] of [['questions',bundle.questions],['next-checks',bundle.next_checks]])(values.length?values:['None recorded.']).forEach(t=>$(id).append(node('li',t)));
+detail($('provenance'),'Exact command, environment, settings and tool hashes',bundle.reproduction);
+detail($('provenance'),'Input manifest and hashes',{manifest:bundle.manifest,inputs:bundle.inputs});
+detail($('provenance'),'Interpretation and parsing policies',bundle.policies);
+update();
+</script>
+</body>
+</html>

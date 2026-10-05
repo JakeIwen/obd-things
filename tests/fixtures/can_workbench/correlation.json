@@ -1,0 +1,251 @@
+{
+  "schema_version": 1,
+  "classification": "candidate_only",
+  "evidence_tier": "exploratory_candidate",
+  "candidate_only": true,
+  "physical_identity_verified": false,
+  "scale_verified": false,
+  "telemetry_promotion_allowed": false,
+  "candidate_only_reason": "time correlation and affine fit do not prove signal identity, units, byte semantics, or physical scaling",
+  "offline_only": true,
+  "affine_orientation": "reference DID raw value = scale * candidate broadcast raw value + intercept",
+  "analysis": {
+    "match_mode": "nearest",
+    "window_statistic": null,
+    "radius_ms": 50.0,
+    "maximum_candidate_staleness_ms": 50.0,
+    "staleness_definition": "absolute candidate-frame delta from the exact kernel/candump-observed diagnostic response timestamp on the declared capture channel",
+    "minimum_samples": 3,
+    "minimum_coverage_ratio": 0.5,
+    "minimum_distinct_values": 4,
+    "top_count": 20,
+    "candidate_filter": {
+      "include_extended": false,
+      "include_diagnostic_ids": false,
+      "default_standard_diagnostic_ids": [
+        "0x7DF",
+        "0x7E0-0x7EF"
+      ],
+      "default_extended_diagnostic_prefixes": [
+        "0x18DAxxxx",
+        "0x18DBxxxx"
+      ]
+    },
+    "candidate_field_profile": {
+      "default": "legacy_coarse_bytes_words_and_stellantis_packed_fields",
+      "default_dlc8_field_count": 39,
+      "targeted_bit_search_streams": [],
+      "targeted_ids_replace_default_profile": true,
+      "bit_numbering": "DBC/cantools sawtooth",
+      "minimum_bits": 1,
+      "maximum_bits": 32,
+      "selected_lengths": [],
+      "selected_lengths_empty_means_full_configured_range": true,
+      "byte_orders": [
+        "little",
+        "big"
+      ],
+      "signedness": [
+        "unsigned",
+        "signed"
+      ],
+      "equivalent_value_geometries_deduplicated": true
+    },
+    "candidate_stream_identity": [
+      "channel",
+      "SFF/EFF namespace",
+      "CAN ID",
+      "DLC",
+      "capture source path and decompressed SHA-256"
+    ],
+    "hard_memory_state_caps": {
+      "active_references": 1000,
+      "pending_wire_links": 1000,
+      "candidate_ids": 1024,
+      "history_frames": 250000,
+      "active_match_states": 100000,
+      "active_window_fields": 100000,
+      "candidate_fields": 30000,
+      "bit_search_streams": 2,
+      "bit_search_fields_per_identifier": 6000,
+      "reported_candidates": 1000,
+      "total_reference_samples": 100000,
+      "fixed_formula_residuals": 100000,
+      "wire_stream_lines": 1500000,
+      "wire_stream_bytes": 1073741824,
+      "capture_files": 256,
+      "total_capture_frames": 300000000,
+      "capture_decompressed_bytes": 68719476736
+    }
+  },
+  "reference": {
+    "module": {
+      "key": "cluster",
+      "name": "Marelli Instrument Panel Cluster (IPC)",
+      "bus": "c-can",
+      "txid_hex": "18DA60F1",
+      "rxid_hex": "18DAF160",
+      "addressing_mode": "normal_29bits"
+    },
+    "capture_channel": "can0",
+    "did": "1000",
+    "requested_field": "auto",
+    "resolved_field": {
+      "kind": "byte",
+      "offset": 0,
+      "width_bytes": 1,
+      "byte_order": null,
+      "signed": false
+    },
+    "sample_count": 5,
+    "global_candump_linkage": {
+      "required": true,
+      "linked_sample_count": 5,
+      "verified_sample_count": 5,
+      "verification_fields": [
+        "raw_line_sequence",
+        "timestamp_epoch_us",
+        "channel",
+        "SFF/EFF namespace",
+        "can_id",
+        "can_data_hex"
+      ]
+    },
+    "timestamp_coverage": {
+      "first_epoch_us": 1000000,
+      "last_epoch_us": 5000000
+    },
+    "observed_polling_cadence": {
+      "interval_count": 4,
+      "minimum_interval_ms": 1000.0,
+      "mean_interval_ms": 1000.0,
+      "maximum_interval_ms": 1000.0,
+      "reference_timestamp_source": "exact kernel/candump-observed diagnostic wire response on the declared capture channel",
+      "csv_sample_holding_used": false
+    },
+    "source": {
+      "path": "tests/fixtures/can_workbench/cluster_wire.jsonl",
+      "compression": "none",
+      "decompressed_stream_sha256": "dfeb016e930be5ba77376275c627dd9476071195c8ef7779522f6338e7f8c007",
+      "decompressed_bytes_read": 1710,
+      "line_count": 5,
+      "frame_count": 5,
+      "blank_line_count": 0,
+      "first_timestamp_epoch_us": 1000000,
+      "last_timestamp_epoch_us": 5000000
+    }
+  },
+  "capture": {
+    "provenance_limits": {
+      "manifest_validated": false,
+      "loss_accounting_validated": false,
+      "campaign_summary_validated": false,
+      "warning": "This report exact-links selected DID rows to raw frames but does not independently validate manifest chunk accounting, socket drops, or clean campaign finalization; review the completed campaign summary separately."
+    },
+    "sources": [
+      {
+        "path": "tests/fixtures/can_workbench/correlation-source.candump",
+        "compression": "none",
+        "decompressed_stream_sha256": "b7f59877a85664126c525ac242d5c63df34961717860fa440615db470c5f35e4",
+        "decompressed_bytes_read": 295,
+        "line_count": 10,
+        "frame_count": 10,
+        "blank_line_count": 0,
+        "first_timestamp_epoch_us": 1000000,
+        "last_timestamp_epoch_us": 5010000
+      }
+    ],
+    "decompressed_bytes_read": 295,
+    "total_frames": 10,
+    "eligible_candidate_frames": 5,
+    "excluded_extended_frames": 5,
+    "excluded_diagnostic_frames": 0,
+    "empty_payload_frames": 0,
+    "candidate_identifier_count": 1,
+    "candidate_stream_count": 1,
+    "candidate_field_state_count": 1
+  },
+  "ranking": {
+    "reported_candidate_count": 1,
+    "eligible_candidate_maximum_r_squared": 0.9999999999999998,
+    "unreported_or_rejected_field_counts": {
+      "below_minimum_samples": 0,
+      "below_minimum_coverage": 0,
+      "below_minimum_distinct_values": 0,
+      "constant_candidate_or_reference": 0,
+      "eligible_but_omitted_by_top": 0
+    },
+    "order": [
+      "r_squared multiplied by coverage_ratio descending",
+      "r_squared descending",
+      "coverage_ratio descending",
+      "sample_count descending",
+      "CAN ID and field deterministic tie-break"
+    ],
+    "candidates": [
+      {
+        "classification": "candidate_only",
+        "evidence_tier": "exploratory_candidate",
+        "candidate_only": true,
+        "physical_identity_verified": false,
+        "scale_verified": false,
+        "telemetry_promotion_allowed": false,
+        "channel": "can0",
+        "can_id": 291,
+        "can_id_hex": "123",
+        "id_bits": 11,
+        "dlc": 1,
+        "field": {
+          "kind": "byte",
+          "offset": 0,
+          "width_bytes": 1,
+          "byte_order": null,
+          "signed": false
+        },
+        "sample_count": 5,
+        "coverage_ratio": 1.0,
+        "fit_coverage_score": 0.9999999999999998,
+        "variation": {
+          "candidate": {
+            "minimum": 2.0,
+            "maximum": 12.0,
+            "tracked_distinct_count": 5,
+            "distinct_count_is_lower_bound": false
+          },
+          "matched_reference": {
+            "minimum": 9.0,
+            "maximum": 29.0,
+            "tracked_distinct_count": 5,
+            "distinct_count_is_lower_bound": false
+          },
+          "distinct_tracking_cap": 16
+        },
+        "reference_timestamp_coverage": {
+          "first_epoch_us": 1000000,
+          "last_epoch_us": 5000000
+        },
+        "affine_model": {
+          "equation": "reference_raw = scale * candidate_raw + intercept",
+          "scale": 1.9999999999999996,
+          "intercept": 5.000000000000005,
+          "rmse_reference_raw": 1.066240299940009e-07
+        },
+        "correlation": {
+          "pearson_r": 0.9999999999999999,
+          "r_squared": 0.9999999999999998
+        },
+        "timing": {
+          "match_mode": "nearest",
+          "contributing_frame_count": 5,
+          "mean_contributing_frames_per_sample": 1.0,
+          "minimum_contributing_frames_per_sample": 1,
+          "maximum_contributing_frames_per_sample": 1,
+          "mean_contributing_abs_delta_ms": 10.0,
+          "maximum_contributing_abs_delta_ms": 10.0
+        },
+        "rank": 1
+      }
+    ]
+  },
+  "fixture_note": "Synthetic output from the existing correlator using adjacent correlation-source.candump and cluster_wire.jsonl. Separate from the precision/gap plotting fixture. No vehicle observations."
+}

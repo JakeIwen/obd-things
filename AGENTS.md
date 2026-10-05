@@ -155,6 +155,13 @@ misleading split between deployed files and their authoritative source.
 
 ## Data locations (imposed 2026-07-08; do not resurrect `dumps/` directories)
 
+The offline CAN report CLI is `tools/can_workbench_report.py`; start with
+`tools/can_workbench/README.md` for its manifest, pinned adapter contracts, and
+verification record. It generates self-contained HTML plus JSON under this
+checkout's `tmp/can_workbench/`, using saved inputs only. Field selections remain
+investigation-local and do not replace the bus map or verified signal catalogue.
+No dashboard/service integration or live CAN access is part of this component.
+
 All machine-written output goes under `tmp/`, which is gitignored wholesale. Nothing a tool writes is
 committed in place.
 
