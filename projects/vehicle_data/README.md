@@ -2058,6 +2058,14 @@ unreachable, but notification state is left unchanged so an undelivered low or
 recovery edge is not consumed. `--no-notify` likewise samples/logs without
 mutating alert state.
 
+Since 2026-10-04 the monitor first reads `/v1/status` and skips the tick (exit 0,
+no CSV row, alert state untouched) when `vehicle_state.running` is true: the
+broker already records running voltage passively. Unknown or unreachable status
+keeps the old behaviour. The broker's Unix API serves one request at a time, so a
+parked wake-assisted read occupies it for several seconds; the drive recorder's
+idle wait therefore uses a 20 s status timeout (in-interval checks keep 2 s), which
+removed the two-hourly "broker status unavailable … TimeoutError" lines.
+
 The broker also retains one explicit engine-off baseline without transmitting.
 After a qualified running epoch ends with exact helper restoration, it observes
 the ordinary passive voltage tail for 30 seconds and atomically saves the newest

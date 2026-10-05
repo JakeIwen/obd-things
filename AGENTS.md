@@ -16,8 +16,7 @@ when that file is absent.
 ## Start every task here
 
 1. Read `git status` and preserve all existing work. A dirty worktree may be an in-progress handoff,
-   not disposable output. As of the Claude-to-Codex transition, the bus-wake refactor and TPMS drive
-   tooling are uncommitted; inspect the current status/diff rather than assuming this note is current.
+   not disposable output; inspect the current status/diff rather than assuming a clean tree.
 2. Read the root `README.md` for hardware topology, safety boundaries, data conventions, and the
    research-first workflow.
 3. Read `docs/bus-map.md` before any CAN reverse-engineering. It is the master map for physical bus
@@ -67,6 +66,22 @@ PCM. The helper's `--enable-oil-life` broker handshake protects rolling
 deployments. See the vehicle-data README and the September 22 gear/oil-life
 finding for validation, test and deployment evidence; do not inject the
 manual 82% support-check result as a new live observation.
+
+## Code layout after the 2026-09/10 refactor
+
+Zero-behaviour refactor waves (audit items #1–#8; deployed and validated on four drives) moved
+code without changing behaviour. Old import paths remain as shims, so existing imports keep working.
+
+- `projects/vehicle_data/historian.py` → facade over `history/`; `early_warning.py` → shim over
+  `warning_engine/`; `api.py` → shim over `api_server.py`/`api_client.py`; broker status and
+  helper-event logic live in `status_view.py`, `vehicle_state.py`, `helper_events.py`.
+- Shared helpers: `lib/candump_io.py`, `lib/capture_pipeline.py` (passive capture engine),
+  `lib/broadcast_signals.py` (fixed broadcast decodes and frame IDs), `lib/reports.py`,
+  `lib/cli_gates.py`, `lib/uds_session.py`, `lib/diagnostic_preflight.py`, `lib/timeutil.py`.
+- For future refactors, run the old-tree/new-tree output scripts in `tests/*_oracle.py`
+  (capture pipeline, broker status/events, active-route effects, advisory lifecycle) and
+  `tools/warning_replay.py` against an exported history. `lib/uds.py`, the safety core and the
+  protected DDL (`history/schema.py::_create_schema`) were deliberately left unchanged.
 
 ## MacBook-managed `~/scripts` tree
 
