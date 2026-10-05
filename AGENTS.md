@@ -78,9 +78,12 @@ code without changing behaviour. Old import paths remain as shims, so existing i
 - Shared helpers: `lib/candump_io.py`, `lib/capture_pipeline.py` (passive capture engine),
   `lib/broadcast_signals.py` (fixed broadcast decodes and frame IDs), `lib/reports.py`,
   `lib/cli_gates.py`, `lib/uds_session.py`, `lib/diagnostic_preflight.py`, `lib/timeutil.py`.
-- For future refactors, run the old-tree/new-tree output scripts in `tests/*_oracle.py`
-  (capture pipeline, broker status/events, active-route effects, advisory lifecycle) and
-  `tools/warning_replay.py` against an exported history. `lib/uds.py`, the safety core and the
+- For future refactors, run the old-tree/new-tree output scripts in `tests/*_oracle.py`:
+  - `tests/gate_oracle.py` records every `--execute`/`--confirm-*` path of 16 tools (882 runs,
+    CAN/ADB/process boundaries replaced by a sentinel); compare two runs with `--compare OLD NEW`.
+  - The others cover the capture pipeline, broker status/events, active-route effects and the
+    advisory lifecycle.
+  - Use `tools/warning_replay.py` against an exported history for evaluator changes. `lib/uds.py`, the safety core and the
   protected DDL (`history/schema.py::_create_schema`) were deliberately left unchanged.
 
 ## MacBook-managed `~/scripts` tree
