@@ -854,19 +854,13 @@ class QueryMixin:
             input_buckets_complete=len(rows) <= 128,
         )
 
-    def metric_series(
-        self,
-        metric: str,
+    @staticmethod
+    def _metric_series_bucket_seconds(
         *,
-        end: datetime | str | None = None,
-        window_seconds: int = 24 * 60 * 60,
-        bucket_seconds: int | None = None,
-        max_points: int = 288,
-        regime: str | None = None,
-        trip_id: int | None = None,
-    ) -> dict[str, object]:
-        """Return bounded downsampled points; never raw one-hertz rows."""
-
+        window_seconds: int,
+        bucket_seconds: int | None,
+        max_points: int,
+    ) -> int:
         if (
             not isinstance(window_seconds, int)
             or isinstance(window_seconds, bool)
@@ -887,44 +881,41 @@ class QueryMixin:
         effective_bucket = max(minimum_bucket, bucket_seconds or minimum_bucket)
         if math.ceil(window_seconds / effective_bucket) > max_points:
             effective_bucket = minimum_bucket
-        end_dt = datetime.now(timezone.utc) if end is None else _utc_datetime(end, "end")
-        end_us = _to_us(end_dt)
-        start_us = end_us - window_seconds * MICROSECONDS
-        width_us = effective_bucket * MICROSECONDS
-        rollup_status = self.refresh_rollups(through=end_dt)
-        with self._lock:
-            cursor_text = self._meta_locked(
-                f"rollup_through_us:{self.config.rollup_seconds}"
-            )
-            cursor_us = int(cursor_text) if cursor_text is not None else None
-            use_rollups = (
-                cursor_us is not None
-                and effective_bucket >= self.config.rollup_seconds
-            )
-            parts: list[str] = []
-            args: list[object] = []
-            if use_rollups:
-                rollup_end = min(end_us, cursor_us)
-                if rollup_end > start_us:
-                    clauses = [
-                        "metric=?",
-                        "bucket_seconds=?",
-                        "bucket_us>=?",
-                        "bucket_us<?",
-                    ]
-                    rollup_args: list[object] = [
-                        metric,
-                        self.config.rollup_seconds,
-                        start_us,
-                        rollup_end,
-                    ]
-                    if regime is not None:
-                        clauses.append("regime=?")
-                        rollup_args.append(regime)
-                    if trip_id is not None:
-                        clauses.append("trip_key=?")
-                        rollup_args.append(trip_id)
-                    parts.append(
+        return effective_bucket
+
+    def _append_metric_series_rollup_part_locked(
+        self,
+        parts: list[str],
+        args: list[object],
+        *,
+        metric: str,
+        start_us: int,
+        end_us: int,
+        cursor_us: int,
+        regime: str | None,
+        trip_id: int | None,
+    ) -> None:
+        rollup_end = min(end_us, cursor_us)
+        if rollup_end > start_us:
+            clauses = [
+                "metric=?",
+                "bucket_seconds=?",
+                "bucket_us>=?",
+                "bucket_us<?",
+            ]
+            rollup_args: list[object] = [
+                metric,
+                self.config.rollup_seconds,
+                start_us,
+                rollup_end,
+            ]
+            if regime is not None:
+                clauses.append("regime=?")
+                rollup_args.append(regime)
+            if trip_id is not None:
+                clauses.append("trip_key=?")
+                rollup_args.append(trip_id)
+            parts.append(
                         f"""
                         SELECT 'rollup' AS basis,bucket_us AS point_us,
                                sample_count,mean * sample_count AS weighted_sum,
@@ -934,22 +925,35 @@ class QueryMixin:
                         WHERE {' AND '.join(clauses)}
                         """
                     )
-                    args.extend(rollup_args)
+            args.extend(rollup_args)
 
-            raw_start = (
-                max(start_us, cursor_us)
-                if use_rollups and cursor_us is not None
-                else start_us
-            )
-            if raw_start <= end_us:
-                clauses = [
-                    "sample.metric=?",
-                    "sample.captured_us>=?",
-                    "sample.captured_us<=?",
-                    "sample.freshness='fresh'",
-                    "sample.value_kind='number'",
-                    "sample.observed_us IS NOT NULL",
-                    """
+    @staticmethod
+    def _append_metric_series_raw_part_locked(
+        parts: list[str],
+        args: list[object],
+        *,
+        metric: str,
+        start_us: int,
+        end_us: int,
+        cursor_us: int | None,
+        use_rollups: bool,
+        regime: str | None,
+        trip_id: int | None,
+    ) -> None:
+        raw_start = (
+            max(start_us, cursor_us)
+            if use_rollups and cursor_us is not None
+            else start_us
+        )
+        if raw_start <= end_us:
+            clauses = [
+                "sample.metric=?",
+                "sample.captured_us>=?",
+                "sample.captured_us<=?",
+                "sample.freshness='fresh'",
+                "sample.value_kind='number'",
+                "sample.observed_us IS NOT NULL",
+                """
                     NOT EXISTS (
                         SELECT 1 FROM metric_samples AS earlier
                         WHERE earlier.metric=sample.metric
@@ -969,15 +973,15 @@ class QueryMixin:
                           )
                     )
                     """,
-                ]
-                raw_args: list[object] = [metric, raw_start, end_us]
-                if regime is not None:
-                    clauses.append("sample.regime=?")
-                    raw_args.append(regime)
-                if trip_id is not None:
-                    clauses.append("sample.trip_id=?")
-                    raw_args.append(trip_id)
-                parts.append(
+            ]
+            raw_args: list[object] = [metric, raw_start, end_us]
+            if regime is not None:
+                clauses.append("sample.regime=?")
+                raw_args.append(regime)
+            if trip_id is not None:
+                clauses.append("sample.trip_id=?")
+                raw_args.append(trip_id)
+            parts.append(
                     f"""
                     SELECT 'raw' AS basis,sample.captured_us AS point_us,
                            1 AS sample_count,sample.value_num AS weighted_sum,
@@ -991,31 +995,21 @@ class QueryMixin:
                     WHERE {' AND '.join(clauses)}
                     """
                 )
-                args.extend(raw_args)
-            rows = self._conn.execute(
-                f"""
-                WITH parts AS ({' UNION ALL '.join(parts)})
-                SELECT ((point_us-?)/?) AS bucket_index,
-                       sum(sample_count) AS sample_count,
-                       min(minimum) AS minimum,max(maximum) AS maximum,
-                       sum(weighted_sum) / sum(sample_count) AS mean,
-                       min(first_us) AS first_us,max(last_us) AS last_us,
-                       group_concat(DISTINCT unit) AS units,
-                       group_concat(DISTINCT quality) AS qualities,
-                       group_concat(DISTINCT source) AS sources,
-                       count(DISTINCT provenance) AS provenance_count,
-                       min(provenance) AS provenance_min,
-                       max(provenance) AS provenance_max,
-                       sum(CASE WHEN basis='rollup' THEN 1 ELSE 0 END)
-                           AS rollup_parts,
-                       sum(CASE WHEN basis='raw' THEN sample_count ELSE 0 END)
-                           AS raw_parts
-                FROM parts
-                GROUP BY bucket_index ORDER BY bucket_index
-                LIMIT ?
-                """,
-                [*args, start_us, width_us, max_points],
-            ).fetchall()
+            args.extend(raw_args)
+
+    @staticmethod
+    def _metric_series_payload(
+        rows: Sequence[sqlite3.Row],
+        *,
+        metric: str,
+        start_us: int,
+        end_dt: datetime,
+        window_seconds: int,
+        effective_bucket: int,
+        width_us: int,
+        max_points: int,
+        rollup_status: dict[str, object],
+    ) -> dict[str, object]:
         points = [
             {
                 "at": _iso_from_us(start_us + int(row["bucket_index"]) * width_us),
@@ -1068,6 +1062,99 @@ class QueryMixin:
                 > 1
             ),
         }
+
+    def metric_series(
+        self,
+        metric: str,
+        *,
+        end: datetime | str | None = None,
+        window_seconds: int = 24 * 60 * 60,
+        bucket_seconds: int | None = None,
+        max_points: int = 288,
+        regime: str | None = None,
+        trip_id: int | None = None,
+    ) -> dict[str, object]:
+        """Return bounded downsampled points; never raw one-hertz rows."""
+
+        effective_bucket = self._metric_series_bucket_seconds(
+            window_seconds=window_seconds,
+            bucket_seconds=bucket_seconds,
+            max_points=max_points,
+        )
+        end_dt = datetime.now(timezone.utc) if end is None else _utc_datetime(end, "end")
+        end_us = _to_us(end_dt)
+        start_us = end_us - window_seconds * MICROSECONDS
+        width_us = effective_bucket * MICROSECONDS
+        rollup_status = self.refresh_rollups(through=end_dt)
+        with self._lock:
+            cursor_text = self._meta_locked(
+                f"rollup_through_us:{self.config.rollup_seconds}"
+            )
+            cursor_us = int(cursor_text) if cursor_text is not None else None
+            use_rollups = (
+                cursor_us is not None
+                and effective_bucket >= self.config.rollup_seconds
+            )
+            parts: list[str] = []
+            args: list[object] = []
+            if use_rollups:
+                self._append_metric_series_rollup_part_locked(
+                    parts,
+                    args,
+                    metric=metric,
+                    start_us=start_us,
+                    end_us=end_us,
+                    cursor_us=cursor_us,
+                    regime=regime,
+                    trip_id=trip_id,
+                )
+
+            self._append_metric_series_raw_part_locked(
+                parts,
+                args,
+                metric=metric,
+                start_us=start_us,
+                end_us=end_us,
+                cursor_us=cursor_us,
+                use_rollups=use_rollups,
+                regime=regime,
+                trip_id=trip_id,
+            )
+            rows = self._conn.execute(
+                f"""
+                WITH parts AS ({' UNION ALL '.join(parts)})
+                SELECT ((point_us-?)/?) AS bucket_index,
+                       sum(sample_count) AS sample_count,
+                       min(minimum) AS minimum,max(maximum) AS maximum,
+                       sum(weighted_sum) / sum(sample_count) AS mean,
+                       min(first_us) AS first_us,max(last_us) AS last_us,
+                       group_concat(DISTINCT unit) AS units,
+                       group_concat(DISTINCT quality) AS qualities,
+                       group_concat(DISTINCT source) AS sources,
+                       count(DISTINCT provenance) AS provenance_count,
+                       min(provenance) AS provenance_min,
+                       max(provenance) AS provenance_max,
+                       sum(CASE WHEN basis='rollup' THEN 1 ELSE 0 END)
+                           AS rollup_parts,
+                       sum(CASE WHEN basis='raw' THEN sample_count ELSE 0 END)
+                           AS raw_parts
+                FROM parts
+                GROUP BY bucket_index ORDER BY bucket_index
+                LIMIT ?
+                """,
+                [*args, start_us, width_us, max_points],
+            ).fetchall()
+        return self._metric_series_payload(
+            rows,
+            metric=metric,
+            start_us=start_us,
+            end_dt=end_dt,
+            window_seconds=window_seconds,
+            effective_bucket=effective_bucket,
+            width_us=width_us,
+            max_points=max_points,
+            rollup_status=rollup_status,
+        )
 
     def list_trips(self, *, limit: int = 20) -> list[dict[str, object]]:
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
