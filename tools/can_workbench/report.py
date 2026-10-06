@@ -100,9 +100,7 @@ def render(bundle):
     return template.replace("__BUNDLE_JSON__", encoded)
 
 
-def build(manifest, output, *, capture_names=(), field_names=(), window=None,
-          max_points=2000, gap=1.0, command=None):
-    started = time.monotonic()
+def _prepare_build(manifest, output, max_points, gap, window):
     manifest, output = Path(manifest).resolve(strict=True), Path(output).absolute()
     if output.exists() or output.is_symlink():
         a.reject(f"output already exists; choose a new directory: {output}")
@@ -114,47 +112,85 @@ def build(manifest, output, *, capture_names=(), field_names=(), window=None,
         window = tuple(a.stamp(str(v)) for v in window)
         if len(window) != 2 or not 0 <= window[0] <= window[1]:
             a.reject("window must be ordered, nonnegative elapsed seconds")
+    return manifest, output, window
+
+
+def _resolve_manifest_path(manifest, path):
+    return (manifest.parent / path).resolve(strict=True)
+
+
+def _load_manifest_inputs(manifest, capture_names, field_names):
     manifest_identity = a.identity(manifest)
     config = a.load_json(manifest)
     validate_manifest(config)
-    captures = [c for c in config["captures"] if not capture_names or c["name"] in capture_names]
-    fields = [f for f in config["fields"] if not field_names or f["name"] in field_names]
-    for names, selected, label in ((capture_names, captures, "capture"), (field_names, fields, "field")):
+    captures = [c for c in config["captures"]
+                if not capture_names or c["name"] in capture_names]
+    fields = [f for f in config["fields"]
+              if not field_names or f["name"] in field_names]
+    selections = ((capture_names, captures, "capture"),
+                  (field_names, fields, "field"))
+    for names, selected, label in selections:
         if not selected or set(names) - {s["name"] for s in selected}:
             a.reject(f"unknown or empty {label} selection")
-    def resolve(path):
-        return (manifest.parent / path).resolve(strict=True)
-    input_paths = [manifest] + [resolve(c["path"]) for c in captures]
-    input_paths += [resolve(p) for key in ("references", "analyses") for p in config.get(key, [])]
+    input_paths = [manifest] + [
+        _resolve_manifest_path(manifest, c["path"]) for c in captures
+    ]
+    input_paths += [
+        _resolve_manifest_path(manifest, p)
+        for key in ("references", "analyses") for p in config.get(key, [])
+    ]
     before = {str(p): a.identity(p) for p in input_paths}
     if before[str(manifest)] != manifest_identity:
         a.reject("manifest changed while loading")
-    capture_results = [a.capture_report(resolve(c["path"]), c, fields, window=window,
-                                       max_points=max_points, gap=gap) for c in captures]
+    return config, captures, fields, before
+
+
+def _analyze_inputs(manifest, config, captures, fields, before, window,
+                    max_points, gap):
+    capture_results = [
+        a.capture_report(_resolve_manifest_path(manifest, c["path"]), c, fields,
+                         window=window, max_points=max_points, gap=gap)
+        for c in captures
+    ]
     for result in capture_results:
-        result["source"] = before[str(resolve(result["path"]))]
+        source_path = _resolve_manifest_path(manifest, result["path"])
+        result["source"] = before[str(source_path)]
     references, excluded_references = [], []
     for path in config.get("references", []):
-        data = a.load_json(resolve(path))
-        if not isinstance(data, dict) or type(data.get("schema_version")) is not int or data["schema_version"] != 1:
+        data = a.load_json(_resolve_manifest_path(manifest, path))
+        if (not isinstance(data, dict)
+                or type(data.get("schema_version")) is not int
+                or data["schema_version"] != 1):
             a.reject("unsupported reference schema_version")
-        if data.get("capture") not in {c["name"] for c in config["captures"]} or data.get("field") not in {f["name"] for f in config["fields"]}:
+        if (data.get("capture") not in {c["name"] for c in config["captures"]}
+                or data.get("field") not in {f["name"] for f in config["fields"]}):
             a.reject("reference names an unknown capture or field")
-        if data.get("capture") not in {c["name"] for c in captures} or data.get("field") not in {f["name"] for f in fields}:
+        if (data.get("capture") not in {c["name"] for c in captures}
+                or data.get("field") not in {f["name"] for f in fields}):
             excluded_references.append(path)
         else:
-            references.append(reference_report(resolve(path), capture_results, fields, window, max_points, gap))
-    analyses = [a.import_analysis(resolve(p)) for p in config.get("analyses", [])]
-    comparisons = [a.compare_captures(capture_results[0], c) for c in capture_results[1:]]
+            references.append(reference_report(
+                _resolve_manifest_path(manifest, path), capture_results, fields,
+                window, max_points, gap))
+    analyses = [a.import_analysis(_resolve_manifest_path(manifest, p))
+                for p in config.get("analyses", [])]
+    comparisons = [a.compare_captures(capture_results[0], c)
+                   for c in capture_results[1:]]
     for path, expected in before.items():
         if a.identity(path) != expected:
             a.reject(f"input changed during generation: {path}")
+    return capture_results, references, excluded_references, analyses, comparisons
+
+
+def _assemble_bundle(config, before, capture_results, fields, references,
+                     excluded_references, analyses, comparisons, capture_names,
+                     field_names, window, max_points, gap, command, started):
     source_files = [Path(__file__), Path(__file__).with_name("adapter.py"),
                     Path(__file__).with_name("viewer.html"), REPO / "tools/can_workbench_report.py",
                     REPO / "lib/candump_io.py", REPO / "lib/signal_fields.py",
                     REPO / "lib/reports.py", REPO / "tools/can_capture_summary.py",
                     REPO / "tools/can_capture_compare.py"]
-    bundle = {
+    return {
         "schema": "obd-things.can-workbench", "schema_version": VERSION,
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "title": config["title"], "summary": config["summary"],
@@ -180,6 +216,9 @@ def build(manifest, output, *, capture_names=(), field_names=(), window=None,
         "excluded_references": excluded_references, "analyses": analyses,
         "comparisons": comparisons, "generation_seconds": time.monotonic() - started,
     }
+
+
+def _publish_bundle(output, bundle):
     # Stage the entire pair beside the final directory. Never overwrite a prior
     # successful report (nonempty directories are protected by atomic rename).
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -195,6 +234,24 @@ def build(manifest, output, *, capture_names=(), field_names=(), window=None,
     finally:
         if stage.exists():
             shutil.rmtree(stage)
+
+
+def build(manifest, output, *, capture_names=(), field_names=(), window=None,
+          max_points=2000, gap=1.0, command=None):
+    started = time.monotonic()
+    manifest, output, window = _prepare_build(
+        manifest, output, max_points, gap, window)
+    config, captures, fields, before = _load_manifest_inputs(
+        manifest, capture_names, field_names)
+    capture_results, references, excluded_references, analyses, comparisons = (
+        _analyze_inputs(
+            manifest, config, captures, fields, before, window, max_points, gap)
+    )
+    bundle = _assemble_bundle(
+        config, before, capture_results, fields, references,
+        excluded_references, analyses, comparisons, capture_names, field_names,
+        window, max_points, gap, command, started)
+    _publish_bundle(output, bundle)
     return output
 
 
