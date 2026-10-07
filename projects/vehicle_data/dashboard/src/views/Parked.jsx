@@ -28,11 +28,11 @@ import {
   tileModel,
   engineRunning,
   minuteClock,
-  warningModel,
   orderedIds,
   isHidden,
 } from "../app/derive.js";
 import { manualRefresh } from "../app/runtime.js";
+import { warningCards } from "../app/warningCards.js";
 import { selectView } from "../app/App.jsx";
 import { Card } from "../components/Card.jsx";
 import { TireGrid } from "../components/TireGrid.jsx";
@@ -236,7 +236,7 @@ function LinkCard({ title, badge, children, go }) {
 const warnGate = H.createStableGate();
 const warnings = computed(() => {
   void minuteClock.value;
-  return warnGate(H.warningsSummary(warningModel.value, store.summary.history.value, Date.now()));
+  return warnGate(H.warningsSummary(warningCards.value, store.summary.history.value, Date.now()));
 });
 
 function WarningsCard() {

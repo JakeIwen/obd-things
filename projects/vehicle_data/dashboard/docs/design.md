@@ -191,6 +191,15 @@ History and System view models live in `src/views/history.helpers.js` and
 `src/views/view.helpers.js`. `historySystem.helpers.js` only re-exports the
 original API for existing consumers and the unchanged Node regressions.
 
+Warning structure/headings live in `src/warningContext.js`; the always-loaded
+`derive.warningContext` (also exported as `warningModel`) contains only the
+structural fields needed by bands, badges and the alert strip. Full card prose,
+system notes and delivery fields are provided by the shared lazy
+`src/app/warningCards.js` computed used by Health and Parked. The structural
+projection has a differential regression against the full card formatter.
+System vehicle-state presentation is in `src/views/systemVehicle.helpers.js`,
+re-exported by `system.helpers.js` for existing consumers.
+
 `npm test` expands `test/*.test.mjs` explicitly so Node 20 and Node 22 discover
 all tests. For a differential refactor check against another checkout, run
 `node tools/refactor-oracle.mjs OLD_CHECKOUT NEW_CHECKOUT TRACE_JSON` from the

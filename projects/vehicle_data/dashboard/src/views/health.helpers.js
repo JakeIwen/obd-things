@@ -3,14 +3,14 @@
  * no Preact, no store, no DOM. Health.jsx wraps each builder in a module-level `computed`, so the
  * work here runs only when its summary slice changes (60 s cadence at most), never per second.
  *
- * - `warningsView()`  early-warning rows from `derive.warningModel` (warnings.js cards).
+ * - `warningsView()`  early-warning rows from the lazy `warnings.js` cards.
  * - `systemNotesView()` adapter, bus and data-quality notes plus recently recovered sample filters.
  * - `codesView()`     the saved diagnostic-code list from `summary.dtcs` (group counts, truncation,
  *                     the one-month split of confirmed history, module coverage).
  */
 
 import { fmtTime, fmtInt, parseDate } from "../format.js";
-import { OPEN_STATES, metricLabel } from "../warnings.js";
+import { OPEN_STATES, metricLabel } from "../warningContext.js";
 
 /** Health cards in default order; ids are what the customiser stores. */
 export const HEALTH_CARDS = Object.freeze([
@@ -194,7 +194,7 @@ export function checksNote(health) {
 
 /**
  * Early-warning card model.
- * @param {object} model derive.warningModel value (warnings.buildWarningCards output)
+ * @param {object} model warnings.buildWarningCards output
  * @param {object|null} health `summary.health` slice (null until the first summary arrives)
  * @returns {{status: 'loading'|'unavailable'|'ok', emptyText: string|null, checks: string|null,
  *   badge: {text: string, tone: string}|null, open: Array, unconfirmed: Array,
@@ -277,7 +277,7 @@ export function recoveredRow(incident, index, nowMs) {
 
 /**
  * System-notes card model.
- * @param {object} model derive.warningModel value
+ * @param {object} model warnings.buildWarningCards output
  * @param {object|null} health `summary.health` slice
  * @param {number} nowMs wall clock for time labels
  */

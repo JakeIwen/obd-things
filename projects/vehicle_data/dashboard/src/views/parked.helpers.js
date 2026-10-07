@@ -13,7 +13,7 @@
  */
 
 import { fmtFixed, fmtTime, fmtDuration, parseDate, DASH } from "../format.js";
-import { OPEN_STATES } from "../warnings.js";
+import { OPEN_STATES } from "../warningContext.js";
 import {
   lastOilChangeSummary,
   milesSinceService,

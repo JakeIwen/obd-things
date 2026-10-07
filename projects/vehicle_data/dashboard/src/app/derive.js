@@ -14,7 +14,7 @@ import * as store from "../store.js";
 import { settings, saveSettings, autoView } from "../settings.js";
 import { fmtValue, fmtFixed, fmtUnit, fmtTime, fmtDuration, DASH, THOUSANDS } from "../format.js";
 import { evaluateBand } from "../bands.js";
-import { buildWarningCards, OPEN_STATES, PAIR_RULE, metricLabel } from "../warnings.js";
+import { buildWarningContext, OPEN_STATES, PAIR_RULE, metricLabel } from "../warningContext.js";
 
 /** Monotonic now; wrapped so tests can stub it. */
 export const monoNow = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
@@ -66,13 +66,15 @@ export const engineRunning = computed(() => {
   return v.confidence === "verified" && v.state === "running";
 });
 
-/** Health cards built from the summary (60 s cadence). */
-export const warningModel = computed(() => buildWarningCards(store.summary.health.value, Date.now()));
+/** Warning state needed by always-loaded bands, badges and top-bar alerts. */
+export const warningContext = computed(() => buildWarningContext(store.summary.health.value));
+// Compatibility for pure consumers that inspect the structural warning list.
+export const warningModel = warningContext;
 
 /** Open vehicle warnings per metric name → 'red' | 'amber'. */
 export const metricAlertColour = computed(() => {
   const map = new Map();
-  const cards = warningModel.value.warnings;
+  const cards = warningContext.value.warnings;
   for (let i = 0; i < cards.length; i += 1) {
     const card = cards[i];
     // Numerals change colour only for a confirmed warning (or critical), never a watch.
@@ -87,7 +89,7 @@ export const metricAlertColour = computed(() => {
 
 /** True while a charging-failure style warning is open. */
 const chargingFailure = computed(() => {
-  const cards = warningModel.value.warnings;
+  const cards = warningContext.value.warnings;
   for (let i = 0; i < cards.length; i += 1) {
     const rule = cards[i].rule || "";
     if (rule.indexOf("charging") >= 0 && OPEN_STATES.has(cards[i].state)) return true;
@@ -384,7 +386,7 @@ export const alertStrip = computed(() => {
       episodeId: null,
     });
   }
-  const cards = warningModel.value.warnings;
+  const cards = warningContext.value.warnings;
   for (let i = 0; i < cards.length; i += 1) {
     const card = cards[i];
     // Only confirmed tier-0/1 warnings and criticals reach the top bar; notices and system items do not.
@@ -406,8 +408,8 @@ export const alertStrip = computed(() => {
 
 /** Badge count for the Health tab. */
 export const healthBadge = computed(() => {
-  const counts = warningModel.value.counts;
-  const open = warningModel.value.warnings.filter((c) => OPEN_STATES.has(c.state)).length;
+  const counts = warningContext.value.counts;
+  const open = warningContext.value.warnings.filter((c) => OPEN_STATES.has(c.state)).length;
   return { count: open, red: counts.critical > 0 };
 });
 

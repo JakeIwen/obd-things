@@ -11,7 +11,8 @@
 import { computed } from "@preact/signals";
 import { useState } from "preact/hooks";
 import * as store from "../store.js";
-import { warningModel, isHidden, orderedIds, dayClock } from "../app/derive.js";
+import { isHidden, orderedIds, dayClock } from "../app/derive.js";
+import { warningCards } from "../app/warningCards.js";
 import { openEvent, openChat } from "../app/dialogs.js";
 import { Card, Empty } from "../components/Card.jsx";
 import ServiceCard from "../components/ServiceCard.jsx";
@@ -20,12 +21,12 @@ import * as H from "./health.helpers.js";
 
 export const HEALTH_CARDS = H.HEALTH_CARDS;
 
-const warningsVm = computed(() => H.warningsView(warningModel.value, store.summary.health.value));
+const warningsVm = computed(() => H.warningsView(warningCards.value, store.summary.health.value));
 // Time labels here are "4:25 pm / yesterday 4:25 pm" plus a one-month cut-off, so the models also
 // follow the local day: the DTC slice can stay unchanged for weeks on a tablet left on overnight.
 const notesVm = computed(() => {
   void dayClock.value;
-  return H.systemNotesView(warningModel.value, store.summary.health.value, Date.now());
+  return H.systemNotesView(warningCards.value, store.summary.health.value, Date.now());
 });
 const scanEnabled = computed(() => store.web.value.dtc_jobs_enabled === true);
 const chatEnabled = computed(() => store.web.value.warning_chat_enabled === true);

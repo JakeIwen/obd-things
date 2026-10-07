@@ -48,6 +48,9 @@ class and provides the `/v1` JSON API. The MacBook-managed Van Dashboard reads
 `http://192.168.6.103:8765/v1/snapshot`, so `/v1` routes must keep working. Start with
 `projects/vehicle_data/README.md` section "Telemetry dashboard" and
 `projects/vehicle_data/dashboard/docs/design.md`.
+Dashboard warning state/headings live in `dashboard/src/warningContext.js`;
+formatted cards are lazy in `dashboard/src/app/warningCards.js`, and System
+vehicle-state text lives in `dashboard/src/views/systemVehicle.helpers.js`.
 
 Broker pure internals are split into `projects/vehicle_data/status_view.py`
 (snapshot-only status builders), `vehicle_state.py` (passive evidence conclusions),

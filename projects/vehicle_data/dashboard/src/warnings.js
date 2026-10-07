@@ -22,54 +22,45 @@
  */
 
 import { fmtValue, fmtUnit, fmtFixed, fmtTime, fmtDurationLong, capFirst, fmtInt, decimalsFor, parseDate } from "./format.js";
+import {
+  TIERS,
+  OPEN_STATES,
+  INCONCLUSIVE_STATES,
+  SYSTEM_CATEGORIES,
+  SYSTEM_RULE_PREFIXES,
+  FORBIDDEN_WORDS,
+  METRIC_LABELS,
+  PAIR_RULE,
+  num,
+  str,
+  obj,
+  list,
+  metricLabel,
+  wheelLabel,
+  isSystemItem,
+  tierOf,
+  collectWarningEntries as collectEntries,
+  warningCategory as categoryOf,
+  episodeId,
+  firstIso,
+  cardOrder,
+  WARNING_TITLES,
+} from "./warningContext.js";
 
-/** Card tiers in display order. */
-export const TIERS = ["critical", "warning", "notice", "system"];
-
-/** Assessment states that count as an open finding. */
-export const OPEN_STATES = new Set(["watch", "warning"]);
-
-/** Assessment states in which an open episode is unconfirmed right now. */
-export const INCONCLUSIVE_STATES = new Set([
-  "unavailable",
-  "not_applicable",
-  "insufficient_history",
-  "rejected",
-  "suppressed",
-]);
-
-/** Categories routed to system notes rather than warnings. */
-export const SYSTEM_CATEGORIES = new Set(["can_infrastructure", "telemetry_quality", "data_quality", "system"]);
-
-/** Rule-id prefixes routed to system notes whatever their category. */
-export const SYSTEM_RULE_PREFIXES = ["can_", "usb_", "telemetry"];
-
-/** Words that must never reach a card line (checked by tests). */
-export const FORBIDDEN_WORDS = /\b(regime|mad|deviation|persisten\w*|episode|advisory|unavailable)\b/i;
-
-/** Plain-English subject per metric. */
-export const METRIC_LABELS = Object.freeze({
-  "engine.oil_pressure": "Oil pressure",
-  "engine.coolant_temperature": "Coolant",
-  "transmission.oil_temperature": "Transmission oil",
-  "engine.vvt_oil_temperature": "Oil temperature",
-  "battery.voltage": "Battery",
-  "generator.field_duty": "Alternator",
-  "engine.rpm": "Engine speed",
-  "vehicle.speed": "Speed",
-  "vehicle.odometer": "Odometer",
-  "engine.crankshaft_power": "Power",
-  "engine.crankshaft_torque": "Torque",
-  "engine.target_crankshaft_torque": "Torque request",
-  "transmission.output_speed": "Output shaft",
-  "transmission.turbine_speed": "Turbine",
-  "tire.pressure.fl": "FL tire",
-  "tire.pressure.fr": "FR tire",
-  "tire.pressure.rl": "RL tire",
-  "tire.pressure.rr": "RR tire",
-});
-
-const WHEELS = Object.freeze({ fl: "FL", fr: "FR", rl: "RL", rr: "RR" });
+export {
+  TIERS,
+  OPEN_STATES,
+  INCONCLUSIVE_STATES,
+  SYSTEM_CATEGORIES,
+  SYSTEM_RULE_PREFIXES,
+  FORBIDDEN_WORDS,
+  METRIC_LABELS,
+  PAIR_RULE,
+  metricLabel,
+  wheelLabel,
+  isSystemItem,
+  tierOf,
+};
 
 const ROLE_NAMES = Object.freeze({ "c-can": "C-CAN", "b-can": "B-CAN", "can-ch": "CAN-CH", spare: "Spare CAN" });
 
@@ -80,91 +71,9 @@ const ROLE_PAUSED = Object.freeze({
   spare: "spare adapter idle",
 });
 
-/**
- * Subject label for a metric: `RR tire`, `Coolant`, or a humanised fallback
- * built from the last path segment (`vvt_oil_temperature` -> `Vvt oil temperature`).
- * @param {string|null|undefined} name metric name
- * @returns {string}
- */
-export function metricLabel(name) {
-  if (typeof name !== "string" || name.length === 0) return "Reading";
-  const known = METRIC_LABELS[name];
-  if (known) return known;
-  const tail = name.slice(name.lastIndexOf(".") + 1).replace(/_/g, " ");
-  return tail.charAt(0).toUpperCase() + tail.slice(1);
-}
-
-/**
- * Wheel code from a tire rule or metric name (`tire_pressure_rr_relative_low`
- * or `tire.pressure.rr` -> `RR`), or `null`.
- * @param {string|null|undefined} ruleOrMetric
- * @returns {string|null}
- */
-export function wheelLabel(ruleOrMetric) {
-  if (typeof ruleOrMetric !== "string") return null;
-  const m = /(?:^|[._])tire[._]pressure[._]([fr][lr])(?:$|[._])/.exec(ruleOrMetric);
-  return m ? WHEELS[m[1]] || null : null;
-}
-
-/**
- * Whether an assessment, episode or incident belongs on the System notes
- * card rather than the warning list.
- * @param {{category?: string, rule?: string}|null|undefined} item
- * @returns {boolean}
- */
-export function isSystemItem(item) {
-  if (!item || typeof item !== "object") return false;
-  if (typeof item.category === "string" && SYSTEM_CATEGORIES.has(item.category)) return true;
-  const rule = typeof item.rule === "string" ? item.rule : "";
-  for (let i = 0; i < SYSTEM_RULE_PREFIXES.length; i += 1) {
-    if (rule.indexOf(SYSTEM_RULE_PREFIXES[i]) === 0) return true;
-  }
-  return false;
-}
-
-/**
- * Card tier for an item: `system` for system items; otherwise the backend's
- * numeric `tier` (2 -> notice) or `severity` (`critical`, `notice`/`info` ->
- * notice, anything else -> warning).
- * @param {{category?: string, rule?: string, tier?: number|string, severity?: string}|null|undefined} item
- * @returns {'critical'|'warning'|'notice'|'system'}
- */
-export function tierOf(item) {
-  if (isSystemItem(item)) return "system";
-  const severity = item && typeof item.severity === "string" ? item.severity : "";
-  const tier = item ? item.tier : undefined;
-  if (tier === 3 || tier === "system") return "system";
-  if (tier === 2 || tier === "notice") return "notice";
-  if (severity === "critical") return "critical";
-  if (severity === "notice" || severity === "info") return "notice";
-  return "warning";
-}
-
-function num(v) {
-  return typeof v === "number" && isFinite(v) ? v : null;
-}
-
 function roundTo(value, decimals) {
   const scale = Math.pow(10, decimals);
   return Math.round(value * scale) / scale;
-}
-
-function str(v) {
-  return typeof v === "string" && v.length > 0 ? v : null;
-}
-
-function obj(v) {
-  return v && typeof v === "object" && !Array.isArray(v) ? v : null;
-}
-
-function list(v) {
-  if (!Array.isArray(v)) return [];
-  const out = [];
-  for (let i = 0; i < v.length; i += 1) {
-    const item = obj(v[i]);
-    if (item && item.omitted_items === undefined) out.push(item);
-  }
-  return out;
 }
 
 function hasPrefix(rule, prefix) {
@@ -198,10 +107,6 @@ function customComparison(f) {
   return (op === "below" ? "under" : "over") + " your " + t + " limit";
 }
 
-/** Same-axle tire asymmetry rules (`tire_pressure_pair_asymmetry`). */
-export const PAIR_RULE = /^tire_pressure_pair_/;
-
-
 /**
  * Sentence templates keyed by rule prefix. The longest matching prefix wins;
  * `default` covers unknown rules. Each template gives the subject, an
@@ -229,9 +134,7 @@ export const TEMPLATES = Object.freeze({
         ? "Stop the engine when safe."
         : "Check the oil level at the next stop.";
     },
-    title: function (f) {
-      return f.absolute || f.severity === "critical" ? "Oil pressure critical" : "Oil pressure low";
-    },
+    title: WARNING_TITLES.oil,
   },
   engine_coolant_: {
     subject: function () {
@@ -241,9 +144,7 @@ export const TEMPLATES = Object.freeze({
     action: function () {
       return "Ease off and watch the gauge.";
     },
-    title: function () {
-      return "Coolant hot";
-    },
+    title: WARNING_TITLES.coolant,
   },
   transmission_oil_: {
     subject: function () {
@@ -253,9 +154,7 @@ export const TEMPLATES = Object.freeze({
     action: function () {
       return "Ease off and let it cool.";
     },
-    title: function () {
-      return "Transmission hot";
-    },
+    title: WARNING_TITLES.transmission,
   },
   battery_voltage_: {
     subject: function () {
@@ -270,9 +169,7 @@ export const TEMPLATES = Object.freeze({
     action: function (f) {
       return f.parked ? "Start the engine or charge it soon." : "Limit accessories and check charging.";
     },
-    title: function (f) {
-      return f.parked ? "Battery low" : "Charging low";
-    },
+    title: WARNING_TITLES.battery,
   },
   tire_pressure_: {
     subject: function (f) {
@@ -283,12 +180,7 @@ export const TEMPLATES = Object.freeze({
     action: function () {
       return "Check pressure at the next stop.";
     },
-    title: function (f) {
-      // A pair rule's metric is only its lower wheel: use "Rear tires uneven".
-      if (f.title && PAIR_RULE.test(f.rule)) return f.title;
-      const wheel = wheelLabel(f.rule) || wheelLabel(f.metric);
-      return (wheel ? wheel + " tire " : "Tire ") + (f.direction === "high" ? "high" : "low");
-    },
+    title: WARNING_TITLES.tire,
   },
   custom_: {
     subject: function (f) {
@@ -298,9 +190,7 @@ export const TEMPLATES = Object.freeze({
     action: function () {
       return "Check it at the next stop.";
     },
-    title: function (f) {
-      return f.customTitle || f.label + (f.direction === "high" ? " high" : " low");
-    },
+    title: WARNING_TITLES.custom,
   },
   default: {
     subject: function (f) {
@@ -312,9 +202,7 @@ export const TEMPLATES = Object.freeze({
     action: function () {
       return "Check at the next stop.";
     },
-    title: function (f) {
-      return f.label + (f.direction === "high" ? " high" : " low");
-    },
+    title: WARNING_TITLES.fallback,
   },
 });
 
@@ -636,64 +524,6 @@ function makeCard(fields) {
     value: fields.value === undefined ? null : fields.value,
     unit: fields.unit === undefined ? null : fields.unit,
   };
-}
-
-function episodeId(episode) {
-  const id = episode ? episode.id : null;
-  return typeof id === "number" && isFinite(id) ? id : null;
-}
-
-function firstIso(values) {
-  for (let i = 0; i < values.length; i += 1) {
-    if (parseDate(values[i]) !== null) return values[i];
-  }
-  return null;
-}
-
-const TIER_RANK = { critical: 0, warning: 1, notice: 2, system: 3 };
-const STATE_RANK = { warning: 0, watch: 1 };
-
-function cardOrder(a, b) {
-  const t = (TIER_RANK[a.tier] || 0) - (TIER_RANK[b.tier] || 0);
-  if (t !== 0) return t;
-  const sa = STATE_RANK[a.state] === undefined ? 2 : STATE_RANK[a.state];
-  const sb = STATE_RANK[b.state] === undefined ? 2 : STATE_RANK[b.state];
-  if (sa !== sb) return sa - sb;
-  const da = parseDate(a.since);
-  const db = parseDate(b.since);
-  return (db ? db.getTime() : 0) - (da ? da.getTime() : 0);
-}
-
-function collectEntries(health) {
-  const byRule = new Map();
-  const assessments = list(health.assessments).concat(list(health.active));
-  for (let i = 0; i < assessments.length; i += 1) {
-    const a = assessments[i];
-    const rule = str(a.rule);
-    if (!rule || !OPEN_STATES.has(a.state) || byRule.has(rule)) continue;
-    byRule.set(rule, { rule: rule, assessment: a, episode: null });
-  }
-  const episodes = obj(health.episodes);
-  const active = episodes ? list(episodes.active) : [];
-  for (let i = 0; i < active.length; i += 1) {
-    const ep = active[i];
-    const rule = str(ep.rule);
-    if (!rule) continue;
-    if (str(ep.status) && ep.status !== "open" && ep.status !== "active") continue;
-    const entry = byRule.get(rule);
-    if (entry) {
-      entry.episode = ep;
-      continue;
-    }
-    const latest = obj(ep.latest_assessment);
-    byRule.set(rule, { rule: rule, assessment: latest, episode: ep, first: obj(ep.first_assessment) });
-  }
-  return Array.from(byRule.values());
-}
-
-function categoryOf(entry) {
-  const a = entry.assessment;
-  return (a && str(a.category)) || (entry.episode && str(entry.episode.category)) || null;
 }
 
 function buildVehicleCard(entry, nowDate) {

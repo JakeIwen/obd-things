@@ -11,7 +11,7 @@
  */
 
 import { DASH, fmtValue, fmtFixed, fmtUnit, fmtTime, fmtClock, fmtDuration, fmtDelta, decimalsFor, parseDate } from "../format.js";
-import { metricLabel } from "../warnings.js";
+import { metricLabel } from "../warningContext.js";
 
 import { DOCS, obj, arr, num, str, wallMs, when, humanize, capital, plural, clip, createStableGate, agoText } from "./view.helpers.js";
 
