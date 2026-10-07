@@ -16,6 +16,7 @@ from .models import (
     _MetricDefinition,
     _MetricSample,
 )
+from .trip_activity import activity_basis, classify_regime
 from .validation import (
     _bool_db,
     _is_placeholder_interface_role,
@@ -73,79 +74,6 @@ class IngestMixin(ValidationMixin):
                         captured_us,
                     ),
                 )
-
-    def _activity_basis(
-        self,
-        samples: Mapping[str, _MetricSample],
-        vehicle: Mapping[str, object],
-    ) -> tuple[bool, str]:
-        rpm = samples.get("engine.rpm")
-        if (
-            rpm is not None
-            and rpm.freshness == "fresh"
-            and rpm.value_num is not None
-            and rpm.value_num >= self.config.running_rpm_threshold
-        ):
-            return True, "fresh_engine_rpm"
-        speed = samples.get("vehicle.speed")
-        if (
-            speed is not None
-            and speed.freshness == "fresh"
-            and speed.value_num is not None
-            and speed.value_num > self.config.moving_speed_threshold_mph
-        ):
-            return True, "fresh_vehicle_speed"
-        if (
-            vehicle.get("running") == 1
-            and isinstance(vehicle.get("age_ms"), int)
-            and vehicle["age_ms"] <= self.config.vehicle_state_max_age_seconds * 1000
-            and vehicle.get("confidence") not in (None, "unknown", "stale")
-        ):
-            return True, "fresh_vehicle_running_state"
-        return False, "no_fresh_running_or_moving_evidence"
-
-    def _classify_regime(self, samples: Mapping[str, _MetricSample]) -> str:
-        def numeric(name: str) -> float | None:
-            sample = samples.get(name)
-            if sample is None or sample.freshness != "fresh":
-                return None
-            return sample.value_num
-
-        rpm = numeric("engine.rpm")
-        speed = numeric("vehicle.speed")
-        coolant = numeric("engine.coolant_temperature")
-        if rpm is None:
-            engine = "engine_unknown"
-            rpm_band = "rpm_unknown"
-        elif rpm < self.config.running_rpm_threshold:
-            engine, rpm_band = "engine_off", "rpm_off"
-        elif rpm < 1_000:
-            engine, rpm_band = "engine_running", "rpm_idle"
-        elif rpm < 2_200:
-            engine, rpm_band = "engine_running", "rpm_low"
-        elif rpm < 3_500:
-            engine, rpm_band = "engine_running", "rpm_mid"
-        else:
-            engine, rpm_band = "engine_running", "rpm_high"
-        if speed is None:
-            motion = "speed_unknown"
-        elif speed <= self.config.moving_speed_threshold_mph:
-            motion = "stationary"
-        elif speed < 35:
-            motion = "urban"
-        elif speed < 65:
-            motion = "road"
-        else:
-            motion = "highway"
-        if coolant is None:
-            thermal = "thermal_unknown"
-        elif coolant < 160:
-            thermal = "cold"
-        elif coolant <= 220:
-            thermal = "warm"
-        else:
-            thermal = "hot"
-        return ":".join((engine, motion, rpm_band, thermal))
 
     def _resolve_trip(
         self,
@@ -376,6 +304,25 @@ class IngestMixin(ValidationMixin):
                 snapshot_id=snapshot_id,
             )
 
+    def _snapshot_activity(
+        self,
+        samples: Mapping[str, _MetricSample],
+        vehicle: Mapping[str, object],
+    ) -> tuple[bool, str, str]:
+        active, basis = activity_basis(
+            samples,
+            vehicle,
+            running_rpm_threshold=self.config.running_rpm_threshold,
+            moving_speed_threshold_mph=self.config.moving_speed_threshold_mph,
+            vehicle_state_max_age_seconds=self.config.vehicle_state_max_age_seconds,
+        )
+        regime = classify_regime(
+            samples,
+            running_rpm_threshold=self.config.running_rpm_threshold,
+            moving_speed_threshold_mph=self.config.moving_speed_threshold_mph,
+        )
+        return active, basis, regime
+
     def ingest_snapshot(
         self,
         snapshot: Mapping[str, object],
@@ -397,8 +344,9 @@ class IngestMixin(ValidationMixin):
         definitions = self._parse_catalog(snapshot)
         samples, gap_states = self._parse_snapshot_metrics(snapshot, definitions)
         vehicle = self._vehicle_fields(snapshot)
-        active, activity_basis = self._activity_basis(samples, vehicle)
-        regime = self._classify_regime(samples)
+        active, activity_basis_value, regime = self._snapshot_activity(
+            samples, vehicle
+        )
 
         with self._lock, self._conn:
             duplicate = self._conn.execute(
@@ -423,7 +371,7 @@ class IngestMixin(ValidationMixin):
                 sequence=sequence,
                 definitions=definitions,
                 active=active,
-                activity_basis=activity_basis,
+                activity_basis=activity_basis_value,
                 vehicle=vehicle,
                 regime=regime,
             )

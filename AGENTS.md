@@ -76,6 +76,7 @@ code without changing behaviour. Old import paths remain as shims, so existing i
 - `projects/vehicle_data/historian.py` → facade over `history/`; `early_warning.py` → shim over
   `warning_engine/`; `api.py` → shim over `api_server.py`/`api_client.py`; broker status and
   helper-event logic live in `status_view.py`, `vehicle_state.py`, `helper_events.py`.
+  Historian activity/regime decisions live in `history/trip_activity.py`.
 - Shared helpers: `lib/candump_io.py`, `lib/capture_pipeline.py` (passive capture engine),
   `lib/broadcast_signals.py` (fixed broadcast decodes and frame IDs), `lib/reports.py`,
   `lib/cli_gates.py`, `lib/uds_session.py`, `lib/diagnostic_preflight.py`, `lib/timeutil.py`.

@@ -32,7 +32,7 @@ from projects.vehicle_data.metrics import METRICS, MetricDefinition
 from projects.vehicle_data.receive_watch import ReceiveSilenceWatch
 from projects.vehicle_data.wake_state import wake_state_conflicts
 from projects.vehicle_data.vehicle_state import (
-    accepts_state_observation, needs_current_authority, passive_vehicle_state,
+    accepts_state_observation, initial_vehicle_state, needs_current_authority, passive_vehicle_state,
     preservation_authority, qualified_engine_state,
 )
 from projects.vehicle_data.status_view import (
@@ -758,17 +758,7 @@ class TelemetryBroker:
         self._active_data_quality: dict[str, dict[str, object]] = {}
         self._recent_data_quality: list[dict[str, object]] = []
         self._vehicle_state_observed_monotonic: float | None = None
-        self._vehicle_state: dict[str, object] = {
-            "state": "unknown",
-            "running": None,
-            "confidence": "unknown",
-            "basis": "no_passive_observation",
-            "detail": (
-                "the broker has not observed enough passive bus evidence to "
-                "describe vehicle state"
-            ),
-            "observed_at": None,
-        }
+        self._vehicle_state: dict[str, object] = initial_vehicle_state()
 
     def list_metrics(self) -> dict[str, object]:
         return {

@@ -9,6 +9,21 @@ from __future__ import annotations
 from projects.vehicle_data.models import AcquisitionResult
 
 
+def initial_vehicle_state() -> dict[str, object]:
+    """No passive observation is evidence of neither running nor stopped."""
+    return {
+        "state": "unknown",
+        "running": None,
+        "confidence": "unknown",
+        "basis": "no_passive_observation",
+        "detail": (
+            "the broker has not observed enough passive bus evidence to "
+            "describe vehicle state"
+        ),
+        "observed_at": None,
+    }
+
+
 def accepts_state_observation(result: AcquisitionResult) -> bool:
     if result.metric not in ("battery.voltage", "engine.rpm", "vehicle.ignition_on"):
         return False
