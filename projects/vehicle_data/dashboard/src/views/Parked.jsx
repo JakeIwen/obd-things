@@ -37,6 +37,7 @@ import { selectView } from "../app/App.jsx";
 import { Card } from "../components/Card.jsx";
 import { TireGrid } from "../components/TireGrid.jsx";
 import { ServiceCard } from "../components/ServiceCard.jsx";
+import { isUnavailableCanState } from "../canAvailability.js";
 import * as H from "./parked.helpers.js";
 
 export const PARKED_CARDS = H.PARKED_CARDS;
@@ -46,6 +47,7 @@ export const PARKED_CARDS = H.PARKED_CARDS;
 
 const volt = tileModel("battery.voltage"); // default decimals: 2 (format.js)
 const voltBand = band("battery.voltage");
+const canUnavailable = computed(() => isUnavailableCanState(store.vehicle.value));
 
 const readingCls = computed(() => H.readingClass(volt.kind.value, voltBand.value.state));
 
@@ -72,6 +74,7 @@ const batterySub = computed(() => {
       kind: volt.kind.value,
       observedAt: shownAt.value,
       running: engineRunning.value,
+      unavailable: canUnavailable.value,
       engineOff: status ? status.engine_off_voltage : null,
       recentTrip: history && Array.isArray(history.recent_trips) ? history.recent_trips[0] : null,
       currentTrip: history ? history.current_trip : null,
@@ -83,14 +86,14 @@ const batterySub = computed(() => {
 const batteryExtra = computed(() => {
   void minuteClock.value;
   const status = store.summary.statusFull.value;
-  return H.engineOffLine(status ? status.engine_off_voltage : null, shownAt.value, Date.now());
+  return H.engineOffLine(status ? status.engine_off_voltage : null, shownAt.value, Date.now(), canUnavailable.value);
 });
 
 const trendGate = H.createStableGate();
 const trend = computed(() => trendGate(H.trendModel(store.summary.history.value)));
 
 const acquireGate = H.createStableGate();
-const acquire = computed(() => acquireGate(H.acquireAvailability(store.web.value)));
+const acquire = computed(() => acquireGate(H.acquireAvailability(store.web.value, store.vehicle.value)));
 
 function BatteryTrend() {
   const t = trend.value;
@@ -185,7 +188,13 @@ function TiresCard() {
 const tripGate = H.createStableGate();
 const trip = computed(() => {
   void minuteClock.value;
-  return tripGate(H.lastTripModel(store.summary.history.value, { running: engineRunning.value, now: Date.now() }));
+  return tripGate(
+    H.lastTripModel(store.summary.history.value, {
+      running: engineRunning.value,
+      unavailable: canUnavailable.value,
+      now: Date.now(),
+    }),
+  );
 });
 
 function TripCard() {

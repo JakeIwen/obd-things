@@ -1,0 +1,7 @@
+{
+  "state": "unknown",
+  "confidence": "unavailable",
+  "missing_basis": "can_adapter_missing",
+  "recovering_basis": "can_adapter_recovering",
+  "initializing_basis": "can_adapter_initializing"
+}

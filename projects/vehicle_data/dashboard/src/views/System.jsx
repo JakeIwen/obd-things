@@ -35,6 +35,7 @@ import { PARKED_CARDS } from "./parked.helpers.js";
 import { HEALTH_CARDS } from "./health.helpers.js";
 import * as H from "./system.helpers.js";
 import { historyCards as buildHistoryCards } from "./history.helpers.js";
+import { isUnavailableCanState } from "../canAvailability.js";
 
 export const SYSTEM_CARDS = H.SYSTEM_CARDS;
 
@@ -83,17 +84,20 @@ const vehicleText = computed(() => {
   void minuteClock.value;
   const v = store.vehicle.value;
   return H.vehicleLine(
-    { state: v.state, basis: v.basis },
+    v,
     { running: engineRunning.value, lastDriveAt: lastDriveAt.value, nowMs: Date.now() },
   );
 });
-const vehicleBasis = computed(() => H.basisText(store.vehicle.value.basis));
+const vehicleBasis = computed(() => {
+  const v = store.vehicle.value;
+  return isUnavailableCanState(v) ? H.canAvailabilityLine(v) : H.basisText(v.basis);
+});
 const vehicleConfidence = computed(() => H.confidenceText(store.vehicle.value.confidence));
 const vehicleDetail = computed(() => store.vehicle.value.detail || "No note from the broker.");
 
 function VehicleCard() {
   return (
-    <Card title="Vehicle state">
+    <Card title="Vehicle state" tone={isUnavailableCanState(store.vehicle.value) ? "amber" : ""}>
       <p class="system-line">{vehicleText}</p>
       <LazyDisclosure
         summary="How the broker decided"

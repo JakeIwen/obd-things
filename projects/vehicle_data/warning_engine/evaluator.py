@@ -7,6 +7,7 @@ from typing import Callable, Mapping, Sequence
 
 from lib.timeutil import finite_number as _numeric
 from projects.vehicle_data import warning_context
+from projects.vehicle_data.can_availability import CAN_UNAVAILABLE_ENGINE
 from projects.vehicle_data.historian import BaselineStats, TelemetryHistorian, project_regime
 
 from .absolute import AbsoluteMixin
@@ -26,6 +27,7 @@ from .rules import (
 )
 from .samples import (
     _Tick,
+    _engine,
     _observed_us,
     _rule_lookbacks,
     _to_us,
@@ -82,6 +84,11 @@ class EarlyWarningEvaluator(
             tick.latest[metric] = self.historian.latest_sample(
                 metric, at=tick.at, fresh_only=True
             )
+            sample = tick.latest[metric]
+            # A coverage gap is neither parked nor running evidence. Retain its
+            # measurements in history, but hold warnings as unavailable.
+            if sample is not None and _engine(sample) == CAN_UNAVAILABLE_ENGINE:
+                tick.latest[metric] = None
         return tick.latest[metric]
 
     def _series(

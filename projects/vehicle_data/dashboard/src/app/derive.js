@@ -15,6 +15,7 @@ import { settings, saveSettings, autoView } from "../settings.js";
 import { fmtValue, fmtFixed, fmtUnit, fmtTime, fmtDuration, DASH, THOUSANDS } from "../format.js";
 import { evaluateBand } from "../bands.js";
 import { buildWarningContext, OPEN_STATES, PAIR_RULE, metricLabel } from "../warningContext.js";
+import { canAvailabilityLabel, canAvailabilityDetail, isUnavailableCanState } from "../canAvailability.js";
 
 /** Monotonic now; wrapped so tests can stub it. */
 export const monoNow = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
@@ -60,9 +61,10 @@ export function liveValue(name) {
 
 /** True when the engine is verifiably running (live RPM ≥ 400 or verified running state). */
 export const engineRunning = computed(() => {
+  const v = store.vehicle.value;
+  if (isUnavailableCanState(v)) return false;
   const rpm = liveValue("engine.rpm").value;
   if (rpm !== null) return rpm >= 400;
-  const v = store.vehicle.value;
   return v.confidence === "verified" && v.state === "running";
 });
 
@@ -135,6 +137,10 @@ export function startEngineTracking() {
   engineTrackingStarted = true;
   let previous = null;
   effect(() => {
+    if (isUnavailableCanState(store.vehicle.value)) {
+      runningSinceMono.value = null;
+      return;
+    }
     const rpm = liveValue("engine.rpm").value;
     const running = rpm !== null && rpm >= 400;
     if (running) {
@@ -185,6 +191,7 @@ const isIgnitionOn = (v) => v === true;
  * tablet clock offset cannot move the 30 s boundary.
  */
 export const voltageMode = computed(() => {
+  if (isUnavailableCanState(store.vehicle.value)) return "neutral";
   const since = runningSinceMono.value;
   if (since !== null) {
     if (monoNow() - since >= 10000) return "running";
@@ -315,13 +322,21 @@ export const dayClock = computed(() => {
   return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
 });
 
+/** Top-bar surface tone: warnings win; CAN loss is an amber degraded state. */
+export function topBarClass(alert, vehicle) {
+  if (alert) return "topbar" + (alert.tier === "critical" ? " topbar--red" : " topbar--amber");
+  return "topbar" + (isUnavailableCanState(vehicle) ? " topbar--amber" : "");
+}
+
 /** Vehicle state word for the top bar ("Running", "Asleep", ...). */
 export const vehicleHead = computed(() => {
   const conn = store.connection.value.state;
   if (conn === "connecting") return "Connecting";
   if (conn === "unavailable") return "Broker unavailable";
+  const v = store.vehicle.value;
+  if (isUnavailableCanState(v)) return canAvailabilityLabel(v);
   if (engineRunning.value) return "Running";
-  switch (store.vehicle.value.state) {
+  switch (v.state) {
     case "ignition_on":
       return "Ignition on";
     case "awake":
@@ -339,6 +354,8 @@ export const vehicleHead = computed(() => {
 export const vehicleTail = computed(() => {
   const conn = store.connection.value.state;
   if (conn === "unavailable") return "showing last data";
+  const v = store.vehicle.value;
+  if (isUnavailableCanState(v)) return canAvailabilityDetail(v);
   const history = store.summary.history.value;
   void minuteClock.value;
   if (engineRunning.value) {
@@ -346,7 +363,7 @@ export const vehicleTail = computed(() => {
     const since = trip ? Date.parse(trip.started_at) : NaN;
     return isFinite(since) ? fmtDuration((Date.now() - since) / 1000) : "";
   }
-  if (store.vehicle.value.state === "ignition_on") return "engine off";
+  if (v.state === "ignition_on") return "engine off";
   const recent = history && Array.isArray(history.recent_trips) ? history.recent_trips[0] : null;
   return recent && recent.ended_at ? "last drive " + fmtTime(recent.ended_at) : "";
 });
@@ -373,6 +390,7 @@ function shortValue(metric, value, unit) {
  * attention. The top bar never changes height.
  */
 export const alertStrip = computed(() => {
+  if (isUnavailableCanState(store.vehicle.value)) return null;
   const items = [];
   for (let i = 0; i < LIVE_ALERTS.length; i += 1) {
     const rule = LIVE_ALERTS[i];
@@ -427,7 +445,7 @@ export function evaluateAutoView() {
   void store.clock.value;
   const next = autoView({
     rpmLive: liveValue("engine.rpm").value !== null,
-    vehicle: { state: v.state, confidence: v.confidence, ageMs: store.ageMs(v, monoNow()) },
+    vehicle: { state: v.state, confidence: v.confidence, basis: v.basis, ageMs: store.ageMs(v, monoNow()) },
     current: activeView.peek(),
   });
   if (next !== activeView.peek()) activeView.value = next;

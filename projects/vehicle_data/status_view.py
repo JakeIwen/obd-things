@@ -10,6 +10,8 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 
+from projects.vehicle_data.can_availability import vehicle_hardware_unavailable
+
 
 @dataclass(frozen=True)
 class StatusSnapshot:
@@ -44,6 +46,8 @@ def build_vehicle_state(
     ignition_stale: bool, rpm_stale: bool,
 ) -> dict[str, object]:
     vehicle_state = dict(snapshot.vehicle_state)
+    if vehicle_hardware_unavailable(vehicle_state):
+        return vehicle_state
     vehicle_state["age_ms"] = age_ms
     if ignition_stale:
         vehicle_state.update(
@@ -302,7 +306,10 @@ def build_status(
         "interface": interface_view.interface,
         "current_owner": interface_view.current_owner,
         "last_readings": last_readings,
-        "active_acquisition_permitted": interface_view.active_permitted,
+        "active_acquisition_permitted": (
+            interface_view.active_permitted
+            and not vehicle_hardware_unavailable(vehicle_state)
+        ),
         "collector": snapshot.collector,
         "display_receiver": display_receiver,
         "history_recorder": snapshot.history_recorder,

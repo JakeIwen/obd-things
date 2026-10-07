@@ -10,6 +10,7 @@
  */
 
 import { signal } from "@preact/signals-core";
+import { isUnavailableCanState } from "./canAvailability.js";
 
 /** localStorage key for v2 settings. */
 export const STORAGE_KEY = "van-telemetry.v2.settings";
@@ -132,7 +133,9 @@ export const settings = signal(loadSettings());
  * Design 5.2 / rule 16 automatic view selection.
  * Drive when `engine.rpm` is live and driver-qualified, or the vehicle state
  * is verified, fresh (≤ 5 s) and moving/running/ignition_on; Parked when the
- * state is asleep/parked and fresh (any confidence); otherwise `current`.
+ * state is asleep/parked and fresh (any confidence); CAN adapter unavailability
+ * keeps the current view even if a surviving role still has fresh RPM; otherwise
+ * `current`.
  * @param {{rpmLive:boolean, vehicle:{state:string, confidence:string, ageMs:number|null}, current:string}} input
  * @returns {'drive'|'parked'|string}
  */
@@ -145,6 +148,7 @@ export function autoView(input) {
     Number.isFinite(v.ageMs) &&
     v.ageMs >= 0 &&
     v.ageMs <= MAX_AUTOMATIC_STATE_AGE_MS;
+  if (isUnavailableCanState(v)) return current;
   if (rpmLive) return "drive";
   if (v.confidence === "verified" && fresh && DRIVING_STATES.has(v.state)) return "drive";
   if (fresh && PARKED_STATES.has(v.state)) return "parked";

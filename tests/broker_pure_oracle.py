@@ -58,6 +58,7 @@ from projects.vehicle_data import broker as broker_module, models
 from projects.vehicle_data.broker import TelemetryBroker
 from projects.vehicle_data.models import AcquisitionResult, failure, success
 from tests.test_vehicle_data import FakeAcquirer, FakeClock
+from tests.can_missing_cases import availability_status_cases
 
 
 NOW = datetime(2026, 9, 30, 12, tzinfo=timezone.utc)
@@ -186,6 +187,7 @@ def status_cases():
             if rejected:
                 b._active_data_quality["test"] = incident
         yield f"temperature/{rejected}", configure
+    yield from availability_status_cases()
 
 
 def status_rows():

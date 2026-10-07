@@ -16,7 +16,7 @@ import { metricLabel } from "../warningContext.js";
 import { DOCS, obj, arr, num, str, wallMs, when, humanize, capital, plural, clip, createStableGate, agoText } from "./view.helpers.js";
 
 export { DOCS, wallMs, humanize, createStableGate, agoText };
-export { BASIS_TEXT, CONFIDENCE_TEXT, basisText, confidenceText, vehicleLine } from "./systemVehicle.helpers.js";
+export { BASIS_TEXT, CONFIDENCE_TEXT, basisText, confidenceText, vehicleLine, canAvailabilityLine } from "./systemVehicle.helpers.js";
 
 // ---------------------------------------------------------------------------
 // System: cards

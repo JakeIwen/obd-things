@@ -310,6 +310,30 @@ test("vehicle line: one line with the plain evidence and the last drive", () => 
   assert.equal(H.vehicleLine(null, {}), "Unknown · not reported");
 });
 
+test("vehicle line: CAN adapter loss outranks running RPM and keeps the state unknown", () => {
+  const base = { state: "unknown", running: null, confidence: "unavailable" };
+  assert.equal(
+    H.vehicleLine({ ...base, basis: "can_adapter_missing", detail: "CAN adapters missing; all required roles are absent" }, { running: true }),
+    "CAN adapters missing · vehicle state unknown",
+  );
+  assert.equal(
+    H.vehicleLine({ ...base, basis: "can_adapter_missing", detail: "B-CAN adapter missing; one role is absent" }, { running: true }),
+    "B-CAN adapter missing · vehicle state unknown",
+  );
+  assert.equal(
+    H.vehicleLine({ ...base, basis: "can_adapter_missing", detail: "C-CAN / B-CAN adapters missing; two roles are absent" }, { running: true }),
+    "C-CAN / B-CAN adapters missing · vehicle state unknown",
+  );
+  assert.equal(
+    H.vehicleLine({ ...base, basis: "can_adapter_recovering", detail: "CAN adapters returning; awaiting fresh passive vehicle evidence" }, { running: true }),
+    "CAN adapters returning · awaiting fresh passive vehicle evidence",
+  );
+  assert.equal(
+    H.vehicleLine({ ...base, basis: "can_adapter_initializing", detail: "Checking CAN adapters; initial interface discovery is still in progress" }, { running: true }),
+    "Checking CAN adapters · initial interface discovery is still in progress",
+  );
+});
+
 test("vehicle disclosure words: basis and confidence in plain English", () => {
   assert.equal(H.basisText("passive_bus_silence"), "bus silent");
   assert.equal(H.basisText("something_new"), "something new");

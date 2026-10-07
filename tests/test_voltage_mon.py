@@ -4,6 +4,12 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+from projects.vehicle_data.can_availability import (
+    CAN_ADAPTER_INITIALIZING,
+    CAN_ADAPTER_MISSING,
+    CAN_ADAPTER_RECOVERING,
+)
+
 REPO = pathlib.Path(__file__).resolve().parents[1]
 MODULE_PATH = REPO / "projects" / "battery" / "voltage_mon.py"
 if not MODULE_PATH.is_file():
@@ -112,6 +118,7 @@ class SharedAcquireTests(unittest.TestCase):
     def test_unreachable_ntfy_does_not_skip_sampling_or_consume_alert_edge(self):
         with (
             mock.patch.object(voltage_mon.sys, "argv", ["voltage_mon.py"]),
+            mock.patch.object(voltage_mon, "broker_vehicle_state", return_value=None),
             mock.patch.object(voltage_mon, "NTFY_VOLTAGE_URL", "https://ntfy.invalid/topic"),
             mock.patch.object(voltage_mon, "have_connectivity", return_value=False),
             mock.patch.object(voltage_mon, "acquire", return_value=(12.5, "ok")) as acquire,
@@ -134,6 +141,7 @@ class SharedAcquireTests(unittest.TestCase):
                 "argv",
                 ["voltage_mon.py", "--no-notify", "--passive-only"],
             ),
+            mock.patch.object(voltage_mon, "broker_vehicle_state", return_value=None),
             mock.patch.object(voltage_mon, "acquire", return_value=(11.8, "ok")) as acquire,
             mock.patch.object(voltage_mon.bv, "append_csv"),
             mock.patch.object(voltage_mon, "maybe_alert") as maybe_alert,
@@ -150,7 +158,11 @@ class SharedAcquireTests(unittest.TestCase):
     def test_running_vehicle_skips_the_tick_without_sampling(self):
         with (
             mock.patch.object(voltage_mon.sys, "argv", ["voltage_mon.py"]),
-            mock.patch.object(voltage_mon, "vehicle_running", return_value=True),
+            mock.patch.object(
+                voltage_mon,
+                "broker_vehicle_state",
+                return_value={"state": "running", "running": True},
+            ),
             mock.patch.object(voltage_mon, "acquire") as acquire,
             mock.patch.object(voltage_mon.bv, "append_csv") as append_csv,
             mock.patch.object(voltage_mon, "maybe_alert") as maybe_alert,
@@ -165,6 +177,119 @@ class SharedAcquireTests(unittest.TestCase):
         append_csv.assert_not_called()
         maybe_alert.assert_not_called()
         connectivity.assert_not_called()
+
+    def test_generic_unknown_status_keeps_legacy_post_after_one_get(self):
+        acquisition = {
+            "available": True,
+            "value": 12.5,
+            "bus": "b-can",
+            "acquisition": "wake_assisted",
+            "source": "bcan.broadcast.0x46c",
+            "quality": "verified",
+            "detail": "broker result",
+        }
+        client = mock.Mock()
+        client.request.side_effect = (
+            (
+                200,
+                {
+                    "vehicle_state": {
+                        "state": "unknown",
+                        "running": None,
+                        "confidence": "unknown",
+                        "basis": "no_fresh_vehicle_evidence",
+                    }
+                },
+            ),
+            (200, acquisition),
+        )
+        broker_path = SimpleNamespace(
+            exists=lambda: True,
+            is_socket=lambda: True,
+            __str__=lambda _self: "/run/van-telemetry/api.sock",
+        )
+        with (
+            mock.patch.object(
+                voltage_mon.sys, "argv", ["voltage_mon.py", "--no-notify"]
+            ),
+            mock.patch.object(voltage_mon, "BROKER_SOCKET", broker_path),
+            mock.patch.object(
+                voltage_mon, "TelemetryClient", return_value=client
+            ) as client_class,
+            mock.patch.object(voltage_mon.bv, "append_csv") as append_csv,
+            mock.patch.object(voltage_mon.os, "makedirs"),
+            mock.patch("builtins.open", mock.mock_open()),
+            mock.patch.object(voltage_mon.fcntl, "flock"),
+            self.assertRaises(SystemExit) as exited,
+        ):
+            voltage_mon.main()
+
+        self.assertEqual(exited.exception.code, 0)
+        self.assertEqual(
+            client.request.call_args_list,
+            [
+                mock.call("GET", "/v1/status"),
+                mock.call(
+                    "POST",
+                    "/v1/acquisitions/battery.voltage",
+                    {"mode": "wake_if_asleep"},
+                ),
+            ],
+        )
+        self.assertEqual(
+            client_class.call_args_list,
+            [
+                mock.call(str(broker_path), timeout=10.0),
+                mock.call(str(broker_path), timeout=30.0),
+            ],
+        )
+        append_csv.assert_called_once()
+
+    def test_hardware_lifecycle_skips_before_post_notifications_or_csv(self):
+        for basis in (
+            CAN_ADAPTER_MISSING,
+            CAN_ADAPTER_RECOVERING,
+            CAN_ADAPTER_INITIALIZING,
+        ):
+            with self.subTest(basis=basis):
+                client = mock.Mock()
+                client.request.return_value = (
+                    200,
+                    {
+                        "vehicle_state": {
+                            "state": "unknown",
+                            "running": None,
+                            "confidence": "unavailable",
+                            "basis": basis,
+                        }
+                    },
+                )
+                broker_path = SimpleNamespace(
+                    is_socket=lambda: True,
+                    __str__=lambda _self: "/run/van-telemetry/api.sock",
+                )
+                with (
+                    mock.patch.object(voltage_mon.sys, "argv", ["voltage_mon.py"]),
+                    mock.patch.object(voltage_mon, "BROKER_SOCKET", broker_path),
+                    mock.patch.object(
+                        voltage_mon, "TelemetryClient", return_value=client
+                    ) as client_class,
+                    mock.patch.object(voltage_mon.bv, "append_csv") as append_csv,
+                    mock.patch.object(voltage_mon, "maybe_alert") as maybe_alert,
+                    mock.patch.object(voltage_mon, "have_connectivity") as connectivity,
+                    mock.patch.object(voltage_mon.os, "makedirs"),
+                    mock.patch("builtins.open", mock.mock_open()),
+                    mock.patch.object(voltage_mon.fcntl, "flock"),
+                ):
+                    self.assertIsNone(voltage_mon.main())
+
+                client_class.assert_called_once_with(
+                    str(broker_path), timeout=10.0
+                )
+                client.request.assert_called_once_with("GET", "/v1/status")
+                append_csv.assert_not_called()
+                maybe_alert.assert_not_called()
+                connectivity.assert_not_called()
 
 
 class VehicleRunningTests(unittest.TestCase):

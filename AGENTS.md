@@ -55,7 +55,9 @@ vehicle-state text lives in `dashboard/src/views/systemVehicle.helpers.js`.
 Broker pure internals are split into `projects/vehicle_data/status_view.py`
 (snapshot-only status builders), `vehicle_state.py` (passive evidence conclusions),
 `wake_state.py` (pure parked-wake admission), and `helper_events.py`
-(bus-parameterized status-event validation). Locks, clocks,
+(bus-parameterized status-event validation). `can_availability.py` latches
+adapter evidence gaps without probing; `can_availability.json` is its shared
+broker/dashboard vocabulary. Locks, clocks,
 component calls and all helper/CAN lifecycle effects remain in `broker.py`.
 `tests/test_broker_pure.py` pins status bytes and directly tests the bus-specific
 helper contracts. `tests/broker_pure_oracle.py` captures generated helper/state

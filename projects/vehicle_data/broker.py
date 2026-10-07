@@ -30,6 +30,7 @@ from projects.vehicle_data.radar_alignment import (
 )
 from projects.vehicle_data.metrics import METRICS, MetricDefinition
 from projects.vehicle_data.receive_watch import ReceiveSilenceWatch
+from projects.vehicle_data.can_availability import CanAvailability
 from projects.vehicle_data.wake_state import wake_state_conflicts
 from projects.vehicle_data.vehicle_state import (
     accepts_state_observation, initial_vehicle_state, needs_current_authority, passive_vehicle_state,
@@ -649,6 +650,7 @@ class TelemetryBroker:
         self._interface_probe_state = "awaiting_first_probe"
         self._interface_probe_started = self.monotonic()
         self._receive_watch = ReceiveSilenceWatch()
+        self._can_availability = CanAvailability(self._interface_probe_started)
         self._receive_silent_roles: tuple[str, ...] = ()
         self._interface_status: dict[str, object] = {
             "channel": getattr(self.acquirer, "channel", "c-can-unresolved"),
@@ -1981,9 +1983,22 @@ class TelemetryBroker:
                 # state and the next read-only role snapshot retries recovery.
                 pass
         with self._lock:
+            self._can_availability.observe(
+                snapshot, probe_ok=probe_state == "ready", now=self.monotonic(),
+                observed_at=datetime.now(timezone.utc).isoformat(),
+            )
             self._interface_status = snapshot
             self._interface_probe_state = probe_state
             self._receive_silent_roles = silent_roles
+
+    def _vehicle_state_snapshot(self, probe: dict) -> tuple[dict, float | None]:
+        # The caller holds the same snapshot lock for the copy and its clock.
+        return (
+            json.loads(json.dumps(self._can_availability.effective_vehicle_state(
+                self._vehicle_state, probe,
+            ))),
+            self._vehicle_state_observed_monotonic,
+        )
 
     def _status_snapshot(self) -> StatusSnapshot:
         with self._lock:
@@ -2067,8 +2082,7 @@ class TelemetryBroker:
             interface_reconcile = json.loads(
                 json.dumps(self._interface_reconcile)
             )
-            vehicle_state = json.loads(json.dumps(self._vehicle_state))
-            vehicle_observed = self._vehicle_state_observed_monotonic
+            vehicle_state, vehicle_observed = self._vehicle_state_snapshot(interface_probe)
         return StatusSnapshot(
             radar_alignment=radar_alignment,
             interface=interface,
@@ -2212,6 +2226,8 @@ class TelemetryBroker:
             else datetime.now(timezone.utc).isoformat()
         )
         with self._lock:
+            if not self._can_availability.admit_observation(result.observed_monotonic):
+                return
             self._vehicle_state = state
             self._vehicle_state_observed_monotonic = (
                 result.observed_monotonic
@@ -2228,7 +2244,9 @@ class TelemetryBroker:
         with self._lock:
             active_drive = dict(self._active_drive)
             auxiliary_drive = dict(self._auxiliary_drive)
-            vehicle_state = dict(self._vehicle_state)
+            vehicle_state = self._can_availability.vehicle_state(
+                now=now, elapsed_seconds=now - self._interface_probe_started,
+            ) or dict(self._vehicle_state)
             restoration_latched = self._active_drive_restoration_latched
             auxiliary_restoration_latched = self._auxiliary_drive_restoration_latched
             collector_state = self._collector_state

@@ -1,5 +1,6 @@
 /** Pure vehicle-state presentation for the System view. */
 
+import { canAvailabilityLine, isUnavailableCanState } from "../canAvailability.js";
 import { obj, num, str, when, humanize, capital } from "./view.helpers.js";
 
 const STATE_WORDS = Object.freeze({
@@ -63,6 +64,7 @@ export function confidenceText(confidence) {
 export function vehicleLine(vehicle, ctx) {
   const context = ctx || {};
   const value = obj(vehicle) || {};
+  if (isUnavailableCanState(value)) return canAvailabilityLine(value);
   const head = context.running ? "Running" : STATE_WORDS[value.state] || capital(humanize(value.state)) || "Unknown";
   const parts = [head];
   if (!context.running || value.state === "running") parts.push(basisText(value.basis));
@@ -73,3 +75,4 @@ export function vehicleLine(vehicle, ctx) {
   return parts.join(" · ");
 }
 
+export { canAvailabilityLine };

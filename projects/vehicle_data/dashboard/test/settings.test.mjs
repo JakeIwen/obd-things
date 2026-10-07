@@ -178,6 +178,15 @@ test("autoView follows design 5.2 / rule 16", () => {
   const inferred = (state, ageMs) => ({ state, confidence: "inferred", ageMs });
 
   assert.equal(autoView({ rpmLive: true, vehicle: inferred("asleep", 100), current: "history" }), "drive", "live rpm wins");
+  assert.equal(
+    autoView({
+      rpmLive: true,
+      vehicle: { state: "unknown", confidence: "unavailable", basis: "can_adapter_missing", ageMs: 100 },
+      current: "health",
+    }),
+    "health",
+    "CAN loss keeps the current view even with surviving-role RPM",
+  );
   assert.equal(autoView({ rpmLive: false, vehicle: verified("running", 4999), current: "history" }), "drive");
   assert.equal(autoView({ rpmLive: false, vehicle: verified("ignition_on", 0), current: "history" }), "drive");
   assert.equal(autoView({ rpmLive: false, vehicle: verified("moving", 10), current: "history" }), "drive");

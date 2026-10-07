@@ -84,5 +84,13 @@
   "recorders/stopped": "f90a7d29d17f6b0eca721fda7adfefbebff8d28c41b0be1d3d444f310eef4e99",
   "recorders/disabled": "e6e128148b5a89d35dea82b74e3f8dfe661615f3f047476e4640dc947f9b6679",
   "temperature/False": "97cde0680516002d2f426c76f2ec9ff3da0c49e5c742468242f1ff24daeb4414",
-  "temperature/True": "2d1ac1444a11d2345529692e585db0fc14266505a565f32eb967954cf340dd1b"
+  "temperature/True": "2d1ac1444a11d2345529692e585db0fc14266505a565f32eb967954cf340dd1b",
+  "adapter/missing": "c64664985a5383e4d232fc6a61bb1cf5f2e393b9c4bf29d841b79f1c554b475a",
+  "adapter/board_a_missing": "8a660b62859d0271bedb577aa1fa3a68c75dd509e5e40bdf99fdc1a2492c6ae3",
+  "adapter/board_b_missing": "9ad6efc196fb5f8f419f4f85666e99e436321180a3c0f7979fb7235571b8a6ab",
+  "adapter/bcan_missing": "58ef107632082de1c630ef273e8c0ceff0ffa7ee3b7bcb8a62704721b55ac2f0",
+  "adapter/startup_grace": "cc1b88b1140717f5bd973d9a5bcc744641bcb614c17b4b402f7cf82a5c56e9dd",
+  "adapter/grace_boundary": "5fe4cefd76b1682c0dba97cce05bcc309c795b1355869cdc881e162d58b97cae",
+  "adapter/returning": "718099f2a6471a0ea78c774830e95d2813e973ec0882a4d5d1f75873daeea0e3",
+  "adapter/returned_fresh": "a09a7264cc6c076c8ddf6e516b590d910fcf4ef2755d4dd29446e6a1bfbdcb51"
 }

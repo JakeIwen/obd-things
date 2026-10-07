@@ -22,6 +22,7 @@ import {
   odometerSourceKind,
   TEXT as OIL_TEXT,
 } from "../dialogs/OilChange.helpers.js";
+import { isUnavailableCanState } from "../canAvailability.js";
 
 // ---------------------------------------------------------------------------
 // constants
@@ -72,7 +73,9 @@ export const TEXT = Object.freeze({
   done: "Done",
   refused: "Refused: ",
   wakeNote: "Listens only: nothing is sent to the van, so a read never wakes it or the dashcam.",
+  vehicleUnknown: "vehicle state unknown",
   acquireChecking: "Checking whether this screen may ask for a reading…",
+  acquireUnavailable: "CAN adapter status is unavailable; waiting for fresh passive vehicle evidence.",
   acquireOff: "This screen only shows saved readings; reading on request is turned off here.",
   tripLoading: "Loading trips…",
   tripUnavailable: "Trip history is not available right now.",
@@ -205,13 +208,14 @@ export function engineStopBefore(sampleMs, ctx) {
  * Battery sub-line from the displayed sample itself (critique M8/A13):
  * `read 4:25 pm · 2 h after engine off`, `now · 12 min after engine off`,
  * `engine running`, or `No reading yet`.
- * @param {{kind:'live'|'held'|'off', observedAt?:string|null, running?:boolean,
+ * @param {{kind:'live'|'held'|'off', observedAt?:string|null, running?:boolean, unavailable?:boolean,
  *   engineOff?:object|null, recentTrip?:object|null, currentTrip?:object|null}} input
  * @param {Date|number} [now]
  */
 export function batterySubline(input, now) {
   const i = input || {};
   if (i.kind !== "live" && i.kind !== "held") return TEXT.noBattery;
+  if (i.unavailable) return TEXT.vehicleUnknown;
   if (i.kind === "live" && i.running) return TEXT.running;
   const nowDate = asDate(now);
   const at = wallMs(i.observedAt);
@@ -232,8 +236,10 @@ export function batterySubline(input, now) {
  * @param {object|null} engineOff `status_full.engine_off_voltage`
  * @param {string|null} displayedAt `observed_at` of the displayed sample
  * @param {Date|number} [now]
+ * @param {boolean} [unavailable] CAN adapter availability is not established
  */
-export function engineOffLine(engineOff, displayedAt, now) {
+export function engineOffLine(engineOff, displayedAt, now, unavailable) {
+  if (unavailable) return "";
   const eov = obj(engineOff);
   if (!eov || eov.enabled === false) return "";
   const nowDate = asDate(now);
@@ -365,7 +371,8 @@ export function trendModel(history, options) {
  * @param {object} web `store.web` flags
  * @returns {{enabled:boolean, note:string}}
  */
-export function acquireAvailability(web) {
+export function acquireAvailability(web, vehicle) {
+  if (isUnavailableCanState(vehicle)) return { enabled: false, note: TEXT.acquireUnavailable };
   const w = obj(web);
   if (!w || !Object.prototype.hasOwnProperty.call(w, "active_acquisition_enabled")) {
     return { enabled: false, note: TEXT.acquireChecking };
@@ -461,14 +468,17 @@ export function lastTripModel(history, ctx) {
   let current = null;
   const cur = obj(h.current_trip);
   if (cur && cur.state !== "complete") {
+    const unavailable = c.unavailable === true;
+    const running = c.running === true && !unavailable;
     const start = wallMs(cur.started_at);
     const lastActive = wallMs(cur.last_active_at);
-    const end = c.running ? nowDate.getTime() : finite(lastActive) ? lastActive : nowDate.getTime();
+    const end = running ? nowDate.getTime() : finite(lastActive) ? lastActive : nowDate.getTime();
     let seconds = finite(start) ? (end - start) / 1000 : null;
     if (seconds === null && finite(cur.duration_seconds)) seconds = cur.duration_seconds;
-    const text = c.running
-      ? finite(start) ? "started " + fmtTime(cur.started_at, nowDate) : "under way"
-      : finite(lastActive) ? "engine off " + fmtTime(cur.last_active_at, nowDate) : "";
+    let text = "";
+    if (unavailable) text = TEXT.vehicleUnknown;
+    else if (running) text = finite(start) ? "started " + fmtTime(cur.started_at, nowDate) : "under way";
+    else if (finite(lastActive)) text = "engine off " + fmtTime(cur.last_active_at, nowDate);
     current = { duration: seconds === null ? DASH : fmtDuration(Math.max(0, seconds)), text };
   }
   let last = null;
@@ -673,7 +683,7 @@ export function serviceModel(maintenance, reading, oilState, now) {
 // warnings and codes summaries (both link to Health)
 
 /**
- * Warnings summary from derive's `warningModel`: open count or
+ * Warnings summary from the lazy formatted warning cards: open count or
  * `Nothing open · last drive 4:25 pm`, and the first two items.
  * @returns {{available:boolean, line:string, badge:{text:string, tone:string}|null,
  *   items:Array<{id:string, title:string, meta:string, tone:string}>, more:string}}

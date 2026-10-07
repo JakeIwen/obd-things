@@ -12,6 +12,7 @@ import {
   evaluateAutoView,
   vehicleHead,
   vehicleTail,
+  topBarClass,
   alertStrip,
   healthBadge,
   startEngineTracking,
@@ -64,7 +65,7 @@ function useLazy(key, loader) {
   return loaded.get(key) || null;
 }
 
-function TopBar() {
+export function TopBar() {
   const conn = useComputed(() => "conn conn--" + store.connection.value.state);
   const connLabel = useComputed(() => {
     const c = store.connection.value;
@@ -75,10 +76,7 @@ function TopBar() {
   const autoPressed = useComputed(() => (settings.value.auto ? "true" : "false"));
   const dimCls = useComputed(() => "topbar__btn" + (settings.value.dim ? " topbar__btn--on" : ""));
   const dimPressed = useComputed(() => (settings.value.dim ? "true" : "false"));
-  const barCls = useComputed(() => {
-    const a = alertStrip.value;
-    return "topbar" + (a ? (a.tier === "critical" ? " topbar--red" : " topbar--amber") : "");
-  });
+  const barCls = useComputed(() => topBarClass(alertStrip.value, store.vehicle.value));
   const headText = useComputed(() => (alertStrip.value ? alertStrip.value.text : vehicleHead.value));
   const tailText = useComputed(() => {
     const a = alertStrip.value;

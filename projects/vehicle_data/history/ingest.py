@@ -8,6 +8,8 @@ import math
 from datetime import datetime, timezone
 from typing import Mapping
 
+from projects.vehicle_data.can_availability import CAN_UNAVAILABLE_BASES
+
 from .models import (
     IngestResult,
     MICROSECONDS,
@@ -16,7 +18,7 @@ from .models import (
     _MetricDefinition,
     _MetricSample,
 )
-from .trip_activity import activity_basis, classify_regime
+from .trip_activity import activity_basis, classify_regime, suspend_trip_timeout
 from .validation import (
     _bool_db,
     _is_placeholder_interface_role,
@@ -80,12 +82,32 @@ class IngestMixin(ValidationMixin):
         captured_us: int,
         active: bool,
         basis: str,
+        *,
+        vehicle: Mapping[str, object],
+        suspend_timeout: bool = False,
     ) -> int | None:
         row = self._conn.execute(
             "SELECT * FROM trips WHERE ended_us IS NULL ORDER BY id DESC LIMIT 1"
         ).fetchone()
         idle_us = int(round(self.config.trip_idle_timeout_seconds * MICROSECONDS))
-        if row is not None and captured_us - row["last_active_us"] >= idle_us:
+        if row is not None and not suspend_timeout and captured_us - row["last_active_us"] >= idle_us:
+            # Recovery may first yield awake/unknown rather than RPM. Keep the
+            # persisted gap until activity or affirmative stopped evidence arrives.
+            gap = self._conn.execute(
+                "SELECT vehicle_basis FROM snapshots WHERE trip_id=? "
+                "AND captured_us>? AND vehicle_basis IN (?,?,?) LIMIT 1",
+                (row["id"], row["last_active_us"], *CAN_UNAVAILABLE_BASES),
+            ).fetchone()
+            if gap is not None:
+                suspend_timeout = suspend_timeout or suspend_trip_timeout(
+                    active=active, vehicle=vehicle,
+                    previous_vehicle_basis=gap["vehicle_basis"],
+                )
+        if (
+            row is not None
+            and not suspend_timeout
+            and captured_us - row["last_active_us"] >= idle_us
+        ):
             self._conn.execute(
                 """
                 UPDATE trips
@@ -209,14 +231,27 @@ class IngestMixin(ValidationMixin):
         regime: str,
     ) -> tuple[int | None, int]:
         latest = self._conn.execute(
-            "SELECT captured_us FROM snapshots ORDER BY captured_us DESC LIMIT 1"
+            """
+            SELECT captured_us,vehicle_basis
+            FROM snapshots ORDER BY captured_us DESC LIMIT 1
+            """
         ).fetchone()
         if latest is not None and captured_us <= latest["captured_us"]:
             raise OutOfOrderSnapshotError(
                 "snapshot time must be newer than the latest successful ingest"
             )
         self._store_catalog(definitions, captured_us)
-        trip_id = self._resolve_trip(captured_us, active, activity_basis)
+        trip_id = self._resolve_trip(
+            captured_us,
+            active,
+            activity_basis,
+            vehicle=vehicle,
+            suspend_timeout=suspend_trip_timeout(
+                active=active,
+                vehicle=vehicle,
+                previous_vehicle_basis=(latest["vehicle_basis"] if latest else None),
+            ),
+        )
         cursor = self._conn.execute(
             """
             INSERT INTO snapshots(
@@ -318,6 +353,7 @@ class IngestMixin(ValidationMixin):
         )
         regime = classify_regime(
             samples,
+            vehicle,
             running_rpm_threshold=self.config.running_rpm_threshold,
             moving_speed_threshold_mph=self.config.moving_speed_threshold_mph,
         )

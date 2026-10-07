@@ -108,6 +108,10 @@ test("batterySubline describes the displayed sample itself", () => {
   );
   assert.equal(H.batterySubline({ kind: "off" }, NOW), "No reading yet");
   assert.equal(H.batterySubline(null, NOW), "No reading yet");
+  assert.equal(
+    H.batterySubline({ kind: "held", observedAt: BATTERY_AT, unavailable: true, ...ctx }, NOW),
+    "vehicle state unknown",
+  );
 });
 
 test("engineOffLine shows the settled reading only when it is not already on screen", () => {
@@ -118,6 +122,7 @@ test("engineOffLine shows the settled reading only when it is not already on scr
   assert.equal(H.engineOffLine({ ...EOV, enabled: false }, BATTERY_AT, NOW), "");
   assert.equal(H.engineOffLine({ ...EOV, last_sample: { ...EOV.last_sample, unit: "mV" } }, BATTERY_AT, NOW), "");
   assert.equal(H.engineOffLine(null, BATTERY_AT, NOW), "");
+  assert.equal(H.engineOffLine(EOV, BATTERY_AT, NOW, true), "", "CAN loss cannot infer an engine stop");
 });
 
 test("battery badge and reading classes follow the band; held values stay dimmed", () => {
@@ -198,6 +203,10 @@ test("acquireAvailability: checking until flags arrive, disabled with a reason, 
   assert.deepEqual(H.acquireAvailability(null), { enabled: false, note: H.TEXT.acquireChecking });
   assert.deepEqual(H.acquireAvailability({ active_acquisition_enabled: false }), { enabled: false, note: H.TEXT.acquireOff });
   assert.deepEqual(H.acquireAvailability(SNAPSHOT.web), { enabled: true, note: "" });
+  assert.deepEqual(
+    H.acquireAvailability(SNAPSHOT.web, { state: "unknown", confidence: "unavailable", basis: "can_adapter_missing" }),
+    { enabled: false, note: H.TEXT.acquireUnavailable },
+  );
   // The web read is receive-only ({"mode":"passive"}); the note must never claim it can wake the van.
   assert.ok(H.TEXT.wakeNote.includes("nothing is sent"));
   assert.ok(!/can wake|will wake|may wake/i.test(H.TEXT.wakeNote));
@@ -268,6 +277,9 @@ test("lastTripModel: last completed trip, the open trip, loading and unavailable
   assert.equal(r.last.duration, "2 min");
   const stopped = H.lastTripModel(running, { running: false, now: NOW + 120000 });
   assert.deepEqual(stopped.current, { duration: "31 min", text: "engine off 12:59 pm" });
+  const unknown = H.lastTripModel(running, { running: true, unavailable: true, now: NOW });
+  assert.equal(unknown.current.text, "vehicle state unknown");
+  assert.doesNotMatch(unknown.current.text, /engine off|running/i);
   const long = { ...HISTORY, recent_trips: [{ ...HISTORY.recent_trips[0], duration_seconds: 3900 }] };
   assert.equal(H.lastTripModel(long, { now: NOW }).last.duration, "1 h 05");
   assert.equal(H.lastTripModel(null, { now: NOW }).state, "loading");

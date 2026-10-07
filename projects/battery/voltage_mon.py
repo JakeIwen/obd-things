@@ -37,6 +37,7 @@ sys.path.insert(0, HERE)
 import bcan_voltage as bv            # sibling module owns CSV path/root and append helper
 from projects.vehicle_data.api import TelemetryClient
 from projects.vehicle_data.broker import DEFAULT_SOCKET
+from projects.vehicle_data.can_availability import vehicle_hardware_unavailable
 
 NTFY_VOLTAGE_URL = os.environ.get("NTFY_VOLTAGE_URL", "")  # topic in ~/secrets/.bash_variables (sourced by .bashrc + cron BASH_ENV); never hardcode
 WARN_V    = 12.0                 # alert below this resting voltage (tune to taste)
@@ -97,6 +98,7 @@ def maybe_alert(volts, allow_send):
 
 
 BROKER_SOCKET = pathlib.Path(DEFAULT_SOCKET)
+_STATUS_UNREAD = object()
 
 
 def _monitor_result(
@@ -180,17 +182,24 @@ def have_connectivity(url=NTFY_VOLTAGE_URL, timeout=6):
         return False
 
 
-def vehicle_running():
-    """True only when the broker reports the engine running; unknown counts as not running."""
+def broker_vehicle_state():
+    """Read the cache-only broker vehicle state once, preserving unknown failures."""
     if not BROKER_SOCKET.is_socket():
-        return False
+        return None
     try:
         status_code, payload = TelemetryClient(str(BROKER_SOCKET), timeout=10.0).request(
             "GET", "/v1/status"
         )
     except (OSError, RuntimeError, json.JSONDecodeError):
-        return False
+        return None
     vehicle = payload.get("vehicle_state") if status_code == 200 and isinstance(payload, dict) else None
+    return vehicle if isinstance(vehicle, dict) else None
+
+
+def vehicle_running(vehicle=_STATUS_UNREAD):
+    """True only when the broker reports the engine running; unknown stays false."""
+    if vehicle is _STATUS_UNREAD:
+        vehicle = broker_vehicle_state()
     return isinstance(vehicle, dict) and vehicle.get("running") is True
 
 
@@ -204,9 +213,15 @@ def main():
         log("another voltage_mon instance is running; skipping this tick")
         return
 
-    # A broker acquisition blocks its single-threaded API for seconds, which can stall the
-    # drive recorder mid-drive; while running, the broker already records voltage passively.
-    if vehicle_running():
+    # A broker acquisition can occupy a POST slot for seconds; while running, the
+    # broker already records voltage. Missing hardware cannot establish stopped
+    # state, so it also fails closed before notification or acquisition work.
+    vehicle = broker_vehicle_state()
+    if vehicle_hardware_unavailable(vehicle):
+        log("CAN adapter availability unresolved; skipping this tick "
+            "(vehicle running state is unknown)")
+        return
+    if vehicle_running(vehicle):
         log("vehicle is running; skipping this tick (the broker records running voltage)")
         return
 

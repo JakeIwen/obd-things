@@ -851,6 +851,46 @@ keeps the dashboard's automatic view selection ready for a separately
 verified ignition/motion metric without silently promoting a voltage
 heuristic.
 
+Missing CAN coverage overrides every retained vehicle-state conclusion with
+`state: unknown`, `running: null`, `confidence: unavailable` and basis
+`can_adapter_missing`. The detail names the missing logical roles, including a
+single B-CAN or CAN-CH channel. Detection uses the existing exact-role snapshot
+(`resolution: missing` or `actual.present: false`), never bus silence, aggregate
+readiness, a spare-only fault, or historical USB incidents. Discovery errors
+are described as unavailable status rather than proven physical absence.
+There is no additional probing: detection follows the existing status refreshes,
+which may lag a loss during a long active-helper interval.
+
+During the existing 30-second startup grace the same fail-closed condition says
+“Checking CAN adapters” (`can_adapter_initializing`), not “missing.” Runtime
+loss does not restart that grace. Return requires all three roles to be present
+and subsequent passive vehicle evidence; `can_adapter_recovering` remains
+unknown until then. GETs retain the interface observation timestamp and do not
+freshen old sleep/RPM evidence. The broker wake gate, scheduled voltage monitor,
+and `active_acquisition_permitted` fail closed throughout this lifecycle.
+
+Partial loss deliberately makes the **aggregate** vehicle state unavailable.
+Existing recorder and armed display-receiver ownership predicates therefore
+stop accepting even a surviving C-CAN route; no ownership gate is weakened to
+preserve capture. Independent metric observations remain available. COP wake
+and initial DTC admission reject the unavailable state; already-admitted active
+operations retain their existing owned live-evidence checks and ordering.
+The advisor receives the uncertainty unchanged and gains no vehicle authority.
+
+The historian neither starts a trip nor advances its activity timestamp from
+cached motion while CAN coverage is unavailable. An open trip is held across
+the gap; the first recovered active observation resumes it even beyond the
+normal idle timeout. Awake/unknown return snapshots keep the gap open; a
+recovered affirmative stopped observation allows normal closure at the last
+actual activity. Missing snapshots/interface gaps remain recorded:
+this does not establish how many real drives occurred while unobserved. The
+frontend labels this condition explicitly, keeps automatic/manual view choices
+stable, and does not interpret the loss as engine-off or parked voltage.
+Gap samples carry an `engine_unavailable` regime rather than the ordinary
+`engine_unknown` regime (which can qualify parked battery warnings). Warning
+evaluation withholds those samples as current evidence and holds confirmed
+warnings unresolved rather than treating missing coverage as recovery.
+
 ## Dashboard freshness timing
 
 A synchronized 120-second passive trace on 2026-07-30 separated a recurring
