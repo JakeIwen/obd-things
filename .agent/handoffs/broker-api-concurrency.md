@@ -84,6 +84,12 @@ whose **start** falls inside the wrapper command interval:
 - First natural post-deploy drive remains to be checked. Latest trip at handoff
   was 76, ended `2026-10-05T00:34:39.516643+00:00`; there were no post-deploy trips.
   Do not start the engine or drive just to manufacture validation.
+- 2026-10-07: three drives (ignition 13:00-14:15 MDT) produced no trips because the Pi's
+  VL805 USB controller had died at 05:59 MDT (UAS write timeouts on the Seagate `mbp2tbkup`
+  disk escalated to "HC died"), removing both gs_usb CAN adapters. The broker reported
+  `asleep` (basis `passive_bus_silence`) with no adapters present. A guarded
+  `safe_reboot.sh` at 14:24 restored USB/CAN; this was not a broker-code failure. The first
+  natural post-deploy drive is still unchecked; use the same `--since` checker command.
 
 ## First-drive check (read-only)
 
