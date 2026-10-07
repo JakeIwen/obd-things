@@ -51,7 +51,8 @@ class and provides the `/v1` JSON API. The MacBook-managed Van Dashboard reads
 
 Broker pure internals are split into `projects/vehicle_data/status_view.py`
 (snapshot-only status builders), `vehicle_state.py` (passive evidence conclusions),
-and `helper_events.py` (bus-parameterized status-event validation). Locks, clocks,
+`wake_state.py` (pure parked-wake admission), and `helper_events.py`
+(bus-parameterized status-event validation). Locks, clocks,
 component calls and all helper/CAN lifecycle effects remain in `broker.py`.
 `tests/test_broker_pure.py` pins status bytes and directly tests the bus-specific
 helper contracts. `tests/broker_pure_oracle.py` captures generated helper/state

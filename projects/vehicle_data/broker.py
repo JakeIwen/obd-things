@@ -30,6 +30,7 @@ from projects.vehicle_data.radar_alignment import (
 )
 from projects.vehicle_data.metrics import METRICS, MetricDefinition
 from projects.vehicle_data.receive_watch import ReceiveSilenceWatch
+from projects.vehicle_data.wake_state import wake_state_conflicts
 from projects.vehicle_data.vehicle_state import (
     accepts_state_observation, needs_current_authority, passive_vehicle_state,
     preservation_authority, qualified_engine_state,
@@ -2242,42 +2243,14 @@ class TelemetryBroker:
             auxiliary_restoration_latched = self._auxiliary_drive_restoration_latched
             collector_state = self._collector_state
             vehicle_observed = self._vehicle_state_observed_monotonic
-        conflicts: list[str] = []
-        if collector_state != "running":
-            conflicts.append("passive collector is not running")
-        freshness_limit = max(3.0, self.collector_interval_seconds * 3.0)
-        if require_fresh and (
-            vehicle_observed is None or now - vehicle_observed > freshness_limit
-        ):
-            conflicts.append("passive vehicle-state evidence is missing or stale")
-        if restoration_latched or active_drive.get("restoration_failed"):
-            conflicts.append("active-drive passive restoration is latched failed")
-        if auxiliary_restoration_latched or auxiliary_drive.get("restoration_failed"):
-            conflicts.append("B-CAN auxiliary passive restoration is latched failed")
-        active_state = active_drive.get("state")
-        active_mode = active_drive.get("interface_mode")
-        if active_state not in ("idle", "disabled"):
-            conflicts.append("broker active-drive state is not idle or disabled")
-        if active_mode != "listen_only":
-            conflicts.append("broker active-drive interface mode is not listen-only")
-        if active_drive.get("helper_pid") is not None:
-            conflicts.append("broker active-drive helper is still present")
-        if auxiliary_drive.get("state") not in ("idle", "disabled"):
-            conflicts.append("broker B-CAN auxiliary state is not idle or disabled")
-        if auxiliary_drive.get("interface_mode") != "listen_only":
-            conflicts.append("broker B-CAN auxiliary mode is not listen-only")
-        if auxiliary_drive.get("helper_pid") is not None:
-            conflicts.append("broker B-CAN auxiliary helper is still present")
-        if (
-            vehicle_state.get("running") is True
-            or vehicle_state.get("state") in ("running", "ignition_on")
-        ):
-            conflicts.append(
-                "broker has verified running or ignition-on vehicle evidence"
-            )
-        elif vehicle_state.get("state") not in ("asleep", "awake", "parked"):
-            conflicts.append("broker vehicle state is not safe for a parked wake")
-        return tuple(conflicts)
+        return wake_state_conflicts(
+            active_drive=active_drive, auxiliary_drive=auxiliary_drive,
+            vehicle_state=vehicle_state, restoration_latched=restoration_latched,
+            auxiliary_restoration_latched=auxiliary_restoration_latched,
+            collector_state=collector_state, vehicle_observed=vehicle_observed,
+            now=now, collector_interval_seconds=self.collector_interval_seconds,
+            require_fresh=require_fresh,
+        )
 
     def _begin_wake_authorization(self) -> tuple[str, ...]:
         conflicts = self._wake_state_conflicts(require_fresh=True)
