@@ -1,5 +1,17 @@
 # Agent Handoff — 2022 Ram Promaster ACC radar, DTC C1418-78 (RESOLVED 2026-06-27)
 
+> **October 8 evidence correction:** the resolved status and numerical capture-window
+> conclusions below describe the June campaign, not current vehicle health.
+> [New saved-log analysis](../findings/2026-10-08_post_collision_alignment.md) documents
+> owner-reported collision concerns, learned estimates reaching −3.300° vertical,
+> and raw adaptive engagement above 3° vertical / 1.3° horizontal. The historical
+> −1.26° fault did not prove a universal ±1° capture or shutoff threshold. The owner
+> places the collision October 1 evening Central; the sequence matches trips 71–73.
+> Exact impact timing remains unverified. The October 8 parked scan returned
+> C1418-78 status `08` (history only), no active/pending radar code and no C1417-78;
+> this does not validate mounting or the moving monitor. Use the canonical DID map's
+> corrected confidence boundaries before interpreting the original model below.
+
 **Read this first**, then the repo-root [`README.md`](../../../README.md) (universal bus facts/gotchas +
 the **RESEARCH-FIRST** working method) and the **authoritative OEM docs** in [`docs/oem/`](oem/) (trust
 those over our inference). Background: `radar_acc_handoff.md`; raw data in `../findings/`;

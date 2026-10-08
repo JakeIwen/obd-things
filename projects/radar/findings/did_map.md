@@ -10,7 +10,7 @@ internal C-CAN — this is why UDS works here and why OBD-II PIDs don't route. C
 ## ★ Alignment / dynamic signals (the ones that matter for C1418-78)
 | DID | idle raw | decode | meaning | conf |
 |---|---|---|---|---|
-| `0x0845` | `FFECC849 FFFFE55F` | 2×i32 ÷1e6 → (**−1.259°**, −0.007°) | **(elevation, azimuth) — AUTHORITATIVE stored misalignment.** Rock-flat across a 2-hr drive ⇒ stored calibration value. This is the C1418-78 driver. | I |
+| `0x0845` | `FFECC849 FFFFE55F` | 2×i32 ÷1e6 → (**−1.259°**, −0.007°) | Candidate **(elevation, azimuth) learned alignment estimates**. Flat in the historical faulted drive; gradual, axis-dependent changes and startup reversions observed in October. Neither a direct bracket measurement nor an established C1418-78 threshold input. | I |
 | `0x0850` | `FFED44D4 FFFF7E86` | 2×i32 ÷1e6 → (−1.228°, −0.033°) | (elevation, azimuth), **2nd / noisier live-ish** source; wanders −1.2…−1.36° while driving, no trend to 0 | I |
 | `0x0841` | `FAE8` | i16 ÷1000 → −1.304° | **LIVE instantaneous** vertical estimate — swings **±10°** while driving (vehicle pitch), ~0 parked. **NOT** the stored fault; do not treat as the misalignment. | I |
 | `0x0861` | `FEE3 0080` | 2×i16 → (−285, +128) | aux angle pair, scale/meaning uncertain (azimuth-ish, ~in-spec) | S |
@@ -19,6 +19,18 @@ internal C-CAN — this is why UDS works here and why OBD-II PIDs don't route. C
 | `0x0840` | `00` | u8 | flag adjacent to angle DIDs — **suspected alignment-status / valid flag** (worth watching during SDA) | S |
 | `0x0842` | `00` | u8 | flag adjacent to angle DIDs — suspected alignment/calibration status | S |
 | `0x0857` | `AA` | u8 | toggles ~170↔0 while driving — status/quality flag | S |
+
+**October 8 correction:** [saved historian and raw-wire evidence](2026-10-08_post_collision_alignment.md)
+shows `0845` reaching (−3.300189°, −1.377313°), with independently decoded
+adaptive ACC engagement around (−3.17°, −1.38°). This rules out treating the
+dashboard's ±1° reference as a universal instantaneous engagement cutoff under
+this candidate decode. The old fault at −1.26° did not establish the firmware's
+capture window. Degree scaling, absolute physical direction and learning
+algorithm remain unverified. A subsequent October 8 09:12:43Z parked physical
+`19 02 FF` returned C1418-78 status `08` (confirmed history only, unchanged from
+September 24), seven `40` incomplete-test entries, and no C1417-78. There was no
+active/pending radar DTC at this read; an engine-off scan does not exercise the
+running/moving monitor. Job `dtc-owner-20261008T090715Z` verified passive restoration.
 
 ## Health (verified against AlfaOBD)
 

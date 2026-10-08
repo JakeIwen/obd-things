@@ -1,5 +1,11 @@
 # DASM (Bosch MRR1evo14F) — DID sweep findings
 
+> **Historical interpretation corrected October 8:** the inferred degree scale
+> remains uncertified. The old −1.26° fault does not prove a ±1° capture window
+> or ACC-disable threshold; subsequent saved replies and raw adaptive-engagement
+> frames provide a counterexample. See the [October investigation](2026-10-08_post_collision_alignment.md)
+> and canonical [DID map](did_map.md) before using the older reasoning below.
+
 Radar identifies as **MRR1evo14F** (Bosch Mid-Range Radar gen-1 evo). VIN `3C6LRVDG4NE######`.
 Full read-only `22 <did>` sweep of 0x0000–0xFFFF: **56 readable DIDs, 0 locked, 0 unresolved (CLEAN)**.
 Raw log: `projects/radar/findings/radar_acc_did_sweep.txt`. Historical sweep used the generic

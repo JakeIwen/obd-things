@@ -1,7 +1,21 @@
 # projects/radar — 2022 Promaster ACC radar (Bosch DASM / MRR1evo14F)
 
 Reverse-engineering + alignment work for the forward-looking ACC/FCW radar. Its former
-**vertical-misalignment fault (DTC C1418-78, ≈ −1.26° elevation)** was repaired; ACC/FCW is functional.
+**vertical-misalignment fault (DTC C1418-78, ≈ −1.26° elevation)** was repaired in June.
+An owner-reported October collision and new alignment drift are under investigation;
+current ACC engagement does not establish correct alignment or FCW performance.
+See the [October 8 saved-log analysis](findings/2026-10-08_post_collision_alignment.md):
+horizontal drift began October 3 evening locally, vertical estimates later reached
+−3.300°, and raw frames confirm adaptive engagement above 3° vertical and 1.3°
+horizontal. The owner identifies the collision as October 1 evening Central;
+the reported drive/short-drive/long-parking sequence closely matches trips 71–73,
+with the large horizontal change on the next recorded drive after parking.
+Exact impact timing remains unverified. The October 8 parked non-clearing scan
+returned C1418-78 status `08` (confirmed history, no active/pending bit), unchanged
+from September 24, and no horizontal-misalignment DTC. All 15 supported modules
+answered and restored passive; PCM was skipped. Physical mounting inspection
+remains the next diagnostic step; successful engagement and a parked scan do
+not validate alignment during driving. See the same finding for exact evidence.
 
 > **Start with [`docs/AGENT_HANDOFF.md`](docs/AGENT_HANDOFF.md)** for the resolved fault, ruled-out
 > list, and `0x0251` evidence, but obey its 2026-08-20 topology warning: its PCAN/`can0` commands
@@ -18,10 +32,12 @@ Service Drive Alignment** — `radar_acc_sda_drive.py --arm` started routine `0x
 local, no wiTECH / no shop.** Below is the original investigation (kept for context).
 
 ## Original conclusion (kept for context — superseded by RESOLVED above)
-The radar stored a vertical boresight error ≈ **−1.26°** → DTC C1418-78 → ACC/FCW off. The OEM fix is a
+The historical radar estimate was ≈ **−1.26°** alongside DTC C1418-78 and ACC/FCW off. The OEM fix is a
 **dynamic "Service Drive Alignment" (SDA), NOT a static mirror** (that premise was a Giulia doc, ruled
 out). The radar self-aligns small deviations while driving but only within a **limited window**; −1.26°
-was beyond it (a 2-hr highway drive did not move it). So the **gate was physical**: re-seat/level the mount
+was historically interpreted as beyond it (a 2-hr highway drive did not move it).
+October evidence does not support using that observation to establish a numerical
+capture window or firmware shutoff threshold. The repair sequence was to re-seat/level the mount
 to get back inside the window, then the SDA finishes it. **Van = home → no shop.** Full detail + decoded
 DIDs in `findings/radar_acc_did_findings.md` and `docs/oem/`.
 

@@ -36,6 +36,16 @@ distinguishes unpopulated raw cluster inputs from unresolved signal decodes.
 Radar alignment polling is validated; ACC set speed/state/gap and lead-object
 data remain separate mapping work. Related-platform DBCs are candidates only.
 
+For the owner-reported October 1 collision and subsequent radar drift, start
+with the [October 8 investigation](projects/radar/findings/2026-10-08_post_collision_alignment.md).
+Raw replies and adaptive-engagement frames contradict treating the inferred
+±1° reference as a firmware cutoff. The October 8 parked DTC scan returned
+C1418-78 status `08` (history only); it does not validate physical alignment.
+The successful 15-module scan reserved the existing cooperative handoffs before
+calling the unchanged batch worker; the continuous display observer otherwise
+holds a shared C-CAN lease. Verify current permissions before handing off a
+command, and preserve every worker-side state, identity and restoration gate.
+
 ## Telemetry dashboard (one app, port 8765)
 
 The repository has exactly one telemetry dashboard: the Preact app in
