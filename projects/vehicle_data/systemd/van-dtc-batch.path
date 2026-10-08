@@ -1,6 +1,7 @@
 [Unit]
 Description=Watch for a fixed DTC batch request file under /run
-After=van-telemetry.service
+# Default path ordering is before paths.target/basic.target, unlike the broker.
+# Only the triggered worker needs to wait for the broker to start.
 Requires=van-telemetry.service
 PartOf=van-telemetry.service
 

@@ -1,4 +1,8 @@
+import configparser
 import pathlib
+import shlex
+import subprocess
+import tempfile
 import unittest
 
 
@@ -49,6 +53,89 @@ class VehicleDataSystemdTests(unittest.TestCase):
         self.assertNotIn("NoNewPrivileges=true", service)
         self.assertIn("dtc-batch.request.json", path)
         self.assertIn("PartOf=van-telemetry.service", path)
+
+    def test_path_keeps_lifecycle_without_waiting_for_the_late_broker(self):
+        path = configparser.ConfigParser(interpolation=None)
+        path.read(SYSTEMD_DIR / "van-dtc-batch.path")
+        unit = path["Unit"]
+        self.assertTrue(unit.getboolean("DefaultDependencies", fallback=True))
+        self.assertEqual(unit.get("After", "").split(), [])
+        self.assertEqual(unit["Requires"], "van-telemetry.service")
+        self.assertEqual(unit["PartOf"], "van-telemetry.service")
+        self.assertEqual(path["Install"]["WantedBy"], "multi-user.target")
+
+        broker = configparser.ConfigParser(interpolation=None)
+        broker.read(SYSTEMD_DIR / "van-telemetry.service")
+        for name in ("van-dtc-batch.path", "van-telemetry-web.service",
+                     "van-telemetry-web-tailscale.service"):
+            self.assertIn(name, broker["Unit"]["Wants"].split())
+            self.assertNotIn(name, broker["Unit"].get("Requires", "").split())
+            self.assertNotIn(name, broker["Unit"].get("After", "").split())
+
+    def test_early_watchers_do_not_wait_for_normal_services(self):
+        for filename in sorted(SYSTEMD_DIR.iterdir()):
+            if filename.suffix not in {".path", ".timer", ".socket"}:
+                continue
+            with self.subTest(unit=filename.name):
+                unit = configparser.ConfigParser(interpolation=None)
+                unit.read(filename)
+                if unit["Unit"].getboolean("DefaultDependencies", fallback=True):
+                    after = unit["Unit"].get("After", "").split()
+                    self.assertFalse([name for name in after
+                                      if name.endswith(".service")])
+
+    def test_lan_listener_orders_after_network_without_hardening_regression(self):
+        unit = configparser.ConfigParser(interpolation=None)
+        unit.read(SYSTEMD_DIR / "van-telemetry-web.service")
+        self.assertIn("network-online.target", unit["Unit"]["After"].split())
+        self.assertIn("network-online.target", unit["Unit"]["Wants"].split())
+        self.assertIn("van-telemetry.service", unit["Unit"]["After"].split())
+        self.assertEqual(unit["Unit"]["PartOf"], "van-telemetry.service")
+        self.assertIn("--bind 127.0.0.1", unit["Service"]["ExecStart"])
+        self.assertNotIn("ExecStartPre", unit["Service"])
+
+        override = configparser.ConfigParser(interpolation=None)
+        override.read(SYSTEMD_DIR / "van-telemetry-web.service.d/20-wait-lan.conf")
+        service = override["Service"]
+        self.assertEqual(service["TimeoutStartSec"], "90")
+        self.assertEqual(service["RestrictAddressFamilies"], "AF_NETLINK")
+        self.assertNotIn("ExecStart", service)
+        self.assertEqual(unit["Service"]["Restart"], "on-failure")
+        self.assertTrue(unit["Service"].getboolean("NoNewPrivileges"))
+
+    def test_lan_wait_retries_until_exact_ipv4_address_is_present(self):
+        override = configparser.ConfigParser(interpolation=None)
+        override.read(SYSTEMD_DIR / "van-telemetry-web.service.d/20-wait-lan.conf")
+        command = shlex.split(override["Service"]["ExecStartPre"])
+        self.assertEqual(command[:2], ["/bin/sh", "-ec"])
+        # Substitute only external reads/sleeps; execute the unit's actual loop.
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            counter = root / "polls"
+            counter.write_text("0\n")
+            ip = root / "ip"
+            ip.write_text(
+                "#!/bin/sh\n"
+                '[ "$*" = "-4 -o address show dev eth0" ] || exit 99\n'
+                f"read count < {shlex.quote(str(counter))}\n"
+                'count=$((count + 1))\n'
+                f'printf "%s\\n" "$count" > {shlex.quote(str(counter))}\n'
+                'case "$count" in\n'
+                '1) exit 1 ;;\n'
+                '2) exit 0 ;;\n'
+                '3) printf "2: eth0 inet 192.168.6.10/24 scope global\\n" ;;\n'
+                '4) printf "2: eth0 inet 192.168.6.1030/24 scope global\\n" ;;\n'
+                '5) printf "2: eth0 inet 192.168.6.103/24 scope global\\n" ;;\n'
+                '*) exit 99 ;;\n'
+                'esac\n'
+            )
+            ip.chmod(0o700)
+            command[2] = command[2].replace("/usr/sbin/ip", shlex.quote(str(ip)))
+            command[2] = command[2].replace("/usr/bin/sleep 1", "printf 'retry\\n'")
+            result = subprocess.run(command, capture_output=True, text=True, timeout=3)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.splitlines(), ["retry"] * 4)
+            self.assertEqual(counter.read_text(), "5\n")
 
 
 if __name__ == "__main__":

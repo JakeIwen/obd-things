@@ -1,6 +1,7 @@
 [Unit]
 Description=Van telemetry dashboard (port 8765; loopback by default, LAN via the local 10-lan.conf drop-in)
-After=van-telemetry.service
+After=network-online.target van-telemetry.service
+Wants=network-online.target
 Requires=van-telemetry.service
 PartOf=van-telemetry.service
 

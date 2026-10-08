@@ -703,6 +703,9 @@ Documents, in reading order:
 
 ### Serving and deployment
 
+Unit-only updates, boot ordering, the optional LAN address wait, and safe
+activation are covered by the [systemd installation runbook](docs/systemd-install.md).
+
 - `web_v2.py` subclasses `web.py` for every `/v1` route and adds: the built
   frontend from `dashboard/dist` (`index.html` no-cache with ETag, hashed
   `/assets/*` gzip'd and immutable, `/docs/*` allowlist); `GET /v2/stream`
