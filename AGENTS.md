@@ -136,9 +136,12 @@ code without changing behaviour. Old import paths remain as shims, so existing i
     and all three vehicle roles were healthy/listen-only with static counters.
     Retain the recorder's 20 s idle timeout and `voltage_mon` running skip:
     eight occupied POST slots can still starve GET admission, and GIL contention
-    has not been isolated or validated over a drive. The first natural drive is
-    still outstanding; see [.agent/handoffs/broker-api-concurrency.md](.agent/handoffs/broker-api-concurrency.md)
-    for latency evidence, the rollback SHA/command and timestamp-anchored checks.
+    has not been isolated over a drive. The first natural drives (2026-10-07,
+    trips 77-80, 96-236 snapshots each) recorded normally with clean journals
+    apart from the known LAN `ConnectionResetError`. Rollback target if ever
+    needed: `0c93cd2` via `tmp/vehicle_data/restart-broker-parked.sh` (parked
+    and asleep). Raw latency evidence stays on the Pi in
+    `tmp/vehicle_data/o2-concurrency/`.
 
 ## MacBook-managed `~/scripts` tree
 

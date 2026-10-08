@@ -1242,9 +1242,9 @@ The restart added no CAN TX. Matched wake-assisted battery measurements reduced
 maximum in-command `/v1/status` latency from 7,821.107 ms to 20.590 ms, with all
 requests returning 200 and exactly 75 B-CAN frames per approved read (zero C/CH
 TX). Units stayed active with zero crash restarts; final passive/quiet checks
-and journals were clean. The first natural drive is still outstanding; the
-[deployment handoff](../../.agent/handoffs/broker-api-concurrency.md) preserves
-measurement caveats, rollback and timestamp-anchored first-drive checks.
+and journals were clean. The first natural drives on 2026-10-07 (trips 77-80)
+recorded normally. Measurement caveats: eight occupied POST slots can still
+starve GET admission, and GIL contention during CAN work was not isolated.
 Each `UnixHTTPServer` instance serves one lifetime; construct a fresh instance
 rather than restarting `serve_forever()` on a stopped object. `serve_unix()`
 already creates a fresh server on every invocation.
