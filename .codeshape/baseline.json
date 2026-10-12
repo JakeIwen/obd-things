@@ -111,6 +111,7 @@
     "tools/fca_hsql_decode.py"
    ],
    "_stamp": [
+    "projects/vehicle_data/radar_reference.py",
     "tools/three_bus_capture.py",
     "tools/warning_replay.py"
    ],
@@ -223,6 +224,10 @@
     "projects/ecu_mapping/rke_front_unlock.py",
     "tools/can_event_window.py"
    ],
+   "createController": [
+    "projects/vehicle_data/dashboard/src/dialogs/RadarCalibration.jsx",
+    "projects/vehicle_data/dashboard/src/dialogs/RadarReference.jsx"
+   ],
    "createStableGate": [
     "projects/vehicle_data/dashboard/src/views/parked.helpers.js",
     "projects/vehicle_data/dashboard/src/views/view.helpers.js"
@@ -267,7 +272,8 @@
    ],
    "initialState": [
     "projects/vehicle_data/dashboard/src/components/dtcScan.helpers.js",
-    "projects/vehicle_data/dashboard/src/dialogs/RadarCalibration.helpers.js"
+    "projects/vehicle_data/dashboard/src/dialogs/RadarCalibration.helpers.js",
+    "projects/vehicle_data/dashboard/src/dialogs/RadarReference.helpers.js"
    ],
    "inventory_file": [
     "tools/alfaobd_dat.py",
@@ -300,12 +306,14 @@
    ],
    "message": [
     "projects/vehicle_data/dashboard/src/components/dtcScan.helpers.js",
-    "projects/vehicle_data/dashboard/src/dialogs/RadarCalibration.helpers.js"
+    "projects/vehicle_data/dashboard/src/dialogs/RadarCalibration.helpers.js",
+    "projects/vehicle_data/dashboard/src/dialogs/RadarReference.helpers.js"
    ],
    "num": [
     "projects/vehicle_data/dashboard/src/components/dtcScan.helpers.js",
     "projects/vehicle_data/dashboard/src/dialogs/EventHistory.helpers.js",
     "projects/vehicle_data/dashboard/src/dialogs/RadarCalibration.helpers.js",
+    "projects/vehicle_data/dashboard/src/radarReference.js",
     "projects/vehicle_data/dashboard/src/views/health.helpers.js",
     "projects/vehicle_data/dashboard/src/views/view.helpers.js",
     "projects/vehicle_data/dashboard/src/warningContext.js"
@@ -317,6 +325,8 @@
    "obj": [
     "projects/vehicle_data/dashboard/src/components/dtcScan.helpers.js",
     "projects/vehicle_data/dashboard/src/dialogs/RadarCalibration.helpers.js",
+    "projects/vehicle_data/dashboard/src/dialogs/RadarReference.helpers.js",
+    "projects/vehicle_data/dashboard/src/radarReference.js",
     "projects/vehicle_data/dashboard/src/views/health.helpers.js",
     "projects/vehicle_data/dashboard/src/views/parked.helpers.js",
     "projects/vehicle_data/dashboard/src/views/view.helpers.js",
@@ -393,7 +403,7 @@
    ],
    "readReply": [
     "projects/vehicle_data/dashboard/src/components/dtcScan.helpers.js",
-    "projects/vehicle_data/dashboard/src/dialogs/RadarCalibration.helpers.js"
+    "projects/vehicle_data/dashboard/src/jsonReply.js"
    ],
    "read_broker_status": [
     "projects/vehicle_data/cop_can_wake.py",
@@ -469,6 +479,7 @@
     "projects/vehicle_data/dashboard/src/views/system.helpers.js"
    ],
    "stamp": [
+    "projects/ecu_mapping/lighting_reference.py",
     "projects/vehicle_data/event_history.py",
     "tools/can_workbench/adapter.py"
    ],
@@ -488,8 +499,8 @@
     "projects/vehicle_data/dashboard/src/views/parked.helpers.js"
    ],
    "useController": [
-    "projects/vehicle_data/dashboard/src/dialogs/RadarCalibration.jsx",
-    "projects/vehicle_data/dashboard/src/dialogs/WarningChat.jsx"
+    "projects/vehicle_data/dashboard/src/dialogs/WarningChat.jsx",
+    "projects/vehicle_data/dashboard/src/dialogs/useController.js"
    ],
    "utc_now": [
     "lib/dtc_batch.py",
@@ -511,7 +522,8 @@
    ],
    "viewModel": [
     "projects/vehicle_data/dashboard/src/components/dtcScan.helpers.js",
-    "projects/vehicle_data/dashboard/src/dialogs/RadarCalibration.helpers.js"
+    "projects/vehicle_data/dashboard/src/dialogs/RadarCalibration.helpers.js",
+    "projects/vehicle_data/dashboard/src/dialogs/RadarReference.helpers.js"
    ],
    "viewport": [
     "projects/vehicle_data/dashboard/tools/measure.mjs",
@@ -603,7 +615,7 @@
    },
    {
     "file": "projects/vehicle_data/dashboard/src/dialogs/RadarCalibration.helpers.js",
-    "line": 177,
+    "line": 167,
     "lines": 108,
     "name": "createRadarCalibrationController"
    },
@@ -651,7 +663,7 @@
    }
   ]
  },
- "date": "2026-10-11",
+ "date": "2026-10-12",
  "exceptions": {},
  "file_limits": {},
  "files": {
@@ -695,6 +707,7 @@
   "projects/ecu_mapping/canch_validation.py": 388,
   "projects/ecu_mapping/cluster_live.py": 61,
   "projects/ecu_mapping/extract_did_map.py": 130,
+  "projects/ecu_mapping/lighting_reference.py": 161,
   "projects/ecu_mapping/pcm_tigershark.py": 290,
   "projects/ecu_mapping/reassemble_commands.py": 229,
   "projects/ecu_mapping/rke_front_unlock.py": 591,
@@ -715,7 +728,7 @@
   "projects/vehicle_data/api_server.py": 885,
   "projects/vehicle_data/auxiliary_polling.py": 198,
   "projects/vehicle_data/bcan_auxiliary.py": 548,
-  "projects/vehicle_data/broker.py": 3282,
+  "projects/vehicle_data/broker.py": 3280,
   "projects/vehicle_data/can_availability.py": 185,
   "projects/vehicle_data/can_interfaces.py": 407,
   "projects/vehicle_data/can_runtime.py": 861,
@@ -727,7 +740,7 @@
   "projects/vehicle_data/custom_warnings.py": 164,
   "projects/vehicle_data/dashboard/src/app/App.jsx": 194,
   "projects/vehicle_data/dashboard/src/app/derive.js": 466,
-  "projects/vehicle_data/dashboard/src/app/dialogs.js": 43,
+  "projects/vehicle_data/dashboard/src/app/dialogs.js": 44,
   "projects/vehicle_data/dashboard/src/app/rings.js": 168,
   "projects/vehicle_data/dashboard/src/app/runtime.js": 12,
   "projects/vehicle_data/dashboard/src/app/warningCards.js": 7,
@@ -735,40 +748,48 @@
   "projects/vehicle_data/dashboard/src/canAvailability.js": 40,
   "projects/vehicle_data/dashboard/src/components/Card.jsx": 69,
   "projects/vehicle_data/dashboard/src/components/DtcScan.jsx": 82,
+  "projects/vehicle_data/dashboard/src/components/LightIndicators.jsx": 40,
   "projects/vehicle_data/dashboard/src/components/ServiceCard.jsx": 141,
   "projects/vehicle_data/dashboard/src/components/Sparkline.jsx": 165,
   "projects/vehicle_data/dashboard/src/components/Tile.jsx": 76,
   "projects/vehicle_data/dashboard/src/components/TireGrid.jsx": 64,
   "projects/vehicle_data/dashboard/src/components/dtcScan.helpers.js": 452,
+  "projects/vehicle_data/dashboard/src/components/lightIndicators.helpers.js": 8,
   "projects/vehicle_data/dashboard/src/dialogs/Customizer.helpers.js": 284,
   "projects/vehicle_data/dashboard/src/dialogs/Customizer.jsx": 162,
   "projects/vehicle_data/dashboard/src/dialogs/EventHistory.helpers.js": 673,
   "projects/vehicle_data/dashboard/src/dialogs/EventHistory.jsx": 635,
   "projects/vehicle_data/dashboard/src/dialogs/OilChange.helpers.js": 486,
   "projects/vehicle_data/dashboard/src/dialogs/OilChange.jsx": 230,
-  "projects/vehicle_data/dashboard/src/dialogs/RadarCalibration.helpers.js": 284,
-  "projects/vehicle_data/dashboard/src/dialogs/RadarCalibration.jsx": 107,
+  "projects/vehicle_data/dashboard/src/dialogs/RadarCalibration.helpers.js": 274,
+  "projects/vehicle_data/dashboard/src/dialogs/RadarCalibration.jsx": 100,
+  "projects/vehicle_data/dashboard/src/dialogs/RadarReference.helpers.js": 128,
+  "projects/vehicle_data/dashboard/src/dialogs/RadarReference.jsx": 89,
   "projects/vehicle_data/dashboard/src/dialogs/WarningChat.helpers.js": 806,
   "projects/vehicle_data/dashboard/src/dialogs/WarningChat.jsx": 229,
   "projects/vehicle_data/dashboard/src/dialogs/modalDialog.js": 65,
+  "projects/vehicle_data/dashboard/src/dialogs/useController.js": 18,
   "projects/vehicle_data/dashboard/src/format.js": 371,
+  "projects/vehicle_data/dashboard/src/jsonReply.js": 22,
   "projects/vehicle_data/dashboard/src/link.baseline.js": 100,
   "projects/vehicle_data/dashboard/src/link.js": 305,
   "projects/vehicle_data/dashboard/src/link.protocol.js": 253,
   "projects/vehicle_data/dashboard/src/link.stream.js": 85,
   "projects/vehicle_data/dashboard/src/link.summary.js": 62,
-  "projects/vehicle_data/dashboard/src/main.jsx": 33,
-  "projects/vehicle_data/dashboard/src/radarAim.js": 28,
+  "projects/vehicle_data/dashboard/src/main.jsx": 34,
+  "projects/vehicle_data/dashboard/src/radarAim.js": 42,
+  "projects/vehicle_data/dashboard/src/radarReference.js": 69,
   "projects/vehicle_data/dashboard/src/ring.js": 317,
   "projects/vehicle_data/dashboard/src/settings.js": 214,
-  "projects/vehicle_data/dashboard/src/store.js": 660,
-  "projects/vehicle_data/dashboard/src/views/Drive.jsx": 129,
-  "projects/vehicle_data/dashboard/src/views/DriveGauges.jsx": 104,
-  "projects/vehicle_data/dashboard/src/views/DriveMore.jsx": 195,
+  "projects/vehicle_data/dashboard/src/store.js": 663,
+  "projects/vehicle_data/dashboard/src/views/Drive.jsx": 110,
+  "projects/vehicle_data/dashboard/src/views/DriveFooter.jsx": 25,
+  "projects/vehicle_data/dashboard/src/views/DriveGauges.jsx": 108,
+  "projects/vehicle_data/dashboard/src/views/DriveMore.jsx": 199,
   "projects/vehicle_data/dashboard/src/views/Health.jsx": 271,
   "projects/vehicle_data/dashboard/src/views/History.jsx": 224,
   "projects/vehicle_data/dashboard/src/views/Parked.jsx": 343,
-  "projects/vehicle_data/dashboard/src/views/System.jsx": 532,
+  "projects/vehicle_data/dashboard/src/views/System.jsx": 559,
   "projects/vehicle_data/dashboard/src/views/cruise.helpers.js": 23,
   "projects/vehicle_data/dashboard/src/views/driveMore.helpers.js": 176,
   "projects/vehicle_data/dashboard/src/views/drivePager.js": 22,
@@ -777,7 +798,7 @@
   "projects/vehicle_data/dashboard/src/views/history.helpers.js": 406,
   "projects/vehicle_data/dashboard/src/views/historySystem.helpers.js": 3,
   "projects/vehicle_data/dashboard/src/views/parked.helpers.js": 790,
-  "projects/vehicle_data/dashboard/src/views/system.helpers.js": 750,
+  "projects/vehicle_data/dashboard/src/views/system.helpers.js": 748,
   "projects/vehicle_data/dashboard/src/views/systemVehicle.helpers.js": 78,
   "projects/vehicle_data/dashboard/src/views/view.helpers.js": 93,
   "projects/vehicle_data/dashboard/src/warningContext.js": 276,
@@ -786,6 +807,7 @@
   "projects/vehicle_data/dashboard/test/EventHistory.helpers.test.mjs": 699,
   "projects/vehicle_data/dashboard/test/OilChange.helpers.test.mjs": 407,
   "projects/vehicle_data/dashboard/test/RadarCalibration.helpers.test.mjs": 266,
+  "projects/vehicle_data/dashboard/test/RadarReference.helpers.test.mjs": 213,
   "projects/vehicle_data/dashboard/test/WarningChat.helpers.test.mjs": 747,
   "projects/vehicle_data/dashboard/test/bands.test.mjs": 391,
   "projects/vehicle_data/dashboard/test/build.test.mjs": 180,
@@ -797,7 +819,8 @@
   "projects/vehicle_data/dashboard/test/dtcScan.test.mjs": 510,
   "projects/vehicle_data/dashboard/test/format.test.mjs": 304,
   "projects/vehicle_data/dashboard/test/health.test.mjs": 513,
-  "projects/vehicle_data/dashboard/test/historySystem.test.mjs": 762,
+  "projects/vehicle_data/dashboard/test/historySystem.test.mjs": 792,
+  "projects/vehicle_data/dashboard/test/lightIndicators.test.mjs": 22,
   "projects/vehicle_data/dashboard/test/link-store.test.mjs": 106,
   "projects/vehicle_data/dashboard/test/link.test.mjs": 943,
   "projects/vehicle_data/dashboard/test/modalDialog.test.mjs": 39,
@@ -812,7 +835,8 @@
   "projects/vehicle_data/dashboard/tools/measure.mjs": 108,
   "projects/vehicle_data/dashboard/tools/refactor-oracle.mjs": 204,
   "projects/vehicle_data/dashboard/tools/shoot.mjs": 229,
-  "projects/vehicle_data/display_receiver.py": 216,
+  "projects/vehicle_data/display_contract.py": 12,
+  "projects/vehicle_data/display_receiver.py": 219,
   "projects/vehicle_data/drift_warnings.py": 1669,
   "projects/vehicle_data/drive_recorder.py": 1818,
   "projects/vehicle_data/dtc_descriptions.py": 231,
@@ -832,20 +856,23 @@
   "projects/vehicle_data/history/store.py": 81,
   "projects/vehicle_data/history/trip_activity.py": 124,
   "projects/vehicle_data/history/validation.py": 576,
-  "projects/vehicle_data/http_common.py": 100,
+  "projects/vehicle_data/http_common.py": 109,
   "projects/vehicle_data/insights.py": 1562,
   "projects/vehicle_data/last_readings.py": 114,
+  "projects/vehicle_data/lighting.py": 41,
   "projects/vehicle_data/maintenance.py": 147,
-  "projects/vehicle_data/metrics.py": 871,
+  "projects/vehicle_data/metric_types.py": 54,
+  "projects/vehicle_data/metrics.py": 823,
   "projects/vehicle_data/models.py": 145,
   "projects/vehicle_data/monitoring_coverage.py": 61,
   "projects/vehicle_data/notifications.py": 431,
   "projects/vehicle_data/pcm_electrical.py": 675,
   "projects/vehicle_data/pcm_temperature_support.py": 167,
-  "projects/vehicle_data/radar_alignment.py": 330,
+  "projects/vehicle_data/radar_alignment.py": 342,
   "projects/vehicle_data/radar_drive_steps.py": 111,
+  "projects/vehicle_data/radar_reference.py": 297,
   "projects/vehicle_data/radar_service_alignment.py": 366,
-  "projects/vehicle_data/radar_service_control.py": 296,
+  "projects/vehicle_data/radar_service_control.py": 307,
   "projects/vehicle_data/radar_service_transport.py": 160,
   "projects/vehicle_data/receive_watch.py": 126,
   "projects/vehicle_data/sources.py": 261,
@@ -870,12 +897,11 @@
   "projects/vehicle_data/warning_engine/samples.py": 396,
   "projects/vehicle_data/warning_engine/tire_pairs.py": 580,
   "projects/vehicle_data/warning_engine/tires.py": 866,
-  "projects/vehicle_data/web.py": 647,
+  "projects/vehicle_data/web.py": 671,
   "projects/vehicle_data/web_v2.py": 804,
   "tests/__init__.py": 0,
   "tests/active_route_effect_oracle.py": 487,
   "tests/active_route_supervision_oracle.py": 126,
-  "tests/advisory_extraction_check.py": 73,
   "tests/advisory_lifecycle_oracle.py": 345,
   "tests/broker_pure_oracle.py": 405,
   "tests/can_missing_cases.py": 83,
@@ -884,7 +910,7 @@
   "tests/fixtures/warning_chat_preview.py": 115,
   "tests/gate_oracle.py": 861,
   "tests/gate_oracle_guards.py": 443,
-  "tests/radar_service_support.py": 177,
+  "tests/radar_service_support.py": 186,
   "tests/test_active_diagnostic_locks.py": 342,
   "tests/test_active_drive.py": 2869,
   "tests/test_alfaobd_adb.py": 386,
@@ -969,6 +995,8 @@
   "tests/test_ignition_triggered_passive_capture.py": 153,
   "tests/test_interface_health_events.py": 301,
   "tests/test_last_readings.py": 100,
+  "tests/test_lighting.py": 73,
+  "tests/test_lighting_reference.py": 82,
   "tests/test_live_data_safety.py": 388,
   "tests/test_maintenance.py": 159,
   "tests/test_no_legacy_can_topology.py": 262,
@@ -977,8 +1005,9 @@
   "tests/test_pcm_temperature_support.py": 168,
   "tests/test_pcm_tigershark.py": 59,
   "tests/test_radar_alignment.py": 239,
+  "tests/test_radar_reference.py": 224,
   "tests/test_radar_service_alignment.py": 466,
-  "tests/test_radar_service_control.py": 413,
+  "tests/test_radar_service_control.py": 450,
   "tests/test_reassemble_commands.py": 89,
   "tests/test_receive_watch.py": 93,
   "tests/test_reports.py": 294,
@@ -997,7 +1026,7 @@
   "tests/test_usb_can_monitor.py": 269,
   "tests/test_van_scan_harvest.py": 432,
   "tests/test_vehicle_advisory_episodes.py": 936,
-  "tests/test_vehicle_data.py": 2291,
+  "tests/test_vehicle_data.py": 2258,
   "tests/test_vehicle_data_api_mutation_serialization.py": 244,
   "tests/test_vehicle_data_api_read_concurrency.py": 320,
   "tests/test_vehicle_data_api_server_lifecycle.py": 361,
@@ -1016,7 +1045,7 @@
   "tests/test_warning_coarse_rules.py": 83,
   "tests/test_warning_delivery.py": 913,
   "tests/test_warning_lifecycle_regressions.py": 241,
-  "tests/test_warning_package.py": 94,
+  "tests/test_warning_package.py": 82,
   "tests/test_warning_replay.py": 731,
   "tests/test_warning_replay_loading.py": 118,
   "tests/test_warning_rules_v3.py": 1972,
@@ -1025,6 +1054,7 @@
   "tests/test_zf9hp.py": 63,
   "tests/test_zf9hp_results.py": 101,
   "tests/vehicle_data_api_concurrency_support.py": 376,
+  "tests/vehicle_data_catalog_contract.py": 39,
   "tools/__init__.py": 1,
   "tools/acc_freshness_audit.py": 70,
   "tools/alfaobd_apk_db.py": 124,
@@ -1077,7 +1107,7 @@
   "tools/zf9hp_results.py": 222
  },
  "func_limits": {},
- "head": "49f8051bcc90ea1c57cacc3dd5937cd91d74e379",
+ "head": "fe0b36643536540ed1ece6242ada1c64c10d13a3",
  "limits": {
   "enforce_tests": true,
   "file_lines": 800,
@@ -1581,6 +1611,14 @@
    "printable": 6,
    "scrub_hex": 15
   },
+  "projects/ecu_mapping/lighting_reference.py": {
+   "candidates": 25,
+   "collect": 33,
+   "main": 21,
+   "reference_windows": 20,
+   "stamp": 2,
+   "transitions": 33
+  },
   "projects/ecu_mapping/pcm_tigershark.py": {
    "_by_did": 7,
    "_entry": 2
@@ -1897,7 +1935,7 @@
    "TelemetryBroker.start_usb_monitor": 11,
    "TelemetryBroker.status_response": 88,
    "TelemetryBroker.stop_collector": 31,
-   "TelemetryBroker.store_display_frame": 32,
+   "TelemetryBroker.store_display_frame": 30,
    "TelemetryBroker.wake_prearm_conflicts": 17,
    "build_parser": 73,
    "main": 151
@@ -2050,6 +2088,7 @@
    "load_rules": 17,
    "validate_rule": 22
   },
+  "projects/vehicle_data/display_contract.py": {},
   "projects/vehicle_data/display_receiver.py": {
    "DisplayReceiver.__init__": 15,
    "DisplayReceiver._check_route": 16,
@@ -2063,7 +2102,7 @@
    "DisplayReceiver.start": 6,
    "DisplayReceiver.status": 3,
    "DisplayReceiver.stop": 6,
-   "receive_display_frames": 54
+   "receive_display_frames": 56
   },
   "projects/vehicle_data/drift_warnings.py": {
    "_Reader.__init__": 8,
@@ -2407,6 +2446,7 @@
   },
   "projects/vehicle_data/http_common.py": {
    "broker_unavailable": 2,
+   "exact_json": 7,
    "route_name": 7,
    "stream_snapshots": 45,
    "web_flags": 19
@@ -2461,6 +2501,9 @@
    "LastReadings.remember": 42,
    "LastReadings.restore_from_historian": 10
   },
+  "projects/vehicle_data/lighting.py": {
+   "decode_light_observations": 11
+  },
   "projects/vehicle_data/maintenance.py": {
    "MaintenanceStore.__init__": 31,
    "MaintenanceStore.add_oil_change": 21,
@@ -2471,8 +2514,10 @@
    "MaintenanceStore.valid_mileage": 3,
    "MaintenanceStore.validate": 22
   },
+  "projects/vehicle_data/metric_types.py": {
+   "MetricDefinition.public_dict": 21
+  },
   "projects/vehicle_data/metrics.py": {
-   "MetricDefinition.public_dict": 21,
    "_acc_display_source": 12,
    "_radar_angle_metric": 12,
    "_raw_cluster_metric": 29,
@@ -2542,11 +2587,12 @@
    "vehicle_gate": 4
   },
   "projects/vehicle_data/radar_alignment.py": {
-   "AlignmentHistory.__init__": 24,
+   "AlignmentHistory.__init__": 26,
    "AlignmentHistory._validate_retained": 20,
    "AlignmentHistory.add": 27,
    "AlignmentHistory.flush": 11,
-   "AlignmentHistory.observe": 5,
+   "AlignmentHistory.latest": 7,
+   "AlignmentHistory.observe": 7,
    "AlignmentHistory.restore_from_historian": 32,
    "AlignmentHistory.summary": 5,
    "RadarAlignmentPoller.__init__": 11,
@@ -2567,6 +2613,26 @@
    "RadarDriveSteps.run": 11,
    "SessionEnding.__init__": 3
   },
+  "projects/vehicle_data/radar_reference.py": {
+   "RadarReferences.__init__": 20,
+   "RadarReferences._commit": 6,
+   "RadarReferences._commit_unattended": 6,
+   "RadarReferences._current": 15,
+   "RadarReferences._payload": 14,
+   "RadarReferences._point": 3,
+   "RadarReferences._select": 7,
+   "RadarReferences._trimmed": 13,
+   "RadarReferences._zero": 13,
+   "RadarReferences.calibration_completed": 9,
+   "RadarReferences.reading_observed": 15,
+   "RadarReferences.request": 18,
+   "RadarReferences.status_response": 4,
+   "ReferencePoint.from_saved": 13,
+   "_State.load": 19,
+   "_State.saved": 3,
+   "_hex_id": 2,
+   "_stamp": 6
+  },
   "projects/vehicle_data/radar_service_alignment.py": {
    "CommandReader.__init__": 5,
    "CommandReader.poll": 23,
@@ -2586,7 +2652,7 @@
    "ServiceAlignment._stop_routine": 5,
    "ServiceAlignment.run_cycle": 9,
    "ServiceAlignment.session_ending": 4,
-   "_speed_mph": 8,
+   "_speed_mph": 7,
    "encode_command": 2,
    "parse_command": 11
   },
@@ -2595,16 +2661,18 @@
    "HelperCommandPipe.alive": 7,
    "HelperCommandPipe.popen": 6,
    "HelperCommandPipe.send": 11,
-   "RadarServiceControl.__init__": 11,
+   "RadarServiceControl.__init__": 12,
    "RadarServiceControl._fail": 4,
+   "RadarServiceControl._helper": 11,
    "RadarServiceControl._helper_started": 3,
    "RadarServiceControl._log": 11,
    "RadarServiceControl._refused": 2,
    "RadarServiceControl._settle": 10,
    "RadarServiceControl._start": 20,
-   "RadarServiceControl._status": 18,
+   "RadarServiceControl._status": 10,
    "RadarServiceControl._stop": 9,
-   "RadarServiceControl.handle_event": 11,
+   "RadarServiceControl.endpoint": 3,
+   "RadarServiceControl.handle_event": 14,
    "RadarServiceControl.request": 9,
    "RadarServiceControl.status_response": 4,
    "RadarServiceControl.supervisor": 7,
@@ -2613,7 +2681,6 @@
    "TrackedRun.active": 2,
    "TrackedRun.apply": 6,
    "TrackedRun.fail": 2,
-   "_same_json": 7,
    "validate_event": 24
   },
   "projects/vehicle_data/radar_service_transport.py": {
@@ -3000,9 +3067,11 @@
    "TelemetryWebHandler._event_get": 2,
    "TelemetryWebHandler._event_post": 2,
    "TelemetryWebHandler._json": 11,
-   "TelemetryWebHandler._maintenance_post": 14,
+   "TelemetryWebHandler._maintenance_post": 9,
    "TelemetryWebHandler._not_found": 5,
+   "TelemetryWebHandler._owner_record_refused": 15,
    "TelemetryWebHandler._proxy_get": 2,
+   "TelemetryWebHandler._radar_reference_post": 9,
    "TelemetryWebHandler._radar_service_get": 3,
    "TelemetryWebHandler._radar_service_post": 12,
    "TelemetryWebHandler._radar_service_refused": 15,
@@ -3115,11 +3184,6 @@
    "run_case.helper_factory": 11,
    "run_case.helper_factory.run": 8,
    "run_case.topology": 8
-  },
-  "tests/advisory_extraction_check.py": {
-   "check": 44,
-   "check.Expand.visit_statement": 30,
-   "methods": 4
   },
   "tests/advisory_lifecycle_oracle.py": {
    "BranchTrace.__call__": 21,
@@ -3317,7 +3381,8 @@
    "Sink.__init__": 2,
    "Sink.emit": 5,
    "Sink.service": 2,
-   "radar_frame": 2
+   "radar_frame": 2,
+   "record_reading": 6
   },
   "tests/test_active_diagnostic_locks.py": {
    "ActiveDiagnosticLockTests.test_live_view_releases_after_keyboard_interrupt": 42,
@@ -5196,6 +5261,17 @@
    "LastReadingsTests.test_invalid_sources_ranges_dates_and_older_readings_do_not_replace_good": 14,
    "LastReadingsTests.test_oil_life_survives_restart_without_becoming_live_or_resetting": 14
   },
+  "tests/test_lighting.py": {
+   "LightingTests.test_exact_id_and_dlc_and_no_external_publisher": 9,
+   "LightingTests.test_owner_recorded_cycles_decode_to_real_booleans": 11,
+   "LightingTests.test_public_cache_expires_and_accepts_off_without_retaining_on": 17,
+   "LightingTests.test_receiver_rejects_old_or_malformed_frames_and_keeps_receipt_time": 19
+  },
+  "tests/test_lighting_reference.py": {
+   "LightingReferenceTests.test_missing_icon_reference_is_not_treated_as_off": 11,
+   "LightingReferenceTests.test_public_report_matches_both_cycles_and_keeps_stream_identity": 47,
+   "LightingReferenceTests.test_rejects_incomplete_reference_instead_of_guessing_states": 10
+  },
   "tests/test_live_data_safety.py": {
    "LiveDataCliSafetyTests.test_deadline_clamps_refresh_sleep_to_remaining_duration": 27,
    "LiveDataCliSafetyTests.test_direct_view_is_dry_run_by_default": 13,
@@ -5388,6 +5464,25 @@
    "RadarAlignmentTests.test_summary_deduplicates_retains_parked_windows_and_resets_after_gap": 12,
    "RadarAlignmentTests.test_two_hours_of_ten_second_reads_fit_the_sample_bound": 7
   },
+  "tests/test_radar_reference.py": {
+   "CalibrationPointTests.test_a_finished_calibration_saves_the_first_full_reading_after_it": 23,
+   "CalibrationPointTests.test_a_reading_without_a_usable_time_is_no_reading_and_never_raises": 9,
+   "CalibrationPointTests.test_the_broker_wires_its_reading_history_to_the_service_control": 9,
+   "Fixture.__init__": 6,
+   "Fixture.post": 2,
+   "Fixture.read": 4,
+   "Fixture.select": 2,
+   "Fixture.state": 2,
+   "StorageTests.setUp": 4,
+   "StorageTests.test_a_failed_write_changes_nothing_and_is_reported": 15,
+   "StorageTests.test_an_unreadable_file_is_reported_and_never_overwritten": 19,
+   "StorageTests.test_points_selection_and_a_waiting_calibration_survive_a_restart": 14,
+   "ZeroAndRollbackTests.test_every_earlier_point_stays_selectable": 14,
+   "ZeroAndRollbackTests.test_only_the_three_exact_requests_are_accepted": 11,
+   "ZeroAndRollbackTests.test_the_oldest_unselected_points_go_first_and_zeroed_ones_before_calibrations": 18,
+   "ZeroAndRollbackTests.test_zero_copies_the_last_full_reading_and_selects_it": 16,
+   "ZeroAndRollbackTests.test_zeroing_twice_on_one_reading_keeps_one_point": 7
+  },
   "tests/test_radar_service_alignment.py": {
    "CommandReaderTests.test_reads_whole_valid_lines_and_ignores_everything_else": 20,
    "CommandReaderTests.test_the_broker_encoding_is_what_the_helper_parses": 7,
@@ -5436,6 +5531,7 @@
    "ControlTests.test_helper_exit_ends_an_active_run": 14,
    "ControlTests.test_helper_is_started_with_the_flag_and_a_stdin_pipe_and_other_events_pass_through": 9,
    "ControlTests.test_malformed_helper_events_are_rejected": 14,
+   "ControlTests.test_only_a_completed_run_is_handed_to_the_reference_points": 13,
    "ControlTests.test_only_the_exact_bodies_are_accepted": 9,
    "ControlTests.test_run_is_tracked_logged_and_finished_by_helper_events": 26,
    "ControlTests.test_start_needs_a_running_helper_that_announced_support": 14,
@@ -5454,13 +5550,14 @@
    "WebRelayTests.api_post": 5,
    "WebRelayTests.enable": 2,
    "WebRelayTests.http": 10,
-   "WebRelayTests.setUp": 22,
+   "WebRelayTests.setUp": 23,
    "WebRelayTests.test_an_enabled_listener_trusts_its_bound_origin_and_the_listed_extras": 14,
    "WebRelayTests.test_broker_api_rejects_malformed_posts_with_the_established_envelope": 12,
    "WebRelayTests.test_enabled_listener_relays_only_trusted_same_origin_json": 23,
    "WebRelayTests.test_every_broker_has_its_own_control_and_reports_an_idle_helper": 7,
    "WebRelayTests.test_flag_and_origin_arguments": 18,
    "WebRelayTests.test_listener_without_the_flag_refuses_both_methods_and_reports_it": 5,
+   "WebRelayTests.test_reference_points_are_relayed_without_the_flag_to_same_origin_json_only": 18,
    "event": 5
   },
   "tests/test_reassemble_commands.py": {
@@ -5972,7 +6069,7 @@
    "SourceTests.test_nonpassive_mode_is_rejected_without_backend_access": 11,
    "SourceTests.test_passive_awake_read_takes_only_observer_lock": 14,
    "SourceTests.test_passive_read_requires_fd_off_and_restart_ms_zero": 16,
-   "SourceTests.test_registry_is_metric_allowlist_with_provenance": 168,
+   "SourceTests.test_registry_is_metric_allowlist_with_provenance": 134,
    "SourceTests.test_runtime_resolved_channel_is_required": 5,
    "SourceTests.test_silent_bus_returns_passive_sleep_evidence": 8,
    "SourceTests.test_web_passive_acquisition_default_and_cache_only_opt_out": 7,
@@ -6416,8 +6513,6 @@
   },
   "tests/test_warning_package.py": {
    "WarningPackageTests.setUp": 6,
-   "WarningPackageTests.test_constant_and_default_table_source_is_unchanged": 10,
-   "WarningPackageTests.test_constant_and_default_table_source_is_unchanged.assignments": 3,
    "WarningPackageTests.test_every_historical_global_still_resolves": 10,
    "WarningPackageTests.test_mixins_have_no_overlapping_methods_or_initializers": 9,
    "WarningPackageTests.test_new_layout_loaded_from_ref_is_not_the_worktree_package": 10,
@@ -6656,6 +6751,7 @@
    "valid_oil_change": 8,
    "wait_until": 5
   },
+  "tests/vehicle_data_catalog_contract.py": {},
   "tools/__init__.py": {},
   "tools/acc_freshness_audit.py": {
    "audit": 32,
@@ -7683,6 +7779,7 @@
   "projects/vehicle_data/dashboard/test/EventHistory.helpers.test.mjs",
   "projects/vehicle_data/dashboard/test/OilChange.helpers.test.mjs",
   "projects/vehicle_data/dashboard/test/RadarCalibration.helpers.test.mjs",
+  "projects/vehicle_data/dashboard/test/RadarReference.helpers.test.mjs",
   "projects/vehicle_data/dashboard/test/WarningChat.helpers.test.mjs",
   "projects/vehicle_data/dashboard/test/bands.test.mjs",
   "projects/vehicle_data/dashboard/test/build.test.mjs",
@@ -7695,6 +7792,7 @@
   "projects/vehicle_data/dashboard/test/format.test.mjs",
   "projects/vehicle_data/dashboard/test/health.test.mjs",
   "projects/vehicle_data/dashboard/test/historySystem.test.mjs",
+  "projects/vehicle_data/dashboard/test/lightIndicators.test.mjs",
   "projects/vehicle_data/dashboard/test/link-store.test.mjs",
   "projects/vehicle_data/dashboard/test/link.test.mjs",
   "projects/vehicle_data/dashboard/test/modalDialog.test.mjs",
@@ -7708,7 +7806,6 @@
   "tests/__init__.py",
   "tests/active_route_effect_oracle.py",
   "tests/active_route_supervision_oracle.py",
-  "tests/advisory_extraction_check.py",
   "tests/advisory_lifecycle_oracle.py",
   "tests/broker_pure_oracle.py",
   "tests/can_missing_cases.py",
@@ -7802,6 +7899,8 @@
   "tests/test_ignition_triggered_passive_capture.py",
   "tests/test_interface_health_events.py",
   "tests/test_last_readings.py",
+  "tests/test_lighting.py",
+  "tests/test_lighting_reference.py",
   "tests/test_live_data_safety.py",
   "tests/test_maintenance.py",
   "tests/test_no_legacy_can_topology.py",
@@ -7810,6 +7909,7 @@
   "tests/test_pcm_temperature_support.py",
   "tests/test_pcm_tigershark.py",
   "tests/test_radar_alignment.py",
+  "tests/test_radar_reference.py",
   "tests/test_radar_service_alignment.py",
   "tests/test_radar_service_control.py",
   "tests/test_reassemble_commands.py",
@@ -7857,7 +7957,8 @@
   "tests/test_web_v2.py",
   "tests/test_zf9hp.py",
   "tests/test_zf9hp_results.py",
-  "tests/vehicle_data_api_concurrency_support.py"
+  "tests/vehicle_data_api_concurrency_support.py",
+  "tests/vehicle_data_catalog_contract.py"
  ],
  "version": 2
 }
