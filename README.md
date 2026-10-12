@@ -76,6 +76,7 @@ projects/                  per-target investigations and durable findings
     radar_acc_live.py          maintained dry-run-first scoped viewer + offline historical CSV follow
     docs/ findings/            radar narrative docs, decoded data + promoted (tracked) captures
   ecu_mapping/vonstar_service.py private fixed-action Unix API for deployed Vonstar controls
+  ecu_mapping/canch_validation.py offline frozen wheel formulas and chassis-candidate checks
 tmp/                       gitignored — ALL machine-written data lands here, never in git:
   captures/                  role-aware passive/drive-recorder raw CAN logs
   discovery/                 bounded ECU-address discovery reports

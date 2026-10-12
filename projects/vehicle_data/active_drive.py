@@ -7,7 +7,8 @@ work while imported. A live invocation owns one bounded engine-running epoch:
 * prove C-CAN pins 6/14 and multiple fresh passive 0x0FC RPM samples;
 * acquire the exclusive cross-process lock and repeat every gate;
 * arm the adapter once, continue receiving the existing broadcast allowlist,
-  and issue only the fixed reviewed PCM/RF-Hub single-frame RDBI requests;
+  and issue only the fixed reviewed PCM/RF-Hub/radar requests (the radar's
+  owner-started service alignment lives in radar_service_alignment.py);
 * close every socket, restore the exact safe listen-only state, verify it, and
   only then release the channel lock.
 
@@ -46,13 +47,22 @@ from projects.vehicle_data import (
     pcm_electrical,
     transmit_permit,
     radar_alignment,
+    radar_drive_steps,
+    radar_service_alignment,
+)
+# The session gates live in their own module so the radar steps can import
+# them too; the private names are kept for this module's call sites.
+from projects.vehicle_data.active_session_gates import (
+    BITRATE, REQUIRED_RPM_SAMPLES, SessionOutcome,
+    active_gate as _active_gate,
+    backend_identity_matches as _backend_identity_matches,
+    running_snapshot as _running_snapshot,
+    safe_active_state as _safe_active_state,
+    safe_passive_state as _safe_passive_state,
+    topology_failure as _topology_failure,
 )
 
 
-BITRATE = 500000
-PAIR = "6/14"
-RUNNING_RPM = 400.0
-REQUIRED_RPM_SAMPLES = 3
 PASSIVE_GATE_SECONDS = 0.5
 ACTIVE_SNAPSHOT_SECONDS = 0.35
 POLL_INTERVAL_SECONDS = 1.0
@@ -84,13 +94,6 @@ TPMS_INVALID = b"\xFF\xFF"
 KPA_TO_PSI = 0.14503773773020923
 TPMS_MIN_PSI = 0.0
 TPMS_MAX_PSI = 150.0
-
-
-@dataclass
-class SessionOutcome:
-    reason: str
-    detail: str
-    restored: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -237,65 +240,6 @@ class SystemBackend:
         if not radar_alignment.LIVE_POLLING_COMMISSIONED:
             return None
         return radar_alignment.RadarAlignmentPoller(self.channel).open()
-
-
-def _safe_passive_state(state: object) -> bool:
-    return LinkExpectation(BITRATE, listen_only=True).matches(state)
-
-
-def _safe_active_state(state: object, initial: canbus.InterfaceState) -> bool:
-    return bool(
-        isinstance(state, canbus.InterfaceState)
-        and state.present
-        and state.up
-        and state.bitrate == BITRATE
-        and state.fd_enabled is False
-        and state.one_shot is False
-        and not state.listen_only
-        and state.controller_state == "ERROR-ACTIVE"
-        and state.restart_ms
-        == (initial.restart_ms if initial.restart_ms is not None else 0)
-    )
-
-
-def _backend_identity_matches(backend: object) -> bool:
-    """Keep legacy injected test backends compatible; live backend always checks."""
-    checker = getattr(backend, "identity_matches", None)
-    return bool(checker()) if callable(checker) else True
-
-
-def _running_snapshot(snapshot: object) -> bool:
-    samples = getattr(snapshot, "rpm_samples", ())
-    return bool(
-        getattr(snapshot, "frame_count", 0) > 0
-        and len(samples) >= REQUIRED_RPM_SAMPLES
-        and all(
-            isinstance(value, (int, float))
-            and not isinstance(value, bool)
-            and math.isfinite(float(value))
-            and float(value) >= RUNNING_RPM
-            for value in samples[-REQUIRED_RPM_SAMPLES:]
-        )
-    )
-
-
-def _topology_failure(topology: object) -> SessionOutcome | None:
-    if not getattr(topology, "usable", False):
-        return SessionOutcome(
-            "wrong_bus",
-            f"same-boot topology is unusable: {getattr(topology, 'reason', 'unknown')}",
-        )
-    if getattr(topology, "bus", None) != "c-can":
-        return SessionOutcome(
-            "wrong_bus",
-            f"same-boot topology reports {getattr(topology, 'bus', 'unknown')}",
-        )
-    if getattr(topology, "pair", None) != PAIR:
-        return SessionOutcome(
-            "wrong_bus",
-            f"C-CAN topology must explicitly report DLC pins {PAIR}",
-        )
-    return None
 
 
 def _preflight_under_lock(backend: SystemBackend) -> tuple[canbus.InterfaceState | None, SessionOutcome | None]:
@@ -641,35 +585,6 @@ def _pcm_outcome(result: object) -> SessionOutcome | None:
     )
 
 
-def _active_gate(
-    backend: SystemBackend,
-    initial: canbus.InterfaceState,
-) -> SessionOutcome | None:
-    if not _backend_identity_matches(backend):
-        return SessionOutcome(
-            "adapter_unhealthy",
-            "resolved C-CAN USB identity changed or disappeared",
-        )
-    if not _safe_active_state(backend.interface_state(), initial):
-        return SessionOutcome(
-            "adapter_unhealthy",
-            "active SocketCAN state changed or left ERROR-ACTIVE",
-        )
-    topology_failure = _topology_failure(backend.topology())
-    if topology_failure is not None:
-        return topology_failure
-    inhibits = backend.inhibits()
-    if inhibits:
-        names = ",".join(
-            str(item.get("name", "invalid")) for item in inhibits
-        )
-        return SessionOutcome(
-            "inhibited",
-            f"external-operation inhibit appeared: {names}",
-        )
-    return None
-
-
 def _wait_for_next_cycle(
     backend: SystemBackend,
     next_cycle: float,
@@ -690,6 +605,7 @@ def run_active_session(
     *,
     termination_guard=None,
     enable_oil_life: bool = False,
+    service_commands=None,
 ) -> SessionOutcome:
     """Run one engine-running ownership interval and always restore before unlock."""
     lock_handle = None
@@ -775,8 +691,12 @@ def run_active_session(
         # process launching updated source cannot receive an unknown event.
         oil_life_enabled = enable_oil_life
         next_oil_life = next_cycle
-        next_radar = next_cycle
-        radar_enabled = radar_poller is not None
+        radar_steps = radar_drive_steps.RadarDriveSteps(
+            backend, sink, radar_poller,
+            radar_drive_steps.FreshAuthority(
+                backend, lock_handle, initial, snapshot_seconds=ACTIVE_SNAPSHOT_SECONDS),
+            next_due=next_cycle, service_commands=service_commands,
+        )
         while True:
             cycle_started = backend.monotonic()
             gate_failure = _active_gate(backend, initial)
@@ -1050,43 +970,11 @@ def run_active_session(
                         interface_mode="armed_diagnostic",
                     )
 
-            if radar_enabled and backend.monotonic() >= next_radar:
-                # Radar replies are segmented. Take new running evidence so
-                # the two independently permitted sends do not inherit time
-                # spent waiting on PCM/TPMS responses earlier in this cycle.
-                radar_snapshot = backend.broadcast_snapshot(ACTIVE_SNAPSHOT_SECONDS)
-                if not _running_snapshot(radar_snapshot):
-                    outcome = SessionOutcome("engine_not_running", "radar read skipped: fresh running evidence absent")
-                    break
-                gate_failure = _active_gate(backend, initial)
-                if gate_failure is not None:
-                    outcome = gate_failure
-                    break
-                try:
-                    request_permit = transmit_permit.issue(
-                        lock_handle, radar_snapshot, purpose=transmit_permit.RADAR_ALIGNMENT,
-                        channel=backend.channel, monotonic=backend.monotonic,
-                    )
-                    flow_permit = transmit_permit.issue(
-                        lock_handle, radar_snapshot, purpose=transmit_permit.RADAR_ALIGNMENT_FLOW,
-                        channel=backend.channel, monotonic=backend.monotonic,
-                    )
-                except transmit_permit.StaleTransmitEvidenceError:
-                    next_cycle = _wait_for_next_cycle(backend, next_cycle, cycle_started)
-                    continue
-                radar = radar_poller.poll(request_permit, flow_permit)
-                next_radar = backend.monotonic() + radar_alignment.POLL_INTERVAL_SECONDS
-                if radar.reason != "transmit_permit_expired":
-                    for index, metric in enumerate(radar_alignment.METRICS):
-                        common = dict(metric=metric, unit="deg", source=radar_alignment.SOURCE,
-                                      bus="c-can", quality="candidate", detail=radar.detail,
-                                      interface_mode="armed_diagnostic")
-                        if radar.available:
-                            sink.emit("observation", value=radar.angles[index], **common)
-                        else:
-                            sink.emit("metric_failure", reason=radar.reason, **common)
-                    if not radar.available:
-                        radar_enabled = False
+            # The radar's 0845 read and any owner-started service alignment.
+            radar_stop = radar_steps.run(snapshot)
+            if radar_stop is not None:
+                outcome = radar_stop
+                break
 
             next_cycle = _wait_for_next_cycle(
                 backend, next_cycle, cycle_started
@@ -1234,6 +1122,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--expected-parent-pid", type=int, required=True)
     parser.add_argument("--enable-oil-life", action="store_true",
                         help="broker accepts the fixed oil-life metric (rolling-deploy handshake)")
+    parser.add_argument(radar_service_alignment.ENABLE_FLAG, action="store_true",
+                        help="broker relays owner service-alignment commands on stdin")
     return parser
 
 
@@ -1265,6 +1155,10 @@ def main(argv=None) -> int:
             sink,
             termination_guard=termination,
             enable_oil_life=args.enable_oil_life,
+            service_commands=(
+                radar_service_alignment.CommandReader(sys.stdin.fileno())
+                if args.enable_radar_service_alignment else None
+            ),
         )
     return 0 if outcome.restored is not False else 2
 

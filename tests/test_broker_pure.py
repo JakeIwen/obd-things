@@ -87,7 +87,9 @@ class BrokerPureTests(unittest.TestCase):
     def test_real_status_web_delivery_bytes_match_baseline(self):
         # Captured independently by running delivery_rows against bc94da0, then
         # re-pinned after the reviewed removal of the dtc_jobs_require_local_one_use_arm
-        # web flag (the only difference across all 425 delivery cases).
+        # web flag (the only difference across all 425 delivery cases), and again
+        # on 2026-10-10 for the added radar_service_enabled web flag: with that
+        # one key dropped the corpus still hashes to the previous f91ba5d9... digest.
         # Adapter lifecycle additions have their own contracts; retain every
         # byte of the original corpus rather than re-pinning this digest.
         legacy = [row for row in delivery_rows() if not row[0].startswith("adapter/")]
@@ -95,7 +97,7 @@ class BrokerPureTests(unittest.TestCase):
         data = (encode(legacy) + "\n").encode()
         self.assertEqual(
             hashlib.sha256(data).hexdigest(),
-            "f91ba5d9224e965ccee1a0f8c15cdbb0989eb331b8b41a674776af71a27a0b9d",
+            "27c8d3e79942c9b505cfad644e417df48de9c57b56a9554094832d8211db90ee",
         )
 
     def test_status_byte_baseline(self):

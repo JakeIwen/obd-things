@@ -13,6 +13,7 @@
    No inline styles (CSP); every label is a text node. */
 import { useEffect, useRef, useState } from "preact/hooks";
 import * as H from "./Customizer.helpers.js";
+import { useModalDialog } from "./modalDialog.js";
 
 function VisibleRow({ row, index, act, fixedOrder }) {
   return (
@@ -67,12 +68,8 @@ function HiddenRow({ row, act }) {
 }
 
 export default function Customizer({ open, view, cards, settings: settingsProp, fixedOrder = false, onChange, onClose }) {
-  const dialogRef = useRef(null);
   const closeRef = useRef(null);
-  const triggerRef = useRef(null);
   const focusRef = useRef(null);
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
@@ -83,34 +80,9 @@ export default function Customizer({ open, view, cards, settings: settingsProp, 
 
   const model = H.editorModel(view, cards, settings, fixedOrder);
 
-  // Open/close follows the `open` prop. showModal traps focus and handles Escape; the close button
-  // takes focus like the other dialogs.
-  useEffect(() => {
-    const d = dialogRef.current;
-    if (!d) return;
-    if (open) {
-      if (!d.open) {
-        triggerRef.current = typeof document !== "undefined" ? document.activeElement : null;
-        try { d.showModal(); } catch { d.setAttribute("open", ""); }
-      }
-      if (closeRef.current) closeRef.current.focus({ preventScroll: true });
-    } else if (d.open) {
-      d.close();
-    }
-  }, [open]);
-
-  // Native close (Esc, X, backdrop, Done) restores focus and tells the parent.
-  useEffect(() => {
-    const d = dialogRef.current;
-    if (!d) return undefined;
-    const handle = () => {
-      const t = triggerRef.current;
-      if (t && t.isConnected && typeof t.focus === "function") { try { t.focus(); } catch { /* ignore */ } }
-      if (onCloseRef.current) onCloseRef.current();
-    };
-    d.addEventListener("close", handle);
-    return () => d.removeEventListener("close", handle);
-  }, []);
+  // Open/close follows the `open` prop; the close button takes focus like the other dialogs, and
+  // any native close (Esc, X, backdrop, Done) restores focus and tells the parent.
+  const { dialogRef, close } = useModalDialog({ open, onClose, focusRef: closeRef });
 
   // After the parent re-renders with the new settings, put focus back on the edited card's control
   // (its row may have moved lists or reached an end, which would otherwise drop focus).
@@ -143,7 +115,6 @@ export default function Customizer({ open, view, cards, settings: settingsProp, 
     else if (action === "up") emit(H.move(view, cards, settings, id, -1), key);
     else if (action === "down") emit(H.move(view, cards, settings, id, 1), key);
   };
-  const close = () => { if (dialogRef.current && dialogRef.current.open) dialogRef.current.close(); };
   const onBackdrop = (ev) => { if (ev.target === dialogRef.current) close(); };
 
   return (

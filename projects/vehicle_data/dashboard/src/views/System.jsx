@@ -8,8 +8,10 @@
  *                  details in a disclosure (ERROR-ACTIVE reads "controller normal").
  *   BROKER         collector, history recorder, summary cache, last-readings storage and the drive
  *                  helpers, from `summary.statusFull` (once a minute, never per second).
- *   RADAR          within/approaching/outside ±1° badge; per axis latest, 1-min and 5-min means (n),
- *                  5-min peak, margin to ±1.00°; the last-read time when not live.
+ *   RADAR          within/approaching/outside ±1° badge; per axis latest, 1-min, 5-min, 30-min and 2-h means (n),
+ *                  the physical aim reading of the elevation sign (radarAim.js),
+ *                  5-min peak, margin to ±1.00°; the last-read time when not live; and, where the
+ *                  listener enables it, the button for the drive-calibration dialog.
  *   METRIC CATALOG every metric with its value (live, dimmed last reading with time, or a dash),
  *                  sources, bus, quality, freshness limit and retention; raw diagnostics and
  *                  unconfirmed metrics sit in a collapsed "Diagnostic-only" disclosure.
@@ -223,6 +225,8 @@ const radar = computed(() => {
 
 function RadarCard() {
   const r = radar.value;
+  // Only a listener started with the opt-in flag offers the radar's drive calibration.
+  const calibrate = store.web.value.radar_service_enabled === true;
   return (
     <Card title="Radar alignment" badge={r.badge.text} badgeTone={r.badge.tone}>
       {r.note ? <p class="system-help">{r.note}</p> : null}
@@ -238,6 +242,13 @@ function RadarCard() {
         ))}
       </div>
       {r.problem ? <p class="system-note system-note--red">{r.problem}</p> : null}
+      {calibrate ? (
+        <div class="btn-row">
+          <button type="button" class="btn" onClick={() => openDialog("radar")}>
+            Drive calibration…
+          </button>
+        </div>
+      ) : null}
     </Card>
   );
 }

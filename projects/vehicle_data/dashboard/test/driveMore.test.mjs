@@ -14,12 +14,15 @@ const WINDOWS = {
   "radar.alignment.azimuth": {
     60: { count: 6, mean: 0.150841, peak_abs: 0.150841, span_seconds: 54.9 },
     300: { count: 20, mean: 0.15084, peak_abs: 0.150841, span_seconds: 208 },
+    1800: { count: 150, mean: 0.1612, peak_abs: 0.1702, span_seconds: 1790 },
+    7200: { count: 610, mean: 0.1748, peak_abs: 0.2014, span_seconds: 7190 },
     latest_value: 0.150841,
     observed_at: "2026-09-24T21:10:38.001564+00:00",
   },
   "radar.alignment.elevation": {
     60: { count: 6, mean: -0.0173, peak_abs: 0.0174, span_seconds: 54.9 },
     300: { count: 20, mean: -0.0177, peak_abs: 0.0184, span_seconds: 208 },
+    1800: { count: 150, mean: -0.0251, peak_abs: 0.031, span_seconds: 1790 },
     latest_value: -0.017161,
     observed_at: "2026-09-24T21:10:38.001188+00:00",
   },
@@ -44,8 +47,12 @@ test("radar tile: live readings show latest, means and the ±1° reference in wo
   });
   assert.equal(m.live, true);
   assert.equal(m.sub, "within ±1°");
-  assert.deepEqual(m.axes.azimuth, { latest: "+0.15°", m1: "+0.15°", m5: "+0.15°" });
-  assert.deepEqual(m.axes.elevation, { latest: MINUS + "0.02°", m1: MINUS + "0.02°", m5: MINUS + "0.02°" });
+  assert.deepEqual(m.axes.azimuth, { latest: "+0.15°", aim: "", m1: "+0.15°", m5: "+0.15°", m30: "+0.16°", h2: "+0.17°" });
+  // The elevation fixture has no 2-hour window yet (a summary saved before it existed).
+  assert.deepEqual(m.axes.elevation, {
+    latest: MINUS + "0.02°", aim: "aimed high · tilt down",
+    m1: MINUS + "0.02°", m5: MINUS + "0.02°", m30: MINUS + "0.03°", h2: "—",
+  });
   const near = H.radarTileModel({ axes: { azimuth: { fresh: true, value: -0.85 } } });
   assert.equal(near.sub, "near the ±1° limit");
   const out = H.radarTileModel({ axes: { elevation: { fresh: true, value: 1.2 } } });
@@ -76,7 +83,9 @@ test("radar tile: nothing to show, or reads switched off, says Not reading", () 
   const empty = H.radarTileModel({});
   assert.equal(empty.live, false);
   assert.equal(empty.sub, "Not reading");
-  for (const axis of H.RADAR_TILE_AXES) assert.deepEqual(empty.axes[axis.id], { latest: "—", m1: "—", m5: "—" });
+  for (const axis of H.RADAR_TILE_AXES) {
+    assert.deepEqual(empty.axes[axis.id], { latest: "—", aim: "", m1: "—", m5: "—", m30: "—", h2: "—" });
+  }
   const off = H.radarTileModel({
     axes: { azimuth: { fresh: true, value: 0.2 } },
     polling: { commissioned: false, detail: "off" },
@@ -84,6 +93,17 @@ test("radar tile: nothing to show, or reads switched off, says Not reading", () 
   assert.equal(off.live, false, "a record is never live when the reads are not commissioned");
   assert.equal(off.sub, "Not reading");
   assert.equal(H.radarTileModel(null).sub, "Not reading");
+});
+
+test("radar tile: the elevation sign reads as a physical aim; azimuth has no mapping", () => {
+  const at = (el, az) => H.radarTileModel({ axes: { elevation: { fresh: true, value: el }, azimuth: { fresh: true, value: az } } });
+  assert.equal(at(-3.76, -1.41).axes.elevation.aim, "aimed high · tilt down");
+  assert.equal(at(0.67, 0.1).axes.elevation.aim, "aimed low · tilt up");
+  assert.equal(at(0.004, 0.1).axes.elevation.aim, "level");
+  assert.equal(at(-3.76, -1.41).axes.azimuth.aim, "");
+  // A held (not live) reading still carries its aim.
+  const held = H.radarTileModel({ axes: { elevation: { held: { value: -1.26, observed_at: "2026-06-13T20:00:00Z" } } } });
+  assert.equal(held.axes.elevation.aim, "aimed high · tilt down");
 });
 
 test("radar tile text carries no provenance jargon", () => {

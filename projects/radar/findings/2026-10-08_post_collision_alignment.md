@@ -288,6 +288,55 @@ the enriched cache response; `dtc-after-owner-interfaces.json` and
 
 ### Interpretation
 
+The owner recalls establishing physical correction direction during the June
+campaign. A check of the promoted adjustment results, older handoff revisions,
+commit messages and the local legacy radar memory recovered one directional
+statement: commit `f0698f3` (June 13), `docs/AGENT_HANDOFF.md` lines 76–80,
+suggested looking for a mount "tilted ~1.26° down". Its context is **open work**
+before the physical inspection/adjustment; it does not document an observed
+downward tilt. The June 26 successful adjustment record says ~1.3° nudge and
+−1.26° → +0.28° after driving, but omits upward/downward physical direction.
+Negative-elevation = downward therefore remains a historical hypothesis,
+not verified polarity from that intervention. This provenance is now retained
+in the canonical DID map rather than silently treating the old suggestion as
+ground truth. The owner subsequently said they no longer remember the adjustment
+direction; no retrospective polarity assignment was made. No corresponding
+horizontal polarity was established.
+
+### What supplies the alignment reference?
+
+The exact reference frame and meaning of `0845` remain unresolved. Its value
+could represent radar aim relative to vehicle axes, an estimated compensation,
+or a remaining error relative to a stored calibration. The June 27 SDA result
+does not choose between these: it succeeded with a nonzero elevation field
+(approximately +0.67°). The older write-up's statement that the DIDs read
+relative to a committed calibration was an inference, not a supplier definition.
+
+The local exact-vehicle ACC description/operation page says the radar combines
+its observations with PCM/ABS/TCM messages, and that an equipped HALF camera
+supplies additional object/environment information. It does not specify which
+inputs its alignment estimator uses, define `0845`, or establish an inclinometer
+reference. The parked perturbation result establishes lack of an immediate DID
+response, not absence of an internal inertial sensor.
+
+As supplier-level examples, Bosch's
+[EP1277062B1](https://patents.google.com/patent/EP1277062B1/en) discusses inferring
+sensor-axis misalignment from target motion/vehicle motion and combining
+methods according to driving-condition-dependent quality. Its discussion of
+stationary-object methods uses the apparent movement of fixed objects to
+recover alignment with the vehicle's direction of travel.
+[US20160161597A1](https://patents.google.com/patent/US20160161597A1/en) uses selected
+target elevation distributions, with an assumption about their average reflector
+height relative to the sensor and compensation for road reflections. That is a
+statistical geometric reference, not a direct mechanical measurement.
+[US20140333473A1](https://patents.google.com/patent/US20140333473A1/en) describes a
+different approach comparing sensor-mounted and vehicle-mounted acceleration
+measurements; its reference is the vehicle axes and intended mounting direction,
+which need not mean exactly zero pitch. These are examples of possible reference
+sources, not proof of implementation in this MRR1evo14F or a definition of its DID.
+
+### Most plausible interpretation of the time history
+
 **Leading explanation, not a firmware determination:** `0845` exposes learned
 or filtered alignment estimates. A step in actual aim can produce gradual
 changes in those estimates as the ECU accumulates useful driving evidence.

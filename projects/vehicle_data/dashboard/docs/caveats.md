@@ -291,16 +291,44 @@ and when your phone is notified is on the [warnings page](/docs/warnings.html). 
 
 Two angles come from the ACC radar identifier `0845`, at candidate quality, read during
 engine-running intervals. The ±1° reference is a monitoring convention for this project, not an OEM
-alignment result. The System view shows the latest angle per axis, and on tap the 1-minute and
-5-minute averages (with sample counts), the 5-minute peak, and the margin to ±1.00°. Drive page 2's
-**Radar aim** tile shows the same angles at a glance: the latest value per axis and the 1-minute and
-5-minute averages. The values are what the ACC radar module reports about its own aim. They are not
+alignment result. The System view shows the latest angle per axis, and on tap the 1-minute, 5-minute,
+30-minute and 2-hour averages (with sample counts), the 5-minute peak, and the margin to ±1.00°.
+Drive page 2's **Radar aim** tile shows the same angles at a glance: the latest value per axis and
+the four averages. The 1- and 5-minute averages cover one unbroken run of reads and start over after
+a gap of more than 30 seconds, such as an engine stop. The 30-minute and 2-hour averages are plain
+time windows ending at the latest read, so they keep averaging across a fuel stop; their sample
+counts show how much of the window has readings. The values are what the ACC radar module reports
+about its own aim. Under the elevation value both views print what the sign means physically:
+`aimed high · tilt down` for a negative angle, `aimed low · tilt up` for a positive one, `level` near
+zero. This comes from the June 2026 repair, when the owner tilted the radar module down by about 1°
+and the stored elevation moved from −1.26° up through zero. It is an owner-reported direction, relative
+to the radar's own calibration, not a measured bracket angle. The horizontal (azimuth) sign has no
+known left/right mapping, so the System view says so instead of guessing. They are not
 a measurement of the van, and no alignment result or calibration is implied. Its footer reads
 `within ±1°`, `near the ±1° limit` (0.8° or more) or `outside ±1°` while readings arrive. When they
 stop, it reads `Not reading · last 3:10 pm` and the last values are dimmed; the averages then cover
 the last minutes of that reading run, not the current minute. "Awaiting
 readings" means no angle has been read during the current drive yet. If the radar reads are ever
 switched off on the Pi, the System view says so in one sentence.
+
+### Drive calibration
+
+Where it has been switched on for this dashboard address, the System view's radar card has a
+**Drive calibration…** button. It runs the radar's own drive alignment, the routine that cleared the
+"ACC not available" fault in June 2026. Unlike everything else on the dashboard, this changes
+something in the van: a calibration that finishes changes how the radar aims.
+
+- Start it stopped, with the engine running. The Pi refuses a start while the van is moving.
+- Then drive straight and steady, about 30–45 mph, on a clear road. In June it took about
+  17 minutes; there is no fixed length. The percentage is the radar's own progress counter.
+- Do not rely on cruise control or forward-collision warning until it finishes. How they behave
+  while the routine runs has not been established.
+- **Stop calibration** ends it. So do switching the engine off, ten minutes without progress, and
+  one hour. Closing the sheet does not end it; open it again to see the progress.
+- A finished calibration is not proof the radar is aimed correctly. If the radar was knocked, check
+  that it sits properly in its bracket first; the routine cannot tell.
+- The percentage, the reason a run ended, and a short technical line from the radar are shown as
+  reported. A run that ends early says why in plain words.
 
 ## Diagnostic codes
 

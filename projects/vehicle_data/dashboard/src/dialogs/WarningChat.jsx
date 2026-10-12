@@ -9,6 +9,7 @@
    (CSP); model replies render as text nodes, never as HTML. */
 import { useEffect, useRef, useState } from "preact/hooks";
 import * as H from "./WarningChat.helpers.js";
+import { useModalDialog } from "./modalDialog.js";
 
 /** The controller is created once per mounted dialog; every state change re-renders from its snapshot. */
 function useController(onWarningsChangedRef) {
@@ -83,53 +84,32 @@ function Proposal({ proposal, locked, onToggle, onApply, onRemove }) {
 }
 
 export default function WarningChat({ open, mode, context, onClose, onWarningsChanged }) {
-  const dialogRef = useRef(null);
   const closeRef = useRef(null);
   const codeRef = useRef(null);
   const inputRef = useRef(null);
   const logRef = useRef(null);
   const stickRef = useRef(true);
-  const triggerRef = useRef(null);
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
   const onWarningsChangedRef = useRef(onWarningsChanged);
   onWarningsChangedRef.current = onWarningsChanged;
   const [ctrl, snap] = useController(onWarningsChangedRef);
   const selectorKey = H.contextKey(mode, context);
 
-  // Open/close follows the `open` prop (and a changed event while open). showModal traps focus
-  // and handles Escape; the close button gets focus like the old dialog.
-  useEffect(() => {
-    const d = dialogRef.current;
-    if (!d) return;
-    if (open) {
-      if (!d.open) {
-        triggerRef.current = typeof document !== "undefined" ? document.activeElement : null;
-        try { d.showModal(); } catch { d.setAttribute("open", ""); }
-      }
+  // Open/close follows the `open` prop (and a changed event while open); the close button gets
+  // focus like the old dialog. Native close (Esc, X, backdrop, close()) stops polling, restores
+  // focus, tells the parent. An in-progress answer keeps running on the Pi; reopening the event
+  // shows it.
+  const { dialogRef } = useModalDialog({
+    open,
+    onClose,
+    focusRef: closeRef,
+    deps: [selectorKey],
+    onOpen: () => {
       stickRef.current = true;
       if (inputRef.current) inputRef.current.value = "";
       ctrl.open(mode, context);
-      if (closeRef.current) closeRef.current.focus({ preventScroll: true });
-    } else if (d.open) {
-      d.close();
-    }
-  }, [open, selectorKey]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Native close (Esc, X, backdrop, close()) stops polling, restores focus, tells the parent.
-  // An in-progress answer keeps running on the Pi; reopening the event shows it.
-  useEffect(() => {
-    const d = dialogRef.current;
-    if (!d) return;
-    const handle = () => {
-      ctrl.close();
-      const t = triggerRef.current;
-      if (t && t.isConnected && typeof t.focus === "function") { try { t.focus(); } catch { /* ignore */ } }
-      if (onCloseRef.current) onCloseRef.current();
-    };
-    d.addEventListener("close", handle);
-    return () => d.removeEventListener("close", handle);
-  }, [ctrl]);
+    },
+    onNativeClose: () => ctrl.close(),
+  });
 
   // Polling pauses while the page is hidden and resumes with an immediate poll when it returns.
   useEffect(() => {

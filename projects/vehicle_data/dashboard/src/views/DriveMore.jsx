@@ -103,7 +103,7 @@ function GearTile() {
 }
 
 // Radar aim: latest angle per axis (current record, else the dated last reading), plus the
-// broker's 1-minute and 5-minute means. The windows ride on status-lite, which republishes only
+// broker's 1-minute, 5-minute, 30-minute and 2-hour means. The windows ride on status-lite, which republishes only
 // when its stable projection (these windows included) changes; status_full is the fallback.
 const radar = computed(() => {
   void dayClock.value; // "last 3:10 pm" becomes "yesterday 3:10 pm" after midnight
@@ -134,8 +134,11 @@ const radarText = RADAR_TILE_AXES.map((axis) => ({
   id: axis.id,
   label: axis.label,
   latest: computed(() => radar.value.axes[axis.id].latest),
+  aim: computed(() => radar.value.axes[axis.id].aim),
   m1: computed(() => radar.value.axes[axis.id].m1),
   m5: computed(() => radar.value.axes[axis.id].m5),
+  m30: computed(() => radar.value.axes[axis.id].m30),
+  h2: computed(() => radar.value.axes[axis.id].h2),
 }));
 
 function RadarTile() {
@@ -147,6 +150,7 @@ function RadarTile() {
           <div class="drive2-radar__axis" key={t.id}>
             <div class="drive2-radar__name">{t.label}</div>
             <div class="drive2-radar__value num">{t.latest}</div>
+            <div class="drive2-radar__aim">{t.aim}</div>
             <div class="drive2-radar__row">
               <span>1-min avg</span>
               <b class="num">{t.m1}</b>
@@ -154,6 +158,14 @@ function RadarTile() {
             <div class="drive2-radar__row">
               <span>5-min avg</span>
               <b class="num">{t.m5}</b>
+            </div>
+            <div class="drive2-radar__row">
+              <span>30-min avg</span>
+              <b class="num">{t.m30}</b>
+            </div>
+            <div class="drive2-radar__row">
+              <span>2-h avg</span>
+              <b class="num">{t.h2}</b>
             </div>
           </div>
         ))}

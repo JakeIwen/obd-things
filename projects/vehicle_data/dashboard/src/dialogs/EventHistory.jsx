@@ -5,6 +5,7 @@
    All non-DOM logic lives in EventHistory.helpers.js. No inline styles (CSP). */
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import * as H from "./EventHistory.helpers.js";
+import { restoreFocus, showModal } from "./modalDialog.js";
 
 // ---------- small building blocks ----------
 
@@ -585,8 +586,7 @@ export default function EventHistory({ open, eventId, onClose, onAskCodex }) {
     if (handoffRef.current) { handoffRef.current = false; return; }
     if (open) {
       if (!d.open) {
-        triggerRef.current = typeof document !== "undefined" ? document.activeElement : null;
-        try { d.showModal(); } catch { d.setAttribute("open", ""); }
+        triggerRef.current = showModal(d);
         if (titleRef.current) titleRef.current.focus({ preventScroll: true });
       }
       if (eventId != null) openEvent(eventId); else listEvents();
@@ -603,8 +603,7 @@ export default function EventHistory({ open, eventId, onClose, onAskCodex }) {
     const handle = () => {
       generation.current++;
       if (skipCloseRef.current) { skipCloseRef.current = false; return; }
-      const t = triggerRef.current;
-      if (t && t.isConnected && typeof t.focus === "function") { try { t.focus(); } catch { /* ignore */ } }
+      restoreFocus(triggerRef.current);
       if (onCloseRef.current) onCloseRef.current();
     };
     d.addEventListener("close", handle);

@@ -734,6 +734,9 @@ activation are covered by the [systemd installation runbook](docs/systemd-instal
 - Only the Tailscale listener has DTC jobs, so only one process writes the
   unlocked on-disk job pointer. The request file is exclusive-create. Start
   one scan at a time.
+- The radar drive-calibration dialog appears only on a listener started with
+  `--enable-radar-service-alignment` (neither tracked unit passes it); see
+  "Radar Service Drive Alignment from the dashboard" below.
 
 ### Frontend decisions
 
@@ -1021,6 +1024,12 @@ Those are the only other CAN frames it can construct:
 18DAC7F1#032231D200000000
 18DAC7F1#032231D300000000
 ```
+
+The fixed radar `0845` read and, only after an owner request relayed by the
+broker, the radar service-alignment requests are the helper's remaining frames;
+see "Radar alignment dashboard" and "Radar Service Drive Alignment from the
+dashboard" below. Those service requests are the one place this helper changes
+a diagnostic session or sends TesterPresent.
 
 All seven are physical `ReadDataByIdentifier` requests to endpoints registered
 in `lib/modules.py`; no functional broadcast request exists. The helper stops
@@ -1418,6 +1427,10 @@ POST /v1/acquisitions/battery.voltage
      {"mode":"wake_if_asleep"}  # local Unix API only; fixed B-CAN profile
 POST /v1/observations/<allowlisted-metric>
      {"value":...,"unit":"...","source":"...","bus":"...","quality":"..."}
+GET  /v1/radar/service-alignment
+POST /v1/radar/service-alignment
+     {"action":"start","confirm_stationary_engine_running":true,"confirm_drive_without_acc":true}
+     {"action":"stop"}
 ```
 
 GETs are cache-only. Observation POSTs exist only on the Unix API and are not
@@ -1439,7 +1452,10 @@ dashboard/manual voltage-check wrapper passes `--passive-only`, so it cannot
 indirectly select the wake mode through `voltage_mon.py`.
 
 The broker Unix API has no raw-frame, arbitrary-DID, diagnostic-session,
-live-DTC-scan, DTC-clear, reset, calibration, configuration, or PROXI endpoint.
+live-DTC-scan, DTC-clear, reset, configuration, or PROXI endpoint. Its one
+calibration action (added 2026-10-10) is the fixed radar service-alignment
+relay above: two exact request bodies, no parameters, described under
+"Radar Service Drive Alignment from the dashboard" below.
 Its DTC GET reads only the atomic JSON cache and cannot open SocketCAN. History
 and health likewise read only SQLite. The optional Tailscale web job boundary
 is separate: it can place only one explicitly confirmed, closed-schema request for the
@@ -1697,13 +1713,17 @@ Rolling summaries count new observations in the broker. As of the September 20
 retention update, each window ends at its latest radar observation and freezes
 there while parked. The last reading, means, peaks, sample counts and original
 timestamp remain visible with a "LAST RECORDED · NOT LIVE" badge. New samples
-after a gap over 30 seconds start new averaging windows. Live freshness gates
+after a gap over 30 seconds start new 1-minute and 5-minute windows; the
+30-minute and 2-hour windows added on 2026-10-10 (`WINDOW_SECONDS` in
+`radar_alignment.py`) are plain time windows ending at the latest read and keep
+averaging across such gaps. Live freshness gates
 remain unchanged, and retained values never enter the live metric cache.
 The small `radar-alignment.json` file beside the history database retains these
 summaries across restarts; the history thread flushes changed summaries. A
-bounded indexed startup query can recover the final five-minute window from
-existing historian observations, deduplicating repeated cached samples.
-Raw averaging history is bounded to five minutes/512 observations per axis.
+bounded indexed startup query can recover the final two hours of windows from
+existing historian observations, deduplicating repeated cached samples, and
+rebuilds a saved summary that predates a window. Raw averaging history is
+bounded to two hours/1,024 observations per axis.
 Dashboard GETs perform no SQL, disk write, or diagnostic request.
 
 Activation verified September 20 via the live snapshot: the broker restarted
@@ -1719,6 +1739,87 @@ that era still matters: `status.current_owner` becomes `broker` during an
 in-flight operation and null between reads; it is not a service-ownership
 indicator. Confirmed DTC history older than one calendar month (UTC, month-end
 clamped) is collapsed by default; this is presentation only.
+
+### Radar Service Drive Alignment from the dashboard (2026-10-10)
+
+**Status: implemented and unit-tested; not yet run on the vehicle.** The first
+owner run is the on-vehicle validation. Review its log and the drive
+recorder's raw C-CAN capture afterwards, in particular the `31 01` and `31 02`
+reply lengths, which the June campaign never recorded.
+
+Deployed 2026-10-10 19:08 MDT and, after a maintainability review restructured
+the new modules, again 2026-10-11 16:18 and 17:01 MDT, each time with the van
+asleep: guarded restart of the broker and both listeners, no CAN transmit
+counter changed, all three vehicle roles listen-only/ERROR-ACTIVE, dashboard
+build `fe8d2e31f1ca`. No listener has the opt-in flag yet, so the route answers
+`radar_service_disabled` and the button is hidden. The build from before the
+feature is kept at
+`tmp/vehicle_data/dashboard-before-radar-service-20261010T1908.tar.gz`.
+
+The owner asked for a way to run the ACC radar's Service Drive Alignment
+(routine `0x0251`) from the dashboard, without an agent session or SSH. This
+is actuation on a forward-collision radar: a completed routine changes the
+radar's calibration, and ACC/FCW behaviour while it runs is not characterised.
+The OEM procedure checks mounting first; the software cannot verify that.
+
+The sequence repeats the 2026-06-27 run recorded in
+[`adjustment_1_results_3.md`](../radar/findings/adjustment_1_results_3.md):
+`10 03` once, `31 01 0251`, then `3E 00` plus a `31 03 0251` progress read
+each helper cycle. Status byte 2 is progress 0–100 and byte 1 is the routine
+state (`01` running, `03` completed, `04` idle). The pre-start `31 02` of the
+June script is not sent: the fresh `10 03` already resets the routine.
+
+Where each rule is enforced:
+
+- **Helper (`radar_service_alignment.py`, inside `active_drive.py`).** Only
+  five fixed single-frame requests and one FlowControl are constructible, each
+  with its own transmit-permit purpose (`transmit_permit.RADAR_SERVICE_*`);
+  all of them are in `radar_service_transport.py`.
+  Every send takes fresh running evidence and repeats the active gates
+  (`radar_drive_steps.FreshAuthority`), like the `0845` read. A start is
+  refused unless the cycle's `vehicle.speed` is at most 0.5 mph. The requests
+  share the `0845` poller's socket, so replies never queue in front of the next
+  alignment read. Stdin is read only when the broker passes
+  `--enable-radar-service-alignment` (the rolling-deploy handshake, as for
+  `--enable-oil-life`).
+- **Ends.** Completed at state `03` with 100 %: nothing more is sent and the
+  session lapses on its own (about 5 s). The owner's stop, 10 minutes without
+  progress, and the one-hour limit send `31 02 0251` once. Three reads
+  reporting idle or a negative response end it as a lost routine; 8 s without
+  any reply ends it as no response. An engine stop ends the helper, and the
+  session lapses. `10 03` is never repeated within a run.
+- **Broker (`radar_service_control.py`).** Starts the helper with the flag and
+  a stdin pipe, relays `start`/`stop` with a request id, strictly validates the
+  helper's `radar_service_alignment` events (a malformed one ends the helper,
+  as for every other event, so the helper bounds its own `detail` and speed to
+  the limits declared beside the event fields), and tracks one run. The broker
+  owns the control as `broker.radar_service`. It never touches CAN. A
+  start is refused unless the helper is alive and has announced support, and
+  not more than once per 10 s. Each run is logged to
+  `tmp/radar/service_alignment/<UTC>_<id>.jsonl`.
+- **Web (`web.py`).** The route exists on every listener but relays only when
+  the listener was started with `--enable-radar-service-alignment`: same-origin
+  JSON from the bind origin or an added `--radar-service-origin`. Neither
+  tracked unit passes the flag. `web.radar_service_enabled` tells the frontend
+  whether to offer the button.
+- **Dashboard.** System → Radar alignment → "Drive calibration…" opens
+  `dialogs/RadarCalibration.jsx`. It polls the route every 2 s while open,
+  shows progress, and offers Stop. Closing it does not stop a run.
+
+Enabling it on the LAN listener is an owner decision: that listener has no
+authentication, so any device on the van network could start or stop the
+routine while the van is stopped with the engine running. See the
+[systemd runbook](docs/systemd-install.md#radar-service-alignment-opt-in).
+
+The run state is deliberately not part of `/v1/status` or the snapshot, so the
+MacBook dashboard's payloads are unchanged apart from the one added web flag.
+State names, end reasons, the path and both request bodies are declared once
+in `radar_service_alignment.json`, which the helper, broker and dashboard load.
+
+Tests: `tests/test_radar_service_alignment.py` (fixed frames, state machine,
+the routine inside `run_active_session` against a scripted radar),
+`tests/test_radar_service_control.py` (relay, a real supervised child over the
+pipe, listener gating) and `dashboard/test/RadarCalibration.helpers.test.mjs`.
 
 ### Last-recorded display policy (September 20 audit)
 

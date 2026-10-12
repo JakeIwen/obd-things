@@ -29,7 +29,7 @@ def route_name(path: str, routes: RouteTable) -> str | None:
 
 
 def web_flags(server, *, include_bind: bool = True, include_build: bool = False) -> dict[str, Any]:
-    """Preserve the three existing flag shapes and their SSE insertion order.
+    """Preserve the three flag shapes and their SSE insertion order.
 
     The full v1 stream deliberately omits bind. Dashboard snapshot/lite-stream
     flags add build (even when None) and use sorted keys, matching HTTP JSON.
@@ -39,6 +39,7 @@ def web_flags(server, *, include_bind: bool = True, include_build: bool = False)
         "warning_chat_enabled": server.warning_chat_socket is not None,
         "active_acquisition_enabled": server.allow_acquisitions,
         "dtc_jobs_enabled": server.dtc_controller is not None,
+        "radar_service_enabled": bool(server.radar_service_origins),
     }
     if include_bind:
         flags["bind"] = f"{server.server_address[0]}:{server.server_address[1]}"

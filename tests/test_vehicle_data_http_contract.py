@@ -27,6 +27,7 @@ class HttpContractTests(unittest.TestCase):
             warning_chat_socket=None,
             allow_acquisitions=False,
             dtc_controller=None,
+            radar_service_origins=frozenset(),
             server_address=("127.0.0.1", 8765),
             build_id=lambda: None,
             stream_max_seconds=1,
@@ -42,8 +43,9 @@ class HttpContractTests(unittest.TestCase):
         full = http_common.web_flags(server)
         self.assertEqual(list(full), [
             "warning_chat_enabled", "active_acquisition_enabled", "dtc_jobs_enabled",
-            "bind",
+            "radar_service_enabled", "bind",
         ])
+        self.assertIs(full["radar_service_enabled"], False)
         self.assertEqual(full["bind"], "127.0.0.1:8765")
         stream = http_common.web_flags(server, include_bind=False)
         self.assertEqual(list(stream), list(full)[:-1])

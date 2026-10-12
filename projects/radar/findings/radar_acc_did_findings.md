@@ -167,7 +167,7 @@ normal use. Don't *rely* on it yet, but it's the path that best fits "van is hom
   before/after baseline now exists). Speed via `0x1002` logged correctly (0-113 km/h) — logger fully working.
 
 ## ★★ BREAKTHROUGH (2026-06-26): nudge + drive → radar AUTO-ALIGNED (0845 converged through 0)
-After physically nudging the radar ~1.3°, a clean 29-min drive (`radar_acc_drive_20260626_232502.csv`,
+After physically nudging the radar ~1.3° (tilting it **downward**, per the owner, recorded 2026-10-10), a clean 29-min drive (`radar_acc_drive_20260626_232502.csv`,
 1736 rows, 0% garbage, max ~49 mph) showed `elev_0845` **converging monotonically toward 0** over the drive:
 5-min window means −0.446 → −0.341 → −0.231 → −0.135 → **+0.153 → +0.275** (started −0.62, ended +0.28).
 `elev_0850` tracked it (−0.36 → +0.25). So:

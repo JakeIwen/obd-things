@@ -1,5 +1,11 @@
 # Adjustment #1 — Results Drive #3: SDA SUCCESS — fault RESOLVED (2026-06-27)
 
+> **Reference-frame clarification, October 8:** this record establishes successful
+> SDA and a nonzero post-SDA `0845` value. Its interpretation below that the DIDs
+> read relative to the committed calibration was not independently verified.
+> The exact diagnostic reference frame remains unresolved; see the canonical
+> [DID map](did_map.md) and [October investigation](2026-10-08_post_collision_alignment.md).
+
 **Headline: the DIY Service Drive Alignment worked. C1418-78 went from active (0x8F) to a stored-history
 record (0x0E), ACC/FCW is functional again, and the fix held on the next drive.** This is the resolution
 of the whole investigation. Source logs (gitignored `tmp/` + committed `findings/`):

@@ -1,7 +1,7 @@
 """Opaque one-use authorization for coordinated engine-running CAN reads.
 
 This is deliberately not a generic transmission permission.  A permit can be
-issued only for one of the two fixed active-drive transports, while a live
+issued only for one of the allowlisted fixed active-drive frames, while a live
 exclusive resolved C-CAN diagnostic lock is held and the latest qualified C-CAN
 snapshot contains three running-RPM samples.  It expires quickly and is
 consumed by the first attempted transport use, successful or otherwise.
@@ -27,9 +27,19 @@ PCM_OIL_LIFE = "pcm.oil_life_remaining"
 RF_HUB_PRESSURE = "rf_hub.pressure"
 RADAR_ALIGNMENT = "radar_acc.alignment"
 RADAR_ALIGNMENT_FLOW = "radar_acc.alignment_flow_control"
+# Owner-started Service Drive Alignment (radar_service_alignment.py): one
+# purpose per fixed frame, so a permit for one cannot send another.
+RADAR_SERVICE_SESSION = "radar_acc.service_alignment.session"
+RADAR_SERVICE_START = "radar_acc.service_alignment.start"
+RADAR_SERVICE_STOP = "radar_acc.service_alignment.stop"
+RADAR_SERVICE_STATUS = "radar_acc.service_alignment.status"
+RADAR_SERVICE_KEEPALIVE = "radar_acc.service_alignment.keepalive"
+RADAR_SERVICE_FLOW = "radar_acc.service_alignment.flow_control"
 ALLOWED_PURPOSES = frozenset(
     (PCM_GENERATOR_DUTY, PCM_CRANKSHAFT_TORQUE, PCM_VVT_OIL_TEMPERATURE, PCM_OIL_LIFE,
-     RF_HUB_PRESSURE, RADAR_ALIGNMENT, RADAR_ALIGNMENT_FLOW)
+     RF_HUB_PRESSURE, RADAR_ALIGNMENT, RADAR_ALIGNMENT_FLOW,
+     RADAR_SERVICE_SESSION, RADAR_SERVICE_START, RADAR_SERVICE_STOP,
+     RADAR_SERVICE_STATUS, RADAR_SERVICE_KEEPALIVE, RADAR_SERVICE_FLOW)
 )
 RUNNING_RPM = 400.0
 REQUIRED_RPM_SAMPLES = 3

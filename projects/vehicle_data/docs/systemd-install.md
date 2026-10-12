@@ -118,3 +118,29 @@ ordinary successful address assignment. The DTC worker remains inactive until
 an authorized request; never trigger a diagnostic job merely to test a watcher.
 If activation fails, preserve logs and the effective units before changes;
 do not restore the known cyclic path definition or bypass the parked gate.
+
+## Radar service alignment (opt-in)
+
+The dashboard's radar drive calibration (README section "Radar Service Drive
+Alignment from the dashboard") is off unless a listener is started with
+`--enable-radar-service-alignment`. Neither tracked unit passes it. It is
+actuation on the forward radar, and the LAN listener has no authentication:
+with the flag, any device on the van network can start or stop the routine
+while the van is stopped with the engine running. Enabling it is the owner's
+decision, made per listener in a machine-local drop-in.
+
+For the LAN listener, append the flag to the `ExecStart=` line of
+`/etc/systemd/system/van-telemetry-web.service.d/10-lan.conf`. The trusted
+origin is the bind address (`http://192.168.6.103:8765`); a tablet that opens
+the dashboard by name also needs `--radar-service-origin http://vanpi.lan:8765`.
+Then reload and restart only the web listener, which owns no CAN interface:
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl restart van-telemetry-web.service
+curl -s http://192.168.6.103:8765/v1/status | python3 -c 'import json,sys; print(json.load(sys.stdin)["web"])'
+```
+
+`radar_service_enabled` should read `true`. Removing the flag and restarting
+the listener turns it off again; a run already started keeps going until it
+ends, the engine stops, or `van-telemetry` is restarted.

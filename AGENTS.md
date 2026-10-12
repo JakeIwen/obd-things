@@ -74,6 +74,30 @@ helper contracts. `tests/broker_pure_oracle.py` captures generated helper/state
 cases against whichever checkout `--repo-root` selects; compare old/new output
 rather than keeping a frozen broker implementation in the permanent tests.
 
+Radar Service Drive Alignment (routine `0x0251`) can be started from the dashboard
+since 2026-10-10. It is actuation, opt-in per web listener
+(`--enable-radar-service-alignment`), and had not been run on the vehicle when
+written; the vehicle-data README section "Radar Service Drive Alignment from the
+dashboard" is the contract. Where things live: `radar_service_transport.py`
+(everything the feature can send: the five fixed frames and their replies, on
+the `0845` poller's socket); `radar_service_alignment.py` (the contract shared
+by helper and broker: event fields and limits, command line format; and the
+helper's run state machine and stdin reader) with `radar_service_alignment.json`
+(states, end reasons, path and request bodies shared with the dashboard);
+`radar_drive_steps.py` (the radar part of a helper cycle: fresh evidence, gates
+and permits for every radar send); `radar_service_control.py` (broker side:
+helper flag and command pipe, run record, event validation, run log under
+`tmp/radar/service_alignment/`); the web relay in `web.py`; and
+`dashboard/src/dialogs/RadarCalibration{.jsx,.helpers.js}`. The run state is
+not in `/v1/status`. `tests/radar_service_support.py` holds the scripted radar.
+
+Shared pieces added with it (2026-10-11): `active_session_gates.py` holds the
+C-CAN active-drive session's gates and the `SessionOutcome` both drive helpers
+return (the B-CAN helper's own gates differ on purpose and stay in
+`bcan_auxiliary.py`); `dashboard/src/dialogs/modalDialog.js` is the open/close
+and focus behaviour of every dialog; `TelemetryWebHandler._read_json` in
+`web.py` is the one JSON body reader for the listener's POST routes.
+
 Oil-life telemetry is enabled (owner activation 2026-10-03):
 `engine.oil_life_remaining` is PCM DID `2185`, unsigned percent, polled at
 most once per minute during qualified engine-running intervals. The Service

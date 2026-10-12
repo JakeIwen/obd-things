@@ -19,6 +19,7 @@ import types
 from dataclasses import dataclass, field
 from typing import Any
 
+from projects.vehicle_data import radar_service_control
 from projects.vehicle_data.http_common import (
     MAX_REQUEST_BYTES,
     MAX_OBSERVATION_QUEUE_SECONDS,
@@ -104,12 +105,14 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
         (r"/v1/events(?:/.*)?", "_event_get"),
         # The broker (unlike the web proxy) accepts an empty metric name.
         (r"/v1/metrics/[^/]*", "_metric_get"),
+        (radar_service_control.API_PATH, "_radar_service_get"),
     )
     POST_ROUTES = (
         (r"/v1/events/.*", "_event_post"),
         (r"/v1/acquisitions/[^/]+", "_acquisition_post"),
         (r"/v1/observations/[^/]+", "_observation_post"),
         (r"/v1/maintenance/oil-changes", "_oil_change_post"),
+        (radar_service_control.API_PATH, "_radar_service_post"),
     )
 
     def _not_found(self, path: str) -> None:
@@ -159,39 +162,29 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
-            return self._json(
-                400,
-                {
-                    "available": False,
-                    "reason": "invalid_request",
-                    "detail": "invalid Content-Length",
-                },
-            )
+            return self._invalid_request("invalid Content-Length")
         if length <= 0 or length > MAX_REQUEST_BYTES:
-            return self._json(
-                400,
-                {
-                    "available": False,
-                    "reason": "invalid_request",
-                    "detail": "request body size is invalid",
-                },
-            )
+            return self._invalid_request("request body size is invalid")
         self._transport_phase("_begin_body_phase")
         body = self.rfile.read(length)
         self._transport_phase("_complete_body_phase")
         try:
             payload = json.loads(body)
         except (UnicodeDecodeError, json.JSONDecodeError):
-            return self._json(
-                400,
-                {
-                    "available": False,
-                    "reason": "invalid_request",
-                    "detail": "body must be one JSON object",
-                },
-            )
+            return self._invalid_request("body must be one JSON object")
         self._transport_phase("_begin_callback_phase")
         return getattr(self, name)(path, payload)
+
+    def _invalid_request(self, detail: str) -> None:
+        return self._json(
+            400, {"available": False, "reason": "invalid_request", "detail": detail},
+        )
+
+    def _radar_service_get(self, path: str) -> None:
+        return self._json(*self.broker.radar_service.status_response())
+
+    def _radar_service_post(self, path: str, payload: Any) -> None:
+        return self._json(*self.broker.radar_service.request(payload))
 
     def _event_post(self, path: str, payload: Any) -> None:
         return self._json(*self.broker.event_request("POST", self.path, payload))

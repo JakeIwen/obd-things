@@ -99,6 +99,81 @@ class RadarAlignmentTests(unittest.TestCase):
         self.assertEqual(history.summary(55)[metric]["300"]["count"], 1)
         self.assertEqual(history.summary(356)[metric]["300"]["mean"], .1)
 
+    def test_long_windows_span_gaps_that_reset_the_short_ones(self):
+        history = radar.AlignmentHistory()
+        metric = radar.METRICS[0]
+        for stamp in range(0, 600, 10):
+            history.add(metric, 1.0, stamp)
+        # A 50 s gap: the short windows start over, the long ones keep the run before it.
+        history.add(metric, -1.0, 650)
+        row = history.summary(650)[metric]
+        self.assertEqual(row["60"]["count"], 1)
+        self.assertEqual(row["300"]["count"], 1)
+        self.assertEqual(row["1800"]["count"], 61)
+        self.assertEqual(row["7200"]["count"], 61)
+        self.assertAlmostEqual(row["1800"]["mean"], 59 / 61)
+        self.assertEqual(row["1800"]["span_seconds"], 650)
+        # Samples older than two hours leave the longest window; the 30-minute one trails.
+        history.add(metric, -1.0, 7500)
+        row = history.summary(7500)[metric]
+        self.assertEqual(row["7200"]["count"], 32)
+        self.assertEqual(row["1800"]["count"], 1)
+        self.assertAlmostEqual(row["7200"]["mean"], 28 / 32)
+        self.assertEqual(row["7200"]["span_seconds"], 7200)
+        self.assertEqual(sorted(k for k in row if k.isdigit()), ["1800", "300", "60", "7200"])
+
+    def test_two_hours_of_ten_second_reads_fit_the_sample_bound(self):
+        history = radar.AlignmentHistory()
+        metric = radar.METRICS[1]
+        for stamp in range(0, 7201, 10):
+            history.add(metric, .5, stamp)
+        self.assertEqual(history.summary(7200)[metric]["7200"]["count"], 721)
+        self.assertLessEqual(len(history.samples[metric]), radar.MAX_SAMPLES)
+
+    def test_legacy_saved_summary_loads_without_long_windows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "radar.json"
+            window = {"count": 2, "mean": .3, "peak_abs": .4, "span_seconds": 10}
+            row = {"latest_value": .4, "observed_at": "2026-09-20T10:00:10+00:00",
+                   "60": window, "300": window}
+            path.write_text(json.dumps({"version": 1, "source": radar.SOURCE,
+                                        "last": {m: dict(row) for m in radar.METRICS}}))
+            history = radar.AlignmentHistory(path)
+            self.assertIsNone(history.storage_error)
+            self.assertEqual(history.summary(0)[radar.METRICS[0]]["300"], window)
+            self.assertNotIn("1800", history.summary(0)[radar.METRICS[0]])
+            del row["300"]
+            path.write_text(json.dumps({"version": 1, "source": radar.SOURCE,
+                                        "last": {m: dict(row) for m in radar.METRICS}}))
+            self.assertIn("required window", radar.AlignmentHistory(path).storage_error)
+
+    def test_history_recovery_rebuilds_a_legacy_summary_with_every_window(self):
+        metric = radar.METRICS[0]
+        latest = dict(metric=metric, source=radar.SOURCE, unit="deg", value=.4,
+                      observed_at="2026-09-20T10:00:10+00:00", captured_at="2026-09-20T10:00:15+00:00")
+        earlier = {**latest, "value": .2, "observed_at": "2026-09-20T09:20:00+00:00"}
+        historian = mock.Mock()
+        historian.latest_sample.side_effect = lambda name: latest if name == metric else None
+        historian.query_samples.return_value = [latest, earlier]
+        history = radar.AlignmentHistory()
+        legacy = {"count": 1, "mean": .4, "peak_abs": .4, "span_seconds": 0}
+        history.last[metric] = {"latest_value": .4, "observed_at": latest["observed_at"],
+                                "60": legacy, "300": legacy}
+        history.restore_from_historian(historian)
+        result = history.summary(0)[metric]
+        self.assertEqual(result["60"]["count"], 1)
+        self.assertEqual(result["1800"]["count"], 1)
+        self.assertEqual(result["7200"]["count"], 2)
+        self.assertAlmostEqual(result["7200"]["mean"], .3)
+        kwargs = historian.query_samples.call_args.kwargs
+        self.assertEqual(kwargs["limit"], radar.MAX_SAMPLES)
+        self.assertEqual((kwargs["end"], kwargs["start"].isoformat()),
+                         (latest["captured_at"], "2026-09-20T08:00:10+00:00"))
+        # An up-to-date summary that already has every window is left alone.
+        historian.query_samples.reset_mock()
+        history.restore_from_historian(historian)
+        historian.query_samples.assert_not_called()
+
     def test_retained_windows_survive_restart_without_becoming_new_samples(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "radar.json"

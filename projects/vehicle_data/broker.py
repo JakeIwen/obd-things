@@ -28,6 +28,7 @@ from projects.vehicle_data.last_readings import LastReadings
 from projects.vehicle_data.radar_alignment import (
     AlignmentHistory, LIVE_POLLING_COMMISSIONED, METRICS as RADAR_METRICS,
 )
+from projects.vehicle_data.radar_service_control import RadarServiceControl
 from projects.vehicle_data.metrics import METRICS, MetricDefinition
 from projects.vehicle_data.receive_watch import ReceiveSilenceWatch
 from projects.vehicle_data.can_availability import CanAvailability
@@ -640,6 +641,7 @@ class TelemetryBroker:
 
         self._lock = threading.RLock()
         self._radar_history = radar_history or AlignmentHistory()
+        self.radar_service = RadarServiceControl()
         # Prevent the passive collector from racing a client-triggered active
         # request before the cross-process observer/exclusive lock is reached.
         self._source_lock = threading.Lock()
@@ -1492,11 +1494,7 @@ class TelemetryBroker:
             else:
                 self._cache[metric] = result
                 self.last_readings.observe(result)
-                if metric in RADAR_METRICS:
-                    self._radar_history.add(
-                        metric, value, result.observed_monotonic,
-                        result.observed_at.isoformat(),
-                    )
+                self._radar_history.observe(result)
                 self._last_error.pop(metric, None)
                 if metric == TRANSMISSION_OIL_TEMPERATURE_METRIC:
                     self._resolve_data_quality(metric, source.name)
@@ -3210,7 +3208,7 @@ def main(argv=None) -> int:
             event_handler=lambda event: broker_holder[
                 "broker"
             ].handle_active_drive_event(event),
-            supervisor_factory=ActiveDriveSupervisor,
+            supervisor_factory=lambda **kwargs: broker_holder["broker"].radar_service.supervisor(ActiveDriveSupervisor, **kwargs),
         )
     if auxiliary_drive_enabled:
         auxiliary_supervisor = RoleAwareAuxiliaryDriveSupervisor(

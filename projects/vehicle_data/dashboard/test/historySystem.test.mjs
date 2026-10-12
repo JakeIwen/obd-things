@@ -487,9 +487,18 @@ test("broker: failures are red and named; missing status says waiting", () => {
 // System: radar alignment
 
 test("radar: not live → retained values, neutral badge, last-read time once", () => {
+  // The long windows arrived after this fixture was captured: give elevation both, azimuth neither.
+  const windows = {
+    ...FULL.radar_alignment,
+    "radar.alignment.elevation": {
+      ...FULL.radar_alignment["radar.alignment.elevation"],
+      1800: { count: 150, mean: -0.0251, peak_abs: 0.031, span_seconds: 1790 },
+      7200: { count: 610, mean: -0.0348, peak_abs: 0.041, span_seconds: 7190 },
+    },
+  };
   const r = H.radarModel({
     axes: { elevation: { fresh: false }, azimuth: { fresh: false } },
-    windows: FULL.radar_alignment,
+    windows,
     polling: FULL.radar_alignment_polling,
     nowMs: NOW,
   });
@@ -504,10 +513,15 @@ test("radar: not live → retained values, neutral badge, last-read time once", 
   assert.deepEqual(el.rows, [
     ["1-min average", "−0.02° (6)"],
     ["5-min average", "−0.02° (16)"],
+    ["30-min average", "−0.03° (150)"],
+    ["2-h average", "−0.03° (610)"],
     ["5-min peak", "0.02°"],
     ["Margin to ±1.00°", "0.98° to spare"],
+    ["Aim", "aimed high · tilt down"],
   ]);
-  assert.equal(az.rows[3][1], "0.84° to spare");
+  assert.deepEqual(az.rows.slice(2, 4), [["30-min average", "—"], ["2-h average", "—"]]);
+  assert.equal(az.rows[5][1], "0.84° to spare");
+  assert.deepEqual(az.rows[6], ["Aim", "left/right direction not known"]);
   assert.doesNotMatch(shownText(r), JARGON);
 });
 
@@ -524,7 +538,8 @@ test("radar: live values colour the badge; outside the reference shows the overs
   const out = live(1.2, 0);
   assert.deepEqual(out.badge, { text: "Outside ±1°", tone: "red" });
   assert.equal(out.note, null);
-  assert.equal(out.axes[0].rows[3][1], "0.20° beyond");
+  assert.equal(out.axes[0].rows[5][1], "0.20° beyond");
+  assert.equal(out.axes[0].rows[6][1], "aimed low · tilt up");
   assert.equal(out.axes[0].rows[0][1], "—");
 });
 
@@ -546,6 +561,7 @@ test("radar: held reading beats the window latest; not set up and no data explai
   const none = H.radarModel({ axes: {}, windows: {}, polling: { commissioned: true }, nowMs: NOW });
   assert.equal(none.badge.text, "No readings yet");
   assert.equal(none.axes[0].latest, "—");
+  assert.equal(none.axes[0].rows[6][1], "—");
   const err = H.radarModel({ axes: {}, windows: {}, polling: { commissioned: true, retained_storage_error: "read-only" }, nowMs: NOW });
   assert.match(err.problem, /not being saved: read-only/);
 });

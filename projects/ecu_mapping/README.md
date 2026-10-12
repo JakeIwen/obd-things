@@ -25,6 +25,13 @@ The cross-project [`AlfaOBD evidence history`](../../docs/alfaobd-evidence-histo
 canonical chronology of confirmed mis-mappings, incompatible profiles, recording/catalog traps,
 project parser corrections, and the trust rules derived from them.
 
+The [October 8 Uconnect investigation](findings/promaster_2022/2026-10-08_uconnect_investigation.md)
+collects existing diagnostic access, saved USB/voltage fault leads, and the
+CarPlay volume/screen-switching investigation plan. The owner reports a 10.1-inch
+display, while July reads reported `UBC` and `145.00.15`; reconcile current
+identity before selecting firmware or a variant-specific procedure. CarPlay
+navigation volume and application logs are not yet mapped.
+
 The [September 24 in-vehicle F1 scan](findings/promaster_2022/2026-09-24_in_vehicle_f1_scan.md)
 passively identifies an in-vehicle diagnostic client that also uses tester address `F1`. It
 periodically runs a read-only identity and `19 02 0D` sweep, plus PCM and TCM data jobs, but only
@@ -83,6 +90,12 @@ ambiguity, and rejects incompatible legacy throttle-blade and vehicle-speed scal
 [`legacy module comparison`](findings/promaster_2022/2026-07-30_legacy_module_cda_overlap.md)
 recovers shifter/GSM lifecycle-layout candidates while bounding ABS, EPS, and ORC results to
 identity continuity.
+
+The [October 8 CAN-CH candidate validation](findings/promaster_2022/2026-10-08_canch_wheel_speed_candidates.md)
+records frozen wheel-speed checks on three complete drives, steering/brake
+consistency, and the remaining physical references needed for dashboard
+integration. `canch_validation.py` is its offline-only reproducible checker;
+production CAN-CH telemetry remains passive-only with no new metric enabled.
 
 The permanent three-tap data and active-poll readiness analysis is recorded in
 [`2026-08-27 three-bus telemetry readiness`](findings/promaster_2022/2026-08-27_three_bus_telemetry_readiness.md).

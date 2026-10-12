@@ -12,6 +12,7 @@
 
 import { DASH, fmtValue, fmtFixed, fmtUnit, fmtTime, fmtAgeCoarse, fmtInt, fmtDelta } from "../format.js";
 import { metricLabel } from "../warningContext.js";
+import { aimText, AZIMUTH_AIM_UNMAPPED } from "../radarAim.js";
 
 import { DOCS, obj, arr, num, str, wallMs, when, humanize, capital, plural, clip, createStableGate, agoText } from "./view.helpers.js";
 
@@ -432,8 +433,11 @@ export function radarModel(input) {
       rows: [
         ["1-min average", windowText(w["60"])],
         ["5-min average", windowText(w300)],
+        ["30-min average", windowText(w["1800"])],
+        ["2-h average", windowText(w["7200"])],
         ["5-min peak", w300 && num(w300.peak_abs) !== null ? fmtFixed(w300.peak_abs, 2) + "°" : DASH],
         ["Margin to ±1.00°", margin],
+        ["Aim", axis.id === "azimuth" ? AZIMUTH_AIM_UNMAPPED : aimText(axis.id, value) || DASH],
       ],
     });
   }

@@ -774,21 +774,7 @@ def main(argv=None) -> int:
             f"--static-root {static_root} has no index.html; run "
             "'npm run build' in projects/vehicle_data/dashboard first"
         )
-    dtc_controller = None
-    dtc_origin = None
-    if args.enable_dtc_jobs:
-        base.validate_dtc_job_bind(args.bind)
-        dtc_origin = base.validate_dtc_origin(
-            args.dtc_trusted_origin, bind=args.bind, port=args.port
-        )
-        dtc_controller = base.DtcWebController(
-            request_path=args.dtc_request_file,
-            current_path=args.dtc_current_file,
-            cancel_dir=args.dtc_cancel_dir,
-            job_root=args.dtc_job_root,
-        )
-    elif args.dtc_trusted_origin:
-        raise SystemExit("--dtc-trusted-origin requires --enable-dtc-jobs")
+    dtc_controller, dtc_origin = base.dtc_controller_from_args(args)
     server = DashboardServer(
         (args.bind, args.port),
         static_root=static_root,
@@ -800,6 +786,7 @@ def main(argv=None) -> int:
         dtc_trusted_origin=dtc_origin,
         warning_chat_socket=None if args.no_warning_chat else args.warning_chat_socket,
         warning_chat_origins=args.warning_chat_origin,
+        radar_service_origins=base.radar_service_origins_from_args(args),
     )
     print(
         f"dashboard v2 listening on {args.bind}:{args.port} "

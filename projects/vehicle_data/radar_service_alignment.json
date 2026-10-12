@@ -1,0 +1,38 @@
+{
+  "path": "/v1/radar/service-alignment",
+  "event_type": "radar_service_alignment",
+  "listener_disabled_reason": "radar_service_disabled",
+  "states": {
+    "idle": "idle",
+    "requested": "requested",
+    "starting": "starting",
+    "running": "running",
+    "stopping": "stopping",
+    "completed": "completed",
+    "stopped": "stopped",
+    "failed": "failed"
+  },
+  "active_states": ["requested", "starting", "running", "stopping"],
+  "reasons": [
+    "owner_stopped",
+    "start_refused_moving",
+    "not_supported",
+    "session_rejected",
+    "start_rejected",
+    "no_response",
+    "routine_reset",
+    "routine_ended",
+    "stalled",
+    "time_limit",
+    "helper_ended",
+    "not_delivered"
+  ],
+  "start_request": {
+    "action": "start",
+    "confirm_stationary_engine_running": true,
+    "confirm_drive_without_acc": true
+  },
+  "stop_request": {
+    "action": "stop"
+  }
+}

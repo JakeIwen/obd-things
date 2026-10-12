@@ -218,6 +218,7 @@ a { color: var(--blue); }
 .drive2-radar__axis { display: flex; flex-direction: column; justify-content: center; min-width: 0; }
 .drive2-radar__name { font-size: 14px; font-weight: 700; letter-spacing: .04em; color: var(--dim); white-space: nowrap; }
 .drive2-radar__value { font-size: var(--value); font-weight: 600; line-height: 1.1; letter-spacing: -.02em; white-space: nowrap; }
+.drive2-radar__aim { min-height: 1.3em; font-size: 14px; color: var(--text-2); white-space: nowrap; }
 .drive2-radar__row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 15px; color: var(--text-2); white-space: nowrap; }
 .drive2-radar__row b { color: var(--text); font-weight: 600; }
 .drive2-radar--held .drive2-radar__value, .drive2-radar--held .drive2-radar__row b { opacity: .55; }
@@ -776,3 +777,18 @@ a { color: var(--blue); }
 .system-ua { font-size: 14px; color: var(--text-2); }
 .system-docs { display: flex; flex-wrap: wrap; gap: 4px 20px; margin-top: 8px; font-size: 15px; }
 .system-docs a { display: inline-flex; align-items: center; min-height: 44px; color: var(--text-2); }
+
+/* ---------- Radar drive calibration (.radar-cal*, src/dialogs/RadarCalibration.jsx) ---------- */
+.radar-cal { width: min(100vw - 24px, 640px); }
+.radar-cal__run { margin: 0 0 12px; padding: 12px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--card-2); }
+.radar-cal__run--ok { border-color: var(--green); }
+.radar-cal__run--red { border-color: var(--red); }
+.radar-cal__headline { font-size: 18px; font-weight: 700; }
+.radar-cal__percent { margin: 4px 0; font-size: 56px; font-weight: 600; line-height: 1.05; }
+.radar-cal__bar { display: block; width: 100%; height: 14px; accent-color: var(--green); }
+.radar-cal__facts { margin-top: 8px; font-size: 15px; }
+.radar-cal__reason { margin: 8px 0 0; font-size: 16px; }
+.radar-cal__detail { margin: 4px 0 0; font-size: 14px; color: var(--dim); overflow-wrap: anywhere; }
+.radar-cal__text { margin: 0 0 8px; font-size: 15px; color: var(--text-2); }
+.radar-cal__text--caution { color: var(--amber); }
+.radar-cal__action { flex: 1 1 auto; min-height: 56px; font-size: 18px; }

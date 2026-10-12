@@ -26,6 +26,12 @@ not validate alignment during driving. See the same finding for exact evidence.
 ## ✅ RESOLVED (2026-06-27) — see `findings/adjustment_1_results_3.md`
 C1418-78 is **cleared and ACC/FCW works again.** Path that fixed it: a **physical nudge** (~1.3°) brought
 the −1.26° boresight back inside the radar's auto-align window (drive #1: −1.26°→+0.28°), then the **DIY
+**Sign convention (owner-reported, recorded 2026-10-10):** that nudge **tilted the radar module
+downward by about 1°**, and the stored elevation estimate moved from −1.26° up through zero. So a
+**negative `0845` elevation means the radar is aimed higher than its calibration and is corrected by
+tilting the module down**; positive means aimed low, tilt up. The dashboard's radar views print this
+reading beside the elevation value (`dashboard/src/radarAim.js`). No left/right mapping has been
+established for azimuth. Continued:
 Service Drive Alignment** — `radar_acc_sda_drive.py --arm` started routine `0x0251`, held the session with
 `3E`, and we drove steady ~40 mph ~17 min. The routine's **progress counter** (status byte[2], 0–100%) hit
 100% and committed: DTC `0x8F`→`0x0E` (testFailed + warning cleared), held on the next drive. **Pure-UDS,
@@ -43,9 +49,22 @@ DIDs in `findings/radar_acc_did_findings.md` and `docs/oem/`.
 
 ## Maintained runtime
 
+**Service Drive Alignment from the dashboard (2026-10-10, not yet run on the vehicle).**
+After the October collision the owner asked for a self-run SDA. Routine `0x0251` can now be
+started, watched and stopped from the telemetry dashboard (System → Radar alignment → Drive
+calibration…) on a listener started with `--enable-radar-service-alignment`. It runs inside the
+broker's engine-running C-CAN helper with fixed frames, starts only with the van stationary, and
+repeats the June 27 sequence. Design, gates and tests are in the vehicle-data README section
+"Radar Service Drive Alignment from the dashboard"; code is
+`projects/vehicle_data/radar_service_alignment.py`. The deleted `radar_acc_sda_drive.py` is not
+restored. The first run is the on-vehicle validation: review
+`tmp/radar/service_alignment/*.jsonl` and the drive recorder's C-CAN capture afterwards, and record
+the `31 01`/`31 02` reply shapes in `findings/did_map.md`. The OEM order still applies: inspect
+mounting before calibrating.
+
 The telemetry dashboard now has an always-visible alignment panel backed by
 `projects/vehicle_data/radar_alignment.py` (2026-09-16). It displays candidate
-stored `0845` elevation/azimuth and trailing one/five-minute sample averages.
+stored `0845` elevation/azimuth and trailing one/five/thirty-minute and two-hour sample averages.
 The +/-1 degree band is an approximate monitoring reference, not a verified
 firmware trip threshold; the signed microdegree scaling remains inferred.
 The instantaneous `0841` pitch signal is not used for this band.

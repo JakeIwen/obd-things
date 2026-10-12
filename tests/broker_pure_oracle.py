@@ -223,6 +223,7 @@ def delivery_rows():
         server = SimpleNamespace(
             telemetry_client=SimpleNamespace(request=request),
             warning_chat_socket=None, allow_acquisitions=True, dtc_controller=None,
+            radar_service_origins=frozenset(),
             server_address=("127.0.0.1", 8765), build_id=lambda: "oracle-build",
             next_snapshot_delivery=lambda: {"instance_id": "oracle", "sequence": 1},
         )

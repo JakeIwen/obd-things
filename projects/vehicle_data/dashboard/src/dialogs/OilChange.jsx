@@ -11,6 +11,7 @@
    No inline styles (CSP); every string is a text node. */
 import { useEffect, useRef, useState } from "preact/hooks";
 import * as H from "./OilChange.helpers.js";
+import { useModalDialog } from "./modalDialog.js";
 
 const EMPTY_FORM = Object.freeze({ date: "", mileage: "", mileageBad: false, source: H.DEFAULT_SOURCE, notes: "" });
 
@@ -19,13 +20,9 @@ function FieldError({ id, text }) {
 }
 
 export default function OilChange({ open, maintenance, odometer, onSaved, onClose }) {
-  const dialogRef = useRef(null);
   const closeRef = useRef(null);
-  const triggerRef = useRef(null);
   const pendingRef = useRef(null);
   const mountedRef = useRef(true);
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
   const onSavedRef = useRef(onSaved);
   onSavedRef.current = onSaved;
 
@@ -37,33 +34,9 @@ export default function OilChange({ open, maintenance, odometer, onSaved, onClos
 
   useEffect(() => () => { mountedRef.current = false; }, []);
 
-  // Open/close follows the `open` prop; showModal traps focus and handles Escape.
-  useEffect(() => {
-    const d = dialogRef.current;
-    if (!d) return;
-    if (open) {
-      if (!d.open) {
-        triggerRef.current = typeof document !== "undefined" ? document.activeElement : null;
-        try { d.showModal(); } catch { d.setAttribute("open", ""); }
-      }
-      if (closeRef.current) closeRef.current.focus({ preventScroll: true });
-    } else if (d.open) {
-      d.close();
-    }
-  }, [open]);
-
-  // Native close (Esc, ×, backdrop) restores focus and tells the parent.
-  useEffect(() => {
-    const d = dialogRef.current;
-    if (!d) return undefined;
-    const handle = () => {
-      const t = triggerRef.current;
-      if (t && t.isConnected && typeof t.focus === "function") { try { t.focus(); } catch { /* ignore */ } }
-      if (onCloseRef.current) onCloseRef.current();
-    };
-    d.addEventListener("close", handle);
-    return () => d.removeEventListener("close", handle);
-  }, []);
+  // Open/close follows the `open` prop; a native close (Esc, ×, backdrop) restores focus and
+  // tells the parent.
+  const { dialogRef, close } = useModalDialog({ open, onClose, focusRef: closeRef });
 
   const data = H.newerMaintenance(maintenance, fetched);
   const today = H.localToday(new Date());
@@ -123,7 +96,6 @@ export default function OilChange({ open, maintenance, odometer, onSaved, onClos
     }
   };
 
-  const close = () => { if (dialogRef.current && dialogRef.current.open) dialogRef.current.close(); };
   const onBackdrop = (ev) => { if (ev.target === dialogRef.current) close(); };
 
   const statusText = result.text || storage;

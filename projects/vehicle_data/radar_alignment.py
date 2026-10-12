@@ -2,6 +2,8 @@
 
 The signed microdegree interpretation is inferred in the radar project's DID
 map. The 1 degree reference is a monitoring aid, not an ECU trip guarantee.
+Each axis publishes 1-minute, 5-minute, 30-minute and 2-hour windows ending
+at its latest read (see WINDOW_SECONDS for how gaps are treated).
 """
 
 from collections import deque
@@ -27,6 +29,18 @@ LIVE_POLLING_COMMISSIONED = True
 POLL_INTERVAL_SECONDS = 10.0
 STALE_AFTER_SECONDS = 30.0
 SOURCE = "radar_acc.did.0845"
+# Rolling windows published per axis, keyed by their length in seconds. The
+# short windows average one contiguous run of reads: a gap over
+# STALE_AFTER_SECONDS (an engine stop, a disabled poller) starts them afresh.
+# The long windows are plain time windows ending at the latest read; they keep
+# averaging across such gaps so a fuel stop does not erase the trend.
+WINDOW_SECONDS = (60, 300, 1800, 7200)
+RUN_WINDOW_SECONDS = frozenset((60, 300))
+# Older saved summaries predate the long windows; they load without them.
+LEGACY_WINDOW_SECONDS = (60, 300)
+MAX_WINDOW_SECONDS = max(WINDOW_SECONDS)
+# 7,200 s at the 10 s cadence is 720 reads per axis; the bound leaves headroom.
+MAX_SAMPLES = 1024
 AXES = ("elevation", "azimuth")
 METRICS = tuple(f"radar.alignment.{axis}" for axis in AXES)
 REQUEST_DATA = bytes.fromhex("03 22 08 45 00 00 00 00")
@@ -60,10 +74,13 @@ class RadarResult:
 
 
 class RadarAlignmentPoller:
-    """Only 22 0845 and one FC for its exact 11-byte reply are constructible.
+    """``poll`` sends only 22 0845 and one FC for its exact 11-byte reply.
 
     No ISO-TP kernel socket: validate the FirstFrame before authorizing FC.
     Both sends consume independent, short-lived engine-running permits.
+    ``drain``, ``send_fixed`` and ``receive`` are the socket primitives; the
+    service-alignment transport uses them too, so the radar has one tester
+    socket and no reply is left queued in front of the next read.
     """
 
     def __init__(self, channel, *, socket_factory=socket.socket,
@@ -97,13 +114,13 @@ class RadarAlignmentPoller:
             self.sock.close()
             self.sock = None
 
-    def _send(self, data, permit, purpose):
+    def send_fixed(self, data, permit, purpose):
         frame = struct.pack(FRAME, EFF | MODULE.txid, 8, data)
         transmit_permit.consume(permit, purpose=purpose, channel=self.channel)
         if self.sock.send(frame) != 16:
             raise OSError("radar fixed send was incomplete")
 
-    def _receive(self, deadline):
+    def receive(self, deadline):
         remaining = deadline - self.monotonic()
         if remaining <= 0:
             raise TimeoutError("radar response deadline expired")
@@ -116,31 +133,34 @@ class RadarAlignmentPoller:
             raise ValueError("radar CAN identifier, flags, or DLC mismatch")
         return data[:dlc]
 
+    def drain(self):
+        # Bounded drain: a flood cannot hold the owner or age permits forever.
+        self.sock.settimeout(0)
+        for _ in range(32):
+            try:
+                self.sock.recv(16)
+            except (BlockingIOError, TimeoutError):
+                break
+        else:
+            raise ValueError("radar response queue did not drain")
+        self.sock.settimeout(self.timeout)
+
     def poll(self, request_permit, flow_permit):
         sent = False
         try:
-            # Bounded drain: a flood cannot hold the owner or age permits forever.
-            self.sock.settimeout(0)
-            for _ in range(32):
-                try:
-                    self.sock.recv(16)
-                except (BlockingIOError, TimeoutError):
-                    break
-            else:
-                raise ValueError("radar response queue did not drain")
-            self.sock.settimeout(self.timeout)
-            self._send(REQUEST_DATA, request_permit, transmit_permit.RADAR_ALIGNMENT)
+            self.drain()
+            self.send_fixed(REQUEST_DATA, request_permit, transmit_permit.RADAR_ALIGNMENT)
             sent = True
             deadline = self.monotonic() + self.timeout
-            first = self._receive(deadline)
+            first = self.receive(deadline)
             if len(first) >= 4 and first[:3] == b"\x03\x7f\x22":
                 return RadarResult(False, reason=(
                     "session_required" if first[3] in (0x7E, 0x7F) else "response_rejected"
                 ), detail=f"Radar 0845 returned NRC {first[3]:02X}; no session change attempted")
             if len(first) != 8 or first[:5] != b"\x10\x0b\x62\x08\x45":
                 raise ValueError("radar FirstFrame length/DID mismatch; no FlowControl sent")
-            self._send(FLOW_CONTROL_DATA, flow_permit, transmit_permit.RADAR_ALIGNMENT_FLOW)
-            consecutive = self._receive(deadline)
+            self.send_fixed(FLOW_CONTROL_DATA, flow_permit, transmit_permit.RADAR_ALIGNMENT_FLOW)
+            consecutive = self.receive(deadline)
             if len(consecutive) < 6 or consecutive[0] != 0x21:
                 raise ValueError("radar ConsecutiveFrame sequence/length mismatch")
             angles = decode_alignment(first[2:] + consecutive[1:6])
@@ -160,6 +180,16 @@ class RadarAlignmentPoller:
             return RadarResult(False, reason="response_rejected", detail=str(exc))
 
 
+def _contiguous_run_start(samples):
+    """Monotonic time of the first sample in the run ending at the newest one."""
+    start = samples[-1][0]
+    for index in range(len(samples) - 1, 0, -1):
+        if samples[index][0] - samples[index - 1][0] > STALE_AFTER_SECONDS:
+            break
+        start = samples[index - 1][0]
+    return start
+
+
 class AlignmentHistory:
     """Windows ending at the latest observation, retained through parked time.
 
@@ -168,7 +198,7 @@ class AlignmentHistory:
     """
 
     def __init__(self, path=None):
-        self.samples = {metric: deque(maxlen=512) for metric in METRICS}
+        self.samples = {metric: deque(maxlen=MAX_SAMPLES) for metric in METRICS}
         self.last = {metric: {} for metric in METRICS}
         self.path = Path(path) if path is not None else None
         self.lock = threading.RLock()
@@ -200,10 +230,14 @@ class AlignmentHistory:
         value = row["latest_value"]
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or abs(value) > 20:
             raise ValueError("invalid retained radar angle")
-        for seconds in (60, 300):
-            window = row[str(seconds)]
+        for seconds in WINDOW_SECONDS:
+            window = row.get(str(seconds))
+            if window is None:
+                if seconds in LEGACY_WINDOW_SECONDS:
+                    raise ValueError("saved radar summary lacks a required window")
+                continue
             count = window["count"]
-            if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 512:
+            if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= MAX_SAMPLES:
                 raise ValueError("invalid retained radar sample count")
             for name, low, high in (("mean", -20, 20), ("peak_abs", 0, 20), ("span_seconds", 0, seconds)):
                 value = window[name]
@@ -217,15 +251,17 @@ class AlignmentHistory:
             samples = self.samples[metric]
             if samples and observed_monotonic <= samples[-1][0]:
                 return
-            if samples and observed_monotonic - samples[-1][0] > STALE_AFTER_SECONDS:
-                samples.clear()
             samples.append((observed_monotonic, value))
-            while samples and observed_monotonic - samples[0][0] > 300:
+            while samples and observed_monotonic - samples[0][0] > MAX_WINDOW_SECONDS:
                 samples.popleft()
+            run_start = _contiguous_run_start(samples)
             row = {"latest_value": value,
                    "observed_at": observed_at or datetime.now(timezone.utc).isoformat()}
-            for seconds in (60, 300):
-                window = [(t, v) for t, v in samples if 0 <= observed_monotonic - t <= seconds]
+            for seconds in WINDOW_SECONDS:
+                earliest = observed_monotonic - seconds
+                if seconds in RUN_WINDOW_SECONDS:
+                    earliest = max(earliest, run_start)
+                window = [(t, v) for t, v in samples if earliest <= t <= observed_monotonic]
                 values = [v for _, v in window]
                 row[str(seconds)] = {
                     "mean": sum(values) / len(values),
@@ -235,6 +271,12 @@ class AlignmentHistory:
                 }
             self.last[metric] = row
             self.dirty = True
+
+    def observe(self, result):
+        """Count one stored broker observation; other metrics are ignored."""
+        if result.metric in self.samples:
+            self.add(result.metric, result.value, result.observed_monotonic,
+                     result.observed_at.isoformat())
 
     def summary(self, now):
         # Deliberately do not age away the last measured windows during parking.
@@ -255,17 +297,24 @@ class AlignmentHistory:
                 self.dirty = False
 
     def restore_from_historian(self, historian):
-        """Recover the final observed windows once at startup using bounded reads."""
+        """Recover the final observed windows once at startup using bounded reads.
+
+        A saved summary that is as new as the historian but predates a window
+        (a legacy file) is rebuilt too, so every window is published after a
+        code upgrade.
+        """
         for metric in METRICS:
             latest = historian.latest_sample(metric)
             if not isinstance(latest, dict) or latest.get("source") != SOURCE or not latest.get("observed_at"):
                 continue
             stamp = datetime.fromisoformat(latest["observed_at"])
-            if self.last[metric] and datetime.fromisoformat(self.last[metric]["observed_at"]) >= stamp:
+            saved = self.last[metric]
+            if saved and datetime.fromisoformat(saved["observed_at"]) >= stamp and \
+                    all(str(seconds) in saved for seconds in WINDOW_SECONDS):
                 continue
             rows = historian.query_samples(
-                metric, start=stamp - timedelta(seconds=300), end=latest["captured_at"],
-                fresh_only=True, newest_first=True, limit=256,
+                metric, start=stamp - timedelta(seconds=MAX_WINDOW_SECONDS), end=latest["captured_at"],
+                fresh_only=True, newest_first=True, limit=MAX_SAMPLES,
             )
             restored = AlignmentHistory()
             for row in reversed(rows):

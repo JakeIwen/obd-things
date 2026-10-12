@@ -3,10 +3,11 @@
 
 This module serves only JSON routes: the cached broker proxy, the server-sent
 event stream, the gated passive voltage read, maintenance and event POSTs, DTC
-batch jobs and the warning-advisor proxy. It serves no dashboard page. The
-dashboard listener is ``web_v2.py``, which subclasses these classes and adds
-the built frontend from ``dashboard/dist`` plus the ``/v2`` routes; the systemd
-units run that file, not this one.
+batch jobs, the opt-in radar service-alignment relay and the warning-advisor
+proxy. It serves no dashboard page. The dashboard listener is ``web_v2.py``,
+which subclasses these classes and adds the built frontend from
+``dashboard/dist`` plus the ``/v2`` routes; the systemd units run that file,
+not this one.
 """
 
 from __future__ import annotations
@@ -35,6 +36,9 @@ from projects.vehicle_data.warning_chat import (
     DEFAULT_SOCKET as DEFAULT_WARNING_CHAT_SOCKET, MAX_BODY as MAX_WARNING_CHAT_BYTES,
 )
 from projects.vehicle_data.broker import DEFAULT_SOCKET
+from projects.vehicle_data.radar_service_alignment import (
+    API_PATH as RADAR_SERVICE_PATH, LISTENER_DISABLED as RADAR_SERVICE_DISABLED,
+)
 from lib.dtc_web import (
     DtcWebController,
     DEFAULT_CANCEL_DIR,
@@ -89,6 +93,20 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
             return
 
+    def _read_json(self, limit: int, *, size_error: str = "request body size is invalid") -> Any:
+        """The request body parsed as JSON.
+
+        Raises ``ValueError`` before reading anything when Content-Length is
+        not a number (Python's own message) or not within 1..``limit``
+        (``size_error``); malformed JSON raises ``json.JSONDecodeError`` or
+        ``UnicodeDecodeError``, both of them ``ValueError`` subclasses. Each
+        route keeps its own answer for those cases.
+        """
+        length = int(self.headers.get("Content-Length", "0"))
+        if not 0 < length <= limit:
+            raise ValueError(size_error)
+        return json.loads(self.rfile.read(length))
+
     def _broker_request(
         self,
         method: str,
@@ -118,6 +136,7 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
         (r"/v1/metrics(?:/[^/]+)?", "_proxy_get"),
         (r"/v1/stream", "_stream_get"),
         (r"/v1/diagnostics/dtc-jobs/current", "_dtc_current"),
+        (RADAR_SERVICE_PATH, "_radar_service_get"),
     )
     POST_ROUTES = (
         (r"/v1/assistant/.*", "_assistant_post"),
@@ -125,6 +144,7 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
         (r"/v1/maintenance/oil-changes", "_maintenance_post"),
         (r"/v1/diagnostics/dtc-jobs(?:/current/cancel)?", "_dtc_job_post"),
         (r"/v1/acquisitions/battery\.voltage", "_acquisition_post"),
+        (RADAR_SERVICE_PATH, "_radar_service_post"),
     )
 
     def _not_found(self, path: str) -> None:
@@ -198,10 +218,10 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
                 },
             )
         try:
-            length = int(self.headers.get("Content-Length", "0"))
+            payload = self._read_json(MAX_REQUEST_BYTES)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            payload = None
         except ValueError:
-            length = -1
-        if length <= 0 or length > MAX_REQUEST_BYTES:
             return self._json(
                 400,
                 {
@@ -210,10 +230,6 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
                     "detail": "request body size is invalid",
                 },
             )
-        try:
-            payload = json.loads(self.rfile.read(length))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            payload = None
         if (
             not isinstance(payload, dict)
             or set(payload) != {"mode"}
@@ -254,10 +270,7 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
             if self.headers.get_content_type() != "application/json":
                 return self._json(415, {"available": False, "detail": "JSON is required"})
             try:
-                length = int(self.headers.get("Content-Length", "0"))
-                if not 0 < length <= MAX_WARNING_CHAT_BYTES:
-                    raise ValueError()
-                payload = json.loads(self.rfile.read(length))
+                payload = self._read_json(MAX_WARNING_CHAT_BYTES)
                 if not isinstance(payload, dict):
                     raise ValueError()
             except (ValueError, UnicodeDecodeError):
@@ -279,10 +292,7 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
         if self.headers.get_content_type() != "application/json":
             return self._json(415, {"available": False, "detail": "Service records require JSON"})
         try:
-            length = int(self.headers.get("Content-Length", "0"))
-            if not 0 < length <= MAX_REQUEST_BYTES:
-                raise ValueError("Invalid service record size")
-            payload = json.loads(self.rfile.read(length))
+            payload = self._read_json(MAX_REQUEST_BYTES, size_error="Invalid service record size")
         except (ValueError, UnicodeDecodeError) as exc:
             return self._json(400, {"available": False, "detail": str(exc)})
         return self._broker_request("POST", path, payload)
@@ -317,10 +327,10 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
                 },
             )
         try:
-            length = int(self.headers.get("Content-Length", "0"))
+            payload = self._read_json(MAX_REQUEST_BYTES)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            payload = None
         except ValueError:
-            length = -1
-        if length <= 0 or length > MAX_REQUEST_BYTES:
             return self._json(
                 400,
                 {
@@ -329,10 +339,6 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
                     "detail": "request body size is invalid",
                 },
             )
-        try:
-            payload = json.loads(self.rfile.read(length))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            payload = None
         try:
             if path.endswith("/cancel"):
                 if not isinstance(payload, dict) or payload != {"action": "cancel"}:
@@ -359,6 +365,39 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
                 {"available": False, "reason": "dtc_job_rejected", "detail": str(exc)},
             )
         return self._json(202, result)
+
+    def _radar_service_refused(self, *, write: bool) -> bool:
+        """Answer with the refusal when this listener will not relay the request."""
+        origins = self.server.radar_service_origins
+        if not origins:
+            refusal = (403, RADAR_SERVICE_DISABLED, "radar service alignment is not enabled on this listener")
+        elif write and (self.headers.get("Origin") not in origins
+                        or self.headers.get("Sec-Fetch-Site") not in (None, "same-origin")):
+            refusal = (403, "origin_rejected", "radar service alignment requires a trusted same-origin request")
+        elif write and self.headers.get_content_type() != "application/json":
+            refusal = (415, "invalid_content_type", "radar service alignment requires application/json")
+        else:
+            return False
+        code, reason, detail = refusal
+        self._json(code, {"available": False, "reason": reason, "detail": detail})
+        return True
+
+    def _radar_service_get(self, path: str) -> None:
+        if not self._radar_service_refused(write=False):
+            self._broker_request("GET", path)
+
+    def _radar_service_post(self, path: str) -> None:
+        # Actuation relay: the broker checks the exact body and the helper
+        # repeats every vehicle gate. This listener only vouches for the origin.
+        if self._radar_service_refused(write=True):
+            return None
+        try:
+            payload = self._read_json(MAX_REQUEST_BYTES)
+            if not isinstance(payload, dict):
+                raise ValueError("body must be one JSON object")
+        except (ValueError, UnicodeDecodeError) as exc:
+            return self._json(400, {"available": False, "reason": "invalid_request", "detail": str(exc)})
+        return self._broker_request("POST", path, payload)
 
     def _stream(self) -> None:
         return stream_snapshots(self, self._stream_event)
@@ -390,6 +429,7 @@ class TelemetryWebServer(http.server.ThreadingHTTPServer):
         dtc_trusted_origin: str | None = None,
         warning_chat_socket: str | None = DEFAULT_WARNING_CHAT_SOCKET,
         warning_chat_origins: list[str] | None = None,
+        radar_service_origins: list[str] | None = None,
     ):
         super().__init__(address, TelemetryWebHandler)
         self.telemetry_client = TelemetryClient(socket_path)
@@ -397,17 +437,25 @@ class TelemetryWebServer(http.server.ThreadingHTTPServer):
         self.dtc_controller = dtc_controller
         self.dtc_trusted_origin = dtc_trusted_origin
         self.warning_chat_socket = warning_chat_socket
-        bind, port = self.server_address[:2]
-        host = f"[{bind}]" if ":" in str(bind) else str(bind)
-        self.warning_chat_origins = {f"http://{host}:{port}"}
-        if bind in LOOPBACK_BINDS:
-            self.warning_chat_origins.add(f"http://localhost:{port}")
-        self.warning_chat_origins.update(warning_chat_origins or [])
+        self.warning_chat_origins = self._trusted_origins(warning_chat_origins or [])
+        # None (the default) leaves the radar service relay off; a list turns it
+        # on for this listener's own origin plus those extra origins.
+        self.radar_service_origins = frozenset(
+            () if radar_service_origins is None else self._trusted_origins(radar_service_origins))
         self.stream_interval_seconds = stream_interval_seconds
         self.stream_max_seconds = stream_max_seconds
         self.snapshot_instance_id = uuid.uuid4().hex
         self._snapshot_sequence = 0
         self._snapshot_sequence_lock = threading.Lock()
+
+    def _trusted_origins(self, extras: list[str]) -> set[str]:
+        """This listener's own origin (and ``localhost`` on loopback) plus ``extras``."""
+        bind, port = self.server_address[:2]
+        host = f"[{bind}]" if ":" in str(bind) else str(bind)
+        origins = {f"http://{host}:{port}", *extras}
+        if bind in LOOPBACK_BINDS:
+            origins.add(f"http://localhost:{port}")
+        return origins
 
     def next_snapshot_delivery(self) -> SnapshotDelivery:
         """Return process-scoped ordering and generation metadata."""
@@ -469,6 +517,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--dtc-trusted-origin")
+    parser.add_argument(
+        "--enable-radar-service-alignment",
+        action="store_true",
+        help=(
+            "let this listener's dashboard start and stop the ACC radar Service "
+            "Drive Alignment (actuation); anyone who can reach an unauthenticated "
+            "listener can then do so while the engine runs"
+        ),
+    )
+    parser.add_argument("--radar-service-origin", action="append", default=[],
+                        help="additional exact trusted HTTP origin for radar service alignment (for example http://vanpi.lan:8765)")
     parser.add_argument("--dtc-request-file", default=str(DEFAULT_REQUEST_PATH))
     parser.add_argument("--dtc-current-file", default=str(DEFAULT_CURRENT_PATH))
     parser.add_argument("--dtc-cancel-dir", default=str(DEFAULT_CANCEL_DIR))
@@ -523,6 +582,40 @@ def validate_dtc_job_bind(bind: str) -> None:
         )
 
 
+def radar_service_origins_from_args(args) -> list[str] | None:
+    """Extra trusted origins for the radar service relay; None when it is not enabled."""
+    if not args.enable_radar_service_alignment:
+        if args.radar_service_origin:
+            raise SystemExit("--radar-service-origin requires --enable-radar-service-alignment")
+        return None
+    for origin in args.radar_service_origin:
+        parsed = urlsplit(origin)
+        if (parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username
+                or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("", "/")):
+            raise SystemExit("--radar-service-origin must be an exact scheme://host[:port] origin")
+    return [origin.rstrip("/") for origin in args.radar_service_origin]
+
+
+def dtc_controller_from_args(args) -> tuple[DtcWebController | None, str | None]:
+    """The guarded DTC job controller and its trusted origin, when enabled."""
+    if not args.enable_dtc_jobs:
+        if args.dtc_trusted_origin:
+            raise SystemExit("--dtc-trusted-origin requires --enable-dtc-jobs")
+        return None, None
+    validate_dtc_job_bind(args.bind)
+    dtc_origin = validate_dtc_origin(
+        args.dtc_trusted_origin,
+        bind=args.bind,
+        port=args.port,
+    )
+    return DtcWebController(
+        request_path=args.dtc_request_file,
+        current_path=args.dtc_current_file,
+        cancel_dir=args.dtc_cancel_dir,
+        job_root=args.dtc_job_root,
+    ), dtc_origin
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     validate_bind(args.bind, allow_remote_bind=args.allow_remote_bind)
@@ -530,23 +623,7 @@ def main(argv=None) -> int:
         raise SystemExit("--port must be between 1 and 65535")
     if args.stream_interval <= 0 or args.stream_max_seconds <= 0:
         raise SystemExit("stream intervals must be positive")
-    dtc_controller = None
-    dtc_origin = None
-    if args.enable_dtc_jobs:
-        validate_dtc_job_bind(args.bind)
-        dtc_origin = validate_dtc_origin(
-            args.dtc_trusted_origin,
-            bind=args.bind,
-            port=args.port,
-        )
-        dtc_controller = DtcWebController(
-            request_path=args.dtc_request_file,
-            current_path=args.dtc_current_file,
-            cancel_dir=args.dtc_cancel_dir,
-            job_root=args.dtc_job_root,
-        )
-    elif args.dtc_trusted_origin:
-        raise SystemExit("--dtc-trusted-origin requires --enable-dtc-jobs")
+    dtc_controller, dtc_origin = dtc_controller_from_args(args)
     server = TelemetryWebServer(
         (args.bind, args.port),
         socket_path=args.socket,
@@ -557,6 +634,7 @@ def main(argv=None) -> int:
         dtc_trusted_origin=dtc_origin,
         warning_chat_socket=None if args.no_warning_chat else args.warning_chat_socket,
         warning_chat_origins=args.warning_chat_origin,
+        radar_service_origins=radar_service_origins_from_args(args),
     )
     try:
         server.serve_forever(poll_interval=0.5)

@@ -141,12 +141,14 @@ tablet browser ──HTTP/SSE──▶ web_v2.py (:8765, subclass of web.py)
   - The client fetches `/v2/summary` after every resync and every 60 s while the page is visible. The
     store publishes a slice only when its JSON changed. A manual refresh bypasses the 60 s throttle.
 - Everything the dialogs need stays on `/v1/*`: `/v1/health` (now gzipped), `/v1/events…`,
-  `/v1/assistant/*`, `/v1/maintenance/oil-changes`, `/v1/diagnostics/dtc-jobs*` and
-  `/v1/acquisitions/battery.voltage`. No route is removed. There is no `/v2/health-full`.
+  `/v1/assistant/*`, `/v1/maintenance/oil-changes`, `/v1/diagnostics/dtc-jobs*`,
+  `/v1/acquisitions/battery.voltage` and, where the listener enables it,
+  `/v1/radar/service-alignment`. No route is removed. There is no `/v2/health-full`.
 - Every `web` flags object on this listener adds `bind` and the dashboard `build` id, read from
   `<static_root>/build.json` and refreshed when that file's mtime changes.
 - CLI: `web_v2.py --socket … --bind <addr> [--port 8765] --allow-remote-bind [--cache-only]
-  [--enable-dtc-jobs --dtc-trusted-origin …] [--warning-chat-origin …] --static-root <dist>`.
+  [--enable-dtc-jobs --dtc-trusted-origin …] [--warning-chat-origin …]
+  [--enable-radar-service-alignment [--radar-service-origin …]] --static-root <dist>`.
   `--port` defaults to 8765 and `--static-root` to `dashboard/dist`.
 - Two deployments, both on port 8765:
   - **LAN** (`van-telemetry-web.service`). The tracked unit binds loopback; the machine-local drop-in
@@ -265,7 +267,10 @@ opens a network or CAN connection. `TRACE_JSON` is optional; keep it under
     / `Row`, `ServiceCard` and `DtcScan`.
   - `views/`: `Drive` (with the page-2 chunk `DriveMore` and `drivePager.js`), `Parked`, `Health`,
     `History` and `System`.
-  - `dialogs/`: `EventHistory`, `WarningChat`, `Customizer` and `OilChange`.
+  - `dialogs/`: `EventHistory`, `WarningChat`, `Customizer`, `OilChange` and `RadarCalibration`.
+    They share `modalDialog.js` (`useModalDialog`: `showModal`, focus the close button, restore
+    focus to the opener on any native close); `EventHistory` keeps its own effects for the chat
+    hand-off and uses that module's two primitives.
   - Heavy logic lives in a sibling `*.helpers.js` (pure, node-testable), with `node:test` coverage
     in `test/<name>.test.mjs`.
 - **Store publishing rules.**
@@ -408,7 +413,7 @@ content. Page 2 ("Sensors") uses the same frame and the same no-scrolling gate.
   |---|---|
   | 0 | **SPEED LIMIT** (`vehicle.speed_limit` in a sign outline with `MPH` under it; `—` in a dim outline when the cluster shows none) · **ACC** (2 cols: `acc.set_speed` `66 mph`; sub-line from the `acc.state` record, then what the cluster shows beside it: `engaged · vehicle ahead · gap 4 of 4`, `standby · gap 4 of 4`, `engaged · fixed cruise`; without those records it reads `set · engaged` as before; standby dims the number; `Off` when the state is off; `—` with `ready · gap 1 of 4`, or `ready · no set speed`, in ready) |
   | A | **ALTERNATOR FIELD** (2 cols: `generator.field_duty` %, 15-min sparkline, sub-line `battery 14.0 V`) · **GEAR** (`~7` from `transmission.gear_estimate` while its record is current, else `—`; sub-line `ratio 0.70` = turbine ÷ output when the output shaft turns ≥ 100 rpm) |
-  | B | **RADAR AIM** (3 cols): Horizontal and Vertical side by side. Each shows its latest angle (`+0.15°`) and then `1-min avg` / `5-min avg` from `status.radar_alignment` windows `"60"`/`"300"`. |
+  | B | **RADAR AIM** (3 cols): Horizontal and Vertical side by side. Each shows its latest angle (`+0.15°`), under it the physical reading of the elevation sign from `src/radarAim.js` (`aimed high · tilt down`, `aimed low · tilt up`, `level`; blank for azimuth), and then `1-min avg` / `5-min avg` / `30-min avg` / `2-h avg` from `status.radar_alignment` windows `"60"`/`"300"`/`"1800"`/`"7200"`; a window the broker has not published yet reads `—`. |
   | C | **TURBINE** (rpm) · **OUTPUT SHAFT** (rpm) · **POWER** (hp, sparkline) |
   | D | **TORQUE** (`engine.crankshaft_torque`, lb-ft) · **TARGET TORQUE** (`engine.target_crankshaft_torque`, lb-ft) · **ODOMETER** (held value with its time; smaller `--tire` numerals so six digits fit a third of the width) |
 
@@ -552,9 +557,17 @@ checks when stopped:
   never rendered live.
 - **Radar alignment**:
   - The badge is one of three reference states: within ±1°, approaching, outside.
-  - Per axis: the latest estimate, then in a disclosure the 1-min mean (n), 5-min mean (n), 5-min
-    peak |angle|, the margin to ±1.00°, and the not-commissioned detail.
+  - Per axis: the latest estimate, then in a disclosure the 1-min, 5-min, 30-min and 2-h means (n),
+    the 5-min peak |angle|, the margin to ±1.00°, an `Aim` row (elevation: the `radarAim.js` reading;
+    azimuth: `left/right direction not known`), and the not-commissioned detail.
   - A held value carries its time.
+  - **Drive calibration…** button, only when `web.radar_service_enabled`. It opens the lazy
+    `dialogs/RadarCalibration.jsx` sheet, which starts, watches and stops the radar's Service Drive
+    Alignment through `/v1/radar/service-alignment`: a confirmation tick, one Start/Stop button, the
+    progress percentage as a native `<progress>`, elapsed time and speed, and the end reason. It
+    polls every 2 s while open (5 s after an error) and never while the page is hidden. Closing the
+    sheet does not stop a run, and a tap on the backdrop does not close it. The Pi enforces the
+    start conditions; the sheet only explains them (engine running, van stopped, box ticked).
 - **Metric catalog**:
   - Every metric shows its value and unit, a dimmed held value with its time, or `—`, plus source,
     bus, quality, freshness limit and retention policy. This is where the provenance vocabulary

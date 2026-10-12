@@ -3,6 +3,7 @@
  * estimate and the shaft-speed ratio. No DOM, no signals; node-testable.
  */
 
+import { aimText } from "../radarAim.js";
 import { DASH, fmtFixed, fmtDelta, fmtTime } from "../format.js";
 
 /** Radar axes in tile order (horizontal first, as the owner reads "az … el"). */
@@ -36,8 +37,10 @@ export function windowMean(w) {
  *   polling?: object|null, nowMs?: number}} input
  *   `axes[id]`: `fresh` is a current record, `value` its number, `held` the dated last reading;
  *   `windows` is `status.radar_alignment` (per metric name: `latest_value`, `observed_at` and the
- *   `"60"`/`"300"` second windows); `polling` is `status.radar_alignment_polling`.
- * @returns {{live: boolean, sub: string, axes: Object<string, {latest: string, m1: string, m5: string}>}}
+ *   `"60"`/`"300"`/`"1800"`/`"7200"` second windows); `polling` is `status.radar_alignment_polling`.
+ * @returns {{live: boolean, sub: string, axes: Object<string, {latest: string, aim: string, m1: string,
+ *   m5: string, m30: string, h2: string}>}}
+ *   `aim` is the physical reading of the sign (`aimed high · tilt down`), elevation only.
  */
 export function radarTileModel(input) {
   const i = isObj(input) ? input : {};
@@ -71,8 +74,11 @@ export function radarTileModel(input) {
     if (isFinite(atMs) && !(atMs <= newest)) newest = atMs;
     axes[axis.id] = {
       latest: fmtAngleSigned(value),
+      aim: aimText(axis.id, value),
       m1: windowMean(w["60"]),
       m5: windowMean(w["300"]),
+      m30: windowMean(w["1800"]),
+      h2: windowMean(w["7200"]),
     };
   }
   let sub;

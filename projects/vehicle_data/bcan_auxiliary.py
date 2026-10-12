@@ -36,6 +36,7 @@ from lib import can_operation_state, canbus, diagnostic_safety
 from lib.can_role_resolver import SysfsCanRoleResolver
 from lib.modules import MODULES
 from projects.vehicle_data import active_drive, auxiliary_polling
+from projects.vehicle_data.active_session_gates import SessionOutcome
 
 
 BITRATE = 125000
@@ -67,13 +68,6 @@ CAN_FRAME_SIZE = struct.calcsize(CAN_FRAME_FORMAT)
 ICS = MODULES["ics_bcan"]
 REQUEST_PAYLOAD = b"\x03\x22\x20\x01"
 POSITIVE_PREFIX = b"\x06\x62\x20\x01"
-
-
-@dataclass
-class SessionOutcome:
-    reason: str
-    detail: str
-    restored: bool | None = None
 
 
 @dataclass(frozen=True)
