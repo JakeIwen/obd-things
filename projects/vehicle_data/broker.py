@@ -30,6 +30,7 @@ from projects.vehicle_data.radar_alignment import (
 )
 from projects.vehicle_data.radar_service_control import RadarServiceControl
 from projects.vehicle_data.metrics import METRICS, MetricDefinition
+from projects.vehicle_data.display_contract import DISPLAY_SOURCES
 from projects.vehicle_data.receive_watch import ReceiveSilenceWatch
 from projects.vehicle_data.can_availability import CanAvailability
 from projects.vehicle_data.wake_state import wake_state_conflicts
@@ -71,8 +72,7 @@ ACTIVE_DRIVE_SOURCES = frozenset(
         # failure on the first moving gear sample (2026-09-24).
         "derived.ccan_0x1f7_shaft_ratio",
         # Cluster display frames decoded by the same snapshot (2026-09-27).
-        "ccan.broadcast.0x0e0",
-        "ccan.broadcast.0x5a0",
+        *DISPLAY_SOURCES,
         "pcm.did.01a1",
         "pcm.did.06da",
         "pcm.did.069f",
@@ -1508,8 +1508,6 @@ class TelemetryBroker:
 
     def store_display_frame(self, observations, observed_at, observed_monotonic, mode):
         """Internal receive callback, never a caller-selectable timestamp API."""
-        from projects.vehicle_data.display_receiver import DISPLAY_SOURCES
-
         results = []
         if mode not in {"listen_only", "armed_diagnostic"}:
             raise ValueError("invalid display receiver interface mode")

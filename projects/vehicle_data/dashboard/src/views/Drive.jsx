@@ -10,7 +10,8 @@
 import { computed, signal } from "@preact/signals";
 import { useEffect, useRef } from "preact/hooks";
 import { settings, saveSettings } from "../settings.js";
-import { DRIVE_PAGE_NAMES, swipeTarget } from "./drivePager.js";
+import { swipeTarget } from "./drivePager.js";
+import { DriveFooter } from "./DriveFooter.jsx";
 
 /** Drive tile registry: id → element factory (ids are used by the customiser). */
 export const DRIVE_TILES = [
@@ -93,25 +94,6 @@ function attachSwipe(el) {
   };
 }
 
-function Pager({ page }) {
-  return (
-    <nav class="drive-pager" aria-label="Drive pages">
-      {DRIVE_PAGE_NAMES.map(([n, name]) => (
-        <button
-          key={n}
-          type="button"
-          class={"drive-pager__btn" + (page === n ? " drive-pager__btn--on" : "")}
-          aria-current={page === n ? "page" : undefined}
-          onClick={() => setDrivePage(n)}
-        >
-          <span class="drive-pager__num">{n}</span>
-          {name}
-        </button>
-      ))}
-    </nav>
-  );
-}
-
 export default function Drive() {
   const page = drivePage.value;
   const ref = useRef(null);
@@ -123,7 +105,7 @@ export default function Drive() {
   return (
     <div class="view view--drive" role="main" ref={ref}>
       {View ? <View /> : <div class={page === 2 ? "drive2" : "drive"} />}
-      <Pager page={page} />
+      <DriveFooter page={page} onPageChange={setDrivePage} />
     </div>
   );
 }

@@ -62,6 +62,11 @@ Dashboard warning state/headings live in `dashboard/src/warningContext.js`;
 formatted cards are lazy in `dashboard/src/app/warningCards.js`, and System
 vehicle-state text lives in `dashboard/src/views/systemVehicle.helpers.js`.
 
+Telemetry metric/source dataclasses live in `metric_types.py`, re-exported by
+`metrics.py`. The pure `display_contract.py` shares fixed ID/DLC/source metadata
+between broker and receiver without importing receive-thread ownership code.
+The Drive page selector is in `dashboard/src/views/DriveFooter.jsx`.
+
 Broker pure internals are split into `projects/vehicle_data/status_view.py`
 (snapshot-only status builders), `vehicle_state.py` (passive evidence conclusions),
 `wake_state.py` (pure parked-wake admission), and `helper_events.py`

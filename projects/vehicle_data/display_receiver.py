@@ -18,6 +18,7 @@ from lib import can_handoff, can_operation_state
 from projects.vehicle_data import ccan_powertrain as cp
 from projects.vehicle_data.can_interfaces import C_CAN_ROLE
 from projects.vehicle_data.drive_recorder import broker_c_can_route
+from projects.vehicle_data.display_contract import DISPLAY_SOURCES, DISPLAY_FRAME_DLCS, DISPLAY_FRAME_IDS
 
 
 CONTROL_SECONDS = 0.25
@@ -25,7 +26,6 @@ RECHECK_SECONDS = 1.0
 # Linux SO_TIMESTAMPNS_OLD; vanpi is 64-bit (two native 64-bit longs).
 SO_TIMESTAMPNS = getattr(socket, "SO_TIMESTAMPNS", 35)
 TIMESPEC = "@ll"
-DISPLAY_SOURCES = frozenset((cp.SPEED_LIMIT_SOURCE, cp.ACC_DISPLAY_SOURCE))
 
 
 def receive_display_frames(channel, *, valid, stopped, publish,
@@ -40,7 +40,7 @@ def receive_display_frames(channel, *, valid, stopped, publish,
     sock = socket_factory(cp.AF_CAN, socket.SOCK_RAW, cp.CAN_RAW)
     try:
         sock.setsockopt(cp.SOL_CAN_RAW, cp.CAN_RAW_FILTER, b"".join(
-            struct.pack("=II", can_id, cp.FILTER_MASK) for can_id in cp.DISPLAY_FRAME_IDS
+            struct.pack("=II", can_id, cp.FILTER_MASK) for can_id in DISPLAY_FRAME_IDS
         ))
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 64 * 1024)
         sock.setsockopt(socket.SOL_SOCKET, SO_TIMESTAMPNS, 1)
@@ -60,9 +60,9 @@ def receive_display_frames(channel, *, valid, stopped, publish,
             if flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC) or len(frame) != 16:
                 continue
             can_id, dlc, data = struct.unpack("=IB3x8s", frame)
-            if can_id not in cp.DISPLAY_FRAME_IDS or can_id & cp.FRAME_TYPE_FLAGS:
+            if can_id not in DISPLAY_FRAME_IDS or can_id & cp.FRAME_TYPE_FLAGS:
                 continue
-            if dlc != (8 if can_id == cp.ACC_DISPLAY_ID else 4):
+            if dlc != DISPLAY_FRAME_DLCS[can_id]:
                 continue
             received = None
             for level, kind, value in ancillary:
@@ -85,7 +85,7 @@ def receive_display_frames(channel, *, valid, stopped, publish,
 
 
 class DisplayReceiver:
-    """One broker-owned thread; only the two display identifiers reach Python."""
+    """One broker-owned thread; only the allowlisted display IDs reach Python."""
 
     def __init__(self, manager, *, status_reader, publish,
                  receiver=receive_display_frames, monotonic=time.monotonic):

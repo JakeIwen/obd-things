@@ -91,7 +91,7 @@ class ContinuousReceiveTests(unittest.TestCase):
                 filters = next(v for level, opt, v in sock.options
                                if level == cp.SOL_CAN_RAW and opt == cp.CAN_RAW_FILTER)
                 self.assertEqual(list(struct.iter_unpack("=II", filters)),
-                                 [(i, cp.FILTER_MASK) for i in cp.DISPLAY_FRAME_IDS])
+                                 [(i, cp.FILTER_MASK) for i in dr.DISPLAY_FRAME_IDS])
 
     def test_on_change_frame_and_ten_hz_limit_publish_between_snapshots(self):
         frames = [(0.4, raw_frame(0x5A0, bytes.fromhex(ACC_SET_66))),

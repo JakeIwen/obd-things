@@ -25,6 +25,7 @@ from projects.vehicle_data.broker import TelemetryBroker, build_parser
 from projects.vehicle_data.metrics import METRICS
 from projects.vehicle_data.models import failure, success
 from projects.vehicle_data.sources import DecodedVoltage, VoltageAcquirer
+from tests.vehicle_data_catalog_contract import EXPECTED_METRIC_NAMES
 from projects.vehicle_data.web import (
     DEFAULT_STREAM_INTERVAL_SECONDS,
     TelemetryWebHandler,
@@ -167,41 +168,7 @@ class SourceTests(unittest.TestCase):
     def test_registry_is_metric_allowlist_with_provenance(self):
         self.assertEqual(
             set(METRICS),
-            {
-                "battery.voltage",
-                "engine.coolant_temperature",
-                "engine.crankshaft_power",
-                "engine.crankshaft_torque",
-                "generator.field_duty",
-                "engine.oil_pressure",
-                "engine.oil_life_remaining",
-                "engine.vvt_oil_temperature",
-                "engine.rpm",
-                "engine.target_crankshaft_torque",
-                "transmission.output_speed",
-                "transmission.oil_temperature",
-                "transmission.turbine_speed",
-                "transmission.gear_estimate",
-                "vehicle.speed_limit",
-                "acc.set_speed",
-                "acc.state",
-                "acc.mode",
-                "acc.follow_distance",
-                "acc.lead_vehicle",
-                "tire.pressure.fl",
-                "tire.pressure.fr",
-                "tire.pressure.rl",
-                "tire.pressure.rr",
-                "vehicle.ignition_on",
-                "vehicle.odometer",
-                "radar.alignment.elevation",
-                "radar.alignment.azimuth",
-                "vehicle.speed",
-                "diagnostics.cluster.did.0107.raw",
-                "diagnostics.cluster.did.1000.raw",
-                "diagnostics.cluster.did.1002.raw",
-                "diagnostics.cluster.did.1005.raw",
-            },
+            EXPECTED_METRIC_NAMES,
         )
         sources = METRICS["battery.voltage"].sources
         self.assertEqual(
