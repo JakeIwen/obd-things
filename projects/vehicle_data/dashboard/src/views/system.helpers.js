@@ -10,13 +10,13 @@
  * jargon (REGISTERED, ALFA SCALE, MAPPED, n/m LIVE, candidate prose), "stale" never used.
  */
 
-import { DASH, fmtValue, fmtFixed, fmtUnit, fmtTime, fmtAgeCoarse, fmtInt, fmtDelta } from "../format.js";
+import { DASH, fmtValue, fmtFixed, fmtUnit, fmtTime, fmtAgeCoarse, fmtInt } from "../format.js";
 import { metricLabel } from "../warningContext.js";
-import { aimText, AZIMUTH_AIM_UNMAPPED } from "../radarAim.js";
+import { aimText, AZIMUTH_AIM_UNMAPPED, RADAR_AXES, fmtAngle } from "../radarAim.js";
 
 import { DOCS, obj, arr, num, str, wallMs, when, humanize, capital, plural, clip, createStableGate, agoText } from "./view.helpers.js";
 
-export { DOCS, wallMs, humanize, createStableGate, agoText };
+export { DOCS, wallMs, humanize, createStableGate, agoText, RADAR_AXES, fmtAngle };
 export { BASIS_TEXT, CONFIDENCE_TEXT, basisText, confidenceText, vehicleLine, canAvailabilityLine } from "./systemVehicle.helpers.js";
 
 // ---------------------------------------------------------------------------
@@ -360,21 +360,10 @@ export function vanCheckRow(dtcs, nowMs) {
 // ---------------------------------------------------------------------------
 // System: radar alignment
 
-export const RADAR_AXES = Object.freeze([
-  Object.freeze({ id: "elevation", name: "radar.alignment.elevation", label: "Vertical (elevation)" }),
-  Object.freeze({ id: "azimuth", name: "radar.alignment.azimuth", label: "Horizontal (azimuth)" }),
-]);
-
 /** Reference limit for the alignment badge (degrees). */
 export const RADAR_LIMIT = 1;
 /** "Approaching" starts here (degrees). */
 export const RADAR_APPROACH = 0.8;
-
-/** Signed angle: `+0.16°`, `−0.02°`, `0.00°`. */
-export function fmtAngle(value) {
-  const v = num(value);
-  return v === null ? DASH : fmtDelta(v, 2) + "°";
-}
 
 function windowText(w) {
   const x = obj(w);

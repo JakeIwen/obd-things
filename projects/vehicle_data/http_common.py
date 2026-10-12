@@ -28,6 +28,15 @@ def route_name(path: str, routes: RouteTable) -> str | None:
     return None
 
 
+def exact_json(payload: object, expected: dict[str, object]) -> bool:
+    """Whether a request body is ``expected``: same keys, values and value types (``1`` is not ``true``)."""
+    return (
+        isinstance(payload, dict) and set(payload) == set(expected)
+        and all(type(payload[key]) is type(value) and payload[key] == value
+                for key, value in expected.items())
+    )
+
+
 def web_flags(server, *, include_bind: bool = True, include_build: bool = False) -> dict[str, Any]:
     """Preserve the three flag shapes and their SSE insertion order.
 

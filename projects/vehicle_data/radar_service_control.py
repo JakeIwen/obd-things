@@ -23,6 +23,7 @@ import time
 import uuid
 
 from lib.timeutil import finite_number, utc_now
+from projects.vehicle_data.http_common import exact_json
 from projects.vehicle_data.radar_service_alignment import (
     ACTIVE_STATES, API_PATH, COMPLETED, ENABLE_FLAG, EVENT_FIELDS, EVENT_TYPE, FAILED, IDLE,
     MAX_DETAIL_CHARS, MAX_RUN_SECONDS, MAX_SPEED_MPH, REASONS, REQUEST_ID, REQUESTED, RUNNING,
@@ -43,15 +44,6 @@ REQUEST_ACK_SECONDS = 15.0
 START_MIN_INTERVAL_SECONDS = 10.0
 LIMITS = {"stationary_max_mph": STATIONARY_MAX_MPH, "stall_seconds": STALL_SECONDS,
           "max_run_seconds": MAX_RUN_SECONDS}
-
-
-def _same_json(payload: object, expected: dict[str, object]) -> bool:
-    """Exact keys, values and value types (``1`` is not ``true``)."""
-    return (
-        isinstance(payload, dict) and set(payload) == set(expected)
-        and all(type(payload[key]) is type(value) and payload[key] == value
-                for key, value in expected.items())
-    )
 
 
 def validate_event(event: dict[str, object]) -> dict[str, object]:
@@ -260,9 +252,9 @@ class RadarServiceControl:
     def request(self, payload: object) -> tuple[int, dict[str, object]]:
         with self._lock:
             self._settle()
-            if _same_json(payload, START_REQUEST):
+            if exact_json(payload, START_REQUEST):
                 return self._start()
-            if _same_json(payload, STOP_REQUEST):
+            if exact_json(payload, STOP_REQUEST):
                 return self._stop()
             return self._refused(400, "invalid_request",
                                  "body must be the exact start or stop request")

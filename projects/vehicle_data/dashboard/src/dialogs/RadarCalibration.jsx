@@ -6,26 +6,19 @@
    Requests, polling, gating hints and every string come from RadarCalibration.helpers.js; the Pi
    enforces the real conditions. The dialog reads the live vehicle speed only to explain why Start
    is not offered. No inline styles (CSP); progress is a native <progress> element. */
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useRef } from "preact/hooks";
 import * as store from "../store.js";
 import { fmtClock } from "../format.js";
 import * as H from "./RadarCalibration.helpers.js";
 import { useModalDialog } from "./modalDialog.js";
+import { useController } from "./useController.js";
 
-function useController() {
-  const ref = useRef(null);
-  const [state, setState] = useState(null);
-  if (ref.current === null) {
-    ref.current = H.createRadarCalibrationController({
-      fetch: (url, init) => globalThis.fetch(url, init),
-      isVisible: () => typeof document === "undefined" || document.visibilityState !== "hidden",
-      setTimeout: (fn, ms) => globalThis.setTimeout(fn, ms),
-      clearTimeout: (id) => globalThis.clearTimeout(id),
-      onChange: setState,
-    });
-  }
-  return [ref.current, state || ref.current.state()];
-}
+const createController = (onChange) =>
+  H.createRadarCalibrationController({
+    fetch: (url, init) => globalThis.fetch(url, init),
+    isVisible: () => typeof document === "undefined" || document.visibilityState !== "hidden",
+    onChange,
+  });
 
 /** Fresh vehicle speed in mph, or null when the stream has none. */
 function liveSpeed() {
@@ -35,7 +28,7 @@ function liveSpeed() {
 
 export default function RadarCalibration({ open, onClose }) {
   const closeRef = useRef(null);
-  const [ctrl, state] = useController();
+  const [ctrl, state] = useController(createController, (c) => c.state());
 
   useEffect(() => {
     ctrl.refresh();

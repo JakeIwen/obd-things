@@ -282,15 +282,26 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
         except (OSError, RuntimeError, ValueError):
             return self._json(503, {"available": False, "detail": "Local Codex assistant is not running or is unavailable on the Pi"})
 
-    def _maintenance_post(self, path: str) -> None:
-        # Human notes only. Require a same-origin JSON request; plain forms
-        # and cross-origin browser requests cannot write the service journal.
+    def _owner_record_refused(self, what: str) -> bool:
+        """Answer with the refusal unless this is a same-origin JSON request.
+
+        Plain forms and cross-origin browser requests cannot write the owner's
+        records (``what`` names them in the answer).
+        """
         expected_origin = f"http://{self.headers.get('Host', '')}"
         if (self.headers.get("Origin") != expected_origin
                 or self.headers.get("Sec-Fetch-Site") not in (None, "same-origin")):
-            return self._json(403, {"available": False, "detail": "Service records require a same-origin request"})
-        if self.headers.get_content_type() != "application/json":
-            return self._json(415, {"available": False, "detail": "Service records require JSON"})
+            self._json(403, {"available": False, "detail": f"{what} require a same-origin request"})
+        elif self.headers.get_content_type() != "application/json":
+            self._json(415, {"available": False, "detail": f"{what} require JSON"})
+        else:
+            return False
+        return True
+
+    def _maintenance_post(self, path: str) -> None:
+        # Human notes only.
+        if self._owner_record_refused("Service records"):
+            return None
         try:
             payload = self._read_json(MAX_REQUEST_BYTES, size_error="Invalid service record size")
         except (ValueError, UnicodeDecodeError) as exc:

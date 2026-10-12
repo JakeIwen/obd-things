@@ -12,6 +12,7 @@
  */
 
 import vocabulary from "../../../radar_service_alignment.json" with { type: "json" };
+import { readReply } from "../jsonReply.js";
 
 export const RADAR_SERVICE = Object.freeze(vocabulary);
 export const POLL_MS = 2000;
@@ -154,17 +155,6 @@ export function viewModel(s, live) {
     statusText: s.error || s.notice || "",
     statusIsError: Boolean(s.error),
   };
-}
-
-async function readReply(response) {
-  let payload = null;
-  try {
-    payload = await response.json();
-  } catch {
-    payload = null;
-  }
-  if (!obj(payload)) throw new Error(response.ok ? "unreadable reply" : "HTTP " + response.status);
-  return { ok: response.ok, payload };
 }
 
 const message = (error) => String((error && error.message) || error);
