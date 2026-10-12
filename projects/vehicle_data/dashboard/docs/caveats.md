@@ -417,3 +417,15 @@ Dashboard settings (the view, Auto, Dim, hidden cards and card order) are stored
 only and never reach the Pi or the van. The dashboard replaced the old one at the same address
 (port 8765), so the view last chosen on the old dashboard is carried over once, and a Codex chat
 access code already entered in this browser still works.
+## Lights and high beams
+
+The green Lights icon repeats the parking/headlights telltale; it does not
+prove that low beams or individual bulbs are working. The blue High beams
+icon shows the separately observed high-beam state. Both were checked against
+two manual off/low/high/low/off sequences on this van, whose switch has no AUTO
+setting. Parking-only and flash-to-pass behavior have not yet been checked.
+
+These icons use current data only. At the owner's request, a disconnected
+link or an observation more than two seconds old looks dim/off, with no text
+and no retained illuminated icon. A dim icon can therefore also mean that
+current data is unavailable.

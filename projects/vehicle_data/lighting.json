@@ -1,0 +1,10 @@
+{
+  "source": "ccan.broadcast.0x73e",
+  "frame_id": 1854,
+  "dlc": 4,
+  "stale_after_seconds": 2.0,
+  "indicators": [
+    {"key": "lights", "metric": "lights.parking_headlights_on", "label": "Lights", "mask": 2},
+    {"key": "high_beam", "metric": "lights.high_beam_on", "label": "High beams", "mask": 4}
+  ]
+}

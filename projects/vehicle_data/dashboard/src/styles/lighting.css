@@ -1,0 +1,24 @@
+.drive-footer { display: grid; grid-template-columns: minmax(70px, 1fr) minmax(0, 336px) minmax(70px, 1fr); align-items: center; gap: 20px; min-width: 0; }
+.drive-footer .drive-pager { grid-column: 2; grid-row: 1; }
+.drive-footer .light-indicators { grid-column: 1; grid-row: 1; justify-self: start; }
+.light-indicators { display: flex; align-items: center; flex: 0 0 auto; gap: 14px; }
+.light-indicator { display: flex; align-items: center; color: var(--dim); }
+.light-indicator__icon { width: 28px; height: 19.6px; fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+.light-indicator--lights.light-indicator--on { color: var(--green); }
+.light-indicator--high_beam.light-indicator--on { color: var(--blue); }
+/* Reserve enough room for the radar's labels and four history rows. */
+@media (min-width: 641px) and (max-aspect-ratio: 1/1) {
+  .view--drive > .drive2 {
+    grid-template-rows: minmax(120px, 1fr) minmax(156px, 1fr)
+      minmax(248px, 1.6fr) minmax(120px, 1fr) minmax(120px, 1fr);
+  }
+}
+@media (max-width: 640px) {
+  .view--drive > .drive2 { grid-auto-rows: minmax(150px, auto); }
+  .view--drive .area-d2radar { min-height: 248px; }
+  .drive-footer { grid-template-columns: minmax(54.8px, 1fr) minmax(0, 336px) minmax(54.8px, 1fr); margin-top: var(--gap); gap: 8px; }
+  .drive-footer .drive-pager { margin-top: 0; }
+  .drive-footer .drive-pager__btn { padding: 0 4px; gap: 4px; }
+  .light-indicators { gap: 10px; }
+  .light-indicator__icon { width: 22.4px; }
+}

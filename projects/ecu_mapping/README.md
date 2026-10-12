@@ -25,6 +25,12 @@ The cross-project [`AlfaOBD evidence history`](../../docs/alfaobd-evidence-histo
 canonical chronology of confirmed mis-mappings, incompatible profiles, recording/catalog traps,
 project parser corrections, and the trust rules derived from them.
 
+The [October 12 light-indicator reference](findings/promaster_2022/2026-10-12_light_indicators.md)
+records two owner-controlled manual-light cycles and the C-CAN `0x73E` green/blue
+telltale fields. `lighting_reference.py` is its offline analyzer; use the named
+`lighting-owner-reference` compute task. The owner confirms no AUTO setting;
+first-drive validation remains open.
+
 The [October 8 Uconnect investigation](findings/promaster_2022/2026-10-08_uconnect_investigation.md)
 collects existing diagnostic access, saved USB/voltage fault leads, and the
 CarPlay volume/screen-switching investigation plan. The owner reports a 10.1-inch

@@ -218,6 +218,7 @@ the permanent CAN-CH role remains the documented route.
 
 | id | field | decode | meaning | when present | confidence |
 |---|---|---|---|---|---|
+| `0x73E`, DLC 4 | byte0 bits 1 / 2 | `bool(B0 & 0x02)` / `bool(B0 & 0x04)` | **green lights / blue high-beam telltales**. Independent booleans; about 4 Hz plus changes. | ignition ON, parked engine-off reference | **owner-referenced manual settings**, two complete off/low/high/low/off cycles, 357/357 scored frames. Owner confirms no AUTO setting; parking-only, flash-to-pass and live driving remain untested. [October 12 evidence](../projects/ecu_mapping/findings/promaster_2022/2026-10-12_light_indicators.md). |
 | `0x2EF` | payload | unresolved / mode-dependent | **not an approved voltage source.** Historical `FF 11` / `0F 15` payloads happened to track ignition/engine state, but live `FF 21` disproved the former low-13-bit `/400` interpretation. Retain only the presence meaning below until multiplexing is mapped. | **ignition ON / running only** | voltage interpretation withdrawn 2026-07-25 |
 | `0x2EF` | presence | — | **ignition-on gate** — its presence = key-on; tpms-logger uses it as the drive/park gate | ignition ON | verified (frame-count gates failed; presence gate works) |
 | `0x41A` | byte0 | `4.0 + raw × 0.05 V` | **system voltage** — C-CAN analogue of 0x46C, readable in a parked wake | any awake C-CAN incl. parked wake | **verified** against BCM +30/ADC status and a controlled charger transition |

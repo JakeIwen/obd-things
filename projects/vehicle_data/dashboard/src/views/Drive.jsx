@@ -11,7 +11,6 @@ import { computed, signal } from "@preact/signals";
 import { useEffect, useRef } from "preact/hooks";
 import { settings, saveSettings } from "../settings.js";
 import { swipeTarget } from "./drivePager.js";
-import { DriveFooter } from "./DriveFooter.jsx";
 
 /** Drive tile registry: id → element factory (ids are used by the customiser). */
 export const DRIVE_TILES = [
@@ -104,8 +103,8 @@ export default function Drive() {
   const View = pageViews[page].value;
   return (
     <div class="view view--drive" role="main" ref={ref}>
-      {View ? <View /> : <div class={page === 2 ? "drive2" : "drive"} />}
-      <DriveFooter page={page} onPageChange={setDrivePage} />
+      {View ? <View page={page} onPageChange={setDrivePage} /> :
+        <div class={page === 2 ? "drive2" : "drive"} />}
     </div>
   );
 }

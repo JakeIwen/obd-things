@@ -1,6 +1,7 @@
 import { computed } from "@preact/signals";
 import { Tile } from "../components/Tile.jsx";
 import { TireGrid } from "../components/TireGrid.jsx";
+import { DriveFooter } from "./DriveFooter.jsx";
 import { liveValue, isHidden, minuteClock, engineRunning } from "../app/derive.js";
 import { tripDistanceMiles } from "../app/rings.js";
 import * as store from "../store.js";
@@ -85,20 +86,23 @@ function TripTile() {
 }
 
 /** Page 1 gauges, loaded on first use. */
-export default function DriveGauges() {
+export default function DriveGauges({ page, onPageChange }) {
   const show = (id) => !isHidden("drive", id);
   return (
-    <div class="drive">
-      {show("speed") && <Tile name="vehicle.speed" label="Speed" area="speed" size="hero" sub={speedSub} />}
-      {show("rpm") && <Tile name="engine.rpm" label="RPM" area="rpm" size="large" sub={rpmSub} spark showUnit={false} />}
-      {show("coolant") && <Tile name="engine.coolant_temperature" label="Coolant" area="coolant" band spark />}
-      {show("trans") && <Tile name="transmission.oil_temperature" label="Trans oil" area="trans" band spark />}
-      {show("oilp") && <Tile name="engine.oil_pressure" label="Oil pressure" area="oilp" band spark />}
-      {show("volt") && <Tile name="battery.voltage" label="Voltage" area="volt" band spark sub={alternatorSub} decimals={1} />}
-      {show("power") && <Tile name="engine.crankshaft_power" label="Power" area="power" spark sub={torqueSub} />}
-      {show("oilt") && <Tile name="engine.vvt_oil_temperature" label="Oil temp (VVT)" area="oilt" band spark />}
-      {show("tires") && <TireGrid area="tires" />}
-      {show("trip") && <TripTile />}
-    </div>
+    <>
+      <div class="drive">
+        {show("speed") && <Tile name="vehicle.speed" label="Speed" area="speed" size="hero" sub={speedSub} />}
+        {show("rpm") && <Tile name="engine.rpm" label="RPM" area="rpm" size="large" sub={rpmSub} spark showUnit={false} />}
+        {show("coolant") && <Tile name="engine.coolant_temperature" label="Coolant" area="coolant" band spark />}
+        {show("trans") && <Tile name="transmission.oil_temperature" label="Trans oil" area="trans" band spark />}
+        {show("oilp") && <Tile name="engine.oil_pressure" label="Oil pressure" area="oilp" band spark />}
+        {show("volt") && <Tile name="battery.voltage" label="Voltage" area="volt" band spark sub={alternatorSub} decimals={1} />}
+        {show("power") && <Tile name="engine.crankshaft_power" label="Power" area="power" spark sub={torqueSub} />}
+        {show("oilt") && <Tile name="engine.vvt_oil_temperature" label="Oil temp (VVT)" area="oilt" band spark />}
+        {show("tires") && <TireGrid area="tires" />}
+        {show("trip") && <TripTile />}
+      </div>
+      <DriveFooter page={page} onPageChange={onPageChange} />
+    </>
   );
 }

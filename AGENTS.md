@@ -62,10 +62,15 @@ Dashboard warning state/headings live in `dashboard/src/warningContext.js`;
 formatted cards are lazy in `dashboard/src/app/warningCards.js`, and System
 vehicle-state text lives in `dashboard/src/views/systemVehicle.helpers.js`.
 
-Telemetry metric/source dataclasses live in `metric_types.py`, re-exported by
-`metrics.py`. The pure `display_contract.py` shares fixed ID/DLC/source metadata
-between broker and receiver without importing receive-thread ownership code.
-The Drive page selector is in `dashboard/src/views/DriveFooter.jsx`.
+Light telltales use `lighting.json` (shared source/field/metric contract),
+`lighting.py` (fixed passive decoder and metric definitions), and the existing
+C-CAN `display_receiver.py`; `display_contract.py` shares its fixed ID/DLC/source
+allowlist with the broker without importing receive-thread ownership code.
+Dashboard rendering is shared by both lazy Drive pages through
+`dashboard/src/views/DriveFooter.jsx` (pager and compact icon-only lights),
+`dashboard/src/components/LightIndicators.jsx`, its pure state helper and
+`dashboard/src/styles/lighting.css`. `metric_types.py` owns the metric/source
+dataclasses; `metrics.py` re-exports them and remains the public registry.
 
 Broker pure internals are split into `projects/vehicle_data/status_view.py`
 (snapshot-only status builders), `vehicle_state.py` (passive evidence conclusions),

@@ -678,6 +678,11 @@ documented in [`warnings-redesign.md`](dashboard/docs/warnings-redesign.md).
 
 ## Telemetry dashboard
 
+Compact, icon-only light/high-beam indicators sit beside the Gauges/Sensors
+selector on both Drive pages. They use passive C-CAN `0x73E`, expire after two
+seconds, and look dim/off when data is unavailable. See the
+[October 12 mapping and activation status](../ecu_mapping/findings/promaster_2022/2026-10-12_light_indicators.md).
+
 There is one telemetry dashboard: the app in [`dashboard/`](dashboard/), served
 on port 8765. It was built in September 2026 as "v2", a parallel app on port
 8766, and on 2026-09-27 it replaced the former static frontend

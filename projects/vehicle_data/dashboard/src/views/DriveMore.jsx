@@ -11,6 +11,7 @@
 
 import { computed } from "@preact/signals";
 import { Tile } from "../components/Tile.jsx";
+import { DriveFooter } from "./DriveFooter.jsx";
 import { liveValue, obs, isHidden, dayClock } from "../app/derive.js";
 import * as store from "../store.js";
 import { DASH, fmtFixed } from "../format.js";
@@ -175,21 +176,24 @@ function RadarTile() {
   );
 }
 
-export default function DriveMore() {
+export default function DriveMore({ page, onPageChange }) {
   const show = (id) => !isHidden("drive", id);
   return (
-    <div class="drive2">
-      {show("limit") && <LimitTile />}
-      {show("acc") && <AccTile />}
-      {show("field") && <Tile name="generator.field_duty" label="Alternator field" area="d2field" spark sub={batterySub} />}
-      {show("gear") && <GearTile />}
-      {show("radar") && <RadarTile />}
-      {show("turbine") && <Tile name="transmission.turbine_speed" label="Turbine" area="d2turb" />}
-      {show("output") && <Tile name="transmission.output_speed" label="Output shaft" area="d2out" />}
-      {show("power2") && <Tile name="engine.crankshaft_power" label="Power" area="d2power" spark />}
-      {show("torque") && <Tile name="engine.crankshaft_torque" label="Torque" area="d2torque" />}
-      {show("target") && <Tile name="engine.target_crankshaft_torque" label="Target torque" area="d2target" />}
-      {show("odometer") && <Tile name="vehicle.odometer" label="Odometer" area="d2odo" />}
-    </div>
+    <>
+      <div class="drive2">
+        {show("limit") && <LimitTile />}
+        {show("acc") && <AccTile />}
+        {show("field") && <Tile name="generator.field_duty" label="Alternator field" area="d2field" spark sub={batterySub} />}
+        {show("gear") && <GearTile />}
+        {show("radar") && <RadarTile />}
+        {show("turbine") && <Tile name="transmission.turbine_speed" label="Turbine" area="d2turb" />}
+        {show("output") && <Tile name="transmission.output_speed" label="Output shaft" area="d2out" />}
+        {show("power2") && <Tile name="engine.crankshaft_power" label="Power" area="d2power" spark />}
+        {show("torque") && <Tile name="engine.crankshaft_torque" label="Torque" area="d2torque" />}
+        {show("target") && <Tile name="engine.target_crankshaft_torque" label="Target torque" area="d2target" />}
+        {show("odometer") && <Tile name="vehicle.odometer" label="Odometer" area="d2odo" />}
+      </div>
+      <DriveFooter page={page} onPageChange={onPageChange} />
+    </>
   );
 }

@@ -6,6 +6,7 @@ The registry is deliberately a metric allowlist, not a generic DID or CAN API.
 from __future__ import annotations
 
 from projects.vehicle_data.metric_types import MetricDefinition, SourceDefinition
+from projects.vehicle_data.lighting import METRICS as LIGHT_METRICS
 
 BATTERY_VOLTAGE = MetricDefinition(
     name="battery.voltage",
@@ -784,6 +785,7 @@ RADAR_AZIMUTH = _radar_angle_metric("azimuth")
 METRICS = {
     definition.name: definition
     for definition in (
+        *LIGHT_METRICS,
         BATTERY_VOLTAGE,
         IGNITION_ON,
         ENGINE_OIL_PRESSURE,

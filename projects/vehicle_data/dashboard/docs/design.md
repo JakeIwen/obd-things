@@ -339,6 +339,19 @@ when the v2 key is absent, and the Codex chat access code (`van-warning-chat.*`)
 
 ### 3.1 Drive (one screen in portrait; no scrolling)
 
+Both Drive pages share `DriveFooter.jsx`: the Gauges/Sensors selector and two
+icon-only light indicators on the same 44 px row. The selector is centered on
+the screen independently of the icons, which align to the row's left edge.
+Equal side columns preserve the center on narrow screens. At the owner's request,
+the icons are 30% smaller (28 × 19.6 px on the tablet), with no visible labels
+or state text. Missing, expired or disconnected observations look dim/off;
+the API still distinguishes unavailable data from a measured false value.
+`LightIndicators.jsx` consumes driver-qualified boolean observation states.
+`lighting.json` is the shared metric contract. Footer code remains in the lazy
+Drive page chunks, and `styles/lighting.css` owns its layout. Manual switch operation was
+owner-referenced on October 12; this van has no AUTO switch setting. First-drive
+behavior remains pending.
+
 Portrait grid: 3 columns (`repeat(3, minmax(0,1fr))`) and 4 rows (`1.15fr 1fr 1fr 1.15fr`) filling
 the view height. The frame is `100dvh` (falling back to `100vh`) minus the 48 px top bar and 64 px
 tab bar, with 16 px gutters and 12 px gaps.

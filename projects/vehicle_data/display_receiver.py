@@ -18,6 +18,7 @@ from lib import can_handoff, can_operation_state
 from projects.vehicle_data import ccan_powertrain as cp
 from projects.vehicle_data.can_interfaces import C_CAN_ROLE
 from projects.vehicle_data.drive_recorder import broker_c_can_route
+from projects.vehicle_data import lighting
 from projects.vehicle_data.display_contract import DISPLAY_SOURCES, DISPLAY_FRAME_DLCS, DISPLAY_FRAME_IDS
 
 
@@ -76,7 +77,9 @@ def receive_display_frames(channel, *, valid, stopped, publish,
             age = wall_time() - received
             if age < -0.05 or age > 1.0:
                 continue  # Discard a stalled queue; wait for a current frame.
-            observations = cp.decode_frame_observations(can_id, data[:dlc])
+            observations = (lighting.decode_light_observations(can_id, data[:dlc])
+                            if can_id == lighting.FRAME_ID
+                            else cp.decode_frame_observations(can_id, data[:dlc]))
             if observations:
                 publish(observations, datetime.fromtimestamp(received, timezone.utc),
                         monotonic() - max(0.0, age))

@@ -1,0 +1,438 @@
+{
+  "capture": "tmp/captures/lighting-20261012/session_20261012T071746.827258Z_2",
+  "analysis_job": "20261012T073018Z-e0853180",
+  "event_sha256": "39bf236ea62690e8a1eca456ab6ef839225b9b3b2f220cdb265e41fbcbd59041",
+  "windows": [
+    {
+      "name": "owner_confirmed_lights_off_baseline",
+      "start": 1791789478.23672,
+      "end": 1791789490.236021,
+      "green": false,
+      "blue": false
+    },
+    {
+      "name": "owner_confirmed_low_beams",
+      "start": 1791789562.593315,
+      "end": 1791789572.299506,
+      "green": true,
+      "blue": false
+    },
+    {
+      "name": "owner_confirmed_steady_high_beams",
+      "start": 1791789607.278294,
+      "end": 1791789614.187976,
+      "green": true,
+      "blue": true
+    },
+    {
+      "name": "owner_confirmed_return_to_low_beams",
+      "start": 1791789665.915217,
+      "end": 1791789675.196207,
+      "green": true,
+      "blue": false
+    },
+    {
+      "name": "owner_confirmed_return_to_lights_off",
+      "start": 1791789715.754511,
+      "end": 1791789728.040234,
+      "green": false,
+      "blue": false
+    },
+    {
+      "name": "owner_confirmed_repeat_low_beams",
+      "start": 1791789889.13653,
+      "end": 1791789897.175397,
+      "green": true,
+      "blue": false
+    },
+    {
+      "name": "owner_confirmed_repeat_steady_high_beams",
+      "start": 1791789943.047371,
+      "end": 1791789956.130091,
+      "green": true,
+      "blue": true
+    },
+    {
+      "name": "owner_confirmed_repeat_return_to_low_beams",
+      "start": 1791790008.830752,
+      "end": 1791790022.087515,
+      "green": true,
+      "blue": false
+    },
+    {
+      "name": "owner_confirmed_repeat_return_to_lights_off",
+      "start": 1791790078.979581,
+      "end": 1791790083.979581,
+      "green": false,
+      "blue": false
+    }
+  ],
+  "sources": [
+    {
+      "path": "001-chunk_0001_20261012T071747.363461Z.candump",
+      "sha256": "f27d6a28f413d9a3f7fe91079deeec8cba5d4491da5108c38198d4b589935521",
+      "frames": 52656,
+      "bytes": 2168948
+    },
+    {
+      "path": "002-chunk_0002_20261012T072247.533404Z.candump",
+      "sha256": "8008e57df68c1c378a9c05dc00455cea69cc38f8f23c9d1fc27d5a5f91abab01",
+      "frames": 52656,
+      "bytes": 2168948
+    },
+    {
+      "path": "003-chunk_0003_20261012T072747.751637Z.candump",
+      "sha256": "24f20bc1373ed69e6cfd86e66f3b059938c8db388742aeff552082d1447cb479",
+      "frames": 3246,
+      "bytes": 133715
+    },
+    {
+      "path": "004-chunk_0001_20261012T071747.435006Z.candump",
+      "sha256": "ccfc98cbc65a170791fd0058849151be8205a2d5e7d4b5a313ed670d8de50687",
+      "frames": 814065,
+      "bytes": 36797433
+    },
+    {
+      "path": "005-chunk_0002_20261012T072247.647420Z.candump",
+      "sha256": "02be9de381c31798aa316eecb28c3ea80cdc015f0324afd671b93cab2800a32f",
+      "frames": 814102,
+      "bytes": 36799107
+    },
+    {
+      "path": "006-chunk_0003_20261012T072747.971932Z.candump",
+      "sha256": "7c3cf2c7c3806e4067d8a9c50ae1c0ced2aef92e755f25859f8ff24bc8cab098",
+      "frames": 49446,
+      "bytes": 2235055
+    },
+    {
+      "path": "007-chunk_0001_20261012T071747.438470Z.candump",
+      "sha256": "ffd31d154892a6bb94a914dba04272426eba6816da06c56f418d763f9766e713",
+      "frames": 563171,
+      "bytes": 24853630
+    },
+    {
+      "path": "008-chunk_0002_20261012T072247.663368Z.candump",
+      "sha256": "5ca29a7c4fa1a0a4cf9a42ace63cf64d905f894afa991d14076ccdbbc899d13c",
+      "frames": 563167,
+      "bytes": 24853453
+    },
+    {
+      "path": "009-chunk_0003_20261012T072747.958554Z.candump",
+      "sha256": "15d968c037af9d8c8348c6bc8fc1259f87f34d5621c97d5eae6bdea9715751f2",
+      "frames": 34204,
+      "bytes": 1509462
+    }
+  ],
+  "selected": [
+    {
+      "channel": "can0",
+      "id_bits": 11,
+      "can_id": 1854,
+      "can_id_hex": "73E",
+      "dlc": 4,
+      "byte": 0,
+      "bit_lsb0": 1,
+      "indicator": "green",
+      "inverted": false,
+      "window_counts": [
+        48,
+        39,
+        27,
+        37,
+        49,
+        32,
+        52,
+        53,
+        20
+      ],
+      "examples": [
+        "40000020",
+        "42008020",
+        "46008020",
+        "42008020",
+        "40000020",
+        "42008020",
+        "46008020",
+        "42008020",
+        "40000020"
+      ],
+      "window_values": [
+        false,
+        true,
+        true,
+        true,
+        false,
+        true,
+        true,
+        true,
+        false
+      ],
+      "transitions": [
+        {
+          "at": 1791789467.489359,
+          "on": false,
+          "payload": "40000020"
+        },
+        {
+          "at": 1791789517.650887,
+          "on": true,
+          "payload": "42008020"
+        },
+        {
+          "at": 1791789701.021768,
+          "on": false,
+          "payload": "40000020"
+        },
+        {
+          "at": 1791789874.826483,
+          "on": true,
+          "payload": "42008020"
+        },
+        {
+          "at": 1791790064.009555,
+          "on": false,
+          "payload": "40000020"
+        }
+      ],
+      "timing": {
+        "count": 2480,
+        "first": 1791789467.489359,
+        "last": 1791790085.987244,
+        "max_gap": 0.7498719692230225
+      }
+    },
+    {
+      "channel": "can0",
+      "id_bits": 11,
+      "can_id": 1854,
+      "can_id_hex": "73E",
+      "dlc": 4,
+      "byte": 0,
+      "bit_lsb0": 2,
+      "indicator": "blue",
+      "inverted": false,
+      "window_counts": [
+        48,
+        39,
+        27,
+        37,
+        49,
+        32,
+        52,
+        53,
+        20
+      ],
+      "examples": [
+        "40000020",
+        "42008020",
+        "46008020",
+        "42008020",
+        "40000020",
+        "42008020",
+        "46008020",
+        "42008020",
+        "40000020"
+      ],
+      "window_values": [
+        false,
+        false,
+        true,
+        false,
+        false,
+        false,
+        true,
+        false,
+        false
+      ],
+      "transitions": [
+        {
+          "at": 1791789467.489359,
+          "on": false,
+          "payload": "40000020"
+        },
+        {
+          "at": 1791789592.790148,
+          "on": true,
+          "payload": "46008020"
+        },
+        {
+          "at": 1791789646.570443,
+          "on": false,
+          "payload": "42008020"
+        },
+        {
+          "at": 1791789916.567085,
+          "on": true,
+          "payload": "46008020"
+        },
+        {
+          "at": 1791789996.306016,
+          "on": false,
+          "payload": "42008020"
+        }
+      ],
+      "timing": {
+        "count": 2480,
+        "first": 1791789467.489359,
+        "last": 1791790085.987244,
+        "max_gap": 0.7498719692230225
+      }
+    }
+  ],
+  "corroborating": [
+    {
+      "channel": "can0",
+      "id_bits": 11,
+      "can_id": 900,
+      "can_id_hex": "384",
+      "dlc": 8,
+      "byte": 3,
+      "bit_lsb0": 7,
+      "indicator": "green",
+      "inverted": false,
+      "window_counts": [
+        48,
+        38,
+        28,
+        37,
+        49,
+        32,
+        53,
+        53,
+        20
+      ],
+      "examples": [
+        "0801b40800000000",
+        "0801b48800000000",
+        "0801b48800200000",
+        "0801b48800000000",
+        "0801b40800000000",
+        "0801b48800000000",
+        "0801b48800200000",
+        "0801b48800000000",
+        "0801b40800000000"
+      ],
+      "window_values": [
+        false,
+        true,
+        true,
+        true,
+        false,
+        true,
+        true,
+        true,
+        false
+      ],
+      "transitions": [
+        {
+          "at": 1791789467.569313,
+          "on": false,
+          "payload": "0801b40800000000"
+        },
+        {
+          "at": 1791789517.819292,
+          "on": true,
+          "payload": "0801b48800000000"
+        },
+        {
+          "at": 1791789701.071233,
+          "on": false,
+          "payload": "0801b40800000000"
+        },
+        {
+          "at": 1791789875.06634,
+          "on": true,
+          "payload": "0801b48800000000"
+        },
+        {
+          "at": 1791790064.066093,
+          "on": false,
+          "payload": "0801b40800000000"
+        }
+      ],
+      "timing": {
+        "count": 2475,
+        "first": 1791789467.569313,
+        "last": 1791790086.067071,
+        "max_gap": 0.5000598430633545
+      }
+    },
+    {
+      "channel": "can0",
+      "id_bits": 11,
+      "can_id": 900,
+      "can_id_hex": "384",
+      "dlc": 8,
+      "byte": 5,
+      "bit_lsb0": 5,
+      "indicator": "blue",
+      "inverted": false,
+      "window_counts": [
+        48,
+        38,
+        28,
+        37,
+        49,
+        32,
+        53,
+        53,
+        20
+      ],
+      "examples": [
+        "0801b40800000000",
+        "0801b48800000000",
+        "0801b48800200000",
+        "0801b48800000000",
+        "0801b40800000000",
+        "0801b48800000000",
+        "0801b48800200000",
+        "0801b48800000000",
+        "0801b40800000000"
+      ],
+      "window_values": [
+        false,
+        false,
+        true,
+        false,
+        false,
+        false,
+        true,
+        false,
+        false
+      ],
+      "transitions": [
+        {
+          "at": 1791789467.569313,
+          "on": false,
+          "payload": "0801b40800000000"
+        },
+        {
+          "at": 1791789592.789208,
+          "on": true,
+          "payload": "0801b48800200000"
+        },
+        {
+          "at": 1791789646.570093,
+          "on": false,
+          "payload": "0801b48800000000"
+        },
+        {
+          "at": 1791789916.56668,
+          "on": true,
+          "payload": "0801b48800200000"
+        },
+        {
+          "at": 1791789996.305842,
+          "on": false,
+          "payload": "0801b48800000000"
+        }
+      ],
+      "timing": {
+        "count": 2475,
+        "first": 1791789467.569313,
+        "last": 1791790086.067071,
+        "max_gap": 0.5000598430633545
+      }
+    }
+  ]
+}

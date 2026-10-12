@@ -5,6 +5,7 @@
 
 import { render } from "preact";
 import "./styles/app.css";
+import "./styles/lighting.css";
 import * as store from "./store.js";
 import { createLink } from "./link.js";
 import { startRings } from "./app/rings.js";
