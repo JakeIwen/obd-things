@@ -444,8 +444,9 @@ mostly 77–79 mph with adaptive cruise engaged) moved the elevation from
   fits a time constant of about 98 s, less cleanly (rms residual 0.13°)
   because it paused while speed fell to 4 mph. So once either axis starts to
   move it settles at about the same rate. The axes differ in how long they
-  wait: azimuth began 18 recorded minutes and 2.5 miles into trip 87, within
-  about a minute of the van first exceeding 35 mph; elevation began after 110
+  wait: azimuth began 18 recorded minutes and 2.5 miles into trip 87, about 4.5
+  minutes after the van pulled away (roughly one minute of that at 35 mph or
+  more); elevation began after 110
   recorded minutes and 98.8 miles (74 minutes at 50 mph or more) counted from
   the start of trip 87.
 - **Not one mechanism at one rate.** The October 7 fall in trip 77 was a
