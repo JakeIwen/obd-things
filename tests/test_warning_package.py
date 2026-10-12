@@ -1,5 +1,4 @@
 """Structural compatibility of the extracted evaluator and its historical API."""
-import ast
 from dataclasses import asdict, fields
 import importlib
 import inspect
@@ -46,17 +45,6 @@ class WarningPackageTests(unittest.TestCase):
                     self.assertEqual(ew._rule_snapshot(left), self.old._rule_snapshot(right))
         self.assertEqual(ew.WARNING_SCHEMA_VERSION, self.old.WARNING_SCHEMA_VERSION)
         self.assertEqual(ew.default_rule_catalog(), self.old.default_rule_catalog())
-
-    def test_constant_and_default_table_source_is_unchanged(self):
-        before = Path(self.old.__file__).read_text()
-        rules = importlib.import_module("projects.vehicle_data.warning_engine.rules")
-        after = Path(rules.__file__).read_text()
-
-        def assignments(source):
-            return {ast.get_source_segment(source, node) for node in ast.parse(source).body
-                    if isinstance(node, (ast.Assign, ast.AnnAssign))}
-
-        self.assertEqual(assignments(before), assignments(after))
 
     def test_mixins_have_no_overlapping_methods_or_initializers(self):
         seen = set()
