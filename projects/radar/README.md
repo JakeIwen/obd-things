@@ -16,6 +16,13 @@ from September 24, and no horizontal-misalignment DTC. All 15 supported modules
 answered and restored passive; PCM was skipped. Physical mounting inspection
 remains the next diagnostic step; successful engagement and a parked scan do
 not validate alignment during driving. See the same finding for exact evidence.
+After the owner bent the bracket back, the October 11 drive (trip 87) returned
+azimuth from −1.410° to −0.068° while elevation stayed at −3.766°. On the next
+drive (trip 88) elevation held for another 50 minutes, then moved to about
+−0.99° within ten minutes and ended at −0.948°. Either axis settles within
+minutes once it starts; elevation waited 110 recorded minutes to start. The
+vertical reading is still about 1.1° from its pre-collision value; see the
+finding's "October 11 follow-up".
 
 > **Start with [`docs/AGENT_HANDOFF.md`](docs/AGENT_HANDOFF.md)** for the resolved fault, ruled-out
 > list, and `0x0251` evidence, but obey its 2026-08-20 topology warning: its PCAN/`can0` commands

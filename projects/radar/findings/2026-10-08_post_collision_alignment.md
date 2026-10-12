@@ -345,6 +345,9 @@ the same filtering/acceptance rules. The within-drive plateaus, ramps and
 between-drive reversions fit this interpretation. Continued physical movement
 of a displaced mount, changed loading, and environment-dependent bias remain
 possible; these logs alone cannot separate them.
+A change in aim does not always appear gradually: after the October 11
+bracket correction the elevation held for 110 recorded minutes and then
+settled within about ten (see "Trip 88" in the October 11 follow-up).
 
 Bosch's [elevation-estimation patent US20160161597A1](https://patents.google.com/patent/US20160161597A1/en)
 describes selecting reliable target observations, accumulating a sliding-time
@@ -364,6 +367,137 @@ confirmed for this van. Inspect the actual bracket/bumper before choosing a
 correction. The completed parked scan above does not exercise a moving monitor.
 Do not use the inferred degree magnitude/sign as a physical adjustment recipe.
 ACC accepting engagement is not an alignment acceptance test.
+
+## October 11 follow-up: bracket correction and per-axis response
+
+The owner reports bending the radar bracket back before trip 87 (time of the
+adjustment not established) and observed that only the horizontal reading
+corrected on that drive, as on earlier occasions. The historian confirms it.
+Times are UTC; trip 87 is October 11 evening locally.
+
+| Trip | Recorded interval, UTC | Vertical / elevation | Horizontal / azimuth |
+|---|---|---|---|
+| 81 | Oct 10 00:29–00:40 | −3.347 → −3.600° | −1.377 → −1.383° |
+| 82 | Oct 10 01:01–01:29 | −3.429 → −3.705° | −1.382 → −1.392° |
+| 83 | Oct 10 01:37–02:52 | −3.705 → −3.747° | −1.392 → −1.402° |
+| 84 | Oct 10 03:31–04:40 | −3.747 → −3.758° | −1.401 → −1.411° |
+| 85 | Oct 10 23:26–23:44 | −3.757 → −3.761° | −1.411 → −1.410° |
+| 86 | Oct 10 23:50–23:54 | −3.761 → −3.761° | −1.410 → −1.410° |
+| 87 | Oct 12 00:17–01:17 | −3.761 → −3.766° | −1.410 → −0.068° |
+| 88 | Oct 12 02:33–04:10 | −3.765 → −0.948° | −0.068 → −0.153° |
+
+In trip 87 the azimuth was unchanged for the first 18 minutes (stationary, then
+low speed), first moved at 00:35:29, passed half-way at 00:37:40 and was
+within 0.03° of its final value by 00:48:21, over four-minute bins averaging
+36–60 mph. The elevation spanned only −3.761049° to −3.765570° over the whole
+59.5 minutes, including about half an hour in bins averaging above 50 mph,
+much of it with adaptive cruise engaged.
+
+Across trips 73–87 (about 365 recorded minutes, 188 two-minute bins):
+
+- The axes have not made a large move together: 24 bins have an elevation
+  change above 0.02°, 14 have an azimuth change above 0.02°, none have both.
+  With so few episodes this is about what independence would give (roughly two
+  overlaps expected), so it does not show an interlock between the axes.
+- Azimuth changed by 0.000° in 33 stationary minutes and fastest at 35 mph and
+  above (1.63°/h of absolute movement at 35–50 mph, against 0.16°/h at 1–20 mph).
+  Both large azimuth corrections (trips 73 and 87) took 10–15 minutes at speed.
+- Elevation shows no such speed dependence: it crept 0.039° while stationary,
+  made its largest move (trip 77, −1.50°) at a mean of 10–14 mph, and moved in
+  bursts with partial reversions at startup. After the collision it changed
+  only +0.177° → +0.056° in the first 49 recorded minutes (trips 73–76, at an
+  increasing rate), then needed trips 77–84 (235 recorded minutes) to settle.
+
+Read on its own, trip 87 looked like a fast azimuth estimator that needs
+vehicle speed beside a slow elevation estimator. **Trip 88 contradicts the
+"slow" half of that**; see the next subsection. What trip 87 does establish is
+narrower: an unchanged elevation over one hour of driving does not show whether
+a bracket correction restored the vertical aim. The elevation was still
+creeping negative in trip 87 (−0.0045° in total), which turned out to predict
+nothing. Adaptive engagement during trip 87 is not an alignment acceptance test.
+
+Lead-vehicle icon while engaged in adaptive mode, from fresh `acc.state`,
+`acc.mode` and `acc.lead_vehicle` rows joined per snapshot (about 7 s apart):
+trip 82 (elevation −3.43° → −3.71°) 44 of 99 engaged snapshots; trip 83, 12 of
+165 (a further 381 engaged snapshots were fixed-speed mode); trip 84, 7 of 222;
+trip 87, 3 of 179. The radar therefore reported a lead vehicle with the
+elevation reading beyond −3.4°. The later low counts cannot be separated from
+light traffic, because lead range is not decoded; they are not evidence of
+missed vehicles or of correct tracking.
+
+### Trip 88: elevation corrected in one step after a long hold
+
+The next drive the same evening (trip 88, Oct 12 02:33–04:10 UTC, 108 miles,
+mostly 77–79 mph with adaptive cruise engaged) moved the elevation from
+−3.765° to −0.948°; azimuth went from −0.068° to −0.153°.
+
+- **Hold.** Elevation spanned only −3.7653° to −3.7671° for the first 50
+  minutes (61.5 miles, 47 minutes at 50 mph or more).
+- **Step.** The last unchanged sample is 03:23:24 and the first changed one
+  03:23:36. The reading was −2.454° at 03:24:41, −1.388° at 03:26:51 and
+  −1.087° at 03:29:09. From 03:23:36 it follows an exponential approach to
+  −0.986° with a time constant of about 100 s (straight-line fit of the log
+  residual, 28 samples, rms residual 0.018°). It then held −0.9858° ± 0.001°
+  from 03:36 to 03:50, moved to −0.926° while slowing from 74 to 65 mph and
+  ended at −0.948°.
+- **Same pace as azimuth.** The first azimuth step in trip 87 (toward −0.255°)
+  fits a time constant of about 98 s, less cleanly (rms residual 0.13°)
+  because it paused while speed fell to 4 mph. So once either axis starts to
+  move it settles at about the same rate. The axes differ in how long they
+  wait: azimuth began 18 recorded minutes and 2.5 miles into trip 87, within
+  about a minute of the van first exceeding 35 mph; elevation began after 110
+  recorded minutes and 98.8 miles (74 minutes at 50 mph or more) counted from
+  the start of trip 87.
+- **Not one mechanism at one rate.** The October 7 fall in trip 77 was a
+  near-linear ramp (−1.859° → −2.766° in 6.5 minutes, about 0.14°/min, at
+  0–28 mph) that continued through samples at 0.0 mph. The reported value can
+  therefore keep moving toward an internal target with the van stopped. The
+  remaining October 7–10 descent was slower still.
+- **Order of the axes.** After both physical changes (the collision and the
+  bracket correction) azimuth moved on the first drive at speed and elevation
+  moved later: not within 49 recorded minutes after the collision, and after
+  110 recorded minutes after the correction. Across trips 74–88 (228
+  two-minute bins; trip 73 has aged out of the live historian) 29 bins have an
+  elevation change above 0.02°, 9 an azimuth change, and none both, against
+  1.1 expected under independence. Two events and a zero count that small do
+  not separate "one axis at a time" from two estimators with different
+  requirements; the owner's one-at-a-time description fits every recorded
+  episode.
+- **Possible trigger, one coincidence.** Fresh `acc.lead_vehicle` rows (only
+  published while engaged or in override in adaptive mode) show the icon in 3
+  of 198 samples in trip 87 and 10 of 295 in trip 88 before the step, against
+  95 of 226 from the step onward. The icon appeared at 03:23:18, 6–18 s before
+  the first changed elevation sample, and the van slowed from 78.4 to 73.1 mph
+  under adaptive cruise. An earlier 50 s icon episode (02:41:43–02:42:34, no
+  speed change) produced no elevation change, and four later 80–110 s episodes
+  left the settled value unchanged. Two readings fit: a close lead vehicle
+  gave the elevation estimator the evidence it had lacked, or the stale −3.77°
+  value was itself suppressing lead-vehicle selection until it corrected.
+  Traffic on that road is not recorded, so the logs cannot choose.
+
+Consequences: the bracket correction removed about 2.8° of the vertical
+reading, leaving it about 1.1° from the pre-collision +0.19° and near the
+−1.26° at which C1418-78 was active in June. For 110 recorded minutes after
+the correction the radar reported a vertical value about 2.8° away from the
+one it later settled on, with adaptive cruise engaged and no warning to the
+driver. Whether the new value is final needs another drive.
+
+Not a service routine: neither web listener unit carries
+`--enable-radar-service-alignment` and no `tmp/radar/service_alignment/` run
+log exists. That does not exclude a routine started from another tool.
+
+Evidence: `tmp/radar/axis-response-20261011/` (`observations.json`, SHA-256
+`4de640e1e96961a434bde7b24506a355a7fc6be8ae161d2a5a6b642d443108de`, plus the
+as-run export and analysis scripts) for trips 69–87, and
+`tmp/radar/axis-response-20261012/` (`observations.json`, SHA-256
+`984af819966c957db2b417a150c21d0d05b9143b2dc3932f724457d9aa22a856`;
+`odometer.json`, SHA-256
+`631689a31b79e46e39a51c954f89dc8542e1bfdd8113b6337c812c3eaee97492`; as-run
+scripts) for trips 74–88. Both were read from the live historian with
+`tools.warning_replay.ReadOnlySource` (one read transaction per export,
+indexed per-trip statements, maximum 0.462 s); trips 69–73 had aged out and
+come from the October 8 `samples.csv`. Fresh rows deduplicated by observation
+timestamp. No CAN transmission or service change.
 
 ## Reproduction and provenance
 
