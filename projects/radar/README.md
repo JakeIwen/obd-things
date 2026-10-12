@@ -69,6 +69,13 @@ restored. The first run is the on-vehicle validation: review
 the `31 01`/`31 02` reply shapes in `findings/did_map.md`. The OEM order still applies: inspect
 mounting before calibrating.
 
+**Reference points on the dashboard (2026-10-12).** The System radar card can be zeroed at the
+current `0845` angles and then shows the change since that point; every earlier reference stays
+selectable, and each completed Service Drive Alignment saves the first angles read after it. This
+is display bookkeeping kept on the Pi (`projects/vehicle_data/radar_reference.py`). It sends
+nothing to the radar and does not change what the radar reports or how it is calibrated. Contract:
+vehicle-data README section "Radar alignment reference points".
+
 The telemetry dashboard now has an always-visible alignment panel backed by
 `projects/vehicle_data/radar_alignment.py` (2026-09-16). It displays candidate
 stored `0845` elevation/azimuth and trailing one/five/thirty-minute and two-hour sample averages.

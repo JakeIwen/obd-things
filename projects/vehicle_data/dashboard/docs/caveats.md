@@ -311,6 +311,20 @@ the last minutes of that reading run, not the current minute. "Awaiting
 readings" means no angle has been read during the current drive yet. If the radar reads are ever
 switched off on the Pi, the System view says so in one sentence.
 
+### Zero and references
+
+The radar card's **Zero / references…** button saves the current angles as a reference. The card
+then shows a **Since reference** row for each axis: how far that angle has moved since the saved
+point. The dashboard does the subtraction. The radar is told nothing and its calibration does not
+change, and the large angle, the ±1° badge and the margin still show what the radar reports.
+
+- Every reference stays in the list, so you can go back to an earlier one or to raw angles only.
+  The list is kept on the Pi, so the tablet and a phone show the same reference.
+- Zeroing while parked uses the last angles read before the engine stopped. The list shows that
+  reading's time when it is more than a minute older than the moment you zeroed.
+- Each drive calibration that finishes saves the first angles read after it, marked
+  **After calibration**. It is not selected for you.
+
 ### Drive calibration
 
 Where it has been switched on for this dashboard address, the System view's radar card has a

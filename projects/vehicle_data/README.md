@@ -1429,6 +1429,8 @@ POST /v1/observations/<allowlisted-metric>
      {"value":...,"unit":"...","source":"...","bus":"...","quality":"..."}
 GET  /v1/radar/service-alignment
 POST /v1/radar/service-alignment
+GET  /v1/radar/alignment-reference
+POST /v1/radar/alignment-reference
      {"action":"start","confirm_stationary_engine_running":true,"confirm_drive_without_acc":true}
      {"action":"stop"}
 ```
@@ -1820,6 +1822,48 @@ Tests: `tests/test_radar_service_alignment.py` (fixed frames, state machine,
 the routine inside `run_active_session` against a scripted radar),
 `tests/test_radar_service_control.py` (relay, a real supervised child over the
 pipe, listener gating) and `dashboard/test/RadarCalibration.helpers.test.mjs`.
+
+### Radar alignment reference points (2026-10-12)
+
+The System view's radar card can show the two `0845` angles as the change since a
+saved reference point. This is display bookkeeping: nothing is sent to the radar,
+its calibration is untouched, and the angles, the ±1° badge and the margins on the
+card stay absolute.
+
+- **What a point is.** A dated copy of the last full reading (both axes) with a
+  source: `manual` (the owner zeroed the card) or `calibration` (saved after a
+  completed Service Drive Alignment, with that run's request id).
+- **Zeroing** adds a point from the broker's last reading and selects it. Points
+  are never edited or replaced, so every earlier one stays selectable as a
+  rollback point, and "no reference" is always available. Zeroing while parked
+  copies the last reading taken; the point records that reading's time.
+- **Calibration points.** When the helper reports a run completed, the broker
+  saves the first reading in which both axes were read after that moment. It is
+  not selected automatically. A completion with no later reading (engine switched
+  off at once) waits for the next one, across a broker restart.
+- **Storage.** `radar-references.json` beside `radar-alignment.json`
+  (`/var/lib/van-telemetry/` on vanpi), written atomically before a request is
+  acknowledged. An unreadable file is reported and never overwritten. At most 200
+  points are kept: the oldest go first, zeroed ones before calibration points,
+  never the selected point or the one it just replaced.
+- **API.** `GET /v1/radar/alignment-reference` returns `current` (the reading a
+  zero would copy), `selected`, `points` (newest first), `pending_calibration`
+  and the storage state. `POST` accepts exactly `{"action":"zero"}`,
+  `{"action":"select","id":"<point id>"}` or `{"action":"clear"}` and answers with
+  the same state: `201` for a new point, `409 no_reading`,
+  `404 unknown_reference`, `503 storage_unavailable`, `400 invalid_request`. Both
+  web listeners relay it without a flag; a POST must be same-origin JSON, like the
+  oil-change route. The state is not part of `/v1/status` or the snapshot.
+- **Code.** `radar_reference.py` (points, storage, local API) with
+  `radar_reference.json` (path, sources and request bodies, shared with the
+  dashboard). `RadarServiceControl` owns the instance, built on the broker's
+  `AlignmentHistory`, which reports each stored reading to it. Dashboard:
+  `src/radarReference.js` (the request and wording the card and the dialog
+  share) and `dialogs/RadarReference{.jsx,.helpers.js}`.
+
+Tests: `tests/test_radar_reference.py`, the reference cases in
+`tests/test_radar_service_control.py` (completion hand-off, the relay and its
+gate) and `dashboard/test/RadarReference.helpers.test.mjs`.
 
 ### Last-recorded display policy (September 20 audit)
 

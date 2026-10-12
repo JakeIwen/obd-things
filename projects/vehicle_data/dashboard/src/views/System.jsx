@@ -10,8 +10,10 @@
  *                  helpers, from `summary.statusFull` (once a minute, never per second).
  *   RADAR          within/approaching/outside ±1° badge; per axis latest, 1-min, 5-min, 30-min and 2-h means (n),
  *                  the physical aim reading of the elevation sign (radarAim.js),
- *                  5-min peak, margin to ±1.00°; the last-read time when not live; and, where the
- *                  listener enables it, the button for the drive-calibration dialog.
+ *                  5-min peak, margin to ±1.00°; the last-read time when not live; the change
+ *                  since the selected reference point with the button for the reference dialog
+ *                  (radarReference.js; re-read with each summary); and, where the listener
+ *                  enables it, the button for the drive-calibration dialog.
  *   METRIC CATALOG every metric with its value (live, dimmed last reading with time, or a dash),
  *                  sources, bus, quality, freshness limit and retention; raw diagnostics and
  *                  unconfirmed metrics sit in a collapsed "Diagnostic-only" disclosure.
@@ -23,7 +25,7 @@
  * touches only text that changed. No timers, no layout reads, no inline styles.
  */
 
-import { computed } from "@preact/signals";
+import { computed, effect } from "@preact/signals";
 import { useEffect, useRef, useState } from "preact/hooks";
 import * as store from "../store.js";
 import { settings, saveSettings } from "../settings.js";
@@ -38,6 +40,7 @@ import { HEALTH_CARDS } from "./health.helpers.js";
 import * as H from "./system.helpers.js";
 import { historyCards as buildHistoryCards } from "./history.helpers.js";
 import { isUnavailableCanState } from "../canAvailability.js";
+import { exchange, isState, selectedPoint } from "../radarReference.js";
 
 export const SYSTEM_CARDS = H.SYSTEM_CARDS;
 
@@ -218,15 +221,35 @@ const radar = computed(() => {
       axes,
       windows: full ? full.radar_alignment : null,
       polling: full ? full.radar_alignment_polling : null,
+      reference: selectedPoint(store.radarReference.value),
       nowMs: Date.now(),
     }),
   );
 });
 
+/** Re-read the reference kept on the Pi; a failed read keeps the last one. */
+function refreshRadarReference() {
+  exchange((url, init) => globalThis.fetch(url, init)).then(
+    (reply) => {
+      if (isState(reply.payload)) store.radarReference.value = reply.payload;
+    },
+    () => {},
+  );
+}
+
 function RadarCard() {
   const r = radar.value;
   // Only a listener started with the opt-in flag offers the radar's drive calibration.
   const calibrate = store.web.value.radar_service_enabled === true;
+  // Another device may have changed the reference: read it on arrival and with each summary.
+  useEffect(
+    () =>
+      effect(() => {
+        void store.summary.statusFull.value;
+        refreshRadarReference();
+      }),
+    [],
+  );
   return (
     <Card title="Radar alignment" badge={r.badge.text} badgeTone={r.badge.tone}>
       {r.note ? <p class="system-help">{r.note}</p> : null}
@@ -241,14 +264,18 @@ function RadarCard() {
           </div>
         ))}
       </div>
+      {r.reference ? <p class="system-note">{r.reference}</p> : null}
       {r.problem ? <p class="system-note system-note--red">{r.problem}</p> : null}
-      {calibrate ? (
-        <div class="btn-row">
+      <div class="btn-row">
+        <button type="button" class="btn" onClick={() => openDialog("radarReference")}>
+          Zero / references…
+        </button>
+        {calibrate ? (
           <button type="button" class="btn" onClick={() => openDialog("radar")}>
             Drive calibration…
           </button>
-        </div>
-      ) : null}
+        ) : null}
+      </div>
     </Card>
   );
 }

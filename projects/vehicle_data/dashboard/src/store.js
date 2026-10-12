@@ -100,6 +100,9 @@ export const statusLite = signal({});
 /** Web listener flags (`active_acquisition_enabled`, `dtc_jobs_enabled`, ...). */
 export const web = signal({});
 
+/** Last radar reference state from the Pi (radarReference.js), or null before the first answer. */
+export const radarReference = signal(null);
+
 /** Broker link state, owned by `link.js`. */
 export const connection = signal({
   state: "connecting",

@@ -525,6 +525,36 @@ test("radar: not live → retained values, neutral badge, last-read time once", 
   assert.doesNotMatch(shownText(r), JARGON);
 });
 
+test("radar: a selected reference adds the change since it and leaves the angles absolute", () => {
+  const input = {
+    axes: { elevation: { fresh: true, value: -0.38 }, azimuth: { fresh: true, value: 0.1 } },
+    windows: {},
+    polling: { commissioned: true },
+    nowMs: NOW,
+  };
+  const reference = {
+    id: "a".repeat(32),
+    source: "manual",
+    created_at: "2026-09-22T18:40:00+00:00",
+    observed_at: "2026-09-22T18:39:55+00:00",
+    angles: { elevation: -0.5, azimuth: 0.1 },
+  };
+  const r = H.radarModel({ ...input, reference });
+  assert.equal(r.axes[0].latest, "−0.38°");
+  assert.deepEqual(r.axes[0].rows[0], ["Since reference", "+0.12°"]);
+  assert.deepEqual(r.axes[1].rows[0], ["Since reference", "0.00°"]);
+  assert.equal(r.axes[0].rows[6][1], "0.62° to spare");
+  assert.deepEqual(r.badge, { text: "Within ±1°", tone: "green" });
+  assert.equal(r.reference, "Change shown since: Zeroed here · 12:40 pm (vertical −0.50° · horizontal +0.10°)");
+  assert.doesNotMatch(shownText(r), JARGON);
+  // An axis with no value yet shows a dash, not a made-up change.
+  const waiting = H.radarModel({ ...input, axes: { elevation: { fresh: false }, azimuth: { fresh: false } }, reference });
+  assert.deepEqual(waiting.axes[0].rows[0], ["Since reference", "—"]);
+  const raw = H.radarModel(input);
+  assert.equal(raw.reference, null);
+  assert.equal(raw.axes[0].rows[0][0], "1-min average");
+});
+
 test("radar: live values colour the badge; outside the reference shows the overshoot", () => {
   const live = (el, az) =>
     H.radarModel({

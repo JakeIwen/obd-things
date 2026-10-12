@@ -792,3 +792,9 @@ a { color: var(--blue); }
 .radar-cal__text { margin: 0 0 8px; font-size: 15px; color: var(--text-2); }
 .radar-cal__text--caution { color: var(--amber); }
 .radar-cal__action { flex: 1 1 auto; min-height: 56px; font-size: 18px; }
+
+/* ---------- Radar reference (.radar-ref*, src/dialogs/RadarReference.jsx) ---------- */
+.radar-ref { width: min(100vw - 24px, 640px); }
+.radar-ref__facts { margin-top: 4px; }
+.radar-ref__row { align-items: center; }
+.radar-ref__name { font-weight: 600; }

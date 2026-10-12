@@ -16,11 +16,12 @@ export const DIALOG_LOADERS = {
   customize: () => import("../dialogs/Customizer.jsx"),
   oil: () => import("../dialogs/OilChange.jsx"),
   radar: () => import("../dialogs/RadarCalibration.jsx"),
+  radarReference: () => import("../dialogs/RadarReference.jsx"),
 };
 
 /**
  * Open a dialog.
- * @param {'events'|'chat'|'customize'|'oil'|'radar'} name
+ * @param {'events'|'chat'|'customize'|'oil'|'radar'|'radarReference'} name
  * @param {object} [props]
  */
 export function openDialog(name, props) {

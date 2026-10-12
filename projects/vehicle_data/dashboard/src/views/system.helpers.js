@@ -13,6 +13,7 @@
 import { DASH, fmtValue, fmtFixed, fmtUnit, fmtTime, fmtAgeCoarse, fmtInt } from "../format.js";
 import { metricLabel } from "../warningContext.js";
 import { aimText, AZIMUTH_AIM_UNMAPPED, RADAR_AXES, fmtAngle } from "../radarAim.js";
+import { anglesText, pointText, sinceReference } from "../radarReference.js";
 
 import { DOCS, obj, arr, num, str, wallMs, when, humanize, capital, plural, clip, createStableGate, agoText } from "./view.helpers.js";
 
@@ -374,16 +375,20 @@ function windowText(w) {
 /**
  * Radar alignment card.
  * @param {{axes:Object<string,{fresh:boolean, value:number|null, held:{value:number,
- *   observed_at:string}|null}>, windows:object|null, polling:object|null, nowMs:number}} input
+ *   observed_at:string}|null}>, windows:object|null, polling:object|null, reference?:object|null,
+ *   nowMs:number}} input
  *   `axes[id]`: `fresh` (record available and current), `value` (fresh value), `held` (dated last
  *   reading from derive.obs); `windows`: `statusFull.radar_alignment`; `polling`:
- *   `statusFull.radar_alignment_polling`.
+ *   `statusFull.radar_alignment_polling`; `reference`: the selected reference point
+ *   (radarReference.js) or null. A reference adds the change since it; the angles themselves,
+ *   the badge and the margins stay absolute.
  */
 export function radarModel(input) {
   const i = input || {};
   const nowMs = num(i.nowMs) !== null ? i.nowMs : Date.now();
   const windows = obj(i.windows) || {};
   const polling = obj(i.polling);
+  const reference = obj(i.reference);
   const axes = [];
   let live = 0;
   let maxAbs = null;
@@ -420,6 +425,7 @@ export function radarModel(input) {
       latest: fmtAngle(value),
       live: fresh,
       rows: [
+        ...(reference ? [["Since reference", fmtAngle(sinceReference(reference, axis.id, value))]] : []),
         ["1-min average", windowText(w["60"])],
         ["5-min average", windowText(w300)],
         ["30-min average", windowText(w["1800"])],
@@ -445,7 +451,10 @@ export function radarModel(input) {
     if (!live) note = "Not live · last read " + (isFinite(newestAt) ? fmtTime(newestAt, new Date(nowMs)) : "earlier");
   }
   const problem = polling && str(polling.retained_storage_error) ? "Last angles are not being saved: " + clip(polling.retained_storage_error, 160) : null;
-  return { badge, note, axes, problem };
+  const since = reference
+    ? "Change shown since: " + pointText(reference, new Date(nowMs)) + " (" + anglesText(reference.angles) + ")"
+    : null;
+  return { badge, note, axes, problem, reference: since };
 }
 
 // ---------------------------------------------------------------------------

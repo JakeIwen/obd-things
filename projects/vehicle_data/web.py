@@ -3,8 +3,8 @@
 
 This module serves only JSON routes: the cached broker proxy, the server-sent
 event stream, the gated passive voltage read, maintenance and event POSTs, DTC
-batch jobs, the opt-in radar service-alignment relay and the warning-advisor
-proxy. It serves no dashboard page. The dashboard listener is ``web_v2.py``,
+batch jobs, the opt-in radar service-alignment relay, the radar reference
+points and the warning-advisor proxy. It serves no dashboard page. The dashboard listener is ``web_v2.py``,
 which subclasses these classes and adds the built frontend from
 ``dashboard/dist`` plus the ``/v2`` routes; the systemd units run that file,
 not this one.
@@ -36,6 +36,7 @@ from projects.vehicle_data.warning_chat import (
     DEFAULT_SOCKET as DEFAULT_WARNING_CHAT_SOCKET, MAX_BODY as MAX_WARNING_CHAT_BYTES,
 )
 from projects.vehicle_data.broker import DEFAULT_SOCKET
+from projects.vehicle_data.radar_reference import API_PATH as RADAR_REFERENCE_PATH
 from projects.vehicle_data.radar_service_alignment import (
     API_PATH as RADAR_SERVICE_PATH, LISTENER_DISABLED as RADAR_SERVICE_DISABLED,
 )
@@ -137,6 +138,7 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
         (r"/v1/stream", "_stream_get"),
         (r"/v1/diagnostics/dtc-jobs/current", "_dtc_current"),
         (RADAR_SERVICE_PATH, "_radar_service_get"),
+        (RADAR_REFERENCE_PATH, "_proxy_get"),
     )
     POST_ROUTES = (
         (r"/v1/assistant/.*", "_assistant_post"),
@@ -145,6 +147,7 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
         (r"/v1/diagnostics/dtc-jobs(?:/current/cancel)?", "_dtc_job_post"),
         (r"/v1/acquisitions/battery\.voltage", "_acquisition_post"),
         (RADAR_SERVICE_PATH, "_radar_service_post"),
+        (RADAR_REFERENCE_PATH, "_radar_reference_post"),
     )
 
     def _not_found(self, path: str) -> None:
@@ -306,6 +309,16 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
             payload = self._read_json(MAX_REQUEST_BYTES, size_error="Invalid service record size")
         except (ValueError, UnicodeDecodeError) as exc:
             return self._json(400, {"available": False, "detail": str(exc)})
+        return self._broker_request("POST", path, payload)
+
+    def _radar_reference_post(self, path: str) -> None:
+        # Display bookkeeping only: a reference point never reaches the vehicle.
+        if self._owner_record_refused("Radar references"):
+            return None
+        try:
+            payload = self._read_json(MAX_REQUEST_BYTES)
+        except (ValueError, UnicodeDecodeError) as exc:
+            return self._json(400, {"available": False, "reason": "invalid_request", "detail": str(exc)})
         return self._broker_request("POST", path, payload)
 
     def _dtc_job_post(self, path: str) -> None:

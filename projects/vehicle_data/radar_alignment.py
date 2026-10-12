@@ -204,6 +204,8 @@ class AlignmentHistory:
         self.lock = threading.RLock()
         self.dirty = False
         self.storage_error = None
+        # Set by the reference points (radar_reference.py); called after each stored reading.
+        self.on_reading = None
         if self.path is not None:
             try:
                 if self.path.stat().st_size > 16384:
@@ -277,6 +279,16 @@ class AlignmentHistory:
         if result.metric in self.samples:
             self.add(result.metric, result.value, result.observed_monotonic,
                      result.observed_at.isoformat())
+            if self.on_reading is not None:
+                self.on_reading()
+
+    def latest(self):
+        """The last reading per axis as ``(value, observed_at)``, or None until every axis has one."""
+        with self.lock:
+            rows = [self.last[metric] for metric in METRICS]
+            if not all(rows):
+                return None
+            return {axis: (row["latest_value"], row["observed_at"]) for axis, row in zip(AXES, rows)}
 
     def summary(self, now):
         # Deliberately do not age away the last measured windows during parking.

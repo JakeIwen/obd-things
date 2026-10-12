@@ -1,0 +1,14 @@
+{
+  "path": "/v1/radar/alignment-reference",
+  "sources": {
+    "manual": "manual",
+    "calibration": "calibration"
+  },
+  "zero_request": {
+    "action": "zero"
+  },
+  "clear_request": {
+    "action": "clear"
+  },
+  "select_action": "select"
+}

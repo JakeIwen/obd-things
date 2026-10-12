@@ -4,7 +4,8 @@ The broker never touches CAN for this. Its ``RadarServiceControl`` builds the
 active-drive helper's supervisor with the feature flag and a stdin pipe added,
 relays one validated start or stop command, records what the helper reports,
 and answers the local API. The helper repeats every vehicle gate itself
-(radar_service_alignment.py).
+(radar_service_alignment.py). A run that completes is reported to the
+alignment reference points (radar_reference.py), which the control also owns.
 
 Run events are appended to ``tmp/radar/service_alignment/`` so a run can be
 reviewed beside the drive recorder's raw capture.
@@ -23,6 +24,7 @@ import time
 import uuid
 
 from lib.timeutil import finite_number, utc_now
+from projects.vehicle_data import radar_reference
 from projects.vehicle_data.http_common import exact_json
 from projects.vehicle_data.radar_service_alignment import (
     ACTIVE_STATES, API_PATH, COMPLETED, ENABLE_FLAG, EVENT_FIELDS, EVENT_TYPE, FAILED, IDLE,
@@ -34,6 +36,8 @@ from projects.vehicle_data.radar_service_alignment import (
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 DEFAULT_LOG_DIR = REPO / "tmp" / "radar" / "service_alignment"
+# Both owner endpoints the control answers for (see ``endpoint``), as one route pattern.
+API_ROUTE = "|".join(re.escape(path) for path in (API_PATH, radar_reference.API_PATH))
 START_REQUEST = VOCABULARY["start_request"]
 STOP_REQUEST = VOCABULARY["stop_request"]
 HELPER_STATES = frozenset((IDLE, STARTING, RUNNING, STOPPING, COMPLETED, STOPPED, FAILED))
@@ -146,10 +150,15 @@ class HelperCommandPipe:
 
 
 class RadarServiceControl:
-    """One tracked service-alignment run and the command pipe to the helper."""
+    """One tracked service-alignment run and the command pipe to the helper.
 
-    def __init__(self, *, log_dir=DEFAULT_LOG_DIR, popen_factory=subprocess.Popen,
+    ``history`` is the broker's radar reading history; the reference points
+    taken from it (``references``) get a point after every completed run.
+    """
+
+    def __init__(self, *, history=None, log_dir=DEFAULT_LOG_DIR, popen_factory=subprocess.Popen,
                  monotonic=time.monotonic):
+        self.references = radar_reference.RadarReferences(history)
         self._pipe = HelperCommandPipe(popen_factory, on_start=self._helper_started)
         self._log_dir = pathlib.Path(log_dir) if log_dir is not None else None
         self._monotonic = monotonic
@@ -183,8 +192,11 @@ class RadarServiceControl:
                 return
             # Also applies after the broker gave up waiting: a late report from
             # the helper is the truth about a routine that did start.
+            newly_completed = run.state != COMPLETED and event["state"] == COMPLETED
             run.apply(event, utc_now())
             self._log({"at": run.updated_at, **event})
+            if newly_completed:
+                self.references.calibration_completed(run.request_id)
 
     # -- tracking (lock held) --------------------------------------------
 
@@ -243,6 +255,10 @@ class RadarServiceControl:
         return code, self._status(reason=reason, detail=detail)
 
     # -- local API -------------------------------------------------------
+
+    def endpoint(self, path: str):
+        """What answers ``status_response()`` and ``request()`` for an ``API_ROUTE`` path."""
+        return self if path == API_PATH else self.references
 
     def status_response(self) -> tuple[int, dict[str, object]]:
         with self._lock:

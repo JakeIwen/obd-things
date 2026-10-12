@@ -105,14 +105,14 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
         (r"/v1/events(?:/.*)?", "_event_get"),
         # The broker (unlike the web proxy) accepts an empty metric name.
         (r"/v1/metrics/[^/]*", "_metric_get"),
-        (radar_service_control.API_PATH, "_radar_service_get"),
+        (radar_service_control.API_ROUTE, "_radar_service_get"),
     )
     POST_ROUTES = (
         (r"/v1/events/.*", "_event_post"),
         (r"/v1/acquisitions/[^/]+", "_acquisition_post"),
         (r"/v1/observations/[^/]+", "_observation_post"),
         (r"/v1/maintenance/oil-changes", "_oil_change_post"),
-        (radar_service_control.API_PATH, "_radar_service_post"),
+        (radar_service_control.API_ROUTE, "_radar_service_post"),
     )
 
     def _not_found(self, path: str) -> None:
@@ -181,10 +181,10 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
         )
 
     def _radar_service_get(self, path: str) -> None:
-        return self._json(*self.broker.radar_service.status_response())
+        return self._json(*self.broker.radar_service.endpoint(path).status_response())
 
     def _radar_service_post(self, path: str, payload: Any) -> None:
-        return self._json(*self.broker.radar_service.request(payload))
+        return self._json(*self.broker.radar_service.endpoint(path).request(payload))
 
     def _event_post(self, path: str, payload: Any) -> None:
         return self._json(*self.broker.event_request("POST", self.path, payload))

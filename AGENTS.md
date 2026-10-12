@@ -98,6 +98,24 @@ return (the B-CAN helper's own gates differ on purpose and stay in
 and focus behaviour of every dialog; `TelemetryWebHandler._read_json` in
 `web.py` is the one JSON body reader for the listener's POST routes.
 
+Radar alignment reference points (2026-10-12): the System radar card can show the
+`0845` angles as the change since a saved point ("zero"). It is display
+bookkeeping kept on the Pi; nothing reaches the radar. The vehicle-data README
+section "Radar alignment reference points" is the contract. Where things live:
+`radar_reference.py` (the points, their file `radar-references.json` beside the
+reading history, and the local API) with `radar_reference.json` (path, sources
+and request bodies shared with the dashboard); `RadarServiceControl` owns the
+instance and hands it each completed run, whose first later reading becomes a
+point; `dashboard/src/radarReference.js` (the request and wording shared by the
+card and the dialog) and `dashboard/src/dialogs/RadarReference{.jsx,.helpers.js}`.
+Shared pieces added with it: `http_common.exact_json` (exact request-body
+check); `TelemetryWebHandler._owner_record_refused` in `web.py` (the same-origin
+JSON gate for owner records, used by the oil-change and reference routes);
+`dashboard/src/radarAim.js` now also declares the radar axes and the angle
+format; `dashboard/src/dialogs/useController.js` creates a dialog's controller
+once per mount; `dashboard/src/jsonReply.js` reads a fetch reply that must be one
+JSON object.
+
 Oil-life telemetry is enabled (owner activation 2026-10-03):
 `engine.oil_life_remaining` is PCM DID `2185`, unsigned percent, polled at
 most once per minute during qualified engine-running intervals. The Service

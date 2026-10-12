@@ -12,10 +12,13 @@ import time
 import unittest
 from unittest import mock
 
-from projects.vehicle_data import api_server, radar_service_alignment as service, web
+from datetime import datetime, timezone
+
+from projects.vehicle_data import api_server, radar_reference, radar_service_alignment as service, web
 from projects.vehicle_data import radar_service_control as control
 from projects.vehicle_data.broker import ActiveDriveSupervisor, TelemetryBroker
-from tests.radar_service_support import Clock
+from projects.vehicle_data.radar_alignment import AlignmentHistory
+from tests.radar_service_support import Clock, record_reading
 from tests.vehicle_data_api_concurrency_support import read_http, unix_socket
 
 
@@ -47,13 +50,13 @@ class FakeProcess:
 class Helper:
     """A control wired to a fake helper process through the real factory wrapper."""
 
-    def __init__(self, log_dir=None):
+    def __init__(self, log_dir=None, history=None):
         self.clock = Clock()
         self.process = FakeProcess()
         self.popen_calls = []
         self.forwarded = []
         self.control = control.RadarServiceControl(
-            log_dir=log_dir, popen_factory=self._popen, monotonic=self.clock)
+            history=history, log_dir=log_dir, popen_factory=self._popen, monotonic=self.clock)
         self.supervisor_kwargs = self.control.supervisor(
             lambda **kwargs: kwargs, event_handler=self.forwarded.append, channel="can7")
 
@@ -99,6 +102,20 @@ class ControlTests(unittest.TestCase):
         self.assertEqual((code, body["run"]["state"]), (202, service.REQUESTED))
         self.assertEqual(helper.process.commands(),
                          [{"command": "start", "request_id": body["run"]["request_id"]}])
+
+    def test_only_a_completed_run_is_handed_to_the_reference_points(self):
+        helper = Helper().launch()
+        waiting = lambda: helper.control.references.status_response()[1]["pending_calibration"]
+        for end in (service.FAILED, service.STOPPED, service.COMPLETED):
+            helper.clock.value += control.START_MIN_INTERVAL_SECONDS
+            request_id = helper.control.request(START)[1]["run"]["request_id"]
+            helper.emit(event(service.RUNNING, request_id=request_id, progress=40))
+            self.assertIsNone(waiting())
+            reason = {service.FAILED: "stalled", service.STOPPED: "owner_stopped"}.get(end)
+            helper.emit(event(end, request_id=request_id, reason=reason))
+            if end != service.COMPLETED:
+                self.assertIsNone(waiting(), end)
+        self.assertEqual(waiting()["request_id"], request_id)
 
     def test_only_the_exact_bodies_are_accepted(self):
         helper = Helper().launch()
@@ -287,7 +304,8 @@ class WebRelayTests(unittest.TestCase):
         socket_path = str(pathlib.Path(self.tmp.name) / "api.sock")
         self.broker = TelemetryBroker(acquirer=mock.Mock(channel="can7"))
         self.addCleanup(self.broker.close)
-        self.helper = Helper(self.tmp.name)
+        self.history = AlignmentHistory()
+        self.helper = Helper(self.tmp.name, history=self.history)
         self.broker.radar_service = self.helper.control
         self.socket_path = socket_path
         self.api = api_server.UnixHTTPServer(socket_path, self.broker)
@@ -306,12 +324,12 @@ class WebRelayTests(unittest.TestCase):
     def enable(self):
         self.web.radar_service_origins = frozenset({self.origin})
 
-    def http(self, method, body=None, headers=None):
+    def http(self, method, body=None, headers=None, path=service.API_PATH):
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
         try:
             data = None if body is None else (body if isinstance(body, bytes) else json.dumps(body).encode())
             base = {"Origin": self.origin, "Content-Type": "application/json"} if method == "POST" else {}
-            connection.request(method, service.API_PATH, body=data, headers={**base, **(headers or {})})
+            connection.request(method, path, body=data, headers={**base, **(headers or {})})
             response = connection.getresponse()
             return response.status, json.loads(response.read())
         finally:
@@ -346,6 +364,25 @@ class WebRelayTests(unittest.TestCase):
         self.assertEqual(self.http("GET")[1]["run"]["progress"], 12)
         code, body = self.http("POST", STOP)
         self.assertEqual((code, body["run"]["stop_requested"]), (202, True))
+
+    def test_reference_points_are_relayed_without_the_flag_to_same_origin_json_only(self):
+        path = radar_reference.API_PATH
+        code, body = self.http("GET", path=path)
+        self.assertEqual((code, body["points"], body["current"]), (200, [], None))
+        record_reading(self.history, datetime(2026, 10, 12, 14, 0, tzinfo=timezone.utc), -3.766, -0.068)
+        for headers, detail in (
+                ({"Origin": "http://evil.example:8765"}, "Radar references require a same-origin request"),
+                ({"Sec-Fetch-Site": "cross-site"}, "Radar references require a same-origin request"),
+                ({"Content-Type": "text/plain"}, "Radar references require JSON")):
+            code, body = self.http("POST", {"action": "zero"}, headers, path=path)
+            self.assertEqual(body, {"available": False, "detail": detail}, headers)
+        self.assertEqual(self.http("POST", b"{oops", path=path)[1]["reason"], "invalid_request")
+        self.assertEqual(self.http("POST", {"action": "start"}, path=path)[1]["reason"], "invalid_request")
+        code, body = self.http("POST", {"action": "zero"}, path=path)
+        self.assertEqual((code, body["points"][0]["angles"]), (201, {"elevation": -3.766, "azimuth": -0.068}))
+        self.assertEqual(self.http("GET", path=path)[1]["selected"], body["selected"])
+        self.assertEqual(self.http("POST", {"action": "clear"}, path=path)[1]["selected"], None)
+        self.assertEqual(self.helper.process.commands(), [])
 
     def api_post(self, head: bytes, body: bytes):
         with unix_socket(self.socket_path, 5.0) as sock:

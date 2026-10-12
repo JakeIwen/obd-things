@@ -142,8 +142,8 @@ tablet browser ──HTTP/SSE──▶ web_v2.py (:8765, subclass of web.py)
     store publishes a slice only when its JSON changed. A manual refresh bypasses the 60 s throttle.
 - Everything the dialogs need stays on `/v1/*`: `/v1/health` (now gzipped), `/v1/events…`,
   `/v1/assistant/*`, `/v1/maintenance/oil-changes`, `/v1/diagnostics/dtc-jobs*`,
-  `/v1/acquisitions/battery.voltage` and, where the listener enables it,
-  `/v1/radar/service-alignment`. No route is removed. There is no `/v2/health-full`.
+  `/v1/acquisitions/battery.voltage`, `/v1/radar/alignment-reference` and, where the listener
+  enables it, `/v1/radar/service-alignment`. No route is removed. There is no `/v2/health-full`.
 - Every `web` flags object on this listener adds `bind` and the dashboard `build` id, read from
   `<static_root>/build.json` and refreshed when that file's mtime changes.
 - CLI: `web_v2.py --socket … --bind <addr> [--port 8765] --allow-remote-bind [--cache-only]
@@ -267,7 +267,9 @@ opens a network or CAN connection. `TRACE_JSON` is optional; keep it under
     / `Row`, `ServiceCard` and `DtcScan`.
   - `views/`: `Drive` (with the page-2 chunk `DriveMore` and `drivePager.js`), `Parked`, `Health`,
     `History` and `System`.
-  - `dialogs/`: `EventHistory`, `WarningChat`, `Customizer`, `OilChange` and `RadarCalibration`.
+  - `dialogs/`: `EventHistory`, `WarningChat`, `Customizer`, `OilChange`, `RadarCalibration` and
+    `RadarReference`. The two radar sheets create their controller through `useController.js`
+    and read replies through `src/jsonReply.js`.
     They share `modalDialog.js` (`useModalDialog`: `showModal`, focus the close button, restore
     focus to the opener on any native close); `EventHistory` keeps its own effects for the chat
     hand-off and uses that module's two primitives.
@@ -561,6 +563,13 @@ checks when stopped:
     the 5-min peak |angle|, the margin to ±1.00°, an `Aim` row (elevation: the `radarAim.js` reading;
     azimuth: `left/right direction not known`), and the not-commissioned detail.
   - A held value carries its time.
+  - **Zero / references…** button. It opens the lazy `dialogs/RadarReference.jsx` sheet: the
+    angles a zero would copy, the reference in use, **Zero at these angles**, **Show raw angles
+    only**, and the list of saved points with a **Use** button each. The points are kept on the Pi
+    (`/v1/radar/alignment-reference`); nothing is sent to the radar. With a point selected the
+    card adds a `Since reference` row per axis and one line naming the point, while the angle,
+    badge and margin stay absolute. The card re-reads the reference on arrival and with each
+    60 s summary; `store.radarReference` holds the last state.
   - **Drive calibration…** button, only when `web.radar_service_enabled`. It opens the lazy
     `dialogs/RadarCalibration.jsx` sheet, which starts, watches and stops the radar's Service Drive
     Alignment through `/v1/radar/service-alignment`: a confirmation tick, one Start/Stop button, the

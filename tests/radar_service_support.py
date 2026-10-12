@@ -1,4 +1,4 @@
-"""Scripted radar ECU and authority fakes for the service-alignment tests.
+"""Scripted radar ECU, authority fakes and stored readings for the radar tests.
 
 ``FakeRadar`` is a SocketCAN stand-in that answers the fixed requests the way
 the MRR1evo14F answered them in June 2026: extended session, routine 0251 with
@@ -8,11 +8,20 @@ its four status bytes, TesterPresent, and the segmented 0845 read.
 from __future__ import annotations
 
 import struct
+from types import SimpleNamespace
 
 from projects.vehicle_data import radar_alignment as radar
 from projects.vehicle_data.radar_drive_steps import SessionEnding
 from projects.vehicle_data.radar_service_alignment import EVENT_TYPE
 from projects.vehicle_data.radar_service_control import validate_event
+
+
+def record_reading(history, at, elevation, azimuth) -> None:
+    """Store one 0845 reading in an ``AlignmentHistory`` at wall time ``at``; None skips an axis."""
+    for metric, value in zip(radar.METRICS, (elevation, azimuth)):
+        if value is not None:
+            history.observe(SimpleNamespace(metric=metric, value=value,
+                                            observed_monotonic=at.timestamp(), observed_at=at))
 
 
 def radar_frame(data: bytes) -> bytes:

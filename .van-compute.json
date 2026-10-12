@@ -2,6 +2,16 @@
   "schema_version": 1,
   "tasks": [
     {
+      "name": "lighting-owner-reference",
+      "description": "Offline bounded bit comparison for the owner's parked light-icon reference; no CAN access.",
+      "profile": "can-log-batch",
+      "source_paths": ["projects/ecu_mapping/lighting_reference.py", "lib/__init__.py", "lib/candump_io.py", "lib/reports.py"],
+      "minimum_inputs": 2,
+      "maximum_inputs": 17,
+      "argv": ["{source:projects/ecu_mapping/lighting_reference.py}", "--events", "{input:0}", "--output", "{result:lighting.json}", "{inputs:1}"],
+      "outputs": ["lighting.json"]
+    },
+    {
       "name": "dashboard-test-build",
       "description": "Install pinned dashboard dependencies without lifecycle scripts, run Node regressions, and build returned assets; no CAN or deployment.",
       "profile": "python-script",
@@ -15,7 +25,8 @@
         "projects/vehicle_data/dashboard/package-lock.json",
         "projects/vehicle_data/dashboard/.npmrc",
         "projects/vehicle_data/can_availability.json",
-        "projects/vehicle_data/radar_service_alignment.json"
+        "projects/vehicle_data/radar_service_alignment.json",
+        "projects/vehicle_data/radar_reference.json"
       ],
       "minimum_inputs": 0,
       "maximum_inputs": 0,
