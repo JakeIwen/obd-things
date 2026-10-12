@@ -24,7 +24,7 @@ import uuid
 
 from lib.timeutil import finite_number, utc_now
 from projects.vehicle_data.radar_service_alignment import (
-    ACTIVE_STATES, COMPLETED, ENABLE_FLAG, EVENT_FIELDS, EVENT_TYPE, FAILED, IDLE,
+    ACTIVE_STATES, API_PATH, COMPLETED, ENABLE_FLAG, EVENT_FIELDS, EVENT_TYPE, FAILED, IDLE,
     MAX_DETAIL_CHARS, MAX_RUN_SECONDS, MAX_SPEED_MPH, REASONS, REQUEST_ID, REQUESTED, RUNNING,
     STALL_SECONDS, STARTING, START_COMMAND, STATIONARY_MAX_MPH, STOPPED, STOPPING, STOP_COMMAND,
     VOCABULARY, encode_command,
@@ -33,7 +33,6 @@ from projects.vehicle_data.radar_service_alignment import (
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 DEFAULT_LOG_DIR = REPO / "tmp" / "radar" / "service_alignment"
-API_PATH = VOCABULARY["path"]
 START_REQUEST = VOCABULARY["start_request"]
 STOP_REQUEST = VOCABULARY["stop_request"]
 HELPER_STATES = frozenset((IDLE, STARTING, RUNNING, STOPPING, COMPLETED, STOPPED, FAILED))
@@ -225,8 +224,8 @@ class RadarServiceControl:
               and self._monotonic() - self._requested_monotonic > REQUEST_ACK_SECONDS):
             self._fail("not_delivered", "the helper did not acknowledge the request")
 
-    def _status(self, **refusal: object) -> dict[str, object]:
-        """The API body; ``refusal`` adds ``available=False`` with a reason and detail."""
+    def _helper(self) -> dict[str, object]:
+        """Whether the helper could take a start now, and the sentence that says why not."""
         running = self._pipe.alive()
         ready = running and self._supported
         if ready:
@@ -235,9 +234,13 @@ class RadarServiceControl:
             detail = "the helper is starting or cannot reach the radar in this interval"
         else:
             detail = "the engine is not running, so the telemetry helper is not armed"
+        return {"running": running, "ready": ready, "detail": detail}
+
+    def _status(self, **refusal: object) -> dict[str, object]:
+        """The API body; ``refusal`` adds ``available=False`` with a reason and detail."""
         return {
             "available": not refusal,
-            "helper": {"running": running, "ready": ready, "detail": detail},
+            "helper": self._helper(),
             "run": None if self._run is None else dataclasses.asdict(self._run),
             "limits": LIMITS,
             "log_error": self._log_error,
@@ -267,7 +270,7 @@ class RadarServiceControl:
     def _start(self) -> tuple[int, dict[str, object]]:
         if self._run is not None and self._run.active:
             return self._refused(409, "already_active", "a service alignment is already active")
-        helper = self._status()["helper"]
+        helper = self._helper()
         if not helper["ready"]:
             return self._refused(409, "helper_not_ready", helper["detail"])
         now = self._monotonic()

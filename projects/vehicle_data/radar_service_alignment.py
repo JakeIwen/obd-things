@@ -25,6 +25,7 @@ from pathlib import Path
 import re
 import sys
 
+from lib.timeutil import finite_number
 from projects.vehicle_data.radar_service_transport import (
     ENTER_SESSION, KEEP_ALIVE, NEGATIVE, POSITIVE, READ_STATUS, ROUTINE_COMPLETED, ROUTINE_IDLE,
     SKIPPED, START_ROUTINE, STOP_ROUTINE, Exchange, RadarServiceTransport, Reply, RoutineStatus,
@@ -138,8 +139,7 @@ def _speed_mph(snapshot: object) -> float | None:
     for observation in getattr(snapshot, "observations", ()):
         if getattr(observation, "metric", None) == "vehicle.speed":
             value = getattr(observation, "value", None)
-            if (isinstance(value, (int, float)) and not isinstance(value, bool)
-                    and math.isfinite(value) and 0 <= value <= MAX_SPEED_MPH):
+            if finite_number(value) and 0 <= value <= MAX_SPEED_MPH:
                 return float(value)
     return None
 
