@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 from lib.candump_io import parse_candump_line, identifier_bits
-from lib.reports import atomic_json
+from lib.reports import atomic_json, require_distinct_output
 
 
 def stamp(event):
@@ -142,6 +142,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if not 1 <= len(args.captures) <= 16:
         raise ValueError('capture count out of bounds')
+    require_distinct_output(args.output, (args.events, *args.captures))
     events = [json.loads(line) for line in args.events.read_text().splitlines()]
     windows = reference_windows(events)
     stats, sources = collect(args.captures, windows)

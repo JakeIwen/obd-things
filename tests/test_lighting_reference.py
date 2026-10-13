@@ -10,6 +10,20 @@ from projects.ecu_mapping.lighting_reference import main
 
 
 class LightingReferenceTests(unittest.TestCase):
+    def test_output_cannot_replace_events_or_capture(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events = root / 'events.jsonl'
+            capture = root / 'capture.candump'
+            events.write_text('owner evidence must be preserved\n')
+            capture.write_text('(1790000000.0) can7 123#00\n')
+            before = {path: path.read_bytes() for path in (events, capture)}
+            for output in (events, capture):
+                with self.subTest(output=output.name), self.assertRaisesRegex(
+                        ValueError, 'output must differ'):
+                    main(['--events', str(events), '--output', str(output), str(capture)])
+                self.assertEqual({path: path.read_bytes() for path in before}, before)
+
     def test_public_report_matches_both_cycles_and_keeps_stream_identity(self):
         states = [(False, False), (True, False), (True, True), (True, False),
                   (False, False), (True, False), (True, True), (True, False),

@@ -103,6 +103,21 @@ def file_result(path):
 
 
 class ReportsTests(unittest.TestCase):
+    def test_evidence_output_guard_rejects_aliases_and_allows_separate_reports(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'source.json'
+            source.write_bytes(b'original evidence\n')
+            alias = root / 'alias.json'
+            alias.symlink_to(source)
+            for output in (source, alias):
+                with self.subTest(output=output.name), self.assertRaisesRegex(
+                        ValueError, 'output must differ'):
+                    reports.require_distinct_output(output, (source,))
+            reports.require_distinct_output(root / 'report.json', (source,))
+            self.assertEqual(source.read_bytes(), b'original evidence\n')
+            self.assertFalse((root / 'report.json').exists())
+
     def setUp(self):
         # Even an accidental call outside these pure writers cannot open CAN.
         real_socket = socket.socket

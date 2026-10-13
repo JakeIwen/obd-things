@@ -15,7 +15,15 @@ import json
 import os
 from pathlib import Path
 import tempfile
-from typing import Literal
+from typing import Iterable, Literal
+
+
+def require_distinct_output(
+    output: str | os.PathLike[str], inputs: Iterable[str | os.PathLike[str]],
+) -> None:
+    """Reject report destinations that resolve to read-only evidence inputs."""
+    if Path(output).resolve() in {Path(source).resolve() for source in inputs}:
+        raise ValueError("report output must differ from every evidence input")
 
 
 def atomic_json(
