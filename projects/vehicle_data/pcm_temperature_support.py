@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Parked fixed PCM support checks; dry-run by default.
 
-At most two padded physical SingleFrame requests, no retry, session control,
+At most six padded physical SingleFrame requests, no retry, session control,
 TesterPresent, wake, or ISO-TP FlowControl. Uses the reviewed role owner and
 requires fresh ignition-on, zero RPM, and zero road speed before arming and
 before each request. This tool does not publish telemetry.
@@ -111,7 +111,9 @@ def main(argv=None) -> int:
                         if sock.send(wire) != len(wire):
                             raise RuntimeError("short PCM request send")
                         try:
-                            row.update(decode_reply(did, sock.recv(pcm.CAN_FRAME_SIZE)))
+                            received = sock.recv(pcm.CAN_FRAME_SIZE)
+                            row["received_frame_hex"] = received.hex(" ").upper()
+                            row.update(decode_reply(did, received))
                         except TimeoutError:
                             row["status"] = "timeout"
                         atomic_write_json(output, report)

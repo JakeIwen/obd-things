@@ -70,6 +70,23 @@ class TemperatureSupportTests(unittest.TestCase):
         self.assertEqual(events, ["handoff_enter", "arm", "restore", "handoff_exit"])
         return result, json.loads(output.getvalue()), sock
 
+    def test_injector_plan_is_six_exact_padded_reads_without_io(self):
+        with mock.patch.object(support.can_runtime_route, "acquire_armed_bus_route") as arm, \
+                mock.patch.object(support.can_handoff, "active_turn") as turn, \
+                mock.patch.object(support.socket, "socket") as sock, \
+                mock.patch("sys.stdout", new_callable=io.StringIO) as output:
+            self.assertEqual(support.main(["--profile", "injector-pulse-width"]), 0)
+        plan = json.loads(output.getvalue())
+        self.assertEqual(plan["requests"], [
+            f"03 22 02 {did:02X} 00 00 00 00" for did in range(0x34, 0x3A)
+        ])
+        self.assertEqual(plan["maximum_requests"], 6)
+        self.assertEqual(plan["retries"], 0)
+        self.assertFalse(plan["session_change"])
+        self.assertFalse(plan["flow_control"])
+        arm.assert_not_called()
+        sock.assert_not_called()
+        turn.assert_not_called()
 
     def test_oil_life_plan_is_one_exact_padded_read_without_io(self):
         with mock.patch.object(support.can_runtime_route, "acquire_armed_bus_route") as arm, \
@@ -120,6 +137,32 @@ class TemperatureSupportTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             support.decode_reply(0x1234, frame("04 62 12 34 11"))
 
+    def test_injector_reply_preserves_raw_u32_candidate_only(self):
+        reply = support.decode_reply(0x0234, frame("07 62 02 34 12 34 56 78"))
+        self.assertEqual(reply, {
+            "status": "positive",
+            "response_hex": "62 02 34 12 34 56 78",
+            "raw": 0x12345678,
+            "raw_hex": "12 34 56 78",
+            "scale_basis": "catalog_candidate_unverified",
+        })
+        self.assertNotIn("value_usec", reply)
+        self.assertEqual(support.decode_reply(
+            0x0239, frame("03 7F 22 31"))["nrc"], "31")
+        for data in (
+            "04 62 02 34 12",
+            "07 62 02 35 12 34 56 78",
+            "08 62 02 34 12 34 56 78",
+            "10 08 62 02 34 12 34 56",
+        ):
+            with self.assertRaises(ValueError):
+                support.decode_reply(0x0234, frame(data))
+        wrong_flags = support.struct.pack(
+            support.pcm.CAN_FRAME_FORMAT, 0x18DAF110, 8,
+            bytes.fromhex("07 62 02 34 12 34 56 78"),
+        )
+        with self.assertRaises(ValueError):
+            support.decode_reply(0x0234, wrong_flags)
 
     def test_plan_never_acquires_a_route_or_opens_can(self):
         with mock.patch.object(support.can_runtime_route, "acquire_armed_bus_route") as arm, \
@@ -153,17 +196,20 @@ class TemperatureSupportTests(unittest.TestCase):
     def test_live_fixed_pair_restores_and_stops_on_lost_vehicle_gate(self):
         for profile, gate_failed, restored in (
             (profile, failed, restored)
-            for profile in ("temperature", "oil-life")
+            for profile in ("temperature", "oil-life", "injector-pulse-width")
             for failed, restored in ((False, True), (True, True), (False, False))
         ):
             with self.subTest(profile=profile, gate_failed=gate_failed, restored=restored):
                 replies = ([frame("04 62 21 85 11")] if profile == "oil-life" else
+                           [frame(f"07 62 02 {did:02X} 00 00 00 {did:02X}")
+                            for did in range(0x34, 0x3A)] if profile == "injector-pulse-width" else
                            [frame("03 7F 22 12"), frame("04 62 06 9F A0")])
                 gates = [["engine started"]] if gate_failed else None
                 result, report, sock = self.run_live_scenario(
                     profile, replies, vehicle_gates=gates, restored=restored)
                 self.assertEqual(result, 0 if restored and not gate_failed else 1)
-                expected_count = {"oil-life": 1, "temperature": 2}[profile]
+                expected_count = {"oil-life": 1, "temperature": 2,
+                                  "injector-pulse-width": 6}[profile]
                 self.assertEqual(sock.send.call_count, 0 if gate_failed else expected_count)
                 if not gate_failed:
                     sent = [support.struct.unpack(support.pcm.CAN_FRAME_FORMAT, c.args[0])[2]
@@ -172,8 +218,38 @@ class TemperatureSupportTests(unittest.TestCase):
                         self.assertEqual(sent, [bytes.fromhex("03 22 21 85 00 00 00 00")])
                         self.assertEqual(report["results"][0]["value_percent"], 17)
                         self.assertIn("oil-life-support-", report["report_path"])
-                    else:
+                    elif profile == "temperature":
                         self.assertEqual(sent, [bytes.fromhex("03 22 F4 5C 00 00 00 00"),
                                                 bytes.fromhex("03 22 06 9F 00 00 00 00")])
                         self.assertEqual([r["status"] for r in report["results"]],
                                          ["negative_response", "positive"])
+                    else:
+                        self.assertEqual(sent, [
+                            bytes.fromhex(f"03 22 02 {did:02X} 00 00 00 00")
+                            for did in range(0x34, 0x3A)
+                        ])
+                        self.assertEqual([row["raw"] for row in report["results"]],
+                                         list(range(0x34, 0x3A)))
+                        self.assertIn("injector-pulse-width-support-", report["report_path"])
+
+    def test_injector_gate_loss_after_two_sends_restores_before_handoff_exit(self):
+        replies = [frame("07 62 02 34 00 00 00 34"), frame("07 62 02 35 00 00 00 35")]
+        result, report, sock = self.run_live_scenario(
+            "injector-pulse-width", replies,
+            vehicle_gates=[[], [], ["engine started"]],
+        )
+        self.assertEqual(result, 1)
+        self.assertEqual(sock.send.call_count, 2)
+        self.assertEqual([row["did"] for row in report["results"]], ["0234", "0235"])
+        self.assertIn("pre-send vehicle/interface/topology gate failed", report["error"])
+        self.assertTrue(report["restored_passive"])
+
+    def test_injector_malformed_reply_restores_before_handoff_exit(self):
+        result, report, sock = self.run_live_scenario(
+            "injector-pulse-width", [frame("04 62 02 34 12")])
+        self.assertEqual(result, 1)
+        self.assertEqual(sock.send.call_count, 1)
+        self.assertIn("exact complete SingleFrame", report["error"])
+        self.assertEqual(report["results"][0]["received_frame_hex"],
+                         frame("04 62 02 34 12").hex(" ").upper())
+        self.assertTrue(report["restored_passive"])

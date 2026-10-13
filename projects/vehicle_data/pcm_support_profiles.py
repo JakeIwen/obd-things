@@ -10,9 +10,11 @@ from projects.vehicle_data import pcm_electrical as pcm
 
 TEMPERATURE_DIDS = (0xF45C, 0x069F)
 OIL_LIFE_DIDS = (0x2185,)
+INJECTOR_PULSE_WIDTH_DIDS = tuple(range(0x0234, 0x023A))
 CHECK_PROFILES = {
     "temperature": TEMPERATURE_DIDS,
     "oil-life": OIL_LIFE_DIDS,
+    "injector-pulse-width": INJECTOR_PULSE_WIDTH_DIDS,
 }
 
 
@@ -21,7 +23,6 @@ def request_bytes(did: int) -> bytes:
     if not any(did in profile for profile in CHECK_PROFILES.values()):
         raise ValueError("DID is outside the fixed support-check profiles")
     return bytes((3, 0x22, did >> 8, did & 255, 0, 0, 0, 0))
-
 
 
 def build_plan(profile: str, timeout_seconds: float, handoff_wait_seconds: float) -> dict:
@@ -43,9 +44,8 @@ def build_plan(profile: str, timeout_seconds: float, handoff_wait_seconds: float
     }
 
 
-
 def decode_reply(did: int, frame: bytes) -> dict:
-    if did not in (*TEMPERATURE_DIDS, 0x2185):
+    if not any(did in profile for profile in CHECK_PROFILES.values()):
         raise ValueError("DID is outside the fixed support-check profiles")
     if len(frame) != pcm.CAN_FRAME_SIZE:
         raise ValueError("malformed SocketCAN response length")
@@ -53,21 +53,43 @@ def decode_reply(did: int, frame: bytes) -> dict:
     if can_id != (pcm.CAN_EFF_FLAG | MODULES["pcm"].rxid) or not 1 <= dlc <= 8:
         raise ValueError("wrong PCM response identity, flags, or DLC")
     length = padded[0]
-    if length not in (3, 4) or dlc < length + 1:
-        raise ValueError("response must be a complete SingleFrame; no FlowControl sent")
+    expected_length = 7 if did in INJECTOR_PULSE_WIDTH_DIDS else 4
+    if length == 3 and dlc >= 4 and padded[1:3] == b"\x7f\x22":
+        payload = padded[1:4]
+        return {
+            "status": "negative_response",
+            "nrc": f"{payload[2]:02X}",
+            "response_hex": payload.hex(" ").upper(),
+        }
+    if length != expected_length or dlc < length + 1:
+        raise ValueError("response must be the exact complete SingleFrame; no FlowControl sent")
     payload = padded[1:1 + length]
-    if length == 3 and payload[:2] == b"\x7f\x22":
-        return {"status": "negative_response", "nrc": f"{payload[2]:02X}",
-                "response_hex": payload.hex(" ").upper()}
-    if payload[:3] != bytes((0x62, did >> 8, did & 255)) or length != 4:
-        raise ValueError("response does not match the exact requested DID and one-byte shape")
+    if payload[:3] != bytes((0x62, did >> 8, did & 255)):
+        raise ValueError("response does not match the exact requested DID")
+    if did in INJECTOR_PULSE_WIDTH_DIDS:
+        return {
+            "status": "positive",
+            "response_hex": payload.hex(" ").upper(),
+            "raw": int.from_bytes(payload[3:7], "big"),
+            "raw_hex": payload[3:7].hex(" ").upper(),
+            "scale_basis": "catalog_candidate_unverified",
+        }
     if did == 0x2185:
         if payload[3] > 100:
             raise ValueError("oil-life byte is outside 0..100 percent; not clamped")
-        return {"status": "positive", "response_hex": payload.hex(" ").upper(),
-                "raw": payload[3], "value_percent": payload[3],
-                "scale_basis": "observed_alfa_scale"}
+        return {
+            "status": "positive",
+            "response_hex": payload.hex(" ").upper(),
+            "raw": payload[3],
+            "value_percent": payload[3],
+            "scale_basis": "observed_alfa_scale",
+        }
     value_c = payload[3] - (64 if did == 0x069F else 40)
-    return {"status": "positive", "response_hex": payload.hex(" ").upper(),
-            "raw": payload[3], "value_c": value_c, "value_f": value_c * 1.8 + 32,
-            "scale_basis": "observed_alfa_scale" if did == 0x069F else "standardized_candidate"}
+    return {
+        "status": "positive",
+        "response_hex": payload.hex(" ").upper(),
+        "raw": payload[3],
+        "value_c": value_c,
+        "value_f": value_c * 1.8 + 32,
+        "scale_basis": "observed_alfa_scale" if did == 0x069F else "standardized_candidate",
+    }

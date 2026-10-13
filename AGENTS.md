@@ -139,9 +139,15 @@ manual 82% support-check result as a new live observation.
 
 ## Code layout after the 2026-09/10 refactor
 
-`projects/vehicle_data/pcm_support_profiles.py` owns the fixed temperature
-and oil-life support plans/decoders; `pcm_temperature_support.py` retains
-the guarded parked CLI and all CAN ownership/restoration effects.
+Offline fuel-consumption catalog research lives in
+`projects/ecu_mapping/fuel_catalog.py` (`fuel-catalog-leads` compute task).
+Its raw-preserving reports do not establish vehicle support; see the
+October 12 fuel-economy finding linked from the ecu-mapping README.
+`lib.reports.require_distinct_output` protects evidence inputs from report
+destination aliases in the fuel and lighting research CLIs.
+`projects/vehicle_data/pcm_support_profiles.py` owns the fixed temperature,
+oil-life and injector support plans/decoders; `pcm_temperature_support.py`
+retains the guarded parked CLI and all CAN ownership/restoration effects.
 
 Zero-behaviour refactor waves (audit items #1–#8; deployed and validated on four drives) moved
 code without changing behaviour. Old import paths remain as shims, so existing imports keep working.

@@ -482,6 +482,18 @@ ownership before arming and again before each request. Results and exact
 restoration status go under `tmp/inventories/pcm/`. F45C is a standardized
 candidate only and is not added to production polling by this check.
 
+The **`--profile injector-pulse-width`** plan checks only PCM `0234–0239`,
+once each, using the same parked gates and restoration path. Replies are
+retained as raw unverified candidates; this does not enable fuel telemetry.
+The fixed plans/decoders live in `pcm_support_profiles.py`. The
+[fuel-economy finding](../ecu_mapping/findings/promaster_2022/2026-10-12_fuel_economy_readiness.md)
+records exact scope and offline verification. Every received raw frame is
+saved before decoding, including an unexpected reply that stops the check.
+Two owner-run checks on October 13 UTC returned exact four-byte positives
+for all six injector DIDs and verified passive restoration. All values were
+zero with the engine off; running semantics and scaling remain unverified.
+Automatic injector polling is not enabled.
+
 The same guarded tool now offers a separate **`--profile oil-life`** check
 for the historically mapped PCM `2185`. It sends only one fixed padded
 `03 22 21 85 00 00 00 00` frame, never the temperature requests. Its 0.75 s

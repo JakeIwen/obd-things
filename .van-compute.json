@@ -2,6 +2,16 @@
   "schema_version": 1,
   "tasks": [
     {
+      "name": "fuel-catalog-leads",
+      "description": "Offline bounded fuel-consumption label/field inventory from owner-supplied AlfaOBD resources; no vehicle access.",
+      "profile": "python-script",
+      "source_paths": ["projects/ecu_mapping/fuel_catalog.py", "tools/alfaobd_catalog.py", "lib/reports.py"],
+      "minimum_inputs": 2,
+      "maximum_inputs": 2,
+      "argv": ["{source:projects/ecu_mapping/fuel_catalog.py}", "{input:0}", "{input:1}", "--output", "{result:fuel-catalog.json}"],
+      "outputs": ["fuel-catalog.json"]
+    },
+    {
       "name": "lighting-owner-reference",
       "description": "Offline bounded bit comparison for the owner's parked light-icon reference; no CAN access.",
       "profile": "can-log-batch",
@@ -1095,6 +1105,28 @@
       "outputs": [
         "gear-ratios.json"
       ]
+    },
+    {
+      "name": "fuel-fca-hsql-query",
+      "description": "Decode one saved FCA PCM HSQL cache and join a bounded caller-supplied request list; offline only.",
+      "profile": "python-script",
+      "source_paths": [
+        "tools/fca_hsql_decode.py"
+      ],
+      "minimum_inputs": 4,
+      "maximum_inputs": 4,
+      "argv": [
+        "{source:tools/fca_hsql_decode.py}",
+        "{input:0}",
+        "--script",
+        "{input:1}",
+        "--properties",
+        "{input:2}",
+        "--labels",
+        "{input:3}",
+        "{arguments}"
+      ],
+      "outputs": []
     },
     {
       "name": "cruise-summary-reduce",

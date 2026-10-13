@@ -25,6 +25,16 @@ The cross-project [`AlfaOBD evidence history`](../../docs/alfaobd-evidence-histo
 canonical chronology of confirmed mis-mappings, incompatible profiles, recording/catalog traps,
 project parser corrections, and the trust rules derived from them.
 
+The [October 12 fuel-economy investigation](findings/promaster_2022/2026-10-12_fuel_economy_readiness.md)
+records the catalog and installed-cluster decoder checks. No gasoline fuel
+consumption source is verified yet. `fuel_catalog.py` and the bounded
+`fuel-catalog-leads` compute task reproduce the offline candidate inventory.
+The injector follow-up identifies six pulse-width candidates and the stock
+injector. Two owner-run engine-off checks confirmed all six return four-byte
+positive replies and restore passive state. Running variation and fuel
+calibration remain open; next prepare bounded automatic evidence collection
+during ordinary driving, without required video or manual fill-up logs.
+
 The [October 12 light-indicator reference](findings/promaster_2022/2026-10-12_light_indicators.md)
 records two owner-controlled manual-light cycles and the C-CAN `0x73E` green/blue
 telltale fields. `lighting_reference.py` is its offline analyzer; use the named
