@@ -21,6 +21,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from lib import can_operation_state, diagnostic_safety
+from projects.vehicle_data.drive_helper_launch import helper_command
 from projects.vehicle_data.engine_off_voltage import EngineOffVoltageCapture
 from projects.vehicle_data.helper_events import validate_helper_status
 from projects.vehicle_data.maintenance import MaintenanceStore
@@ -50,8 +51,8 @@ from projects.vehicle_data.models import (
 DEFAULT_SOCKET = "/run/van-telemetry/api.sock"
 DEFAULT_HISTORY_DB = REPO / "tmp" / "vehicle_data" / "history.sqlite3"
 DEFAULT_DTC_CACHE = REPO / "tmp" / "vehicle_data" / "dtc-cache.json"
-ACTIVE_DRIVE_HELPER = REPO / "projects" / "vehicle_data" / "active_drive.py"
-BCAN_AUXILIARY_HELPER = REPO / "projects" / "vehicle_data" / "bcan_auxiliary.py"
+ACTIVE_DRIVE_HELPER = "projects.vehicle_data.active_drive"
+BCAN_AUXILIARY_HELPER = "projects.vehicle_data.bcan_auxiliary"
 MAX_ACTIVE_EVENT_BYTES = 64 * 1024
 SUPPLEMENTAL_REFRESH_INTERVAL_SECONDS = 60.0
 ACTIVE_DRIVE_RESTORATION_INHIBIT = "vehicle-data-restoration-failed"
@@ -154,7 +155,7 @@ class ActiveDriveSupervisor:
         shutdown_timeout_seconds: float = 10.0,
         event_silence_timeout_seconds: float = 10.0,
         queue_poll_seconds: float = 0.1,
-        helper_path: pathlib.Path = ACTIVE_DRIVE_HELPER,
+        helper_module: str = ACTIVE_DRIVE_HELPER,
         stall_tolerance_seconds: float = 30.0,
         stall_detection_seconds: float = 1.0,
         monotonic=time.monotonic,
@@ -172,7 +173,7 @@ class ActiveDriveSupervisor:
         self.tolerated_stall_seconds = 0.0
         self.expected_usb_serial = expected_usb_serial
         self.expected_dev_id = expected_dev_id
-        self.helper_path = pathlib.Path(helper_path)
+        self.helper_module = helper_module
         if (
             not isinstance(self.expected_usb_serial, str)
             or not self.expected_usb_serial
@@ -206,7 +207,7 @@ class ActiveDriveSupervisor:
         try:
             print(
                 f"{datetime.now(timezone.utc).isoformat()} "
-                f"{pathlib.Path(self.helper_path).name} supervisor on {self.channel}: "
+                f"{self.helper_module.rpartition('.')[2]} supervisor on {self.channel}: "
                 f"this process did not run for {stalled:.1f} s; credited {credit:.1f} s "
                 "to the helper's silence and cleanup limits",
                 file=sys.stderr,
@@ -278,8 +279,7 @@ class ActiveDriveSupervisor:
 
     def run(self, stop_event: threading.Event) -> dict[str, object]:
         command = [
-            sys.executable,
-            str(self.helper_path),
+            *helper_command(self.helper_module),
             "--channel",
             self.channel,
             "--expected-parent-pid",
@@ -293,7 +293,7 @@ class ActiveDriveSupervisor:
                 hex(self.expected_dev_id),
             ]
         )
-        if self.helper_path == ACTIVE_DRIVE_HELPER:
+        if self.helper_module == ACTIVE_DRIVE_HELPER:
             command.append("--enable-oil-life")
         try:
             process = self.popen_factory(
@@ -301,6 +301,7 @@ class ActiveDriveSupervisor:
                 stdout=subprocess.PIPE,
                 text=True,
                 bufsize=1,
+                cwd=REPO,
             )
         except Exception as exc:
             return {
@@ -566,7 +567,7 @@ class AuxiliaryDriveSupervisor(ActiveDriveSupervisor):
 
     def __init__(self, **kwargs):
         super().__init__(
-            helper_path=BCAN_AUXILIARY_HELPER,
+            helper_module=BCAN_AUXILIARY_HELPER,
             **kwargs,
         )
 

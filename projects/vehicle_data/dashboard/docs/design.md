@@ -146,9 +146,10 @@ tablet browser ──HTTP/SSE──▶ web_v2.py (:8765, subclass of web.py)
   enables it, `/v1/radar/service-alignment`. No route is removed. There is no `/v2/health-full`.
 - Every `web` flags object on this listener adds `bind` and the dashboard `build` id, read from
   `<static_root>/build.json` and refreshed when that file's mtime changes.
-- CLI: `web_v2.py --socket … --bind <addr> [--port 8765] --allow-remote-bind [--cache-only]
-  [--enable-dtc-jobs --dtc-trusted-origin …] [--warning-chat-origin …]
-  [--enable-radar-service-alignment [--radar-service-origin …]] --static-root <dist>`.
+- CLI (from the repository root): `python3 -m projects.vehicle_data.web_v2 --socket … --bind <addr>
+  [--port 8765] --allow-remote-bind [--cache-only] [--enable-dtc-jobs --dtc-trusted-origin …]
+  [--warning-chat-origin …] [--enable-radar-service-alignment [--radar-service-origin …]]
+  --static-root <dist>`.
   `--port` defaults to 8765 and `--static-root` to `dashboard/dist`.
 - Two deployments, both on port 8765:
   - **LAN** (`van-telemetry-web.service`). The tracked unit binds loopback; the machine-local drop-in
@@ -875,7 +876,7 @@ curl -sI "http://$(tailscale ip -4):8765/"
 A manual trial on another port, as user `pi`, leaves the live units untouched:
 
 ```bash
-cd /home/pi/dev/obd-things && python3 projects/vehicle_data/web_v2.py \
+cd /home/pi/dev/obd-things && python3 -m projects.vehicle_data.web_v2 \
   --socket /run/van-telemetry/api.sock --bind 127.0.0.1 --port 8799 \
   --static-root projects/vehicle_data/dashboard/dist
 ```

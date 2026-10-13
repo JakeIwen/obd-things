@@ -72,6 +72,21 @@ class VehicleDataSystemdTests(unittest.TestCase):
             self.assertNotIn(name, broker["Unit"].get("Requires", "").split())
             self.assertNotIn(name, broker["Unit"].get("After", "").split())
 
+    def test_telemetry_programs_start_as_modules_from_the_repository_root(self):
+        # The scripts have no sys.path bootstrap, so a by-path ExecStart cannot import lib.
+        for filename in sorted(SYSTEMD_DIR.glob("*.service")):
+            with self.subTest(unit=filename.name):
+                unit = configparser.ConfigParser(interpolation=None)
+                unit.read(filename)
+                service = unit["Service"]
+                command = shlex.split(service["ExecStart"])
+                self.assertNotIn("projects/vehicle_data/", " ".join(command[:2]))
+                if command[1] != "-m":
+                    continue
+                self.assertEqual(service["WorkingDirectory"], "/home/pi/dev/obd-things")
+                module = REPO_ROOT.joinpath(*command[2].split(".")).with_suffix(".py")
+                self.assertTrue(module.is_file(), command[2])
+
     def test_early_watchers_do_not_wait_for_normal_services(self):
         for filename in sorted(SYSTEMD_DIR.iterdir()):
             if filename.suffix not in {".path", ".timer", ".socket"}:

@@ -2296,8 +2296,10 @@ class BrokerActiveDriveTests(unittest.TestCase):
         self.assertFalse(result["restored"])
         self.assertEqual(result["interface_mode"], "armed_diagnostic")
         self.assertEqual(
-            commands[0][2:],
+            commands[0][1:],
             [
+                "-m",
+                "projects.vehicle_data.active_drive",
                 "--channel",
                 TEST_CHANNEL,
                 "--expected-parent-pid",

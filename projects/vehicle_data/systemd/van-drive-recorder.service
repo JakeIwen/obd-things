@@ -13,7 +13,7 @@ Group=pi
 WorkingDirectory=/home/pi/dev/obd-things
 Environment=PYTHONUNBUFFERED=1
 ExecStartPre=+/usr/sbin/sysctl -w net.core.rmem_max=16777216
-ExecStart=/usr/bin/python3 /home/pi/dev/obd-things/projects/vehicle_data/drive_recorder.py --execute --confirm-broker-owned-receive-only
+ExecStart=/usr/bin/python3 -m projects.vehicle_data.drive_recorder --execute --confirm-broker-owned-receive-only
 Restart=on-failure
 RestartSec=15
 TimeoutStopSec=180

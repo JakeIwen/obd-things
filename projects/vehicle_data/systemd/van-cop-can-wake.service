@@ -15,7 +15,7 @@ RuntimeDirectoryMode=0750
 UMask=0027
 Environment=PYTHONUNBUFFERED=1
 ExecStartPre=/usr/bin/test -r /home/pi/dev/obd-things/lib/can_wake.py
-ExecStart=/usr/bin/python3 /home/pi/dev/obd-things/projects/vehicle_data/cop_can_wake.py --execute --confirm-fixed-c-can-wake
+ExecStart=/usr/bin/python3 -m projects.vehicle_data.cop_can_wake --execute --confirm-fixed-c-can-wake
 Restart=on-failure
 RestartSec=15
 TimeoutStopSec=30

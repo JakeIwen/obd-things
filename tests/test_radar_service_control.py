@@ -263,14 +263,16 @@ class RealPipeTests(unittest.TestCase):
         self.fail("condition was not reached")
 
     def test_commands_reach_a_supervised_child_and_its_events_come_back(self):
-        with tempfile.TemporaryDirectory() as directory:
-            script = pathlib.Path(directory) / "helper.py"
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.dict("os.environ", {"PYTHONPATH": directory}):
+            script = pathlib.Path(directory) / "scripted_radar_helper.py"
             script.write_text(HELPER_SCRIPT.format(repo=str(REPO)))
             service_control = control.RadarServiceControl(log_dir=directory)
             forwarded = []
             supervisor = service_control.supervisor(
                 ActiveDriveSupervisor, event_handler=forwarded.append, channel="can7",
-                expected_usb_serial="serial-a", expected_dev_id=0, helper_path=script)
+                expected_usb_serial="serial-a", expected_dev_id=0,
+                helper_module="scripted_radar_helper")
             result = {}
             thread = threading.Thread(
                 target=lambda: result.update(final=supervisor.run(threading.Event())))

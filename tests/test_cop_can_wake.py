@@ -477,7 +477,7 @@ class UnitFileTests(unittest.TestCase):
             / "systemd"
             / "van-cop-can-wake.service"
         ).read_text()
-        self.assertIn("cop_can_wake.py", unit)
+        self.assertIn("-m projects.vehicle_data.cop_can_wake", unit)
         self.assertIn("--confirm-fixed-c-can-wake", unit)
         self.assertIn("RuntimeDirectory=van-cop-can-wake", unit)
         self.assertIn("Wants=van-telemetry.service", unit)

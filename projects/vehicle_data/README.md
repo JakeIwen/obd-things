@@ -468,7 +468,8 @@ unresolved. No temperature alert is inferred. History includes the new metric.
 dashboard endpoint or a running-helper profile. Its default is an inert plan:
 
 ```bash
-python3 projects/vehicle_data/pcm_temperature_support.py
+cd /home/pi/dev/obd-things
+python3 -m projects.vehicle_data.pcm_temperature_support
 ```
 
 Its fixed live sequence sends at most one padded physical `22 F45C` and one
@@ -490,9 +491,10 @@ percent in `0..100`; other values are rejected, not clamped. Reports use
 `tmp/inventories/pcm/oil-life-support-*.json`; nothing is published to telemetry.
 
 ```bash
-python3 projects/vehicle_data/pcm_temperature_support.py --profile oil-life
+cd /home/pi/dev/obd-things
+python3 -m projects.vehicle_data.pcm_temperature_support --profile oil-life
 # Only while parked, ignition ON and engine OFF, in a shell with working sudo:
-python3 projects/vehicle_data/pcm_temperature_support.py --profile oil-life --execute --confirm-parked-ignition-on-engine-off
+python3 -m projects.vehicle_data.pcm_temperature_support --profile oil-life --execute --confirm-parked-ignition-on-engine-off
 ```
 
 October 2 preparation passed 6 tests plus 6 subtests in job
@@ -718,7 +720,8 @@ activation are covered by the [systemd installation runbook](docs/systemd-instal
   (one trimmed bundle; warning lists are never capped and other capped lists
   report `<key>_omitted_count`); `bind` and the `build` id in every `web` flags
   object; and one User-Agent log line per client IP. `web.py` alone serves no
-  page. Keep the `web_v2.py` filename: the installed units execute it by path.
+  page. Keep the `web_v2` module name: the installed units run it as
+  `projects.vehicle_data.web_v2`.
 - `van-telemetry-web.service` binds loopback in the tracked unit; the
   machine-local drop-in `/etc/systemd/system/van-telemetry-web.service.d/10-lan.conf`
   adds `--allow-remote-bind` and the LAN address (`http://vanpi.lan:8765/`).
@@ -1317,7 +1320,8 @@ idle I/O and `--max-chunks 30`. The mount is read-only in the unit, and `Private
 `AF_UNIX` only are set. A manual run looks like this:
 
 ```bash
-nice -n 19 ionice -c3 python3 projects/vehicle_data/van_scan_harvest.py \
+cd /home/pi/dev/obd-things
+nice -n 19 ionice -c3 python3 -m projects.vehicle_data.van_scan_harvest \
   --campaign 'broker-drive-20260924T*'   # omit --campaign to process every incomplete campaign
 ```
 
@@ -1380,10 +1384,11 @@ on 2026-10-02 (trip 67 from 15 full chunks, 213,123,565 compressed bytes) and
 appear under History with their coverage and cancel attribution.
 
 ```bash
+cd /home/pi/dev/obd-things
 # Metadata-only plan for one trip; does not scan/decompress a saved capture:
-python3 projects/vehicle_data/cruise_harvest.py --trip 67
+python3 -m projects.vehicle_data.cruise_harvest --trip 67
 # After the named task is approved/registered, submit or import its existing job:
-python3 projects/vehicle_data/cruise_harvest.py --trip 67 --execute
+python3 -m projects.vehicle_data.cruise_harvest --trip 67 --execute
 ```
 
 After task approval/registration, the proposed timer can be installed from the
@@ -1598,10 +1603,11 @@ from the web UI.
 Examples:
 
 ```bash
-python3 projects/vehicle_data/client.py status
-python3 projects/vehicle_data/client.py get battery.voltage
-python3 projects/vehicle_data/client.py acquire battery.voltage --mode passive
-python3 projects/vehicle_data/client.py publish battery.voltage \
+cd /home/pi/dev/obd-things
+python3 -m projects.vehicle_data.client status
+python3 -m projects.vehicle_data.client get battery.voltage
+python3 -m projects.vehicle_data.client acquire battery.voltage --mode passive
+python3 -m projects.vehicle_data.client publish battery.voltage \
   --value 12.4 --unit V --source cluster.did.1004 --bus c-can \
   --quality observed_alfa_scale
 ```
@@ -1615,7 +1621,8 @@ For a manual cache-only dashboard trial on a spare loopback port (build
 `dashboard/dist` first; see "Telemetry dashboard" above):
 
 ```bash
-python3 projects/vehicle_data/web_v2.py --bind 127.0.0.1 --port 8799 --cache-only
+cd /home/pi/dev/obd-things
+python3 -m projects.vehicle_data.web_v2 --bind 127.0.0.1 --port 8799 --cache-only
 ```
 
 The dashboard uses server-sent events, but every stream update is still made

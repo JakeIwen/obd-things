@@ -703,8 +703,8 @@ class HelperTests(unittest.TestCase):
             re.sub(r"\$\{([A-Z_]+)\}", lambda match: env[match.group(1)], word)
             for word in shlex.split(exec_line[len("ExecStart="):])
         ]
-        self.assertTrue(words[1].endswith("projects/vehicle_data/web_v2.py"))
-        args = web_v2.build_parser().parse_args(words[2:])
+        self.assertEqual(words[1:3], ["-m", "projects.vehicle_data.web_v2"])
+        args = web_v2.build_parser().parse_args(words[3:])
         self.assertTrue(args.enable_dtc_jobs)
         self.assertEqual(args.port, 8765)
         web_v2.base.validate_dtc_job_bind(args.bind)
