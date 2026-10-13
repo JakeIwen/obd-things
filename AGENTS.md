@@ -236,6 +236,9 @@ their package (`from projects.battery import bcan_voltage`), never by bare name.
 `-m` with `WorkingDirectory=/home/pi/dev/obd-things`, which `tests/test_service_units_start_modules.py`
 enforces; code that starts another script passes `-m` and `cwd=REPO`. Compute tasks still name a
 script path: both workers put the job's source root on `PYTHONPATH`.
+A script that needs the repo root derives it itself, after its imports:
+`REPO = Path(__file__).resolve().parents[N]` (N is its depth below the root). There is
+deliberately no shared root module, so compute source bundles stay self-contained.
 
 ## Data locations (imposed 2026-07-08; do not resurrect `dumps/` directories)
 
