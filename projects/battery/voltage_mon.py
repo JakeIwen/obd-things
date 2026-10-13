@@ -20,7 +20,7 @@ continue while ntfy is unreachable, and the alert edge remains pending.
                                                         # cache/web-safe; never wakes
 
 cron (installed alongside):
-    0 10-22/2 * * *  timeout 90 python3 .../voltage_mon.py >> .../voltage_mon.log 2>&1
+    0 10-22/2 * * *  /home/pi/dev/obd-things/projects/battery/voltage_mon.sh   # timeout + log
 """
 import os
 import sys

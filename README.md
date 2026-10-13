@@ -101,9 +101,10 @@ answered by location alone — neither local nor EXFAT `tmp/` data is tracked.
 module-agnostic and reusable — it knows nothing about any particular ECU (addressing is passed in via
 the module key). Anything under `projects/<name>/` is specific to that target.
 
-Scripts under `projects/` locate the repo root by walking up to the dir containing `lib/`, so they run
-from any working directory and survive being moved deeper. New generic tools in `tools/` can use the
-simpler `REPO = dirname(__file__)/..`.
+Run every script as a module from the repo root (`python3 -m tools.dtc_scan`,
+`python3 -m projects.battery.bcan_voltage`); none edits `sys.path`, so running one by file path fails.
+A script that needs the repo root for default paths uses `REPO = Path(__file__).resolve().parents[N]`
+after its imports. AGENTS.md section "Running scripts" has the full convention.
 
 ---
 

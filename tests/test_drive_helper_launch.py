@@ -4,6 +4,7 @@ The helpers have no sys.path bootstrap, so this runs the exact command prefix an
 working directory the supervisor hands to Popen (with ``--help``, which touches no CAN).
 """
 
+import os
 import subprocess
 import sys
 import threading
@@ -49,9 +50,13 @@ class DriveHelperLaunchTests(unittest.TestCase):
 
                 command, kwargs = launches[0]
                 self.assertEqual(command[:3], [sys.executable, "-m", module])
+                # No inherited import path, so only the working directory can make it import.
+                env = {key: value for key, value in os.environ.items()
+                       if key not in ("PYTHONPATH", "PYTHONHOME")}
                 result = subprocess.run(
                     [*command[:3], "--help"],
                     cwd=kwargs["cwd"],
+                    env=env,
                     capture_output=True,
                     text=True,
                     timeout=10,
