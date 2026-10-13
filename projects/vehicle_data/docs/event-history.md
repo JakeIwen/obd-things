@@ -60,7 +60,8 @@ includes its pagination cursor. The offline command below exports every retained
 event table in one consistent read transaction, including all archived baselines:
 
 ```bash
-python3 tools/telemetry_event_export.py --database /var/lib/van-telemetry/history.sqlite3
+cd /home/pi/dev/obd-things
+python3 -m tools.telemetry_event_export --database /var/lib/van-telemetry/history.sqlite3
 ```
 
 Default output is a uniquely named JSONL file in

@@ -180,13 +180,14 @@ def wait_for_ignition(
 def child_command(args: argparse.Namespace, run_id: str) -> list[str]:
     return [
         sys.executable,
-        str(REPO / "tools" / "passive_drive_capture.py"),
+        "-m",
+        "tools.passive_drive_capture",
         "--bus",
         "c-can",
         "--out-root",
-        str(args.out_root),
+        os.path.abspath(args.out_root),  # the child runs from REPO
         "--require-mount",
-        str(args.require_mount),
+        os.path.abspath(args.require_mount),
         "--campaign",
         run_id,
         "--duration-seconds",
@@ -364,7 +365,7 @@ def execute(args: argparse.Namespace, policy: passive.DiskPolicy) -> int:
         )
         atomic_write_json(args.state_path, state)
         print(f"{utc_now()} ignition observed; starting {run_id}", flush=True)
-        result = subprocess.run(command, check=False)
+        result = subprocess.run(command, check=False, cwd=REPO)
         state.update(
             {
                 "status": "complete" if result.returncode == 0 else "error",

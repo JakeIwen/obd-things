@@ -8,7 +8,7 @@ User=pi
 Environment=PYTHONUNBUFFERED=1
 Type=simple
 WorkingDirectory=/home/pi/dev/obd-things
-ExecStart=/usr/bin/python3 projects/tpms/drive_sniff.py --auto
+ExecStart=/usr/bin/python3 -m projects.tpms.drive_sniff --auto
 Restart=always
 RestartSec=15
 

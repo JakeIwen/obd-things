@@ -36,19 +36,21 @@ opened. The inhibit remains after disconnect and must be removed explicitly only
 vehicle campaign is over:
 
 ```bash
-python3 tools/alfaobd_controller.py campaign-begin
-python3 tools/alfaobd_controller.py campaign-status
-python3 tools/alfaobd_controller.py campaign-end
+cd /home/pi/dev/obd-things
+python3 -m tools.alfaobd_controller campaign-begin
+python3 -m tools.alfaobd_controller campaign-status
+python3 -m tools.alfaobd_controller campaign-end
 ```
 
 An Alfa adapter prompt invalidates the recorded physical topology. Before physically moving an
 adapter, mark it unknown; after the new routing is confirmed, record the exact branch:
 
 ```bash
-python3 tools/can_operation_state.py topology-set unknown \
+cd /home/pi/dev/obd-things
+python3 -m tools.can_operation_state topology-set unknown \
   --source manual_adapter_change
 
-python3 tools/can_operation_state.py topology-set can-ch \
+python3 -m tools.can_operation_state topology-set can-ch \
   --pair 12/13 --source manual_grey_confirmation
 ```
 
@@ -92,13 +94,15 @@ logged. Taps are never retried.
 Observe without tapping:
 
 ```bash
-python3 tools/alfaobd_controller.py observe
+cd /home/pi/dev/obd-things
+python3 -m tools.alfaobd_controller observe
 ```
 
 Wait up to 60 seconds for connection, a routing prompt, or an ISO warning:
 
 ```bash
-python3 tools/alfaobd_controller.py wait \
+cd /home/pi/dev/obd-things
+python3 -m tools.alfaobd_controller wait \
   --expect connected,adapter_prompt,iso_warning \
   --timeout 60
 ```
@@ -106,13 +110,15 @@ python3 tools/alfaobd_controller.py wait \
 Inspect a connection action without touching the tablet:
 
 ```bash
-python3 tools/alfaobd_controller.py action connect
+cd /home/pi/dev/obd-things
+python3 -m tools.alfaobd_controller action connect
 ```
 
 Perform one confirmed read-only connection action:
 
 ```bash
-python3 tools/alfaobd_controller.py action connect \
+cd /home/pi/dev/obd-things
+python3 -m tools.alfaobd_controller action connect \
   --execute --confirm-read-only-diagnostics
 ```
 

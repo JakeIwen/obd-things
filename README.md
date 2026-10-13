@@ -260,9 +260,10 @@ The inventory commands below are safe planning runs: dry-run is the default, so 
 inspect the live interface, open a CAN socket, or write a report.
 
 ```bash
-python3 tools/did_sweep.py radar_acc 0800 08FF # plan 256 physical DID reads; NO CAN traffic
-python3 tools/routine_scan.py radar_acc 0200 020F # plan 31 03 reads (+ FF00-FF03); NO CAN traffic
-python3 tools/ecu_discover.py --profile promaster88-bcan # plan 4 verified + 4 unresolved B-CAN reads; NO traffic
+cd /home/pi/dev/obd-things
+python3 -m tools.did_sweep radar_acc 0800 08FF # plan 256 physical DID reads; NO CAN traffic
+python3 -m tools.routine_scan radar_acc 0200 020F # plan 31 03 reads (+ FF00-FF03); NO CAN traffic
+python3 -m tools.ecu_discover --profile promaster88-bcan # plan 4 verified + 4 unresolved B-CAN reads; NO traffic
 ```
 
 Generic diagnostic tools take a **module key** from `lib/modules.py`; inspect that registry for

@@ -11,7 +11,7 @@ From the repository root, generate the supplied synthetic example:
 
 ```sh
 manifest=tests/fixtures/can_workbench/investigation.json
-python3 tools/can_workbench_report.py "$manifest" --out tmp/can_workbench/demo
+python3 -m tools.can_workbench_report "$manifest" --out tmp/can_workbench/demo
 open tmp/can_workbench/demo/index.html
 ```
 

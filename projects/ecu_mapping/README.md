@@ -245,22 +245,23 @@ do not require immediate live file growth. Pull the resulting files from
 ## Pipeline
 
 ```
-tools/alfaobd_decode.py  <in.bin> [out.txt]      # generic: .bin -> decoded text (reusable)
-tools/alfaobd_gauges.py  <Gauges_Data.csv>       # offline section/profile/metric inventory -> tmp/
-tools/alfaobd_gauge_join.py <Gauges_Data.csv> <decoded.txt> --section N  # offline DID candidates
-tools/candump_diagnostic_wire.py <capture...> --module pcm   # exact 22/62 wire stream
-tools/can_timeseries_correlate.py <capture...> --module pcm  # DID-to-broadcast candidates
-tools/alfaobd_dat.py <post.dat> --baseline <pre.dat>  # detect cached/duplicated plot series
-tools/alfaobd_apk_db.py  <base.apk>              # reconstruct catalog DB + label resource -> tmp/
-tools/alfaobd_catalog.py <db> <labels> --device-id N  # read-only model/device export -> tmp/
-tools/alfaobd_bcm_decode.py                   # apply current-BCM field layouts to existing evidence
-tools/fca_hsql_decode.py <db.data> --script <db.script> --properties <db.properties>  # legacy FCA .eng DB -> JSON
-tools/alfaobd_singleton_campaign.py plan <plan.json>  # guarded one-label Status monitor
-tools/passive_drive_capture.py --out-root <path>      # bounded C-CAN recorder; plan by default
-tools/alfaobd_singleton_join.py <campaign> --capture-set <json>  # offline evidence join
-tools/alfaobd_singleton_infer.py <join.json>          # offline candidate scale/enum inference
-projects/ecu_mapping/vin_scan.py        <decoded.txt> [vin]   # which van? (run FIRST)
-projects/ecu_mapping/extract_did_map.py <decoded.txt> <out>   # per-module DID/service map
+cd /home/pi/dev/obd-things
+python3 -m tools.alfaobd_decode  <in.bin> [out.txt]      # generic: .bin -> decoded text (reusable)
+python3 -m tools.alfaobd_gauges  <Gauges_Data.csv>       # offline section/profile/metric inventory -> tmp/
+python3 -m tools.alfaobd_gauge_join <Gauges_Data.csv> <decoded.txt> --section N  # offline DID candidates
+python3 -m tools.candump_diagnostic_wire <capture...> --module pcm   # exact 22/62 wire stream
+python3 -m tools.can_timeseries_correlate <capture...> --module pcm  # DID-to-broadcast candidates
+python3 -m tools.alfaobd_dat <post.dat> --baseline <pre.dat>  # detect cached/duplicated plot series
+python3 -m tools.alfaobd_apk_db  <base.apk>              # reconstruct catalog DB + label resource -> tmp/
+python3 -m tools.alfaobd_catalog <db> <labels> --device-id N  # read-only model/device export -> tmp/
+python3 -m tools.alfaobd_bcm_decode                   # apply current-BCM field layouts to existing evidence
+python3 -m tools.fca_hsql_decode <db.data> --script <db.script> --properties <db.properties>  # legacy FCA .eng DB -> JSON
+python3 -m tools.alfaobd_singleton_campaign plan <plan.json>  # guarded one-label Status monitor
+python3 -m tools.passive_drive_capture --out-root <path>      # bounded C-CAN recorder; plan by default
+python3 -m tools.alfaobd_singleton_join <campaign> --capture-set <json>  # offline evidence join
+python3 -m tools.alfaobd_singleton_infer <join.json>          # offline candidate scale/enum inference
+python3 -m projects.ecu_mapping.vin_scan        <decoded.txt> [vin]   # which van? (run FIRST)
+python3 -m projects.ecu_mapping.extract_did_map <decoded.txt> <out>   # per-module DID/service map
 projects/ecu_mapping/alfalog.py                  # shared log parser + ELM reassembly
 ```
 
@@ -298,7 +299,8 @@ Only prompt-completed exact positive echoes supply bytes to the fitter. In schem
 `polling.cycle_boundary` remains DID-only and is null for a `21` local-identifier boundary.
 
 ```bash
-python3 tools/alfaobd_gauge_join.py Gauges_Data.csv decoded.txt \
+cd /home/pi/dev/obd-things
+python3 -m tools.alfaobd_gauge_join Gauges_Data.csv decoded.txt \
   --section 2 --address DA10F1 --source-scope historical-other-vehicle
 ```
 
@@ -371,7 +373,8 @@ role in use.
 The tracked five-signal cluster shakedown was completed on 2026-07-24:
 
 ```bash
-python3 tools/alfaobd_singleton_campaign.py plan \
+cd /home/pi/dev/obd-things
+python3 -m tools.alfaobd_singleton_campaign plan \
   projects/ecu_mapping/configs/alfaobd_cluster_singleton_shakedown.json
 ```
 
@@ -404,7 +407,8 @@ dwell was only 12 seconds per segment. Run both commands in detached `tmux` sess
 an SSH/tool-session lifetime must not determine capture lifetime.
 
 ```bash
-python3 tools/passive_drive_capture.py \
+cd /home/pi/dev/obd-things
+python3 -m tools.passive_drive_capture \
   --out-root /mnt/EXFAT512/obd-things/tmp/captures/ccan/drive-correlation \
   --require-mount /mnt/EXFAT512 \
   --campaign "RUN_ID" \
@@ -417,7 +421,8 @@ python3 tools/passive_drive_capture.py \
 The AlfaOBD pane is:
 
 ```bash
-python3 tools/alfaobd_singleton_campaign.py run \
+cd /home/pi/dev/obd-things
+python3 -m tools.alfaobd_singleton_campaign run \
   projects/ecu_mapping/configs/alfaobd_cluster_singleton_shakedown.json \
   --campaign-id "RUN_ID" \
   --out-root /mnt/EXFAT512/obd-things/tmp/ecu_mapping/alfaobd-drive \
@@ -431,7 +436,8 @@ For a hands-off ordinary-driving scaling run, use the dedicated plan instead of
 the short parked shakedown plan:
 
 ```bash
-python3 tools/alfaobd_singleton_campaign.py plan \
+cd /home/pi/dev/obd-things
+python3 -m tools.alfaobd_singleton_campaign plan \
   projects/ecu_mapping/configs/alfaobd_cluster_scaling_drive.json
 ```
 
@@ -452,7 +458,8 @@ Use one new timestamped `RUN_ID` in both panes. Start the passive recorder
 first and give it enough time to cover the complete Alfa run:
 
 ```bash
-python3 tools/passive_drive_capture.py \
+cd /home/pi/dev/obd-things
+python3 -m tools.passive_drive_capture \
   --out-root /mnt/EXFAT512/obd-things/tmp/captures/ccan/drive-correlation \
   --require-mount /mnt/EXFAT512 \
   --campaign "RUN_ID" \
@@ -461,7 +468,7 @@ python3 tools/passive_drive_capture.py \
   --execute --confirm-passive \
   --conditions "ordinary driving; parked start; engine running; serial-resolved C-CAN 6/14 passive; OBDLink MX+ parallel"
 
-python3 tools/alfaobd_singleton_campaign.py run \
+python3 -m tools.alfaobd_singleton_campaign run \
   projects/ecu_mapping/configs/alfaobd_cluster_scaling_drive.json \
   --campaign-id "RUN_ID" \
   --out-root /mnt/EXFAT512/obd-things/tmp/ecu_mapping/alfaobd-drive \
@@ -673,7 +680,8 @@ restricted to one exact existing campaign, and never deletes a partial that fail
 verification:
 
 ```bash
-python3 tools/passive_drive_capture.py \
+cd /home/pi/dev/obd-things
+python3 -m tools.passive_drive_capture \
   --out-root /mnt/EXFAT512/obd-things/tmp/captures/ccan/drive-correlation \
   --require-mount /mnt/EXFAT512 \
   --campaign EXACT_EXISTING_CAMPAIGN \
@@ -698,7 +706,8 @@ result was reviewed and its hash is now pinned in the tracked discovery plan.
 The plan-only check is inert:
 
 ```bash
-python3 tools/alfaobd_plots_catalog.py plan \
+cd /home/pi/dev/obd-things
+python3 -m tools.alfaobd_plots_catalog plan \
   projects/ecu_mapping/configs/alfaobd_pcm_plots_catalog.json
 ```
 
@@ -706,15 +715,17 @@ For the first live catalog pass, park the van, connect AlfaOBD to the PCM profil
 page, and leave the red play triangle visible. `audit` sends no input:
 
 ```bash
-python3 tools/alfaobd_plots_catalog.py audit \
+cd /home/pi/dev/obd-things
+python3 -m tools.alfaobd_plots_catalog audit \
   projects/ecu_mapping/configs/alfaobd_pcm_plots_catalog.json
 ```
 
 Only after that audit succeeds, use a new exact run ID:
 
 ```bash
+cd /home/pi/dev/obd-things
 RUN_ID='pcm-plots-catalog-YYYYMMDD-HHMMSS'
-python3 tools/alfaobd_plots_catalog.py inventory \
+python3 -m tools.alfaobd_plots_catalog inventory \
   projects/ecu_mapping/configs/alfaobd_pcm_plots_catalog.json \
   --campaign-id "$RUN_ID" \
   --execute --confirm-read-only-navigation --confirm-parked \
@@ -737,13 +748,14 @@ PCM catalog and review fields are pinned. The TCM plan deliberately remains
 unpinned until the live 56-row selector inventory completes:
 
 ```bash
-python3 tools/alfaobd_plots_scalar_campaign.py plan \
+cd /home/pi/dev/obd-things
+python3 -m tools.alfaobd_plots_scalar_campaign plan \
   projects/ecu_mapping/configs/alfaobd_pcm_plots_scalars.json
 
-python3 tools/alfaobd_plots_scalar_campaign.py audit \
+python3 -m tools.alfaobd_plots_scalar_campaign audit \
   projects/ecu_mapping/configs/alfaobd_pcm_plots_scalars.json
 
-python3 tools/alfaobd_plots_scalar_campaign.py plan \
+python3 -m tools.alfaobd_plots_scalar_campaign plan \
   projects/ecu_mapping/configs/alfaobd_tcm_plots_scalars.json
 ```
 
@@ -803,7 +815,8 @@ confirmed. A saved checkpointed JSONL can be decoded without touching the
 vehicle:
 
 ```bash
-python3 tools/zf9hp_results.py \
+cd /home/pi/dev/obd-things
+python3 -m tools.zf9hp_results \
   tmp/inventories/tcm/dids_<stamp>.results.jsonl
 ```
 
@@ -840,7 +853,8 @@ For the completed run, `capture-set.json` binds the two overlapping recorder dir
 `run.json`, checkpoint, and `manifest.jsonl` hashes:
 
 ```bash
-python3 tools/alfaobd_singleton_join.py \
+cd /home/pi/dev/obd-things
+python3 -m tools.alfaobd_singleton_join \
   /mnt/EXFAT512/obd-things/tmp/ecu_mapping/alfaobd-drive/cluster-shakedown-20260724-005100 \
   --capture-set /mnt/EXFAT512/obd-things/tmp/ecu_mapping/alfaobd-drive/cluster-shakedown-20260724-005100/capture-set.json \
   --output /mnt/EXFAT512/obd-things/tmp/sweeps/cluster-shakedown-20260724-005100-singleton-join.json
@@ -850,8 +864,9 @@ For a new ordinary-driving run covered by one complete passive recorder, join
 the two directories using the exact shared run ID:
 
 ```bash
+cd /home/pi/dev/obd-things
 RUN_ID='your-exact-run-id'
-python3 tools/alfaobd_singleton_join.py \
+python3 -m tools.alfaobd_singleton_join \
   "/mnt/EXFAT512/obd-things/tmp/ecu_mapping/alfaobd-drive/${RUN_ID}" \
   "/mnt/EXFAT512/obd-things/tmp/captures/ccan/drive-correlation/${RUN_ID}" \
   --output "/mnt/EXFAT512/obd-things/tmp/sweeps/${RUN_ID}-singleton-join.json"
@@ -869,7 +884,8 @@ recover only the observed portion of an enum. It opens no ADB, CAN, network,
 service, or subprocess resource:
 
 ```bash
-python3 tools/alfaobd_singleton_infer.py \
+cd /home/pi/dev/obd-things
+python3 -m tools.alfaobd_singleton_infer \
   "/mnt/EXFAT512/obd-things/tmp/sweeps/${RUN_ID}-singleton-join.json" \
   --output "/mnt/EXFAT512/obd-things/tmp/sweeps/${RUN_ID}-singleton-inference.json" \
   --kind 'Actual Gear=enum'
@@ -907,9 +923,10 @@ holds exclusive role/channel ownership, arms only for the viewer, and restores
 the exact passive baseline. It is not a drive logger:
 
 ```bash
-python3 projects/ecu_mapping/cluster_live.py
+cd /home/pi/dev/obd-things
+python3 -m projects.ecu_mapping.cluster_live
 
-python3 projects/ecu_mapping/cluster_live.py \
+python3 -m projects.ecu_mapping.cluster_live \
   --execute --confirm-parked --confirm-engine-off --pair 6/14 \
   --conditions "parked, ignition ON, engine OFF"
 ```
@@ -1017,7 +1034,8 @@ explicitly candidate-only. The portable direct invocation for the completed
 idling shakedown is:
 
 ```bash
-python3 tools/can_timeseries_correlate.py \
+cd /home/pi/dev/obd-things
+python3 -m tools.can_timeseries_correlate \
   --wire tmp/captures/ccan/cluster-drive/cluster-drive-shakedown-20260726T050955Z/cluster_wire.jsonl \
   --did 1000 \
   --reference-field u16be:0 \
@@ -1054,7 +1072,8 @@ instead of expanding every frame. This example is illustrative and should
 still be submitted through the matching named compute task for a full log:
 
 ```bash
-python3 tools/can_timeseries_correlate.py \
+cd /home/pi/dev/obd-things
+python3 -m tools.can_timeseries_correlate \
   --module tcm \
   --wire tmp/ecu_mapping/tcm-drive-analysis/tcm_wire.jsonl \
   --did 101B --reference-field u16be:0 \
@@ -1124,7 +1143,8 @@ implementation and development-leg results are recorded in the
 manifest without opening raw logs:
 
 ```bash
-python3 tools/can_signal_benchmark.py plan \
+cd /home/pi/dev/obd-things
+python3 -m tools.can_signal_benchmark plan \
   projects/ecu_mapping/configs/signal_field_benchmark_v1.json
 ```
 
@@ -1407,7 +1427,8 @@ verify the `/4` rpm scale or authorize public telemetry promotion.
    The historical two-DID reproduction command is:
 
    ```bash
-   python3 tools/did_sweep.py pcm \
+   cd /home/pi/dev/obd-things
+   python3 -m tools.did_sweep pcm \
      --did 3159 --did 315A \
      --session 92 --confirm-session-change \
      --pair 6/14 \

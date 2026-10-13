@@ -402,7 +402,8 @@ is still required to measure the >=95% freshness acceptance target. Run the
 bounded read-only audit with the new trip ID:
 
 ```bash
-python3 tools/acc_freshness_audit.py --trip TRIP_ID
+cd /home/pi/dev/obd-things
+python3 -m tools.acc_freshness_audit --trip TRIP_ID
 ```
 
 Deployment on 2026-09-29 at about 23:07Z used the guarded asleep broker restart.
@@ -1069,7 +1070,7 @@ gets no credit, and a stall longer than 30 s still fails closed.
   ERROR-ACTIVE with zero bus errors, restarts and bus-off, and static TX
   counters. The adapters had been restored; only the confirmation was lost.
 - Recovery used, owner-directed, van asleep: inspect all four roles, then
-  `python3 tools/can_operation_state.py inhibit-end NAME` for each inhibit,
+  `python3 -m tools.can_operation_state inhibit-end NAME` (from the repository root) for each inhibit,
   then restart `van-telemetry` (the broker also holds the latch in memory).
   The broker serves a cached interface status, so an ended inhibit can still be
   listed for a few seconds.
@@ -1543,7 +1544,8 @@ explain code definitions only: they are not diagnoses, live scans, or proof
 that a saved condition is still present.
 
 ```bash
-python3 tools/dtc_scan.py --resolve-runtime
+cd /home/pi/dev/obd-things
+python3 -m tools.dtc_scan --resolve-runtime
 ```
 
 `--resolve-runtime` reads sysfs identities only. Completed
@@ -1557,7 +1559,8 @@ resolved roles.
 The reviewed multi-module live worker is also dry-run by default:
 
 ```bash
-python3 tools/dtc_batch.py --json
+cd /home/pi/dev/obd-things
+python3 -m tools.dtc_batch --json
 ```
 
 Its exact execution, restoration, report-import, cancellation, and guarded web
@@ -1579,14 +1582,16 @@ The one-module reader remains useful for an explicitly scoped investigation
 and is dry-run by default:
 
 ```bash
-python3 tools/dtc_inventory.py <module-key>
+cd /home/pi/dev/obd-things
+python3 -m tools.dtc_inventory <module-key>
 ```
 
 Its gated live form is a tool-owned scoped operation, not a separate arming
 step:
 
 ```bash
-python3 tools/dtc_inventory.py <module-key> \
+cd /home/pi/dev/obd-things
+python3 -m tools.dtc_inventory <module-key> \
   --execute --confirm-parked --pair <documented-pair> \
   --conditions "parked; ignition ON; engine OFF"
 ```

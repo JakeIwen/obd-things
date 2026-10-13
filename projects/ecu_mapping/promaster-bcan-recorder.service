@@ -12,7 +12,7 @@ Group=pi
 WorkingDirectory=/home/pi/dev/obd-things
 Environment=PYTHONUNBUFFERED=1
 ExecStartPre=+/usr/sbin/sysctl -w net.core.rmem_max=16777216
-ExecStart=/usr/bin/python3 /home/pi/dev/obd-things/projects/ecu_mapping/bcan_drive_recorder.py --execute --confirm-passive-bcan
+ExecStart=/usr/bin/python3 -m projects.ecu_mapping.bcan_drive_recorder --execute --confirm-passive-bcan
 Restart=always
 RestartSec=15
 TimeoutStopSec=180

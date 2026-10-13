@@ -32,8 +32,9 @@ policy.
 The ordinary dry run opens no CAN socket and creates no job:
 
 ```bash
-python3 tools/dtc_batch.py
-python3 tools/dtc_batch.py --bus can-ch --json
+cd /home/pi/dev/obd-things
+python3 -m tools.dtc_batch
+python3 -m tools.dtc_batch --bus can-ch --json
 ```
 
 The default plan contains 15 requestable modules: seven C-CAN, four B-CAN,
@@ -44,7 +45,8 @@ and four CAN-CH. PCM is the sixteenth registry row and remains unsupported.
 Live execution requires all three explicit operator assertions:
 
 ```bash
-python3 tools/dtc_batch.py --execute \
+cd /home/pi/dev/obd-things
+python3 -m tools.dtc_batch --execute \
   --confirm-parked \
   --confirm-park-gear \
   --confirm-ignition-on-engine-off
@@ -136,14 +138,16 @@ A future UI runner can choose a safe job ID in advance with `--job-id` and
 poll without CAN access:
 
 ```bash
-python3 tools/dtc_batch.py --status <job-id> --json
+cd /home/pi/dev/obd-things
+python3 -m tools.dtc_batch --status <job-id> --json
 ```
 
 Cooperative cancellation is a separate atomic flag checked before every arm
 and request:
 
 ```bash
-python3 tools/dtc_batch.py --cancel <job-id> --json
+cd /home/pi/dev/obd-things
+python3 -m tools.dtc_batch --cancel <job-id> --json
 ```
 
 `--status` derives `cancel_requested` directly from that atomic flag, so a

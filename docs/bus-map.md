@@ -133,7 +133,7 @@ The maintained AlfaOBD-derived B-CAN profile remains
 `18DA{4A,62,65,6A,85,87,98,D9}F1`, with corresponding `18DAF1xx` responses. Addresses `85`,
 `87`, `98`, and `D9` answered both F1A5 and F187 on 2026-07-21. Addresses `4A`, `62`, `65`, and
 `6A` timed out to both reads and remain unresolved/possibly optional, not proven absent. Dry-run
-the bounded set with `python3 tools/ecu_discover.py --profile promaster88-bcan`; a live rerun is
+the bounded set from the repository root with `python3 -m tools.ecu_discover --profile promaster88-bcan`; a live rerun is
 active diagnostic traffic and still requires the profile-specific confirmation and normal safety
 gates. [Catalog/UI evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-21_alfaobd_apk_catalog.md#adapter-routing-recovered-from-the-live-application-selector).
 
@@ -411,8 +411,8 @@ in this tested recipe. Exact passive restoration completed after two C-CAN
 TX packets, with zero errors/inhibits and no B-CAN/CAN-CH TX change.
 [Evidence](../projects/ecu_mapping/findings/promaster_2022/2026-09-05_drive_inventory_oil_candidates.md#september-6-live-support-and-recorder-recovery).
 
-To plan a new module inventory without touching CAN, run
-`python3 tools/did_sweep.py <key> START END` (dry-run is the default). A parked live run requires
+To plan a new module inventory without touching CAN, run, from the repository root,
+`python3 -m tools.did_sweep <key> START END` (dry-run is the default). A parked live run requires
 the explicit `--execute --confirm-parked --pair ... --conditions ...` gates described in the root
 README. Checkpointed JSONL plus an atomic summary land under `tmp/inventories/<key>/`; a clean,
 complete run also produces a compatibility text view under `tmp/sweeps/`. Promote selected evidence

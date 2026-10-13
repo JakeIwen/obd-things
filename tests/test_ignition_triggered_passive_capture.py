@@ -72,7 +72,7 @@ class IgnitionTriggeredPassiveCaptureTests(unittest.TestCase):
             ]
         )
         command = arm.child_command(args, "drive-test")
-        self.assertIn("tools/passive_drive_capture.py", command[1])
+        self.assertEqual(command[1:3], ["-m", "tools.passive_drive_capture"])
         self.assertIn("--confirm-passive", command)
         self.assertEqual(
             command[command.index("--stop-after-id") + 1],
