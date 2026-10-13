@@ -49,13 +49,13 @@ import subprocess
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 
-REPO = Path(__file__).resolve().parents[2]
-
-from lib.dtc import (  # noqa: E402
+from lib.dtc import (
     DtcParseError,
     parse_dtc_list_response,
 )
-from lib.modules import MODULES  # noqa: E402
+from lib.modules import MODULES
+
+REPO = Path(__file__).resolve().parents[2]
 
 
 DEFAULT_CAPTURE_ROOT = (

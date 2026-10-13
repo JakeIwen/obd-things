@@ -20,9 +20,7 @@ import sys
 import time
 
 
-REPO = Path(__file__).resolve().parents[2]
-
-from lib import (  # noqa: E402
+from lib import (
     broadcast_signals,
     can_handoff,
     can_operation_state,
@@ -31,7 +29,9 @@ from lib import (  # noqa: E402
     canbus,
     uds,
 )
-from lib.modules import MODULES  # noqa: E402
+from lib.modules import MODULES
+
+REPO = Path(__file__).resolve().parents[2]
 
 
 ROLE = "c-can"

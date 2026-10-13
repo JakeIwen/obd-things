@@ -18,14 +18,12 @@ import os
 import sys
 import glob
 import time
-
-# locate repo root (dir containing lib/) regardless of how deep this script lives
-_root = os.path.dirname(os.path.abspath(__file__))
-while _root != os.path.dirname(_root) and not os.path.isdir(os.path.join(_root, "lib")):
-    _root = os.path.dirname(_root)
+from pathlib import Path
 
 from lib.modules import MODULES
 from live_data.live_data import run, Metric, s16, s32, u8
+
+REPO = Path(__file__).resolve().parents[2]
 
 # Historical CSV-follow analysis remains useful even though the retired
 # fixed-channel drive logger itself is no longer executable. These values are
@@ -93,7 +91,7 @@ def follow_csv(path=None):
     delta/direction from the start-of-drive baseline, the decoded DTC status byte (F/C/W flags), and a
     speed-gated SETTLED indicator + trailing-window slope -- the same plateau gate the logger chimes on."""
     GRN, RED, CYA, YEL, DIM, RST = "\033[32m", "\033[31m", "\033[36m", "\033[33m", "\033[2m", "\033[0m"
-    dumps_dir = os.path.join(_root, "tmp", "radar")
+    dumps_dir = os.path.join(REPO, "tmp", "radar")
     newest = lambda: (sorted(glob.glob(os.path.join(dumps_dir, "radar_acc_drive_*.csv")),
                              key=os.path.getmtime) or [None])[-1]
     cur = os.path.abspath(path) if path else newest()

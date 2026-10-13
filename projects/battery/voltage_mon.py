@@ -37,12 +37,14 @@ from projects.vehicle_data.api import TelemetryClient
 from projects.vehicle_data.broker import DEFAULT_SOCKET
 from projects.vehicle_data.can_availability import vehicle_hardware_unavailable
 
+REPO = pathlib.Path(__file__).resolve().parents[2]
+
 NTFY_VOLTAGE_URL = os.environ.get("NTFY_VOLTAGE_URL", "")  # topic in ~/secrets/.bash_variables (sourced by .bashrc + cron BASH_ENV); never hardcode
 WARN_V    = 12.0                 # alert below this resting voltage (tune to taste)
 HYST_V    = 0.3                  # must rise this far above WARN to count as "recovered"
 REALERT_H = 12                   # while still low, re-push at most every this many hours
-STATE = os.path.join(bv._ROOT, "tmp", "battery", "mon_state.json")
-LOCK  = os.path.join(bv._ROOT, "tmp", "battery", "voltage_mon.lock")
+STATE = os.path.join(REPO, "tmp", "battery", "mon_state.json")
+LOCK  = os.path.join(REPO, "tmp", "battery", "voltage_mon.lock")
 
 
 def log(m):

@@ -32,14 +32,13 @@ import socket
 import struct
 import argparse
 import datetime
+from pathlib import Path
 
-_ROOT = os.path.dirname(os.path.abspath(__file__))
-while _ROOT != os.path.dirname(_ROOT) and not os.path.isdir(os.path.join(_ROOT, "lib")):
-    _ROOT = os.path.dirname(_ROOT)
+from lib import broadcast_signals, can_runtime_route, canbus
+from lib.canbus import append_csv                     # noqa: F401  re-exported for callers
 
-from lib import broadcast_signals, can_runtime_route, canbus  # noqa: E402
-from lib.canbus import append_csv                     # noqa: E402,F401  re-exported for callers
-CSV_PATH = os.path.join(_ROOT, "tmp", "battery", "bcan_voltage.csv")
+REPO = Path(__file__).resolve().parents[2]
+CSV_PATH = os.path.join(REPO, "tmp", "battery", "bcan_voltage.csv")
 
 BUS = "b-can"
 VOLT_ID = broadcast_signals.B_CAN_VOLTAGE.can_id

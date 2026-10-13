@@ -14,9 +14,9 @@ import re
 import sqlite3
 import subprocess
 
-REPO = Path(__file__).resolve().parents[2]
 from projects.vehicle_data.van_scan_harvest import bus_capture_ended, completed_chunks
 
+REPO = Path(__file__).resolve().parents[2]
 TASK = "cruise-summary-reduce"
 COMPUTE = "/home/pi/van_compute/scripts/pi_compute.py"
 DEFAULT_ROOT = Path("/mnt/EXFAT512/obd-things/tmp/captures/three_bus_drive/broker-drive")

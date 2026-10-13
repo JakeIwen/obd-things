@@ -28,13 +28,13 @@ import time
 from typing import Callable, Sequence
 
 
-REPO = Path(__file__).resolve().parents[2]
+from lib import can_operation_state, can_runtime_route, canbus, diagnostic_safety
+from lib.modules import MODULES
+from lib.timeutil import utc_now
+from lib import broadcast_signals
+from lib import capture_pipeline as capture
 
-from lib import can_operation_state, can_runtime_route, canbus, diagnostic_safety  # noqa: E402
-from lib.modules import MODULES  # noqa: E402
-from lib.timeutil import utc_now  # noqa: E402
-from lib import broadcast_signals  # noqa: E402
-from lib import capture_pipeline as capture  # noqa: E402
+REPO = Path(__file__).resolve().parents[2]
 
 
 CHANNEL: str | None = None

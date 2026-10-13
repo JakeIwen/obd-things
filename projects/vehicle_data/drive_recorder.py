@@ -47,22 +47,22 @@ import time
 from typing import Callable, Sequence
 
 
-REPO = Path(__file__).resolve().parents[2]
-
-from projects.vehicle_data.api import TelemetryClient  # noqa: E402
-from projects.vehicle_data.broker import DEFAULT_SOCKET  # noqa: E402
-from lib import capture_pipeline as capture  # noqa: E402
-from lib.broadcast_signals import B_CAN_VOLTAGE, IGNITION_ON  # noqa: E402
-from lib.can_role_resolver import SysfsCanRoleResolver  # noqa: E402
-from lib.can_runtime_route import NetdevIdentityExpectation  # noqa: E402
-from lib.modules import MODULES  # noqa: E402
-from lib.timeutil import utc_now  # noqa: E402
-from projects.vehicle_data.can_interfaces import (  # noqa: E402
+from projects.vehicle_data.api import TelemetryClient
+from projects.vehicle_data.broker import DEFAULT_SOCKET
+from lib import capture_pipeline as capture
+from lib.broadcast_signals import B_CAN_VOLTAGE, IGNITION_ON
+from lib.can_role_resolver import SysfsCanRoleResolver
+from lib.can_runtime_route import NetdevIdentityExpectation
+from lib.modules import MODULES
+from lib.timeutil import utc_now
+from projects.vehicle_data.can_interfaces import (
     PassiveInterfaceLease,
     PassiveInterfaceManager,
     PassiveInterfaceUnavailable,
 )
-from tools.passive_drive_capture import CCAN_CORRELATION_BROADCAST_IDS  # noqa: E402
+from tools.passive_drive_capture import CCAN_CORRELATION_BROADCAST_IDS
+
+REPO = Path(__file__).resolve().parents[2]
 
 
 BITRATE = 500_000

@@ -45,13 +45,14 @@ import argparse
 import datetime
 from contextlib import ExitStack
 from dataclasses import dataclass
-
-REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+from pathlib import Path
 
 from lib import can_operation_state, can_runtime_route, canbus, diagnostic_safety, uds
 from lib import broadcast_signals
 from lib.modules import bind_channel, get
 from projects.vehicle_data.api import TelemetryClient
+
+REPO = Path(__file__).resolve().parents[2]
 
 CYCLE_S = 10
 IGNITION_WINDOW_S = 2.0

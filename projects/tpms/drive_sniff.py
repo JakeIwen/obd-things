@@ -32,11 +32,12 @@ import socket
 import struct
 import argparse
 import datetime
+from pathlib import Path
 
-REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+from lib import broadcast_signals
+from lib import can_runtime_route
 
-from lib import broadcast_signals  # noqa: E402
-from lib import can_runtime_route  # noqa: E402
+REPO = Path(__file__).resolve().parents[2]
 
 OUT_DIR = os.path.join(REPO, "tmp", "tpms", "captures")
 BUS = "c-can"

@@ -31,15 +31,15 @@ import socket
 import argparse
 import datetime
 import subprocess
+from pathlib import Path
 
 HOST, PORT = "192.168.0.10", 35000        # ELM327 Wi-Fi dongle default endpoint
 NM_PROFILE = "vlink-obd"                   # NetworkManager connection for the V-LINK AP
-_ROOT = os.path.dirname(os.path.abspath(__file__))
-while _ROOT != os.path.dirname(_ROOT) and not os.path.isdir(os.path.join(_ROOT, "lib")):
-    _ROOT = os.path.dirname(_ROOT)
 
 from lib.canbus import append_csv          # noqa: E402,F401  shared CSV appender
-CSV_PATH = os.path.join(_ROOT, "tmp", "battery", "dongle_voltage.csv")
+
+REPO = Path(__file__).resolve().parents[2]
+CSV_PATH = os.path.join(REPO, "tmp", "battery", "dongle_voltage.csv")
 _VOLT_RE = re.compile(r"([0-9]{1,2}\.[0-9]+)\s*V", re.I)
 
 

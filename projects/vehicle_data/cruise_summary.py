@@ -14,11 +14,11 @@ import json
 import math
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[2]
-
 from projects.vehicle_data import ccan_powertrain as cp
 from tools.can_capture_summary import parse_frame
 from tools.can_event_window import capture_lines, crc8_sae_j1850
+
+REPO = Path(__file__).resolve().parents[2]
 
 VERSION = 1
 IDS = frozenset((0x5A0, 0x2FA, 0x0E0, 0x1FA))

@@ -16,8 +16,6 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-REPO = pathlib.Path(__file__).resolve().parents[2]
-
 from lib import can_operation_state, diagnostic_safety
 from projects.vehicle_data.drive_helper_launch import helper_command
 from projects.vehicle_data.engine_off_voltage import EngineOffVoltageCapture
@@ -46,6 +44,8 @@ from projects.vehicle_data.models import (
     failure,
     success,
 )
+
+REPO = pathlib.Path(__file__).resolve().parents[2]
 DEFAULT_SOCKET = "/run/van-telemetry/api.sock"
 DEFAULT_HISTORY_DB = REPO / "tmp" / "vehicle_data" / "history.sqlite3"
 DEFAULT_DTC_CACHE = REPO / "tmp" / "vehicle_data" / "dtc-cache.json"
