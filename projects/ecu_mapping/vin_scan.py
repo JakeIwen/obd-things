@@ -3,14 +3,13 @@
 prints the VIN timeline + counts. Use this FIRST — AlfaOBD debug files accumulate across
 whatever vehicles the tablet touched (our 396 MB reference bin was a different Promaster).
 
-Usage: vin_scan.py <decoded.txt> [expected_vin]
+Usage: python3 -m projects.ecu_mapping.vin_scan <decoded.txt> [expected_vin]
 """
 import os
 import sys
 from collections import Counter
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from alfalog import iter_exchanges, decode_vin
+from projects.ecu_mapping.alfalog import iter_exchanges, decode_vin
 
 OUR_VIN = os.environ.get("OBD_VIN", "")   # set locally; kept out of git
 

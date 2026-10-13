@@ -14,9 +14,9 @@ is datestamped. NTFY_VOLTAGE_URL sets the topic (defined in ~/secrets/.bash_vari
 Connectivity gates notification delivery only. Sampling and CSV history
 continue while ntfy is unreachable, and the alert edge remains pending.
 
-    python3 projects/battery/voltage_mon.py             # one run (pushes ntfy if low)
-    python3 projects/battery/voltage_mon.py --no-notify  # one run, never pushes (test the read path)
-    python3 projects/battery/voltage_mon.py --no-notify --passive-only
+    python3 -m projects.battery.voltage_mon             # one run (pushes ntfy if low)
+    python3 -m projects.battery.voltage_mon --no-notify  # one run, never pushes (test the read path)
+    python3 -m projects.battery.voltage_mon --no-notify --passive-only
                                                         # cache/web-safe; never wakes
 
 cron (installed alongside):
@@ -32,9 +32,7 @@ import datetime
 import subprocess
 import urllib.parse
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
-import bcan_voltage as bv            # sibling module owns CSV path/root and append helper
+from projects.battery import bcan_voltage as bv  # sibling module owns CSV path/root and append helper
 from projects.vehicle_data.api import TelemetryClient
 from projects.vehicle_data.broker import DEFAULT_SOCKET
 from projects.vehicle_data.can_availability import vehicle_hardware_unavailable

@@ -22,11 +22,10 @@ DECIMATION: keeps at most one frame per CAN ID per DECIM_S (default 2 s). Pressu
 signal, so this loses nothing that matters while keeping a 90-minute drive around ~10 MB instead
 of ~90 MB. Output is candump-compatible: ``(epoch) <resolved-channel> ID#HEX``.
 
-    python3 projects/tpms/drive_sniff.py --auto     # systemd mode: capture each drive
-    python3 projects/tpms/drive_sniff.py            # capture now until Ctrl-C
+    python3 -m projects.tpms.drive_sniff --auto     # systemd mode: capture each drive
+    python3 -m projects.tpms.drive_sniff            # capture now until Ctrl-C
 """
 import os
-import sys
 import time
 import errno
 import socket
@@ -35,7 +34,7 @@ import argparse
 import datetime
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-sys.path.insert(0, REPO)
+
 from lib import broadcast_signals  # noqa: E402
 from lib import can_runtime_route  # noqa: E402
 

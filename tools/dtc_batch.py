@@ -29,8 +29,6 @@ import uuid
 from typing import Any, Sequence
 
 REPO = Path(__file__).resolve().parents[1]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
 
 from lib import can_operation_state, can_runtime_route, canbus, diagnostic_safety, uds
 from lib.dtc import DtcHistory, READ_DTC_BY_STATUS_REQUEST, write_cache

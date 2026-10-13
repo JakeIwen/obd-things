@@ -1,7 +1,7 @@
 """Subprocess coverage for the campaign commands documented in the runbook.
 
 These tests deliberately remove ``PYTHONPATH``.  A user running
-``python3 tools/<tool>.py`` from the repository root should not need an
+``python3 -m tools.<tool>`` from the repository root should not need an
 environment-specific import path for the repository's own ``lib`` package.
 
 Live gates are intentionally omitted from the documented execute commands:
@@ -73,7 +73,8 @@ class CampaignCliEntrypointTests(unittest.TestCase):
             temporary = Path(directory)
             result = self._run(
                 [
-                    "tools/alfaobd_singleton_campaign.py",
+                    "-m",
+                    "tools.alfaobd_singleton_campaign",
                     "plan",
                     str(CLUSTER_PLAN.relative_to(REPO)),
                 ],
@@ -89,7 +90,8 @@ class CampaignCliEntrypointTests(unittest.TestCase):
             temporary = Path(directory)
             result = self._run(
                 [
-                    "tools/alfaobd_plots_catalog.py",
+                    "-m",
+                    "tools.alfaobd_plots_catalog",
                     "plan",
                     str(PCM_PLOTS_CATALOG_PLAN.relative_to(REPO)),
                 ],
@@ -106,7 +108,8 @@ class CampaignCliEntrypointTests(unittest.TestCase):
             output = temporary / "must-not-exist"
             result = self._run(
                 [
-                    "tools/passive_drive_capture.py",
+                    "-m",
+                    "tools.passive_drive_capture",
                     "--out-root",
                     str(output),
                     "--require-mount",
@@ -145,7 +148,8 @@ class CampaignCliEntrypointTests(unittest.TestCase):
             output = temporary / "must-not-exist"
             result = self._run(
                 [
-                    "tools/alfaobd_singleton_campaign.py",
+                    "-m",
+                    "tools.alfaobd_singleton_campaign",
                     "run",
                     str(CLUSTER_PLAN.relative_to(REPO)),
                     "--campaign-id",
@@ -175,7 +179,8 @@ class CampaignCliEntrypointTests(unittest.TestCase):
             output = temporary / "must-not-exist"
             result = self._run(
                 [
-                    "tools/alfaobd_plots_catalog.py",
+                    "-m",
+                    "tools.alfaobd_plots_catalog",
                     "inventory",
                     str(PCM_PLOTS_CATALOG_PLAN.relative_to(REPO)),
                     "--campaign-id",
@@ -203,7 +208,8 @@ class CampaignCliEntrypointTests(unittest.TestCase):
             output = temporary / "must-not-exist"
             result = self._run(
                 [
-                    "tools/passive_drive_capture.py",
+                    "-m",
+                    "tools.passive_drive_capture",
                     "--out-root",
                     str(output),
                     "--require-mount",

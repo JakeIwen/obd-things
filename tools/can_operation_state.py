@@ -6,15 +6,9 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict
 import json
-from pathlib import Path
 import sys
 
-
-REPO = Path(__file__).resolve().parents[1]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
-
-from lib import can_operation_state as operation_state  # noqa: E402
+from lib import can_operation_state as operation_state
 
 
 def build_parser() -> argparse.ArgumentParser:

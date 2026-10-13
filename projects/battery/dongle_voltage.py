@@ -11,11 +11,11 @@ multimeter reading -- and the calibration persisted across a reset.
 
 Cron-friendly: single shot, optional CSV log, --warn threshold with exit codes for a notifier.
 
-    python3 projects/battery/dongle_voltage.py                  # -> "11.9 V"
-    python3 projects/battery/dongle_voltage.py --quiet           # -> "11.9"
-    python3 projects/battery/dongle_voltage.py --csv --warn 11.8  # log + flag low
-    python3 projects/battery/dongle_voltage.py --connect          # best-effort bring up wlan0->dongle first
-    python3 projects/battery/dongle_voltage.py --calibrate 12.55  # one-time: AT CV from a multimeter reading
+    python3 -m projects.battery.dongle_voltage                  # -> "11.9 V"
+    python3 -m projects.battery.dongle_voltage --quiet           # -> "11.9"
+    python3 -m projects.battery.dongle_voltage --csv --warn 11.8  # log + flag low
+    python3 -m projects.battery.dongle_voltage --connect          # best-effort bring up wlan0->dongle first
+    python3 -m projects.battery.dongle_voltage --calibrate 12.55  # one-time: AT CV from a multimeter reading
 
 Exit codes (match read_voltage.py so one notifier wrapper handles both sources):
     0  read OK and >= --warn        1  read failed        2  read OK but BELOW --warn (low battery)
@@ -37,7 +37,7 @@ NM_PROFILE = "vlink-obd"                   # NetworkManager connection for the V
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 while _ROOT != os.path.dirname(_ROOT) and not os.path.isdir(os.path.join(_ROOT, "lib")):
     _ROOT = os.path.dirname(_ROOT)
-sys.path.insert(0, _ROOT)
+
 from lib.canbus import append_csv          # noqa: E402,F401  shared CSV appender
 CSV_PATH = os.path.join(_ROOT, "tmp", "battery", "dongle_voltage.csv")
 _VOLT_RE = re.compile(r"([0-9]{1,2}\.[0-9]+)\s*V", re.I)

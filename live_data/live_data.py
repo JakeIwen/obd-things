@@ -9,14 +9,12 @@ ReadDataByIdentifier requests. Both policies retain the parked safety gates.
 """
 import argparse
 import math
-import os
 import sys
 import time
 import struct
 import shutil
 from collections import namedtuple
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from lib import can_runtime_route, diagnostic_safety, uds
 from lib.uds import s16, s32, u8        # re-export so metric tables can `from ... import s16,...`
 from tools.ecu_discover import prearm_conflict_errors, preflight

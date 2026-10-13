@@ -53,8 +53,6 @@ import sys
 from typing import BinaryIO, ContextManager, Iterable, Iterator, Protocol, Sequence
 
 REPO = Path(__file__).resolve().parents[1]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
 
 from lib.modules import MODULES, NORMAL_11BITS, Module
 from lib.candump_io import (

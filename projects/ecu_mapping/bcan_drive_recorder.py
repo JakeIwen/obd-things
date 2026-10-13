@@ -29,8 +29,6 @@ from typing import Callable, Sequence
 
 
 REPO = Path(__file__).resolve().parents[2]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
 
 from lib import can_operation_state, can_runtime_route, canbus, diagnostic_safety  # noqa: E402
 from lib.modules import MODULES  # noqa: E402

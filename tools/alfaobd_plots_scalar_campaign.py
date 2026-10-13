@@ -48,8 +48,6 @@ from typing import Callable
 
 
 REPO = Path(__file__).resolve().parents[1]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
 
 from tools.alfaobd_plots_catalog import (  # noqa: E402
     AdbClient,

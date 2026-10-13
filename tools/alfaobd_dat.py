@@ -20,10 +20,6 @@ import re
 import sys
 from typing import Iterable, TextIO
 
-REPO = Path(__file__).resolve().parents[1]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
-
 from lib.reports import atomic_json as _atomic_json
 
 

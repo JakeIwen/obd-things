@@ -25,10 +25,6 @@ import subprocess
 import sys
 from typing import Iterator, Sequence
 
-REPO = Path(__file__).resolve().parents[1]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
-
 from tools.can_capture_summary import Frame, parse_frame
 from lib import broadcast_signals
 from lib.signal_fields import SignalField, SignalFieldError

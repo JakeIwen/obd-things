@@ -15,11 +15,11 @@ the allowlisted local telemetry broker, and prints changes to stdout. Read-only 
 (22 / 19), no writes. Survives bounded socket recovery while the engine-running and
 ownership gates remain valid; otherwise it stops and restores listen-only. Ctrl-C to stop.
 
-    python3 projects/tpms/tpms_logger.py    # guarded engine-running fallback
+    python3 -m projects.tpms.tpms_logger    # guarded engine-running fallback
 
 AUTO MODE (systemd service tpms-logger.service runs this):
 
-    python3 projects/tpms/tpms_logger.py --auto
+    python3 -m projects.tpms.tpms_logger --auto
 
 Auto mode first proves that the telemetry broker Unix socket is absent before inspecting CAN.
 Any live broker response or uncertain status failure makes this process yield completely: no
@@ -38,7 +38,6 @@ the effective installed unit is safe to start.
 import os
 import csv
 import errno
-import sys
 import time
 import socket
 import struct
@@ -48,7 +47,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-sys.path.insert(0, REPO)
+
 from lib import can_operation_state, can_runtime_route, canbus, diagnostic_safety, uds
 from lib import broadcast_signals
 from lib.modules import bind_channel, get

@@ -14,14 +14,12 @@ This surfaces the write / IO-control / routine / security sequences — e.g. the
 actuations behind the remote-unlock work. Output is a decoded, interpreted command log
 (an extrapolation -> findings/).
 
-Usage: reassemble_commands.py <decoded.txt> <out.txt> [atsh_filter e.g. DA40F1]
+Usage: python3 -m projects.ecu_mapping.reassemble_commands <decoded.txt> <out.txt> [atsh_filter e.g. DA40F1]
 """
-import os
 import re
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from alfalog import iter_lines, ascii_of, phys_addr, recording_date_hints
+from projects.ecu_mapping.alfalog import iter_lines, ascii_of, phys_addr, recording_date_hints
 
 _LINE = re.compile(r'^(\d{2}:\d{2}:\d{2}\.\d{3}) ([SR]): ([0-9A-Fa-f]*)$')
 _SEG  = re.compile(r'^([0-9A-Fa-f]):([0-9A-Fa-f]+)$')

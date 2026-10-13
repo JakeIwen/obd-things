@@ -27,8 +27,6 @@ import tempfile
 from typing import Iterable, Iterator
 
 REPO = Path(__file__).resolve().parents[1]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
 
 from lib.reports import atomic_json as _atomic_json
 from projects.ecu_mapping.alfalog import iter_exchanges_detailed

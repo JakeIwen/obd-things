@@ -14,10 +14,10 @@ report is wanted.
 
 Examples::
 
-    python3 tools/fca_hsql_decode.py path/db.data \
+    python3 -m tools.fca_hsql_decode path/db.data \
       --script path/db.script --properties path/db.properties --summary
 
-    python3 tools/fca_hsql_decode.py path/db.data \
+    python3 -m tools.fca_hsql_decode path/db.data \
       --script path/db.script --properties path/db.properties \
       --labels path/Label.properties --xmit 22F187 --xmit 2231D0 \
       > tmp/fca_hsql_join.json

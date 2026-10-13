@@ -19,10 +19,6 @@ import re
 import sys
 from typing import Sequence
 
-REPO = Path(__file__).resolve().parents[1]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
-
 from lib.signal_fields import SignalField, SignalFieldError
 from lib.modules import MODULES
 from tools import can_timeseries_correlate as correlate

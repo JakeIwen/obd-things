@@ -3,11 +3,11 @@
 
 Dry-run plan:
 
-    python3 projects/ecu_mapping/cluster_live.py
+    python3 -m projects.ecu_mapping.cluster_live
 
 Parked live view (the shared runner resolves, owns, arms, and restores C-CAN):
 
-    python3 projects/ecu_mapping/cluster_live.py \
+    python3 -m projects.ecu_mapping.cluster_live \
         --execute --confirm-parked --confirm-engine-off --pair 6/14 \
         --conditions "parked, ignition ON, engine OFF"
 
@@ -24,14 +24,6 @@ RPM/speed scaling, the remaining gear enum, and the temperature formula are not 
 verified. Those rows therefore display raw response bytes only. Battery voltage uses AlfaOBD's
 observed raw x 0.1 V rendering and is visibly qualified; it is not an independent voltmeter.
 """
-import os
-import sys
-
-
-_root = os.path.dirname(os.path.abspath(__file__))
-while _root != os.path.dirname(_root) and not os.path.isdir(os.path.join(_root, "lib")):
-    _root = os.path.dirname(_root)
-sys.path.insert(0, _root)
 
 from lib.modules import MODULES
 from live_data.live_data import Metric, run, u8

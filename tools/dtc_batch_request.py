@@ -9,10 +9,6 @@ from pathlib import Path
 import sys
 import threading
 
-REPO = Path(__file__).resolve().parents[1]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
-
 from lib.dtc_batch import JobStore, atomic_json
 from lib.dtc_web import (
     DEFAULT_CURRENT_PATH,

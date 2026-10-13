@@ -16,9 +16,9 @@ shared role plus current-channel observer locks. It requires exact passive
 classical CAN and never changes a link or transmits. The former fixed-channel
 parked-wake path is retired; its verified behavior remains in ``docs/bus-map.md``.
 
-    python3 projects/battery/ccan_voltage.py                  # -> "12.0 V" (passive; needs an awake bus)
-    python3 projects/battery/ccan_voltage.py --quiet
-    python3 projects/battery/ccan_voltage.py --csv --warn 12.0
+    python3 -m projects.battery.ccan_voltage                  # -> "12.0 V" (passive; needs an awake bus)
+    python3 -m projects.battery.ccan_voltage --quiet
+    python3 -m projects.battery.ccan_voltage --csv --warn 12.0
 
 Exit codes (match the other readers so one notifier handles all sources):
     0  read OK and >= --warn        1  read failed (incl. bus asleep / wrong bus)        2  below --warn
@@ -38,7 +38,7 @@ import datetime
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 while _ROOT != os.path.dirname(_ROOT) and not os.path.isdir(os.path.join(_ROOT, "lib")):
     _ROOT = os.path.dirname(_ROOT)
-sys.path.insert(0, _ROOT)
+
 from lib import broadcast_signals, can_runtime_route, canbus  # noqa: E402
 from lib.canbus import append_csv                     # noqa: E402,F401  re-exported for callers
 CSV_PATH = os.path.join(_ROOT, "tmp", "battery", "ccan_voltage.csv")

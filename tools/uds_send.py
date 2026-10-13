@@ -3,8 +3,8 @@
 
 Dry-run is the default and never opens a CAN socket::
 
-    python3 tools/uds_send.py radar_acc 22 F1 A5
-    python3 tools/uds_send.py radar_acc 31 03 02 51
+    python3 -m tools.uds_send radar_acc 22 F1 A5
+    python3 -m tools.uds_send radar_acc 31 03 02 51
 
 Live diagnostic reads require ``--execute``, a parked assertion, physical-pair provenance,
 and recorded conditions. Diagnostic-session traffic and mutation/actuation services require
@@ -14,11 +14,9 @@ serialized by SocketCAN channel and restores verified listen-only mode before re
 
 import argparse
 import math
-import os
 import string
 import sys
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from lib.cli_gates import execution_gate
 from lib import can_runtime_route, diagnostic_safety, uds
 from lib.modules import get

@@ -26,7 +26,6 @@ import sys
 from typing import Any
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, REPO)
 
 from lib.dtc import DtcHistory, DtcParseError, scan_from_inventory_report, write_cache
 from lib.modules import MODULES

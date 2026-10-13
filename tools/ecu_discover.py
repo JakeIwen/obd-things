@@ -9,11 +9,11 @@ rails, and must only be used after a passive bus survey confirms the physical pa
 
 Dry-run the current-van C-CAN verified-endpoint profile (default; sends nothing):
 
-    python3 tools/ecu_discover.py
+    python3 -m tools.ecu_discover
 
 For live C-CAN use, let the tool resolve, own, arm, and restore the exact role:
 
-    python3 tools/ecu_discover.py --execute --confirm-parked --pair 6/14 \
+    python3 -m tools.ecu_discover --execute --confirm-parked --pair 6/14 \
         --conditions "ignition ON, engine OFF, serial-role C-CAN on pins 6/14"
 
 The tool refuses to run on unresolved/wrong hardware. Cooperative observers,
@@ -31,14 +31,14 @@ named profile below are live-verified; its other four targets remain unresolved.
 An expanded 29-bit normal-fixed address-byte sweep is available only with an explicit flag and
 confirmation. It still sends physical 0x18DAxxF1 requests, never functional broadcast:
 
-    python3 tools/ecu_discover.py --all-29bit-targets
-    python3 tools/ecu_discover.py --all-29bit-targets --confirm-expanded-scan \
+    python3 -m tools.ecu_discover --all-29bit-targets
+    python3 -m tools.ecu_discover --all-29bit-targets --confirm-expanded-scan \
         --execute --confirm-parked --pair 6/14 \
         --conditions "ignition ON, engine OFF, serial-role C-CAN on pins 6/14"
 
 A bounded portion of that address-byte space can be selected without repeating a completed scan:
 
-    python3 tools/ecu_discover.py --address-byte-range F2 FF
+    python3 -m tools.ecu_discover --address-byte-range F2 FF
 
 Live use of a range is also an unverified-address scan and requires ``--confirm-expanded-scan``.
 
@@ -50,13 +50,13 @@ and F187 and remain unresolved rather than proven absent. Dry-run the bounded
 profile before executing it against the permanent serial-resolved B-CAN role
 on DLC pins 3/11::
 
-    python3 tools/ecu_discover.py --profile promaster88-bcan
+    python3 -m tools.ecu_discover --profile promaster88-bcan
 
 Live use additionally requires ``--confirm-catalog-candidates`` and the ordinary parked,
 physical-pair, exact-role ownership, host-privilege, interface, inhibit, and
 passive-restoration gates::
 
-    python3 tools/ecu_discover.py --profile promaster88-bcan \
+    python3 -m tools.ecu_discover --profile promaster88-bcan \
         --execute --confirm-catalog-candidates --confirm-parked --pair 3/11 \
         --conditions "ignition ON, engine OFF, serial-role B-CAN on pins 3/11"
 
@@ -67,7 +67,7 @@ One researched legacy target can optionally receive an explicit DiagnosticSessio
 preamble before its identity read. This is deliberately restricted to a single custom physical
 pair and requires a separate live confirmation::
 
-    python3 tools/ecu_discover.py --target pcm=18DA10F1:18DAF110 \
+    python3 -m tools.ecu_discover --target pcm=18DA10F1:18DAF110 \
         --probe legacy-1a87 --session 92 --tx-padding 00
 
 The exact current-van AlfaOBD trace used ``10 92 -> 50 92`` immediately before
@@ -86,7 +86,6 @@ import time
 from dataclasses import asdict, dataclass
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, REPO)
 
 from lib.reports import atomic_json as _atomic_json
 from lib.cli_gates import execution_gate

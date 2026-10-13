@@ -13,10 +13,10 @@ B-CAN carries traffic after a key-fob unlock or with ignition awake. A fully
 asleep bus returns an expected unavailable result; the retired fixed-channel
 autonomous-wake CLI is intentionally not reproduced here.
 
-    python3 projects/battery/bcan_voltage.py                 # -> "12.5 V" (passive; needs an awake bus)
-    python3 projects/battery/bcan_voltage.py --quiet          # -> "12.5"
-    python3 projects/battery/bcan_voltage.py --csv --warn 12.0 # log + flag low
-    python3 projects/battery/bcan_voltage.py --timeout 10      # wait up to 10s for a frame (a wake window)
+    python3 -m projects.battery.bcan_voltage                 # -> "12.5 V" (passive; needs an awake bus)
+    python3 -m projects.battery.bcan_voltage --quiet          # -> "12.5"
+    python3 -m projects.battery.bcan_voltage --csv --warn 12.0 # log + flag low
+    python3 -m projects.battery.bcan_voltage --timeout 10      # wait up to 10s for a frame (a wake window)
 
 Exit codes (shared by the passive voltage reader CLIs):
     0  read OK and >= --warn        1  read failed (incl. bus asleep)        2  read OK but BELOW --warn
@@ -36,7 +36,7 @@ import datetime
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 while _ROOT != os.path.dirname(_ROOT) and not os.path.isdir(os.path.join(_ROOT, "lib")):
     _ROOT = os.path.dirname(_ROOT)
-sys.path.insert(0, _ROOT)
+
 from lib import broadcast_signals, can_runtime_route, canbus  # noqa: E402
 from lib.canbus import append_csv                     # noqa: E402,F401  re-exported for callers
 CSV_PATH = os.path.join(_ROOT, "tmp", "battery", "bcan_voltage.csv")

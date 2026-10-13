@@ -37,10 +37,6 @@ import tempfile
 import time
 from typing import Callable, Iterable, Sequence
 
-REPO = Path(__file__).resolve().parents[1]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
-
 from lib import can_runtime_route
 from lib.modules import MODULES
 from lib.timeutil import utc_now

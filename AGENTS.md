@@ -53,10 +53,9 @@ The repository has exactly one telemetry dashboard: the Preact app in
 `projects/vehicle_data/web_v2.py` in `van-telemetry-web.service` (LAN via a machine-local drop-in)
 and `van-telemetry-web-tailscale.service` (Tailscale, guarded DTC jobs). The former static frontend
 (`projects/vehicle_data/static/`) and the temporary parallel "v2" units were removed on 2026-09-27.
-The vehicle_data programs have no `sys.path` bootstrap: the units (including the machine-local LAN
-drop-in) and the broker's drive helpers (`drive_helper_launch.py`) run them as modules from the repo root
-(`python3 -m projects.vehicle_data.web_v2`), so module names must stay. Only `cruise_summary.py`
-keeps a bootstrap, for the compute protocol. `web.py` is `web_v2`'s base
+The units (including the machine-local LAN drop-in) and the broker's drive helpers
+(`drive_helper_launch.py`) run the vehicle_data programs as modules (`python3 -m
+projects.vehicle_data.web_v2`), so module names must stay. `web.py` is `web_v2`'s base
 class and provides the `/v1` JSON API. The MacBook-managed Van Dashboard reads
 `http://192.168.6.103:8765/v1/snapshot`, so `/v1` routes must keep working. Start with
 `projects/vehicle_data/README.md` section "Telemetry dashboard" and
@@ -227,6 +226,16 @@ read-only deployment output on this machine.
 
 Local edits can be overwritten by the next MacBook push and can create a
 misleading split between deployed files and their authoritative source.
+
+## Running scripts (modules from the repo root, 2026-10-12)
+
+No script carries a `sys.path` bootstrap. Run every repo program as a module from the repo root
+(`cd /home/pi/dev/obd-things && python3 -m tools.dtc_scan --help`; `projects/x/y.py` is
+`projects.x.y`). Running one by path fails with `No module named 'lib'`. Import siblings through
+their package (`from projects.battery import bcan_voltage`), never by bare name. systemd units use
+`-m` with `WorkingDirectory=/home/pi/dev/obd-things`, which `tests/test_service_units_start_modules.py`
+enforces; code that starts another script passes `-m` and `cwd=REPO`. Compute tasks still name a
+script path: both workers put the job's source root on `PYTHONPATH`.
 
 ## Data locations (imposed 2026-07-08; do not resurrect `dumps/` directories)
 

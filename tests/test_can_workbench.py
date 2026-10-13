@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -227,8 +228,9 @@ class WorkbenchTests(unittest.TestCase):
             self.capture()
 
     def test_cli_failure_is_useful(self):
-        proc = subprocess.run(["python3", str(r.REPO / "tools/can_workbench_report.py"),
-                               str(self.manifest), "--field", "missing"], capture_output=True, text=True)
+        proc = subprocess.run([sys.executable, "-m", "tools.can_workbench_report",
+                               str(self.manifest), "--field", "missing"], cwd=r.REPO,
+                              capture_output=True, text=True)
         self.assertEqual(proc.returncode, 2)
         self.assertIn("unknown or empty field", proc.stderr)
         self.assertNotIn("Traceback", proc.stderr)

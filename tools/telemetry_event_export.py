@@ -12,11 +12,8 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
-import sys
 import zlib
 
-REPO=Path(__file__).resolve().parents[1]
-if str(REPO) not in sys.path:sys.path.insert(0,str(REPO))
 from projects.vehicle_data.event_history import GUIDE, VERSION
 
 TABLES=('advisory_episodes','advisory_episode_events','advisory_evidence',

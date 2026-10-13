@@ -38,8 +38,6 @@ import sys
 from typing import BinaryIO, Callable, Iterable, Iterator, Sequence
 
 REPO = Path(__file__).resolve().parents[1]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
 
 from lib.modules import MODULES, Module
 from lib.candump_io import CandumpFormat, parse_candump_line, zstd_stream

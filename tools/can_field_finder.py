@@ -18,7 +18,7 @@ Consume finalized logs made by the role-aware passive recorder, for example
 measured target values; this offline tool neither establishes a bus state nor assumes how the
 vehicle network was awakened::
 
-    python3 tools/can_field_finder.py /tmp/v_off.log=12.5 /tmp/v_run.log=14.2
+    python3 -m tools.can_field_finder /tmp/v_off.log=12.5 /tmp/v_run.log=14.2
 
 Without "=value" tags it falls back to ranking whatever changed most between the captures
 (decoded under common voltage scales) so you can eyeball candidates. Accepts candump's

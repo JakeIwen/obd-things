@@ -10,14 +10,14 @@ preserving the first 11 characters and replacing the unique serial with ``######
 
 Dry run (nothing transmitted):
 
-    python3 tools/identity_inventory.py radar_acc
+    python3 -m tools.identity_inventory radar_acc
 
 Live use resolves the module's permanent bus role, acquires only that role and
 its current serial/``dev_id``-resolved channel, then performs its own bounded
 arm/restore cycle.  An active same-role observer may need to be stopped if it
 blocks the exclusive lease; owners on other buses remain independent:
 
-    python3 tools/identity_inventory.py radar_acc --execute --confirm-parked --pair 6/14 \
+    python3 -m tools.identity_inventory radar_acc --execute --confirm-parked --pair 6/14 \
         --conditions "ignition ON, engine OFF, SGW-bypass C-CAN"
 
 The exact resolved interface is restored to listen-only mode after every attempted live run. Machine output
@@ -32,7 +32,6 @@ import sys
 import time
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, REPO)
 
 from lib.reports import atomic_json as _atomic_json
 from lib.cli_gates import execution_gate

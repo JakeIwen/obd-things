@@ -3,8 +3,8 @@
 
 The positional CLI remains ``MODULE [START] [END]`` (hexadecimal bounds):
 
-    python3 tools/routine_scan.py radar_acc
-    python3 tools/routine_scan.py radar_acc 0200 03FF
+    python3 -m tools.routine_scan radar_acc
+    python3 -m tools.routine_scan radar_acc 0200 03FF
 
 The default is a dry run. A live scan is ACTIVE diagnostic traffic and requires all of
 ``--execute``, ``--confirm-parked``, ``--pair``, and ``--conditions``. Routine discovery sends
@@ -29,7 +29,6 @@ import sys
 import time
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, REPO)
 
 from lib.reports import atomic_json as _atomic_json
 from lib.cli_gates import execution_gate

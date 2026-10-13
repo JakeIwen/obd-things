@@ -13,15 +13,15 @@ not the absolute unit; absolute scale needs an external inclinometer.)
 
 Workflow:
     # 1. dry-run a bounded capture plan:
-    python3 tools/signal_correlate.py capture radar_acc --seconds 60
+    python3 -m tools.signal_correlate capture radar_acc --seconds 60
     # 2. parked live capture after explicitly arming the bus:
-    python3 tools/signal_correlate.py capture radar_acc --seconds 60 --execute \
+    python3 -m tools.signal_correlate capture radar_acc --seconds 60 --execute \
             --confirm-parked --confirm-session-change --confirm-no-active-routine \
             --pair 6/14 --conditions "ignition ON, engine OFF, SGW-bypass C-CAN"
     #    (default DIDs = the angle candidates + sanity rows; Ctrl-C to stop early)
 
     # 3. analyze: regress every captured slice against a reference slice
-    python3 tools/signal_correlate.py analyze tmp/sweeps/radar_acc_correlate_*.json \\
+    python3 -m tools.signal_correlate analyze tmp/sweeps/radar_acc_correlate_*.json \\
             --ground '0845:0:4:>i4'
 
 Capture mode enters an extended session and sends TesterPresent plus non-mutating 22
@@ -37,7 +37,6 @@ import time
 import datetime
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, REPO)
 from lib.reports import atomic_json as _atomic_json
 from lib.cli_gates import execution_gate
 from lib import can_runtime_route, diagnostic_safety, uds

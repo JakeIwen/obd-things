@@ -35,8 +35,6 @@ from typing import Callable, Iterator, Mapping, Sequence
 
 
 REPO = Path(__file__).resolve().parents[1]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
 
 from lib.capture_pipeline import candump_command as _candump_command
 from lib.vehicle_can_roles import CAN_BUS_ROLES

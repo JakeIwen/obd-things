@@ -24,11 +24,9 @@ import json
 from pathlib import Path
 import re
 import sqlite3
-import sys
 from typing import Any, Iterable, Sequence
 
 REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO))
 
 from lib.reports import atomic_json as _atomic_json
 from projects.ecu_mapping.alfalog import iter_exchanges

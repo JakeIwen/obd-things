@@ -22,7 +22,6 @@ from tests.radar_service_support import Clock, record_reading
 from tests.vehicle_data_api_concurrency_support import read_http, unix_socket
 
 
-REPO = pathlib.Path(__file__).resolve().parents[1]
 START = {"action": "start", "confirm_stationary_engine_running": True,
          "confirm_drive_without_acc": True}
 STOP = {"action": "stop"}
@@ -224,11 +223,10 @@ class ControlTests(unittest.TestCase):
 
 HELPER_SCRIPT = textwrap.dedent('''
     import json, sys, time
-    sys.path.insert(0, {repo!r})
     from projects.vehicle_data import radar_service_alignment as service
 
     def emit(event_type, **payload):
-        print(json.dumps({{"type": event_type, **payload}}), flush=True)
+        print(json.dumps({"type": event_type, **payload}), flush=True)
 
     def report(state, request_id=None, reason=None, progress=None):
         emit(service.EVENT_TYPE, state=state, reason=reason, detail="scripted", supported=True,
@@ -266,7 +264,7 @@ class RealPipeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, \
                 mock.patch.dict("os.environ", {"PYTHONPATH": directory}):
             script = pathlib.Path(directory) / "scripted_radar_helper.py"
-            script.write_text(HELPER_SCRIPT.format(repo=str(REPO)))
+            script.write_text(HELPER_SCRIPT)
             service_control = control.RadarServiceControl(log_dir=directory)
             forwarded = []
             supervisor = service_control.supervisor(

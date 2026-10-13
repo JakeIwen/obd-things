@@ -266,7 +266,7 @@ def main(argv=None):
     parser.add_argument("--gap-seconds", type=float, default=1.0)
     args = parser.parse_args(argv)
     output = args.out or REPO / "tmp/can_workbench" / datetime.now(timezone.utc).strftime("report-%Y%m%dT%H%M%S%fZ")
-    command = [sys.executable, str(REPO / "tools/can_workbench_report.py"),
+    command = [sys.executable, "-m", "tools.can_workbench_report",
                *(sys.argv[1:] if argv is None else argv)]
     try:
         result = build(args.manifest, output, capture_names=args.capture, field_names=args.field,

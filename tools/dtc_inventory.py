@@ -22,7 +22,6 @@ import sys
 import time
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, REPO)
 
 from lib.reports import atomic_json as _atomic_json
 from lib.cli_gates import execution_gate

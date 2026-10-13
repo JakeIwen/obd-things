@@ -31,8 +31,6 @@ from typing import Callable, Iterable
 
 
 REPO = Path(__file__).resolve().parents[1]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
 
 from lib import can_runtime_route, diagnostic_safety  # noqa: E402
 from lib.modules import MODULES  # noqa: E402

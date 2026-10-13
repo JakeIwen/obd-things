@@ -4,9 +4,9 @@
 The legacy positional form is preserved, but every invocation is a dry-run unless ``--execute``
 is supplied::
 
-    python3 tools/did_sweep.py radar_acc 0800 08FF
-    python3 tools/did_sweep.py tcm --did F40C --did 04FE --did 1018
-    python3 tools/did_sweep.py radar_acc 0800 08FF --execute --confirm-parked \
+    python3 -m tools.did_sweep radar_acc 0800 08FF
+    python3 -m tools.did_sweep tcm --did F40C --did 04FE --did 1018
+    python3 -m tools.did_sweep radar_acc 0800 08FF --execute --confirm-parked \
         --pair 6/14 --conditions "parked, ignition ON, engine OFF"
 
 No DiagnosticSessionControl request is sent by default. ``--session 03`` is an explicit state
@@ -33,7 +33,6 @@ import sys
 import time
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, REPO)
 
 from lib.reports import atomic_json as _atomic_json
 from lib.cli_gates import execution_gate

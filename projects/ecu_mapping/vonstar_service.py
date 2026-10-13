@@ -14,15 +14,10 @@ import re
 import socket
 import socketserver
 import stat
-import sys
 import threading
 import time
 
-REPO = Path(__file__).resolve().parents[2]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
-
-from projects.ecu_mapping import rke_front_unlock as rke  # noqa: E402
+from projects.ecu_mapping import rke_front_unlock as rke
 
 
 SERVICE = "vonstar"

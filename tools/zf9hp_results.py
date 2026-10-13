@@ -20,12 +20,10 @@ import json
 import os
 from pathlib import Path
 import re
-import sys
 import tempfile
 
 
 REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO))
 
 from projects.ecu_mapping import zf9hp
 

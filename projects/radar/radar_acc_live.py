@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Live ACC-radar (Bosch MRR1evo / DASM) alignment + health view.
 
-    python3 projects/radar/radar_acc_live.py          # print bounded direct-view plan; NO CAN access
-    python3 projects/radar/radar_acc_live.py --execute --confirm-parked --confirm-engine-off \
+    python3 -m projects.radar.radar_acc_live          # print bounded direct-view plan; NO CAN access
+    python3 -m projects.radar.radar_acc_live --execute --confirm-parked --confirm-engine-off \
         --confirm-session-change --confirm-no-active-routine --pair 6/14 \
         --conditions "parked, ignition ON, engine OFF"  # ACTIVE parked direct view
-    python3 projects/radar/radar_acc_live.py --follow # NO bus access -- tails the newest saved
+    python3 -m projects.radar.radar_acc_live --follow # NO bus access -- tails the newest saved
                                                       #   historical drive CSV, if present
-    python3 projects/radar/radar_acc_live.py --follow <path.csv>
+    python3 -m projects.radar.radar_acc_live --follow <path.csv>
 
 Direct mode is bounded active UDS, dry-run by default, and limited to five total requests/s by default.
 Its guarded serial-role ownership coordinates the selected C-CAN role independently of other buses.
@@ -23,7 +23,7 @@ import time
 _root = os.path.dirname(os.path.abspath(__file__))
 while _root != os.path.dirname(_root) and not os.path.isdir(os.path.join(_root, "lib")):
     _root = os.path.dirname(_root)
-sys.path.insert(0, _root)
+
 from lib.modules import MODULES
 from live_data.live_data import run, Metric, s16, s32, u8
 

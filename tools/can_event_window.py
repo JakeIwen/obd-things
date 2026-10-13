@@ -23,11 +23,6 @@ import subprocess
 import sys
 from typing import Iterator, TextIO
 
-
-REPO = Path(__file__).resolve().parents[1]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
-
 from tools import can_capture_summary
 from lib.candump_io import zstd_stream
 

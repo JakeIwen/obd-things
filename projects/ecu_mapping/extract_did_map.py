@@ -9,15 +9,14 @@ up as scraps -> use reassemble_commands.py (TODO) for those.
 Output is an *extrapolation* (a derived map), so it belongs in findings/; the raw/decoded
 logs it reads stay under tmp/ecu_mapping/.
 
-Usage: extract_did_map.py <decoded.txt> <out.txt> [vehicle_vin]
+Usage: python3 -m projects.ecu_mapping.extract_did_map <decoded.txt> <out.txt> [vehicle_vin]
 """
 import os
 import re
 import sys
 from collections import defaultdict, Counter
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from alfalog import iter_exchanges, phys_addr, redact_vin
+from projects.ecu_mapping.alfalog import iter_exchanges, phys_addr, redact_vin
 
 OUR_VIN = os.environ.get("OBD_VIN", "")   # real VIN stays out of git; set it locally
 MAXSAMP = 4
