@@ -17,8 +17,6 @@ import socket
 import struct
 import time
 
-REPO = Path(__file__).resolve().parents[2]
-
 from lib import can_handoff, can_operation_state, can_runtime_route, canbus, diagnostic_safety
 from lib.modules import MODULES
 from projects.vehicle_data import ccan_powertrain, pcm_electrical as pcm
@@ -26,6 +24,7 @@ from projects.vehicle_data import pcm_support_profiles as profiles
 from tools.ecu_discover import prearm_conflict_errors
 from tools.passive_drive_capture import atomic_write_json
 
+REPO = Path(__file__).resolve().parents[2]
 CHECK_DIDS = profiles.TEMPERATURE_DIDS
 CHECK_PROFILES = profiles.CHECK_PROFILES
 TIMEOUT_SECONDS = 0.75
