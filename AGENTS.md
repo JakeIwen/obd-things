@@ -53,7 +53,10 @@ The repository has exactly one telemetry dashboard: the Preact app in
 `projects/vehicle_data/web_v2.py` in `van-telemetry-web.service` (LAN via a machine-local drop-in)
 and `van-telemetry-web-tailscale.service` (Tailscale, guarded DTC jobs). The former static frontend
 (`projects/vehicle_data/static/`) and the temporary parallel "v2" units were removed on 2026-09-27.
-`web_v2.py` keeps its filename because the installed units execute it by path; `web.py` is its base
+The vehicle_data programs have no `sys.path` bootstrap: the units (including the machine-local LAN
+drop-in) and the broker's drive helpers (`drive_helper_launch.py`) run them as modules from the repo root
+(`python3 -m projects.vehicle_data.web_v2`), so module names must stay. Only `cruise_summary.py`
+keeps a bootstrap, for the compute protocol. `web.py` is `web_v2`'s base
 class and provides the `/v1` JSON API. The MacBook-managed Van Dashboard reads
 `http://192.168.6.103:8765/v1/snapshot`, so `/v1` routes must keep working. Start with
 `projects/vehicle_data/README.md` section "Telemetry dashboard" and

@@ -16,18 +16,12 @@ import argparse
 import http.server
 import ipaddress
 import json
-import pathlib
 import re
-import sys
 import threading
 import time
 import uuid
 from typing import Any
 from urllib.parse import urlsplit
-
-REPO = pathlib.Path(__file__).resolve().parents[2]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
 
 from projects.vehicle_data.api import MAX_REQUEST_BYTES, TelemetryClient
 from projects.vehicle_data.api_schema import SnapshotDelivery

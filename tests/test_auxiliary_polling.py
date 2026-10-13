@@ -1,11 +1,13 @@
 import dataclasses
 import json
+import pathlib
 import subprocess
 import sys
 import unittest
 
 from projects.vehicle_data import auxiliary_polling as polling
 
+REPO = pathlib.Path(__file__).resolve().parents[1]
 
 class AuxiliaryPollingTests(unittest.TestCase):
     def test_fixed_plan_is_single_bcan_target_and_canch_passive_only(self):
@@ -101,7 +103,8 @@ class AuxiliaryPollingTests(unittest.TestCase):
 
     def test_cli_is_json_plan_only(self):
         result = subprocess.run(
-            [sys.executable, str(polling.__file__)],
+            [sys.executable, "-m", "projects.vehicle_data.auxiliary_polling"],
+            cwd=REPO,
             check=False,
             capture_output=True,
             text=True,

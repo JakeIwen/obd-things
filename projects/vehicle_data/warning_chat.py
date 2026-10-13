@@ -28,10 +28,6 @@ import time
 import tomllib
 import uuid
 
-REPO = Path(__file__).resolve().parents[2]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
-
 from projects.vehicle_data.api import TelemetryClient, _prepare_socket_path
 from projects.vehicle_data.engine_off_voltage import _atomic_json
 from projects.vehicle_data.event_history import GUIDE as EVENT_SYSTEM_GUIDE

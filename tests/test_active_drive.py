@@ -419,21 +419,6 @@ class ActiveSessionTests(unittest.TestCase):
         self.assertEqual(len(failures), 1)
         self.assertEqual(failures[0]["metric"], "engine.vvt_oil_temperature")
 
-    def test_absolute_script_entrypoint_imports_from_an_unrelated_working_directory(self):
-        result = subprocess.run(
-            [
-                sys.executable,
-                active_drive.__file__,
-                "--help",
-            ],
-            cwd="/tmp",
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("Guarded engine-running", result.stdout)
-
     def run_session(self, backend, *, enable_oil_life=True):
         sink = EventSink()
         events = backend.events

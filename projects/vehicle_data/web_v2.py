@@ -36,16 +36,11 @@ import json
 import mimetypes
 import pathlib
 import re
-import sys
 import threading
 import time
 from typing import Any
 
-REPO = pathlib.Path(__file__).resolve().parents[2]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
-
-from projects.vehicle_data import web as base  # noqa: E402
+from projects.vehicle_data import web as base
 from projects.vehicle_data.http_common import broker_unavailable, route_name, stream_snapshots, web_flags
 
 DEFAULT_STATIC_ROOT = pathlib.Path(__file__).with_name("dashboard") / "dist"

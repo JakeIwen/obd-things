@@ -17,8 +17,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
 
 from lib import can_operation_state, diagnostic_safety
 from projects.vehicle_data.drive_helper_launch import helper_command

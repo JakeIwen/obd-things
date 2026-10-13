@@ -48,8 +48,6 @@ from typing import Callable, Sequence
 
 
 REPO = Path(__file__).resolve().parents[2]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
 
 from projects.vehicle_data.api import TelemetryClient  # noqa: E402
 from projects.vehicle_data.broker import DEFAULT_SOCKET  # noqa: E402

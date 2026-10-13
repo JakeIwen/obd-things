@@ -24,7 +24,6 @@ import ctypes
 import json
 import math
 import os
-import pathlib
 import re
 import signal
 import socket
@@ -33,10 +32,6 @@ import sys
 import time
 from dataclasses import dataclass
 from typing import Callable
-
-REPO = pathlib.Path(__file__).resolve().parents[2]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
 
 from lib import can_operation_state, canbus, diagnostic_safety
 from lib.can_role_resolver import SysfsCanRoleResolver

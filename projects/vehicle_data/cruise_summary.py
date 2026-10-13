@@ -15,6 +15,8 @@ import math
 from pathlib import Path
 import sys
 
+# Unlike the other vehicle_data programs (started with ``python -m``), this one
+# keeps its bootstrap: the van-compute protocol runs it by script path.
 REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))

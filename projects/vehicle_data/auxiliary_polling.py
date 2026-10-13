@@ -18,14 +18,7 @@ import argparse
 from dataclasses import asdict, dataclass
 import json
 import math
-from pathlib import Path
-import sys
 from typing import Callable, Sequence
-
-
-REPO = Path(__file__).resolve().parents[2]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
 
 from lib.modules import MODULES
 

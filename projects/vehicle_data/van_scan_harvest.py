@@ -46,13 +46,10 @@ import os
 from pathlib import Path
 import re
 import subprocess
-import sys
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 
 REPO = Path(__file__).resolve().parents[2]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
 
 from lib.dtc import (  # noqa: E402
     DtcParseError,

@@ -23,19 +23,13 @@ import os
 from pathlib import Path
 import re
 import signal
-import sys
 import threading
 import time
 from typing import Callable
 
-
-REPO = Path(__file__).resolve().parents[2]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
-
-from lib import can_wake  # noqa: E402
-from projects.vehicle_data.api import TelemetryClient  # noqa: E402
-from projects.vehicle_data.broker import DEFAULT_SOCKET  # noqa: E402
+from lib import can_wake
+from projects.vehicle_data.api import TelemetryClient
+from projects.vehicle_data.broker import DEFAULT_SOCKET
 
 
 ROLE = "c-can"

@@ -13,11 +13,8 @@ from pathlib import Path
 import re
 import sqlite3
 import subprocess
-import sys
 
 REPO = Path(__file__).resolve().parents[2]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
 from projects.vehicle_data.van_scan_harvest import bus_capture_ended, completed_chunks
 
 TASK = "cruise-summary-reduce"
