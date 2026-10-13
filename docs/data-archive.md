@@ -86,3 +86,21 @@ derivatives:
 The active `tmp/venvs/obd-research/` search environment and `tmp/playwright/` browser runtime were
 kept local. ECU catalog databases, benchmark inputs, inventories, sweeps, TPMS/radar data, and all
 other smaller or near-term project artifacts were also retained locally.
+
+## 2026-10-12 cleanup ledger
+
+A root-filesystem growth audit moved 4.4 GiB of completed evidence to the same relative paths below
+`/mnt/EXFAT512/obd-things/tmp/`. Each file was SHA-256 checked before the local item was replaced
+with a symlink, so cited paths still resolve while EXFAT512 is mounted:
+
+- `captures/three_bus_drive/20260819_183854_-0600_can2-ccan_can3-bcan_can0-canch.candump` and the
+  `session_20260820_011258_-0600` and `session_20260823T042427.681227Z_1189408` directories. The
+  `current_session`/`current_capture_path` pointer files and the metadata/summary files stay local.
+- `radar/acc-passive-20260924/`, `radar/acc-passive-20260927/`, `radar/acc-passive-20260928/`.
+- `vehicle_data/warning_replay/fix-20260925/` and the seventeen 2026-09-24 `replay-*.sqlite3`
+  outputs. Exports, reports, the 2026-10-08 replays, and `system-replay-*` databases (which have
+  WAL sidecars) stay local.
+
+Compute history (`tmp/compute/done` and `failed`, about 3.9 GiB in 98k files) was left local.
+Copied per file to EXFAT512 it would occupy about 14 GiB because of the 128 KiB allocation unit.
+The Pi backup watchdog now alerts when local `tmp/` exceeds its configured budget.
