@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from lib import can_operation_state, diagnostic_safety
-from projects.vehicle_data.drive_helper_launch import helper_command
+from projects.vehicle_data.drive_helper_launch import HELPER_CWD, helper_command
 from projects.vehicle_data.engine_off_voltage import EngineOffVoltageCapture
 from projects.vehicle_data.helper_events import validate_helper_status
 from projects.vehicle_data.maintenance import MaintenanceStore
@@ -299,7 +299,7 @@ class ActiveDriveSupervisor:
                 stdout=subprocess.PIPE,
                 text=True,
                 bufsize=1,
-                cwd=REPO,
+                cwd=HELPER_CWD,
             )
         except Exception as exc:
             return {

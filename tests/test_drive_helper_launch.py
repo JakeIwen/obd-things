@@ -11,6 +11,7 @@ import threading
 import unittest
 
 from projects.vehicle_data.broker import ActiveDriveSupervisor, AuxiliaryDriveSupervisor
+from projects.vehicle_data.drive_helper_launch import HELPER_CWD
 
 
 class Process:
@@ -50,6 +51,7 @@ class DriveHelperLaunchTests(unittest.TestCase):
 
                 command, kwargs = launches[0]
                 self.assertEqual(command[:3], [sys.executable, "-m", module])
+                self.assertEqual(kwargs["cwd"], HELPER_CWD)
                 # No inherited import path, so only the working directory can make it import.
                 env = {key: value for key, value in os.environ.items()
                        if key not in ("PYTHONPATH", "PYTHONHOME")}
