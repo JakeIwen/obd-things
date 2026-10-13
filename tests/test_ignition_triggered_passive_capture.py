@@ -84,6 +84,16 @@ class IgnitionTriggeredPassiveCaptureTests(unittest.TestCase):
         )
         self.assertNotIn("--tx", command)
 
+    def test_child_gets_the_validated_paths_unchanged(self):
+        # The parent checked these exact (absolute) paths; normalizing them here could let a
+        # symlink followed by ".." name a different directory than the one checked and recorded.
+        args = arm.build_parser().parse_args(
+            ["--out-root", "/mnt/archive/link/../captures", "--require-mount", "/mnt/archive/link/.."]
+        )
+        command = arm.child_command(args, "drive-test")
+        self.assertEqual(command[command.index("--out-root") + 1], "/mnt/archive/link/../captures")
+        self.assertEqual(command[command.index("--require-mount") + 1], "/mnt/archive/link/..")
+
     def test_execute_waits_then_runs_one_child(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

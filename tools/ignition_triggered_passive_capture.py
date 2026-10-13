@@ -183,9 +183,9 @@ def child_command(args: argparse.Namespace, run_id: str) -> list[str]:
         "--bus",
         "c-can",
         "--out-root",
-        os.path.abspath(args.out_root),  # the child runs from REPO
+        str(args.out_root),
         "--require-mount",
-        os.path.abspath(args.require_mount),
+        str(args.require_mount),
         "--campaign",
         run_id,
         "--duration-seconds",
