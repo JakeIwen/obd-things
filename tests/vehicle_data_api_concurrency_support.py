@@ -27,7 +27,8 @@ from projects.vehicle_data.models import success
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-TMP_BASE = os.environ.get("TMPDIR", "/private/tmp")
+# Short, non-symlinked default so socket paths fit AF_UNIX: /private/tmp on macOS, /tmp elsewhere.
+TMP_BASE = os.environ.get("TMPDIR", "/private/tmp" if os.path.isdir("/private/tmp") else "/tmp")
 
 
 class MutableClock:
