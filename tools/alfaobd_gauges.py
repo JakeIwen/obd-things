@@ -33,11 +33,10 @@ import sys
 import tempfile
 from typing import Iterable, TextIO
 
-
-REPO = Path(__file__).resolve().parents[1]
-
 from lib.reports import atomic_json as _atomic_json
 
+
+REPO = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_ROOT = REPO / "tmp" / "inventories" / "alfaobd_gauges"
 PROFILE_PREFIX = "Recording data for "
 DATE_PREFIX = "Date (YY/MM/DD):"

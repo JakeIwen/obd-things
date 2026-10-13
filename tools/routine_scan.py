@@ -24,11 +24,10 @@ import datetime
 import json
 import math
 import os
+from pathlib import Path
 import signal
 import sys
 import time
-
-REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 from lib.reports import atomic_json as _atomic_json
 from lib.cli_gates import execution_gate
@@ -43,6 +42,7 @@ from lib.uds_session import (
 from lib.diagnostic_preflight import prearm_conflict_errors, preflight
 
 
+REPO = Path(__file__).resolve().parents[1]
 DEFAULT_START = 0x0200
 DEFAULT_END = 0x03FF
 EXTRA_RIDS = (0xFF00, 0xFF01, 0xFF02, 0xFF03)

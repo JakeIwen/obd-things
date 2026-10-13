@@ -26,12 +26,11 @@ import re
 import sqlite3
 from typing import Any, Iterable, Sequence
 
-REPO = Path(__file__).resolve().parents[1]
-
 from lib.reports import atomic_json as _atomic_json
 from projects.ecu_mapping.alfalog import iter_exchanges
 
 
+REPO = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE = REPO / "tmp/ecu_mapping/android_tablet/alfaobd.db"
 DEFAULT_DECODED = REPO / "tmp/ecu_mapping/promaster_2022_debug.decoded.txt"
 DEFAULT_MODULE_MAP = (

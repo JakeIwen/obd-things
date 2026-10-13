@@ -46,10 +46,7 @@ import sys
 import time
 from typing import Callable
 
-
-REPO = Path(__file__).resolve().parents[1]
-
-from tools.alfaobd_plots_catalog import (  # noqa: E402
+from tools.alfaobd_plots_catalog import (
     AdbClient,
     _dialog_signature,
     _observe_stable_dialog,
@@ -60,7 +57,7 @@ from tools.alfaobd_plots_catalog import (  # noqa: E402
     parse_dialog_page,
     validate_plots_page,
 )
-from lib.alfaobd_common import (  # noqa: E402
+from lib.alfaobd_common import (
     CatalogPlan,
     DialogPage,
     CatalogInventory,
@@ -70,12 +67,13 @@ from lib.alfaobd_common import (  # noqa: E402
     SAFE_ID_PREFIX,
     CAMPAIGN_ID_RE,
 )
-from tools.alfaobd_singleton_campaign import (  # noqa: E402
+from tools.alfaobd_singleton_campaign import (
     CampaignError,
     _one_by_id,
 )
 
 
+REPO = Path(__file__).resolve().parents[1]
 DEFAULT_OUT_ROOT = (
     REPO / "tmp" / "ecu_mapping" / "alfaobd_plots_scalar"
 )

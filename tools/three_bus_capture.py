@@ -33,9 +33,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator, Mapping, Sequence
 
-
-REPO = Path(__file__).resolve().parents[1]
-
 from lib.capture_pipeline import candump_command as _candump_command
 from lib.vehicle_can_roles import CAN_BUS_ROLES
 from projects.vehicle_data.can_interfaces import (
@@ -45,6 +42,7 @@ from projects.vehicle_data.can_interfaces import (
 )
 
 
+REPO = Path(__file__).resolve().parents[1]
 DEFAULT_CAPTURE_ROOT = REPO / "tmp" / "captures" / "three_bus_drive"
 DEFAULT_CHUNK_SECONDS = 3600
 DEFAULT_RETRY_SECONDS = 2

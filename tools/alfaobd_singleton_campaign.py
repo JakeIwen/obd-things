@@ -44,8 +44,6 @@ from typing import Callable, Iterable
 import xml.etree.ElementTree as ET
 import zlib
 
-REPO = Path(__file__).resolve().parents[1]
-
 from lib import can_runtime_route, diagnostic_safety
 from lib.alfaobd_adb import (
     AlfaUiError,
@@ -71,6 +69,7 @@ from lib.alfaobd_common import (
 )
 
 
+REPO = Path(__file__).resolve().parents[1]
 DEFAULT_OUT_ROOT = REPO / "tmp" / "ecu_mapping" / "alfaobd_singleton"
 LOCK_DIR = REPO / "tmp" / "locks"
 REMOTE_LOG_ROOT = "/sdcard/Android/data/com.android.AlfaOBD/files/logs"

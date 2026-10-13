@@ -37,8 +37,6 @@ import subprocess
 import sys
 from typing import BinaryIO, Callable, Iterable, Iterator, Sequence
 
-REPO = Path(__file__).resolve().parents[1]
-
 from lib.modules import MODULES, Module
 from lib.candump_io import CandumpFormat, parse_candump_line, zstd_stream
 from lib.vehicle_can_roles import CAN_ROLE_SPECS, normalize_can_role
@@ -46,6 +44,7 @@ from lib.alfaobd_common import CampaignPlan
 from tools.alfaobd_singleton_campaign import CampaignError, load_plan
 
 
+REPO = Path(__file__).resolve().parents[1]
 DEFAULT_OUT_DIR = REPO / "tmp" / "ecu_mapping" / "alfaobd_singleton_join"
 DEFAULT_MAX_ARTIFACT_BYTES = 1024**3
 DEFAULT_MAX_SEGMENT_BYTES = 64 * 1024**2

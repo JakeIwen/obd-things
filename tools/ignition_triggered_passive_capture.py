@@ -26,15 +26,13 @@ import tempfile
 import time
 from typing import Sequence
 
+from lib import broadcast_signals
+from lib import can_runtime_route
+from lib.timeutil import utc_now
+from tools import passive_drive_capture as passive
+
 
 REPO = Path(__file__).resolve().parents[1]
-
-from lib import broadcast_signals  # noqa: E402
-from lib import can_runtime_route  # noqa: E402
-from lib.timeutil import utc_now  # noqa: E402
-from tools import passive_drive_capture as passive  # noqa: E402
-
-
 CHANNEL: str | None = None
 C_CAN_BITRATE = 500_000
 IGNITION_ID = broadcast_signals.IGNITION_ON.can_id

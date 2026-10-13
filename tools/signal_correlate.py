@@ -28,6 +28,7 @@ Capture mode enters an extended session and sends TesterPresent plus non-mutatin
 ReadDataByIdentifier requests; it is ACTIVE, not passive, and takes the channel diagnostic lock.
 """
 import os
+from pathlib import Path
 import sys
 import argparse
 import glob
@@ -36,7 +37,6 @@ import math
 import time
 import datetime
 
-REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 from lib.reports import atomic_json as _atomic_json
 from lib.cli_gates import execution_gate
 from lib import can_runtime_route, diagnostic_safety, uds
@@ -48,6 +48,8 @@ try:
 except ImportError:
     raise SystemExit("Missing dependency: pip3 install --break-system-packages numpy")
 
+
+REPO = Path(__file__).resolve().parents[1]
 # Default DIDs to log: the inferred angle candidates + the two VERIFIED sanity rows.
 DEFAULT_DIDS = [0x0841, 0x0845, 0x0850, 0x0861, 0x1006, 0x0835]
 SESSION = 0x03

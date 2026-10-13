@@ -22,12 +22,10 @@ from pathlib import Path
 import re
 import tempfile
 
-
-REPO = Path(__file__).resolve().parents[1]
-
 from projects.ecu_mapping import zf9hp
 
 
+REPO = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = REPO / "tmp/ecu_mapping/zf9hp_support_decode.json"
 HEX_DID = re.compile(r"^[0-9A-Fa-f]{4}$")
 DISPLAY_CONVERSIONS = {

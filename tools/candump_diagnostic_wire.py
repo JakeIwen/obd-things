@@ -20,11 +20,8 @@ import re
 import sys
 from typing import Sequence
 
-
-REPO = Path(__file__).resolve().parents[1]
-
-from lib.modules import MODULES, Module  # noqa: E402
-from tools.can_timeseries_correlate import (  # noqa: E402
+from lib.modules import MODULES, Module
+from tools.can_timeseries_correlate import (
     CliZstdDecompressor,
     CorrelateError,
     MAX_CAPTURE_FILES,
@@ -35,6 +32,7 @@ from tools.can_timeseries_correlate import (  # noqa: E402
 )
 
 
+REPO = Path(__file__).resolve().parents[1]
 TMP_ROOT = (REPO / "tmp").resolve()
 MAX_EXCHANGES = 1_500_000
 _VAN_COMPUTE_JOB_ID_RE = re.compile(r"\d{8}T\d{6}Z-[0-9a-f]{8}")

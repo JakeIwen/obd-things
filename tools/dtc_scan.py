@@ -25,13 +25,12 @@ import sqlite3
 import sys
 from typing import Any
 
-REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-
 from lib.dtc import DtcHistory, DtcParseError, scan_from_inventory_report, write_cache
 from lib.modules import MODULES
 from lib.dtc_reports import load_inventory
 
 
+REPO = Path(__file__).resolve().parents[1]
 BUS_ORDER = ("c-can", "b-can", "can-ch")
 BUS_PAIRS = {"c-can": "6/14", "b-can": "3/11", "can-ch": "12/13"}
 REQUEST_HEX = "19 02 FF"

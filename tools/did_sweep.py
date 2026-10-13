@@ -28,11 +28,10 @@ import datetime
 import json
 import math
 import os
+from pathlib import Path
 import signal
 import sys
 import time
-
-REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 from lib.reports import atomic_json as _atomic_json
 from lib.cli_gates import execution_gate
@@ -48,6 +47,7 @@ from lib.diagnostic_preflight import prearm_conflict_errors, preflight
 from lib.vin_redaction import redact_response_vins
 
 
+REPO = Path(__file__).resolve().parents[1]
 MIN_REQUEST_RATE = 0.1
 MAX_REQUEST_RATE = 5.0
 MAX_REQUEST_TIMEOUT_S = 5.0

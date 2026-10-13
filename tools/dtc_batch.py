@@ -28,8 +28,6 @@ import time
 import uuid
 from typing import Any, Sequence
 
-REPO = Path(__file__).resolve().parents[1]
-
 from lib import can_operation_state, can_runtime_route, canbus, diagnostic_safety, uds
 from lib.dtc import DtcHistory, READ_DTC_BY_STATUS_REQUEST, write_cache
 from lib.dtc_batch import (
@@ -59,6 +57,7 @@ from lib.dtc_reports import load_inventory
 from tools.dtc_scan import DEFAULT_CACHE, DEFAULT_DB
 
 
+REPO = Path(__file__).resolve().parents[1]
 DEFAULT_REPORT_ROOT = REPO / "tmp" / "inventories"
 MAX_TIMEOUT_S = 5.0
 STATE_SNAPSHOT_TIMEOUT_S = 0.75

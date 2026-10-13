@@ -52,8 +52,6 @@ import subprocess
 import sys
 from typing import BinaryIO, ContextManager, Iterable, Iterator, Protocol, Sequence
 
-REPO = Path(__file__).resolve().parents[1]
-
 from lib.modules import MODULES, NORMAL_11BITS, Module
 from lib.candump_io import (
     CandumpFormat, CandumpSyntaxError, identifier_bits,
@@ -68,6 +66,7 @@ from lib.signal_fields import (
 )
 
 
+REPO = Path(__file__).resolve().parents[1]
 TMP_ROOT = REPO / "tmp"
 DEFAULT_MODULE = MODULES["cluster"]
 # Backward-compatible public alias used by existing callers and evidence tests.

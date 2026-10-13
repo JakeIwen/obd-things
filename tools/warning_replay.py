@@ -51,20 +51,20 @@ import sys
 import tempfile
 import time
 
-REPO = Path(__file__).resolve().parents[1]
-
-import projects.vehicle_data.historian as historian_module  # noqa: E402
-from projects.vehicle_data.early_warning import (  # noqa: E402
+import projects.vehicle_data.historian as historian_module
+from projects.vehicle_data.early_warning import (
     DEFAULT_EVALUATION_RULES,
     EarlyWarningEvaluator,
 )
-from projects.vehicle_data.historian import (  # noqa: E402
+from projects.vehicle_data.historian import (
     REGIME_DIMENSIONS,
     BaselineStats,
     HistorianConfig,
     TelemetryHistorian,
 )
 
+
+REPO = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE = Path("/var/lib/van-telemetry/history.sqlite3")
 OUT_DIR = REPO / "tmp" / "vehicle_data" / "warning_replay"
 DEFAULT_EXPORT = OUT_DIR / "export.sqlite3"

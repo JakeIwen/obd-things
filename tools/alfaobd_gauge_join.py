@@ -26,12 +26,11 @@ import sys
 import tempfile
 from typing import Iterable, Iterator
 
-REPO = Path(__file__).resolve().parents[1]
-
 from lib.reports import atomic_json as _atomic_json
 from projects.ecu_mapping.alfalog import iter_exchanges_detailed
 
 
+REPO = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_ROOT = REPO / "tmp" / "inventories" / "alfaobd_gauge_join"
 DEFAULT_MAX_EXCHANGES = 100_000
 DEFAULT_MAX_HYPOTHESES_PER_METRIC = 20_000

@@ -29,12 +29,9 @@ import sys
 import time
 from typing import Callable, Iterable
 
-
-REPO = Path(__file__).resolve().parents[1]
-
-from lib import can_runtime_route, diagnostic_safety  # noqa: E402
-from lib.modules import MODULES  # noqa: E402
-from lib.alfaobd_common import (  # noqa: E402
+from lib import can_runtime_route, diagnostic_safety
+from lib.modules import MODULES
+from lib.alfaobd_common import (
     CATALOG_HASH_DOMAIN,
     CatalogPlan,
     DialogPage,
@@ -52,7 +49,7 @@ from lib.alfaobd_common import (  # noqa: E402
     _write_bytes,
     _write_text,
 )
-from tools.alfaobd_singleton_campaign import (  # noqa: E402
+from tools.alfaobd_singleton_campaign import (
     AdbClient,
     CampaignError,
     CommandRunner,
@@ -66,6 +63,7 @@ from tools.alfaobd_singleton_campaign import (  # noqa: E402
 )
 
 
+REPO = Path(__file__).resolve().parents[1]
 DEFAULT_OUT_ROOT = REPO / "tmp" / "ecu_mapping" / "alfaobd_plots_catalog"
 PLOTS_PAGE_IDS = {
     f"{SAFE_ID_PREFIX}plots_label",

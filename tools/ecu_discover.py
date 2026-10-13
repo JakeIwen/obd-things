@@ -78,14 +78,13 @@ import argparse
 import datetime
 import math
 import os
+from pathlib import Path
 import re
 import signal
 import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass
-
-REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 from lib.reports import atomic_json as _atomic_json
 from lib.cli_gates import execution_gate
@@ -94,6 +93,7 @@ from lib import can_runtime_route, canbus, uds
 from lib.modules import MODULES, Module, NORMAL_11BITS, NORMAL_29BITS
 
 
+REPO = Path(__file__).resolve().parents[1]
 DISCOVERY_DID = 0xF187  # standardized vehicle-manufacturer spare-part number; deliberately not VIN
 SUBTYPE_DID = 0xF1A5  # FCA-observed identity value; selects AlfaOBD's current subtype catalog
 MIN_REQUEST_RATE = 0.1

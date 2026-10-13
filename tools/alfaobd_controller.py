@@ -14,10 +14,7 @@ import json
 from pathlib import Path
 import sys
 
-
-REPO = Path(__file__).resolve().parents[1]
-
-from lib.alfaobd_adb import (  # noqa: E402
+from lib.alfaobd_adb import (
     DEFAULT_FAILURE_ROOT,
     DEFAULT_POLL_INTERVAL_SECONDS,
     AlfaUiError,
@@ -29,9 +26,10 @@ from lib.alfaobd_adb import (  # noqa: E402
     WaitOutcome,
     require_diagnostic_confirmation,
 )
-from lib import can_operation_state  # noqa: E402
+from lib import can_operation_state
 
 
+REPO = Path(__file__).resolve().parents[1]
 ALFA_INHIBIT_NAME = "alfaobd"
 
 
