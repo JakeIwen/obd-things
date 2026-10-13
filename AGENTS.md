@@ -139,6 +139,10 @@ manual 82% support-check result as a new live observation.
 
 ## Code layout after the 2026-09/10 refactor
 
+`projects/vehicle_data/pcm_support_profiles.py` owns the fixed temperature
+and oil-life support plans/decoders; `pcm_temperature_support.py` retains
+the guarded parked CLI and all CAN ownership/restoration effects.
+
 Zero-behaviour refactor waves (audit items #1–#8; deployed and validated on four drives) moved
 code without changing behaviour. Old import paths remain as shims, so existing imports keep working.
 

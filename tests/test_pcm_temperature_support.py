@@ -16,6 +16,61 @@ def frame(data):
 
 
 class TemperatureSupportTests(unittest.TestCase):
+    def run_live_scenario(self, profile, replies, vehicle_gates=None, restored=True):
+        events = []
+
+        @contextmanager
+        def handoff(bus):
+            self.assertEqual(bus, "c-can")
+            events.append("handoff_enter")
+            try:
+                yield
+            finally:
+                events.append("handoff_exit")
+
+        owner = mock.Mock()
+        owner.route.channel = "can7"
+
+        def acquire(*args, **kwargs):
+            self.assertEqual(events, ["handoff_enter"])
+            events.append("arm")
+            return owner
+
+        def release():
+            events.append("restore")
+            return restored
+
+        owner.release.side_effect = release
+        sock = mock.MagicMock()
+        sock.__enter__.return_value = sock
+        sock.send.return_value = support.pcm.CAN_FRAME_SIZE
+        sock.recv.side_effect = replies
+        gate_patch = ({"side_effect": vehicle_gates} if vehicle_gates is not None
+                      else {"return_value": []})
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.object(support, "REPO", Path(tmp)),
+                mock.patch.object(support.can_handoff, "active_turn", side_effect=handoff),
+                mock.patch.object(support.can_runtime_route, "acquire_armed_bus_route", side_effect=acquire),
+                mock.patch.object(support.can_runtime_route, "revalidate_bus_route"),
+                mock.patch.object(support.can_runtime_route, "_is_exact_armed_state", return_value=True),
+                mock.patch.object(support.diagnostic_safety, "validate_channel_lock"),
+                mock.patch.object(support.canbus, "interface_state"),
+                mock.patch.object(support.can_operation_state, "active_inhibits", return_value=[]),
+                mock.patch.object(support.can_operation_state, "load_topology", return_value=SimpleNamespace(
+                    usable=True, bus="c-can", pair="6/14")),
+                mock.patch.object(support, "vehicle_gate", **gate_patch),
+                mock.patch.object(support.socket, "socket", return_value=sock),
+                mock.patch.object(support.time, "sleep"),
+                mock.patch("sys.stdout", new_callable=io.StringIO) as output,
+            ):
+                result = support.main(["--profile", profile, "--execute",
+                                       "--confirm-parked-ignition-on-engine-off"])
+        owner.release.assert_called_once()
+        self.assertEqual(events, ["handoff_enter", "arm", "restore", "handoff_exit"])
+        return result, json.loads(output.getvalue()), sock
+
+
     def test_oil_life_plan_is_one_exact_padded_read_without_io(self):
         with mock.patch.object(support.can_runtime_route, "acquire_armed_bus_route") as arm, \
                 mock.patch.object(support.can_handoff, "active_turn") as turn, \
@@ -65,6 +120,7 @@ class TemperatureSupportTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             support.decode_reply(0x1234, frame("04 62 12 34 11"))
 
+
     def test_plan_never_acquires_a_route_or_opens_can(self):
         with mock.patch.object(support.can_runtime_route, "acquire_armed_bus_route") as arm, \
                 mock.patch.object(support.socket, "socket") as sock, \
@@ -100,69 +156,24 @@ class TemperatureSupportTests(unittest.TestCase):
             for profile in ("temperature", "oil-life")
             for failed, restored in ((False, True), (True, True), (False, False))
         ):
-            with self.subTest(gate_failed=gate_failed, restored=restored), tempfile.TemporaryDirectory() as tmp:
-                events = []
-
-                @contextmanager
-                def handoff(bus):
-                    self.assertEqual(bus, "c-can")
-                    events.append("handoff_enter")
-                    try:
-                        yield
-                    finally:
-                        events.append("handoff_exit")
-
-                owner = mock.Mock()
-                owner.route.channel = "can7"
-
-                def acquire(*args, **kwargs):
-                    self.assertEqual(events, ["handoff_enter"])
-                    events.append("arm")
-                    return owner
-
-                def release():
-                    events.append("restore")
-                    return restored
-
-                owner.release.side_effect = release
-                sock = mock.MagicMock()
-                sock.__enter__.return_value = sock
-                sock.send.return_value = 16
-                sock.recv.side_effect = ([frame("04 62 21 85 11")] if profile == "oil-life"
-                                        else [frame("03 7F 22 12"), frame("04 62 06 9F A0")])
-                with (
-                    mock.patch.object(support, "REPO", Path(tmp)),
-                    mock.patch.object(support.can_handoff, "active_turn", side_effect=handoff),
-                    mock.patch.object(support.can_runtime_route, "acquire_armed_bus_route", side_effect=acquire),
-                    mock.patch.object(support.can_runtime_route, "revalidate_bus_route"),
-                    mock.patch.object(support.can_runtime_route, "_is_exact_armed_state", return_value=True),
-                    mock.patch.object(support.diagnostic_safety, "validate_channel_lock"),
-                    mock.patch.object(support.canbus, "interface_state"),
-                    mock.patch.object(support.can_operation_state, "active_inhibits", return_value=[]),
-                    mock.patch.object(support.can_operation_state, "load_topology", return_value=SimpleNamespace(
-                        usable=True, bus="c-can", pair="6/14")),
-                    mock.patch.object(support, "vehicle_gate", return_value=["engine started"] if gate_failed else []),
-                    mock.patch.object(support.socket, "socket", return_value=sock),
-                    mock.patch.object(support.time, "sleep"),
-                    mock.patch("sys.stdout", new_callable=io.StringIO) as output,
-                ):
-                    result = support.main(["--profile", profile, "--execute",
-                                           "--confirm-parked-ignition-on-engine-off"])
-                owner.release.assert_called_once()
-                self.assertEqual(events, ["handoff_enter", "arm", "restore", "handoff_exit"])
+            with self.subTest(profile=profile, gate_failed=gate_failed, restored=restored):
+                replies = ([frame("04 62 21 85 11")] if profile == "oil-life" else
+                           [frame("03 7F 22 12"), frame("04 62 06 9F A0")])
+                gates = [["engine started"]] if gate_failed else None
+                result, report, sock = self.run_live_scenario(
+                    profile, replies, vehicle_gates=gates, restored=restored)
                 self.assertEqual(result, 0 if restored and not gate_failed else 1)
-                expected_count = 1 if profile == "oil-life" else 2
+                expected_count = {"oil-life": 1, "temperature": 2}[profile]
                 self.assertEqual(sock.send.call_count, 0 if gate_failed else expected_count)
                 if not gate_failed:
                     sent = [support.struct.unpack(support.pcm.CAN_FRAME_FORMAT, c.args[0])[2]
                             for c in sock.send.call_args_list]
                     if profile == "oil-life":
                         self.assertEqual(sent, [bytes.fromhex("03 22 21 85 00 00 00 00")])
-                        report = json.loads(output.getvalue())
                         self.assertEqual(report["results"][0]["value_percent"], 17)
                         self.assertIn("oil-life-support-", report["report_path"])
                     else:
                         self.assertEqual(sent, [bytes.fromhex("03 22 F4 5C 00 00 00 00"),
                                                 bytes.fromhex("03 22 06 9F 00 00 00 00")])
-                        self.assertEqual([r["status"] for r in json.loads(output.getvalue())["results"]],
+                        self.assertEqual([r["status"] for r in report["results"]],
                                          ["negative_response", "positive"])

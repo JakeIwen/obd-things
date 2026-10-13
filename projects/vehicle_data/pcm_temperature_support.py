@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Parked fixed PCM temperature or oil-life support check; dry-run by default.
+"""Parked fixed PCM support checks; dry-run by default.
 
 At most two padded physical SingleFrame requests, no retry, session control,
 TesterPresent, wake, or ISO-TP FlowControl. Uses the reviewed role owner and
@@ -22,12 +22,14 @@ REPO = Path(__file__).resolve().parents[2]
 from lib import can_handoff, can_operation_state, can_runtime_route, canbus, diagnostic_safety
 from lib.modules import MODULES
 from projects.vehicle_data import ccan_powertrain, pcm_electrical as pcm
+from projects.vehicle_data import pcm_support_profiles as profiles
 from tools.ecu_discover import prearm_conflict_errors
 from tools.passive_drive_capture import atomic_write_json
 
-CHECK_DIDS = (0xF45C, 0x069F)
-CHECK_PROFILES = {"temperature": CHECK_DIDS, "oil-life": (0x2185,)}
+CHECK_DIDS = profiles.TEMPERATURE_DIDS
+CHECK_PROFILES = profiles.CHECK_PROFILES
 TIMEOUT_SECONDS = 0.75
+decode_reply = profiles.decode_reply
 
 
 def stationary_errors(snapshot) -> list[str]:
@@ -49,35 +51,6 @@ def vehicle_gate(route) -> list[str]:
     ))
 
 
-def decode_reply(did: int, frame: bytes) -> dict:
-    if did not in (*CHECK_DIDS, 0x2185):
-        raise ValueError("DID is outside the fixed support-check profiles")
-    if len(frame) != pcm.CAN_FRAME_SIZE:
-        raise ValueError("malformed SocketCAN response length")
-    can_id, dlc, padded = struct.unpack(pcm.CAN_FRAME_FORMAT, frame)
-    if can_id != (pcm.CAN_EFF_FLAG | MODULES["pcm"].rxid) or not 1 <= dlc <= 8:
-        raise ValueError("wrong PCM response identity, flags, or DLC")
-    length = padded[0]
-    if length not in (3, 4) or dlc < length + 1:
-        raise ValueError("response must be a complete SingleFrame; no FlowControl sent")
-    payload = padded[1:1 + length]
-    if length == 3 and payload[:2] == b"\x7f\x22":
-        return {"status": "negative_response", "nrc": f"{payload[2]:02X}",
-                "response_hex": payload.hex(" ").upper()}
-    if payload[:3] != bytes((0x62, did >> 8, did & 255)) or length != 4:
-        raise ValueError("response does not match the exact requested DID and one-byte shape")
-    if did == 0x2185:
-        if payload[3] > 100:
-            raise ValueError("oil-life byte is outside 0..100 percent; not clamped")
-        return {"status": "positive", "response_hex": payload.hex(" ").upper(),
-                "raw": payload[3], "value_percent": payload[3],
-                "scale_basis": "observed_alfa_scale"}
-    value_c = payload[3] - (64 if did == 0x069F else 40)
-    return {"status": "positive", "response_hex": payload.hex(" ").upper(),
-            "raw": payload[3], "value_c": value_c, "value_f": value_c * 1.8 + 32,
-            "scale_basis": "observed_alfa_scale" if did == 0x069F else "standardized_candidate"}
-
-
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=tuple(CHECK_PROFILES), default="temperature")
@@ -85,13 +58,7 @@ def main(argv=None) -> int:
     parser.add_argument("--confirm-parked-ignition-on-engine-off", action="store_true")
     args = parser.parse_args(argv)
     dids = CHECK_PROFILES[args.profile]
-    plan = {"profile": args.profile, "module": "pcm", "bus": "c-can", "pair": "6/14",
-            "request_id": "18DA10F1", "response_id": "18DAF110",
-            "requests": [bytes((3, 0x22, did >> 8, did & 255, 0, 0, 0, 0)).hex(" ").upper()
-                         for did in dids],
-            "maximum_requests": len(dids), "timeout_seconds": TIMEOUT_SECONDS,
-            "retries": 0, "session_change": False, "flow_control": False,
-            "handoff_wait_seconds": can_handoff.ACTIVE_WAIT_SECONDS}
+    plan = profiles.build_plan(args.profile, TIMEOUT_SECONDS, can_handoff.ACTIVE_WAIT_SECONDS)
     if not args.execute:
         print(json.dumps({"dry_run": True, **plan}, indent=2))
         return 0
@@ -135,7 +102,7 @@ def main(argv=None) -> int:
                         ) or can_operation_state.active_inhibits(owner.route.channel)
                             or not topology.usable or topology.bus != "c-can" or topology.pair != "6/14"):
                             raise RuntimeError("pre-send vehicle/interface/topology gate failed: " + "; ".join(errors))
-                        request = bytes((3, 0x22, did >> 8, did & 255, 0, 0, 0, 0))
+                        request = profiles.request_bytes(did)
                         row = {"did": f"{did:04X}", "request_hex": request.hex(" ").upper(),
                                "attempted_at": datetime.now(timezone.utc).isoformat()}
                         report["results"].append(row)
