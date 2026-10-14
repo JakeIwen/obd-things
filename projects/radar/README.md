@@ -91,8 +91,13 @@ contains 85 complete replies in two sampled chunks at 10.107–11.149-second
 request intervals alongside PCM telemetry. See the
 [dashboard/ACC mapping outlook](findings/2026-09-22_acc_and_dashboard_mapping_outlook.md)
 for provenance, remaining dashboard gaps, and the read-only ACC settings plan.
-Set speed, selected gap, engagement state, and lead-vehicle data are separate
-mapping work; alignment readings do not expose them. Unlike the historical
+Set speed, selected gap, engagement state and the lead-vehicle icon were
+mapped separately from alignment in the September 27–28 owner-referenced
+drives. The [October 14 owner video](findings/2026-10-14_acc_distance_video.md)
+independently confirms all four distance bars with and without a lead icon;
+the existing telemetry decoder needs no correction. That finding includes
+the byte table, video/CAN timing limits and regression fixture. Actual lead
+range and relative speed remain unmapped. Unlike the historical
 viewer, it does not change diagnostic session or send TesterPresent. See the
 vehicle-data README's radar deployment section and the DID map for provenance.
 

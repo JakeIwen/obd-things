@@ -256,6 +256,16 @@ the permanent CAN-CH role remains the documented route.
 | `0x1F7` | bytes4–5 BE u16 | `raw / 2 rpm` | **transmission turbine/input speed**, exact-linked to TCM DID `2102` and its labeled Alfa gauge | ignition ON / running | **observed Alfa scale; receive-only telemetry allowlisted**. Initial 248-sample fit R² 0.99999024; independent blind whole-leg recovery used 2,014 samples, full coverage, rank 4, R² 0.99996705, and the expected approximately `×2` raw relationship; [loaded evidence](../projects/ecu_mapping/findings/promaster_2022/2026-07-27_tcm_plots_loaded_drive_mapping.md), [blind benchmark](../projects/ecu_mapping/findings/promaster_2022/2026-07-28_signal_field_engine_benchmark.md) |
 | signature set | — | — | C-CAN identity guard: `0x100 101 103 104 10F 110 116 0EA 0EE 0FA 0FE` (+ `2EF`). `0x41A` was removed on 2026-09-24 because B-CAN also carries it (~1 Hz while driving), which misidentified B-CAN as C-CAN; see `lib/canbus.py` `CCAN_SIG` | high-rate, ignition-on & in parked wakes | used by `classify_bus()` |
 
+**ACC distance video validation (October 14):** the owner's cluster video
+independently confirms all four bars for engaged indices 6–9 with a lead-car
+icon and 10–13 without. It also confirms standby at one/four bars and
+no-lead override at four. The existing mapping is unchanged; a lead-icon
+change does not change the selected gap. See the
+[video finding](../projects/radar/findings/2026-10-14_acc_distance_video.md)
+for the exact frames, hashes, 15 regression samples and a transition-boundary
+timing caveat. The cluster's post-cancel "ACC Ready" wording corresponds to
+raw state 5 (`standby`), distinct from initial raw state 1 (`ready`).
+
 **Display capture timing (September 29):** during the historian trip-67 ACC
 observation gap, the recorder still received 263 `0x5A0` frames in
 00:01:35.582237Z–00:05:22.578330Z with maximum spacing 1.003830 s. A stale

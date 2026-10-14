@@ -363,6 +363,16 @@ and the `docs/bus-map.md` rows for `0x0E0` and `0x5A0`):
   gate on `acc.state`. The lead vehicle's range and relative speed are not in
   this frame and have not been found.
 
+The [October 14 owner-video check](../radar/findings/2026-10-14_acc_distance_video.md)
+independently confirms all four bars in both engaged families: indices 6–9
+with a lead-car icon and 10–13 without one. It also confirms retained bars
+after cancellation and four bars during override. The existing decoder
+matches the video; `tests/test_acc_video_reference.py` preserves 15 labeled
+samples. The cluster's post-cancel "ACC Ready" text corresponds to API
+`standby` (remembered speed), distinct from initial raw-1 `ready`. Temporary
+popups and display latency mean a CAN setting need not be visible in every
+video frame. Unknown state/index pairs remain withheld.
+
 They are display information only: no warning, notification or safety logic
 uses them. `0x5A0` is sent at 1 Hz plus on change, and `0x0E0` trails the
 required powertrain frames within each 100 ms cycle. The old

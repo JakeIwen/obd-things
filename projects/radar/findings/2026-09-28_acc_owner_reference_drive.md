@@ -192,6 +192,11 @@ what the cluster displays. No warning, notification or safety logic uses them.
 
 ## Still open
 
+The [October 14 owner video](2026-10-14_acc_distance_video.md) independently
+replicates all four engaged distance settings in both lead/no-lead families,
+plus standby at one/four bars and no-lead override at four. It confirms the
+existing map without extending it to unseen indices.
+
 1. Indices 18–22, 30 and 33–36 have not been seen. The decoder publishes only the state for them.
 2. Ready at two to four bars (indices 3–5) and fixed cruise were each seen on one drive.
 3. Lead-vehicle range and relative speed are still not found on C-CAN or CAN-CH.

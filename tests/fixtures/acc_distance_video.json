@@ -1,0 +1,258 @@
+{
+  "schema_version": 1,
+  "evidence": "Manually labeled owner-video stills paired with saved C-CAN frames; stable display samples, not a per-frame synchronized replay.",
+  "video": {
+    "filename": "acc_distance.MOV",
+    "sha256": "5fcd151ff97b9b29b922c9a9b8975409ec6a1265cdbe672b4b12a394a96d3d19",
+    "metadata_start_utc": "2026-10-14T18:27:30Z",
+    "duration_seconds": 123.611667,
+    "stills_compute_job": "20261014T185947Z-c186ff1f"
+  },
+  "capture": {
+    "run": "broker-drive-20261014T180442821084",
+    "role": "c-can",
+    "physical_pair": "6/14",
+    "bitrate": 500000,
+    "recorded_interface": "can0",
+    "filename": "chunk_000002_full.candump.zst",
+    "sha256": "255d1a0ca410714c5447e040a8890a0a7aa31061d213673abb77bcde6b9f5659",
+    "can_id_hex": "5A0",
+    "id_bits": 11,
+    "dlc": 8,
+    "window_compute_job": "20261014T185043Z-30d6dc37"
+  },
+  "samples": [
+    {
+      "requested_video_seconds": 16,
+      "actual_video_seconds": 15.99,
+      "visual_observation": "one bar and lead-car icon",
+      "can_timestamp": 1792002465.929478,
+      "can_source_line": 498086,
+      "payload_hex": "2D3A6C43033C1880",
+      "expected_metrics": {
+        "acc.state": "engaged",
+        "acc.mode": "adaptive",
+        "acc.follow_distance": 1,
+        "acc.lead_vehicle": true,
+        "acc.set_speed": 67
+      }
+    },
+    {
+      "requested_video_seconds": 18,
+      "actual_video_seconds": 17.993333333333332,
+      "visual_observation": "two bars and lead-car icon",
+      "can_timestamp": 1792002467.929467,
+      "can_source_line": 503552,
+      "payload_hex": "2D3B6C43033C1C80",
+      "expected_metrics": {
+        "acc.state": "engaged",
+        "acc.mode": "adaptive",
+        "acc.follow_distance": 2,
+        "acc.lead_vehicle": true,
+        "acc.set_speed": 67
+      }
+    },
+    {
+      "requested_video_seconds": 20,
+      "actual_video_seconds": 19.995,
+      "visual_observation": "three bars and lead-car icon",
+      "can_timestamp": 1792002469.929501,
+      "can_source_line": 508998,
+      "payload_hex": "2D3C6C43033C2080",
+      "expected_metrics": {
+        "acc.state": "engaged",
+        "acc.mode": "adaptive",
+        "acc.follow_distance": 3,
+        "acc.lead_vehicle": true,
+        "acc.set_speed": 67
+      }
+    },
+    {
+      "requested_video_seconds": 24,
+      "actual_video_seconds": 23.985,
+      "visual_observation": "four bars and lead-car icon",
+      "can_timestamp": 1792002473.929479,
+      "can_source_line": 519905,
+      "payload_hex": "2D3D6C43033C2480",
+      "expected_metrics": {
+        "acc.state": "engaged",
+        "acc.mode": "adaptive",
+        "acc.follow_distance": 4,
+        "acc.lead_vehicle": true,
+        "acc.set_speed": 67
+      }
+    },
+    {
+      "requested_video_seconds": 32,
+      "actual_video_seconds": 31.996666666666666,
+      "visual_observation": "four bars; lead-car icon gone",
+      "can_timestamp": 1792002481.929272,
+      "can_source_line": 541706,
+      "payload_hex": "2D006C43033C3480",
+      "expected_metrics": {
+        "acc.state": "engaged",
+        "acc.mode": "adaptive",
+        "acc.follow_distance": 4,
+        "acc.lead_vehicle": false,
+        "acc.set_speed": 67
+      }
+    },
+    {
+      "requested_video_seconds": 48,
+      "actual_video_seconds": 47.986666666666665,
+      "visual_observation": "Adaptive Cruise Control (ACC) Off; no distance graphic",
+      "can_timestamp": 1792002497.928957,
+      "can_source_line": 585426,
+      "payload_hex": "2D350000033C0400",
+      "expected_metrics": {
+        "acc.state": "off",
+        "acc.mode": null,
+        "acc.follow_distance": null,
+        "acc.lead_vehicle": null,
+        "acc.set_speed": null
+      }
+    },
+    {
+      "requested_video_seconds": 68,
+      "actual_video_seconds": 67.99833333333333,
+      "visual_observation": "four bars; no lead-car icon",
+      "can_timestamp": 1792002517.929175,
+      "can_source_line": 640066,
+      "payload_hex": "2D415535033C3480",
+      "expected_metrics": {
+        "acc.state": "engaged",
+        "acc.mode": "adaptive",
+        "acc.follow_distance": 4,
+        "acc.lead_vehicle": false,
+        "acc.set_speed": 53
+      }
+    },
+    {
+      "requested_video_seconds": 70,
+      "actual_video_seconds": 69.985,
+      "visual_observation": "three bars; no lead-car icon",
+      "can_timestamp": 1792002519.929262,
+      "can_source_line": 645518,
+      "payload_hex": "2D005535033C3080",
+      "expected_metrics": {
+        "acc.state": "engaged",
+        "acc.mode": "adaptive",
+        "acc.follow_distance": 3,
+        "acc.lead_vehicle": false,
+        "acc.set_speed": 53
+      }
+    },
+    {
+      "requested_video_seconds": 74,
+      "actual_video_seconds": 73.99,
+      "visual_observation": "two bars; no lead-car icon",
+      "can_timestamp": 1792002523.92892,
+      "can_source_line": 656419,
+      "payload_hex": "2D3F5535033C2C80",
+      "expected_metrics": {
+        "acc.state": "engaged",
+        "acc.mode": "adaptive",
+        "acc.follow_distance": 2,
+        "acc.lead_vehicle": false,
+        "acc.set_speed": 53
+      }
+    },
+    {
+      "requested_video_seconds": 76,
+      "actual_video_seconds": 75.99333333333334,
+      "visual_observation": "one bar; no lead-car icon",
+      "can_timestamp": 1792002525.929188,
+      "can_source_line": 661866,
+      "payload_hex": "2D3E5535033C2880",
+      "expected_metrics": {
+        "acc.state": "engaged",
+        "acc.mode": "adaptive",
+        "acc.follow_distance": 1,
+        "acc.lead_vehicle": false,
+        "acc.set_speed": 53
+      }
+    },
+    {
+      "requested_video_seconds": 84,
+      "actual_video_seconds": 83.98833333333333,
+      "visual_observation": "ACC Ready; one bar; remembered 53 mph crossed out",
+      "can_timestamp": 1792002533.929369,
+      "can_source_line": 683676,
+      "payload_hex": "2D465535033C3940",
+      "expected_metrics": {
+        "acc.state": "standby",
+        "acc.mode": "adaptive",
+        "acc.follow_distance": 1,
+        "acc.lead_vehicle": null,
+        "acc.set_speed": 53
+      }
+    },
+    {
+      "requested_video_seconds": 108.5,
+      "actual_video_seconds": 108.49,
+      "visual_observation": "three bars; no lead-car icon; second increment sequence",
+      "can_timestamp": 1792002558.099842,
+      "can_source_line": 749609,
+      "payload_hex": "2D402D1C033C3080",
+      "expected_metrics": {
+        "acc.state": "engaged",
+        "acc.mode": "adaptive",
+        "acc.follow_distance": 3,
+        "acc.lead_vehicle": false,
+        "acc.set_speed": 28
+      }
+    },
+    {
+      "requested_video_seconds": 110.5,
+      "actual_video_seconds": 110.49333333333334,
+      "visual_observation": "four bars; no lead-car icon; second increment sequence",
+      "can_timestamp": 1792002560.020222,
+      "can_source_line": 754853,
+      "payload_hex": "2D412D1C033C3480",
+      "expected_metrics": {
+        "acc.state": "engaged",
+        "acc.mode": "adaptive",
+        "acc.follow_distance": 4,
+        "acc.lead_vehicle": false,
+        "acc.set_speed": 28
+      }
+    },
+    {
+      "requested_video_seconds": 112,
+      "actual_video_seconds": 111.995,
+      "visual_observation": "four bars remain while own-vehicle graphic and speed blink off",
+      "can_timestamp": 1792002561.928997,
+      "can_source_line": 760058,
+      "payload_hex": "2D4A2D1C033C6900",
+      "expected_metrics": {
+        "acc.state": "override",
+        "acc.mode": "adaptive",
+        "acc.follow_distance": 4,
+        "acc.lead_vehicle": false
+      }
+    },
+    {
+      "requested_video_seconds": 116,
+      "actual_video_seconds": 115.985,
+      "visual_observation": "ACC Ready; four bars; remembered 28 mph crossed out",
+      "can_timestamp": 1792002565.929657,
+      "can_source_line": 770975,
+      "payload_hex": "2D002D1C033C4540",
+      "expected_metrics": {
+        "acc.state": "standby",
+        "acc.mode": "adaptive",
+        "acc.follow_distance": 4,
+        "acc.lead_vehicle": null,
+        "acc.set_speed": 28
+      }
+    }
+  ],
+  "timing_caveat": {
+    "requested_video_seconds": 106,
+    "actual_video_seconds": 105.98666666666666,
+    "visible_bars": 1,
+    "can_change_video_seconds": 105.912914,
+    "new_can_index": 11,
+    "interpretation": "Transition-boundary sample: cluster still shows one bar shortly after the CAN announcement of two; metadata precision and rendering delay are not independently separated. Excluded from stable-sample assertions."
+  }
+}

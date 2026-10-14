@@ -33,8 +33,14 @@ when that file is absent.
 For remaining dashboard mappings and live ACC settings, the September 22
 [mapping assessment](projects/radar/findings/2026-09-22_acc_and_dashboard_mapping_outlook.md)
 distinguishes unpopulated raw cluster inputs from unresolved signal decodes.
-Radar alignment polling is validated; ACC set speed/state/gap and lead-object
-data remain separate mapping work. Related-platform DBCs are candidates only.
+Radar alignment polling is validated. ACC set speed/state/gap and the lead
+icon were subsequently mapped in the September 27–28 owner-referenced drives.
+The [October 14 video validation](projects/radar/findings/2026-10-14_acc_distance_video.md)
+confirms all four bars in both engaged families of `0x5A0` (indices 6–9 with
+the lead icon, 10–13 without). The existing decoder is correct; 15 reviewed
+video/raw-frame cases live in `tests/fixtures/acc_distance_video.json`, tested
+through the public decoder by `tests/test_acc_video_reference.py`. Lead range
+and relative speed remain unresolved. Related-platform DBCs are candidates only.
 
 For the owner-reported October 1 collision and subsequent radar drift, start
 with the [October 8 investigation](projects/radar/findings/2026-10-08_post_collision_alignment.md).
