@@ -359,7 +359,7 @@ tab bar, with 16 px gutters and 12 px gaps.
 
 | row | content |
 |---|---|
-| A | **SPEED** (2 cols, hero numerals, `mph`; two-line footer: `limit 55 mph` while live, then `ACC 66 mph · engaged · vehicle ahead`; regular cruise uses `Cruise`; current off/ready/standby/override states are explicit) · **RPM** (1 col; the unit is in the label; the footer reads `gear 6` once a live gear metric exists and is empty until then; 15-min sparkline) |
+| A | **SPEED** (2 cols, hero numerals, `mph`; two-line footer: `limit 55 mph` while live, then `ACC 66 mph · engaged · vehicle ahead`; a four-bar gap readout sits beside the speed numeral; regular cruise uses `Cruise`; current off/ready/standby/override states are explicit) · **RPM** (1 col; the unit is in the label; the footer reads `gear 6` once a live gear metric exists and is empty until then; 15-min sparkline) |
 | B | **COOLANT** · **TRANS OIL** · **OIL PRESSURE**: value, unit, band bar, 15-min sparkline |
 | C | **VOLTAGE** (1 decimal; sub-line `alternator 42 %`) · **POWER** (`hp`; sub-line `165 lb-ft`) · **OIL TEMP (VVT)** |
 | D | **TIRES** (2 cols: 2×2 grid FL FR / RL RR) · **TRIP** (Time, Distance `≈ 12.3 mi`, Coolant max, Avg power) |
@@ -380,6 +380,14 @@ Rules for Drive tiles:
   off/ready hides cached set speed, and `vehicle ahead` requires adaptive
   engaged/override. Standby explicitly identifies remembered set speed. All
   ACC information is display-only and cannot cause warnings.
+- A four-bar selected-gap readout sits beside the Speed numeral on page 1
+  and the ACC set-speed numeral on page 2. Bottom-to-top filled bars and a
+  `Gap 3 / 4` label show the count without relying on colour. It is not
+  interactive. Ready/standby keep the current gap in secondary text colour;
+  standby speed is explicitly saved. Fixed cruise, off, unknown/stale data
+  and a disconnected link show no bars. Lead detection remains separate text.
+  `AccDistance.jsx` shares `accDisplay.js` and its pure model across both lazy
+  pages; static SVG classes/text are signal-bound and have no animations.
 - Both Drive pages now load lazily. `DriveGauges.jsx` holds page 1's gauges and
   computed footers; `Drive.jsx` retains the registry, pager and swipe behavior.
   This makes room for ACC without expanding the boot bundle beyond its budget.
@@ -427,7 +435,7 @@ content. Page 2 ("Sensors") uses the same frame and the same no-scrolling gate.
 
   | row | content |
   |---|---|
-  | 0 | **SPEED LIMIT** (`vehicle.speed_limit` in a sign outline with `MPH` under it; `—` in a dim outline when the cluster shows none) · **ACC** (2 cols: `acc.set_speed` `66 mph`; sub-line from the `acc.state` record, then what the cluster shows beside it: `engaged · vehicle ahead · gap 4 of 4`, `standby · gap 4 of 4`, `engaged · fixed cruise`; without those records it reads `set · engaged` as before; standby dims the number; `Off` when the state is off; `—` with `ready · gap 1 of 4`, or `ready · no set speed`, in ready) |
+  | 0 | **SPEED LIMIT** (`vehicle.speed_limit` in a sign outline with `MPH` under it; `—` in a dim outline when the cluster shows none) · **ACC** (2 cols: `acc.set_speed` `66 mph`, four-bar gap graphic beside it; sub-line `engaged · vehicle ahead`, `standby · saved speed`, or `engaged · fixed cruise`; fixed mode labels the tile `Cruise`; standby dims only the saved number; `Off` when off; `—` and `ready · no set speed` before SET) |
   | A | **ALTERNATOR FIELD** (2 cols: `generator.field_duty` %, 15-min sparkline, sub-line `battery 14.0 V`) · **GEAR** (`~7` from `transmission.gear_estimate` while its record is current, else `—`; sub-line `ratio 0.70` = turbine ÷ output when the output shaft turns ≥ 100 rpm) |
   | B | **RADAR AIM** (3 cols): Horizontal and Vertical side by side. Each shows its latest angle (`+0.15°`), under it the physical reading of the elevation sign from `src/radarAim.js` (`aimed high · tilt down`, `aimed low · tilt up`, `level`; blank for azimuth), and then `1-min avg` / `5-min avg` / `30-min avg` / `2-h avg` from `status.radar_alignment` windows `"60"`/`"300"`/`"1800"`/`"7200"`; a window the broker has not published yet reads `—`. |
   | C | **TURBINE** (rpm) · **OUTPUT SHAFT** (rpm) · **POWER** (hp, sparkline) |
@@ -446,8 +454,12 @@ content. Page 2 ("Sensors") uses the same frame and the same no-scrolling gate.
 - **Data rules.** The gear estimate and the radar angles are candidate quality, so they are read
   from the metric record: current means `available && !stale`. The ACC state, mode, distance bars
   and lead-vehicle flag are `verified` but are strings, a small integer and a boolean, so they are
-  read from their records the same way. The speed limit and the set speed are `verified`
-  (owner-referenced) and use `liveValue`. The broker keeps a value until its 10 s staleness, so the
+  read from their records the same way. The speed limit uses `liveValue`.
+  `accDisplayModel` requires verified `ccan.broadcast.0x5a0` records, a live
+  connection, and exactly matching observation timestamps for the state and
+  every companion field, including set speed. This prevents a newly unmapped
+  state/index pair borrowing earlier still-fresh details. Bars must be integer
+  1–4 and mode adaptive. The broker keeps a value until its 10 s staleness, so the
   state gates everything else: `off` or `ready` hides a set speed, `vehicle ahead` shows only
   while engaged or in override, and nothing beside the state shows without a current state.
   `vehicle ahead` comes first in the sub-line, which ends in an ellipsis on a narrow tile. The

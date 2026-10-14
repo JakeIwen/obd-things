@@ -15,7 +15,7 @@ test("Speed footer gates retained fields on the current state and mode", () => {
   assert.equal(speedFooter(null, "mystery", 66, shown), "");
   assert.equal(speedFooter(null, "off", 66, shown), "ACC off");
   assert.equal(speedFooter(null, "ready", 66, shown), "ACC · ready");
-  assert.equal(speedFooter(null, "standby", 66, shown), "ACC 66 mph · standby");
+  assert.equal(speedFooter(null, "standby", 66, shown), "ACC 66 mph · standby · saved");
   assert.equal(speedFooter(null, "engaged", 65, {mode: "fixed", lead: true}), "Cruise 65 mph · engaged");
   assert.equal(speedFooter(null, "engaged", null, shown), "ACC · engaged · vehicle ahead");
 });

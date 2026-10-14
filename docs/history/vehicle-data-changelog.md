@@ -1,7 +1,33 @@
 # Vehicle-data changelog
 
-Verbatim sections from `projects/vehicle_data/README.md`; relative links and
-above/below references retain their original source-file context.
+Deployment notes and archived sections from `projects/vehicle_data/README.md`.
+Relative links and above/below references in the older sections retain their
+original source-file context.
+
+### ACC selected-distance display (2026-10-14)
+
+Deployed dashboard build `95b0a09e5ec3` to both port-8765 listeners. A passive
+four-bar `Gap n / 4` readout sits beside Speed on Drive page 1 and ACC set speed
+on page 2. The lead-vehicle text remains separate; standby keeps the selected
+gap and identifies the saved speed. Fixed cruise is labeled `Cruise` and shows
+no gap. Both pages reject stale, disconnected, unverified or older-frame details.
+Phone status text wraps without clipping the lead indication.
+
+`dashboard-test-build` job `20261014T222542Z-70cb78a5`: 480 tests passed,
+78,847-byte core, all bundle budgets passed. Twenty-two browser checks passed
+across the bar counts and state/freshness cases, at 800×1096, 800×1280,
+1280×800 and 390×844. Screenshots and verification scripts are under
+`tmp/playwright/acc-distance-ui/`; test/build and HTTP evidence are under
+`tmp/vehicle_data/acc-distance-ui/`.
+
+Both listeners returned the new build, matching JS/CSS hashes, updated caveats
+and working `/v1/snapshot` responses. Broker/listener PIDs, active state and
+restart counts were unchanged. Assets were published before entry pages, with
+old hashed assets retained for open tabs. Rollback files are in
+`tmp/vehicle_data/acc-distance-ui/dashboard-before-20261014T222613Z.tar.gz`.
+Browser scenarios used private in-memory fixtures; no synthetic readings were
+sent to the broker. A natural-drive observation of the new UI remains separate
+from this parked deployment check.
 
 ### Fixes deployed during the dashboard build (2026-09-24 → 09-27)
 

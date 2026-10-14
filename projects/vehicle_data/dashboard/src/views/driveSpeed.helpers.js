@@ -9,7 +9,7 @@ export function speedFooter(limit, state, setSpeed, shown) {
   else if (acc.sub) {
     const label = shown && shown.mode === "fixed" ? "Cruise" : "ACC";
     const speed = acc.unit ? " " + acc.value + " " + acc.unit : "";
-    const status = state === "override" ? "override" : state;
+    const status = state === "override" ? "override" : state === "standby" ? "standby · saved" : state;
     const ahead = shown && shown.mode === "adaptive" && shown.lead === true &&
       (state === "engaged" || state === "override") ? " · vehicle ahead" : "";
     lines.push(label + speed + " · " + status + ahead);

@@ -126,14 +126,12 @@ export const ACC_STATE_WORDS = Object.freeze({
   ready: "ready",
   engaged: "engaged",
   override: "accelerator override",
-  standby: "standby",
+  standby: "standby · saved speed",
 });
 
 /**
- * What the cluster shows beside the ACC state, as sub-line parts: `vehicle ahead` first (it is
- * what changes while driving), then `gap 3 of 4`, or `fixed cruise`. The broker keeps each value
- * until it goes stale, so every part is gated on the state that shows it: a vehicle ahead only
- * while engaged or in override, a gap in every adaptive state, nothing without a state.
+ * Text beside the state. The distance setting has its own four-bar graphic;
+ * the lead-vehicle indication appears only during adaptive engagement/override.
  * @param {string|null} st a state with a word in `ACC_STATE_WORDS`, or null
  * @param {{mode?: string|null, bars?: number|null, lead?: boolean|null}|null|undefined} shown
  *   current `acc.mode`, `acc.follow_distance` and `acc.lead_vehicle` record values
@@ -145,7 +143,6 @@ export function accShownParts(st, shown) {
   if (shown.mode !== "adaptive") return [];
   const parts = [];
   if (shown.lead === true && (st === "engaged" || st === "override")) parts.push("vehicle ahead");
-  if (isNum(shown.bars) && shown.bars >= 1 && shown.bars <= 4) parts.push("gap " + Math.round(shown.bars) + " of 4");
   return parts;
 }
 
@@ -170,7 +167,7 @@ export function accTileModel(state, setSpeed, shown) {
   return {
     value: String(Math.round(setSpeed)),
     unit: "mph",
-    sub: st ? sub(extra.length ? ACC_STATE_WORDS[st] : "set · " + ACC_STATE_WORDS[st]) : "set speed",
+    sub: sub(ACC_STATE_WORDS[st]),
     kind: st === "standby" ? "held" : "live",
   };
 }

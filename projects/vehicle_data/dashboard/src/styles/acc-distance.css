@@ -1,0 +1,44 @@
+.acc-distance {
+  flex: 0 0 68px;
+  align-self: center;
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.2;
+  letter-spacing: 0;
+  font-weight: 500;
+}
+.acc-distance[hidden] { display: none; }
+.acc-distance__graphic { width: 60px; height: 36px; }
+.acc-distance__bar { fill: none; stroke: var(--line-strong); stroke-width: 1; }
+.acc-distance__bar--selected { fill: currentColor; stroke: currentColor; }
+.acc-distance__count { white-space: nowrap; }
+.acc-distance__count span { color: var(--text-2); }
+.acc-distance--saved { color: var(--text-2); }
+
+/* Keep a selected gap legible when only the remembered set speed is dimmed. */
+.area-d2acc.tile--held .tile__value { opacity: 1; }
+.area-d2acc.tile--held .tile__value > span { opacity: .55; }
+
+@media (max-width: 640px) {
+  .area-d2acc { min-height: 168px; }
+  .area-d2acc .tile__value { flex-wrap: wrap; align-content: center; }
+  .area-d2acc .tile__sub {
+    white-space: normal;
+    line-height: 18px;
+    min-height: 36px;
+    overflow: visible;
+  }
+  .area-d2acc .acc-distance {
+    flex-basis: 100%;
+    flex-direction: row;
+    justify-content: flex-start;
+    margin: 6px 0;
+    gap: 8px;
+  }
+  .area-d2acc .acc-distance__graphic { width: 40px; height: 24px; }
+}

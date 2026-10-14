@@ -372,6 +372,9 @@ samples. The cluster's post-cancel "ACC Ready" text corresponds to API
 `standby` (remembered speed), distinct from initial raw-1 `ready`. Temporary
 popups and display latency mean a CAN setting need not be visible in every
 video frame. Unknown state/index pairs remain withheld.
+The dashboard shows a four-bar `Gap n / 4` readout beside Speed on Drive
+page 1 and ACC set speed on page 2. Both use the same current observation;
+standby retains the selected gap and explicitly marks the saved speed.
 
 They are display information only: no warning, notification or safety logic
 uses them. `0x5A0` is sent at 1 Hz plus on change, and `0x0E0` trails the

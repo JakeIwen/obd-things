@@ -105,7 +105,7 @@ what they meant and where that information lives now.
   September 28 drive, where every noted event matched:
   - the state (`engaged`, `standby`, `accelerator override`, `ready`) and the `Off` value;
   - `vehicle ahead`, shown while the cluster shows its vehicle-ahead icon;
-  - `gap 3 of 4`, the following-distance setting in bars;
+  - four horizontal bars with `Gap 3 / 4`, the selected following-distance setting;
   - `fixed cruise`, when regular cruise is in use instead of adaptive cruise. This was seen in
     one short episode only.
 
@@ -113,6 +113,14 @@ what they meant and where that information lives now.
   `Cruise` means fixed-speed cruise. A missing or expired state hides every
   cruise detail, even if a set speed remains cached. Off and ready hide set speed;
   standby labels it as remembered. On page 2 the standby number is also dimmed.
+  Both pages show the gap beside the speed. Filled bars count the selected
+  setting; outlines mark the remaining settings. This is a readout, not a
+  control. The bars remain in ready/standby, and disappear for fixed cruise,
+  ACC off, unavailable/expired data or a lost connection. They do not indicate
+  the actual distance to the vehicle ahead or whether it is safe to follow.
+  All four settings, with and without a lead icon, were independently checked
+  against the owner's October 14 cluster video. Cruise details must come from
+  the same current frame as the state; older cached details are withheld.
   The frame
   arrives about once a second, so the tile can take a few seconds to follow a button press or a
   vehicle moving in. `vehicle ahead` is the cluster's icon, not a distance: the van does not put
