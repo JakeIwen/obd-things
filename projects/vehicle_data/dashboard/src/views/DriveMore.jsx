@@ -13,6 +13,7 @@ import { computed } from "@preact/signals";
 import { Tile } from "../components/Tile.jsx";
 import { AccDistance } from "../components/AccDistance.jsx";
 import { currentAcc } from "../accDisplay.js";
+import { accTileModel } from "../accDisplay.helpers.js";
 import { DriveFooter } from "./DriveFooter.jsx";
 import { liveValue, obs, isHidden, dayClock } from "../app/derive.js";
 import * as store from "../store.js";
@@ -23,7 +24,6 @@ import {
   gearText,
   ratioText,
   speedLimitText,
-  accTileModel,
 } from "./driveMore.helpers.js";
 
 // Speed limit: the number the cluster's traffic-sign display shows, in a sign outline; `—` when

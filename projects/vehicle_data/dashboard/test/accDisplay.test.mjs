@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ACC_METRICS, accDisplayModel } from "../src/accDisplay.helpers.js";
+import { ACC_METRICS, accDisplayModel, accTileModel, accShownParts } from "../src/accDisplay.helpers.js";
 import { currentAcc } from "../src/accDisplay.js";
 import { connection, metricSignal } from "../src/store.js";
 
@@ -107,4 +107,58 @@ test("shared reactive presentation responds to frame changes, staleness and reco
   const distance = metricSignal(ACC_METRICS.bars);
   distance.value = { ...distance.value, stale: true };
   assert.equal(currentAcc.value.bars, null);
+});
+
+test("accTileModel: set speed with the state word; Off and ready have no number", () => {
+  assert.deepEqual(accTileModel("engaged", 66), { value: "66", unit: "mph", sub: "engaged", kind: "live" });
+  assert.deepEqual(accTileModel("override", 61), { value: "61", unit: "mph", sub: "accelerator override", kind: "live" });
+  assert.deepEqual(accTileModel("standby", 66), { value: "66", unit: "mph", sub: "standby · saved speed", kind: "held" });
+  // A cached set speed never shows once the state says off or ready.
+  assert.deepEqual(accTileModel("off", 66), { value: "Off", unit: "", sub: "", kind: "off" });
+  assert.deepEqual(accTileModel("ready", 66), { value: "—", unit: "", sub: "ready · no set speed", kind: "off" });
+  // No current state record: hide even a still-fresh cached set speed.
+  assert.deepEqual(accTileModel(null, 66), { value: "—", unit: "", sub: "", kind: "off" });
+  assert.deepEqual(accTileModel(null, null), { value: "—", unit: "", sub: "", kind: "off" });
+  assert.deepEqual(accTileModel("engaged", null), { value: "—", unit: "", sub: "engaged", kind: "off" });
+  assert.deepEqual(accTileModel("mystery", 50), { value: "—", unit: "", sub: "", kind: "off" });
+  for (const state of ["off", "ready", "engaged", "override", "standby", null]) {
+    const m = accTileModel(state, 60);
+    for (const t of [m.value, m.sub]) assert.doesNotMatch(t, /candidate|0x5a0|quality|stale/i, t);
+  }
+});
+
+test("accTileModel: lead icon stays separate from the distance graphic and fixed cruise", () => {
+  const adaptive = (bars, lead) => ({ mode: "adaptive", bars, lead });
+  // 7:44 PM: following a vehicle at four bars, set 66.
+  assert.deepEqual(accTileModel("engaged", 66, adaptive(4, true)), { value: "66", unit: "mph", sub: "engaged · vehicle ahead", kind: "live" });
+  // 7:00 PM: one bar, no vehicle.
+  assert.deepEqual(accTileModel("engaged", 73, adaptive(1, false)), { value: "73", unit: "mph", sub: "engaged", kind: "live" });
+  assert.deepEqual(accTileModel("override", 40, adaptive(4, true)), { value: "40", unit: "mph", sub: "accelerator override · vehicle ahead", kind: "live" });
+  // Standby and ready never show a lead icon; distance is drawn separately.
+  assert.deepEqual(accTileModel("standby", 61, adaptive(4, true)), { value: "61", unit: "mph", sub: "standby · saved speed", kind: "held" });
+  assert.deepEqual(accTileModel("ready", null, adaptive(1, null)), { value: "—", unit: "", sub: "ready · no set speed", kind: "off" });
+  // 7:05 PM: regular cruise on, set 65, cancel.
+  const fixed = { mode: "fixed", bars: 3, lead: true };
+  assert.deepEqual(accTileModel("ready", null, fixed), { value: "—", unit: "", sub: "ready · fixed cruise", kind: "off" });
+  assert.deepEqual(accTileModel("engaged", 65, fixed), { value: "65", unit: "mph", sub: "engaged · fixed cruise", kind: "live" });
+  assert.deepEqual(accTileModel("standby", 65, fixed), { value: "65", unit: "mph", sub: "standby · saved speed · fixed cruise", kind: "held" });
+  // Off hides everything, whatever is still cached.
+  assert.deepEqual(accTileModel("off", 65, fixed), { value: "Off", unit: "", sub: "", kind: "off" });
+  assert.deepEqual(accTileModel("off", 66, adaptive(4, true)), { value: "Off", unit: "", sub: "", kind: "off" });
+  // Missing mode details still retain a known cruise state.
+  for (const shown of [null, undefined, {}, { mode: null, bars: null, lead: null }, { mode: "mystery", bars: 2, lead: true }]) {
+    assert.deepEqual(accTileModel("engaged", 66, shown), { value: "66", unit: "mph", sub: "engaged", kind: "live" });
+    assert.deepEqual(accTileModel("ready", 66, shown), { value: "—", unit: "", sub: "ready · no set speed", kind: "off" });
+  }
+  assert.deepEqual(accTileModel("engaged", 66, adaptive(7, false)), { value: "66", unit: "mph", sub: "engaged", kind: "live" }, "distance is not repeated in the status text");
+  assert.deepEqual(accTileModel("engaged", 66, adaptive(null, true)), { value: "66", unit: "mph", sub: "engaged · vehicle ahead", kind: "live" });
+  // Without a current state nothing beside it is shown either.
+  assert.deepEqual(accTileModel(null, 66, adaptive(4, true)), { value: "—", unit: "", sub: "", kind: "off" });
+  assert.deepEqual(accShownParts("engaged", adaptive(2, true)), ["vehicle ahead"]);
+  assert.deepEqual(accShownParts(null, adaptive(2, true)), []);
+  for (const st of ["ready", "engaged", "override", "standby"]) {
+    for (const shown of [adaptive(3, true), fixed]) {
+      assert.doesNotMatch(accTileModel(st, 60, shown).sub, /candidate|0x5a0|quality|stale|index|hud/i);
+    }
+  }
 });

@@ -1,4 +1,4 @@
-import { accTileModel } from "./driveMore.helpers.js";
+import { accTileModel } from "../accDisplay.helpers.js";
 
 /** Two short lines in the existing Speed footer; display information only. */
 export function speedFooter(limit, state, setSpeed, shown) {

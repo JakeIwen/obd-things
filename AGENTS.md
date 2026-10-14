@@ -70,7 +70,8 @@ Dashboard warning state/headings live in `dashboard/src/warningContext.js`;
 formatted cards are lazy in `dashboard/src/app/warningCards.js`, and System
 vehicle-state text lives in `dashboard/src/views/systemVehicle.helpers.js`.
 ACC presentation on both Drive pages shares `dashboard/src/accDisplay.js`
-and its pure `accDisplay.helpers.js` model. Details must be verified, current
+and its pure `accDisplay.helpers.js` model, state vocabulary and text formatters.
+Details must be verified, current
 and timestamp-matched to the state from the same `0x5A0` observation.
 `components/AccDistance.jsx` and `styles/acc-distance.css` render the selected
 one-to-four-bar gap independently of the lead-vehicle text; they are display-only.

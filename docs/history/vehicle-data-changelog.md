@@ -29,6 +29,13 @@ Browser scenarios used private in-memory fixtures; no synthetic readings were
 sent to the broker. A natural-drive observation of the new UI remains separate
 from this parked deployment check.
 
+The same-day code-quality review produced build `07a042c4fe24`: non-string
+ACC states are rejected, pure ACC validation/formatting share one module, and
+each SVG bar owns its reactive hook. Behavior and structural fixes are separate
+commits. Final job `20261014T223707Z-563a43e7` passed 481 tests; 23 browser checks
+passed with unchanged valid-data layout. Follow-up evidence and the rollback
+archive for `95b0a09e5ec3` are under `tmp/vehicle_data/acc-distance-ui-review/`.
+
 ### Fixes deployed during the dashboard build (2026-09-24 → 09-27)
 
 - `lib/canbus.py`: `CCAN_SIG` no longer contains `0x41A` (B-CAN carries it at
