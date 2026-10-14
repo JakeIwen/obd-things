@@ -51,6 +51,16 @@ test("off, fixed cruise, unknown states and connection loss cannot show an adapt
   }
 });
 
+test("state values must be strings, even when property-key coercion names a known state", () => {
+  for (const state of [["engaged"], ["standby"], { value: "engaged" }, true, 2]) {
+    const display = accDisplayModel(records({ state }), "live");
+    assert.equal(display.state, null);
+    assert.equal(display.bars, null);
+    assert.equal(display.lead, null);
+    assert.equal(display.setSpeed, null);
+  }
+});
+
 test("stale, unverified, missing or invalid distance records never turn into a bar count", () => {
   for (const patch of [
     { stale: true }, { available: false }, { quality: "candidate" }, { source: "other" },

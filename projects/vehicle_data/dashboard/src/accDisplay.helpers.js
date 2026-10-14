@@ -16,7 +16,7 @@ export function accDisplayModel(records, connectionState) {
       !stateRecord.observed_at) return EMPTY;
   const state = stateRecord.value;
   if (state === "off") return { ...EMPTY, state };
-  if (!Object.prototype.hasOwnProperty.call(ACC_STATE_WORDS, state)) return EMPTY;
+  if (typeof state !== "string" || !Object.prototype.hasOwnProperty.call(ACC_STATE_WORDS, state)) return EMPTY;
   const read = (key, type) => {
     const record = records[ACC_METRICS[key]];
     return fresh(record) && record.observed_at === stateRecord.observed_at &&
