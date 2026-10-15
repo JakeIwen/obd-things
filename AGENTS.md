@@ -73,6 +73,8 @@ ACC presentation on both Drive pages shares `dashboard/src/accDisplay.js`
 and its pure `accDisplay.helpers.js` model, state vocabulary and text formatters.
 Details must be verified, current
 and timestamp-matched to the state from the same `0x5A0` observation.
+Speeding colour and chime: `dashboard/src/overspeed.helpers.js` (pure rule),
+`overspeed.js` (shared signal and app-wide chime effect) and `chime.js` (Web Audio).
 `components/AccDistance.jsx` and `styles/acc-distance.css` render the selected
 one-to-four-bar gap and, above it, the cluster's vehicle-ahead car icon; they are
 display-only.

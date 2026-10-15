@@ -99,6 +99,15 @@ what they meant and where that information lives now.
   one, or keep the previous road's limit. It was checked against the cluster on a September 27
   drive (every noted change matched). The cluster sends 0 when it shows no limit, and the tile
   then reads `—`.
+- **Speeding colour and chime**: more than 15 % over the speed limit (strictly; 63.3 mph in a 55)
+  turns Speed's number and the limit sign soft red. Both readings must be current; when the limit
+  goes stale the tile shows `—` and nothing is red. Once that has held without a break for five
+  seconds, the dashboard plays one warning chime. It does not repeat while you stay over; it plays
+  again after a new speed limit (five more seconds over the new one) or after you have been back
+  under the threshold for at least five seconds. The browser allows sound only after the screen
+  has been tapped once since the page loaded, so after a reload the first chime is silent until
+  then. It uses the cluster's camera-read limit, so a misread sign gives a wrong colour or chime.
+  Display information only; it never drives a warning.
 - **ACC** (under Speed on Drive page 1, with the full tile on page 2): the adaptive-cruise set speed from the cluster frame `0x5A0` (byte 3 in
   mph, cross-checked against byte 2 in km/h), checked against the cluster display on the same
   drive. The words under it come from the same frame and were checked against the cluster on a

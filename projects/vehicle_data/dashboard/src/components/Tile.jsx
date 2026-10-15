@@ -42,17 +42,19 @@ export function BandBar({ name }) {
  * A metric tile.
  * @param {{name: string, label: string, area?: string, size?: 'hero'|'large'|'value',
  *          band?: boolean, spark?: boolean, sub?: import('@preact/signals').ReadonlySignal<string>,
- *          extra?: any, onClick?: Function, decimals?: number, showUnit?: boolean}} props
+ *          extra?: any, onClick?: Function, decimals?: number, showUnit?: boolean,
+ *          overspeed?: import('@preact/signals').ReadonlySignal<boolean>}} props
  *   `sub` is an optional live sub-line (e.g. alternator duty); when the value is
- *   held, the held time stamp replaces it.
+ *   held, the held time stamp replaces it. `overspeed` tints the value soft red while true.
  */
-export function Tile({ name, label, area, size = "value", band = false, spark = false, sub, extra, onClick, decimals, showUnit = true }) {
+export function Tile({ name, label, area, size = "value", band = false, spark = false, sub, extra, onClick, decimals, showUnit = true, overspeed }) {
   const m = tileModel(name, decimals === undefined ? undefined : { decimals });
   const cls = useComputed(() => {
     let c = "tile tile--" + size + " tile--" + m.kind.value;
     if (area) c += " area-" + area;
     const colour = m.colour.value;
     if (colour) c += " tile--" + colour;
+    if (overspeed && overspeed.value) c += " tile--overspeed";
     return c;
   });
   const subText = useComputed(() => {

@@ -13,6 +13,7 @@ import { computed } from "@preact/signals";
 import { Tile } from "../components/Tile.jsx";
 import { AccDistance } from "../components/AccDistance.jsx";
 import { currentAcc } from "../accDisplay.js";
+import { overspeed } from "../overspeed.js";
 import { accTileModel } from "../accDisplay.helpers.js";
 import { DriveFooter } from "./DriveFooter.jsx";
 import { liveValue, obs, isHidden, dayClock } from "../app/derive.js";
@@ -30,7 +31,8 @@ import {
 // it shows none (the broker publishes nothing for the frame's 0, so the record goes stale).
 const limit = computed(() => speedLimitText(liveValue("vehicle.speed_limit").value));
 const limitOn = computed(() => limit.value !== DASH);
-const limitCls = computed(() => "tile area-d2limit " + (limitOn.value ? "tile--live" : "tile--off"));
+const limitCls = computed(() => "tile area-d2limit " + (limitOn.value ? "tile--live" : "tile--off") +
+  (overspeed.value ? " tile--overspeed" : ""));
 const limitUnit = computed(() => (limitOn.value ? "mph" : ""));
 
 function LimitTile() {

@@ -18,6 +18,7 @@
   --red-bg: #2c1a18;
   --green: #5fd39a;
   --blue: #6fb7ff;
+  --overspeed: #ff958a;
   --band-ok: #52665f;
   --hero: clamp(64px, 11vh, 128px);
   --large: clamp(40px, 6.2vh, 72px);
@@ -213,6 +214,10 @@ a { color: var(--blue); }
 .drive2-limit__value { font-weight: 700; letter-spacing: -.02em; white-space: nowrap; }
 .drive2-limit__unit { font-size: 13px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--text-2); }
 .tile--off .drive2-limit__sign { border-color: var(--line-strong); color: var(--dim); }
+/* More than 15 % over the limit (src/overspeed.js): Speed's number and the limit sign turn soft red. */
+.tile--overspeed .tile__value > span, .tile--overspeed .drive2-limit__sign,
+.tile--overspeed .drive2-limit__unit { color: var(--overspeed); }
+.tile--overspeed .drive2-limit__sign { border-color: var(--overspeed); }
 
 .drive2-radar__axes { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 24px; align-content: center; }
 .drive2-radar__axis { display: flex; flex-direction: column; justify-content: center; min-width: 0; }
@@ -636,7 +641,7 @@ a { color: var(--blue); }
 }
 
 /* ---------- night dim (per device, top-bar toggle) ---------- */
-:root.dim { --text: #aab6b1; --text-2: #7f8b87; --dim: #5d6864; --band-ok: #3a4843; --line: #1d2826; --line-strong: #2a3632; }
+:root.dim { --overspeed: #c97a71; --text: #aab6b1; --text-2: #7f8b87; --dim: #5d6864; --band-ok: #3a4843; --line: #1d2826; --line-strong: #2a3632; }
 :root.dim .tile__value, :root.dim .reading { opacity: .85; }
 
 /* ---------- Health view (src/views/Health.jsx, src/components/DtcScan.jsx) — every class is .health-* ----------

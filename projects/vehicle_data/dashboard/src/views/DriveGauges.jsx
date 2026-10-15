@@ -3,6 +3,7 @@ import { Tile } from "../components/Tile.jsx";
 import { TireGrid } from "../components/TireGrid.jsx";
 import { AccDistance } from "../components/AccDistance.jsx";
 import { currentAcc } from "../accDisplay.js";
+import { overspeed } from "../overspeed.js";
 import { DriveFooter } from "./DriveFooter.jsx";
 import { liveValue, isHidden, minuteClock, engineRunning } from "../app/derive.js";
 import { tripDistanceMiles } from "../app/rings.js";
@@ -87,7 +88,7 @@ export default function DriveGauges({ page, onPageChange }) {
   return (
     <>
       <div class="drive">
-        {show("speed") && <Tile name="vehicle.speed" label="Speed" area="speed" size="hero" sub={speedSub} extra={<AccDistance />} />}
+        {show("speed") && <Tile name="vehicle.speed" label="Speed" area="speed" size="hero" sub={speedSub} extra={<AccDistance />} overspeed={overspeed} />}
         {show("rpm") && <Tile name="engine.rpm" label="RPM" area="rpm" size="large" sub={rpmSub} spark showUnit={false} />}
         {show("coolant") && <Tile name="engine.coolant_temperature" label="Coolant" area="coolant" band spark />}
         {show("trans") && <Tile name="transmission.oil_temperature" label="Trans oil" area="trans" band spark />}

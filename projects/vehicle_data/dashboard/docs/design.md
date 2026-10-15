@@ -392,6 +392,13 @@ Rules for Drive tiles:
   `vehicle ahead` status text remains as well.
   `AccDistance.jsx` shares `accDisplay.js` and its pure model across both lazy
   pages; static SVG classes/text are signal-bound and have no animations.
+- Speeding (`src/overspeed.helpers.js` rule, `src/overspeed.js` signals and
+  background effect, `src/chime.js` Web Audio): above 115 % of a current
+  `vehicle.speed_limit`, Speed (page 1) and Speed limit (page 2) get
+  `tile--overspeed`, which tints the number, unit and sign `--overspeed` (soft
+  red, dimmer at night). After five continuous seconds, one synthesised chime
+  plays, whichever view is open; a different limit starts a new episode, and
+  dips under five seconds after a chime do not. Audio unlocks on the first tap.
 - Both Drive pages now load lazily. `DriveGauges.jsx` holds page 1's gauges and
   computed footers; `Drive.jsx` retains the registry, pager and swipe behavior.
   This makes room for ACC without expanding the boot bundle beyond its budget.

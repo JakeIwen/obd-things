@@ -12,6 +12,7 @@ import { createLink } from "./link.js";
 import { startRings } from "./app/rings.js";
 import { App } from "./app/App.jsx";
 import { runtime } from "./app/runtime.js";
+import { startOverspeedChime } from "./overspeed.js";
 
 const link = createLink({
   fetch: (url, init) => fetch(url, init),
@@ -25,6 +26,7 @@ const link = createLink({
 
 runtime.link = link;
 startRings();
+startOverspeedChime();
 
 const root = document.getElementById("app");
 root.textContent = "";

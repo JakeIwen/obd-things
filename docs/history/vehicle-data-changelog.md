@@ -4,6 +4,20 @@ Deployment notes and archived sections from `projects/vehicle_data/README.md`.
 Relative links and above/below references in the older sections retain their
 original source-file context.
 
+### Speeding colour and chime (2026-10-14)
+
+Deployed dashboard build `6197d03e445a` to both port-8765 listeners. More than
+15 % over a current cluster speed limit tints Speed (page 1) and the limit sign
+(page 2) soft red; after five continuous seconds one Web Audio chime plays,
+app-wide. It chimes again only after a different limit or a clear spell of at
+least five seconds. Audio needs one tap after each page load.
+
+`npm test`: 488 passed (six new rule tests), budgets passed, core 80,672 B.
+Chromium check with synthetic records: not red at 63/55, red at 70/55,
+one chime at 5 s, none by 12 s, another 5 s after the limit changed to 45, not
+red with a stale limit, page-2 sign red. Script and screenshots under
+`tmp/playwright/overspeed/`.
+
 ### ACC vehicle-ahead icon (2026-10-14)
 
 Deployed dashboard build `58254ce6774b` to both port-8765 listeners. While the
