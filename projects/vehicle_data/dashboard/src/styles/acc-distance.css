@@ -1,5 +1,5 @@
 .acc-distance {
-  flex: 0 0 68px;
+  flex: 0 0 80px;
   align-self: center;
   margin-left: auto;
   display: flex;
@@ -13,7 +13,10 @@
   font-weight: 500;
 }
 .acc-distance[hidden] { display: none; }
-.acc-distance__graphic { width: 60px; height: 36px; }
+.acc-distance__graphic { width: 72px; height: 60px; }
+.acc-distance__lead { visibility: hidden; fill: currentColor; }
+.acc-distance__lead--on { visibility: visible; }
+.acc-distance__lead-window { fill: var(--card); }
 .acc-distance__bar { fill: none; stroke: var(--line-strong); stroke-width: 1; }
 .acc-distance__bar--selected { fill: currentColor; stroke: currentColor; }
 .acc-distance__count { white-space: nowrap; }
@@ -40,5 +43,5 @@
     margin: 6px 0;
     gap: 8px;
   }
-  .area-d2acc .acc-distance__graphic { width: 40px; height: 24px; }
+  .area-d2acc .acc-distance__graphic { width: 40px; height: 33px; }
 }

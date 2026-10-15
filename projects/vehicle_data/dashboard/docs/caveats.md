@@ -104,7 +104,8 @@ what they meant and where that information lives now.
   drive. The words under it come from the same frame and were checked against the cluster on a
   September 28 drive, where every noted event matched:
   - the state (`engaged`, `standby`, `accelerator override`, `ready`) and the `Off` value;
-  - `vehicle ahead`, shown while the cluster shows its vehicle-ahead icon;
+  - `vehicle ahead`, shown while the cluster shows its vehicle-ahead icon, with a matching car
+    drawn above the gap bars (adaptive cruise engaged or overriding only);
   - four horizontal bars with `Gap 3 / 4`, the selected following-distance setting;
   - `fixed cruise`, when regular cruise is in use instead of adaptive cruise. This was seen in
     one short episode only.

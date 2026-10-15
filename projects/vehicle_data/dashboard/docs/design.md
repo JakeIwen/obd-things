@@ -385,7 +385,11 @@ Rules for Drive tiles:
   `Gap 3 / 4` label show the count without relying on colour. It is not
   interactive. Ready/standby keep the current gap in secondary text colour;
   standby speed is explicitly saved. Fixed cruise, off, unknown/stale data
-  and a disconnected link show no bars. Lead detection remains separate text.
+  and a disconnected link show no bars. While the cluster shows its
+  vehicle-ahead icon (adaptive engaged/override only), a filled rear-view car
+  sits above the top bar, as on the cluster, and the readout's accessible name
+  adds `vehicle ahead`; its space stays reserved so the bars never shift. The
+  `vehicle ahead` status text remains as well.
   `AccDistance.jsx` shares `accDisplay.js` and its pure model across both lazy
   pages; static SVG classes/text are signal-bound and have no animations.
 - Both Drive pages now load lazily. `DriveGauges.jsx` holds page 1's gauges and

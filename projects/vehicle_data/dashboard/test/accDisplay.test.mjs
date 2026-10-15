@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ACC_METRICS, accDisplayModel, accTileModel, accShownParts } from "../src/accDisplay.helpers.js";
+import { ACC_METRICS, accDisplayModel, accDistanceLabel, accTileModel, accShownParts } from "../src/accDisplay.helpers.js";
 import { currentAcc } from "../src/accDisplay.js";
 import { connection, metricSignal } from "../src/store.js";
 
@@ -161,4 +161,14 @@ test("accTileModel: lead icon stays separate from the distance graphic and fixed
       assert.doesNotMatch(accTileModel(st, 60, shown).sub, /candidate|0x5a0|quality|stale|index|hud/i);
     }
   }
+});
+
+test("accDistanceLabel names the vehicle-ahead icon only while the model shows it", () => {
+  assert.equal(accDistanceLabel(3, true), "Following distance: 3 of 4 bars, vehicle ahead");
+  for (const lead of [false, null]) assert.equal(accDistanceLabel(3, lead), "Following distance: 3 of 4 bars");
+  // Standby keeps the gap but the model withholds the lead icon there.
+  const standby = accDisplayModel(records({ state: "standby", bars: 2, lead: true }), "live");
+  assert.equal(accDistanceLabel(standby.bars, standby.lead), "Following distance: 2 of 4 bars");
+  const engaged = accDisplayModel(records({ bars: 2, lead: true }), "live");
+  assert.equal(accDistanceLabel(engaged.bars, engaged.lead), "Following distance: 2 of 4 bars, vehicle ahead");
 });

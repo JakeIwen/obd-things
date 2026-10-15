@@ -4,6 +4,19 @@ Deployment notes and archived sections from `projects/vehicle_data/README.md`.
 Relative links and above/below references in the older sections retain their
 original source-file context.
 
+### ACC vehicle-ahead icon (2026-10-14)
+
+Deployed dashboard build `58254ce6774b` to both port-8765 listeners. While the
+cluster shows its vehicle-ahead icon (`acc.lead_vehicle`, adaptive engaged or
+override only), a filled rear-view car sits above the gap bars on Speed (page 1)
+and the ACC tile (page 2), and the readout's accessible name adds `vehicle
+ahead`. Its space is reserved so the bars never shift; the status text is kept.
+
+`npm test`: 482 passed; build budgets passed. Twenty-six Chromium checks passed
+(icon on for engaged/override, off for ready, standby, no lead and an older
+lead record) at 800×1096, 800×1280, 1280×800 and 390×844. Screenshots and the
+check script are under `tmp/playwright/acc-lead-icon/`.
+
 ### ACC selected-distance display (2026-10-14)
 
 Deployed dashboard build `95b0a09e5ec3` to both port-8765 listeners. A passive

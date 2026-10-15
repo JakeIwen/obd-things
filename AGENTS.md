@@ -74,7 +74,8 @@ and its pure `accDisplay.helpers.js` model, state vocabulary and text formatters
 Details must be verified, current
 and timestamp-matched to the state from the same `0x5A0` observation.
 `components/AccDistance.jsx` and `styles/acc-distance.css` render the selected
-one-to-four-bar gap independently of the lead-vehicle text; they are display-only.
+one-to-four-bar gap and, above it, the cluster's vehicle-ahead car icon; they are
+display-only.
 
 Light telltales use `lighting.json` (shared source/field/metric contract),
 `lighting.py` (fixed passive decoder and metric definitions), and the existing

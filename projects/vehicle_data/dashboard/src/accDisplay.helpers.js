@@ -54,6 +54,16 @@ export function accTileModel(state, setSpeed, shown) {
   };
 }
 
+/**
+ * Accessible name of the gap graphic, which also carries the cluster's vehicle-ahead icon.
+ * @param {number|null} bars selected distance setting 1–4
+ * @param {boolean|null} lead `AccDisplay.lead` (true only while adaptive engaged/override)
+ * @returns {string}
+ */
+export function accDistanceLabel(bars, lead) {
+  return `Following distance: ${bars} of 4 bars` + (lead === true ? ", vehicle ahead" : "");
+}
+
 export const ACC_METRICS = Object.freeze({
   state: "acc.state", mode: "acc.mode", bars: "acc.follow_distance",
   lead: "acc.lead_vehicle", setSpeed: "acc.set_speed",
