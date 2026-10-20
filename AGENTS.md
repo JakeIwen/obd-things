@@ -158,6 +158,11 @@ Offline fuel-consumption catalog research lives in
 `projects/ecu_mapping/fuel_catalog.py` (`fuel-catalog-leads` compute task).
 Its raw-preserving reports do not establish vehicle support; see the
 October 12 fuel-economy finding linked from the ecu-mapping README.
+The fuel-rate source is now the C-CAN `0x2ED` broadcast (strong candidate,
+nominal `raw/512` L/h, no telemetry metric yet); start with the
+[October 14 cluster-video finding](projects/ecu_mapping/findings/promaster_2022/2026-10-14_fuel_rate_cluster_video.md).
+`tools/candump_arrays.py` (`candump-id-arrays` compute task) saves finalized
+candump logs as per-identifier numpy arrays for offline reference syncs.
 `lib.reports.require_distinct_output` protects evidence inputs from report
 destination aliases in the fuel and lighting research CLIs.
 `projects/vehicle_data/pcm_support_profiles.py` owns the fixed temperature,

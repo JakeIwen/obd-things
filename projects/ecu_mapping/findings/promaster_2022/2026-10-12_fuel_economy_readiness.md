@@ -2,6 +2,11 @@
 
 ## Result and scope
 
+> **Update 2026-10-14:** a broadcast fuel-rate source was found: C-CAN `0x2ED`,
+> nominal `raw/512` L/h, checked against the owner's cluster instant-mpg video.
+> See [the October 14 finding](2026-10-14_fuel_rate_cluster_video.md). The
+> sections below record the earlier diagnostic search and remain accurate for it.
+
 The owner requested fuel economy and trends in the telemetry dashboard. The
 offline pass did **not establish a usable gasoline fuel-consumption signal
 for this van**. The owner subsequently completed two bounded parked injector

@@ -26,14 +26,16 @@ canonical chronology of confirmed mis-mappings, incompatible profiles, recording
 project parser corrections, and the trust rules derived from them.
 
 The [October 12 fuel-economy investigation](findings/promaster_2022/2026-10-12_fuel_economy_readiness.md)
-records the catalog and installed-cluster decoder checks. No gasoline fuel
-consumption source is verified yet. `fuel_catalog.py` and the bounded
+records the catalog and installed-cluster decoder checks. `fuel_catalog.py` and the bounded
 `fuel-catalog-leads` compute task reproduce the offline candidate inventory.
 The injector follow-up identifies six pulse-width candidates and the stock
-injector. Two owner-run engine-off checks confirmed all six return four-byte
-positive replies and restore passive state. Running variation and fuel
-calibration remain open; next prepare bounded automatic evidence collection
-during ordinary driving, without required video or manual fill-up logs.
+injector; two owner-run engine-off checks confirmed four-byte positive replies.
+The [October 14 cluster-video check](findings/promaster_2022/2026-10-14_fuel_rate_cluster_video.md)
+then found the broadcast source: C-CAN `0x2ED` carries an instantaneous fuel
+rate (nominal `raw/512` L/h). It reproduces the cluster's instant mpg and Trip B
+average when scaled by about 1.13, is zero during overrun fuel cut and is
+nonzero at idle. It is a strong candidate with unverified absolute accuracy; no telemetry
+metric exists yet, and injector polling is no longer needed for a source.
 
 The [October 12 light-indicator reference](findings/promaster_2022/2026-10-12_light_indicators.md)
 records two owner-controlled manual-light cycles and the C-CAN `0x73E` green/blue

@@ -1156,6 +1156,16 @@
       "outputs": [
         "cruise-summary.json"
       ]
+    },
+    {
+      "name": "candump-id-arrays",
+      "description": "Offline: save finalized candump logs (optionally an epoch window) as per-identifier numpy arrays; no vehicle access.",
+      "profile": "can-log-batch",
+      "source_paths": ["tools/__init__.py", "lib/candump_io.py", "tools/candump_arrays.py"],
+      "minimum_inputs": 1,
+      "maximum_inputs": 16,
+      "argv": ["{source:tools/candump_arrays.py}", "{inputs}", "{arguments}", "--output", "{result:frames.npz}"],
+      "outputs": ["frames.npz"]
     }
   ]
 }
