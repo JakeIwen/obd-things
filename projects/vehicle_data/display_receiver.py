@@ -27,24 +27,45 @@ RECHECK_SECONDS = 1.0
 # Linux SO_TIMESTAMPNS_OLD; vanpi is 64-bit (two native 64-bit longs).
 SO_TIMESTAMPNS = getattr(socket, "SO_TIMESTAMPNS", 35)
 TIMESPEC = "@ll"
+SO_RXQ_OVFL = getattr(socket, "SO_RXQ_OVFL", 40)
+
+
+def _received_timestamp(ancillary):
+    for level, kind, value in ancillary:
+        if level == socket.SOL_SOCKET and kind == SO_TIMESTAMPNS:
+            if len(value) >= struct.calcsize(TIMESPEC):
+                sec, ns = struct.unpack(TIMESPEC, value[:struct.calcsize(TIMESPEC)])
+                if sec > 0 and 0 <= ns < 1_000_000_000:
+                    return sec + ns / 1_000_000_000
+    return None
+
+
+def _decode_display(can_id, data):
+    return (lighting.decode_light_observations(can_id, data)
+            if can_id == lighting.FRAME_ID else cp.decode_frame_observations(can_id, data))
 
 
 def receive_display_frames(channel, *, valid, stopped, publish,
                            socket_factory=socket.socket, monotonic=time.monotonic,
-                           wall_time=time.time):
+                           wall_time=time.time, frame_dlcs=DISPLAY_FRAME_DLCS,
+                           decode=_decode_display, lost=None):
     """Keep one filtered socket open, publishing each received frame immediately.
 
     Kernel receipt timestamps prevent a host stall or a queued frame from
     acquiring a new age. No snapshot schedule, aggregation, or sample holding
     participates in this path. ``valid`` also cooperatively yields ownership.
     """
+    notify_loss = lost if lost is not None else (lambda: None)
     sock = socket_factory(cp.AF_CAN, socket.SOCK_RAW, cp.CAN_RAW)
     try:
         sock.setsockopt(cp.SOL_CAN_RAW, cp.CAN_RAW_FILTER, b"".join(
-            struct.pack("=II", can_id, cp.FILTER_MASK) for can_id in DISPLAY_FRAME_IDS
+            struct.pack("=II", can_id, cp.FILTER_MASK) for can_id in frame_dlcs
         ))
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 64 * 1024)
         sock.setsockopt(socket.SOL_SOCKET, SO_TIMESTAMPNS, 1)
+        if lost is not None:
+            sock.setsockopt(socket.SOL_SOCKET, SO_RXQ_OVFL, 1)
+        dropped = 0
         sock.bind((channel,))
         sock.settimeout(CONTROL_SECONDS)
         while not stopped():
@@ -52,37 +73,41 @@ def receive_display_frames(channel, *, valid, stopped, publish,
                 return
             try:
                 frame, ancillary, flags, _address = sock.recvmsg(
-                    16, socket.CMSG_SPACE(struct.calcsize(TIMESPEC))
+                    16, socket.CMSG_SPACE(struct.calcsize(TIMESPEC)) + socket.CMSG_SPACE(4)
                 )
             except socket.timeout:
                 continue
             if stopped() or not valid():
                 return
             if flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC) or len(frame) != 16:
+                notify_loss()
                 continue
-            can_id, dlc, data = struct.unpack("=IB3x8s", frame)
-            if can_id not in DISPLAY_FRAME_IDS or can_id & cp.FRAME_TYPE_FLAGS:
-                continue
-            if dlc != DISPLAY_FRAME_DLCS[can_id]:
-                continue
-            received = None
             for level, kind, value in ancillary:
-                if level == socket.SOL_SOCKET and kind == SO_TIMESTAMPNS:
-                    if len(value) >= struct.calcsize(TIMESPEC):
-                        sec, ns = struct.unpack(TIMESPEC, value[:struct.calcsize(TIMESPEC)])
-                        if sec > 0 and 0 <= ns < 1_000_000_000:
-                            received = sec + ns / 1_000_000_000
+                if level == socket.SOL_SOCKET and kind == SO_RXQ_OVFL:
+                    count = struct.unpack('=I', value[:4])[0] if len(value) >= 4 else None
+                    if count != dropped:
+                        notify_loss()
+                        dropped = count
+            can_id, dlc, data = struct.unpack("=IB3x8s", frame)
+            if can_id not in frame_dlcs or can_id & cp.FRAME_TYPE_FLAGS:
+                continue
+            if dlc != frame_dlcs[can_id]:
+                notify_loss()
+                continue
+            received = _received_timestamp(ancillary)
             if received is None:
+                notify_loss()
                 continue  # No receipt evidence: never manufacture freshness.
             age = wall_time() - received
             if age < -0.05 or age > 1.0:
+                notify_loss()
                 continue  # Discard a stalled queue; wait for a current frame.
-            observations = (lighting.decode_light_observations(can_id, data[:dlc])
-                            if can_id == lighting.FRAME_ID
-                            else cp.decode_frame_observations(can_id, data[:dlc]))
+            observations = decode(can_id, data[:dlc])
             if observations:
                 publish(observations, datetime.fromtimestamp(received, timezone.utc),
                         monotonic() - max(0.0, age))
+            else:
+                notify_loss()
     finally:
         sock.close()
 

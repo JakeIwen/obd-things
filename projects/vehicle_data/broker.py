@@ -27,7 +27,8 @@ from projects.vehicle_data.radar_alignment import (
 )
 from projects.vehicle_data.radar_service_control import RadarServiceControl
 from projects.vehicle_data.metrics import METRICS, MetricDefinition
-from projects.vehicle_data.display_contract import DISPLAY_SOURCES
+from projects.vehicle_data.display_contract import DISPLAY_SOURCES, display_results
+from projects.vehicle_data.compass import METRIC as COMPASS_METRIC
 from projects.vehicle_data.receive_watch import ReceiveSilenceWatch
 from projects.vehicle_data.can_availability import CanAvailability
 from projects.vehicle_data.wake_state import wake_state_conflicts
@@ -1507,24 +1508,8 @@ class TelemetryBroker:
 
     def store_display_frame(self, observations, observed_at, observed_monotonic, mode):
         """Internal receive callback, never a caller-selectable timestamp API."""
-        results = []
-        if mode not in {"listen_only", "armed_diagnostic"}:
-            raise ValueError("invalid display receiver interface mode")
-        for observation in observations:
-            if observation.source not in DISPLAY_SOURCES & ACTIVE_DRIVE_SOURCES:
-                raise ValueError("display source is not allowlisted")
-            definition = self.definitions[observation.metric]
-            result = success(
-                metric=observation.metric, unit=observation.unit, value=observation.value,
-                source=observation.source, bus="c-can", acquisition="passive",
-                quality=observation.quality, observed_at=observed_at,
-                observed_monotonic=observed_monotonic, interface_mode=mode,
-                detail="continuous cluster frame, kernel receipt timestamp",
-            )
-            checked = self._validate_acquirer_result(observation.metric, definition, result)
-            if not checked.available:
-                raise ValueError(checked.detail)
-            results.append(result)
+        results = display_results(observations, self.definitions, observed_at,
+                                  observed_monotonic, mode, self._validate_acquirer_result)
         # All fields of an ACC frame enter the cache together. Unknown fields
         # remain governed by their existing state/age gates; none is refreshed.
         with self._lock:
@@ -1535,6 +1520,11 @@ class TelemetryBroker:
                     continue
                 self._cache[result.metric] = result
                 self.last_readings.observe(result)
+
+    def invalidate_compass(self):
+        """Keep the dated last reading, but end its live receive evidence."""
+        with self._lock:
+            self._cache.pop(COMPASS_METRIC, None)
 
     def _refresh_derived_power(self) -> None:
         """Derive ECU-estimated crankshaft horsepower from exact fresh inputs."""
@@ -3258,11 +3248,8 @@ def main(argv=None) -> int:
         last_readings=last_readings,
     )
     broker_holder["broker"] = broker
-    from projects.vehicle_data.display_receiver import DisplayReceiver
-    broker.display_receiver = DisplayReceiver(
-        interface_manager, status_reader=broker.status_response,
-        publish=broker.store_display_frame,
-    )
+    from projects.vehicle_data.display_receivers import DisplayReceivers
+    broker.display_receiver = DisplayReceivers(interface_manager, broker)
     broker.start_usb_monitor()
     if not args.no_collector:
         broker.start_collector()

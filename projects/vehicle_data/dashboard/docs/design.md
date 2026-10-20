@@ -906,3 +906,12 @@ cd /home/pi/dev/obd-things && python3 -m projects.vehicle_data.web_v2 \
 ```
 
 Record the build id from `dist/build.json` in the deployment note.
+
+### Compass letters (October 14)
+
+Both Drive footers show only N/NE/E/SE/S/SW/W/NW at the right, on the light-icons row,
+in bold monospace. `compass.json` shares the source/index/label contract. A valid last
+report remains at 70% opacity after the ten-second announcement age expires or the
+connection/receiver stops; persistence never renews the observation timestamp. No report
+means an empty indicator. The accessible name identifies last-reported values. See
+the [compass contract](../../docs/compass-display.md) for acquisition and retention details.

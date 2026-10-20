@@ -36,6 +36,7 @@
         "projects/vehicle_data/dashboard/.npmrc",
         "projects/vehicle_data/can_availability.json",
         "projects/vehicle_data/lighting.json",
+        "projects/vehicle_data/compass.json",
         "projects/vehicle_data/radar_service_alignment.json",
         "projects/vehicle_data/radar_reference.json"
       ],

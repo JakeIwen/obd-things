@@ -161,6 +161,18 @@ October 12 fuel-economy finding linked from the ecu-mapping README.
 The fuel-rate source is now the C-CAN `0x2ED` broadcast (strong candidate,
 nominal `raw/512` L/h, no telemetry metric yet); start with the
 [October 14 cluster-video finding](projects/ecu_mapping/findings/promaster_2022/2026-10-14_fuel_rate_cluster_video.md).
+Compass direction is B-CAN `0x088`, DLC 5, byte3 bits 5–3 (N/NE/E/SE/S/SW/W/NW);
+see the [owner route video](projects/ecu_mapping/findings/promaster_2022/2026-10-14_compass_direction_video.md)
+and [compass display contract](projects/vehicle_data/docs/compass-display.md).
+`compass.py`/`compass.json` own the decoder, metric and shared labels;
+`compass_receiver.py` receives continuously beside the proven B-CAN auxiliary
+owner, and `display_receivers.py` coordinates it with the C-CAN receiver.
+`display_contract.py` shares display metric definitions and pure callback
+validation; locks and cache mutation remain in the broker. The source announces
+changes only: retain the original receipt time, expire freshness after ten
+seconds, and keep stale/restored letters slightly dimmed as the owner requested.
+Frontend `compass.js`, `components/Compass.jsx` and `styles/compass.css` render
+letters at the Drive footer right; `styles/night.css` owns the stronger Dim palette.
 `tools/candump_arrays.py` (`candump-id-arrays` compute task) saves finalized
 candump logs as per-identifier numpy arrays for offline reference syncs.
 `lib.reports.require_distinct_output` protects evidence inputs from report

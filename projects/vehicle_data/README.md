@@ -734,6 +734,14 @@ Documents, in reading order:
   [`dashboard/docs/warnings-redesign.md`](dashboard/docs/warnings-redesign.md)
   the tiered early-warning backend.
 
+Compass letters appear at the right of the Drive footer on both pages,
+in a separate monospace font. Stale directions stay visible at 70% opacity.
+The event-driven B-CAN `0x088` feed is receive-only beside the existing
+auxiliary drive owner; it preserves actual receipt times and never polls for
+heading. The Dim button now darkens all shared colours and backgrounds for
+night use. See the [compass and night display contract](docs/compass-display.md)
+for ownership, retention, validation and activation details.
+
 ### Serving and deployment
 
 Unit-only updates, boot ordering, the optional LAN address wait, and safe

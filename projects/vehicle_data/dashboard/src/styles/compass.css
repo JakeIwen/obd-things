@@ -1,0 +1,13 @@
+.drive-footer .compass { grid-column: 3; grid-row: 1; justify-self: end; }
+.compass {
+  min-width: 2.6ch;
+  text-align: right;
+  font-family: ui-monospace, "Roboto Mono", "DejaVu Sans Mono", monospace;
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: .06em;
+  color: var(--text);
+}
+.compass--stale { opacity: .7; }
+@media (max-width: 640px) { .compass { font-size: 23px; } }

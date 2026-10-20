@@ -32,6 +32,7 @@ export const DRIVER_QUALITIES = new Set(["verified", "observed_alfa_scale"]);
 export const RETAIN_LAST_READING = new Set([
   "battery.voltage",
   "vehicle.odometer",
+  "vehicle.compass_direction",
   "engine.oil_life_remaining",
   "engine.coolant_temperature",
   "engine.vvt_oil_temperature",

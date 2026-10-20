@@ -9,6 +9,8 @@
  * so it can be unit-tested and reused by non-UI code.
  */
 
+import { COMPASS, compassLetters } from "./compass.js";
+
 /** Placeholder shown for a value that cannot be formatted. */
 export const DASH = "—";
 
@@ -171,6 +173,7 @@ export function fmtFixed(value, decimals, separate) {
  * @returns {string}
  */
 export function fmtValue(name, value) {
+  if (name === COMPASS.metric) return compassLetters(value) || DASH;
   if (value === null || value === undefined) return DASH;
   if (typeof value === "boolean") return value ? "ON" : "OFF";
   if (typeof value === "string") {
@@ -192,6 +195,7 @@ export function fmtValue(name, value) {
  * @returns {string} display unit, possibly empty
  */
 export function fmtUnit(name, unit) {
+  if (name === COMPASS.metric) return "";
   if (typeof unit === "string" && unit.length > 0) {
     const mapped = UNIT_DISPLAY[unit];
     return typeof mapped === "string" ? mapped : unit;

@@ -1,0 +1,8 @@
+{
+  "metric": "vehicle.compass_direction",
+  "source": "bcan.broadcast.0x088",
+  "frame_id": 136,
+  "dlc": 5,
+  "stale_after_seconds": 10.0,
+  "directions": ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+}

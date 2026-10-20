@@ -23,6 +23,7 @@ EXPECTED_METRIC_NAMES = frozenset({
     "acc.lead_vehicle",
     "lights.parking_headlights_on",
     "lights.high_beam_on",
+    "vehicle.compass_direction",
     "tire.pressure.fl",
     "tire.pressure.fr",
     "tire.pressure.rl",

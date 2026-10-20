@@ -37,6 +37,15 @@ average when scaled by about 1.13, is zero during overrun fuel cut and is
 nonzero at idle. It is a strong candidate with unverified absolute accuracy; no telemetry
 metric exists yet, and injector polling is no longer needed for a source.
 
+The [October 14 compass-video investigation](findings/promaster_2022/2026-10-14_compass_direction_video.md)
+identifies B-CAN `0x088`, DLC 5, byte 3 bits 5–3 as the eight-direction
+announcement (N/NE/E/SE/S/SW/W/NW). Four video-referenced left turns match
+N → W → S → E → N. It is event-driven, with gaps over five minutes;
+the [telemetry integration](../vehicle_data/docs/compass-display.md) now receives it
+continuously beside the existing B-CAN drive owner and retains stale letters,
+slightly dimmed. The broker loaded this integration on October 15 at 09:42Z;
+the first engine-running direction announcement remains to be live-validated.
+
 The [October 12 light-indicator reference](findings/promaster_2022/2026-10-12_light_indicators.md)
 records two owner-controlled manual-light cycles and the C-CAN `0x73E` green/blue
 telltale fields. `lighting_reference.py` is its offline analyzer; use the named

@@ -1,0 +1,246 @@
+{
+  "schema_version": 1,
+  "status": "offline reference; not a live telemetry source",
+  "video": {
+    "filename": "direction_mapping.MOV",
+    "sha256": "d87e2e0b42ffbf78dbefe035598730eeb63ae1899b90aadc4b5529d2be16f906",
+    "creation_time_utc": "2026-10-15T02:22:31Z",
+    "duration_seconds": 88.386667
+  },
+  "reference_method": "Road orientation from video and OpenStreetMap; cardinal labels independently assigned to settled road segments. Intermediate directions inferred from transition order, not read from a compass display.",
+  "capture_id": "broker-drive-20261015T015240015334",
+  "bus": "b-can",
+  "physical_pair": "3/11",
+  "bitrate": 125000,
+  "inputs": [
+    {
+      "sequence": 0,
+      "sha256": "accb78ff245b2973a994b53e76bcc7917ee2f5849a0e1683b2d2f7fe31217707",
+      "bytes": 685573
+    },
+    {
+      "sequence": 1,
+      "sha256": "336d5eeaf00d7fc564b2324ab94469dfe59437666bf0af283774948ab6c8bd57",
+      "bytes": 772189
+    },
+    {
+      "sequence": 2,
+      "sha256": "8ef7174b805c767b14a7da0c1b94e971aae318750d2ca513e035a97b0a7cabff",
+      "bytes": 774279
+    },
+    {
+      "sequence": 3,
+      "sha256": "9c25fcb901650dd2488ddc496c1ca340651f2c9ea8aafad35d9ea35881ab112a",
+      "bytes": 564760
+    }
+  ],
+  "events": [
+    {
+      "timestamp": 1792030876.020993,
+      "source_index": 2,
+      "line_number": 91036,
+      "interface": "can1",
+      "id_bits": 11,
+      "can_id": 136,
+      "can_id_hex": "088",
+      "dlc": 5,
+      "data_hex": "00 00 03 C8 00",
+      "video_seconds": -74.979007
+    },
+    {
+      "timestamp": 1792030878.620937,
+      "source_index": 2,
+      "line_number": 91501,
+      "interface": "can1",
+      "id_bits": 11,
+      "can_id": 136,
+      "can_id_hex": "088",
+      "dlc": 5,
+      "data_hex": "00 00 03 C0 00",
+      "video_seconds": -72.379063
+    },
+    {
+      "timestamp": 1792030962.325377,
+      "source_index": 3,
+      "line_number": 282,
+      "interface": "can1",
+      "id_bits": 11,
+      "can_id": 136,
+      "can_id_hex": "088",
+      "dlc": 5,
+      "data_hex": "00 00 03 F8 00",
+      "video_seconds": 11.325377
+    },
+    {
+      "timestamp": 1792030964.716043,
+      "source_index": 3,
+      "line_number": 715,
+      "interface": "can1",
+      "id_bits": 11,
+      "can_id": 136,
+      "can_id_hex": "088",
+      "dlc": 5,
+      "data_hex": "00 00 03 F0 00",
+      "video_seconds": 13.716043
+    },
+    {
+      "timestamp": 1792030978.035169,
+      "source_index": 3,
+      "line_number": 3093,
+      "interface": "can1",
+      "id_bits": 11,
+      "can_id": 136,
+      "can_id_hex": "088",
+      "dlc": 5,
+      "data_hex": "00 00 03 E8 00",
+      "video_seconds": 27.035169
+    },
+    {
+      "timestamp": 1792030980.635146,
+      "source_index": 3,
+      "line_number": 3560,
+      "interface": "can1",
+      "id_bits": 11,
+      "can_id": 136,
+      "can_id_hex": "088",
+      "dlc": 5,
+      "data_hex": "00 00 03 E0 00",
+      "video_seconds": 29.635146
+    },
+    {
+      "timestamp": 1792031009.619806,
+      "source_index": 3,
+      "line_number": 8715,
+      "interface": "can1",
+      "id_bits": 11,
+      "can_id": 136,
+      "can_id_hex": "088",
+      "dlc": 5,
+      "data_hex": "00 00 03 D8 00",
+      "video_seconds": 58.619806
+    },
+    {
+      "timestamp": 1792031011.919838,
+      "source_index": 3,
+      "line_number": 9129,
+      "interface": "can1",
+      "id_bits": 11,
+      "can_id": 136,
+      "can_id_hex": "088",
+      "dlc": 5,
+      "data_hex": "00 00 03 D0 00",
+      "video_seconds": 60.919838
+    },
+    {
+      "timestamp": 1792031021.014953,
+      "source_index": 3,
+      "line_number": 10746,
+      "interface": "can1",
+      "id_bits": 11,
+      "can_id": 136,
+      "can_id_hex": "088",
+      "dlc": 5,
+      "data_hex": "00 00 03 C8 00",
+      "video_seconds": 70.014953
+    },
+    {
+      "timestamp": 1792031024.319631,
+      "source_index": 3,
+      "line_number": 11334,
+      "interface": "can1",
+      "id_bits": 11,
+      "can_id": 136,
+      "can_id_hex": "088",
+      "dlc": 5,
+      "data_hex": "00 00 03 C0 00",
+      "video_seconds": 73.319631
+    }
+  ],
+  "samples": [
+    {
+      "requested_video_seconds": 0.0,
+      "actual_video_seconds": 0.0,
+      "direction_from_route": "N",
+      "most_recent_frame": {
+        "timestamp": 1792030878.620937,
+        "source_index": 2,
+        "line_number": 91501,
+        "interface": "can1",
+        "id_bits": 11,
+        "can_id": 136,
+        "can_id_hex": "088",
+        "dlc": 5,
+        "data_hex": "00 00 03 C0 00"
+      },
+      "frame_age_seconds": 72.379063
+    },
+    {
+      "requested_video_seconds": 20.0,
+      "actual_video_seconds": 19.9916666667,
+      "direction_from_route": "W",
+      "most_recent_frame": {
+        "timestamp": 1792030964.716043,
+        "source_index": 3,
+        "line_number": 715,
+        "interface": "can1",
+        "id_bits": 11,
+        "can_id": 136,
+        "can_id_hex": "088",
+        "dlc": 5,
+        "data_hex": "00 00 03 F0 00"
+      },
+      "frame_age_seconds": 6.275624
+    },
+    {
+      "requested_video_seconds": 40.0,
+      "actual_video_seconds": 40.0,
+      "direction_from_route": "S",
+      "most_recent_frame": {
+        "timestamp": 1792030980.635146,
+        "source_index": 3,
+        "line_number": 3560,
+        "interface": "can1",
+        "id_bits": 11,
+        "can_id": 136,
+        "can_id_hex": "088",
+        "dlc": 5,
+        "data_hex": "00 00 03 E0 00"
+      },
+      "frame_age_seconds": 10.364854
+    },
+    {
+      "requested_video_seconds": 65.0,
+      "actual_video_seconds": 64.9933333333,
+      "direction_from_route": "E",
+      "most_recent_frame": {
+        "timestamp": 1792031011.919838,
+        "source_index": 3,
+        "line_number": 9129,
+        "interface": "can1",
+        "id_bits": 11,
+        "can_id": 136,
+        "can_id_hex": "088",
+        "dlc": 5,
+        "data_hex": "00 00 03 D0 00"
+      },
+      "frame_age_seconds": 4.073495
+    },
+    {
+      "requested_video_seconds": 80.0,
+      "actual_video_seconds": 80.0,
+      "direction_from_route": "N",
+      "most_recent_frame": {
+        "timestamp": 1792031024.319631,
+        "source_index": 3,
+        "line_number": 11334,
+        "interface": "can1",
+        "id_bits": 11,
+        "can_id": 136,
+        "can_id_hex": "088",
+        "dlc": 5,
+        "data_hex": "00 00 03 C0 00"
+      },
+      "frame_age_seconds": 6.680369
+    }
+  ]
+}
