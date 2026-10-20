@@ -322,8 +322,9 @@ red if any is critical).
   that bypasses the 60 s throttle.
 - **State text**: said once, for example `Running · 32 min`, `Asleep · last drive 4:25 pm` or
   `Ignition on · engine off`.
-- **Dim**: a night toggle, stored per device. Primary text drops to the secondary tone, and band
-  bars and values are subdued; red and amber are unchanged.
+- **Dim**: a night toggle, stored per device. `styles/night.css` substantially darkens text,
+  backgrounds, bands, separators and every accent, including red/amber warnings and the light icons.
+  Dialogs inherit the same palette. It controls app colours, not the tablet backlight.
 - **Auto**: turns automatic view selection back on (section 5.2).
 
 **Alert in the top bar.** When an item is in `warning` state or has critical severity, the state text
@@ -635,8 +636,8 @@ checks when stopped:
 - Text: primary `#f3f6f4`; secondary `#aab6b1` (≥ 7:1 on a card); dimmed/held `#7f8b87`.
 - Semantic colours: amber `#f5b642`, red `#ff5d4d`, green `#5fd39a`. The neutral normal-band colour
   is `#52665f`.
-- `.dim` (night) redefines the tokens: primary text becomes `#aab6b1`, and the band and lines are
-  darker. Red and amber are unchanged.
+- `.dim` (night) redefines all palette tokens in `styles/night.css`; primary text is `#6c7971`. The band and lines are
+  darker, and red/amber/green/blue accents are also subdued.
 - Type: `Roboto, system-ui, "Segoe UI", sans-serif`, with `font-variant-numeric: tabular-nums`.
   Roboto comes first because on One UI `system-ui` resolves to SamsungOne, which may lack tabular
   digits.

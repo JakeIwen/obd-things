@@ -640,10 +640,6 @@ a { color: var(--blue); }
   .oil-actions .btn { width: 100%; }
 }
 
-/* ---------- night dim (per device, top-bar toggle) ---------- */
-:root.dim { --overspeed: #c97a71; --text: #aab6b1; --text-2: #7f8b87; --dim: #5d6864; --band-ok: #3a4843; --line: #1d2826; --line-strong: #2a3632; }
-:root.dim .tile__value, :root.dim .reading { opacity: .85; }
-
 /* ---------- Health view (src/views/Health.jsx, src/components/DtcScan.jsx) — every class is .health-* ----------
    Early-warning header actions wrap under the title on narrow screens; row actions and links keep
    44 px targets; code rows use the list contract. Nothing under 13 px. */

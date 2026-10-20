@@ -1,0 +1,24 @@
+/* Night mode reduces every shared colour, including alerts and open dialogs.
+   Colour tokens avoid a full-screen filter/compositing layer on the tablet. */
+:root.dim {
+  --bg: #020403;
+  --card: #070d0b;
+  --card-2: #0c1411;
+  --line: #15201a;
+  --line-strong: #223128;
+  --text: #6c7971;
+  --text-2: #526159;
+  --dim: #404e47;
+  --amber: #9e742b;
+  --amber-bg: #171107;
+  --red: #ad4236;
+  --red-bg: #190b08;
+  --green: #397f5c;
+  --blue: #456f99;
+  --overspeed: #a25d55;
+  --band-ok: #293b32;
+  accent-color: var(--green);
+}
+/* These badges use a light foreground over a solid alert colour by day. */
+:root.dim .tab__badge--red, :root.dim .card__badge--red { color: #a9b5ad; }
+:root.dim .msg--me { background: var(--card-2); }
