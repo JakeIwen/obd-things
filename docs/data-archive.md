@@ -21,21 +21,27 @@ anything under either `tmp/` tree tracked or backed up.
 ## Recurring compute retention
 
 Use `python3 -m tools.compute_retention` from the repository root to preview
-the owner's **30-day policy for both successful and failed jobs**. It prints the backend's JSON plan
+the owner's **2 GiB cap for completed compute history**, with a maximum age
+of **30 days for both successful and failed jobs**. It prints the backend's JSON plan
 and changes no data. `--apply` explicitly deletes eligible completed jobs.
 This is the storage-administration exception to the usual `pi_compute.py`
 frontend rule: analysis and tests still go through the named compute tasks.
 The wrapper calls the installed administrative entry point in an isolated
 child process; it does not duplicate queue locking, citation scanning or deletion.
 
-The policy selected by the owner on October 21 keeps:
+The policy selected by the owner on October 21 applies to local `done/` and
+`failed/` compute history, including source snapshots, results and metadata:
 
-- successful jobs and failed jobs for 30 days, measured from the
-  manifest's completion time;
-- jobs cited in tracked or nonignored working-tree files outside `tmp/`, and
-  their transitive job dependencies, regardless of age;
-- queued/running jobs and their dependencies. Unsafe or malformed entries
-  are refused or skipped by the backend rather than force-deleted.
+- Delete uncited jobs older than 30 days, measured from manifest completion.
+- If retained history is still above 2,147,483,648 allocated bytes, delete the
+  oldest remaining uncited jobs until it fits. The size cap takes precedence
+  over keeping a full 30 days; recent disposable jobs can be evicted sooner.
+- Preserve jobs cited outside `tmp/` in tracked or nonignored working files,
+  their transitive dependencies, and dependencies of queued/running jobs.
+- Active jobs and archive symlink targets are outside the completed-history
+  budget. Raw vehicle inputs outside the queue are never selected.
+- If protected or uninspectable data prevents meeting the budget, report it
+  and return failure. Never claim the 2 GiB target was met when it was not.
 
 Before the first manual apply or enabling the timer, review the plan's
 eligible IDs. Subsequent weekly runs apply automatically. **Ignored handoffs under
@@ -47,19 +53,20 @@ as workstreams finish or add evidence. Keep the canonical raw input separately: 
 that a job's original inputs remain available. Do not use compute history as
 the only copy of vehicle evidence.
 
-The deployed backend currently hardcodes 60/31 days and exposes no age flags.
-This adapter verifies that known upstream policy, configures its
-`retention.RETENTION_DAYS` mapping to 30/30 in the child process, then calls
-the unchanged queue entry point. Its dependency is the installed package at
-`/home/pi/van_compute/current`, supplied through the child's `PYTHONPATH`.
-It leaves the deployed release and other compute commands unchanged, and
-refuses an unexpected upstream policy rather than silently overriding it.
-If van-compute adds a public age option, replace this narrow adapter with that
-option in a reviewed update.
+The adapter requires van-compute's supported `--keep-days` and
+`--max-history-bytes` options. It passes those flags to the installed
+administrative CLI and performs no runtime policy overrides. An older backend
+rejects the flags before deletion. Deploy the reviewed van-compute update
+through its coupled Mac/Pi installer before activating this policy; do not
+patch its immutable Pi release. The source owner is
+`/Users/jacobr/dev/van-compute`, with deployment instructions in that repo's
+`pi/docs/compute/VAN_COMPUTE.md`.
 
-`tools/systemd/obd-compute-retention.service` and its `.timer` provide weekly
-automatic application of this policy, with up to one hour of random delay and
-a persistent missed-run catch-up. They are opt-in: committing these files does
+`tools/systemd/obd-compute-retention.service`, `.path` and `.timer` apply the
+policy when completed-job directories change and hourly (up to five minutes
+random delay), with persistent missed-run catch-up. A new completed job can
+briefly take history over budget until the triggered maintenance finishes;
+this is a retention limit, not a filesystem quota on active work. They are opt-in: committing these files does
 not install or enable them. The service runs as `pi`, has no CAN or network
 access, and writes only the queue and van-compute's existing submission-fence
 directory. That fence temporarily defers new compute submissions while the
@@ -70,12 +77,14 @@ job that a later plan reports as skipped; investigate that entry rather than
 forcing removal. The unit sends SIGINT so the backend can restore its
 submission fence during normal cancellation.
 
-Install both regular unit files in `/etc/systemd/system/`, run
-`systemctl daemon-reload`, and enable `obd-compute-retention.timer`. Check its
+Install all three regular unit files in `/etc/systemd/system/`, run
+`systemctl daemon-reload`, run the first cleanup, and enable both
+`obd-compute-retention.path` and `obd-compute-retention.timer`. Check the timer's
 next scheduled run with `systemctl list-timers obd-compute-retention.timer`;
 inspect completed runs with `journalctl -u obd-compute-retention.service`.
-Disable the timer with `sudo systemctl disable --now obd-compute-retention.timer`
-to stop future cleanup. This preserves all remaining data.
+Disable both triggers with `sudo systemctl disable --now
+obd-compute-retention.timer obd-compute-retention.path` to stop future cleanup.
+This preserves all remaining data.
 
 The wrapper's public CLI and unit contracts are covered by
 `tests/test_compute_retention.py`. Run the whole repository suite through
@@ -95,13 +104,13 @@ EXFAT space separately. Never use a whole-tree age deletion command.
 
 | Data class | Policy |
 | --- | --- |
-| Completed compute history | Weekly 30-day retention for both outcomes, with citation/dependency protection above. Review sustained growth even if every retained job is protected. |
+| Completed compute history | 2 GiB cap; at most 30 days for either outcome, with citation/dependency protection above. Check on completion and hourly. |
 | Raw CAN, AlfaOBD inputs, inventories, owner references | No automatic deletion. Preserve canonical inputs; archive completed large files only after mount/space checks and hash verification. |
 | Replay databases, extracted arrays, build copies | Review after the workstream ends or after 30 days idle. Remove only after confirming retained source and reproducible command; preserve named oracle fixtures and SQLite WAL/SHM sets. |
 | Browser/Python environments | Review after 30 days unused. Reinstallable, but keep any runtime used by an active workstream; do not repeatedly remove a shared runtime between jobs. |
 | Locks, active captures, live service state/history | Excluded. Do not unlink a live lock or change historian retention to meet the scratch-data budget. |
 
-If weekly cleanup cannot bring usage under the review trigger, investigate
+If compute cleanup cannot bring total `tmp/` usage under the review trigger, investigate
 the largest remaining category. Prefer a reviewed, task-specific shorter
 window for disposable test/build jobs in van-compute over reducing retention
 for all research jobs. Archive large evidence files rather than copying
@@ -246,3 +255,27 @@ A separate small growth source is shared-observer metadata appended by
 about 15 MB and grew around 1.9 MB/day. Fixing that requires preserving the
 live shared/exclusive lock contract and checking metadata consumers. It is
 excluded from cleanup; never unlink it while owners may hold its inode.
+
+## Owner revision: 2 GiB completed-compute cap
+
+The owner rejected the age-only saving and set a 2 GiB maximum specifically
+for compute history. This supersedes the weekly age-only activation script.
+The revised backend preview measured 5,216,096,256 allocated bytes and selected
+324 uncited jobs totalling 3,082,387,456 bytes. Projected remaining history is
+2,133,708,800 bytes: **4.86 GiB → 1.99 GiB**, reclaiming **2.87 GiB** while
+preserving cited jobs and active dependencies. The live read-only preview took
+35 seconds; its report is `tmp/storage-retention/compute-plan-2g-final.json`.
+No data has been deleted.
+
+The updated van-compute source has 301 passing tests. The revised consumer has
+1,944 passing Python tests (12 reported skips) and 491 passing dashboard tests
+plus the build. Systemd validation passed. The published backend baseline
+matches the installed Pi source cohort; deployment must still use the Mac's
+normal coupled installer. Existing unrelated `queue.py` code-shape growth in
+the backend is unchanged; the budget change introduces no size exceptions.
+
+Activation order: deploy the reviewed van-compute backend on Mac and Pi,
+install all three obd retention units, run the first cleanup successfully,
+then enable the `.path` and `.timer` triggers. The old age-only handoff is
+superseded. Actual reclaimed space and installed service behavior remain to
+be verified after the owner runs the replacement activation handoff.

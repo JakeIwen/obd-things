@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Plan or apply 30-day van-compute retention for this checkout."""
+"""Keep completed compute history within 2 GiB and at most 30 days old."""
 
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -13,19 +12,9 @@ from typing import Sequence
 
 REPO = Path(__file__).resolve().parents[1]
 PYTHON = Path("/usr/bin/python3")
-VAN_COMPUTE_RELEASE = Path("/home/pi/van_compute/current")
-CHILD = """\
-from van_compute import queue, retention
-
-expected = {"done": 60, "failed": 31}
-if retention.RETENTION_DAYS != expected:
-    raise SystemExit(
-        "van-compute retention policy changed; refusing the unchecked override: "
-        + repr(retention.RETENTION_DAYS)
-    )
-retention.RETENTION_DAYS = {"done": 30, "failed": 30}
-raise SystemExit(queue.main())
-"""
+BACKEND = Path("/home/pi/van_compute/scripts/van_compute.py")
+KEEP_DAYS = 30
+MAX_HISTORY_BYTES = 2 * 1024**3
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -33,7 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="delete successful and failed jobs eligible after 30 days",
+        help="delete expired jobs, then older uncited jobs until history fits 2 GiB",
     )
     return parser
 
@@ -41,14 +30,16 @@ def build_parser() -> argparse.ArgumentParser:
 def retention_command(*, apply: bool) -> list[str]:
     command = [
         str(PYTHON),
-        "-P",
-        "-c",
-        CHILD,
+        str(BACKEND),
         "--root",
         str(REPO / "tmp" / "compute"),
         "prune",
         "--citations-root",
         str(REPO),
+        "--keep-days",
+        str(KEEP_DAYS),
+        "--max-history-bytes",
+        str(MAX_HISTORY_BYTES),
     ]
     if apply:
         command.append("--apply")
@@ -56,17 +47,13 @@ def retention_command(*, apply: bool) -> list[str]:
 
 
 def run_retention(*, apply: bool) -> int:
-    package = VAN_COMPUTE_RELEASE / "van_compute"
-    if not package.is_dir():
-        print(f"compute retention backend is missing: {package}", file=sys.stderr)
+    if not BACKEND.is_file():
+        print(f"compute retention backend is missing: {BACKEND}", file=sys.stderr)
         return 2
-    environment = os.environ.copy()
-    environment["PYTHONPATH"] = str(VAN_COMPUTE_RELEASE)
     try:
         completed = subprocess.run(
             retention_command(apply=apply),
             check=False,
-            env=environment,
         )
     except OSError as exc:
         print(f"could not start compute retention backend: {exc}", file=sys.stderr)
