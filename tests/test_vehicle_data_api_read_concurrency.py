@@ -300,7 +300,14 @@ class ApiConcurrencyTests(unittest.TestCase):
 
     def test_stdlib_error_output_and_normal_protocol_error_allow_recovery(self):
         with running_server(server_class=SingleWorkerServer) as harness:
-            harness.server.request_io_timeout = 0.05
+            # Keep the malformed peer unread, but leave enough response time for
+            # a loaded worker to write the following small recovery response.
+            # Production uses five seconds; this remains deliberately bounded.
+            harness.server.request_io_timeout = 0.2
+            # Probe worker recovery independently of status-catalog size under
+            # the deliberately tiny send buffer and short response deadline.
+            recovered = {"available": True, "recovered": True}
+            harness.broker.status_response = lambda: recovered
             malformed = harness.connect()
             malformed.sendall(
                 b"U" * 60000
@@ -310,8 +317,7 @@ class ApiConcurrencyTests(unittest.TestCase):
             request_bytes(fresh, "GET", "/v1/status")
             self.assertTrue(wait_until(lambda: harness.server.accepted == 2, timeout=0.8))
             status, payload = read_http(fresh, timeout=0.8)
-            self.assertEqual(status, 200)
-            self.assertIsInstance(payload, dict)
+            self.assertEqual((status, payload), (200, recovered))
             fresh.close()
             malformed.close()
 

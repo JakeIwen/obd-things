@@ -261,9 +261,18 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(a.import_analysis(path)["report"]["ranking"]["candidates"], [])
 
     def test_generated_default_location_is_ignored(self):
-        proc = subprocess.run(["git", "check-ignore", "tmp/can_workbench/report/index.html"],
-                              cwd=r.REPO, capture_output=True)
-        self.assertEqual(proc.returncode, 0)
+        # Compute workers receive source snapshots without the checkout's .git.
+        checkout = self.root / "ignore-check"
+        checkout.mkdir()
+        shutil.copyfile(r.REPO / ".gitignore", checkout / ".gitignore")
+        subprocess.run(["git", "init", "--quiet", "--template="], cwd=checkout,
+                       check=True, capture_output=True)
+        proc = subprocess.run(
+            ["git", "-c", "core.excludesFile=/dev/null", "check-ignore",
+             "tmp/can_workbench/report/index.html"],
+            cwd=checkout, capture_output=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode())
 
 
 if __name__ == "__main__":

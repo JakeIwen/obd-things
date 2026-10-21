@@ -50,6 +50,7 @@
       "description": "Run the portable offline obd-things test suite, optionally filtered by pytest arguments.",
       "profile": "repo-test",
       "source_paths": [
+        ".gitignore",
         "lib",
         "tools",
         "tests",
