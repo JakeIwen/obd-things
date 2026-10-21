@@ -23,6 +23,8 @@ from checks.backend_layout.references import RepoIndex
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_REFERENCE = re.compile(r"\{source:([^}]+)\}")
 PURE_MODULES = (
+    "lib.signal_search_contract",
+    "tools.signal_benchmark_policy",
     "projects.vehicle_data.metric_types",
     "projects.vehicle_data.helper_events",
     "projects.vehicle_data.wake_state",
@@ -84,6 +86,11 @@ class BackendContractsTests(unittest.TestCase):
                         self.assertTrue((ROOT / path).is_file())
                         self.assertTrue(packaged(path, task["source_paths"]))
                         self.assertTrue(self.table.lists(path))
+            if any("tools/can_timeseries_correlate.py" in arg for arg in task["argv"]):
+                with self.subTest(task=task["name"], dependency="search contract"):
+                    self.assertTrue(
+                        packaged("lib/signal_search_contract.py", task["source_paths"])
+                    )
         self.assertGreater(entry_count, 0)
 
     def test_shared_library_has_no_application_dependencies(self):

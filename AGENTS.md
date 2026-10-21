@@ -305,6 +305,12 @@ Never rebaseline as part of a feature or to pass the suite.
 ## Backend ownership and dependency direction
 
 Keep `lib/`, `tools/`, `live_data/` and `projects/` as the checkout packages.
+`lib/signal_search_contract.py` owns the offline search bounds, evidence labels,
+field record and legacy geometry shared by correlation and benchmarking.
+`tools/signal_benchmark_policy.py` owns pure per-case validation/evaluation;
+`tools/can_signal_benchmark.py` keeps manifest/report file access, provenance,
+aggregation and the CLI. Original public imports remain available.
+
 Records and pure decisions belong with their domain and must not import the
 runtime, transports or storage they describe. Existing safety/lease/restore
 owners keep their ordered effects. Public module entry paths and the `/v1` API
@@ -342,9 +348,10 @@ caller has retired, with owner/callers/retirement stated in the wrapper header.
 | `tools/ignition_triggered_passive_capture.py` | promaster-mapping-drive.service | Gated passive capture |
 | `tools/dtc_batch_request.py` | van-dtc-batch.service | Batch request worker |
 | `tools/compute_retention.py` | obd-compute-retention.service and owner CLI | Thin adapter to the installed van-compute policy |
+| `python3 -m tests.signal_benchmark_oracle` | Offline refactor verification against a selected checkout | Benchmark CLI/field preservation fixtures |
 | `run_tests.py` | repo-full-suite and repo-tests compute tasks; offline developer verification | Fail-fast Python/Node/layout/scratch-build gate |
 | `tools/dashboard_build.py` | dashboard-test-build compute task | Scratch dashboard tests/build |
-| `tools/can_signal_benchmark.py` | Owner CLI and offline benchmark recipes | Offline benchmark manifest, provenance and per-case evaluation |
+| `tools/can_signal_benchmark.py` | Owner CLI and offline benchmark recipes | Benchmark file/provenance orchestration; pure rules in signal_benchmark_policy |
 | `tools/can_timeseries_correlate.py` | CAN timeseries compute tasks | Offline scalar correlation |
 | `tools/candump_diagnostic_wire.py` | Diagnostic wire compute tasks | Offline ISO-TP extraction |
 | `tools/alfaobd_decode.py` | alfaobd-debug-decode compute task | Offline debug decode |
@@ -367,7 +374,7 @@ caller has retired, with owner/callers/retirement stated in the wrapper header.
 
 ## Running scripts (modules from the repo root, 2026-10-12)
 
-No script carries a `sys.path` bootstrap. Run every repo program as a module from the repo root
+No script carries a `sys.path` bootstrap. Run every vehicle/research program as a module from the repo root
 (`cd /home/pi/dev/obd-things && python3 -m tools.dtc_scan --help`; `projects/x/y.py` is
 `projects.x.y`). Running one by path fails with `No module named 'lib'`. Import siblings through
 their package (`from projects.battery import bcan_voltage`), never by bare name. systemd units use
@@ -377,6 +384,9 @@ script path: both workers put the job's source root on `PYTHONPATH`.
 A script that needs the repo root derives it itself, after its imports:
 `REPO = Path(__file__).resolve().parents[N]` (N is its depth below the root). There is
 deliberately no shared root module, so compute source bundles stay self-contained.
+The standalone verification launchers `run_tests.py` and
+`checks/check_layout.py` use the documented file commands in
+[backend verification](docs/backend-layout.md); neither repairs `sys.path`.
 
 ## Data locations (imposed 2026-07-08; do not resurrect `dumps/` directories)
 
