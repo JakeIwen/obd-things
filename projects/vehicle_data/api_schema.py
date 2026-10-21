@@ -210,6 +210,7 @@ class HistoryResponse(CachedProduct, total=False):
     trip_comparison: JsonObject
     windows: dict[str, JsonObject]
     metric_trends: dict[str, JsonObject]
+    fuel_economy: JsonObject
     maintenance_hook: JsonObject
 
 

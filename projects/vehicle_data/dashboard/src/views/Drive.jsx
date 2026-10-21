@@ -29,6 +29,7 @@ export const DRIVE_TILES = [
     ["limit", "Speed limit"],
     ["acc", "ACC"],
     ["field", "Alternator field"],
+    ["fuel", "Fuel rate"],
     ["gear", "Gear"],
     ["radar", "Radar aim"],
     ["turbine", "Turbine"],

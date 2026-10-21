@@ -184,7 +184,7 @@ a { color: var(--blue); }
   grid-template-rows: 1fr 1fr 1.2fr 1fr 1fr;
   grid-template-areas:
     "d2limit d2acc d2acc"
-    "d2field d2field d2gear"
+    "d2field d2fuel d2gear"
     "d2radar d2radar d2radar"
     "d2turb d2out d2power"
     "d2torque d2target d2odo";
@@ -192,6 +192,7 @@ a { color: var(--blue); }
 .area-d2limit { grid-area: d2limit; }
 .area-d2acc { grid-area: d2acc; }
 .area-d2field { grid-area: d2field; }
+.area-d2fuel { grid-area: d2fuel; }
 .area-d2gear { grid-area: d2gear; }
 .area-d2radar { grid-area: d2radar; }
 .area-d2turb { grid-area: d2turb; }
@@ -235,7 +236,7 @@ a { color: var(--blue); }
     grid-template-rows: repeat(4, minmax(0, 1fr));
     grid-template-areas:
       "d2limit d2acc d2acc d2gear"
-      "d2field d2field d2power d2odo"
+      "d2field d2fuel d2power d2odo"
       "d2radar d2radar d2turb d2out"
       "d2radar d2radar d2torque d2target";
   }
@@ -255,7 +256,8 @@ a { color: var(--blue); }
       "d2radar d2radar"
       "d2turb d2out"
       "d2torque d2target"
-      "d2power d2odo";
+      "d2power d2odo"
+      "d2fuel d2fuel";
   }
 }
 
@@ -310,7 +312,7 @@ a { color: var(--blue); }
 .tire--off .tire__value { color: var(--dim); }
 
 /* trip tile rows */
-.trip { display: grid; grid-template-rows: repeat(4, 1fr); flex: 1 1 auto; min-height: 0; }
+.trip { display: grid; grid-template-rows: repeat(5, 1fr); flex: 1 1 auto; min-height: 0; }
 .trip__row { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-width: 0; font-size: 15px; color: var(--text-2); }
 .trip__row b { color: var(--text); font-weight: 600; white-space: nowrap; }
 

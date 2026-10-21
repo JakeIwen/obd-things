@@ -13,7 +13,7 @@ missing. No diagnostic request or injector model is needed.
 | Field | `raw = ((b4 & 0x07) << 13) \| (b5 << 5) \| (b6 >> 3)`: Motorola, DBC start bit 34, 16 bits, unsigned |
 | Nominal decode | `raw / 512` L/h |
 | Cluster relation | Cluster fuel ≈ `1.13 × raw / 512` L/h: a reset Trip B average fits `k = 1.131` (RMS 0.04 mpg) and the video ratio fit gives 1.128. A fixed +1 L/h is ruled out (see the trip-average check) |
-| Status | **Strong candidate.** Identity supported by cluster-display, overrun and idle evidence; absolute accuracy not verified; not in telemetry |
+| Status | **Strong candidate.** Identity supported by cluster-display, overrun and idle evidence; absolute accuracy not verified. Telemetry metric `engine.fuel_rate` (candidate, cluster-matched) since 2026-10-20 |
 
 `b4` bits 7–3 and `b6` bits 2–0 were zero in every frame of the three legs
 examined, so the field could be wider than 16 bits. The 1/512 L/h binary scale
@@ -191,10 +191,12 @@ holds the blind screen; `data/` holds the per-ID arrays.
 2. **Cluster correction shape.** Resolved by the trip-average check as a
    ratio of about 1.13. The remaining tension is the −0.6 mpg ratio error
    on the 11 highest-load highway samples.
-3. **Telemetry.** No metric, poller or dashboard change was made. An
-   approximate display (Tier 2, `approximate_display`/`trend`) could be
-   frozen from the decode above, with trip mpg computed as distance ÷
-   integrated fuel and labelled estimated.
+3. **Telemetry.** Done 2026-10-20: `engine.fuel_rate` (candidate, gal/h,
+   `1.131 × raw/512`) plus estimated trip and 7/30-day economy, computed as
+   mean speed over mean fuel rate across the historian's engine-running
+   samples (five-second cadence). Resampling the four full-rate captures at
+   five seconds put trip mpg within about −5% to +5% (p5–p95) of the
+   full-rate integral on 10–38 min trips. See the vehicle-data README.
 4. The automatic injector-pulse-width collection designed in the readiness
    finding is no longer needed for a fuel source. Keep it only if the
    broadcast scale proves unusable.

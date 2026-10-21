@@ -19,6 +19,11 @@ from lib.signal_fields import SignalField
 KPA_TO_PSI = 0.14503773773020923
 KMH_TO_MPH = 0.621371192237334
 NM_TO_LB_FT = 0.7375621492772656
+LITRES_PER_US_GALLON = 3.785411784
+# The cluster's instant-mpg video and a reset Trip B average both put its fuel
+# at about 1.131 x the nominal raw/512 L/h. Only a fill-up can say which scale
+# is real fuel; until then telemetry follows the cluster.
+FUEL_RATE_CLUSTER_FACTOR = 1.131
 
 
 def _fahrenheit(celsius: float) -> float:
@@ -35,6 +40,10 @@ def _mph(kmh: float) -> float:
 
 def _lb_ft(nm: float) -> float:
     return nm * NM_TO_LB_FT
+
+
+def _us_gallons(litres: float) -> float:
+    return litres / LITRES_PER_US_GALLON
 
 
 @dataclass(frozen=True)
@@ -98,6 +107,16 @@ COOLANT_TEMPERATURE = BroadcastSignal(
     units="°F", quality="observed_alfa_scale", min_dlc=1,
     provenance="0x2ED byte 0 - 40 °C, converted to °F for telemetry",
     conversion=_fahrenheit,
+)
+FUEL_RATE = BroadcastSignal(
+    bus="c-can", can_id=0x2ED, metric="engine.fuel_rate",
+    field=SignalField(34, 16, "big"), scale=FUEL_RATE_CLUSTER_FACTOR, offset=0.0,
+    units="gal/h", quality="candidate", min_dlc=7,
+    provenance=(
+        "0x2ED 16-bit field at DBC start bit 34 / 512 L/h, x 1.131 to "
+        "match the cluster's fuel figure, converted to US gal/h"
+    ),
+    divisor=512.0, conversion=_us_gallons,
 )
 ENGINE_SPEED = BroadcastSignal(
     bus="c-can", can_id=0x0FC, metric="engine.rpm",
@@ -166,6 +185,7 @@ SIGNALS = (
     SYSTEM_VOLTAGE,
     OIL_PRESSURE,
     COOLANT_TEMPERATURE,
+    FUEL_RATE,
     ENGINE_SPEED,
     TARGET_CRANK_TORQUE,
     VEHICLE_SPEED,

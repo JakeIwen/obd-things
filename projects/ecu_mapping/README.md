@@ -34,8 +34,10 @@ The [October 14 cluster-video check](findings/promaster_2022/2026-10-14_fuel_rat
 then found the broadcast source: C-CAN `0x2ED` carries an instantaneous fuel
 rate (nominal `raw/512` L/h). It reproduces the cluster's instant mpg and Trip B
 average when scaled by about 1.13, is zero during overrun fuel cut and is
-nonzero at idle. It is a strong candidate with unverified absolute accuracy; no telemetry
-metric exists yet, and injector polling is no longer needed for a source.
+nonzero at idle. It is a strong candidate with unverified absolute accuracy, and injector
+polling is no longer needed for a source. Since 2026-10-20 it is the candidate telemetry
+metric `engine.fuel_rate`, scaled to match the cluster, with estimated trip and 7/30-day
+economy on the dashboard (see the vehicle-data README).
 
 The [October 14 compass-video investigation](findings/promaster_2022/2026-10-14_compass_direction_video.md)
 identifies B-CAN `0x088`, DLC 5, byte 3 bits 5–3 as the eight-direction

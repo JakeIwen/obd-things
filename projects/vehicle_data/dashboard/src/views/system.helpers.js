@@ -501,6 +501,7 @@ const CATALOG_LABELS = Object.freeze({
   "engine.vvt_oil_temperature": "Oil temperature (VVT)",
   "generator.field_duty": "Alternator duty",
   "engine.target_crankshaft_torque": "Torque request",
+  "engine.fuel_rate": "Fuel rate",
   "transmission.output_speed": "Output shaft speed",
   "transmission.turbine_speed": "Turbine speed",
   "radar.alignment.azimuth": "Radar horizontal angle",

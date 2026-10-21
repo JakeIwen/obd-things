@@ -159,8 +159,14 @@ Offline fuel-consumption catalog research lives in
 Its raw-preserving reports do not establish vehicle support; see the
 October 12 fuel-economy finding linked from the ecu-mapping README.
 The fuel-rate source is now the C-CAN `0x2ED` broadcast (strong candidate,
-nominal `raw/512` L/h, no telemetry metric yet); start with the
+nominal `raw/512` L/h); start with the
 [October 14 cluster-video finding](projects/ecu_mapping/findings/promaster_2022/2026-10-14_fuel_rate_cluster_video.md).
+Since 2026-10-20 it is telemetry metric `engine.fuel_rate` (candidate, gal/h,
+cluster-matched ×1.131 in `lib/broadcast_signals.FUEL_RATE`). `fuel_economy.py`
+owns the metric definition and the estimated trip and 7/30-day economy added
+to the history response; `history/running_totals.py` sums engine-running
+samples per trip or window; `dashboard/src/fuelEconomy.helpers.js` formats the
+Drive and History figures.
 Compass direction is B-CAN `0x088`, DLC 5, byte3 bits 5–3 (N/NE/E/SE/S/SW/W/NW);
 see the [owner route video](projects/ecu_mapping/findings/promaster_2022/2026-10-14_compass_direction_video.md)
 and [compass display contract](projects/vehicle_data/docs/compass-display.md).

@@ -4,6 +4,20 @@ Deployment notes and archived sections from `projects/vehicle_data/README.md`.
 Relative links and above/below references in the older sections retain their
 original source-file context.
 
+### Estimated fuel rate and economy (2026-10-20/21)
+
+New candidate metric `engine.fuel_rate` (C-CAN `0x2ED`, raw / 512 L/h × 1.131
+to match the cluster, in gal/h). Drive page 1 shows trip economy in the Trip
+tile, page 2 a Fuel rate tile with instant mpg, and History each trip's
+economy plus a 7/30-day line, all marked `≈`. Deployed parked and asleep on
+2026-10-20 (broker restart 19:00 MDT, no TX). On 2026-10-21 both windows
+were found counting speed from drives recorded before the fuel rate existed,
+so they would have read `partial_fuel_coverage` for 7 and 30 days. Each
+window now starts at the first recorded fuel minute and says `since`;
+redeployed 13:08 MDT, dashboard build `c6b0c4e25406`, TX unchanged. Replaying
+the October 15 town drive gives 13.9 mpg at full rate (the cluster showed
+13.9) and 14.0 at the five-second history cadence.
+
 ### Speeding colour and chime (2026-10-14)
 
 Deployed dashboard build `6197d03e445a` to both port-8765 listeners. More than

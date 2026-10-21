@@ -1,7 +1,7 @@
 /**
  * Drive page 2, "Sensors" (design 3.1.1): the cluster's speed limit and ACC set speed, alternator
- * field duty, the gear estimate, radar aim, transmission shaft speeds, power, torque and target
- * torque, and the odometer. One screen, no
+ * field duty, the estimated fuel rate, the gear estimate, radar aim, transmission shaft speeds,
+ * power, torque and target torque, and the odometer. One screen, no
  * scrolling, at 800×1280 portrait and 1280×800 landscape. Loaded lazily the first time page 2
  * is shown; while page 1 is on screen none of this is mounted.
  *
@@ -19,6 +19,7 @@ import { DriveFooter } from "./DriveFooter.jsx";
 import { liveValue, obs, isHidden, dayClock } from "../app/derive.js";
 import * as store from "../store.js";
 import { DASH, fmtFixed } from "../format.js";
+import { fuelRateText, instantText } from "../fuelEconomy.helpers.js";
 import {
   RADAR_TILE_AXES,
   radarTileModel,
@@ -78,6 +79,28 @@ const batterySub = computed(() => {
   const v = liveValue("battery.voltage").value;
   return v === null ? "" : "battery " + fmtFixed(v, 1) + " V";
 });
+
+// Fuel rate: read from the record like the gear (candidate quality, so derive.obs would never
+// call it live). Estimated, so shown with "≈"; the sub-line is the instant economy while moving.
+const fuel = computed(() => fuelRateText(store.metricSignal("engine.fuel_rate").value));
+const fuelCls = computed(() => "tile tile--value area-d2fuel " + (fuel.value === DASH ? "tile--off" : "tile--live"));
+const fuelUnit = computed(() => (fuel.value === DASH ? "" : "gal/h"));
+const fuelSub = computed(() =>
+  instantText(liveValue("vehicle.speed").value, store.metricSignal("engine.fuel_rate").value),
+);
+
+function FuelTile() {
+  return (
+    <section class={fuelCls} aria-label="Fuel rate">
+      <div class="tile__label">Fuel rate</div>
+      <div class="tile__value num">
+        <span>{fuel}</span>
+        <span class="tile__unit">{fuelUnit}</span>
+      </div>
+      <div class="tile__sub">{fuelSub}</div>
+    </section>
+  );
+}
 
 // Gear estimate: read from the record (its quality is below the driver-qualified set, so
 // derive.obs would never call it live). Shown with "~" and only while current.
@@ -180,6 +203,7 @@ export default function DriveMore({ page, onPageChange }) {
         {show("limit") && <LimitTile />}
         {show("acc") && <AccTile />}
         {show("field") && <Tile name="generator.field_duty" label="Alternator field" area="d2field" spark sub={batterySub} />}
+        {show("fuel") && <FuelTile />}
         {show("gear") && <GearTile />}
         {show("radar") && <RadarTile />}
         {show("turbine") && <Tile name="transmission.turbine_speed" label="Turbine" area="d2turb" />}

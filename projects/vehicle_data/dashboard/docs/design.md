@@ -132,7 +132,11 @@ tablet browser ──HTTP/SSE──▶ web_v2.py (:8765, subclass of web.py)
     `age_seconds`, `last_snapshot_at`, `active_interface_gaps`, `active_metric_gaps` and
     `retention`. It also holds `metric_trends[name]`, with fields `unit`, `current_trip`,
     `current_minus_prior_median`, `prior_trips`, `days_7`, `days_30`, `series` and `sparkline`. Both
-    `series` and `sparkline` use 900 s buckets.
+    `series` and `sparkline` use 900 s buckets. Since 2026-10-20 the broker adds
+    `fuel_economy` (`available`, `quality`, `detail`, `days_7`, `days_30`; a window that starts at
+    the first recorded fuel rate rather than 7 or 30 days back carries `since`) and a `fuel_economy`
+    object on `current_trip` and each recent trip (`available`, `mpg`, `mean_speed_mph`,
+    `mean_fuel_rate_gph`, `samples`, or `reason`); see `projects/vehicle_data/fuel_economy.py`.
   - `maintenance`: as is (1.4 KB).
   - `status_full`: the complete broker status for the System view, fetched here once a minute rather
     than every second.
@@ -421,7 +425,9 @@ Rules for Drive tiles:
   per-metric minimum span (10 psi, 20 °F, 0.5 V) and draws only the nearest band edge.
 - Trip distance integrates live speed samples (gaps longer than 30 s are skipped). It is persisted
   in `localStorage` (`van-telemetry.v2.trip`) keyed by the trip's start, so a reload mid-trip keeps
-  it. Coolant max and average power come from `history.trip_comparison` (60 s cadence).
+  it. Coolant max and average power come from `history.trip_comparison` (60 s cadence). The
+  Fuel row (added 2026-10-20) is the open trip's estimated economy,
+  `history.current_trip.fuel_economy.mpg`, written `≈ 14.1 mpg` (`src/fuelEconomy.helpers.js`).
 - Customisation can hide a Drive tile. Positions are fixed, so a hidden tile leaves its cell empty
   and nothing else moves.
 
@@ -448,14 +454,14 @@ content. Page 2 ("Sensors") uses the same frame and the same no-scrolling gate.
   | row | content |
   |---|---|
   | 0 | **SPEED LIMIT** (`vehicle.speed_limit` in a sign outline with `MPH` under it; `—` in a dim outline when the cluster shows none) · **ACC** (2 cols: `acc.set_speed` `66 mph`, four-bar gap graphic beside it; sub-line `engaged · vehicle ahead`, `standby · saved speed`, or `engaged · fixed cruise`; fixed mode labels the tile `Cruise`; standby dims only the saved number; `Off` when off; `—` and `ready · no set speed` before SET) |
-  | A | **ALTERNATOR FIELD** (2 cols: `generator.field_duty` %, 15-min sparkline, sub-line `battery 14.0 V`) · **GEAR** (`~7` from `transmission.gear_estimate` while its record is current, else `—`; sub-line `ratio 0.70` = turbine ÷ output when the output shaft turns ≥ 100 rpm) |
+  | A | **ALTERNATOR FIELD** (`generator.field_duty` %, 15-min sparkline, sub-line `battery 14.0 V`; 2 cols until 2026-10-20) · **FUEL RATE** (`≈ 1.2` gal/h from `engine.fuel_rate` while its record is current, else `—`; sub-line `now ≈ 20 mpg` = speed ÷ rate at ≥ 5 mph, or `coasting, no fuel` at zero) · **GEAR** (`~7` from `transmission.gear_estimate` while its record is current, else `—`; sub-line `ratio 0.70` = turbine ÷ output when the output shaft turns ≥ 100 rpm) |
   | B | **RADAR AIM** (3 cols): Horizontal and Vertical side by side. Each shows its latest angle (`+0.15°`), under it the physical reading of the elevation sign from `src/radarAim.js` (`aimed high · tilt down`, `aimed low · tilt up`, `level`; blank for azimuth), and then `1-min avg` / `5-min avg` / `30-min avg` / `2-h avg` from `status.radar_alignment` windows `"60"`/`"300"`/`"1800"`/`"7200"`; a window the broker has not published yet reads `—`. |
   | C | **TURBINE** (rpm) · **OUTPUT SHAFT** (rpm) · **POWER** (hp, sparkline) |
   | D | **TORQUE** (`engine.crankshaft_torque`, lb-ft) · **TARGET TORQUE** (`engine.target_crankshaft_torque`, lb-ft) · **ODOMETER** (held value with its time; smaller `--tire` numerals so six digits fit a third of the width) |
 
-- **Landscape** (4 columns × 4 rows): `limit acc acc gear` / `field field power odo` /
+- **Landscape** (4 columns × 4 rows): `limit acc acc gear` / `field fuel power odo` /
   `radar radar turbine output` / `radar radar torque target`. On a phone (≤ 640 px) it has 2
-  columns (`limit acc` first) and scrolls, like page 1.
+  columns (`limit acc` first, fuel last across both) and scrolls, like page 1.
 - **Radar aim footer** (said once):
   - live: `within ±1°`, `near the ±1° limit` (≥ 0.8°) or `outside ±1°`;
   - otherwise: `Not reading · last 3:10 pm` with the values dimmed, or `Not reading` when there is
@@ -463,8 +469,8 @@ content. Page 2 ("Sensors") uses the same frame and the same no-scrolling gate.
   - The numerals never change colour; the System card keeps the badge, peak and margin.
   - The windows come from status-lite (already in `STATUS_LITE_KEYS`), with `status_full` as the
     fallback. No server change was needed.
-- **Data rules.** The gear estimate and the radar angles are candidate quality, so they are read
-  from the metric record: current means `available && !stale`. The ACC state, mode, distance bars
+- **Data rules.** The gear estimate, the fuel rate and the radar angles are candidate quality, so
+  they are read from the metric record: current means `available && !stale`. The ACC state, mode, distance bars
   and lead-vehicle flag are `verified` but are strings, a small integer and a boolean, so they are
   read from their records the same way. The speed limit uses `liveValue`.
   `accDisplayModel` requires verified `ccan.broadcast.0x5a0` records, a live
@@ -479,7 +485,7 @@ content. Page 2 ("Sensors") uses the same frame and the same no-scrolling gate.
   normal `Tile` rules (live, held with its time, or `—`). `generator.field_duty` joins
   `SPARK_METRICS` (minimum span 20 %). No new timers were added.
 - **Customisation.** The page-2 tiles are in `DRIVE_TILES` with ids `limit`, `acc`, `field`,
-  `gear`, `radar`, `turbine`, `output`, `power2`, `torque`, `target` and `odometer`, each labelled
+  `fuel`, `gear`, `radar`, `turbine`, `output`, `power2`, `torque`, `target` and `odometer`, each labelled
   `… (page 2)`. They
   hide like page-1 tiles, and a hidden tile leaves its cell empty.
 - Caveats for these tiles are in `docs/caveats.md` (Drive and engine, Electrical, Radar alignment).
@@ -564,7 +570,10 @@ checks when stopped:
 ### 3.4 History
 
 - **Trips**: the current trip (if open) and the last five, with duration and end time. Distance and
-  max speed appear when per-trip statistics exist (v2.1).
+  max speed appear when per-trip statistics exist (v2.1). Each trip's meta line ends with its
+  estimated economy (`≈ 16.1 mpg`) when the broker has one, and the card leads with
+  `Fuel economy ≈ 15.2 mpg over 7 days · ≈ 15.0 mpg over 30 days` (2026-10-20). A window that
+  starts at the first fuel reading reads `since Oct 20`, shown once when both do.
   Completed trips also accept an offline `cruise_summary`: engaged time (excluding
   accelerator override), time with the vehicle-ahead icon (including override),
   CANC button counts, provisional brake associations, unknown/ambiguous cancels,

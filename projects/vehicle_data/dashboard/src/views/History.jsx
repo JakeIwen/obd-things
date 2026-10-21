@@ -110,6 +110,7 @@ function TripsCard() {
   const t = trips.value;
   return (
     <Card title="Trips" wide>
+      {t.fuel ? <p class="list__meta">{t.fuel}</p> : null}
       {t.current ? (
         <div class="history-trip history-trip--now">
           <span class="history-trip__dur num">{t.current.duration}</span>

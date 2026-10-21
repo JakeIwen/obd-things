@@ -10,6 +10,7 @@ import { tripDistanceMiles } from "../app/rings.js";
 import * as store from "../store.js";
 import { fmtValue, fmtDuration, DASH } from "../format.js";
 import { speedFooter } from "./driveSpeed.helpers.js";
+import { mpgText } from "../fuelEconomy.helpers.js";
 
 // Sub-lines computed once at module scope (shared by every mount).
 const alternatorSub = computed(() => {
@@ -59,13 +60,15 @@ const tripRows = computed(() => {
   return [
     ["Time", duration],
     ["Distance", distance],
+    // Estimated; refreshed with the history summary, about once a minute.
+    ["Fuel", (trip && mpgText(trip.fuel_economy)) || DASH],
     ["Coolant max", coolMax ? coolMax + " °F" : DASH],
     ["Avg power", powerAvg ? powerAvg + " hp" : DASH],
   ];
 });
 
 function TripTile() {
-  // Four rows of short text; the whole tile re-renders at most once a minute.
+  // Five rows of short text; the whole tile re-renders at most once a minute.
   const rows = tripRows.value;
   return (
     <section class="tile area-trip" aria-label="Trip">

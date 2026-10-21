@@ -12,6 +12,7 @@
 
 import { DASH, fmtValue, fmtFixed, fmtUnit, fmtTime, fmtClock, fmtDuration, fmtDelta, decimalsFor, parseDate } from "../format.js";
 import { metricLabel } from "../warningContext.js";
+import { mpgText, windowsText } from "../fuelEconomy.helpers.js";
 
 import { DOCS, obj, arr, num, str, wallMs, when, humanize, capital, plural, clip, createStableGate, agoText } from "./view.helpers.js";
 
@@ -172,18 +173,19 @@ function endNote(reason) {
 }
 
 /**
- * Trips card: the open trip (if any) and the last five completed trips.
+ * Trips card: the open trip (if any) and the last five completed trips, each with its estimated
+ * fuel economy when the broker has one, plus the 7- and 30-day economy line (`fuel`, or null).
  * @param {object|null} history `summary.history`
  * @param {{nowMs:number, extraMs?:number}} ctx `extraMs` as in `coverageLine`
  * @returns {{current:{duration:string, title:string, meta:string}|null, rows:Array<{id:string, when:string,
- *   duration:string, meta:string}>, emptyText:string|null}}
+ *   duration:string, meta:string}>, fuel:string|null, emptyText:string|null}}
  */
 export function tripsModel(history, ctx) {
   const c = ctx || {};
   const nowMs = num(c.nowMs) !== null ? c.nowMs : Date.now();
   const extra = num(c.extraMs) !== null && c.extraMs > 0 ? c.extraMs : 0;
   const h = obj(history);
-  if (!h) return { current: null, rows: [], emptyText: "Waiting for history…" };
+  if (!h) return { current: null, rows: [], fuel: null, emptyText: "Waiting for history…" };
   let current = null;
   const open = obj(h.current_trip);
   if (open) {
@@ -192,6 +194,8 @@ export function tripsModel(history, ctx) {
     const parts = [];
     if (started) parts.push("started " + started);
     if (num(open.snapshot_count) !== null) parts.push(plural(open.snapshot_count, "sample", "samples"));
+    const mpg = mpgText(open.fuel_economy);
+    if (mpg) parts.push(mpg);
     current = {
       duration: secs === null ? DASH : fmtDuration(secs + extra / 1000),
       title: "In progress",
@@ -209,6 +213,8 @@ export function tripsModel(history, ctx) {
     const endClock = parseDate(t.ended_at);
     if (endClock) meta.push("ended " + fmtClock(endClock));
     if (num(t.snapshot_count) !== null) meta.push(plural(t.snapshot_count, "sample", "samples"));
+    const mpg = mpgText(t.fuel_economy);
+    if (mpg) meta.push(mpg);
     const note = endNote(t.end_reason);
     if (note) meta.push(note);
     rows.push({
@@ -219,7 +225,7 @@ export function tripsModel(history, ctx) {
     });
   }
   const emptyText = !current && !rows.length ? "No trips recorded yet." : null;
-  return { current, rows, emptyText };
+  return { current, rows, fuel: windowsText(h.fuel_economy, nowMs), emptyText };
 }
 
 // ---------------------------------------------------------------------------

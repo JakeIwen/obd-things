@@ -302,6 +302,7 @@ The initial drive-publisher vocabulary is intentionally narrow:
 | `engine.vvt_oil_temperature` | `pcm.did.069f` | number, `°F` | `observed_alfa_scale` |
 | `engine.oil_pressure` | `ccan.broadcast.0x41d` | number, `psi` | `observed_alfa_scale` |
 | `engine.coolant_temperature` | `ccan.broadcast.0x2ed` | number, `°F` | `observed_alfa_scale` |
+| `engine.fuel_rate` | `ccan.broadcast.0x2ed` | number, `gal/h` | `candidate` |
 | `engine.rpm` | `ccan.broadcast.0x0fc` | number, `rpm` | `observed_alfa_scale` |
 | `engine.target_crankshaft_torque` | `ccan.broadcast.0x100` | number, `lb-ft` | `observed_alfa_scale` |
 | `transmission.output_speed` | `ccan.broadcast.0x1f7` | number, `rpm` | `observed_alfa_scale` |
@@ -323,6 +324,19 @@ The initial drive-publisher vocabulary is intentionally narrow:
 | `diagnostics.cluster.did.1002.raw` | `cluster.did.1002` | integer, `raw_u8` | `candidate` |
 | `diagnostics.cluster.did.0107.raw` | `cluster.did.0107` | integer, `raw_u8` | `candidate` |
 | `diagnostics.cluster.did.1005.raw` | `cluster.did.1005` | integer, `raw_u8` | `candidate` |
+
+`engine.fuel_rate` (added 2026-10-20) is decoded from the same `0x2ED`
+frame as coolant, so the passive collector and the active-drive snapshot pick
+it up with no new frame, filter or allowlist entry. It is the 16-bit field at
+DBC start bit 34, raw / 512 L/h times 1.131 to match the instrument cluster,
+published in US gal/h at candidate quality; the factor lives in
+`lib/broadcast_signals.FUEL_RATE`. `fuel_economy.py` owns the metric
+definition and adds estimated economy to the history response: each listed
+trip gets `fuel_economy` and the response gets 7- and 30-day figures (each
+starting no earlier than the first recorded fuel rate, marked `since`), all as
+mean speed over mean fuel rate across engine-running samples
+(`history/running_totals.py`). Absolute accuracy awaits a fill-up check; see
+the [October 14 finding](../ecu_mapping/findings/promaster_2022/2026-10-14_fuel_rate_cluster_video.md).
 
 `vehicle.ignition_on` is a positive-presence witness: a received `0x2EF`
 frame may publish only `true`. A publisher-supplied `false` is rejected

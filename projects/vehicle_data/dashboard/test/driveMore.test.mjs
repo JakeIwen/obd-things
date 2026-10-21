@@ -159,7 +159,7 @@ test("Drive registry lists page-2 tiles with unique ids and every id is rendered
   const block = drive.slice(drive.indexOf("export const DRIVE_TILES"), drive.indexOf("];", drive.indexOf("export const DRIVE_TILES")));
   const ids = [...block.matchAll(/(?:id: |\[)"([^"]+)"/g)].map((m) => m[1]);
   assert.equal(new Set(ids).size, ids.length, "ids are unique across both pages");
-  const page2 = ["limit", "acc", "field", "gear", "radar", "turbine", "output", "power2", "torque", "target", "odometer"];
+  const page2 = ["limit", "acc", "field", "fuel", "gear", "radar", "turbine", "output", "power2", "torque", "target", "odometer"];
   for (const id of page2) {
     assert.ok(ids.includes(id), id + " registered");
     assert.ok(more.includes('show("' + id + '")'), id + " rendered through isHidden");

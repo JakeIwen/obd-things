@@ -80,8 +80,9 @@ what they meant and where that information lives now.
   far. Only verified and observed-scale values drive a big number on Drive.
 - **candidate**: a strong lead whose offset, scale or identity is not yet settled. A candidate never
   drives an alarm. Candidates shown outside the catalog are the odometer (dimmed with its time,
-  with a small `*` on the Service card), the gear estimate (always written with `~`) and the radar
-  angles (System card and Drive page 2), and each is explained in its own section below.
+  with a small `*` on the Service card), the gear estimate (always written with `~`), fuel rate and
+  fuel economy (always written with `≈`) and the radar angles (System card and Drive page 2), and
+  each is explained in its own section below.
 
 ## Drive and engine
 
@@ -93,6 +94,19 @@ what they meant and where that information lives now.
   appears only while the van is moving. Page 2 also shows the ratio itself, for example
   `ratio 0.70` (7th is about 0.70 and 5th is 1.00). During shifts or torque-converter slip the ratio
   sits between gears, and the estimate can lag or disappear briefly.
+- **Fuel rate and fuel economy** (`≈`; Fuel rate on Drive page 2, Fuel on the page 1 Trip tile,
+  and on the History Trips card): estimates. The fuel rate is the engine computer's own fuel-flow
+  figure from C-CAN frame `0x2ED` (the coolant frame), read without asking the engine anything. It
+  drops to zero when coasting in gear and reads about 0.4–0.5 gal/h at a warm idle. Its scale is
+  chosen to match the cluster: the cluster's instant and trip-average mpg both work out to 1.13
+  times the engine computer's nominal figure, so the app does the same and should agree with the
+  dash within a few percent. Neither has been checked against fuel actually pumped, so treat both
+  as the cluster's opinion, not a measurement. Under the rate, `now ≈ 20 mpg` is the instant
+  economy while moving (`coasting, no fuel` during the fuel cut). Trip and 7/30-day economy are
+  average speed over average fuel rate across the Pi's engine-running history samples, one every
+  five seconds, so a short trip can be off by a few percent more. Trips recorded before the fuel
+  rate was added (October 2026) have no figure, and until a window has a full 7 or 30 days of
+  fuel readings it counts only the driving since then and says `since Oct 20` instead.
 - **Speed limit** (Drive page 2, and `limit 55 mph` under Speed on page 1): the number the
   instrument cluster's traffic-sign display shows, copied from C-CAN frame `0x0E0` byte 0 in mph.
   It is whatever the van's camera last recognised, not a map value: it can lag a new sign, miss
@@ -291,7 +305,9 @@ These summaries never create a warning.
   They start empty after a page reload.
 - While parked, most metrics have "gaps" because nothing can be read; that is expected and is not
   flagged.
-- Trip statistics beyond duration and end time (distance, maxima) will appear when the Pi publishes
+- Each trip shows its estimated fuel economy once it has about a minute of engine running with the
+  fuel rate recorded, and the Trips card leads with the 7- and 30-day figures (see Fuel rate and
+  fuel economy above). Other trip statistics (distance, maxima) will appear when the Pi publishes
   per-trip summaries.
 
 ## Early warnings and system notes

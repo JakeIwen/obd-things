@@ -208,6 +208,28 @@ def table_observations(can_id, data):
     )
 
 
+def legacy_fuel_rate_observations(
+    can_id: int, data: bytes
+) -> tuple[PassiveObservation, ...]:
+    """Literal fuel-rate decode that follows coolant in the same 0x2ED frame."""
+    if can_id != COOLANT_TEMPERATURE_ID or len(data) < 7:
+        return ()
+    raw = ((data[4] & 0x07) << 13) | (data[5] << 5) | (data[6] >> 3)
+    return (
+        PassiveObservation(
+            metric="engine.fuel_rate",
+            value=(raw * 1.131 / 512.0 + 0.0) / 3.785411784,
+            unit="gal/h",
+            source="ccan.broadcast.0x2ed",
+            quality="candidate",
+            detail=(
+                "0x2ED 16-bit field at DBC start bit 34 / 512 L/h, x 1.131 to "
+                "match the cluster's fuel figure, converted to US gal/h"
+            ),
+        ),
+    )
+
+
 def legacy_b_can_voltage(data):
     if len(data) >= 6:
         return (((data[4] << 8) | data[5]) & 0x1FFF) / 400.0
@@ -216,7 +238,7 @@ def legacy_b_can_voltage(data):
 
 class BroadcastSignalsTests(unittest.TestCase):
     def check_observations(self, can_id, data):
-        expected = legacy_observations(can_id, data)
+        expected = legacy_observations(can_id, data) + legacy_fuel_rate_observations(can_id, data)
         actual = table_observations(can_id, data)
         # repr includes every metadata string, tuple order, and value type
         # (1, 1.0, True), and distinguishes signed zero and adjacent floats.
@@ -249,8 +271,8 @@ class BroadcastSignalsTests(unittest.TestCase):
                     )
 
     def test_frozen_rows_and_unique_keys(self):
-        self.assertEqual(len(bs.SIGNALS), 11)
-        self.assertEqual(len({(s.bus, s.can_id, s.metric) for s in bs.SIGNALS}), 11)
+        self.assertEqual(len(bs.SIGNALS), 12)
+        self.assertEqual(len({(s.bus, s.can_id, s.metric) for s in bs.SIGNALS}), 12)
         with self.assertRaises(FrozenInstanceError):
             bs.ENGINE_SPEED.can_id = 1
 
@@ -259,6 +281,22 @@ class BroadcastSignalsTests(unittest.TestCase):
             data = bytes((raw, 0, raw, raw, 0, 0, 0, 0))
             for can_id in (0x41A, 0x41D, 0x2ED, 0x1F7):
                 self.check_observations(can_id, data)
+
+    def test_every_fuel_rate_word_and_its_neighbouring_bits(self):
+        for raw in range(65536):
+            data = bytes((0x5A, 0, 0, 0, raw >> 13, (raw >> 5) & 255, (raw & 31) << 3))
+            self.check_observations(0x2ED, data)
+            # Bits outside the field (b4 7-3, b6 2-0) never reach the value.
+            noisy = bytearray(data)
+            noisy[4] |= 0xF8
+            noisy[6] |= 0x07
+            self.assertEqual(bs.FUEL_RATE.decode(noisy), bs.FUEL_RATE.decode(data))
+
+    def test_fuel_rate_reference_frame(self):
+        # The recorded 0x2ED frame in test_display_frames: raw 6714, 13.11 L/h nominal.
+        value = bs.FUEL_RATE.decode(bytes.fromhex("821FC00000D1D000"))
+        self.assertAlmostEqual(value, 6714 / 512 * 1.131 / 3.785411784)
+        self.assertIsNone(bs.FUEL_RATE.decode(bytes.fromhex("821FC00000D1")))
 
     def test_every_rpm_word_including_masked_bits(self):
         for raw in range(65536):

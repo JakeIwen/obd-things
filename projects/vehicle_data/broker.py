@@ -798,7 +798,9 @@ class TelemetryBroker:
             }
         try:
             from projects.vehicle_data.cruise_harvest import attach_summaries
-            return attach_summaries(self.insights.history_response())
+            from projects.vehicle_data.fuel_economy import attach_fuel_economy
+            history = attach_summaries(self.insights.history_response())
+            return attach_fuel_economy(history, self.insights.historian)
         except Exception as exc:
             return {
                 "available": False,

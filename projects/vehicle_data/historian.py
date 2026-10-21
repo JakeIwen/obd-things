@@ -79,6 +79,7 @@ from .history.advisories import AdvisoryMixin as _AdvisoryMixin
 from .history.ingest import IngestMixin as _IngestMixin
 from .history.queries import QueryMixin as _QueryMixin
 from .history.rollups import RollupMixin as _RollupMixin
+from .history.running_totals import RunningTotalsMixin as _RunningTotalsMixin
 from .history.store import HistorianStore as _HistorianStore
 
 
@@ -87,6 +88,7 @@ class TelemetryHistorian(
     _IngestMixin,
     _RollupMixin,
     _QueryMixin,
+    _RunningTotalsMixin,
     _AdvisoryMixin,
 ):
     """Transactional, offline telemetry historian.
