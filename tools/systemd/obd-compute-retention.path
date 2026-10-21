@@ -1,0 +1,10 @@
+[Unit]
+Description=Check the compute-history budget when completed jobs change
+
+[Path]
+PathChanged=/home/pi/dev/obd-things/tmp/compute/done
+PathChanged=/home/pi/dev/obd-things/tmp/compute/failed
+Unit=obd-compute-retention.service
+
+[Install]
+WantedBy=multi-user.target

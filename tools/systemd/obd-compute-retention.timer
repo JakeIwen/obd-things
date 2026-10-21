@@ -1,9 +1,9 @@
 [Unit]
-Description=Weekly retention of completed obd-things compute jobs
+Description=Hourly enforcement of the obd-things compute-history budget
 
 [Timer]
-OnCalendar=weekly
-RandomizedDelaySec=1h
+OnCalendar=hourly
+RandomizedDelaySec=5min
 Persistent=true
 Unit=obd-compute-retention.service
 
