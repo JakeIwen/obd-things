@@ -116,7 +116,9 @@ class DashboardV2NodeSuiteTests(unittest.TestCase):
             self.fail(f"node --test exceeded {TIMEOUT_SECONDS} s\n{output[-4000:]}")
         report = (result.stdout + result.stderr)[-6000:]
         self.assertEqual(result.returncode, 0, f"node --test failed\n{report}")
-        self.assertRegex(result.stdout, r"# fail 0\b", report)
+        # Node 25 prefixes TAP diagnostics with the Unicode info marker instead
+        # of the older "#" while keeping the same summary field.
+        self.assertRegex(result.stdout, r"(?:#|ℹ) fail 0\b", report)
 
 
 if __name__ == "__main__":

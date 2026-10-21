@@ -209,6 +209,7 @@ class NoLegacyCanTopologyTests(unittest.TestCase):
             relative = path.relative_to(REPO)
             if (
                 "tmp" in relative.parts
+                or ".claude" in relative.parts
                 or relative.parts[0] == "tests"
                 or path.name.startswith("._")
             ):
