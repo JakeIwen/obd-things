@@ -170,6 +170,7 @@
    ],
    "build_plan": [
     "lib/dtc_batch.py",
+    "projects/vehicle_data/pcm_support_profiles.py",
     "tools/can_signal_benchmark.py",
     "tools/dtc_scan.py"
    ],
@@ -215,6 +216,10 @@
    "classify_session_response": [
     "lib/uds_session.py",
     "tools/ecu_discover.py"
+   ],
+   "collect": [
+    "projects/ecu_mapping/lighting_reference.py",
+    "tools/candump_arrays.py"
    ],
    "compact_hex": [
     "tools/alfaobd_bcm_decode.py",
@@ -285,6 +290,7 @@
    ],
    "isNum": [
     "projects/vehicle_data/dashboard/src/bands.js",
+    "projects/vehicle_data/dashboard/src/overspeed.helpers.js",
     "projects/vehicle_data/dashboard/src/views/driveMore.helpers.js"
    ],
    "kwp_dtc_name": [
@@ -663,7 +669,34 @@
    }
   ]
  },
- "date": "2026-10-12",
+ "coverage": {
+  "extensions": [
+   ".bash",
+   ".cjs",
+   ".css",
+   ".js",
+   ".jsx",
+   ".less",
+   ".mjs",
+   ".py",
+   ".sass",
+   ".scss",
+   ".sh",
+   ".ts",
+   ".tsx",
+   ".zsh"
+  ],
+  "markers": [
+   "bare_except",
+   "dual_import_guard",
+   "important",
+   "lint_disable",
+   "sys_path_hack",
+   "ts_any",
+   "type_ignore"
+  ]
+ },
+ "date": "2026-10-21",
  "exceptions": {},
  "file_limits": {},
  "files": {
@@ -688,7 +721,7 @@
   "lib/dtc_reports.py": 72,
   "lib/dtc_web.py": 541,
   "lib/modules.py": 297,
-  "lib/reports.py": 80,
+  "lib/reports.py": 88,
   "lib/signal_fields.py": 341,
   "lib/timeutil.py": 20,
   "lib/uds.py": 235,
@@ -699,7 +732,7 @@
   "live_data/live_data.py": 393,
   "projects/battery/bcan_voltage.py": 149,
   "projects/battery/ccan_voltage.py": 152,
-  "projects/battery/dongle_voltage.py": 166,
+  "projects/battery/dongle_voltage.py": 165,
   "projects/battery/voltage_mon.py": 252,
   "projects/battery/voltage_mon.sh": 13,
   "projects/ecu_mapping/alfalog.py": 300,
@@ -707,7 +740,8 @@
   "projects/ecu_mapping/canch_validation.py": 388,
   "projects/ecu_mapping/cluster_live.py": 53,
   "projects/ecu_mapping/extract_did_map.py": 129,
-  "projects/ecu_mapping/lighting_reference.py": 161,
+  "projects/ecu_mapping/fuel_catalog.py": 105,
+  "projects/ecu_mapping/lighting_reference.py": 162,
   "projects/ecu_mapping/pcm_tigershark.py": 290,
   "projects/ecu_mapping/reassemble_commands.py": 227,
   "projects/ecu_mapping/rke_front_unlock.py": 589,
@@ -728,16 +762,20 @@
   "projects/vehicle_data/api_server.py": 885,
   "projects/vehicle_data/auxiliary_polling.py": 191,
   "projects/vehicle_data/bcan_auxiliary.py": 543,
-  "projects/vehicle_data/broker.py": 3279,
+  "projects/vehicle_data/broker.py": 3266,
   "projects/vehicle_data/can_availability.py": 185,
   "projects/vehicle_data/can_interfaces.py": 407,
   "projects/vehicle_data/can_runtime.py": 861,
   "projects/vehicle_data/ccan_powertrain.py": 875,
   "projects/vehicle_data/client.py": 105,
+  "projects/vehicle_data/compass.py": 39,
+  "projects/vehicle_data/compass_receiver.py": 132,
   "projects/vehicle_data/cop_can_wake.py": 669,
   "projects/vehicle_data/cruise_harvest.py": 180,
   "projects/vehicle_data/cruise_summary.py": 221,
   "projects/vehicle_data/custom_warnings.py": 164,
+  "projects/vehicle_data/dashboard/src/accDisplay.helpers.js": 101,
+  "projects/vehicle_data/dashboard/src/accDisplay.js": 10,
   "projects/vehicle_data/dashboard/src/app/App.jsx": 194,
   "projects/vehicle_data/dashboard/src/app/derive.js": 466,
   "projects/vehicle_data/dashboard/src/app/dialogs.js": 44,
@@ -746,12 +784,16 @@
   "projects/vehicle_data/dashboard/src/app/warningCards.js": 7,
   "projects/vehicle_data/dashboard/src/bands.js": 400,
   "projects/vehicle_data/dashboard/src/canAvailability.js": 40,
+  "projects/vehicle_data/dashboard/src/chime.js": 62,
+  "projects/vehicle_data/dashboard/src/compass.js": 18,
+  "projects/vehicle_data/dashboard/src/components/AccDistance.jsx": 47,
   "projects/vehicle_data/dashboard/src/components/Card.jsx": 69,
+  "projects/vehicle_data/dashboard/src/components/Compass.jsx": 15,
   "projects/vehicle_data/dashboard/src/components/DtcScan.jsx": 82,
   "projects/vehicle_data/dashboard/src/components/LightIndicators.jsx": 40,
   "projects/vehicle_data/dashboard/src/components/ServiceCard.jsx": 141,
   "projects/vehicle_data/dashboard/src/components/Sparkline.jsx": 165,
-  "projects/vehicle_data/dashboard/src/components/Tile.jsx": 76,
+  "projects/vehicle_data/dashboard/src/components/Tile.jsx": 78,
   "projects/vehicle_data/dashboard/src/components/TireGrid.jsx": 64,
   "projects/vehicle_data/dashboard/src/components/dtcScan.helpers.js": 452,
   "projects/vehicle_data/dashboard/src/components/lightIndicators.helpers.js": 8,
@@ -769,29 +811,36 @@
   "projects/vehicle_data/dashboard/src/dialogs/WarningChat.jsx": 229,
   "projects/vehicle_data/dashboard/src/dialogs/modalDialog.js": 65,
   "projects/vehicle_data/dashboard/src/dialogs/useController.js": 18,
-  "projects/vehicle_data/dashboard/src/format.js": 371,
+  "projects/vehicle_data/dashboard/src/format.js": 375,
   "projects/vehicle_data/dashboard/src/jsonReply.js": 22,
   "projects/vehicle_data/dashboard/src/link.baseline.js": 100,
   "projects/vehicle_data/dashboard/src/link.js": 305,
   "projects/vehicle_data/dashboard/src/link.protocol.js": 253,
   "projects/vehicle_data/dashboard/src/link.stream.js": 85,
   "projects/vehicle_data/dashboard/src/link.summary.js": 62,
-  "projects/vehicle_data/dashboard/src/main.jsx": 34,
+  "projects/vehicle_data/dashboard/src/main.jsx": 39,
+  "projects/vehicle_data/dashboard/src/overspeed.helpers.js": 60,
+  "projects/vehicle_data/dashboard/src/overspeed.js": 26,
   "projects/vehicle_data/dashboard/src/radarAim.js": 42,
   "projects/vehicle_data/dashboard/src/radarReference.js": 69,
   "projects/vehicle_data/dashboard/src/ring.js": 317,
   "projects/vehicle_data/dashboard/src/settings.js": 214,
-  "projects/vehicle_data/dashboard/src/store.js": 663,
+  "projects/vehicle_data/dashboard/src/store.js": 664,
+  "projects/vehicle_data/dashboard/src/styles/acc-distance.css": 47,
+  "projects/vehicle_data/dashboard/src/styles/app.css": 801,
+  "projects/vehicle_data/dashboard/src/styles/compass.css": 13,
+  "projects/vehicle_data/dashboard/src/styles/lighting.css": 24,
+  "projects/vehicle_data/dashboard/src/styles/night.css": 24,
   "projects/vehicle_data/dashboard/src/views/Drive.jsx": 110,
-  "projects/vehicle_data/dashboard/src/views/DriveFooter.jsx": 25,
-  "projects/vehicle_data/dashboard/src/views/DriveGauges.jsx": 108,
-  "projects/vehicle_data/dashboard/src/views/DriveMore.jsx": 199,
+  "projects/vehicle_data/dashboard/src/views/DriveFooter.jsx": 27,
+  "projects/vehicle_data/dashboard/src/views/DriveGauges.jsx": 105,
+  "projects/vehicle_data/dashboard/src/views/DriveMore.jsx": 195,
   "projects/vehicle_data/dashboard/src/views/Health.jsx": 271,
   "projects/vehicle_data/dashboard/src/views/History.jsx": 224,
   "projects/vehicle_data/dashboard/src/views/Parked.jsx": 343,
   "projects/vehicle_data/dashboard/src/views/System.jsx": 559,
   "projects/vehicle_data/dashboard/src/views/cruise.helpers.js": 23,
-  "projects/vehicle_data/dashboard/src/views/driveMore.helpers.js": 176,
+  "projects/vehicle_data/dashboard/src/views/driveMore.helpers.js": 122,
   "projects/vehicle_data/dashboard/src/views/drivePager.js": 22,
   "projects/vehicle_data/dashboard/src/views/driveSpeed.helpers.js": 18,
   "projects/vehicle_data/dashboard/src/views/health.helpers.js": 700,
@@ -809,12 +858,14 @@
   "projects/vehicle_data/dashboard/test/RadarCalibration.helpers.test.mjs": 266,
   "projects/vehicle_data/dashboard/test/RadarReference.helpers.test.mjs": 213,
   "projects/vehicle_data/dashboard/test/WarningChat.helpers.test.mjs": 747,
+  "projects/vehicle_data/dashboard/test/accDisplay.test.mjs": 174,
   "projects/vehicle_data/dashboard/test/bands.test.mjs": 391,
   "projects/vehicle_data/dashboard/test/build.test.mjs": 180,
   "projects/vehicle_data/dashboard/test/canAvailability.test.mjs": 134,
+  "projects/vehicle_data/dashboard/test/compass.test.mjs": 47,
   "projects/vehicle_data/dashboard/test/cruise.test.mjs": 16,
   "projects/vehicle_data/dashboard/test/derive-live.test.mjs": 385,
-  "projects/vehicle_data/dashboard/test/driveMore.test.mjs": 226,
+  "projects/vehicle_data/dashboard/test/driveMore.test.mjs": 172,
   "projects/vehicle_data/dashboard/test/driveSpeed.test.mjs": 21,
   "projects/vehicle_data/dashboard/test/dtcScan.test.mjs": 510,
   "projects/vehicle_data/dashboard/test/format.test.mjs": 304,
@@ -824,6 +875,7 @@
   "projects/vehicle_data/dashboard/test/link-store.test.mjs": 106,
   "projects/vehicle_data/dashboard/test/link.test.mjs": 943,
   "projects/vehicle_data/dashboard/test/modalDialog.test.mjs": 39,
+  "projects/vehicle_data/dashboard/test/overspeed.test.mjs": 68,
   "projects/vehicle_data/dashboard/test/parked.test.mjs": 517,
   "projects/vehicle_data/dashboard/test/perf.test.mjs": 560,
   "projects/vehicle_data/dashboard/test/ring.test.mjs": 284,
@@ -835,10 +887,11 @@
   "projects/vehicle_data/dashboard/tools/measure.mjs": 108,
   "projects/vehicle_data/dashboard/tools/refactor-oracle.mjs": 204,
   "projects/vehicle_data/dashboard/tools/shoot.mjs": 229,
-  "projects/vehicle_data/display_contract.py": 12,
-  "projects/vehicle_data/display_receiver.py": 219,
+  "projects/vehicle_data/display_contract.py": 43,
+  "projects/vehicle_data/display_receiver.py": 244,
+  "projects/vehicle_data/display_receivers.py": 30,
   "projects/vehicle_data/drift_warnings.py": 1669,
-  "projects/vehicle_data/drive_helper_launch.py": 13,
+  "projects/vehicle_data/drive_helper_launch.py": 16,
   "projects/vehicle_data/drive_recorder.py": 1816,
   "projects/vehicle_data/dtc_descriptions.py": 231,
   "projects/vehicle_data/early_warning.py": 144,
@@ -868,7 +921,8 @@
   "projects/vehicle_data/monitoring_coverage.py": 61,
   "projects/vehicle_data/notifications.py": 431,
   "projects/vehicle_data/pcm_electrical.py": 675,
-  "projects/vehicle_data/pcm_temperature_support.py": 164,
+  "projects/vehicle_data/pcm_support_profiles.py": 95,
+  "projects/vehicle_data/pcm_temperature_support.py": 132,
   "projects/vehicle_data/radar_alignment.py": 342,
   "projects/vehicle_data/radar_drive_steps.py": 111,
   "projects/vehicle_data/radar_reference.py": 297,
@@ -912,6 +966,7 @@
   "tests/gate_oracle.py": 861,
   "tests/gate_oracle_guards.py": 443,
   "tests/radar_service_support.py": 186,
+  "tests/test_acc_video_reference.py": 38,
   "tests/test_active_diagnostic_locks.py": 342,
   "tests/test_active_drive.py": 2856,
   "tests/test_alfaobd_adb.py": 386,
@@ -958,16 +1013,18 @@
   "tests/test_canbus.py": 143,
   "tests/test_canbus_identify.py": 24,
   "tests/test_canch_validation.py": 163,
+  "tests/test_candump_arrays.py": 40,
   "tests/test_candump_diagnostic_wire.py": 206,
   "tests/test_candump_io.py": 263,
   "tests/test_capture_pipeline.py": 31,
   "tests/test_ccan_powertrain.py": 316,
   "tests/test_cli_gates.py": 589,
   "tests/test_cluster_live.py": 50,
+  "tests/test_compass.py": 202,
   "tests/test_cop_can_wake.py": 491,
   "tests/test_cruise_summary.py": 135,
   "tests/test_custom_warnings.py": 121,
-  "tests/test_dashboard_v2_node.py": 123,
+  "tests/test_dashboard_v2_node.py": 125,
   "tests/test_dex_field_usage.py": 189,
   "tests/test_diagnostic_helpers.py": 119,
   "tests/test_diagnostic_safety.py": 153,
@@ -975,7 +1032,7 @@
   "tests/test_display_frames.py": 496,
   "tests/test_display_receiver.py": 279,
   "tests/test_drift_warnings.py": 1075,
-  "tests/test_drive_helper_launch.py": 69,
+  "tests/test_drive_helper_launch.py": 71,
   "tests/test_drive_recorder_capture_boundary.py": 49,
   "tests/test_drive_recorder_interval_steps.py": 155,
   "tests/test_dtc_batch.py": 862,
@@ -990,6 +1047,7 @@
   "tests/test_engine_off_voltage.py": 135,
   "tests/test_event_history.py": 366,
   "tests/test_fca_hsql_decode.py": 444,
+  "tests/test_fuel_catalog.py": 114,
   "tests/test_gear_estimate.py": 59,
   "tests/test_health_summary.py": 87,
   "tests/test_history_package.py": 118,
@@ -998,13 +1056,13 @@
   "tests/test_interface_health_events.py": 301,
   "tests/test_last_readings.py": 100,
   "tests/test_lighting.py": 73,
-  "tests/test_lighting_reference.py": 82,
+  "tests/test_lighting_reference.py": 96,
   "tests/test_live_data_safety.py": 388,
   "tests/test_maintenance.py": 159,
-  "tests/test_no_legacy_can_topology.py": 262,
+  "tests/test_no_legacy_can_topology.py": 263,
   "tests/test_passive_drive_capture.py": 1177,
   "tests/test_pcm_electrical.py": 618,
-  "tests/test_pcm_temperature_support.py": 168,
+  "tests/test_pcm_temperature_support.py": 255,
   "tests/test_pcm_tigershark.py": 59,
   "tests/test_radar_alignment.py": 239,
   "tests/test_radar_reference.py": 224,
@@ -1012,7 +1070,7 @@
   "tests/test_radar_service_control.py": 450,
   "tests/test_reassemble_commands.py": 89,
   "tests/test_receive_watch.py": 93,
-  "tests/test_reports.py": 294,
+  "tests/test_reports.py": 309,
   "tests/test_rke_front_unlock.py": 221,
   "tests/test_routine_scan.py": 746,
   "tests/test_service_units_start_modules.py": 60,
@@ -1057,7 +1115,7 @@
   "tests/test_zf9hp.py": 63,
   "tests/test_zf9hp_results.py": 101,
   "tests/vehicle_data_api_concurrency_support.py": 377,
-  "tests/vehicle_data_catalog_contract.py": 39,
+  "tests/vehicle_data_catalog_contract.py": 40,
   "tools/__init__.py": 1,
   "tools/acc_freshness_audit.py": 70,
   "tools/alfaobd_apk_db.py": 124,
@@ -1087,6 +1145,7 @@
   "tools/can_workbench/adapter.py": 270,
   "tools/can_workbench/report.py": 277,
   "tools/can_workbench_report.py": 7,
+  "tools/candump_arrays.py": 83,
   "tools/candump_diagnostic_wire.py": 412,
   "tools/dashboard_build.py": 32,
   "tools/dex_field_usage.py": 712,
@@ -1110,7 +1169,7 @@
   "tools/zf9hp_results.py": 218
  },
  "func_limits": {},
- "head": "3f58fa2f7b50b973f7860e247a0a09203bb3df20",
+ "head": "98de0f960f3f8a10b719e8cc0fdef3b649d29548",
  "limits": {
   "enforce_tests": true,
   "file_lines": 800,
@@ -1119,6 +1178,7 @@
  "markers": {
   "bare_except": 0,
   "dual_import_guard": 0,
+  "important": 1,
   "lint_disable": 7,
   "sys_path_hack": 0,
   "type_ignore": 31
@@ -1453,7 +1513,8 @@
    "get": 5
   },
   "lib/reports.py": {
-   "atomic_json": 60
+   "atomic_json": 60,
+   "require_distinct_output": 6
   },
   "lib/signal_fields.py": {
    "SignalField.__post_init__": 30,
@@ -1614,10 +1675,17 @@
    "printable": 6,
    "scrub_hex": 15
   },
+  "projects/ecu_mapping/fuel_catalog.py": {
+   "expand_plain_references": 9,
+   "expand_plain_references.replace": 3,
+   "extract_fields": 22,
+   "main": 23,
+   "plain_label_bank": 6
+  },
   "projects/ecu_mapping/lighting_reference.py": {
    "candidates": 25,
    "collect": 33,
-   "main": 21,
+   "main": 22,
    "reference_windows": 20,
    "stamp": 2,
    "transitions": 33
@@ -1928,6 +1996,7 @@
    "TelemetryBroker.handle_auxiliary_drive_event": 63,
    "TelemetryBroker.health_response": 19,
    "TelemetryBroker.history_response": 17,
+   "TelemetryBroker.invalidate_compass": 4,
    "TelemetryBroker.list_metrics": 7,
    "TelemetryBroker.maintenance_response": 11,
    "TelemetryBroker.metric_response": 34,
@@ -1938,10 +2007,10 @@
    "TelemetryBroker.start_usb_monitor": 11,
    "TelemetryBroker.status_response": 88,
    "TelemetryBroker.stop_collector": 31,
-   "TelemetryBroker.store_display_frame": 30,
+   "TelemetryBroker.store_display_frame": 14,
    "TelemetryBroker.wake_prearm_conflicts": 17,
    "build_parser": 73,
-   "main": 151
+   "main": 148
   },
   "projects/vehicle_data/can_availability.py": {
    "CanAvailability.__init__": 7,
@@ -2036,6 +2105,21 @@
    "main": 30,
    "scalar_json": 10
   },
+  "projects/vehicle_data/compass.py": {
+   "decode_compass_observations": 13
+  },
+  "projects/vehicle_data/compass_receiver.py": {
+   "CompassReceiver.__init__": 16,
+   "CompassReceiver._listen": 30,
+   "CompassReceiver._listen.publish": 7,
+   "CompassReceiver._listen.valid": 13,
+   "CompassReceiver.run": 25,
+   "CompassReceiver.start": 5,
+   "CompassReceiver.status": 3,
+   "CompassReceiver.stop": 6,
+   "LocalBrokerStatusClient.request": 4,
+   "armed_compass_route": 5
+  },
   "projects/vehicle_data/cop_can_wake.py": {
    "CopCanWakeSupervisor.__init__": 48,
    "CopCanWakeSupervisor._clear_attempt_schedule": 4,
@@ -2091,7 +2175,9 @@
    "load_rules": 17,
    "validate_rule": 22
   },
-  "projects/vehicle_data/display_contract.py": {},
+  "projects/vehicle_data/display_contract.py": {
+   "display_results": 26
+  },
   "projects/vehicle_data/display_receiver.py": {
    "DisplayReceiver.__init__": 15,
    "DisplayReceiver._check_route": 16,
@@ -2105,7 +2191,17 @@
    "DisplayReceiver.start": 6,
    "DisplayReceiver.status": 3,
    "DisplayReceiver.stop": 6,
-   "receive_display_frames": 56
+   "_decode_display": 3,
+   "_received_timestamp": 8,
+   "receive_display_frames": 65
+  },
+  "projects/vehicle_data/display_receivers.py": {
+   "DisplayReceivers.__init__": 6,
+   "DisplayReceivers.pause_passive": 2,
+   "DisplayReceivers.resume_passive": 2,
+   "DisplayReceivers.start": 3,
+   "DisplayReceivers.status": 2,
+   "DisplayReceivers.stop": 3
   },
   "projects/vehicle_data/drift_warnings.py": {
    "_Reader.__init__": 8,
@@ -2586,9 +2682,13 @@
    "_positive_finite_timeout": 12,
    "_validate_closed_registry": 65
   },
+  "projects/vehicle_data/pcm_support_profiles.py": {
+   "build_plan": 17,
+   "decode_reply": 49,
+   "request_bytes": 5
+  },
   "projects/vehicle_data/pcm_temperature_support.py": {
-   "decode_reply": 27,
-   "main": 80,
+   "main": 76,
    "stationary_errors": 11,
    "vehicle_gate": 4
   },
@@ -3389,6 +3489,9 @@
    "Sink.service": 2,
    "radar_frame": 2,
    "record_reading": 6
+  },
+  "tests/test_acc_video_reference.py": {
+   "AccVideoReferenceTests.test_video_labeled_display_samples": 18
   },
   "tests/test_active_diagnostic_locks.py": {
    "ActiveDiagnosticLockTests.test_live_view_releases_after_keyboard_interrupt": 42,
@@ -4496,6 +4599,9 @@
    "speed_payload": 2,
    "wheel_payload": 5
   },
+  "tests/test_candump_arrays.py": {
+   "CandumpArraysTests.test_payloads_lengths_and_window": 15
+  },
   "tests/test_candump_diagnostic_wire.py": {
    "DiagnosticWireTests.test_extracts_only_paired_physical_reads_with_global_raw_sequence": 56,
    "DiagnosticWireTests.test_generic_reference_reader_pins_pcm_endpoint_and_direction": 31,
@@ -4588,6 +4694,23 @@
    "ClusterLiveWrapperTests.test_metric_table_has_only_reviewed_dids_in_display_order": 6,
    "ClusterLiveWrapperTests.test_unverified_decodes_are_raw_only": 10
   },
+  "tests/test_compass.py": {
+   "CompassDecodeTests.test_owner_video_cardinals_and_complete_turn_sequence": 10,
+   "CompassDecodeTests.test_silence_ages_last_report_and_receive_loss_retains_it": 20,
+   "CompassDecodeTests.test_unknown_payload_flags_and_other_frame_namespaces_are_rejected": 10,
+   "CompassReceiveTests.test_event_only_feed_preserves_kernel_receipt_and_does_not_resample": 14,
+   "CompassReceiveTests.test_local_client_cannot_request_an_acquisition_or_another_route": 7,
+   "CompassReceiveTests.test_only_proven_auxiliary_owner_can_admit_compass": 10,
+   "CompassReceiveTests.test_owner_replacement_rejects_publication_and_closes_interval": 27,
+   "CompassReceiveTests.test_owner_replacement_rejects_publication_and_closes_interval.admit": 4,
+   "CompassReceiveTests.test_owner_replacement_rejects_publication_and_closes_interval.receiver": 7,
+   "CompassReceiveTests.test_real_admission_reads_local_broker_status_before_receiving": 29,
+   "CompassReceiveTests.test_real_admission_reads_local_broker_status_before_receiving.receive": 6,
+   "CompassReceiveTests.test_socket_overflow_and_unknown_payload_end_previous_live_evidence": 12,
+   "CompassReceiveTests.test_stop_during_real_route_revalidation_prevents_publication": 24,
+   "CompassReceiveTests.test_stop_during_real_route_revalidation_prevents_publication.query_interface": 6,
+   "CompassReceiveTests.test_stop_during_real_route_revalidation_prevents_publication.receive": 4
+  },
   "tests/test_cop_can_wake.py": {
    "BrokerGateTests.test_exact_fresh_stopped_state_is_accepted": 12,
    "BrokerGateTests.test_fresh_awake_activity_after_our_own_wake_is_accepted": 7,
@@ -4667,7 +4790,7 @@
    "sample": 4
   },
   "tests/test_dashboard_v2_node.py": {
-   "DashboardV2NodeSuiteTests.test_node_suite_passes": 20,
+   "DashboardV2NodeSuiteTests.test_node_suite_passes": 22,
    "esbuild_problem": 23,
    "missing_dependencies": 12,
    "node_major": 12
@@ -4889,7 +5012,7 @@
    "to_us": 2
   },
   "tests/test_drive_helper_launch.py": {
-   "DriveHelperLaunchTests.test_each_supervisor_launch_starts_its_helper_module": 32,
+   "DriveHelperLaunchTests.test_each_supervisor_launch_starts_its_helper_module": 33,
    "Process.kill": 2,
    "Process.poll": 2,
    "Process.terminate": 2,
@@ -5173,6 +5296,15 @@
    "encode_row": 26,
    "index_record": 2
   },
+  "tests/test_fuel_catalog.py": {
+   "FuelCatalogTests.test_bcm_table_without_optional_group_column_is_supported": 14,
+   "FuelCatalogTests.test_incompatible_schema_is_not_an_empty_candidate_result": 14,
+   "FuelCatalogTests.test_missing_or_duplicate_separator_is_refused": 7,
+   "FuelCatalogTests.test_output_cannot_replace_catalog_or_labels": 15,
+   "FuelCatalogTests.test_plain_references_do_not_use_enum_or_whole_file_offsets": 9,
+   "FuelCatalogTests.test_report_links_fields_but_does_not_assert_vehicle_support": 24,
+   "FuelCatalogTests.test_valid_catalog_can_have_no_fuel_candidates": 13
+  },
   "tests/test_gear_estimate.py": {
    "GearEstimateTests.test_between_bands_and_eight_nine_are_unknown": 5,
    "GearEstimateTests.test_each_frozen_band_maps_to_its_gear": 4,
@@ -5282,6 +5414,7 @@
   },
   "tests/test_lighting_reference.py": {
    "LightingReferenceTests.test_missing_icon_reference_is_not_treated_as_off": 11,
+   "LightingReferenceTests.test_output_cannot_replace_events_or_capture": 13,
    "LightingReferenceTests.test_public_report_matches_both_cycles_and_keeps_stream_identity": 47,
    "LightingReferenceTests.test_rejects_incomplete_reference_instead_of_guessing_states": 10
   },
@@ -5323,7 +5456,7 @@
    "NoLegacyCanTopologyTests.test_installed_role_contract_has_three_independent_buses_and_one_spare": 19,
    "NoLegacyCanTopologyTests.test_live_can_paths_have_no_global_service_exclusion": 13,
    "NoLegacyCanTopologyTests.test_maintained_live_paths_do_not_name_retired_adapter_or_fixed_netdev": 12,
-   "NoLegacyCanTopologyTests.test_passive_signature_identification_has_a_reviewed_role_owner": 29,
+   "NoLegacyCanTopologyTests.test_passive_signature_identification_has_a_reviewed_role_owner": 30,
    "NoLegacyCanTopologyTests.test_registry_never_persists_ephemeral_socketcan_names": 6,
    "NoLegacyCanTopologyTests.test_retired_single_adapter_entry_points_stay_removed": 19,
    "NoLegacyCanTopologyTests.test_shared_libraries_have_no_bus_hunting_or_channel_only_armer": 15,
@@ -5438,12 +5571,17 @@
    "response_frame": 11
   },
   "tests/test_pcm_temperature_support.py": {
+   "TemperatureSupportTests.run_live_scenario": 53,
+   "TemperatureSupportTests.run_live_scenario.acquire": 4,
+   "TemperatureSupportTests.run_live_scenario.handoff": 7,
+   "TemperatureSupportTests.run_live_scenario.release": 3,
    "TemperatureSupportTests.test_busy_handoff_never_arms_or_transmits": 18,
    "TemperatureSupportTests.test_exact_reply_classification": 7,
-   "TemperatureSupportTests.test_live_fixed_pair_restores_and_stops_on_lost_vehicle_gate": 72,
-   "TemperatureSupportTests.test_live_fixed_pair_restores_and_stops_on_lost_vehicle_gate.acquire": 4,
-   "TemperatureSupportTests.test_live_fixed_pair_restores_and_stops_on_lost_vehicle_gate.handoff": 7,
-   "TemperatureSupportTests.test_live_fixed_pair_restores_and_stops_on_lost_vehicle_gate.release": 3,
+   "TemperatureSupportTests.test_injector_gate_loss_after_two_sends_restores_before_handoff_exit": 11,
+   "TemperatureSupportTests.test_injector_malformed_reply_restores_before_handoff_exit": 9,
+   "TemperatureSupportTests.test_injector_plan_is_six_exact_padded_reads_without_io": 17,
+   "TemperatureSupportTests.test_injector_reply_preserves_raw_u32_candidate_only": 26,
+   "TemperatureSupportTests.test_live_fixed_pair_restores_and_stops_on_lost_vehicle_gate": 38,
    "TemperatureSupportTests.test_oil_life_decodes_percent_and_rejects_invalid_shapes": 13,
    "TemperatureSupportTests.test_oil_life_plan_is_one_exact_padded_read_without_io": 15,
    "TemperatureSupportTests.test_plan_never_acquires_a_route_or_opens_can": 8,
@@ -5601,6 +5739,7 @@
    "ReportsTests.test_cleanup_error_policy": 10,
    "ReportsTests.test_dtc_encoding_and_cleanup_are_the_only_intentional_change": 21,
    "ReportsTests.test_dump_failure_leftovers": 18,
+   "ReportsTests.test_evidence_output_guard_rejects_aliases_and_allows_separate_reports": 14,
    "ReportsTests.test_fsync_precedes_replace_and_is_optional": 15,
    "ReportsTests.test_fsync_precedes_replace_and_is_optional.replace": 3,
    "ReportsTests.test_helper_does_not_create_parent": 4,
@@ -7387,6 +7526,11 @@
    "validate_manifest": 36
   },
   "tools/can_workbench_report.py": {},
+  "tools/candump_arrays.py": {
+   "_lines": 7,
+   "collect": 27,
+   "main": 14
+  },
   "tools/candump_diagnostic_wire.py": {
    "_checked_output": 53,
    "_single_frame_payload": 7,
@@ -7800,9 +7944,11 @@
   "projects/vehicle_data/dashboard/test/RadarCalibration.helpers.test.mjs",
   "projects/vehicle_data/dashboard/test/RadarReference.helpers.test.mjs",
   "projects/vehicle_data/dashboard/test/WarningChat.helpers.test.mjs",
+  "projects/vehicle_data/dashboard/test/accDisplay.test.mjs",
   "projects/vehicle_data/dashboard/test/bands.test.mjs",
   "projects/vehicle_data/dashboard/test/build.test.mjs",
   "projects/vehicle_data/dashboard/test/canAvailability.test.mjs",
+  "projects/vehicle_data/dashboard/test/compass.test.mjs",
   "projects/vehicle_data/dashboard/test/cruise.test.mjs",
   "projects/vehicle_data/dashboard/test/derive-live.test.mjs",
   "projects/vehicle_data/dashboard/test/driveMore.test.mjs",
@@ -7815,6 +7961,7 @@
   "projects/vehicle_data/dashboard/test/link-store.test.mjs",
   "projects/vehicle_data/dashboard/test/link.test.mjs",
   "projects/vehicle_data/dashboard/test/modalDialog.test.mjs",
+  "projects/vehicle_data/dashboard/test/overspeed.test.mjs",
   "projects/vehicle_data/dashboard/test/parked.test.mjs",
   "projects/vehicle_data/dashboard/test/perf.test.mjs",
   "projects/vehicle_data/dashboard/test/ring.test.mjs",
@@ -7834,6 +7981,7 @@
   "tests/gate_oracle.py",
   "tests/gate_oracle_guards.py",
   "tests/radar_service_support.py",
+  "tests/test_acc_video_reference.py",
   "tests/test_active_diagnostic_locks.py",
   "tests/test_active_drive.py",
   "tests/test_alfaobd_adb.py",
@@ -7880,12 +8028,14 @@
   "tests/test_canbus.py",
   "tests/test_canbus_identify.py",
   "tests/test_canch_validation.py",
+  "tests/test_candump_arrays.py",
   "tests/test_candump_diagnostic_wire.py",
   "tests/test_candump_io.py",
   "tests/test_capture_pipeline.py",
   "tests/test_ccan_powertrain.py",
   "tests/test_cli_gates.py",
   "tests/test_cluster_live.py",
+  "tests/test_compass.py",
   "tests/test_cop_can_wake.py",
   "tests/test_cruise_summary.py",
   "tests/test_custom_warnings.py",
@@ -7912,6 +8062,7 @@
   "tests/test_engine_off_voltage.py",
   "tests/test_event_history.py",
   "tests/test_fca_hsql_decode.py",
+  "tests/test_fuel_catalog.py",
   "tests/test_gear_estimate.py",
   "tests/test_health_summary.py",
   "tests/test_history_package.py",

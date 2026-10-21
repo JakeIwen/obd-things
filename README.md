@@ -8,9 +8,35 @@ started as ACC-radar alignment work and is structured so the
 **generic CAN/UDS plumbing is reusable for any module** (PCM, BCM, ABS, …),
 with each investigation living under `projects/<name>/`.
 
-![Tablet telemetry dashboard showing live fuel economy](projects/vehicle_data/dashboard/screenshots/17-drive-live-fuel-economy.png)
+## Telemetry dashboard
 
-*Tablet telemetry dashboard with illustrative demo data; see [Telemetry dashboard](projects/vehicle_data/README.md#telemetry-dashboard).*
+<p align="center">
+  <img src="projects/vehicle_data/dashboard/screenshots/01-drive-gauges.png" width="380" alt="Van telemetry dashboard replaying a historical drive with speed, RPM, temperatures, oil pressure, charging voltage, power, tire pressures, trip data, and light indicators">
+  <img src="projects/vehicle_data/dashboard/screenshots/17-drive-live-fuel-economy.png" width="380" alt="Drive sensors view with an estimated fuel rate of 3.3 gallons per hour and instant economy of 19 mpg, adaptive cruise, estimated gear, radar aim, and transmission speeds">
+</p>
+
+The tablet dashboard turns the passive three-bus telemetry stream into a driver-focused view of
+speed, engine and transmission temperatures, oil pressure, charging voltage, power, tire pressure,
+trip history, estimated fuel rate and live mpg, lighting state, diagnostics, maintenance, and radar
+alignment. Both screenshots use clearly labeled browser-only demo data: a replay with representative
+values from saved driving ranges (left) and an illustrative highway scene (right). Neither is live
+vehicle data, and the captures performed no CAN or service actions.
+
+<details>
+<summary>More dashboard views</summary>
+
+| Parked overview | Trip history and trends |
+|---|---|
+| <img src="projects/vehicle_data/dashboard/screenshots/03-parked-battery-tires-and-service.png" width="300" alt="Parked overview with battery trend, tire pressures, last trip, maintenance and warning summaries"> | <img src="projects/vehicle_data/dashboard/screenshots/07-history-trips-and-temperature-trends.png" width="300" alt="Trip history with recent drives, cruise summaries, and temperature trends"> |
+| Battery trend, tire pressures, last trip, maintenance, and warning summaries. | Recent trips, cruise use, recording coverage, and temperature trends. |
+| Health and diagnostics | Custom early warning |
+| <img src="projects/vehicle_data/dashboard/screenshots/04-health-warnings-and-diagnostics.png" width="300" alt="Health view with an early warning and diagnostic trouble codes"> | <img src="projects/vehicle_data/dashboard/screenshots/13-create-custom-early-warning.png" width="300" alt="Natural-language custom early-warning proposal and approval review"> |
+| Early warnings, evidence status, diagnostic codes, and module coverage. | Natural-language warning setup with a simulated proposal and approval review. |
+
+All gallery images use illustrative demo data; simulated conversations and actions are identified in
+the [capture manifest](projects/vehicle_data/dashboard/screenshots/manifest.json).
+
+</details>
 
 > **New here (human or agent)? Read this whole file first** (universal facts + gotchas below), then
 > the README of whatever you're working on, e.g. [`projects/radar/README.md`](projects/radar/README.md).
