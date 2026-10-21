@@ -82,8 +82,8 @@ Install all three regular unit files in `/etc/systemd/system/`, run
 `obd-compute-retention.path` and `obd-compute-retention.timer`. Check the timer's
 next scheduled run with `systemctl list-timers obd-compute-retention.timer`;
 inspect completed runs with `journalctl -u obd-compute-retention.service`.
-Disable both triggers with `sudo systemctl disable --now
-obd-compute-retention.timer obd-compute-retention.path` to stop future cleanup.
+Disable both triggers with
+`sudo systemctl disable --now obd-compute-retention.{timer,path}` to stop future cleanup.
 This preserves all remaining data.
 
 The wrapper's public CLI and unit contracts are covered by
@@ -267,7 +267,8 @@ preserving cited jobs and active dependencies. The live read-only preview took
 35 seconds; its report is `tmp/storage-retention/compute-plan-2g-final.json`.
 No data has been deleted.
 
-The updated van-compute source has 301 passing tests. The revised consumer has
+The updated van-compute suite ran 305 tests successfully (one Linux-only skip
+on the Mac worker), including the merged upstream installer changes. The revised consumer has
 1,944 passing Python tests (12 reported skips) and 491 passing dashboard tests
 plus the build. Systemd validation passed. The published backend baseline
 matches the installed Pi source cohort; deployment must still use the Mac's
