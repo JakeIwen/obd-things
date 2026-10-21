@@ -66,6 +66,17 @@ class and provides the `/v1` JSON API. The MacBook-managed Van Dashboard reads
 `http://192.168.6.103:8765/v1/snapshot`, so `/v1` routes must keep working. Start with
 `projects/vehicle_data/README.md` section "Telemetry dashboard" and
 `projects/vehicle_data/dashboard/docs/design.md`.
+
+Dashboard screenshots always show realistic dummy data that showcases the features in view
+(owner rule, 2026-10-21), whether they go in a README, a doc, a finding, a handoff or a report
+to the owner. They never show the dashes of a parked van. Fill every visible tile with
+values that agree with each other (instant mpg is speed ÷ fuel rate, power matches torque × RPM).
+`dashboard/tools/demo_data.mjs` holds the scene and its consistency check.
+`node --experimental-websocket tools/shoot.mjs --demo <url> <outdir>` (from `dashboard/`)
+applies it before shooting each view. Extend the scene when a feature it doesn't cover is in view.
+Caption every such image as illustrative demo data, and list tracked ones in
+`dashboard/screenshots/manifest.json`. They are never drive evidence, and never show the full
+VIN or a real location.
 Dashboard warning state/headings live in `dashboard/src/warningContext.js`;
 formatted cards are lazy in `dashboard/src/app/warningCards.js`, and System
 vehicle-state text lives in `dashboard/src/views/systemVehicle.helpers.js`.

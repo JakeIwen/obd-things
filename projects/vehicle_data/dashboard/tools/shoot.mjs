@@ -1,5 +1,5 @@
 // Screenshot and measure every dashboard v2 view in headless Firefox over WebDriver BiDi.
-// usage: node --experimental-websocket tools/shoot.mjs <url> <outdir> [observeSeconds]
+// usage: node --experimental-websocket tools/shoot.mjs [--demo] <url> <outdir> [observeSeconds]
 // Output per orientation and view: <outdir>/<orientation>-<view>.png, plus report.json with
 // DOM size, document height vs viewport, small text, tap targets, overflow/overlap hits,
 // console errors and a MutationObserver/rAF sample on the Drive view.
@@ -7,9 +7,12 @@ import {spawn} from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-const url = process.argv[2] || "http://127.0.0.1:8767/";
-const out = process.argv[3] || "tmp-shots";
-const observeSeconds = Number(process.argv[4] || 10);
+const rawArgs = process.argv.slice(2);
+const demo = rawArgs.includes("--demo");
+const args = rawArgs.filter((arg) => arg !== "--demo");
+const url = args[0] || "http://127.0.0.1:8767/";
+const out = args[1] || "tmp-shots";
+const observeSeconds = Number(args[2] || 10);
 const port = 9300 + Math.floor(Math.random() * 600);
 fs.mkdirSync(out, {recursive: true});
 const profileDir = path.join(out, "ff-profile");
@@ -22,6 +25,8 @@ fs.writeFileSync(path.join(profileDir, "user.js"), [
   'user_pref("layout.css.devPixelsPerPx", "1.0");',
 ].join("\n") + "\n");
 const ff = spawn(process.env.FIREFOX || "/usr/bin/firefox", ["--headless", "--no-remote", "-profile", profileDir, `--remote-debugging-port=${port}`, "--remote-allow-hosts=127.0.0.1,localhost", "--window-size=800,1280", "about:blank"], {stdio: ["ignore", "ignore", "pipe"]});
+// A failed probe must not leave this tool's private browser running.
+process.on("exit", () => { if (ff.exitCode === null) ff.kill("SIGKILL"); });
 let stderr = ""; ff.stderr.on("data", (d) => { stderr += d; });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let ws = null;
@@ -86,11 +91,83 @@ const probe = () => evaluate(`(() => {
   return {domNodes: document.getElementsByTagName('*').length, viewScroll: view ? view.scrollHeight : null, viewClient: view ? view.clientHeight : null, docW: document.documentElement.scrollWidth, winW: innerWidth, small, tapSmall: tapSmall.slice(0, 20), overflow: overflow.slice(0, 20), overlaps: overlaps.slice(0, 20), clippedTiles: clipped};
 })()`);
 
+async function applyDemoScene(scene) {
+  const payload = JSON.stringify(scene);
+  return evaluate(`(async (scene) => {
+    const van = window.__van;
+    if (!van || !van.store || !van.link) throw new Error("window.__van is unavailable");
+    van.link.stop();
+    // Let any already-queued stream callback retire before the fixture becomes authoritative.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const store = van.store;
+    const now = performance.now();
+    const nowWall = Date.now();
+    const finalObservedAt = new Date(nowWall).toISOString();
+    const makeRecord = (name, value, receivedMono, observedAt) => {
+      const spec = scene.metrics[name];
+      return {
+        name, available: true, stale: false, value,
+        unit: spec.unit, quality: spec.quality, source: spec.source,
+        bus: null, acquisition: null, interface_mode: "illustrative_demo",
+        observed_at: observedAt, reason: null, detail: null,
+        last_recorded: spec.quality === "candidate" ? {
+          value, unit: spec.unit, quality: spec.quality, source: spec.source, observed_at: observedAt,
+        } : null,
+        last_acquisition_error: null,
+        receivedMono, ageAtReceiptMs: 0,
+        staleAfterMs: scene.staleAfterMs,
+      };
+    };
+    try {
+      localStorage.setItem("van-telemetry.v2.trip", JSON.stringify({
+        start: scene.history.current_trip.started_at,
+        miles: scene.trip.distanceMiles,
+      }));
+    } catch (_error) {}
+    store.connection.value = {state: "live", reason: null, detail: null, sinceMono: now};
+    store.vehicle.value = {
+      state: "awake", running: true, confidence: "verified", basis: "illustrative_demo",
+      detail: null, observed_at: finalObservedAt, ageAtReceiptMs: 0, receivedMono: now,
+    };
+    store.summary.history.value = scene.history;
+    store.summary.health.value = scene.health;
+    store.summary.statusFull.value = scene.statusLite;
+    store.summary.error.value = null;
+    store.summary.fetchedMono.value = now;
+    store.statusLite.value = scene.statusLite;
+    for (const [name, values] of Object.entries(scene.sparklines)) {
+      const start = now - 14 * 60 * 1000;
+      const step = values.length > 1 ? 14 * 60 * 1000 / (values.length - 1) : 0;
+      values.forEach((value, index) => {
+        const receivedMono = start + index * step;
+        const observedAt = new Date(nowWall - (now - receivedMono)).toISOString();
+        store.metricSignal(name).value = makeRecord(name, value, receivedMono, observedAt);
+      });
+    }
+    for (const [name, spec] of Object.entries(scene.metrics)) {
+      store.metricSignal(name).value = makeRecord(name, spec.value, now, finalObservedAt);
+    }
+    store.metricNames.value = Object.keys(scene.metrics).sort();
+    store.clock.value = Math.round(now / 1000) * 1000;
+    return {
+      name: scene.name,
+      metrics: Object.keys(scene.metrics).length,
+      instantMpg: Math.round(scene.metrics["vehicle.speed"].value / scene.metrics["engine.fuel_rate"].value),
+      odometerState: store.observationState("vehicle.odometer", now, nowWall).kind,
+    };
+  })(${payload})`);
+}
+
 const report = {url, startedAt: new Date().toISOString(), views: {}};
 await viewport(800, 1280);
 await send("browsingContext.navigate", {context, url, wait: "complete"});
 await sleep(6000);
 report.assets = await evaluate(`performance.getEntriesByType("resource").filter(e => !e.name.includes("/v1/") && !e.name.includes("/v2/")).map(e => ({name: e.name.replace(location.origin, ""), transfer: e.transferSize, decoded: e.decodedBodySize}))`);
+if (demo) {
+  const {buildDemoScene} = await import("./demo_data.mjs");
+  report.demo = await applyDemoScene(buildDemoScene());
+  await sleep(500);
+}
 // Drive view mutation / frame sample while the stream runs.
 await clickTab("Drive"); await sleep(1500);
 report.driveIdle = await evaluate(`new Promise((resolve) => {

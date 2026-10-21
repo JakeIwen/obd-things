@@ -867,7 +867,8 @@ because 1→2 upshifts cross R's band). It was observed live on 2026-09-24 (7th 
   gate. Owner action: add `node_modules` and `dist` to van_compute's ignored directories, because the
   snapshot otherwise ships 13 MB of dependencies.
 - **Browser**: `tools/shoot.mjs` (headless Firefox over WebDriver BiDi) screenshots and measures
-  every view at 800×1280 and 1280×800. It checks:
+  every view at 800×1280 and 1280×800. Pass `--demo` to stop polling and fill both Drive pages
+  plus the History trips card from the coherent illustrative scene in `tools/demo_data.mjs`. It checks:
   - document height (Drive ≤ 1 screen in portrait) and DOM nodes (Drive ≤ 350);
   - text under 13 px, tap targets under 44 px, overflow/overlap hits and console errors;
   - a MutationObserver/rAF sample on Drive (≤ 12 writes/s live, 0 when unchanged, no rAF gap over

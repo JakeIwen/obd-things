@@ -148,6 +148,14 @@
       "height": 1280,
       "bytes": 90598,
       "sha256": "c15dc08d99f99471583d72ff307d031b08f9b0325b7bc83b936de21bd67fdf9a"
+    },
+    {
+      "file": "17-drive-live-fuel-economy.png",
+      "caption": "Drive Sensors page from build c6b0c4e25406 with illustrative demo highway data, including ≈ 3.3 gal/h and now ≈ 19 mpg.",
+      "width": 800,
+      "height": 1280,
+      "bytes": 136357,
+      "sha256": "d4e7ad73ea5a30f48e0f5dd14a2758c4ab40e7c897a211ae526e948ff7b8e5e0"
     }
   ]
 }

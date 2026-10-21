@@ -8,6 +8,10 @@ started as ACC-radar alignment work and is structured so the
 **generic CAN/UDS plumbing is reusable for any module** (PCM, BCM, ABS, …),
 with each investigation living under `projects/<name>/`.
 
+![Tablet telemetry dashboard showing live fuel economy](projects/vehicle_data/dashboard/screenshots/17-drive-live-fuel-economy.png)
+
+*Tablet telemetry dashboard with illustrative demo data; see [Telemetry dashboard](projects/vehicle_data/README.md#telemetry-dashboard).*
+
 > **New here (human or agent)? Read this whole file first** (universal facts + gotchas below), then
 > the README of whatever you're working on, e.g. [`projects/radar/README.md`](projects/radar/README.md).
 
