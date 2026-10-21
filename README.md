@@ -18,9 +18,23 @@ The tablet dashboard turns the passive three-bus telemetry stream into a driver-
 speed, engine and transmission temperatures, oil pressure, charging voltage, power, tire pressure,
 trip history, lighting state, diagnostics, maintenance, and radar alignment. This screenshot uses a
 clearly labeled browser-only replay with representative values from saved driving ranges; it is not
-live vehicle data and the capture performed no CAN or service actions. The
-[dashboard gallery](projects/vehicle_data/dashboard/screenshots/) also shows its parked, health,
-history, system, warning, maintenance, and guarded diagnostic views.
+live vehicle data and the capture performed no CAN or service actions.
+
+<details>
+<summary>More dashboard views</summary>
+
+| Sensors and adaptive cruise | Trip history and trends |
+|---|---|
+| <img src="projects/vehicle_data/dashboard/screenshots/02-drive-sensors.png" width="300" alt="Drive sensors view with adaptive cruise, following distance, gear, radar alignment, and transmission speeds"> | <img src="projects/vehicle_data/dashboard/screenshots/07-history-trips-and-temperature-trends.png" width="300" alt="Trip history with recent drives, cruise summaries, and temperature trends"> |
+| Adaptive-cruise state, following distance, estimated gear, radar aim, and transmission speeds. | Recent trips, cruise use, recording coverage, and temperature trends. |
+| Health and diagnostics | Custom early warning |
+| <img src="projects/vehicle_data/dashboard/screenshots/04-health-warnings-and-diagnostics.png" width="300" alt="Health view with an early warning and diagnostic trouble codes"> | <img src="projects/vehicle_data/dashboard/screenshots/13-create-custom-early-warning.png" width="300" alt="Natural-language custom early-warning proposal and approval review"> |
+| Early warnings, evidence status, diagnostic codes, and module coverage. | Natural-language warning setup with a simulated proposal and approval review. |
+
+All gallery images use illustrative demo data; simulated conversations and actions are identified in
+the [capture manifest](projects/vehicle_data/dashboard/screenshots/manifest.json).
+
+</details>
 
 > **New here (human or agent)? Read this whole file first** (universal facts + gotchas below), then
 > the README of whatever you're working on, e.g. [`projects/radar/README.md`](projects/radar/README.md).

@@ -11,6 +11,7 @@
   "tablet_reference": "projects/vehicle_data/dashboard/docs/design.md: portrait-mounted tablet, 800 × 1280 CSS pixels; physical DPR unconfirmed.",
   "capture_method": "Clean Chromium browser displaying the current built app. Browser-only reactive-store fixtures, saved historical ranges, canvas/SVG and text changes, and intercepted advisor/scan API responses supplied demo data.",
   "data_notice": "Portfolio demonstration images combine saved app data with representative values from historical telemetry ranges, charts, trip/cruise summaries and assistant conversations. They are not evidence of a live drive, diagnosis, model response or service action. The primary Drive image carries an on-screen historical-replay label.",
+  "primary_trip_source": "Trip 65 in tmp/vehicle_data/warning_replay/replay-current@wave4-20261004T030357326Z.sqlite3: 64.2 minutes, 53.47 miles integrated from fresh speed samples, and 210.2 °F maximum coolant. The displayed 15 hp average is the 15.21 hp prior-trip median in dashboard/test/fixtures/summary-v2.json.",
   "suggested_public_caption": "Van telemetry dashboard — tablet UI with illustrative demo data.",
   "safety": "No vehicle actions, scan execution, warning installation, maintenance saves, deployments or service changes. Mutating requests were blocked or fulfilled locally in the capture browser.",
   "suggested_homepage_images": [
@@ -26,8 +27,8 @@
       "caption": "Driving dashboard with speed, RPM, temperatures, oil pressure, voltage, power, tire pressures and trip statistics.",
       "width": 800,
       "height": 1280,
-      "bytes": 84137,
-      "sha256": "91b6c58aa83f544d230c18d45bf13601182a80f129a53a2efdce1bf5df03c067"
+      "bytes": 86485,
+      "sha256": "194c77ac90da3191b7fe3e056c7d146071e5aa737b185a0124ffc0317e4e5f9e"
     },
     {
       "file": "02-drive-sensors.png",
