@@ -1,1 +1,26 @@
-{"hook_mode": "block"}
+{
+  "hook_mode": "block",
+  "layout": {
+    "sourceRoots": [
+      "."
+    ],
+    "entries": [],
+    "contracts": [
+      {
+        "from": "lib",
+        "to": [
+          "live_data",
+          "projects",
+          "tools"
+        ],
+        "allowDynamic": false
+      }
+    ],
+    "exclude": [
+      "checks/check_layout.py",
+      "checks/backend_layout",
+      "checks/layout_fixture.py"
+    ],
+    "exceptions": []
+  }
+}

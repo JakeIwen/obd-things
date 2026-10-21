@@ -61,10 +61,12 @@ class ApiConcurrencyTests(unittest.TestCase):
                 sock = harness.connect()
                 sock.sendall(b"GET /v1/status HTTP/1.1\r\nHost: local\r\n")
                 blocked.append(sock)
-            deadline = time.monotonic() + 1.0
-            while harness.server.accepted < harness.server.request_worker_count and time.monotonic() < deadline:
-                harness.server.accepted_event.wait(0.05)
-            self.assertEqual(harness.server.accepted, harness.server.request_worker_count)
+            # accepted_event stays set after the first accept; repeatedly waiting
+            # on it would spin and starve the acceptor on a busy worker.
+            self.assertTrue(wait_until(
+                lambda: harness.server.accepted == harness.server.request_worker_count,
+                timeout=1.0,
+            ))
             self.assertEqual(harness.server.request_queue_size, 64)
             self.assertEqual(harness.server._transport_queue.maxsize, harness.server.request_worker_count)
             self.assertEqual(harness.server._post_jobs.maxsize, harness.server.request_worker_count)
@@ -287,6 +289,9 @@ class ApiConcurrencyTests(unittest.TestCase):
             self.assertTrue(wait_until(response_phase_active, timeout=0.5))
             self.assertTrue(wait_until(lambda: harness.server.accepted == 1, timeout=0.5))
 
+            # The stalled response already owns its short absolute deadline.
+            # The recovery request needs the normal I/O budget on a busy worker.
+            harness.server.request_io_timeout = api_server.UnixHTTPServer.request_io_timeout
             fresh = harness.connect()
             request_bytes(fresh, "GET", "/v1/status")
             self.assertTrue(

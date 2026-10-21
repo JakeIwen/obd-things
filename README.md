@@ -385,6 +385,15 @@ Do not reconstruct a historical recipe on an ephemeral `canN`.
 4. Any routine parameter format or angle scale reconstructed from the historical evidence remains
    **reverse-engineered, not from a Bosch ODX**, and may be wrong.
 
+## Offline development checks
+
+The complete automated gate is `python3 run_tests.py` (Python 3.11+, Node 20+,
+npm and Git). On vanpi, submit `repo-full-suite` through the existing compute
+queue. It covers pytest, dashboard Node tests, backend layout checks and a
+scratch production build; it does not deploy or use the vehicle.
+See [backend organization and verification](docs/backend-layout.md) for the
+commands, dependency preparation and enforcement limits.
+
 ## License & disclaimer
 MIT — see [LICENSE](LICENSE). **Provided "AS IS", WITHOUT WARRANTY OF ANY KIND**; the authors and
 contributors accept **no liability** for any damage, injury, loss, or legal consequence arising from its use

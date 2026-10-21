@@ -2,6 +2,7 @@ import tempfile
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 from lib import can_handoff, diagnostic_safety
@@ -89,13 +90,24 @@ class CanHandoffTests(unittest.TestCase):
                 pass
 
     def test_active_wait_is_bounded_and_releases_gate(self):
+        clock = SimpleNamespace(now=100.0, sleeps=[])
+
+        def advance(seconds):
+            self.assertGreater(seconds, 0)
+            self.assertLessEqual(seconds, 0.005)
+            clock.sleeps.append(seconds)
+            clock.now += seconds
+
+        # Real flock contention proves the gate releases; a controlled clock
+        # measures the deadline without depending on host scheduling latency.
+        timing = SimpleNamespace(monotonic=lambda: clock.now, sleep=advance)
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(
             diagnostic_safety,
             "LOCK_DIR",
             directory,
-        ):
+        ), mock.patch.object(can_handoff, "time", timing):
             with can_handoff.passive_turn("c-can"):
-                started = time.monotonic()
+                started = clock.now
                 with self.assertRaisesRegex(
                     diagnostic_safety.ChannelLockError,
                     "bounded active handoff deadline",
@@ -106,7 +118,8 @@ class CanHandoffTests(unittest.TestCase):
                         retry_seconds=0.005,
                     ):
                         pass
-                self.assertLess(time.monotonic() - started, 0.25)
+                self.assertAlmostEqual(clock.now - started, 0.03)
+                self.assertTrue(clock.sleeps)
 
             with can_handoff.passive_turn("c-can"):
                 pass
