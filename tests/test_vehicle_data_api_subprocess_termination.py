@@ -223,11 +223,16 @@ def start_signal_child(tmp_name: str, mode: str, repo_root=REPO_ROOT):
     return process, read_fd, socket_path
 
 
+# READY follows the child's broker import, which takes over a second on a busy
+# Pi. Only the startup wait is generous; termination steps keep their 1 s bound.
+STARTUP_TIMEOUT_SECONDS = 15.0
+
+
 class SubprocessTerminationTests(unittest.TestCase):
     def _prepare_signal_case(
         self, mode, socket_path, reader, lines, clients, concurrent_reads
     ):
-        lines.append(reader.line())
+        lines.append(reader.line(timeout=STARTUP_TIMEOUT_SECONDS))
         self.assertEqual(lines[-1], "READY")
         if mode in ("wake", "interrupt"):
             sock = unix_socket(socket_path)
