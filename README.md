@@ -8,6 +8,20 @@ started as ACC-radar alignment work and is structured so the
 **generic CAN/UDS plumbing is reusable for any module** (PCM, BCM, ABS, …),
 with each investigation living under `projects/<name>/`.
 
+## Telemetry dashboard
+
+<p align="center">
+  <img src="projects/vehicle_data/dashboard/screenshots/01-drive-gauges.png" width="560" alt="Van telemetry dashboard replaying a historical drive with speed, RPM, temperatures, oil pressure, charging voltage, power, tire pressures, trip data, and light indicators">
+</p>
+
+The tablet dashboard turns the passive three-bus telemetry stream into a driver-focused view of
+speed, engine and transmission temperatures, oil pressure, charging voltage, power, tire pressure,
+trip history, lighting state, diagnostics, maintenance, and radar alignment. This screenshot uses a
+clearly labeled browser-only replay with representative values from saved driving ranges; it is not
+live vehicle data and the capture performed no CAN or service actions. The
+[dashboard gallery](projects/vehicle_data/dashboard/screenshots/) also shows its parked, health,
+history, system, warning, maintenance, and guarded diagnostic views.
+
 > **New here (human or agent)? Read this whole file first** (universal facts + gotchas below), then
 > the README of whatever you're working on, e.g. [`projects/radar/README.md`](projects/radar/README.md).
 
