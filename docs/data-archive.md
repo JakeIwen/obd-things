@@ -18,6 +18,95 @@ anything under either `tmp/` tree tracked or backed up.
 - A symlink under local `tmp/` is a convenience pointer, not redundancy. If it appears broken,
   inspect `findmnt -T /mnt/EXFAT512` before deciding the artifact is gone.
 
+## Recurring compute retention
+
+Use `python3 -m tools.compute_retention` from the repository root to preview
+the owner's **30-day policy for both successful and failed jobs**. It prints the backend's JSON plan
+and changes no data. `--apply` explicitly deletes eligible completed jobs.
+This is the storage-administration exception to the usual `pi_compute.py`
+frontend rule: analysis and tests still go through the named compute tasks.
+The wrapper calls the installed administrative entry point in an isolated
+child process; it does not duplicate queue locking, citation scanning or deletion.
+
+The policy selected by the owner on October 21 keeps:
+
+- successful jobs and failed jobs for 30 days, measured from the
+  manifest's completion time;
+- jobs cited in tracked or nonignored working-tree files outside `tmp/`, and
+  their transitive job dependencies, regardless of age;
+- queued/running jobs and their dependencies. Unsafe or malformed entries
+  are refused or skipped by the backend rather than force-deleted.
+
+Before the first manual apply or enabling the timer, review the plan's
+eligible IDs. Subsequent weekly runs apply automatically. **Ignored handoffs under
+`.agent/` and references inside `tmp/` do not pin jobs.** Promote a needed job
+ID into the tracked finding or project documentation that uses it, then rerun
+the plan. Existing handoff-only references are preserved in
+[`compute-retention-pins.md`](compute-retention-pins.md); keep that list current
+as workstreams finish or add evidence. Keep the canonical raw input separately: the pruner does not verify
+that a job's original inputs remain available. Do not use compute history as
+the only copy of vehicle evidence.
+
+The deployed backend currently hardcodes 60/31 days and exposes no age flags.
+This adapter verifies that known upstream policy, configures its
+`retention.RETENTION_DAYS` mapping to 30/30 in the child process, then calls
+the unchanged queue entry point. Its dependency is the installed package at
+`/home/pi/van_compute/current`, supplied through the child's `PYTHONPATH`.
+It leaves the deployed release and other compute commands unchanged, and
+refuses an unexpected upstream policy rather than silently overriding it.
+If van-compute adds a public age option, replace this narrow adapter with that
+option in a reviewed update.
+
+`tools/systemd/obd-compute-retention.service` and its `.timer` provide weekly
+automatic application of this policy, with up to one hour of random delay and
+a persistent missed-run catch-up. They are opt-in: committing these files does
+not install or enable them. The service runs as `pi`, has no CAN or network
+access, and writes only the queue and van-compute's existing submission-fence
+directory. That fence temporarily defers new compute submissions while the
+backend rescans citations and holds its queue lock. It does not restart the
+compute broker or telemetry services.
+Deletion is per file, not atomic per job. An interruption can leave a partial
+job that a later plan reports as skipped; investigate that entry rather than
+forcing removal. The unit sends SIGINT so the backend can restore its
+submission fence during normal cancellation.
+
+Install both regular unit files in `/etc/systemd/system/`, run
+`systemctl daemon-reload`, and enable `obd-compute-retention.timer`. Check its
+next scheduled run with `systemctl list-timers obd-compute-retention.timer`;
+inspect completed runs with `journalctl -u obd-compute-retention.service`.
+Disable the timer with `sudo systemctl disable --now obd-compute-retention.timer`
+to stop future cleanup. This preserves all remaining data.
+
+The wrapper's public CLI and unit contracts are covered by
+`tests/test_compute_retention.py`. Run the whole repository suite through
+the `repo-tests` compute task, plus `dashboard-test-build` when its Node wrapper
+cannot execute on the worker's platform. Validate the units with
+`systemd-analyze verify` before installation. The backend remains responsible
+for its own deletion and concurrency tests.
+
+## Storage review policy
+
+Treat **6 GiB local `tmp/` usage as a review trigger**, not a deletion quota.
+The machine-managed backup watchdog's existing alert is 8 GiB; do not change
+its deployed `~/scripts` copy from this repository. Review monthly and whenever
+that alert fires, using `du -xhd1 tmp` (local allocated bytes, without following
+archive symlinks) and the compute-retention preview. Check the remaining
+EXFAT space separately. Never use a whole-tree age deletion command.
+
+| Data class | Policy |
+| --- | --- |
+| Completed compute history | Weekly 30-day retention for both outcomes, with citation/dependency protection above. Review sustained growth even if every retained job is protected. |
+| Raw CAN, AlfaOBD inputs, inventories, owner references | No automatic deletion. Preserve canonical inputs; archive completed large files only after mount/space checks and hash verification. |
+| Replay databases, extracted arrays, build copies | Review after the workstream ends or after 30 days idle. Remove only after confirming retained source and reproducible command; preserve named oracle fixtures and SQLite WAL/SHM sets. |
+| Browser/Python environments | Review after 30 days unused. Reinstallable, but keep any runtime used by an active workstream; do not repeatedly remove a shared runtime between jobs. |
+| Locks, active captures, live service state/history | Excluded. Do not unlink a live lock or change historian retention to meet the scratch-data budget. |
+
+If weekly cleanup cannot bring usage under the review trigger, investigate
+the largest remaining category. Prefer a reviewed, task-specific shorter
+window for disposable test/build jobs in van-compute over reducing retention
+for all research jobs. Archive large evidence files rather than copying
+compute source snapshots file by file onto EXFAT's large allocation units.
+
 ## Current archive layout
 
 The 2026-07-30 storage audit moved seven large CAN logs into the same relative paths below the
@@ -104,3 +193,56 @@ with a symlink, so cited paths still resolve while EXFAT512 is mounted:
 Compute history (`tmp/compute/done` and `failed`, about 3.9 GiB in 98k files) was left local.
 Copied per file to EXFAT512 it would occupy about 14 GiB because of the 128 KiB allocation unit.
 The Pi backup watchdog now alerts when local `tmp/` exceeds its configured budget.
+
+## 2026-10-21 audit (before cleanup)
+
+The reported 7.2 GB is 7.18 GiB: local `tmp/` occupied 7,712,530,432 allocated
+bytes, with 7,454,678,071 apparent bytes. Archive symlink targets are excluded.
+
+| Local category | Allocated size, rounded | Interpretation |
+| --- | ---: | --- |
+| `compute/` | 4.42 GiB | 560 successful and 74 failed jobs; 3.29 GB decimal in repeated source snapshots. |
+| `vehicle_data/` | 876 MiB | Includes 455 MiB warning replays and 291 MiB current fuel-economy work. |
+| `ecu_mapping/` | 713 MiB | Owner inputs, extracted catalogs and derived analysis; mixed retention needs. |
+| `captures/` | 358 MiB | Unique vehicle evidence. |
+| `playwright/` | 312 MiB | Mostly reinstallable browser/runtime files. |
+
+Compute history grew by about 1.94 GB decimal across 214 October jobs. The
+2026-10-21 19:31 UTC backend preview marked 52 jobs eligible, totalling
+219,639,222 apparent bytes (about 209 MiB), while protecting 233 jobs and
+keeping 349 inside their age windows. That is a modest immediate saving;
+weekly retention prevents indefinite accumulation but is not a hard size cap.
+No data was deleted for this audit. The gitignored plan is
+`tmp/storage-retention/compute-plan.json`; regenerate it before applying.
+
+The owner then selected 30 days for both outcomes. The adapter's 19:55 UTC
+preview identified 195 eligible jobs (184 successful, 11 failed), totalling
+789,466,864 apparent bytes (753 MiB). It retained 233 protected jobs and 214
+young jobs. That preview is `tmp/storage-retention/compute-plan-30-days.json`;
+figures change as current test jobs finish. This remains a preparation-only
+audit: no apply or timer installation has run.
+
+After promoting 45 handoff-only references to the tracked pins list, the
+20:00 UTC final preview retained 274 protected jobs and 213 young jobs. It
+identified **159 eligible jobs, 615,059,366 apparent bytes (587 MiB)**, with
+no skipped entries. No pinned ID was eligible. The final review file is
+`tmp/storage-retention/compute-plan-30-days-pinned.json`.
+
+Verification on the isolated publish branch: 1,943 Python tests passed with
+12 reported skips, 491 dashboard tests and the build passed, and systemd unit
+validation and the code-shape ratchet passed. The test-fixture portability
+repairs are separate from the retention change. No live cleanup or timer
+activation was included in verification.
+
+Normal drive recordings already write zstd chunks directly to EXFAT, with
+30/25 GiB free-space degradation/stop floors. EXFAT had about 31 GiB free
+(94% used), so moving every scratch directory there would trade one space
+problem for another. Agent sandbox mount views can be read-only even when
+the underlying filesystem is writable; they do not alone prove a host mount
+failure.
+
+A separate small growth source is shared-observer metadata appended by
+`lib/diagnostic_safety.py::_acquire_channel_lock`: the C-CAN handoff lock was
+about 15 MB and grew around 1.9 MB/day. Fixing that requires preserving the
+live shared/exclusive lock contract and checking metadata consumers. It is
+excluded from cleanup; never unlink it while owners may hold its inode.

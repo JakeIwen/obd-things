@@ -1,0 +1,28 @@
+[Unit]
+Description=Retain recent and cited obd-things compute jobs
+Documentation=file:/home/pi/dev/obd-things/docs/data-archive.md
+ConditionPathIsDirectory=/home/pi/dev/obd-things/tmp/compute/done
+ConditionPathExists=/home/pi/van_compute/scripts/van_compute.py
+
+[Service]
+Type=oneshot
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/dev/obd-things
+ExecStart=/usr/bin/python3 -m tools.compute_retention --apply
+Environment=PYTHONDONTWRITEBYTECODE=1
+UMask=0077
+Nice=15
+IOSchedulingClass=idle
+TimeoutStartSec=30min
+KillSignal=SIGINT
+TimeoutStopSec=5min
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+# The existing pruner fences new submissions here while holding its queue lock.
+ReadWritePaths=/home/pi/dev/obd-things/tmp/compute /home/pi/van_compute/scripts
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
