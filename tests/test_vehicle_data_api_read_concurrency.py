@@ -287,6 +287,9 @@ class ApiConcurrencyTests(unittest.TestCase):
             self.assertTrue(wait_until(response_phase_active, timeout=0.5))
             self.assertTrue(wait_until(lambda: harness.server.accepted == 1, timeout=0.5))
 
+            # The stalled response already owns its short absolute deadline.
+            # The recovery request needs the normal I/O budget on a busy worker.
+            harness.server.request_io_timeout = api_server.UnixHTTPServer.request_io_timeout
             fresh = harness.connect()
             request_bytes(fresh, "GET", "/v1/status")
             self.assertTrue(
