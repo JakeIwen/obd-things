@@ -10,6 +10,7 @@ from typing import Mapping
 
 from projects.vehicle_data.can_availability import CAN_UNAVAILABLE_BASES
 
+from .interface_queries import historical_interface_roles
 from .models import (
     IngestResult,
     MICROSECONDS,
@@ -551,12 +552,7 @@ class IngestMixin(ValidationMixin):
         set also heals databases whose old raw samples were already pruned.
         """
 
-        previously_seen = {
-            row[0]
-            for row in self._conn.execute(
-                "SELECT DISTINCT role FROM interface_samples"
-            )
-        }
+        previously_seen = historical_interface_roles(self._conn)
         open_gap_roles = {
             row[0]
             for row in self._conn.execute(

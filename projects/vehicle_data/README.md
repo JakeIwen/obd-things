@@ -2177,6 +2177,11 @@ SQLite `quick_check` returned `ok`, and query plans selected the new indexes.
 No CAN acquisition behavior, evidence rule, sampling interval, or notification
 latency was relaxed.
 
+The [October 23 CPU investigation](docs/broker-cpu.md) identifies repeated
+trip-rollup and per-ingest interface-history scans in the larger retained
+history. It records the bounded-query repair, saved-data regressions, live
+benchmark method and activation status; consult it before restarting that fix.
+
 The installed role-aware `van-drive-recorder.service` is enabled and active,
 waiting receive-only for broker-owned active-drive intervals. `tpms-logger`,
 `promaster-bcan-recorder`, `promaster-mapping-drive`, `tpms-drivesniff`, and the

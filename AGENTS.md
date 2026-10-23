@@ -205,6 +205,12 @@ code without changing behaviour. Old import paths remain as shims, so existing i
   `warning_engine/`; `api.py` → shim over `api_server.py`/`api_client.py`; broker status and
   helper-event logic live in `status_view.py`, `vehicle_state.py`, `helper_events.py`.
   Historian activity/regime decisions live in `history/trip_activity.py`.
+- Bounded interface-history lookups live in `history/interface_queries.py`;
+  additive query indexes are installed by `history/schema.py::_create_query_indexes`.
+  `tools/telemetry_history_profile.py` (`telemetry-history-profile` compute task)
+  profiles a finalized saved SQLite backup without live access. See the
+  [broker CPU investigation](projects/vehicle_data/docs/broker-cpu.md) for evidence
+  and current activation status.
 - Shared helpers: `lib/candump_io.py`, `lib/capture_pipeline.py` (passive capture engine),
   `lib/broadcast_signals.py` (fixed broadcast decodes and frame IDs), `lib/reports.py`,
   `lib/cli_gates.py`, `lib/uds_session.py`, `lib/diagnostic_preflight.py`, `lib/timeutil.py`.

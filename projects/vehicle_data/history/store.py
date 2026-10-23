@@ -41,6 +41,7 @@ class HistorianStore(SchemaMixin):
             self._conn.execute("PRAGMA journal_mode = WAL")
             self._conn.execute("PRAGMA synchronous = NORMAL")
         self._create_schema()
+        self._create_query_indexes()
         from projects.vehicle_data.event_history import SCHEMA as event_schema
         with self._lock, self._conn:
             self._conn.executescript(event_schema)

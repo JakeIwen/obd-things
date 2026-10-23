@@ -9,6 +9,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
+from .interface_queries import previous_topology_sample
 from .models import (
     BaselineStats,
     DATA_QUALITY_SCHEMA_VERSION,
@@ -398,15 +399,7 @@ class QueryMixin:
             generation = (
                 system["topology_generation"] if system is not None else None
             )
-            previous = self._conn.execute(
-                """
-                SELECT topology_generation,captured_us
-                FROM system_health_samples
-                WHERE snapshot_id<? AND topology_generation IS NOT NULL
-                ORDER BY captured_us DESC LIMIT 1
-                """,
-                (snapshot_id,),
-            ).fetchone()
+            previous = previous_topology_sample(self._conn, snapshot_id)
         gaps = self._active_interface_gap_payloads(gap_rows)
         roles = self._system_health_role_payloads(role_rows, gaps)
         issues, inhibits = self._system_health_lists(system)

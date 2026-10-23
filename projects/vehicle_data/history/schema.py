@@ -14,6 +14,27 @@ from .models import (
 class SchemaMixin:
     """Verbatim historian schema creation and version checks."""
 
+    def _create_query_indexes(self) -> None:
+        """Add access paths without rewriting retained history or its schema version."""
+        with self._lock, self._conn:
+            # Preserve the baseline index's regime/time traversal within a trip,
+            # including the order of floating-point sums.
+            self._conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS metric_rollups_trip
+                ON metric_rollups(trip_key, metric, bucket_seconds, regime, bucket_us)
+                """
+            )
+            # Unknown topology can persist for many snapshots. Seek the previous
+            # known generation directly, including across a long evidence gap.
+            self._conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS system_health_samples_known_topology
+                ON system_health_samples(snapshot_id, topology_generation, captured_us)
+                WHERE topology_generation IS NOT NULL
+                """
+            )
+
     def _create_schema(self) -> None:
         schema = """
         CREATE TABLE IF NOT EXISTS historian_meta (

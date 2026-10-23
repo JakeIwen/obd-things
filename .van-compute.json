@@ -2,6 +2,16 @@
   "schema_version": 1,
   "tasks": [
     {
+      "name": "telemetry-history-profile",
+      "description": "Profile unchanged history, fuel and warning queries on an in-memory clone of a saved SQLite backup with fixed time; no live CAN or service access.",
+      "profile": "python-script",
+      "source_paths": ["tools/telemetry_history_profile.py", "lib", "projects/vehicle_data"],
+      "minimum_inputs": 1,
+      "maximum_inputs": 2,
+      "argv": ["{source:tools/telemetry_history_profile.py}", "{inputs}", "{arguments}", "--output", "{result:history-profile}"],
+      "outputs": ["history-profile"]
+    },
+    {
       "name": "fuel-catalog-leads",
       "description": "Offline bounded fuel-consumption label/field inventory from owner-supplied AlfaOBD resources; no vehicle access.",
       "profile": "python-script",
