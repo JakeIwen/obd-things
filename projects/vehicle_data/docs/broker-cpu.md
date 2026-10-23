@@ -61,16 +61,26 @@ children; thread figures are not added to the process total. Probe CPU was
 
 | Measurement | Before deployment | After deployment |
 |---|---:|---:|
-| Mean broker CPU, one core | 26.86% | Pending activation |
-| User / system CPU | 15.17% / 11.69% | Pending activation |
-| Median / peak one-second CPU | 13.94% / 124.66% | Pending activation |
-| Mean outside observed refresh intervals | 16.99% | Pending activation |
-| Five completed supplemental refreshes | 5.607–8.998 s | Pending activation |
-| Historian interval, median / maximum | 5.275 / 11.856 s | Pending activation |
-| Status latency, median / maximum | 5.58 / 43.96 ms | Pending activation |
-| Snapshot latency, median / maximum | 9.46 / 111.36 ms | Pending activation |
-| History latency, median / maximum | 9.14 / 85.30 ms | Pending activation |
-| Health latency, median / maximum | 52.39 / 171.71 ms | Pending activation |
+| Mean broker CPU, one core | 26.86% | 14.67% |
+| User / system CPU | 15.17% / 11.69% | 9.69% / 4.98% |
+| Median / peak one-second CPU | 13.94% / 124.66% | 12.15% / 84.40% |
+| Mean outside observed refresh intervals | 16.99% | 13.41% |
+| Five completed supplemental refreshes | 5.607–8.998 s | 0.623–0.905 s |
+| Mean supplemental refresh | 6.694 s | 0.725 s |
+| Historian interval, median / maximum | 5.275 / 11.856 s | 5.128 / 6.119 s |
+| Status latency, median / maximum | 5.58 / 43.96 ms | 5.09 / 26.64 ms |
+| Snapshot latency, median / maximum | 9.46 / 111.36 ms | 12.47 / 26.95 ms |
+| History latency, median / maximum | 9.14 / 85.30 ms | 10.89 / 19.73 ms |
+| Health latency, median / maximum | 52.39 / 171.71 ms | 56.40 / 103.56 ms |
+
+The after sample used the identical probe and cadence for 300 seconds after
+startup, with five completed refreshes and 1.76 seconds of probe CPU. Mean
+broker CPU fell **45.4%** and mean refresh duration fell **89.2%**. Peak
+one-second CPU is not eliminated; residual work outside refreshes averages
+13.41% of one core. The samples occurred several hours apart under ordinary
+host load, so this is a matched operational comparison, not an isolated lab
+benchmark. Snapshot/history/health median request times did not improve; their
+worst sampled latencies and the historian's long refresh-related gaps did.
 
 All sampled requests returned 200; the van stayed asleep and CAN TX counters
 did not move. Refresh scheduling remains 60 seconds after completion, plus
@@ -122,8 +132,8 @@ History CPU fell 79.1%; the combined loaders fell 72.5%. Ingest SQL work fell
 from approximately 2,433,000 VM instructions to 35,000 (98.6%). Health/DTC
 code and outputs are unchanged; their small timing variation is retained in
 the table rather than described as an improvement. Index initialization on
-the memory clone took 0.497 seconds. None of these numbers replaces the pending
-live Pi after measurement.
+the memory clone took 0.497 seconds. The separate live Pi measurements above
+establish the actual deployed improvement.
 
 Raw evidence stays under `tmp/vehicle_data/broker-cpu-20261023/`, with the live
 sample at `tmp/vehicle_data/cpu-before-20261023.jsonl` and the finalized backup
@@ -131,14 +141,13 @@ at `tmp/vehicle_data/cpu-history-20261023.sqlite3`.
 
 ## Process rows, validation and activation
 
-Systemd reports one broker process, historical/current-at-investigation PID
-3264272, with 16 tasks and no crash restarts. The owner's htop capture shows
-that PID at 105.2% and likely thread 3264376 at 94.2%, with identical memory
-figures and other smaller matching rows. That is consistent with process-total
-plus thread display, not evidence of two cores of independent broker work.
-Host thread membership is pending confirmation because the agent sandbox
-cannot see host `/proc` entries. The deployment handoff will save host thread
-IDs before replacing the process.
+The owner-shell `ps -T` capture **confirms thread 3264376 belonged to broker
+process 3264272**, alongside its other 15 threads. The htop rows were a process
+total and one included thread; the reported 105.2% and 94.2% must not be added.
+The separate 75-second `pidstat -t` sample measured the process at 19.82% and
+that thread at 11.32% on average. This shorter, process-only sample is not mixed
+with the five-minute cgroup baseline, which includes short-lived children.
+The host capture was necessary because the agent sandbox hides host `/proc`.
 
 Full-suite job `20261023T181554Z-43619077` passed **1,968 tests, 12 skips and
 2,909 subtests** in 184.94 seconds through the current `repo-tests` entry point
@@ -160,26 +169,53 @@ The narrow correction already present on the remote branch restores the normal
 I/O budget only after the stalled response has acquired its own fixed deadline;
 the stalled-peer expiry assertion and production code remain unchanged.
 
-Deployment is explicitly authorized but **not yet activated**. The agent's
-literal sudo permission check fails under the sandbox's no-new-privileges
-restriction. Independent code review, saved-data equivalence and the full suite
-are complete; activation and a live after benchmark require the owner-shell
-handoff. The pre-task clean source/rollback target is
-`43e8c1b`; the broker does not export a runtime Git revision. Its current
-instance began `2026-10-21T19:08:57.262387+00:00`.
+**Deployed and independently verified October 23 at 20:44–20:53 UTC.** The
+owner-shell handoff pinned source `9372f26` and clean runtime paths before the
+guarded asleep restart. Systemd launched broker PID 2376347 at 20:44:53 UTC;
+the new API instance is `2026-10-23T20:44:58.301929+00:00`. Both new indexes
+exist and are selected on the live Pi's SQLite 3.40.1. The application schema
+version remains 1. Ten indexed snapshot rows spanning the restart confirm
+history continuity, with an 8.438-second maximum restart interval.
+
+The agent's no-new-privileges boundary required the normal SSH shell. The first
+handoff's unnecessary `sudo -v` prompted for a password; the corrected handoff
+uses noninteractive, command-specific checks, with no credential keepalive or
+sudo-policy change. The owner's normal shell has passwordless sudo.
+
+The pre-task clean source/rollback target is `43e8c1b`; the broker does not
+export an embedded runtime Git revision. The previous instance began
+`2026-10-21T19:08:57.262387+00:00`. The four replaced old runtime files remain
+in the raw rollback tar; older code can retain the new indexes and all history.
 
 The work is isolated on `codex/broker-cpu-20261023`. Remote `master` advanced
 with unrelated architecture/benchmark work while this checkout retained two
 storage-policy commits. Neither history is overwritten or implicitly deployed;
 the dedicated branch keeps this task's tested source explicit.
 
-Installed units/drop-ins are recorded in the raw evidence. Only a broker
-restart is required; `PartOf=` also restarts both existing web listeners and
-the DTC path watcher. No unit installation, daemon reload, enablement change,
-dashboard build installation, or recorder restart is needed. Index creation
-is the only database migration: additive, with startup work and WAL/storage
-growth to verify. Rollback restores the prior code while retaining the indexes
-and all history.
+Installed unit/drop-in hashes are unchanged. Only the broker was explicitly
+restarted; `PartOf=` also restarted both web listeners and the DTC path watcher.
+The broker and both web listeners are active with zero crash restarts. Recorder
+PID 743 and advisor PID 1255 stayed unchanged; the DTC worker remains inactive.
+No units, enablement, dashboard assets, adapters, networking or cron changed.
+The new broker has no journal entries/errors. The old process printed
+`KeyboardInterrupt` during the requested stop; systemd recorded successful
+deactivation and startup, not an automatic crash restart.
+
+Owner checks before/after/final and an independent final check verified fresh
+asleep state, idle/restored helpers, no active/foreign owner or inhibit, exact
+serial/dev_id identities, all vehicle roles passive/healthy and the spare down.
+All four channels had zero TX, RX, error and drop deltas across the deployment
+window. Existing open episodes 666 and 667 remained open; delivered notification
+count stayed 137 with zero pending/failed entries. Metric catalog names are
+unchanged. Historian snapshots advanced in each post-restart check, and status,
+snapshot, history and health returned 200 through Unix, LAN and Tailscale.
+
+Deployment evidence, including the full after sample and independent checks,
+is in `tmp/vehicle_data/broker-cpu-20261023/deploy-20261023T204329Z/`.
+`live-comparison.json` records the calculated reductions. The residual baseline
+includes the measured safety/interface work described above; it has not been
+fully attributed thread by thread. Remaining history work includes the 7/30-day
+aggregates. No polling cadence or ownership check was weakened to reduce it.
 
 Use the existing `restart-broker-parked.sh` and supplement its checks with
 fresh serial/dev_id identity, state/freshness, ownership, inhibit, passive

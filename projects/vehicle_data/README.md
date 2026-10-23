@@ -2177,10 +2177,11 @@ SQLite `quick_check` returned `ok`, and query plans selected the new indexes.
 No CAN acquisition behavior, evidence rule, sampling interval, or notification
 latency was relaxed.
 
-The [October 23 CPU investigation](docs/broker-cpu.md) identifies repeated
-trip-rollup and per-ingest interface-history scans in the larger retained
-history. It records the bounded-query repair, saved-data regressions, live
-benchmark method and activation status; consult it before restarting that fix.
+The [October 23 CPU repair](docs/broker-cpu.md) is deployed: bounded trip-rollup
+and interface-history queries reduced parked broker CPU from 26.86% to 14.67%
+of one core and mean refresh time from 6.694 to 0.725 seconds in matched
+five-minute samples. The guarded asleep deployment added zero CAN TX; the
+report records source, regressions, remaining costs and rollback information.
 
 The installed role-aware `van-drive-recorder.service` is enabled and active,
 waiting receive-only for broker-owned active-drive intervals. `tpms-logger`,
