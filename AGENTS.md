@@ -292,9 +292,96 @@ read-only deployment output on this machine.
 Local edits can be overwritten by the next MacBook push and can create a
 misleading split between deployed files and their authoritative source.
 
+## Safe automated suite
+
+`python3 run_tests.py` is the complete offline gate (Python 3.11+, Node 20+,
+npm and Git): isolated dependency setup, full pytest including dashboard Node
+tests, installed layout tests/scan and a scratch dashboard build. On vanpi use
+`/home/pi/van_compute/scripts/pi_compute.py run repo-full-suite --wait 60`;
+placement remains the compute service's decision. `repo-tests` still accepts
+pytest filters and prepares dependencies, but omits the layout/build phases.
+See [backend verification](docs/backend-layout.md) for setup, boundaries and
+coverage limits. No test command authorizes vehicle or service activity.
+
+The repo-owned checker has no `layout` baseline and is advisory.
+`tests/test_backend_contracts.py` independently enforces library direction,
+selected pure imports, declared launch targets and compute entry packaging.
+Never rebaseline as part of a feature or to pass the suite.
+
+## Backend ownership and dependency direction
+
+Keep `lib/`, `tools/`, `live_data/` and `projects/` as the checkout packages.
+`lib/signal_search_contract.py` owns the offline search bounds, evidence labels,
+field record and legacy geometry shared by correlation and benchmarking.
+`tools/signal_benchmark_policy.py` owns pure per-case validation/evaluation;
+`tools/can_signal_benchmark.py` keeps manifest/report file access, provenance,
+aggregation and the CLI. Original public imports remain available.
+
+Records and pure decisions belong with their domain and must not import the
+runtime, transports or storage they describe. Existing safety/lease/restore
+owners keep their ordered effects. Public module entry paths and the `/v1` API
+are compatibility contracts; grouping a filename prefix alone is insufficient.
+
+## Contracts
+
+Paths below are supported even when a caller is disabled. Python commands use
+`python3 -m` from this checkout; compute workers package the source cohorts in
+`.van-compute.json`. Keep wrappers until every supported host and rollback
+caller has retired, with owner/callers/retirement stated in the wrapper header.
+
+| Path | Caller | Owner |
+| --- | --- | --- |
+| `projects/vehicle_data/broker.py` | van-telemetry.service | Telemetry runtime and ordered CAN lifecycle |
+| `projects/vehicle_data/web_v2.py` | Both van-telemetry-web listeners | Dashboard static serving and web.py /v1 API |
+| `projects/vehicle_data/drive_recorder.py` | van-drive-recorder.service | Receive-only broker drive recording |
+| `projects/vehicle_data/active_drive.py` | Broker drive_helper_launch | C-CAN active-drive helper |
+| `projects/vehicle_data/bcan_auxiliary.py` | Broker drive_helper_launch | B-CAN auxiliary helper |
+| `projects/vehicle_data/cop_can_wake.py` | van-cop-can-wake.service | Fixed wake supervisor |
+| `projects/vehicle_data/warning_chat.py` | van-telemetry-advisor.service | Advisory chat worker |
+| `projects/vehicle_data/van_scan_harvest.py` | van-scan-harvest.service | Completed-capture DTC harvest |
+| `projects/vehicle_data/cruise_harvest.py` | van-cruise-harvest.service | Completed-capture cruise harvest |
+| `projects/vehicle_data/cruise_summary.py` | cruise-summary-reduce compute task | Offline cruise summary |
+| `projects/ecu_mapping/vonstar_service.py` | vonstar.service | Fixed-action vehicle-access API |
+| `projects/ecu_mapping/rke_front_unlock.py` | vonstar.service preflight | Reviewed access operation |
+| `projects/ecu_mapping/bcan_drive_recorder.py` | promaster-bcan-recorder.service | B-CAN recorder |
+| `projects/ecu_mapping/fuel_catalog.py` | fuel-catalog-leads compute task | Offline catalog inventory |
+| `projects/ecu_mapping/lighting_reference.py` | lighting-owner-reference compute task | Offline light reference comparison |
+| `projects/ecu_mapping/canch_validation.py` | canch-fixed-candidate-validation compute task | Offline frozen-candidate checks |
+| `projects/tpms/drive_sniff.py` | tpms-drivesniff.service | RF Hub sniffer |
+| `projects/tpms/tpms_logger.py` | tpms-logger.service | RF Hub logger |
+| `lib/can_handoff.py` | vonstar.service preflight | Cooperative role fairness |
+| `lib/can_wake.py` | vonstar and van-cop-can-wake preflight | Fixed wake profiles and restoration |
+| `tools/ignition_triggered_passive_capture.py` | promaster-mapping-drive.service | Gated passive capture |
+| `tools/dtc_batch_request.py` | van-dtc-batch.service | Batch request worker |
+| `tools/compute_retention.py` | obd-compute-retention.service and owner CLI | Thin adapter to the installed van-compute policy |
+| `python3 -m tests.signal_benchmark_oracle` | Offline refactor verification against a selected checkout | Benchmark CLI/field preservation fixtures |
+| `run_tests.py` | repo-full-suite and repo-tests compute tasks; offline developer verification | Fail-fast Python/Node/layout/scratch-build gate |
+| `tools/dashboard_build.py` | dashboard-test-build compute task | Scratch dashboard tests/build |
+| `tools/telemetry_history_profile.py` | telemetry-history-profile compute task | Bounded offline history, fuel-economy and warning profiles from finalized SQLite backups |
+| `tools/can_signal_benchmark.py` | Owner CLI and offline benchmark recipes | Benchmark file/provenance orchestration; pure rules in signal_benchmark_policy |
+| `tools/can_timeseries_correlate.py` | CAN timeseries compute tasks | Offline scalar correlation |
+| `tools/candump_diagnostic_wire.py` | Diagnostic wire compute tasks | Offline ISO-TP extraction |
+| `tools/alfaobd_decode.py` | alfaobd-debug-decode compute task | Offline debug decode |
+| `tools/alfaobd_gauge_join.py` | alfaobd-gauge-join compute task | Offline gauge/wire join |
+| `tools/alfaobd_apk_db.py` | alfaobd-apk-extract compute task | Offline SQLite extraction |
+| `tools/alfaobd_dat.py` | alfaobd-dat inventory/compare tasks | Offline cache records |
+| `tools/alfaobd_gauges.py` | alfaobd-gauge-inventory compute task | Offline gauge inventory |
+| `tools/alfaobd_catalog.py` | alfaobd-catalog-export compute task | Offline catalog export |
+| `tools/alfaobd_java_arrays.py` | alfaobd-java-array-inventory task | Offline array inventory |
+| `tools/dex_field_usage.py` | dex-field-usage compute task | Offline DEX field inventory |
+| `tools/can_cross_bus_speed.py` | CAN cross-bus compute tasks | Offline speed correlation |
+| `tools/can_event_window.py` | can-event-window compute task | Offline bounded frame windows |
+| `tools/gear_ratio_lookup.py` | gear-ratio-lookup compute task | Offline ratio lookup |
+| `tools/can_gear_ratio_analyze.py` | can-gear-ratio-analyze task | Offline ratio analysis |
+| `tools/fca_hsql_decode.py` | fuel-fca-hsql-query compute task | Offline HSQL query |
+| `tools/candump_arrays.py` | candump-id-arrays compute task | Offline per-identifier arrays |
+| `projects/vehicle_data/dashboard/tools/build.mjs` | npm build/watch | Dashboard build owner |
+| `projects/vehicle_data/dashboard/tools/measure.mjs` | npm measure | Browser measurement entry |
+| `projects/vehicle_data/dashboard/test/` | npm test and Python suite | Dashboard regression fixtures |
+
 ## Running scripts (modules from the repo root, 2026-10-12)
 
-No script carries a `sys.path` bootstrap. Run every repo program as a module from the repo root
+No script carries a `sys.path` bootstrap. Run every vehicle/research program as a module from the repo root
 (`cd /home/pi/dev/obd-things && python3 -m tools.dtc_scan --help`; `projects/x/y.py` is
 `projects.x.y`). Running one by path fails with `No module named 'lib'`. Import siblings through
 their package (`from projects.battery import bcan_voltage`), never by bare name. systemd units use
@@ -304,6 +391,9 @@ script path: both workers put the job's source root on `PYTHONPATH`.
 A script that needs the repo root derives it itself, after its imports:
 `REPO = Path(__file__).resolve().parents[N]` (N is its depth below the root). There is
 deliberately no shared root module, so compute source bundles stay self-contained.
+The standalone verification launchers `run_tests.py` and
+`checks/check_layout.py` use the documented file commands in
+[backend verification](docs/backend-layout.md); neither repairs `sys.path`.
 
 ## Data locations (imposed 2026-07-08; do not resurrect `dumps/` directories)
 

@@ -1,0 +1,6 @@
+# Python dependencies for the complete offline suite in run_tests.py.
+# Install into a repo-owned virtual environment; Node dependencies remain locked by the dashboard.
+pytest>=8.4,<10
+numpy>=1.26,<3
+can-isotp==2.0.7
+cantools==42.0.3

@@ -1,10 +1,9 @@
 """Run the dashboard v2 node suite from the Python test runners (critique M4).
 
 ``npm test`` in ``projects/vehicle_data/dashboard`` is the primary gate on the
-Pi. This wrapper makes ``python3 -m unittest`` / pytest (and therefore the
-``repo-tests`` compute task) run the same ``node --test`` suite as a regression
-gate. It skips when Node 20+ or the installed dependencies are absent, for
-example in a checkout where ``npm ci`` has not run.
+Pi. This wrapper makes pytest run the same ``node --test`` suite as a regression
+gate. Missing Node or dependencies are setup failures; ``run_tests.py`` prepares
+the pinned dependencies before invoking pytest.
 """
 
 from __future__ import annotations
@@ -82,22 +81,27 @@ MISSING = missing_dependencies()
 ESBUILD_PROBLEM = esbuild_problem() if NODE_MAJOR is not None and not MISSING else None
 
 
-@unittest.skipUnless(
-    NODE_MAJOR is not None and NODE_MAJOR >= MIN_NODE_MAJOR,
-    f"node >= {MIN_NODE_MAJOR} is required for the dashboard v2 suite",
-)
-@unittest.skipIf(
-    bool(MISSING),
-    "dashboard v2 dependencies are not installed "
-    f"(missing {', '.join(MISSING)}); run 'npm ci' in {DASHBOARD}",
-)
-@unittest.skipIf(
-    ESBUILD_PROBLEM is not None,
-    f"installed esbuild cannot run on this platform ({ESBUILD_PROBLEM}); "
-    "node_modules was installed for another OS/CPU",
-)
 class DashboardV2NodeSuiteTests(unittest.TestCase):
     def test_node_suite_passes(self):
+        self.assertIsNotNone(
+            NODE_MAJOR,
+            f"node >= {MIN_NODE_MAJOR} is required for the dashboard v2 suite",
+        )
+        self.assertGreaterEqual(
+            NODE_MAJOR,
+            MIN_NODE_MAJOR,
+            f"node >= {MIN_NODE_MAJOR} is required for the dashboard v2 suite",
+        )
+        self.assertFalse(
+            MISSING,
+            "dashboard v2 dependencies are not installed "
+            f"(missing {', '.join(MISSING)}); run 'npm ci' in {DASHBOARD}",
+        )
+        self.assertIsNone(
+            ESBUILD_PROBLEM,
+            f"installed esbuild cannot run on this platform ({ESBUILD_PROBLEM}); "
+            "run 'npm ci' on this OS/CPU",
+        )
         # Explicit files rather than a directory argument: Node 20 recurses into a directory,
         # Node 21+ treats arguments as globs, and a file list means the same on both.
         files = sorted(str(path.relative_to(DASHBOARD)) for path in (DASHBOARD / "test").rglob("*.test.mjs"))

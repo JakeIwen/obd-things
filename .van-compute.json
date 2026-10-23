@@ -15,21 +15,47 @@
       "name": "fuel-catalog-leads",
       "description": "Offline bounded fuel-consumption label/field inventory from owner-supplied AlfaOBD resources; no vehicle access.",
       "profile": "python-script",
-      "source_paths": ["projects/ecu_mapping/fuel_catalog.py", "tools/alfaobd_catalog.py", "lib/reports.py"],
+      "source_paths": [
+        "projects/ecu_mapping/fuel_catalog.py",
+        "tools/alfaobd_catalog.py",
+        "lib/reports.py"
+      ],
       "minimum_inputs": 2,
       "maximum_inputs": 2,
-      "argv": ["{source:projects/ecu_mapping/fuel_catalog.py}", "{input:0}", "{input:1}", "--output", "{result:fuel-catalog.json}"],
-      "outputs": ["fuel-catalog.json"]
+      "argv": [
+        "{source:projects/ecu_mapping/fuel_catalog.py}",
+        "{input:0}",
+        "{input:1}",
+        "--output",
+        "{result:fuel-catalog.json}"
+      ],
+      "outputs": [
+        "fuel-catalog.json"
+      ]
     },
     {
       "name": "lighting-owner-reference",
       "description": "Offline bounded bit comparison for the owner's parked light-icon reference; no CAN access.",
       "profile": "can-log-batch",
-      "source_paths": ["projects/ecu_mapping/lighting_reference.py", "lib/__init__.py", "lib/candump_io.py", "lib/reports.py"],
+      "source_paths": [
+        "projects/ecu_mapping/lighting_reference.py",
+        "lib/__init__.py",
+        "lib/candump_io.py",
+        "lib/reports.py"
+      ],
       "minimum_inputs": 2,
       "maximum_inputs": 17,
-      "argv": ["{source:projects/ecu_mapping/lighting_reference.py}", "--events", "{input:0}", "--output", "{result:lighting.json}", "{inputs:1}"],
-      "outputs": ["lighting.json"]
+      "argv": [
+        "{source:projects/ecu_mapping/lighting_reference.py}",
+        "--events",
+        "{input:0}",
+        "--output",
+        "{result:lighting.json}",
+        "{inputs:1}"
+      ],
+      "outputs": [
+        "lighting.json"
+      ]
     },
     {
       "name": "dashboard-test-build",
@@ -52,15 +78,54 @@
       ],
       "minimum_inputs": 0,
       "maximum_inputs": 0,
-      "argv": ["{source:tools/dashboard_build.py}", "--output", "{result:dashboard-dist}"],
-      "outputs": ["dashboard-dist"]
+      "argv": [
+        "{source:tools/dashboard_build.py}",
+        "--output",
+        "{result:dashboard-dist}"
+      ],
+      "outputs": [
+        "dashboard-dist"
+      ]
+    },
+    {
+      "name": "repo-full-suite",
+      "description": "Run every offline Python, Node, layout and scratch-build gate with fail-fast reporting; no CAN or deployment.",
+      "profile": "python-script",
+      "source_paths": [
+        "run_tests.py",
+        "requirements-test.txt",
+        ".codeshape/config.json",
+        ".gitignore",
+        "AGENTS.md",
+        "README.md",
+        "pyproject.toml",
+        "checks",
+        "lib",
+        "live_data",
+        "projects",
+        "tests",
+        "tools"
+      ],
+      "minimum_inputs": 0,
+      "maximum_inputs": 0,
+      "argv": [
+        "{source:run_tests.py}"
+      ],
+      "outputs": []
     },
     {
       "name": "repo-tests",
-      "description": "Run the portable offline obd-things test suite, optionally filtered by pytest arguments.",
-      "profile": "repo-test",
+      "description": "Prepare pinned dashboard dependencies and run the fail-fast pytest suite, optionally filtered by pytest arguments.",
+      "profile": "python-script",
       "source_paths": [
+        "run_tests.py",
+        "requirements-test.txt",
+        ".codeshape/config.json",
         ".gitignore",
+        "AGENTS.md",
+        "README.md",
+        "pyproject.toml",
+        "checks",
         "lib",
         "tools",
         "tests",
@@ -73,8 +138,9 @@
       "minimum_inputs": 0,
       "maximum_inputs": 0,
       "argv": [
-        "-q",
-        "tests",
+        "{source:run_tests.py}",
+        "--pytest-only",
+        "--",
         "{arguments}"
       ],
       "outputs": []
@@ -1001,7 +1067,10 @@
       ],
       "minimum_inputs": 0,
       "maximum_inputs": 0,
-      "argv": ["-q", "tests/test_canch_validation.py"],
+      "argv": [
+        "-q",
+        "tests/test_canch_validation.py"
+      ],
       "outputs": []
     },
     {
@@ -1173,11 +1242,23 @@
       "name": "candump-id-arrays",
       "description": "Offline: save finalized candump logs (optionally an epoch window) as per-identifier numpy arrays; no vehicle access.",
       "profile": "can-log-batch",
-      "source_paths": ["tools/__init__.py", "lib/candump_io.py", "tools/candump_arrays.py"],
+      "source_paths": [
+        "tools/__init__.py",
+        "lib/candump_io.py",
+        "tools/candump_arrays.py"
+      ],
       "minimum_inputs": 1,
       "maximum_inputs": 16,
-      "argv": ["{source:tools/candump_arrays.py}", "{inputs}", "{arguments}", "--output", "{result:frames.npz}"],
-      "outputs": ["frames.npz"]
+      "argv": [
+        "{source:tools/candump_arrays.py}",
+        "{inputs}",
+        "{arguments}",
+        "--output",
+        "{result:frames.npz}"
+      ],
+      "outputs": [
+        "frames.npz"
+      ]
     }
   ]
 }

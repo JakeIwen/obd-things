@@ -64,6 +64,16 @@ from lib.signal_fields import (
     SignalFieldError,
     iter_signal_fields,
 )
+from lib.signal_search_contract import (
+    CorrelateError,
+    EXPLORATORY_EVIDENCE_TIER,
+    FieldSpec,
+    MAX_BIT_SEARCH_IDENTIFIERS,
+    MAX_RADIUS_MS,
+    PROXY_EVALUATION_EVIDENCE_TIER,
+    SCHEMA_VERSION,
+    _legacy_signal_field,
+)
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -72,9 +82,6 @@ DEFAULT_MODULE = MODULES["cluster"]
 # Backward-compatible public alias used by existing callers and evidence tests.
 CLUSTER_MODULE = DEFAULT_MODULE
 
-SCHEMA_VERSION = 1
-EXPLORATORY_EVIDENCE_TIER = "exploratory_candidate"
-PROXY_EVALUATION_EVIDENCE_TIER = "operational_proxy_evaluation"
 MAX_WIRE_LINE_BYTES = 1 << 20
 MAX_WIRE_STREAM_LINES = 1_500_000
 MAX_WIRE_STREAM_BYTES = 1 << 30
@@ -87,11 +94,9 @@ MAX_HISTORY_FRAMES = 250_000
 MAX_ACTIVE_MATCH_STATES = 100_000
 MAX_ACTIVE_WINDOW_FIELDS = 100_000
 MAX_CANDIDATE_FIELDS = 30_000
-MAX_BIT_SEARCH_IDENTIFIERS = 2
 MAX_BIT_SEARCH_FIELDS_PER_IDENTIFIER = 6_000
 MAX_REGIME_CANDIDATE_STREAMS = 4
 MAX_REGIME_REGRESSIONS = 50_000
-MAX_RADIUS_MS = 10_000
 MAX_TOP_COUNT = 1_000
 # One selected DID is sampled at roughly 1 Hz by cluster_drive_log.py, so this
 # still covers a full 20-hour leg with ample margin while bounding cumulative
@@ -115,10 +120,6 @@ _VAN_COMPUTE_JOB_ID_RE = re.compile(r"\d{8}T\d{6}Z-[0-9a-f]{8}")
 _VAN_COMPUTE_WIRE_NAME_RE = re.compile(
     r"\d{3}-[a-z][a-z0-9_]{0,63}_wire\.jsonl"
 )
-
-
-class CorrelateError(RuntimeError):
-    """Raised for malformed evidence or a violated offline-analysis gate."""
 
 
 def _van_compute_job_root() -> Path:
@@ -180,112 +181,6 @@ class CanFrame:
     @property
     def dlc(self) -> int:
         return len(self.payload)
-
-
-@dataclass(frozen=True, order=True)
-class FieldSpec:
-    kind: str
-    offset: int
-    geometry: SignalField | None = None
-
-    def __post_init__(self) -> None:
-        if (
-            not isinstance(self.offset, int)
-            or isinstance(self.offset, bool)
-            or self.offset < 0
-        ):
-            raise CorrelateError("field offset must be a non-negative integer")
-        if self.kind == "bitfield":
-            if self.geometry is None:
-                raise CorrelateError("bitfield specification requires geometry")
-            if self.offset != self.geometry.first_payload_byte:
-                raise CorrelateError(
-                    "bitfield offset must equal its first payload byte"
-                )
-        elif self.geometry is not None:
-            raise CorrelateError(
-                "legacy field specification cannot carry bit geometry"
-            )
-
-    @classmethod
-    def from_signal_field(cls, geometry: SignalField) -> "FieldSpec":
-        return cls("bitfield", geometry.first_payload_byte, geometry)
-
-    @property
-    def width_bytes(self) -> int:
-        if self.geometry is not None:
-            return self.geometry.span_bytes
-        if self.kind == "byte":
-            return 1
-        if self.kind == "u13be-low5":
-            return 2
-        if self.kind == "u17be-low1":
-            return 3
-        if self.kind.startswith(("u16", "i16")):
-            return 2
-        if self.kind.startswith(("u32", "i32")):
-            return 4
-        raise CorrelateError(f"unsupported field kind {self.kind!r}")
-
-    @property
-    def byte_order(self) -> str | None:
-        if self.geometry is not None:
-            return self.geometry.byte_order
-        if self.kind in ("u13be-low5", "u17be-low1"):
-            return "big"
-        if self.kind in ("u16be", "i16be"):
-            return "big"
-        if self.kind in ("u16le", "i16le"):
-            return "little"
-        if self.kind in ("u32be", "i32be"):
-            return "big"
-        if self.kind in ("u32le", "i32le"):
-            return "little"
-        return None
-
-    @property
-    def signed(self) -> bool:
-        if self.geometry is not None:
-            return self.geometry.signed
-        return self.kind.startswith("i")
-
-    @property
-    def label(self) -> str:
-        if self.geometry is not None:
-            return self.geometry.label
-        return f"{self.kind}:{self.offset}"
-
-    def as_dict(self) -> dict[str, object]:
-        result: dict[str, object] = {
-            "kind": self.kind,
-            "offset": self.offset,
-            "width_bytes": self.width_bytes,
-            "byte_order": self.byte_order,
-            "signed": self.signed,
-        }
-        if self.geometry is not None:
-            result.update(
-                {
-                    "dbc_start_bit": self.geometry.dbc_start_bit,
-                    "length_bits": self.geometry.length_bits,
-                    "label": self.geometry.label,
-                    "bit_numbering": "dbc_cantools_sawtooth",
-                }
-            )
-        return result
-
-    def sort_key(self) -> tuple[object, ...]:
-        if self.geometry is None:
-            return (0, self.kind, self.offset)
-        return (
-            1,
-            self.kind,
-            self.offset,
-            self.geometry.dbc_start_bit,
-            self.geometry.length_bits,
-            self.geometry.byte_order,
-            self.geometry.signed,
-        )
 
 
 @dataclass(frozen=True, order=True)
@@ -786,29 +681,6 @@ def _parse_signal_length(value: str) -> int:
 
 def _reject_json_constant(value: str) -> object:
     raise ValueError(f"non-finite JSON constant {value!r} is not accepted")
-
-
-@lru_cache(maxsize=None)
-def _legacy_signal_field(spec: FieldSpec) -> SignalField:
-    if spec.geometry is not None:
-        return spec.geometry
-    if spec.kind == "byte":
-        return SignalField(spec.offset * 8, 8, "little")
-    if spec.kind == "u13be-low5":
-        return SignalField(spec.offset * 8 + 4, 13, "big")
-    if spec.kind == "u17be-low1":
-        return SignalField(spec.offset * 8, 17, "big")
-    match = re.fullmatch(r"([ui])(16|32)(be|le)", spec.kind)
-    if match is None:
-        raise CorrelateError(f"unsupported field kind {spec.kind!r}")
-    byte_order = "big" if match.group(3) == "be" else "little"
-    start_bit = spec.offset * 8 + (7 if byte_order == "big" else 0)
-    return SignalField(
-        start_bit,
-        int(match.group(2), 10),
-        byte_order,
-        signed=match.group(1) == "i",
-    )
 
 
 def _decode_field(payload: bytes, spec: FieldSpec) -> int:

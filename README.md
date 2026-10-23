@@ -78,6 +78,7 @@ lib/                       GENERIC, module-agnostic plumbing
   can_wake.py                fixed logical B/C wake profiles with exact passive restoration
   can_handoff.py             cooperative per-role fairness ahead of authoritative CAN locks
   signal_fields.py           dependency-free DBC/cantools Intel/Motorola raw bit geometry
+  signal_search_contract.py  shared offline search bounds, field records and legacy geometry
   diagnostic_safety.py       shared/exclusive logical-role and resolved-channel locks
   can_operation_state.py     same-boot physical-topology + external-campaign wake inhibits
 live_data/                 GENERIC top-style live-view library (not a standalone CLI)
@@ -99,6 +100,7 @@ tools/                     GENERIC, module-agnostic CLI tools (take a module key
   signal_correlate.py        DID byte-slice <-> signal correlator (lstsq), capture + analyze
   can_timeseries_correlate.py offline cluster-DID <-> passive broadcast candidate correlator
   can_signal_benchmark.py    whole-drive report benchmark; never runs heavy searches on vanpi
+  signal_benchmark_policy.py pure per-case benchmark validation and evaluation
 projects/                  per-target investigations and durable findings
   vehicle_configuration/    BCM/PROXI configuration campaigns and recovery handoffs
   vehicle_data/             allowlisted cached telemetry broker, CLI, and gated dashboard
@@ -131,7 +133,7 @@ answered by location alone — neither local nor EXFAT `tmp/` data is tracked.
 module-agnostic and reusable — it knows nothing about any particular ECU (addressing is passed in via
 the module key). Anything under `projects/<name>/` is specific to that target.
 
-Run every script as a module from the repo root (`python3 -m tools.dtc_scan`,
+Run vehicle/research scripts as modules from the repo root (`python3 -m tools.dtc_scan`,
 `python3 -m projects.battery.bcan_voltage`); none edits `sys.path`, so running one by file path fails.
 A script that needs the repo root for default paths uses `REPO = Path(__file__).resolve().parents[N]`
 after its imports. AGENTS.md section "Running scripts" has the full convention.
@@ -384,6 +386,18 @@ Do not reconstruct a historical recipe on an ephemeral `canN`.
    angles in spec) and treat ACC/FCW as untrusted until proven on a controlled test.
 4. Any routine parameter format or angle scale reconstructed from the historical evidence remains
    **reverse-engineered, not from a Bosch ODX**, and may be wrong.
+
+## Offline development checks
+
+The complete automated gate is `python3 run_tests.py` (Python 3.11+, Node 20+,
+npm and Git). On vanpi, submit `repo-full-suite` through the existing compute
+queue. It covers pytest, dashboard Node tests, backend layout checks and a
+scratch production build; it does not deploy or use the vehicle.
+The offline benchmark preservation harness is
+`python3 -m tests.signal_benchmark_oracle --repo-root CHECKOUT --output OUTPUT`.
+It asserts expected results before capturing stdout, stderr, status and file bytes.
+See [backend organization and verification](docs/backend-layout.md) for the
+commands, dependency preparation and enforcement limits.
 
 ## License & disclaimer
 MIT — see [LICENSE](LICENSE). **Provided "AS IS", WITHOUT WARRANTY OF ANY KIND**; the authors and

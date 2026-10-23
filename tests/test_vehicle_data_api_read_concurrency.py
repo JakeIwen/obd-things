@@ -61,10 +61,12 @@ class ApiConcurrencyTests(unittest.TestCase):
                 sock = harness.connect()
                 sock.sendall(b"GET /v1/status HTTP/1.1\r\nHost: local\r\n")
                 blocked.append(sock)
-            deadline = time.monotonic() + 1.0
-            while harness.server.accepted < harness.server.request_worker_count and time.monotonic() < deadline:
-                harness.server.accepted_event.wait(0.05)
-            self.assertEqual(harness.server.accepted, harness.server.request_worker_count)
+            # accepted_event stays set after the first accept; repeatedly waiting
+            # on it would spin and starve the acceptor on a busy worker.
+            self.assertTrue(wait_until(
+                lambda: harness.server.accepted == harness.server.request_worker_count,
+                timeout=1.0,
+            ))
             self.assertEqual(harness.server.request_queue_size, 64)
             self.assertEqual(harness.server._transport_queue.maxsize, harness.server.request_worker_count)
             self.assertEqual(harness.server._post_jobs.maxsize, harness.server.request_worker_count)
@@ -261,15 +263,25 @@ class ApiConcurrencyTests(unittest.TestCase):
             self.assertEqual(acquirer.calls, ["passive"])
 
     def test_stuck_output_deadline_releases_single_worker_while_peer_remains_open(self):
-        with running_server(server_class=SingleWorkerServer) as harness:
-            harness.server.request_io_timeout = 0.05
+        response_started = threading.Event()
+
+        class ShortFirstResponseServer(SingleWorkerServer):
+            def _begin_response_phase(self, handler):
+                normal_timeout = self.request_io_timeout
+                if not response_started.is_set():
+                    self.request_io_timeout = 0.05
+                try:
+                    super()._begin_response_phase(handler)
+                finally:
+                    self.request_io_timeout = normal_timeout
+                response_started.set()
+
+        with running_server(server_class=ShortFirstResponseServer) as harness:
             calls = 0
-            called = threading.Event()
 
             def status_response():
                 nonlocal calls
                 calls += 1
-                called.set()
                 if calls == 1:
                     return {"blob": "x" * 8_000_000}
                 return {"available": True, "recovered": True}
@@ -277,19 +289,13 @@ class ApiConcurrencyTests(unittest.TestCase):
             harness.broker.status_response = status_response
             stuck = harness.connect()
             request_bytes(stuck, "GET", "/v1/status")
-            self.assertTrue(called.wait(1.0))
-            def response_phase_active():
-                with harness.server._condition:
-                    return any(
-                        record.phase == "response"
-                        for record in harness.server._connections.values()
-                    )
-            self.assertTrue(wait_until(response_phase_active, timeout=0.5))
-            self.assertTrue(wait_until(lambda: harness.server.accepted == 1, timeout=0.5))
+            # Latch phase entry: a poll can miss the entire 50 ms response phase.
+            self.assertTrue(response_started.wait(1.0))
+            self.assertEqual(harness.server.accepted, 1)
 
-            # The stalled response already owns its short absolute deadline.
-            # The recovery request needs the normal I/O budget on a busy worker.
-            harness.server.request_io_timeout = api_server.UnixHTTPServer.request_io_timeout
+            # Both sockets retain their normal idle timeout. Only the first
+            # response's absolute deadline is short, so worker recovery below
+            # proves that deadline releases a write to the still-open peer.
             fresh = harness.connect()
             request_bytes(fresh, "GET", "/v1/status")
             self.assertTrue(
