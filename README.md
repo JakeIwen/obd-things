@@ -11,16 +11,16 @@ with each investigation living under `projects/<name>/`.
 ## Telemetry dashboard
 
 <p align="center">
-  <img src="projects/vehicle_data/dashboard/screenshots/01-drive-gauges.png" width="380" alt="Van telemetry dashboard replaying a historical drive with speed, RPM, temperatures, oil pressure, charging voltage, power, tire pressures, trip data, and light indicators">
+  <img src="projects/vehicle_data/dashboard/screenshots/01-drive-gauges.png" width="380" alt="Drive gauges view with illustrative demo data: 63 mph with instant and trip fuel economy under the speed, RPM, temperatures, oil pressure, charging voltage, power, tire pressures, trip data, and light indicators">
   <img src="projects/vehicle_data/dashboard/screenshots/17-drive-live-fuel-economy.png" width="380" alt="Drive sensors view with an estimated fuel rate of 3.3 gallons per hour and instant economy of 19 mpg, adaptive cruise, estimated gear, radar aim, and transmission speeds">
 </p>
 
 The tablet dashboard turns the passive three-bus telemetry stream into a driver-focused view of
 speed, engine and transmission temperatures, oil pressure, charging voltage, power, tire pressure,
 trip history, estimated fuel rate and live mpg, lighting state, diagnostics, maintenance, and radar
-alignment. Both screenshots use clearly labeled browser-only demo data: a replay with representative
-values from saved driving ranges (left) and an illustrative highway scene (right). Neither is live
-vehicle data, and the captures performed no CAN or service actions.
+alignment. Both screenshots use browser-only demo data, the same illustrative highway scene on the
+Gauges page (left) and the Sensors page (right). Neither is live vehicle data, and the captures
+performed no CAN or service actions.
 
 <details>
 <summary>More dashboard views</summary>

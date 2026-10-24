@@ -10,8 +10,8 @@
   },
   "tablet_reference": "projects/vehicle_data/dashboard/docs/design.md: portrait-mounted tablet, 800 × 1280 CSS pixels; physical DPR unconfirmed.",
   "capture_method": "Clean Chromium browser displaying the current built app. Browser-only reactive-store fixtures, saved historical ranges, canvas/SVG and text changes, and intercepted advisor/scan API responses supplied demo data.",
-  "data_notice": "Portfolio demonstration images combine saved app data with representative values from historical telemetry ranges, charts, trip/cruise summaries and assistant conversations. They are not evidence of a live drive, diagnosis, model response or service action. The primary Drive image carries an on-screen historical-replay label.",
-  "primary_trip_source": "Trip 65 in tmp/vehicle_data/warning_replay/replay-current@wave4-20261004T030357326Z.sqlite3: 64.2 minutes, 53.47 miles integrated from fresh speed samples, and 210.2 °F maximum coolant. The displayed 15 hp average is the 15.21 hp prior-trip median in dashboard/test/fixtures/summary-v2.json.",
+  "data_notice": "Portfolio demonstration images combine saved app data with representative values from historical telemetry ranges, charts, trip/cruise summaries and assistant conversations. They are not evidence of a live drive, diagnosis, model response or service action. The two Drive images (01 and 17) show the demo scene in dashboard/tools/demo_data.mjs, whose values agree with each other.",
+  "primary_trip_source": "Images 01 and 17 (Drive) use the demo scene in dashboard/tools/demo_data.mjs: a 42-minute, 39.8-mile illustrative highway trip at 63 mph. The other images keep the 2026-10-20 replay: Trip 65 in tmp/vehicle_data/warning_replay/replay-current@wave4-20261004T030357326Z.sqlite3: 64.2 minutes, 53.47 miles integrated from fresh speed samples, and 210.2 °F maximum coolant. The displayed 15 hp average is the 15.21 hp prior-trip median in dashboard/test/fixtures/summary-v2.json.",
   "suggested_public_caption": "Van telemetry dashboard — tablet UI with illustrative demo data.",
   "safety": "No vehicle actions, scan execution, warning installation, maintenance saves, deployments or service changes. Mutating requests were blocked or fulfilled locally in the capture browser.",
   "suggested_homepage_images": [
@@ -24,11 +24,11 @@
   "images": [
     {
       "file": "01-drive-gauges.png",
-      "caption": "Driving dashboard with speed, RPM, temperatures, oil pressure, voltage, power, tire pressures and trip statistics.",
+      "caption": "Drive Gauges page from build 6f18e1889170 with illustrative demo highway data: 63 mph with now ≈ 19 mpg and trip ≈ 16.4 mpg under the speed, RPM, temperatures, oil pressure, voltage, power, tire pressures and trip statistics.",
       "width": 800,
       "height": 1280,
-      "bytes": 86485,
-      "sha256": "194c77ac90da3191b7fe3e056c7d146071e5aa737b185a0124ffc0317e4e5f9e"
+      "bytes": 136213,
+      "sha256": "063a93cf130d58b9cb30e2d9a60eb5af5cbbf16e1bad2842c04a909c757f0a89"
     },
     {
       "file": "02-drive-sensors.png",
