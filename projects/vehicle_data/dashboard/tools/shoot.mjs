@@ -1,5 +1,6 @@
 // Screenshot and measure every dashboard v2 view in headless Firefox over WebDriver BiDi.
 // usage: node --experimental-websocket tools/shoot.mjs [--demo] <url> <outdir> [observeSeconds]
+// SHOOT_SIZES="800x1096:gate,390x844:phone" adds viewports to the portrait and landscape pair.
 // Output per orientation and view: <outdir>/<orientation>-<view>.png, plus report.json with
 // DOM size, document height vs viewport, small text, tap targets, overflow/overlap hits,
 // console errors and a MutationObserver/rAF sample on the Drive view.
@@ -178,7 +179,9 @@ report.driveIdle = await evaluate(`new Promise((resolve) => {
   const tick = (now) => { f.count++; const g = now - last; last = now; if (g > f.maxGap) f.maxGap = Math.round(g); if (g > 32) f.over32++; if (g > 50) f.over50++; if (on) requestAnimationFrame(tick); }; requestAnimationFrame(tick);
   setTimeout(() => { on = false; mo.disconnect(); resolve({seconds: ${observeSeconds}, mutations: m, frames: f, conn: window.__van && window.__van.store.connection.peek()}); }, ${observeSeconds * 1000});
 })`);
-for (const [w, h, orient] of [[800, 1280, "portrait"], [1280, 800, "landscape"]]) {
+const extraSizes = (process.env.SHOOT_SIZES || "").split(",").filter(Boolean)
+  .map((s) => { const [dims, name] = s.split(":"); const [w, h] = dims.split("x").map(Number); return [w, h, name || dims]; });
+for (const [w, h, orient] of [[800, 1280, "portrait"], [1280, 800, "landscape"], ...extraSizes]) {
   await viewport(w, h); await sleep(800);
   for (const label of ["Drive", "Parked", "Health", "History", "System"]) {
     await clickTab(label); await sleep(1500);
