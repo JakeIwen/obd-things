@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fuelRateText, instantText, mpgText, windowsText } from "../src/fuelEconomy.helpers.js";
+import { fuelRateText, instantFigure, instantText, mpgFigure, mpgText, windowsText } from "../src/fuelEconomy.helpers.js";
 import { tripsModel } from "../src/views/history.helpers.js";
 
 const NOW = Date.parse("2026-09-22T19:00:00Z");
@@ -28,6 +28,17 @@ test("instant economy while moving, fuel cut when coasting, nothing when stopped
   assert.equal(instantText(2, live(0.4)), "");
   assert.equal(instantText(null, live(2)), "");
   assert.equal(instantText(60, { ...live(2), stale: true }), "");
+});
+
+test("Speed-tile figures carry the unit only with a value and read 99+ while coasting", () => {
+  assert.deepEqual(instantFigure(60, live(3)), { value: "≈ 20", unit: "mpg" });
+  assert.deepEqual(instantFigure(60, live(0.5)), { value: "≈ 99+", unit: "mpg" });
+  assert.deepEqual(instantFigure(45, live(0)), { value: "≈ 99+", unit: "mpg" });
+  assert.deepEqual(instantFigure(2, live(0.4)), { value: "—", unit: "" });
+  assert.deepEqual(instantFigure(60, { ...live(2), stale: true }), { value: "—", unit: "" });
+  assert.deepEqual(mpgFigure({ available: true, mpg: 16.44 }), { value: "≈ 16.4", unit: "mpg" });
+  assert.deepEqual(mpgFigure({ available: false, samples: 3 }), { value: "—", unit: "" });
+  assert.deepEqual(mpgFigure(null), { value: "—", unit: "" });
 });
 
 test("7- and 30-day line skips a window without a figure", () => {

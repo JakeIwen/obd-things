@@ -94,15 +94,16 @@ what they meant and where that information lives now.
   appears only while the van is moving. Page 2 also shows the ratio itself, for example
   `ratio 0.70` (7th is about 0.70 and 5th is 1.00). During shifts or torque-converter slip the ratio
   sits between gears, and the estimate can lag or disappear briefly.
-- **Fuel rate and fuel economy** (`≈`; Fuel rate on Drive page 2, Fuel on the page 1 Trip tile,
-  and on the History Trips card): estimates. The fuel rate is the engine computer's own fuel-flow
+- **Fuel rate and fuel economy** (`≈`; `now` and `trip` under Speed on Drive page 1, Fuel rate on
+  page 2, and on the History Trips card): estimates. The fuel rate is the engine computer's own fuel-flow
   figure from C-CAN frame `0x2ED` (the coolant frame), read without asking the engine anything. It
   drops to zero when coasting in gear and reads about 0.4–0.5 gal/h at a warm idle. Its scale is
   chosen to match the cluster: the cluster's instant and trip-average mpg both work out to 1.13
   times the engine computer's nominal figure, so the app does the same and should agree with the
   dash within a few percent. Neither has been checked against fuel actually pumped, so treat both
-  as the cluster's opinion, not a measurement. Under the rate, `now ≈ 20 mpg` is the instant
-  economy while moving (`coasting, no fuel` during the fuel cut). Trip and 7/30-day economy are
+  as the cluster's opinion, not a measurement. `now ≈ 20 mpg` (under Speed, and under the rate on
+  page 2) is the instant economy while moving; during the fuel cut it reads `≈ 99+` under Speed
+  and `coasting, no fuel` on page 2, like the cluster's capped readout. Trip and 7/30-day economy are
   average speed over average fuel rate across the Pi's engine-running history samples, one every
   five seconds, so a short trip can be off by a few percent more. Trips recorded before the fuel
   rate was added (October 2026) have no figure, and until a window has a full 7 or 30 days of

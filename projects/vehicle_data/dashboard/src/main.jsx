@@ -7,6 +7,7 @@ import { render } from "preact";
 import "./styles/app.css";
 import "./styles/lighting.css";
 import "./styles/acc-distance.css";
+import "./styles/speed-economy.css";
 import "./styles/compass.css";
 import "./styles/night.css";
 import * as store from "./store.js";

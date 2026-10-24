@@ -5,12 +5,12 @@ import { AccDistance } from "../components/AccDistance.jsx";
 import { currentAcc } from "../accDisplay.js";
 import { overspeed } from "../overspeed.js";
 import { DriveFooter } from "./DriveFooter.jsx";
+import { SpeedEconomy } from "./SpeedEconomy.jsx";
 import { liveValue, isHidden, minuteClock, engineRunning } from "../app/derive.js";
 import { tripDistanceMiles } from "../app/rings.js";
 import * as store from "../store.js";
 import { fmtValue, fmtDuration, DASH } from "../format.js";
 import { speedFooter } from "./driveSpeed.helpers.js";
-import { mpgText } from "../fuelEconomy.helpers.js";
 
 // Sub-lines computed once at module scope (shared by every mount).
 const alternatorSub = computed(() => {
@@ -60,15 +60,13 @@ const tripRows = computed(() => {
   return [
     ["Time", duration],
     ["Distance", distance],
-    // Estimated; refreshed with the history summary, about once a minute.
-    ["Fuel", (trip && mpgText(trip.fuel_economy)) || DASH],
     ["Coolant max", coolMax ? coolMax + " °F" : DASH],
     ["Avg power", powerAvg ? powerAvg + " hp" : DASH],
   ];
 });
 
 function TripTile() {
-  // Five rows of short text; the whole tile re-renders at most once a minute.
+  // Four rows of short text; the whole tile re-renders at most once a minute.
   const rows = tripRows.value;
   return (
     <section class="tile area-trip" aria-label="Trip">
@@ -91,7 +89,7 @@ export default function DriveGauges({ page, onPageChange }) {
   return (
     <>
       <div class="drive">
-        {show("speed") && <Tile name="vehicle.speed" label="Speed" area="speed" size="hero" sub={speedSub} extra={<AccDistance />} overspeed={overspeed} />}
+        {show("speed") && <Tile name="vehicle.speed" label="Speed" area="speed" size="hero" sub={speedSub} extra={<AccDistance />} detail={<SpeedEconomy />} overspeed={overspeed} />}
         {show("rpm") && <Tile name="engine.rpm" label="RPM" area="rpm" size="large" sub={rpmSub} spark showUnit={false} />}
         {show("coolant") && <Tile name="engine.coolant_temperature" label="Coolant" area="coolant" band spark />}
         {show("trans") && <Tile name="transmission.oil_temperature" label="Trans oil" area="trans" band spark />}

@@ -1,0 +1,15 @@
+/* ---------- Estimated economy under the Speed numeral (src/views/SpeedEconomy.jsx) ---------- */
+/* The row sits between the hero numeral and the two-line footer, taking only the spare height.
+   Its numerals scale with the viewport like the other tile sizes: 44 px on the 1,280 px tablet,
+   down to a size that still fits above the footer at the 1,096 px portrait gate and in landscape.
+   The captions and unit follow the numeral, as a tile unit follows its value. */
+.speed-economy {
+  display: flex; align-items: baseline; gap: 0 28px; flex-shrink: 0;
+  margin-top: 2px; min-width: 0; white-space: nowrap; overflow: hidden;
+}
+.speed-economy__item {
+  display: inline-flex; align-items: baseline; gap: 6px; min-width: 0;
+  font-size: clamp(18px, calc(11.5vh - 103px), 44px);
+}
+.speed-economy__name, .speed-economy__unit { font-size: max(14px, .4em); color: var(--text-2); }
+.speed-economy__value { font-weight: 600; line-height: 1.1; letter-spacing: -.02em; }

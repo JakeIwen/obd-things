@@ -364,7 +364,7 @@ tab bar, with 16 px gutters and 12 px gaps.
 
 | row | content |
 |---|---|
-| A | **SPEED** (2 cols, hero numerals, `mph`; two-line footer: `limit 55 mph` while live, then `ACC 66 mph · engaged · vehicle ahead`; a four-bar gap readout sits beside the speed numeral; regular cruise uses `Cruise`; current off/ready/standby/override states are explicit) · **RPM** (1 col; the unit is in the label; the footer reads `gear 6` once a live gear metric exists and is empty until then; 15-min sparkline) |
+| A | **SPEED** (2 cols, hero numerals, `mph`; under the numeral an estimated economy row `now ≈ 19 mpg · trip ≈ 16.4 mpg`; two-line footer: `limit 55 mph` while live, then `ACC 66 mph · engaged · vehicle ahead`; a four-bar gap readout sits beside the speed numeral; regular cruise uses `Cruise`; current off/ready/standby/override states are explicit) · **RPM** (1 col; the unit is in the label; the footer reads `gear 6` once a live gear metric exists and is empty until then; 15-min sparkline) |
 | B | **COOLANT** · **TRANS OIL** · **OIL PRESSURE**: value, unit, band bar, 15-min sparkline |
 | C | **VOLTAGE** (1 decimal; sub-line `alternator 42 %`) · **POWER** (`hp`; sub-line `165 lb-ft`) · **OIL TEMP (VVT)** |
 | D | **TIRES** (2 cols: 2×2 grid FL FR / RL RR) · **TRIP** (Time, Distance `≈ 12.3 mi`, Coolant max, Avg power) |
@@ -425,9 +425,16 @@ Rules for Drive tiles:
   per-metric minimum span (10 psi, 20 °F, 0.5 V) and draws only the nearest band edge.
 - Trip distance integrates live speed samples (gaps longer than 30 s are skipped). It is persisted
   in `localStorage` (`van-telemetry.v2.trip`) keyed by the trip's start, so a reload mid-trip keeps
-  it. Coolant max and average power come from `history.trip_comparison` (60 s cadence). The
-  Fuel row (added 2026-10-20) is the open trip's estimated economy,
-  `history.current_trip.fuel_economy.mpg`, written `≈ 14.1 mpg` (`src/fuelEconomy.helpers.js`).
+  it. Coolant max and average power come from `history.trip_comparison` (60 s cadence).
+- Estimated economy sits under the Speed numeral, above its footer, in the height the hero tile
+  had spare (owner request 2026-10-24; it replaces the Trip tile's Fuel row of 2026-10-20).
+  `now ≈ 19 mpg` is live speed ÷ live fuel rate at ≥ 5 mph (`≈ 99+` from 99 up and during the
+  fuel cut, `—` when stopped or either record is stale); `trip ≈ 16.4 mpg` is
+  `history.current_trip.fuel_economy.mpg` (`—` until the broker has one). The numerals scale with
+  the viewport (`clamp(18px, 11.5vh − 103px, 44px)`, 44 px on the 1,280 px tablet) so the row still fits above the two-line footer
+  at the 1,096 px gate and in landscape; the phone layout gives the Speed row 184 px instead of
+  150. `src/views/SpeedEconomy.jsx` renders it through the Tile `detail` slot with
+  `styles/speed-economy.css`; the figures come from `src/fuelEconomy.helpers.js`.
 - Customisation can hide a Drive tile. Positions are fixed, so a hidden tile leaves its cell empty
   and nothing else moves.
 

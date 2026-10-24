@@ -14,13 +14,23 @@ export const INSTANT_MIN_MPH = 5;
 /** Instant figures above this read as `99+`, like the cluster's capped display. */
 export const INSTANT_CAP_MPG = 99;
 
+const NO_FIGURE = Object.freeze({ value: DASH, unit: "" });
+const figure = (text) => ({ value: "≈ " + text, unit: "mpg" });
+
 /**
- * `≈ 14.1 mpg` from one history `fuel_economy` object, or null when it holds no figure
- * (too few running samples, a trip from before fuel was recorded, or no fuel used).
+ * One history `fuel_economy` object as a Speed-tile figure, `{value: "≈ 14.1", unit: "mpg"}`, or
+ * `—` with no unit when it holds none (too few running samples, a trip from before fuel was
+ * recorded, or no fuel used).
  */
+export function mpgFigure(economy) {
+  if (!economy || economy.available !== true || !isNum(economy.mpg) || economy.mpg < 0) return NO_FIGURE;
+  return figure(economy.mpg.toFixed(1));
+}
+
+/** `≈ 14.1 mpg` from one history `fuel_economy` object, or null when it holds no figure. */
 export function mpgText(economy) {
-  if (!economy || economy.available !== true || !isNum(economy.mpg) || economy.mpg < 0) return null;
-  return "≈ " + economy.mpg.toFixed(1) + " mpg";
+  const f = mpgFigure(economy);
+  return f.unit ? f.value + " " + f.unit : null;
 }
 
 /** Live fuel rate as `≈ 1.2` (gal/h), or `—` unless the record is current. */
@@ -30,16 +40,28 @@ export function fuelRateText(rec) {
 }
 
 /**
- * Sub-line under the live rate while moving: instant economy, or the fuel cut the engine
- * computer makes when coasting in gear. Empty when stopped or when either value is missing.
+ * Instant economy in mpg while moving on a current fuel record; Infinity during the fuel cut
+ * the engine computer makes when coasting in gear; null when stopped or either value is missing.
  * @param {number|null} mph live `vehicle.speed`
  * @param {{available?: boolean, stale?: boolean, value?: *}|null} rec `engine.fuel_rate` record
  */
+function instantMpg(mph, rec) {
+  if (!isNum(mph) || mph < INSTANT_MIN_MPH || fuelRateText(rec) === DASH) return null;
+  return rec.value === 0 ? Infinity : mph / rec.value;
+}
+const capped = (mpg) => (mpg > INSTANT_CAP_MPG ? INSTANT_CAP_MPG + "+" : String(Math.round(mpg)));
+
+/** Speed-tile figure `{value: "≈ 19", unit: "mpg"}`; `≈ 99+` from the cap up and while coasting. */
+export function instantFigure(mph, rec) {
+  const mpg = instantMpg(mph, rec);
+  return mpg === null ? NO_FIGURE : figure(capped(mpg));
+}
+
+/** Sub-line under the live rate on page 2: `now ≈ 20 mpg`, `coasting, no fuel`, or empty. */
 export function instantText(mph, rec) {
-  if (!isNum(mph) || mph < INSTANT_MIN_MPH || fuelRateText(rec) === DASH) return "";
-  if (rec.value === 0) return "coasting, no fuel";
-  const mpg = mph / rec.value;
-  return "now ≈ " + (mpg > INSTANT_CAP_MPG ? INSTANT_CAP_MPG + "+" : Math.round(mpg)) + " mpg";
+  const mpg = instantMpg(mph, rec);
+  if (mpg === null) return "";
+  return mpg === Infinity ? "coasting, no fuel" : "now ≈ " + capped(mpg) + " mpg";
 }
 
 /**
