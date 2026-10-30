@@ -24,11 +24,11 @@
   "images": [
     {
       "file": "01-drive-gauges.png",
-      "caption": "Drive Gauges page from build 6f18e1889170 with illustrative demo highway data: 63 mph with now ≈ 19 mpg and trip ≈ 16.4 mpg under the speed, RPM, temperatures, oil pressure, voltage, power, tire pressures and trip statistics.",
+      "caption": "Drive Gauges page from build b3abd6e816f1 with illustrative demo highway data: 63 mph with now ≈ 19 mpg under the speed, RPM, temperatures, oil pressure, voltage, power, tire pressures and This drive (time, distance, ≈ 16.4 mpg, coolant max, average power).",
       "width": 800,
       "height": 1280,
-      "bytes": 136213,
-      "sha256": "063a93cf130d58b9cb30e2d9a60eb5af5cbbf16e1bad2842c04a909c757f0a89"
+      "bytes": 143720,
+      "sha256": "39ca7d53f68a22a045997da14b1f8dc1fe6e546796218e07d0b121f299ebcaec"
     },
     {
       "file": "02-drive-sensors.png",

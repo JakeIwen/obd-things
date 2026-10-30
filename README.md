@@ -11,7 +11,7 @@ with each investigation living under `projects/<name>/`.
 ## Telemetry dashboard
 
 <p align="center">
-  <img src="projects/vehicle_data/dashboard/screenshots/01-drive-gauges.png" width="380" alt="Drive gauges view with illustrative demo data: 63 mph with instant and trip fuel economy under the speed, RPM, temperatures, oil pressure, charging voltage, power, tire pressures, trip data, and light indicators">
+  <img src="projects/vehicle_data/dashboard/screenshots/01-drive-gauges.png" width="380" alt="Drive gauges view with illustrative demo data: 63 mph with instant fuel economy under the speed, RPM, temperatures, oil pressure, charging voltage, power, tire pressures, This drive time, distance and fuel economy, and light indicators">
   <img src="projects/vehicle_data/dashboard/screenshots/17-drive-live-fuel-economy.png" width="380" alt="Drive sensors view with an estimated fuel rate of 3.3 gallons per hour and instant economy of 19 mpg, adaptive cruise, estimated gear, radar aim, and transmission speeds">
 </p>
 
