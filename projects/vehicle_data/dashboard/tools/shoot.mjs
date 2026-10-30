@@ -1,6 +1,7 @@
 // Screenshot and measure every dashboard v2 view in headless Firefox over WebDriver BiDi.
 // usage: node --experimental-websocket tools/shoot.mjs [--demo] <url> <outdir> [observeSeconds]
 // SHOOT_SIZES="800x1096:gate,390x844:phone" adds viewports to the portrait and landscape pair.
+// Dark keeps the original filenames; light/dim add their prefix. All use the real controls.
 // Output per orientation and view: <outdir>/<orientation>-<view>.png, plus report.json with
 // DOM size, document height vs viewport, small text, tap targets, overflow/overlap hits,
 // console errors and a MutationObserver/rAF sample on the Drive view.
@@ -132,24 +133,35 @@ async function applyDemoScene(scene) {
     };
     store.summary.history.value = scene.history;
     store.summary.health.value = scene.health;
-    store.summary.statusFull.value = scene.statusLite;
+    store.summary.maintenance.value = scene.maintenance;
+    store.summary.dtcs.value = scene.dtcs;
+    store.catalog.value = Object.entries(scene.metrics).map(([name, spec]) =>
+      ({name, label: name, unit: spec.unit, quality: spec.quality, freshness_seconds: scene.staleAfterMs / 1000}));
+    store.web.value = {active_acquisition_enabled: false, dtc_jobs_enabled: false, warning_chat_enabled: false,
+      build: "illustrative-demo", bind: "loopback preview"};
+    store.summary.statusFull.value = {...scene.statusLite, vehicle_state: store.vehicle.peek()};
     store.summary.error.value = null;
     store.summary.fetchedMono.value = now;
     store.statusLite.value = scene.statusLite;
     for (const [name, values] of Object.entries(scene.sparklines)) {
-      const start = now - 14 * 60 * 1000;
-      const step = values.length > 1 ? 14 * 60 * 1000 / (values.length - 1) : 0;
-      values.forEach((value, index) => {
-        const receivedMono = start + index * step;
-        const observedAt = new Date(nowWall - (now - receivedMono)).toISOString();
-        store.metricSignal(name).value = makeRecord(name, value, receivedMono, observedAt);
-      });
+      // Sparse knots leave empty canvas columns. Interpolate a bounded five-second
+      // series through the public ring API, without feeding old samples into trip distance.
+      const ring = van.ringFor(name);
+      ring.clear();
+      const count = 169;
+      ring.seed(Array.from({length: count}, (_, i) => {
+        const position = i * (values.length - 1) / (count - 1);
+        const left = Math.floor(position), right = Math.min(left + 1, values.length - 1);
+        return {at: nowWall - (count - 1 - i) * 5000,
+          value: values[left] + (values[right] - values[left]) * (position - left)};
+      }), {nowMono: now, nowEpochMs: nowWall});
     }
     for (const [name, spec] of Object.entries(scene.metrics)) {
       store.metricSignal(name).value = makeRecord(name, spec.value, now, finalObservedAt);
     }
     store.metricNames.value = Object.keys(scene.metrics).sort();
     store.clock.value = Math.round(now / 1000) * 1000;
+    window.dispatchEvent(new Event('resize'));
     return {
       name: scene.name,
       metrics: Object.keys(scene.metrics).length,
@@ -159,14 +171,33 @@ async function applyDemoScene(scene) {
   })(${payload})`);
 }
 
+async function setAppearance(mode, dim = false) {
+  await evaluate(`(async () => {
+    const theme = document.querySelector('.topbar__theme');
+    if (!theme) throw new Error('Theme control not found');
+    for (let i = 0; i < 3 && !theme.getAttribute('aria-label').toLowerCase().startsWith('theme: ' + ${JSON.stringify(mode)}); i++) {
+      theme.click();
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    const button = [...document.querySelectorAll('.topbar__btn')].find(e => /^dim$/i.test(e.textContent.trim()));
+    if ((button.getAttribute('aria-pressed') === 'true') !== ${dim}) button.click();
+    return true;
+  })()`);
+  await sleep(400);
+}
+
 const report = {url, startedAt: new Date().toISOString(), views: {}};
 await viewport(800, 1280);
 await send("browsingContext.navigate", {context, url, wait: "complete"});
 await sleep(6000);
 report.assets = await evaluate(`performance.getEntriesByType("resource").filter(e => !e.name.includes("/v1/") && !e.name.includes("/v2/")).map(e => ({name: e.name.replace(location.origin, ""), transfer: e.transferSize, decoded: e.decodedBodySize}))`);
+const originalSettings = await evaluate(`(() => { try { return {raw: localStorage.getItem('van-telemetry.v2.settings')}; } catch { return null; } })()`);
+await setAppearance("dark");
+let demoScene = null;
 if (demo) {
   const {buildDemoScene} = await import("./demo_data.mjs");
-  report.demo = await applyDemoScene(buildDemoScene());
+  demoScene = buildDemoScene();
+  report.demo = await applyDemoScene(demoScene);
   await sleep(500);
 }
 // Drive view mutation / frame sample while the stream runs.
@@ -181,11 +212,18 @@ report.driveIdle = await evaluate(`new Promise((resolve) => {
 })`);
 const extraSizes = (process.env.SHOOT_SIZES || "").split(",").filter(Boolean)
   .map((s) => { const [dims, name] = s.split(":"); const [w, h] = dims.split("x").map(Number); return [w, h, name || dims]; });
+const appearances = report.appearances = {};
+try {
+for (const appearance of ["dark", "light", ...(Number(process.env.SHOOT_DIM ?? 1) ? ["dim"] : [])]) {
+  await setAppearance(appearance === "dim" ? "dark" : appearance, appearance === "dim");
+  const report = appearances[appearance] = {views: {}};
+  const capture = (name) => shot(path.join(out, appearance === "dark" ? name : `${appearance}-${name}`));
 for (const [w, h, orient] of [[800, 1280, "portrait"], [1280, 800, "landscape"], ...extraSizes]) {
   await viewport(w, h); await sleep(800);
   for (const label of ["Drive", "Parked", "Health", "History", "System"]) {
     await clickTab(label); await sleep(1500);
-    const file = await shot(path.join(out, `${orient}-${label.toLowerCase()}.png`));
+    if (demoScene) { await applyDemoScene(demoScene); await sleep(200); }
+    const file = await capture(`${orient}-${label.toLowerCase()}.png`);
     report.views[`${orient}-${label}`] = Object.assign({file}, await probe());
     // Drive page 2 (design 3.1.1) through its pager, then back to page 1 so the saved choice is restored.
     if (label === "Drive") {
@@ -193,7 +231,7 @@ for (const [w, h, orient] of [[800, 1280, "portrait"], [1280, 800, "landscape"],
       if (await pager(2)) {
         for (let i = 0; i < 40; i++) { if (await evaluate(`!!document.querySelector('.drive2 .tile')`)) break; await sleep(250); }
         await sleep(1500);
-        const file2 = await shot(path.join(out, `${orient}-drive-2.png`));
+        const file2 = await capture(`${orient}-drive-2.png`);
         report.views[`${orient}-Drive-2`] = Object.assign({file: file2}, await probe());
         await pager(1); await sleep(800);
       }
@@ -207,7 +245,7 @@ for (const [w, h, orient] of [[800, 1280, "portrait"], [1280, 800, "landscape"],
         const moved = await evaluate(`(() => { const v = document.querySelector('.view'); if (!v) return false; const before = v.scrollTop; v.scrollTop = before + v.clientHeight - 80; return v.scrollTop > before; })()`);
         if (!moved) break;
         await sleep(500);
-        extra.push(await shot(path.join(out, `${orient}-${label.toLowerCase()}-p${p + 1}.png`)));
+        extra.push(await capture(`${orient}-${label.toLowerCase()}-p${p + 1}.png`));
       }
       await evaluate(`(() => { const v = document.querySelector('.view'); if (v) v.scrollTop = 0; return true; })()`);
       report.views[`${orient}-${label}`].pages = extra;
@@ -222,13 +260,13 @@ if (Number(process.env.SHOOT_OPEN ?? 1)) {
     await clickTab(label); await sleep(1200);
     for (let round = 0; round < 3; round++) { await evaluate(`(() => { for (const d of document.querySelectorAll('.view details:not([open])')) d.open = true; return true; })()`); await sleep(400); }
     const key = `open-${label}`;
-    report.views[key] = Object.assign({file: await shot(path.join(out, `open-${label.toLowerCase()}.png`))}, await probe());
+    report.views[key] = Object.assign({file: await capture(`open-${label.toLowerCase()}.png`)}, await probe());
     const extra = [];
     for (let p = 1; p <= 12; p++) {
       const moved = await evaluate(`(() => { const v = document.querySelector('.view'); if (!v) return false; const before = v.scrollTop; v.scrollTop = before + v.clientHeight - 80; return v.scrollTop > before; })()`);
       if (!moved) break;
       await sleep(400);
-      extra.push(await shot(path.join(out, `open-${label.toLowerCase()}-p${p + 1}.png`)));
+      extra.push(await capture(`open-${label.toLowerCase()}-p${p + 1}.png`));
     }
     report.views[key].pages = extra;
     await evaluate(`(() => { const v = document.querySelector('.view'); if (v) v.scrollTop = 0; for (const d of document.querySelectorAll('.view details[open]')) d.open = false; return true; })()`);
@@ -268,7 +306,8 @@ if (Number(process.env.SHOOT_DIALOGS ?? 1)) {
     }],
   ];
   report.dialogs = {};
-  for (const [key, tab, open] of steps) {
+  // Demo mode has no saved-event fixture: never mix real event records into illustrative captures.
+  for (const [key, tab, open] of steps.filter(([key]) => !demo || key === "oil" || key === "customize")) {
     await clickTab(tab); await sleep(1000);
     const clicked = await open();
     // The dialog chunk loads on first use; wait for the <dialog> to open (up to 10 s).
@@ -283,25 +322,29 @@ if (Number(process.env.SHOOT_DIALOGS ?? 1)) {
       if (!loading) break;
       await sleep(500);
     }
-    const entry = {clicked, file: await shot(path.join(out, `dialog-${key}.png`))};
+    const entry = {clicked, file: await capture(`dialog-${key}.png`)};
     Object.assign(entry, await probeDialog());
     const scrolled = await evaluate(`(() => { const d = document.querySelector('dialog[open]'); if (!d) return false; const s = [d, ...d.querySelectorAll('*')].find(e => e.scrollHeight > e.clientHeight + 40 && /auto|scroll/.test(getComputedStyle(e).overflowY)); if (!s) return false; s.scrollTop = s.scrollHeight; return true; })()`);
-    if (scrolled) { await sleep(500); entry.end = await shot(path.join(out, `dialog-${key}-end.png`)); }
+    if (scrolled) { await sleep(500); entry.end = await capture(`dialog-${key}-end.png`); }
     report.dialogs[key] = entry;
     await closeDialog();
     await evaluate(`(() => { const v = document.querySelector('.view'); if (v) v.scrollTop = 0; for (const d of document.querySelectorAll('.view details[open]')) d.open = false; return true; })()`);
   }
 }
-// Night dim on the Drive view (toggled back afterwards so the profile keeps its setting).
-if (Number(process.env.SHOOT_DIM ?? 1)) {
-  await viewport(800, 1280); await clickTab("Drive"); await sleep(800);
-  const toggleDim = () => evaluate(`(() => { const b = [...document.querySelectorAll('button')].find(e => /^dim$/i.test(e.textContent.trim())); if (b) b.click(); return !!b; })()`);
-  if (await toggleDim()) {
-    await sleep(800);
-    report.dim = {root: await evaluate(`document.documentElement.className`), file: await shot(path.join(out, "portrait-drive-dim.png"))};
-    await toggleDim(); await sleep(400);
-  }
 }
+} finally {
+  // Restore the entire original profile, including an absent key and an unexpired dim override.
+  if (originalSettings) await evaluate(`(() => {
+    try {
+      const raw = ${JSON.stringify(originalSettings.raw)};
+      if (raw === null) localStorage.removeItem('van-telemetry.v2.settings');
+      else localStorage.setItem('van-telemetry.v2.settings', raw);
+    } catch (_) {}
+    return true;
+  })()`);
+}
+report.views = appearances.dark.views;
+report.dialogs = appearances.dark.dialogs;
 report.consoleErrors = consoleErrors.slice(0, 30);
 fs.writeFileSync(path.join(out, "report.json"), JSON.stringify(report, null, 2));
 console.log(JSON.stringify(report, null, 2));

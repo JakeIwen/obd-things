@@ -27,15 +27,15 @@ const COLUMN_PX = 4;
 const mounted = new Set();
 let timer = null;
 let colours = null;
+let paletteObserver = null;
 
 function readColours() {
   if (colours) return colours;
   const style = getComputedStyle(document.documentElement);
-  const get = (name, fallback) => (style.getPropertyValue(name) || "").trim() || fallback;
+  const get = (name) => style.getPropertyValue(name).trim();
   colours = {
-    line: get("--text-2", "#aab6b1"),
-    band: get("--line-strong", "#34443f"),
-    dim: get("--dim", "#7f8b87"),
+    line: get("--text-2"),
+    band: get("--line-strong"),
   };
   return colours;
 }
@@ -126,6 +126,10 @@ function onResize() {
 
 function ensureTimer() {
   if (timer || !mounted.size) return;
+  colours = null;
+  // Canvas pixels do not inherit changed CSS tokens; repaint once when the palette changes.
+  paletteObserver = new MutationObserver(() => { colours = null; redrawAll(true); });
+  paletteObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
   timer = setInterval(() => {
     if (document.visibilityState === "visible") redrawAll(false);
   }, REDRAW_MS);
@@ -136,6 +140,8 @@ function releaseTimer() {
   if (mounted.size || !timer) return;
   clearInterval(timer);
   timer = null;
+  paletteObserver.disconnect();
+  paletteObserver = null;
   window.removeEventListener("resize", onResize);
 }
 

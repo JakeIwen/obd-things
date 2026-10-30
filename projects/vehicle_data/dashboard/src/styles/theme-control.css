@@ -1,0 +1,15 @@
+/* The theme glyph has its own 44px target, leaving AUTO exclusively for views. */
+.topbar__theme {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  width: 44px;
+  padding: 0;
+  color: var(--text-2);
+}
+@media (max-width: 640px) {
+  .app > .topbar { gap: 4px; padding-right: 4px; }
+  .topbar__btn { min-width: 44px; padding: 0 8px; }
+  .topbar__theme { padding: 0; }
+}

@@ -49,8 +49,8 @@ Goals, in priority order:
    separate card.
 
 Non-goals for v2.0: any new CAN acquisition; changing the
-broker's safety contract; a light theme (a high-contrast day mode waits until the screen is checked in
-sunlight); a no-scroll landscape layout; standalone (browser-chrome-free) display, which needs HTTPS.
+broker's safety contract; a no-scroll landscape layout; standalone (browser-chrome-free) display, which needs HTTPS.
+The original light-theme deferral was superseded by the owner's October 30 sun-schedule request (section 4).
 Deferred to v2.1: the per-wheel tire cold baseline, per-trip statistics, seeded Drive sparklines,
 consuming the warning backend's `group`/`tier`/`action` fields, and the gear footer.
 
@@ -300,15 +300,17 @@ opens a network or CAN connection. `TRACE_JSON` is optional; keep it under
     Minute-resolution text (trip duration, "last drive 4:25 pm", ages) changes at most once a minute.
   - Lists are keyed by stable ids. There are no inline style props and no layout reads in render.
     `Sparkline` reads its size once on mount and on window resize.
-  - There are two timers:
+  - Timers are bounded and independent of rendering:
+    - the wall-clock theme schedule checks once a minute and immediately on `visibilitychange`;
     - the DTC job poll (2 s while a job is active and the page is visible, 5 s after an error),
       which stops when the panel unmounts;
     - one shared sparkline redraw timer (at most every 10 s, only while Drive sparklines are
       mounted, and only when a ring changed or the window slid by a column).
   - Long disclosure bodies (DTC groups, module coverage, unconfirmed items) render on first open.
 - **CSS class contract.** `src/styles/app.css` holds the shared classes (frame, top bar, tab bar,
-  tiles, band bar, cards, disclosures, key/value lists, rows, buttons, dialogs, docs pages, and the
-  `.dim` night tokens). Each view or dialog appends its own classes at the end, under a comment
+  tiles, band bar, cards, disclosures, key/value lists, rows, buttons, dialogs and docs pages).
+  Colours live in `styles/palette.css`, overridden only by `light.css` and `night.css`;
+  the compact theme control is in `styles/theme-control.css`. Each view or dialog appends its own classes at the end, under a comment
   naming its source file, with a prefix: `.chat-*`, `.evh-*`, `.cust-*`, `.oil-*`, `.health-*`,
   `.parked-*`, and `.history-*` / `.system-*` for the views in progress. No file restyles another
   file's prefix.
@@ -326,10 +328,15 @@ red if any is critical).
   that bypasses the 60 s throttle.
 - **State text**: said once, for example `Running · 32 min`, `Asleep · last drive 4:25 pm` or
   `Ignition on · engine off`.
-- **Dim**: a night toggle, stored per device. `styles/night.css` substantially darkens text,
-  backgrounds, bands, separators and every accent, including red/amber warnings and the light icons.
-  Dialogs inherit the same palette. It controls app colours, not the tablet backlight.
-- **Auto**: turns automatic view selection back on (section 5.2).
+- **Theme**: the 44 px icon button cycles **Auto → Light → Dark → Auto** (half-disc, sun, moon).
+  Its accessible name and tooltip say the current mode and the next tap's action. It never
+  duplicates the bare AUTO label reserved for automatic view selection.
+- **Dim**: in manual Light/Dark, the persisted night toggle works as before. In Auto theme,
+  a tap overrides the scheduled dim state until the next **dim** boundary; the stored
+  `dimOverrideUntil` epoch keeps that override across reloads. Switching theme mode clears it.
+  `styles/night.css` darkens text, surfaces, bands, accents and dialogs, even over forced Light.
+  This changes app colours, not the tablet backlight.
+- **Auto**: turns automatic view selection back on (section 5.2), unchanged and independent of theme.
 
 **Alert in the top bar.** When an item is in `warning` state or has critical severity, the state text
 is replaced by the most severe item in a short `metric value` form, plus `+n` for the rest. Examples:
@@ -647,7 +654,29 @@ checks when stopped:
 
 ## 4. Visual system
 
-- Flat, opaque surfaces: page `#0e1412`, card `#172120`, card border `#26332f`, raised row `#1d2a27`.
+- **Theme policy (owner request, 2026-10-30).** `settings.themeMode` is `auto | light | dark`,
+  defaulting to Auto even for older stored settings. `theme.config.js` owns the fixed Denver
+  reference (39.7392° N, 104.9903° W, `America/Denver`) and all four offsets.
+  `sunTimes.js` implements NOAA's Meeus calculation at zenith 90.833°; `Intl` supplies the
+  Mountain calendar date, including DST, independently of the browser's time zone.
+  Auto is dark from sunset −90 min until sunrise +90 min, and dim from sunset +30 min
+  until sunrise −30 min. At a boundary its new state applies. `theme.helpers.js` is the
+  pure schedule/override rule; `theme.js` applies root `.light`/`.dim` once per minute and
+  on wake, without using the telemetry clock. Denver is a reference, not a GPS lookup:
+  longitude changes sun times about four minutes per degree, so the margins absorb ordinary travel.
+- **Light palette.** `styles/light.css` uses white cards, near-black ink and dark amber/red/green/blue
+  accents; every SVG inherits the shared tokens. Canvas sparklines invalidate their cached
+  colours on a root-class change. Native controls follow `color-scheme` (dark whenever dim),
+  and the theme-color meta follows `--bg`. Dark defaults remain in `styles/palette.css`.
+- **Verification.** `test/theme*.test.mjs` covers exact boundaries, persistent override expiry,
+  legacy settings and sleeping across a boundary. Independent NOAA `main.js` results for
+  Denver (local Mountain time): Jun 21 2026 **05:32:11 / 20:31:30 MDT**; Dec 21
+  **07:17:33 / 16:38:49 MST**; Mar 8 **07:22:11 / 18:59:43 MDT**; Nov 1
+  **06:28:44 / 16:57:45 MST** (rise/set, ±2 minute test tolerance).
+  `tools/shoot.mjs --demo` captures every view in dark, light and dim, including additional
+  `SHOOT_SIZES` viewports, then restores the original profile settings. These are illustrative
+  data, not observations. Device-in-sunlight readability still needs the owner's physical tablet.
+- Flat, opaque surfaces: default dark page `#0e1412`, card `#172120`, card border `#26332f`, raised row `#1d2a27`.
   There are no gradients, `backdrop-filter`, shadows, fixed overlays or translucent fills.
 - Text: primary `#f3f6f4`; secondary `#aab6b1` (≥ 7:1 on a card); dimmed/held `#7f8b87`.
 - Semantic colours: amber `#f5b642`, red `#ff5d4d`, green `#5fd39a`. The neutral normal-band colour

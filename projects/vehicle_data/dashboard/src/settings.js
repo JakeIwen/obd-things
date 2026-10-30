@@ -11,6 +11,7 @@
 
 import { signal } from "@preact/signals-core";
 import { isUnavailableCanState } from "./canAvailability.js";
+import { THEME_MODES } from "./theme.config.js";
 
 /** localStorage key for v2 settings. */
 export const STORAGE_KEY = "van-telemetry.v2.settings";
@@ -46,10 +47,11 @@ export const DRIVE_PAGES = [1, 2];
 
 /**
  * Fresh default settings object.
- * @returns {{version:1, view:string, auto:boolean, hidden:object, order:object, timeFormat:string, dim:boolean, drivePage:number}}
+ * @returns {object} Fresh settings, including manual dim and an optional auto-mode override expiry.
  */
 export function defaultSettings() {
-  return { version: 1, view: "drive", auto: true, hidden: {}, order: {}, timeFormat: "12h", dim: false, drivePage: 1 };
+  return { version: 1, view: "drive", auto: true, hidden: {}, order: {}, timeFormat: "12h", dim: false,
+    themeMode: "auto", dimOverrideUntil: null, drivePage: 1 };
 }
 
 /**
@@ -67,6 +69,11 @@ export function normalizeSettings(candidate) {
   out.order = perViewLists(candidate.order);
   if (TIME_FORMATS.has(candidate.timeFormat)) out.timeFormat = candidate.timeFormat;
   if (typeof candidate.dim === "boolean") out.dim = candidate.dim;
+  if (THEME_MODES.includes(candidate.themeMode)) out.themeMode = candidate.themeMode;
+  if (out.themeMode === "auto" && typeof candidate.dim === "boolean"
+    && Number.isSafeInteger(candidate.dimOverrideUntil) && candidate.dimOverrideUntil > 0) {
+    out.dimOverrideUntil = candidate.dimOverrideUntil;
+  }
   if (DRIVE_PAGES.includes(candidate.drivePage)) out.drivePage = candidate.drivePage;
   return out;
 }

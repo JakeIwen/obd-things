@@ -1,0 +1,26 @@
+/* Sunlight palette: near-black ink, white cards, and dark semantic accents.
+   Excluding .dim makes the manual night palette win even over forced light. */
+:root.light:not(.dim) {
+  color-scheme: light;
+  --bg: #e7eee9;
+  --card: #ffffff;
+  --card-2: #edf3ef;
+  --line: #a4b5ab;
+  --line-strong: #738a7d;
+  --text: #101f17;
+  --text-2: #283e31;
+  --dim: #445d4c;
+  --amber: #875100;
+  --amber-bg: #fff0ce;
+  --red: #b22216;
+  --red-bg: #ffe9e5;
+  --green: #11613b;
+  --blue: #135c9b;
+  --overspeed: #b22216;
+  --band-ok: #b2c4b9;
+  --on-amber: #ffffff;
+  --on-red: #ffffff;
+  --on-green: #ffffff;
+  --message-me: #d8e9de;
+  accent-color: var(--green);
+}

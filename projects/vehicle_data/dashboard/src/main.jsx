@@ -10,10 +10,12 @@ import "./styles/lighting.css";
 import "./styles/acc-distance.css";
 import "./styles/speed-economy.css";
 import "./styles/compass.css";
+import "./styles/light.css";
 import "./styles/night.css";
+import "./styles/theme-control.css";
 import * as store from "./store.js";
 import { createLink } from "./link.js";
-import { startRings } from "./app/rings.js";
+import { startRings, ringFor } from "./app/rings.js";
 import { App } from "./app/App.jsx";
 import { runtime } from "./app/runtime.js";
 import { startOverspeedChime } from "./overspeed.js";
@@ -38,4 +40,4 @@ render(<App />, root);
 link.start();
 
 // Stable hooks for tools/measure.mjs and manual debugging; no behaviour depends on them.
-window.__van = { link, store };
+window.__van = { link, store, ringFor };

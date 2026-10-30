@@ -20,6 +20,8 @@ import {
 import { dialog, closeDialog, openEvent, openChat, DIALOG_LOADERS } from "./dialogs.js";
 import { manualRefresh } from "./runtime.js";
 import Drive from "../views/Drive.jsx";
+import { ThemeButton } from "./ThemeButton.jsx";
+import { displayTheme, toggleDim, startTheme } from "../theme.js";
 
 const VIEW_LOADERS = {
   parked: () => import("../views/Parked.jsx"),
@@ -74,8 +76,11 @@ export function TopBar() {
   });
   const autoCls = useComputed(() => "topbar__btn topbar__auto" + (settings.value.auto ? " topbar__btn--on" : ""));
   const autoPressed = useComputed(() => (settings.value.auto ? "true" : "false"));
-  const dimCls = useComputed(() => "topbar__btn" + (settings.value.dim ? " topbar__btn--on" : ""));
-  const dimPressed = useComputed(() => (settings.value.dim ? "true" : "false"));
+  const dimCls = useComputed(() => "topbar__btn" + (displayTheme.value.dim ? " topbar__btn--on" : ""));
+  const dimPressed = useComputed(() => (displayTheme.value.dim ? "true" : "false"));
+  const dimTitle = useComputed(() => settings.value.themeMode === "auto"
+    ? "Toggle Dim until the next Denver sunrise/sunset dim boundary"
+    : "Dim the screen for night driving");
   const barCls = useComputed(() => topBarClass(alertStrip.value, store.vehicle.value));
   const headText = useComputed(() => (alertStrip.value ? alertStrip.value.text : vehicleHead.value));
   const tailText = useComputed(() => {
@@ -87,10 +92,6 @@ export function TopBar() {
     const s = settings.peek();
     saveSettings({ ...s, auto: !s.auto, view: activeView.peek() });
     evaluateAutoView();
-  };
-  const toggleDim = () => {
-    const s = settings.peek();
-    saveSettings({ ...s, dim: !s.dim });
   };
   const onState = () => {
     const a = alertStrip.peek();
@@ -107,7 +108,8 @@ export function TopBar() {
         {headText}
         <span class="topbar__state-sub">{tailText}</span>
       </button>
-      <button type="button" class={dimCls} aria-pressed={dimPressed} onClick={toggleDim} title="Dim the screen for night driving">
+      <ThemeButton />
+      <button type="button" class={dimCls} aria-pressed={dimPressed} onClick={toggleDim} title={dimTitle}>
         Dim
       </button>
       <button type="button" class={autoCls} aria-pressed={autoPressed} onClick={toggleAuto} title="Switch between Drive and Parked automatically">
@@ -176,13 +178,7 @@ startEngineTracking();
 
 export function App() {
   useEffect(() => effect(() => evaluateAutoView()), []);
-  useEffect(
-    () =>
-      effect(() => {
-        document.documentElement.classList.toggle("dim", Boolean(settings.value.dim));
-      }),
-    [],
-  );
+  useEffect(() => startTheme(), []);
   return (
     <>
       <TopBar />

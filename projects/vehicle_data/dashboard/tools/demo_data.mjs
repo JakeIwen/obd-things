@@ -124,8 +124,29 @@ function historyAt(nowMs, scene) {
       "engine.coolant_temperature": {current_trip: {maximum: 209}},
       "engine.crankshaft_power": {current_trip: {mean: 48}},
     }},
-    metric_trends: {},
+    metric_trends: Object.fromEntries(["engine.coolant_temperature", "transmission.oil_temperature", "battery.voltage", "engine.oil_pressure"]
+      .map((name) => [name, trendAt(nowMs, scene, name)])),
   };
+}
+
+function trendAt(nowMs, scene, name) {
+  const values = scene.sparklines[name];
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const stats = {minimum: Math.min(...values), mean, maximum: Math.max(...values)};
+  return {
+    unit: scene.metrics[name].unit, current_trip: stats, days_7: stats, days_30: stats,
+    current_minus_prior_median: 0,
+    prior_trips: {median_of_trip_means: mean, mad_of_trip_means: 0.5, trip_count: 12},
+    series: {start_at: iso(nowMs - 24 * HOUR_MS), end_at: iso(nowMs), bucket_seconds: 900},
+    sparkline: Array.from({length: 96}, (_, i) => ({at: iso(nowMs - (95 - i) * 15 * MINUTE_MS), value: values[i % values.length]})),
+  };
+}
+
+function maintenanceAt(nowMs) {
+  const record = {id: "demo-oil", date: iso(nowMs - 20 * 24 * HOUR_MS).slice(0, 10),
+    mileage_mi: 46750, mileage_source: "ics_estimate", notes: "Illustrative demo record"};
+  return {available: true, persistent: true, storage_error: null, record_count: 1,
+    last_oil_change: record, oil_changes: [record], oil_life: {available: true, value: 76, observed_at: iso(nowMs)}};
 }
 
 function radarStatusAt(nowMs) {
@@ -133,7 +154,7 @@ function radarStatusAt(nowMs) {
     latest_value: latest,
     observed_at: iso(nowMs),
     "60": {count: 12, mean: means[0]},
-    "300": {count: 60, mean: means[1]},
+    "300": {count: 60, mean: means[1], peak_abs: Math.abs(latest) + 0.03},
     "1800": {count: 180, mean: means[2]},
     "7200": {count: 420, mean: means[3]},
   });
@@ -153,8 +174,25 @@ export function buildDemoScene(nowMs = Date.now()) {
     ...DEMO_SCENE,
     nowMs,
     history: historyAt(nowMs, DEMO_SCENE),
-    statusLite: radarStatusAt(nowMs),
-    health: {available: true, warnings: [], items: []},
+    statusLite: {
+      ...radarStatusAt(nowMs), service: "van-telemetry", started_at: iso(nowMs - 2 * HOUR_MS),
+      collector: {state: "running", interval_seconds: 1, last_cycle_at: iso(nowMs)},
+      history_recorder: {enabled: true, state: "recording"},
+      active_drive: {state: "running"}, auxiliary_drive: {state: "running"},
+      supplemental_cache: {state: "ready", last_refreshed_at: iso(nowMs)}, last_readings: {persistent: true},
+      interface: {mode: "listen_only", active_inhibits: [], role_interfaces: {
+        ready: true, roles: Object.fromEntries(["c-can", "b-can", "can-ch"].map((role, i) => [role,
+          {safe: true, resolution: "resolved", channel: `demo${i}`, passive_ready: true}])),
+      }},
+    },
+    maintenance: maintenanceAt(nowMs),
+    dtcs: {available: true, group_counts: {current: 0, pending: 0}, current: [], pending: [], modules: []},
+    health: {available: true, generated_at: iso(nowMs), assessments: [{
+      rule: "engine_coolant_temperature_relative_high", metric: "engine.coolant_temperature",
+      category: "vehicle_health", severity: "warning", direction: "high", state: "watch",
+      current: {value: 203, unit: "°F", observed_at: iso(nowMs)}, baseline: {median: 190, unit: "°F"},
+      persistence: {observed: 2, required: 10, window_seconds: 60},
+    }], active: [], episodes: {active: []}},
   };
   validateDemoScene(scene);
   return scene;

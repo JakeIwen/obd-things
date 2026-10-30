@@ -53,6 +53,8 @@ test("defaults and constants", () => {
     order: {},
     timeFormat: "12h",
     dim: false,
+    themeMode: "auto",
+    dimOverrideUntil: null,
     drivePage: 1,
   });
   assert.notEqual(defaultSettings(), defaultSettings(), "a fresh object every call");
@@ -81,6 +83,8 @@ test("normalizeSettings drops unknown views, non-string ids, duplicates and bad 
     order: { system: ["buses", "broker"] },
     timeFormat: "24h",
     dim: false,
+    themeMode: "auto",
+    dimOverrideUntil: null,
     drivePage: 1,
   });
   assert.deepEqual(normalizeSettings({ view: "overview", auto: "yes", timeFormat: "bad" }), defaultSettings());
@@ -164,6 +168,8 @@ test("saveSettings normalizes, publishes to the signal and persists", () => {
     order: {},
     timeFormat: "24h",
     dim: false,
+    themeMode: "auto",
+    dimOverrideUntil: null,
     drivePage: 1,
   });
   assert.equal(settings.value, saved);
