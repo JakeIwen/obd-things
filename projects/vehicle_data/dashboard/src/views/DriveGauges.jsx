@@ -1,4 +1,7 @@
 import { computed } from "@preact/signals";
+import { useRef, useState } from "preact/hooks";
+import { useModalDialog } from "../dialogs/modalDialog.js";
+import { DRIVE_INFO, tripRowsModel } from "./driveTrip.helpers.js";
 import { Tile } from "../components/Tile.jsx";
 import { TireGrid } from "../components/TireGrid.jsx";
 import { AccDistance } from "../components/AccDistance.jsx";
@@ -9,7 +12,7 @@ import { SpeedEconomy } from "./SpeedEconomy.jsx";
 import { liveValue, isHidden, minuteClock, engineRunning } from "../app/derive.js";
 import { tripDistanceMiles } from "../app/rings.js";
 import * as store from "../store.js";
-import { fmtValue, fmtDuration, DASH } from "../format.js";
+import { fmtValue } from "../format.js";
 import { speedFooter } from "./driveSpeed.helpers.js";
 
 // Sub-lines computed once at module scope (shared by every mount).
@@ -40,46 +43,47 @@ const rpmSub = computed(() => (gearText.value ? "gear " + gearText.value : ""));
 
 const tripRows = computed(() => {
   void minuteClock.value;
-  const history = store.summary.history.value;
-  const trip = history && history.current_trip ? history.current_trip : null;
-  const running = engineRunning.value;
-  const since = trip ? Date.parse(trip.started_at) : NaN;
-  const duration = running && isFinite(since) ? fmtDuration((Date.now() - since) / 1000) : DASH;
-  const miles = tripDistanceMiles.value;
-  const distance = running && miles !== null ? "≈ " + miles.toFixed(1) + " mi" : DASH;
-  const cmp = history && history.trip_comparison && history.trip_comparison.metrics;
-  const maxOf = (name) => {
-    const cur = cmp && cmp[name] && cmp[name].current_trip;
-    return cur && typeof cur.maximum === "number" ? fmtValue(name, cur.maximum) : null;
-  };
-  const coolMax = maxOf("engine.coolant_temperature");
-  const powerAvg = (() => {
-    const cur = cmp && cmp["engine.crankshaft_power"] && cmp["engine.crankshaft_power"].current_trip;
-    return cur && typeof cur.mean === "number" ? fmtValue("engine.crankshaft_power", cur.mean) : null;
-  })();
-  return [
-    ["Time", duration],
-    ["Distance", distance],
-    ["Coolant max", coolMax ? coolMax + " °F" : DASH],
-    ["Avg power", powerAvg ? powerAvg + " hp" : DASH],
-  ];
+  return tripRowsModel(store.summary.history.value, {
+    running: engineRunning.value,
+    miles: tripDistanceMiles.value,
+    nowMs: Date.now(),
+  });
 });
 
 function TripTile() {
-  // Four rows of short text; the whole tile re-renders at most once a minute.
   const rows = tripRows.value;
+  const [infoOpen, setInfoOpen] = useState(false);
+  const closeRef = useRef(null);
+  const { dialogRef, close } = useModalDialog({ open: infoOpen, onClose: () => setInfoOpen(false), focusRef: closeRef });
   return (
-    <section class="tile area-trip" aria-label="Trip">
-      <div class="tile__label">Trip</div>
-      <div class="trip">
-        {rows.map(([k, v]) => (
-          <div class="trip__row" key={k}>
-            <span>{k}</span>
-            <b class="num">{v}</b>
-          </div>
-        ))}
-      </div>
-    </section>
+    <>
+      <section class="tile area-trip" aria-label="This drive">
+        <div class="drive-trip__head">
+          <div class="tile__label">This drive</div>
+          <button type="button" class="drive-trip__info" title={DRIVE_INFO} aria-label="About this drive" onClick={() => setInfoOpen(true)}>
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.5" />
+              <path d="M12 10v7M12 7v1" fill="none" stroke="currentColor" stroke-width="2" />
+            </svg>
+          </button>
+        </div>
+        <div class="trip">
+          {rows.map(([k, v]) => (
+            <div class="trip__row" key={k}>
+              <span>{k}</span>
+              <b class="num">{v}</b>
+            </div>
+          ))}
+        </div>
+      </section>
+      <dialog ref={dialogRef} class="dialog" aria-labelledby="drive-info-title" onClick={(ev) => { if (ev.target === dialogRef.current) close(); }}>
+        <header class="dialog__head">
+          <h2 id="drive-info-title" class="dialog__title">This drive</h2>
+          <button type="button" class="dialog__close" aria-label="Close drive information" ref={closeRef} onClick={close}>×</button>
+        </header>
+        <div class="dialog__body"><p>{DRIVE_INFO}</p></div>
+      </dialog>
+    </>
   );
 }
 

@@ -42,6 +42,7 @@ test("card registry: six unique ids with labels, in the design order", () => {
   assert.deepEqual(H.PARKED_IDS, ["battery", "tires", "trip", "service", "warnings", "codes"]);
   assert.equal(new Set(H.PARKED_IDS).size, H.PARKED_IDS.length);
   for (const card of H.PARKED_CARDS) assert.ok(card.label.length > 0);
+  assert.deepEqual(H.PARKED_CARDS.find((card) => card.id === "trip"), { id: "trip", label: "Last drive" });
   assert.equal(H.DOCS_URL, "/docs/caveats.html");
 });
 
@@ -283,8 +284,8 @@ test("lastTripModel: last completed trip, the open trip, loading and unavailable
   const long = { ...HISTORY, recent_trips: [{ ...HISTORY.recent_trips[0], duration_seconds: 3900 }] };
   assert.equal(H.lastTripModel(long, { now: NOW }).last.duration, "1 h 05");
   assert.equal(H.lastTripModel(null, { now: NOW }).state, "loading");
-  assert.equal(H.lastTripModel({ available: false }, { now: NOW }).text, "Trip history is not available right now.");
-  assert.equal(H.lastTripModel({ recent_trips: [], current_trip: null }, { now: NOW }).text, "No trips recorded yet.");
+  assert.equal(H.lastTripModel({ available: false }, { now: NOW }).text, "Drive history is not available right now.");
+  assert.equal(H.lastTripModel({ recent_trips: [], current_trip: null }, { now: NOW }).text, "No drives recorded yet.");
 });
 
 // ---------------------------------------------------------------------------

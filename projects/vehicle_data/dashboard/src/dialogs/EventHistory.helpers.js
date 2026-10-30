@@ -331,7 +331,7 @@ export function assessmentModel(a, ref) {
       ["Observed conditions", human(a.regime).replaceAll(":", " · ")],
       ["Baseline matches", human(a.baseline_regime || b.regime || "Not evaluated").replaceAll("|", " · ").replaceAll("=", ": ")],
       ["Recovery", recoveryText(a.recovery)],
-      ["Baseline support", b.bucket_count == null ? null : b.bucket_count + " minute buckets · " + b.trip_count + " prior trips"],
+      ["Baseline support", b.bucket_count == null ? null : b.bucket_count + " minute buckets · " + b.trip_count + " prior drives"],
     ]),
     reference: factRows([
       ["Source", c.source || "Not recorded"], ["Quality", human(c.quality)],
@@ -541,8 +541,8 @@ export function recurrenceModel(e) {
   const recurrence = e.recurrences || {}, stats = recurrence.last_30_days || {};
   return {
     facts: factRows([
-      ["Openings in 30 days", num(stats.episode_openings)], ["Recorded trips", num(stats.recorded_trips)],
-      ["Recorded trip hours", num(stats.recorded_trip_hours)], ["Openings per recorded trip", num(stats.openings_per_recorded_trip)],
+      ["Openings in 30 days", num(stats.episode_openings)], ["Recorded drives", num(stats.recorded_trips)],
+      ["Recorded drive hours", num(stats.recorded_trip_hours)], ["Openings per recorded drive", num(stats.openings_per_recorded_trip)],
     ]),
     caveat: stats.denominator_caveat || recurrence.interpretation || "These counts include watches.",
     events: (recurrence.events || []).map(r => ({ id: r.id, label: "Event " + r.id + " · " + formatTime(r.opened_at) + " · " + (r.status === "open" ? "Unresolved" : "Closed") })),
@@ -569,10 +569,11 @@ export function recordModel(value, depth = 0) {
   }
   const rows = [], nested = [];
   for (const [key, item] of Object.entries(value)) {
+    const label = human(key).replace(/\btrip(s)?\b/g, (_, plural) => plural ? "drives" : "drive");
     if (item != null && typeof item === "object") {
-      if (depth < RECORD_MAX_DEPTH) nested.push({ key, label: human(key), value: item });
+      if (depth < RECORD_MAX_DEPTH) nested.push({ key, label, value: item });
     } else {
-      rows.push([human(key), item == null ? "Not recorded" : typeof item === "boolean" ? (item ? "Yes" : "No") :
+      rows.push([label, item == null ? "Not recorded" : typeof item === "boolean" ? (item ? "Yes" : "No") :
         typeof item === "number" ? num(item) : isDateLike(item) ? formatTime(item) : String(item)]);
     }
   }
@@ -598,7 +599,7 @@ export const LIST_EMPTY_HINT = "Try a different title, event number or status.";
 // ---------- guide ----------
 export const GUIDE_TOPICS = [
   ["Watch vs Warning", "A watch can open before enough repeated readings qualify it as a warning. An interrupted watch that never warns is archived as unconfirmed after its quiet window. Neither is a mechanical diagnosis.", ["watch", "warning", "enough repeated readings", "Neither is a mechanical diagnosis"]],
-  ["What the Baseline Means", "History-based rules compare similar operating conditions across prior trips. Their boundaries are monitoring references, not manufacturer limits.", ["similar operating conditions", "prior trips", "monitoring references", "not manufacturer limits"]],
+  ["What the Baseline Means", "History-based rules compare similar operating conditions across prior drives. Their boundaries are monitoring references, not manufacturer limits.", ["similar operating conditions", "prior drives", "monitoring references", "not manufacturer limits"]],
   ["Saved vs Live", "Readings keep their original timestamps. Routine freshness expiry is a quiet monitoring note, not a new vehicle-health event. Missing or stale data cannot prove recovery or continuous abnormal operation. Confirmed warnings retain their unresolved history.", ["original timestamps", "Missing or stale data", "cannot prove recovery"]],
   ["Review vs Recovery", "Notes, review and dismissal record your judgment. They do not resolve the event or silence its notifications.", ["Notes, review and dismissal", "do not resolve the event", "silence its notifications"]],
   ["Explore Without Changing Anything", "Threshold comparisons use saved samples only. Viewing, exporting and discussing an event do not request vehicle readings or change a warning rule.", ["saved samples only", "do not request vehicle readings", "change a warning rule"]],

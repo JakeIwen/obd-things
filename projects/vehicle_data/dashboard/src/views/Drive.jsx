@@ -23,7 +23,7 @@ export const DRIVE_TILES = [
   { id: "power", label: "Power" },
   { id: "oilt", label: "Oil temp (VVT)" },
   { id: "tires", label: "Tires" },
-  { id: "trip", label: "Trip" },
+  { id: "trip", label: "This drive" },
   // Page 2 (DriveMore.jsx), in screen order; ids must not collide with page 1.
   ...[
     ["limit", "Speed limit"],

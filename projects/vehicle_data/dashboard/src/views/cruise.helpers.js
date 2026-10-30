@@ -16,7 +16,7 @@ export function cruiseLines(summary) {
       "averaged " + delta + " mph " + (p.mean_delta_mph < 0 ? "below" : "above") + " the limit";
     lines.push("Set speed " + relation + " · compared " + duration(p.paired_seconds));
   } else lines.push("No set speed / speed limit comparison recorded");
-  lines.push("Recorded " + summary.coverage_percent.toFixed(1) + "% of trip" +
+  lines.push("Recorded " + summary.coverage_percent.toFixed(1) + "% of drive" +
     (summary.recording_complete === false ? " · recording ended early or lost frames" : "") +
     (summary.override_seconds > 0 ? " · accelerator override " + duration(summary.override_seconds) : ""));
   return lines;

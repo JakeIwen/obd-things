@@ -13,3 +13,18 @@
 }
 .speed-economy__name, .speed-economy__unit { font-size: max(14px, .4em); color: var(--text-2); }
 .speed-economy__value { font-weight: 600; line-height: 1.1; letter-spacing: -.02em; }
+
+/* Phones scroll: let the hero, ACC graphic and footer keep their natural height instead of
+   squeezing the numeral's box into the instant-economy row. */
+@media (max-width: 640px) {
+  .drive { grid-template-rows: max-content; }
+}
+
+/* Five rows share the old tile's height; the info hit target uses the heading's spare padding. */
+.area-trip .trip { grid-template-rows: repeat(5, 1fr); }
+.drive-trip__head { display: flex; align-items: center; justify-content: space-between; min-height: 19px; }
+.drive-trip__info {
+  display: flex; align-items: center; justify-content: center; flex: none;
+  width: 44px; height: 44px; margin: -10px -12px -10px 0; padding: 0;
+  border: 0; background: none; color: var(--text-2);
+}

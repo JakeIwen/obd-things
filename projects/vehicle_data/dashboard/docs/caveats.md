@@ -94,8 +94,8 @@ what they meant and where that information lives now.
   appears only while the van is moving. Page 2 also shows the ratio itself, for example
   `ratio 0.70` (7th is about 0.70 and 5th is 1.00). During shifts or torque-converter slip the ratio
   sits between gears, and the estimate can lag or disappear briefly.
-- **Fuel rate and fuel economy** (`≈`; `now` and `trip` under Speed on Drive page 1, Fuel rate on
-  page 2, and on the History Trips card): estimates. The fuel rate is the engine computer's own fuel-flow
+- **Fuel rate and fuel economy** (`≈`; `now` under Speed and MPG in This drive on Drive page 1,
+  Fuel rate on page 2, and on the History Drives card): estimates. The fuel rate is the engine computer's own fuel-flow
   figure from C-CAN frame `0x2ED` (the coolant frame), read without asking the engine anything. It
   drops to zero when coasting in gear and reads about 0.4–0.5 gal/h at a warm idle. Its scale is
   chosen to match the cluster: the cluster's instant and trip-average mpg both work out to 1.13
@@ -103,9 +103,9 @@ what they meant and where that information lives now.
   dash within a few percent. Neither has been checked against fuel actually pumped, so treat both
   as the cluster's opinion, not a measurement. `now ≈ 20 mpg` (under Speed, and under the rate on
   page 2) is the instant economy while moving; during the fuel cut it reads `≈ 99+` under Speed
-  and `coasting, no fuel` on page 2, like the cluster's capped readout. Trip and 7/30-day economy are
+  and `coasting, no fuel` on page 2, like the cluster's capped readout. Drive and 7/30-day economy are
   average speed over average fuel rate across the Pi's engine-running history samples, one every
-  five seconds, so a short trip can be off by a few percent more. Trips recorded before the fuel
+  five seconds, so a short drive can be off by a few percent more. Drives recorded before the fuel
   rate was added (October 2026) have no figure, and until a window has a full 7 or 30 days of
   fuel readings it counts only the driving since then and says `since Oct 20` instead.
 - **Speed limit** (Drive page 2, and `limit 55 mph` under Speed on page 1): the number the
@@ -152,8 +152,8 @@ what they meant and where that information lives now.
   the range or closing speed of that vehicle on the buses the Pi listens to. All of it is display
   information only and never drives a warning.
 - **Coolant**: C-CAN `0x2ED` byte 0, raw − 40 °C, shown in °F. The thermostat is fully open near
-  220 °F. The highest value seen in 57 recorded trips is 221 °F. Hot-day idle at 213–220 °F is
-  inside the normal envelope for this engine (13 of 57 trips reached it). Below 160 °F the engine is
+  220 °F. The highest value seen in 57 recorded drives is 221 °F. Hot-day idle at 213–220 °F is
+  inside the normal envelope for this engine (13 of 57 drives reached it). Below 160 °F the engine is
   warming up and the bar has no colour.
 - **Oil pressure**: C-CAN `0x41D` byte 2, raw × 4 kPa, shown in psi.
   - The engine has a two-stage oil pump, so about 80 psi at higher rpm and load is normal, not high.
@@ -180,9 +180,13 @@ what they meant and where that information lives now.
   horsepower or a dynamometer figure. Negative values on overrun are real.
 - **Torque** (the line under Power): PCM identifier `06DA`, signed 16-bit × 0.04 Nm, shown in lb-ft,
   read about once a second while the engine runs. It is the engine computer's crankshaft estimate.
-- **Trip** (Drive): time since the trip started; distance added up from live speed readings (marked
-  `≈`, gaps longer than 30 s are skipped, and it survives a page reload); the trip's highest coolant
-  and average power from the Pi's trip history, refreshed once a minute.
+- **This drive** (Drive): the dashboard's own automatic drive, separate from the instrument
+  cluster's Trip A/B. It starts when the van starts moving or running and ends after 5 minutes
+  parked. There is no manual reset. The heading's info icon explains this on hover or tap.
+  Rows show time since it started; distance added up from live speed readings (marked `≈`, gaps
+  longer than 30 s are skipped, and it survives a page reload); estimated MPG (marked `≈`); then
+  highest coolant and average power from the Pi's drive history, refreshed once a minute.
+  Speed shows only instant economy, not this drive's average.
 - **Target torque** (Drive page 2): the transmission's requested crankshaft torque from frame
   `0x100`. It is a command, not a measurement. Compare it with **Torque** beside it to see how
   closely the engine follows the request. Negative values on overrun are normal.
@@ -235,7 +239,7 @@ what they meant and where that information lives now.
   68 psi) or when a tire warning is confirmed. Pressures normally rise 2–4 psi when warm and 5–8 psi
   on the highway.
 - **Colours later**: comparing each wheel with its own cold baseline needs a per-wheel figure the Pi
-  does not publish yet. The 30-day and prior-trip averages it does publish mix warm and highway
+  does not publish yet. The 30-day and prior-drive averages it does publish mix warm and highway
   readings, and would be off by 2–3 psi, enough to colour normal cold mornings amber. That
   comparison will arrive with the Pi's cold-baseline figure.
 
@@ -281,9 +285,13 @@ pressures and the radar angles. Everything else (speed, RPM, oil pressure, torqu
 duty, shaft speeds) is live-only and shows a dash when unavailable, because a stale value there
 could be mistaken for a current one.
 
-## Trends and trips
+## Trends and drives
 
-Completed-trip cruise summaries come from the saved full drive recording.
+The Pi's saved warning evidence and technical guide may still call an automatic drive a "trip".
+It means the same dashboard drive described above, never the cluster's Trip A/B. Typed record
+references keep the `trip:` prefix so existing links still work.
+
+Completed-drive cruise summaries come from the saved full drive recording.
 `Cruise engaged` counts the cluster's engaged state; accelerator override is
 separate. `Vehicle ahead` counts the cluster icon while engaged or overriding,
 not a measured following distance. Button cancels require a valid CANC press
@@ -300,16 +308,16 @@ tails are not extrapolated. `Not recorded` does not mean cruise was unused.
 These summaries never create a warning.
 
 - The History view's trends come from the Pi's historian: 7-day and 30-day low, average and high,
-  the typical range of earlier trips, and 24-hour lines built from 15-minute buckets. Missing
+  the typical range of earlier drives, and 24-hour lines built from 15-minute buckets. Missing
   telemetry stays a visible gap in the line; nothing is filled in.
 - The Drive view's small lines cover the last 15 minutes, built in the browser from live readings.
   They start empty after a page reload.
 - While parked, most metrics have "gaps" because nothing can be read; that is expected and is not
   flagged.
-- Each trip shows its estimated fuel economy once it has about a minute of engine running with the
-  fuel rate recorded, and the Trips card leads with the 7- and 30-day figures (see Fuel rate and
-  fuel economy above). Other trip statistics (distance, maxima) will appear when the Pi publishes
-  per-trip summaries.
+- Each drive shows its estimated fuel economy once it has about a minute of engine running with the
+  fuel rate recorded, and the Drives card leads with the 7- and 30-day figures (see Fuel rate and
+  fuel economy above). Other drive statistics (distance, maxima) will appear when the Pi publishes
+  per-drive summaries.
 
 ## Early warnings and system notes
 

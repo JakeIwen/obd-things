@@ -25,7 +25,7 @@ in tiers, so the top bar only ever shows something you can act on.
 | **Critical** | an absolute limit is crossed far enough to act now: oil pressure below about 12 psi with the engine running, coolant at 240 °F, parked battery under 11.5 V, or a tire under 45 psi (front) / 60 psi (rear) | red top bar on every view, red number, Health list | immediately, repeated every 5 min while active; never delayed |
 | **Warning** | an absolute limit (see below), or a sustained deviation from this van's own history in the same driving conditions, held for minutes | amber top bar, amber number, Health list | once when confirmed, grouped by component (at most one per component every 6 h). Absolute-limit warnings go out at once. History-relative warnings raised between 22:00 and 07:30 while parked wait until 07:30; raised during a drive they go out at once. At most 3 of them go out per drive. |
 | **Watch** | older rule set only (still deployed): an item that has started but not yet lasted long enough to count. The redesigned rules and owner-added rules show nothing until a warning is confirmed. | Health list only | never |
-| **Notice** | a slow drift across trips (a tire losing pressure week over week, idle coolant creeping up, oil pressure falling, the battery accepting less charge, resting voltage low or falling) | Health list | once per notice, at most one per component a week, held until 07:30 during quiet hours |
+| **Notice** | a slow drift across drives (a tire losing pressure week over week, idle coolant creeping up, oil pressure falling, the battery accepting less charge, resting voltage low or falling) | Health list | once per notice, at most one per component a week, held until 07:30 during quiet hours |
 | **System** | adapter, bus or data-quality problems (an adapter missing, a sample rejected by a plausibility gate) | System notes on the Health view, System view | never; adapter, bus and data-quality items are listed in System notes only |
 
 ## What a warning line says
@@ -55,7 +55,7 @@ Every warning is written the same way: the number, the comparison, how long, and
 ## History-relative rules
 
 For temperatures, oil pressure, voltage and tires, the Pi learns what is normal for this van over the
-last 30 days, excluding the current trip. It compares like with like: engine running or not;
+last 30 days, excluding the current drive. It compares like with like: engine running or not;
 stationary, urban, road or highway; rpm band; and warm or cold.
 
 - A deviation counts only when it is larger than both a minimum effect (0.8 V, 12 °F, 5 psi of oil
@@ -80,7 +80,7 @@ stationary, urban, road or highway; rpm band; and warm or cold.
   above 3,500 rpm; in between, nothing is judged.
 - Coolant at or above 230 °F for six readings in a row (about 30–45 s at the live sampling rate):
   warning; at 240 °F: critical. These are owner limits: the
-  thermostat is fully open near 220 °F, and the highest value seen in 57 trips is 221 °F.
+  thermostat is fully open near 220 °F, and the highest value seen in 57 drives is 221 °F.
 - Transmission oil at or above 230 °F for twelve readings in a row (about 1–1.5 min at the live
   sampling rate): warning.
 - Running voltage under 12.0 V for twelve readings in a row (about 1–1.5 min at the live sampling

@@ -80,7 +80,7 @@ export function trendId(metric) {
 export function historyCards(history) {
   const metrics = trendMetrics(history);
   const list = metrics.length ? metrics : TREND_ORDER.slice();
-  return [{ id: "trips", label: "Trips" }].concat(
+  return [{ id: "trips", label: "Drives" }].concat(
     list.map((metric) => ({ id: trendId(metric), label: trendTitle(metric) + " trend" })),
   );
 }
@@ -224,7 +224,7 @@ export function tripsModel(history, ctx) {
       meta: meta.join(" · "),
     });
   }
-  const emptyText = !current && !rows.length ? "No trips recorded yet." : null;
+  const emptyText = !current && !rows.length ? "No drives recorded yet." : null;
   return { current, rows, fuel: windowsText(h.fuel_economy, nowMs), emptyText };
 }
 
@@ -353,12 +353,12 @@ export function trendModel(metric, trend, ctx) {
     const count = num(prior.trip_count);
     const mad = num(prior.mad_of_trip_means);
     typical =
-      "Usual trip " +
+      "Usual drive " +
       fmtValue(metric, prior.median_of_trip_means) +
       (mad !== null ? " ± " + madText(metric, mad) : "") +
       u +
       " avg" +
-      (count !== null ? " · " + plural(count, "trip", "trips") : "");
+      (count !== null ? " · " + plural(count, "drive", "drives") : "");
   }
   let current = null;
   const cur = obj(t.current_trip);
@@ -372,7 +372,7 @@ export function trendModel(metric, trend, ctx) {
       else if (text.charAt(0) === "−") cmp = " · " + text.slice(1) + " below usual";
       else cmp = " · same as usual";
     }
-    current = "This trip " + fmtValue(metric, cur.mean) + u + " avg" + cmp;
+    current = "This drive " + fmtValue(metric, cur.mean) + u + " avg" + cmp;
   }
   const series = obj(t.series) || {};
   const bucketSec = num(series.bucket_seconds);

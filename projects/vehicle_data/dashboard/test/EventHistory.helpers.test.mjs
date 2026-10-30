@@ -340,7 +340,7 @@ test("assessmentModel exposes state, reason, key facts and the evidence referenc
   assert.equal(facts["Observed conditions"], "running · warm");
   assert.equal(facts["Baseline matches"], "running · warm: 1");
   assert.equal(facts["Recovery"], "1 of 4 comparable normal readings");
-  assert.equal(facts["Baseline support"], "40 minute buckets · 6 prior trips");
+  assert.equal(facts["Baseline support"], "40 minute buckets · 6 prior drives");
   assert.equal(facts["Measured"], H.formatTime(local(16, 20, 5)));
   const ref = Object.fromEntries(m.reference.map(r => [r.label, r.value]));
   assert.equal(ref["Source"], "ccan");
@@ -514,13 +514,24 @@ test("peaksModel, recurrenceModel and identifierFacts", () => {
   assert.equal(peaks[0].ref, "event:579:peak");
   assert.equal(peaks[1].assessment, undefined);
   const r = H.recurrenceModel(event());
-  assert.deepEqual(r.facts.map(f => [f.label, f.value]), [["Openings in 30 days", "2"], ["Recorded trips", "9"], ["Recorded trip hours", "12.25"], ["Openings per recorded trip", "0.22"]]);
+  assert.deepEqual(r.facts.map(f => [f.label, f.value]), [["Openings in 30 days", "2"], ["Recorded drives", "9"], ["Recorded drive hours", "12.25"], ["Openings per recorded drive", "0.22"]]);
   assert.equal(r.caveat, "Trip spans, not measured hours.");
   assert.deepEqual(r.events, [{ id: 401, label: "Event 401 · " + H.formatTime(local(10, 0, 0, 20)) + " · Closed" }]);
   assert.equal(H.recurrenceModel({ recurrences: { interpretation: "Counts include watches." } }).caveat, "Counts include watches.");
   assert.equal(H.recurrenceModel({}).caveat, "These counts include watches.");
   assert.deepEqual(H.recurrenceModel({}).facts.map(f => f.value), ["Not recorded", "Not recorded", "Not recorded", "Not recorded"]);
   assert.deepEqual(H.identifierFacts(event()).map(f => [f.label, f.value]), [["Event", "event:579"], ["Rule", "coolant_high"], ["Evidence revision", "3"]]);
+});
+
+test("record labels say drive without changing evidence keys, references or values", () => {
+  const record = { trip: { id: 88 }, trip_id: 88, prior_trips: 6, method: "trip_median_vs_prior_trips" };
+  const before = structuredClone(record);
+  const model = H.recordModel(record);
+  assert.deepEqual(model.nested, [{ key: "trip", label: "drive", value: { id: 88 } }]);
+  assert.deepEqual(model.facts.map(({ label, value }) => [label, value]), [
+    ["drive id", "88"], ["prior drives", "6"], ["method", "trip_median_vs_prior_trips"],
+  ]);
+  assert.deepEqual(record, before);
 });
 
 test("recordModel renders less common evidence as labelled facts with bounded nesting", () => {

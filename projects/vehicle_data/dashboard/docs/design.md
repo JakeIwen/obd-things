@@ -371,15 +371,15 @@ tab bar, with 16 px gutters and 12 px gaps.
 
 | row | content |
 |---|---|
-| A | **SPEED** (2 cols, hero numerals, `mph`; under the numeral an estimated economy row `now ≈ 19 mpg · trip ≈ 16.4 mpg`; two-line footer: `limit 55 mph` while live, then `ACC 66 mph · engaged · vehicle ahead`; a four-bar gap readout sits beside the speed numeral; regular cruise uses `Cruise`; current off/ready/standby/override states are explicit) · **RPM** (1 col; the unit is in the label; the footer reads `gear 6` once a live gear metric exists and is empty until then; 15-min sparkline) |
+| A | **SPEED** (2 cols, hero numerals, `mph`; under the numeral an estimated economy row `now ≈ 19 mpg`; two-line footer: `limit 55 mph` while live, then `ACC 66 mph · engaged · vehicle ahead`; a four-bar gap readout sits beside the speed numeral; regular cruise uses `Cruise`; current off/ready/standby/override states are explicit) · **RPM** (1 col; the unit is in the label; the footer reads `gear 6` once a live gear metric exists and is empty until then; 15-min sparkline) |
 | B | **COOLANT** · **TRANS OIL** · **OIL PRESSURE**: value, unit, band bar, 15-min sparkline |
 | C | **VOLTAGE** (1 decimal; sub-line `alternator 42 %`) · **POWER** (`hp`; sub-line `165 lb-ft`) · **OIL TEMP (VVT)** |
-| D | **TIRES** (2 cols: 2×2 grid FL FR / RL RR) · **TRIP** (Time, Distance `≈ 12.3 mi`, Coolant max, Avg power) |
+| D | **TIRES** (2 cols: 2×2 grid FL FR / RL RR) · **THIS DRIVE** (Time, Distance `≈ 12.3 mi`, MPG `≈ 16.4 mpg`, Coolant max, Avg power; info icon on the heading) |
 
 The portrait gate is no scrolling within ≤ 1,096 visible px (the browser toolbar stays; see the
 manifest note). In landscape (`min-aspect-ratio: 1/1` and width ≥ 900 px), there are 4 columns:
 SPEED (2) · RPM · TIRES spanning the rows, then COOLANT · TRANS · OIL PRESSURE, then VOLTAGE · POWER ·
-OIL TEMP · TRIP. Landscape may scroll in v2.0. At ≤ 640 px (phone) Drive becomes two columns and
+OIL TEMP · THIS DRIVE. Landscape may scroll in v2.0. At ≤ 640 px (phone) Drive becomes two columns and
 scrolls. Type sizes are `clamp()`ed against the viewport height (`--hero: clamp(64px, 11vh, 128px)`,
 with `--large`, `--value` and `--tire` in proportion). Because the rows are fractions of the same
 height, type and rows scale together.
@@ -430,18 +430,26 @@ Rules for Drive tiles:
 - Sparklines show the last 15 minutes from the client ring, with no axis and no labels. They start
   empty and fill live; they are not seeded from 900 s buckets. Each scales to its own range with a
   per-metric minimum span (10 psi, 20 °F, 0.5 V) and draws only the nearest band edge.
-- Trip distance integrates live speed samples (gaps longer than 30 s are skipped). It is persisted
-  in `localStorage` (`van-telemetry.v2.trip`) keyed by the trip's start, so a reload mid-trip keeps
+- **This drive** groups Time, Distance, MPG, Coolant max and Avg power (owner decision 2026-10-30).
+  It means the historian's automatic drive: starts when the van starts moving or running, ends after
+  5 minutes parked, separate from the cluster's Trip A/B, with no manual reset or tap-cycling.
+  The heading's 44 px info button uses the existing native `title` hover tooltip and opens the same
+  copy in a dialog on tap, using `dialogs/modalDialog.js` for focus and Escape handling.
+  `views/driveTrip.helpers.js` owns the copy and the pure `tripRowsModel`; the visible label changes,
+  but the `trip` tile id, CSS area, settings keys and historian API field names remain contracts.
+  Distance integrates live speed samples (gaps longer than 30 s are skipped) and persists in
+  `localStorage` (`van-telemetry.v2.trip`) keyed by the drive's start, so a reload mid-drive keeps
   it. Coolant max and average power come from `history.trip_comparison` (60 s cadence).
-- Estimated economy sits under the Speed numeral, above its footer, in the height the hero tile
-  had spare (owner request 2026-10-24; it replaces the Trip tile's Fuel row of 2026-10-20).
-  `now ≈ 19 mpg` is live speed ÷ live fuel rate at ≥ 5 mph (`≈ 99+` from 99 up and during the
-  fuel cut, `—` when stopped or either record is stale); `trip ≈ 16.4 mpg` is
-  `history.current_trip.fuel_economy.mpg` (`—` until the broker has one). The numerals scale with
-  the viewport (`clamp(18px, 11.5vh − 103px, 44px)`, 44 px on the 1,280 px tablet) so the row still fits above the two-line footer
-  at the 1,096 px gate and in landscape; the phone layout gives the Speed row 184 px instead of
-  150. `src/views/SpeedEconomy.jsx` renders it through the Tile `detail` slot with
-  `styles/speed-economy.css`; the figures come from `src/fuelEconomy.helpers.js`.
+  MPG uses `mpgFigure(history.current_trip.fuel_economy)` (`≈ 16.4 mpg`, or `—` until available).
+  Five equal rows share the old tile's height; `styles/speed-economy.css` owns the row/heading rules.
+- Only instant economy sits under the Speed numeral, above its footer: `now ≈ 19 mpg` is live
+  speed ÷ live fuel rate at ≥ 5 mph (`≈ 99+` from 99 up and during the fuel cut, `—` when stopped
+  or either record is stale). The single instant rule in `src/fuelEconomy.helpers.js` is shared
+  with page 2's Fuel rate sub-line. Its numeral scales with the viewport
+  (`clamp(18px, 11.5vh − 103px, 44px)`, 44 px on the 1,280 px tablet) so it fits above the two-line
+  footer at the 1,096 px gate and in landscape; the scrolling phone grid gives Speed its natural
+  content height so the hero numeral, economy and ACC graphic do not overlap. `src/views/SpeedEconomy.jsx` renders it through Tile's `detail` slot with
+  `styles/speed-economy.css`. The drive-average figure no longer appears under Speed.
 - Customisation can hide a Drive tile. Positions are fixed, so a hidden tile leaves its cell empty
   and nothing else moves.
 
@@ -528,7 +536,7 @@ checks when stopped:
 - **TIRES**: the last reading per wheel, with one time for the set. In v2.0 wheels are coloured only
   by the absolute floors (front < 50 psi, rear < 68 psi) and by an active `warning` rule. The
   cold-baseline comparison arrives with the server baseline in v2.1 (section 8).
-- **LAST TRIP**: `65 min · ended 4:25 pm`, plus the open trip while one runs. Per-trip statistics
+- **LAST DRIVE**: `65 min · ended 4:25 pm`, plus the open drive while one runs. Per-drive statistics
   (distance, maxima) arrive in v2.1.
 - **SERVICE** (the shared `ServiceCard`):
   - Odometer: live, or dimmed with its time. An estimate (the ICS source) carries a small `*`
@@ -583,12 +591,12 @@ checks when stopped:
 
 ### 3.4 History
 
-- **Trips**: the current trip (if open) and the last five, with duration and end time. Distance and
-  max speed appear when per-trip statistics exist (v2.1). Each trip's meta line ends with its
+- **Drives**: the current drive (if open) and the last five, with duration and end time. Distance and
+  max speed appear when per-drive statistics exist (v2.1). Each drive's meta line ends with its
   estimated economy (`≈ 16.1 mpg`) when the broker has one, and the card leads with
   `Fuel economy ≈ 15.2 mpg over 7 days · ≈ 15.0 mpg over 30 days` (2026-10-20). A window that
   starts at the first fuel reading reads `since Oct 20`, shown once when both do.
-  Completed trips also accept an offline `cruise_summary`: engaged time (excluding
+  Completed drives also accept an offline `cruise_summary`: engaged time (excluding
   accelerator override), time with the vehicle-ahead icon (including override),
   CANC button counts, provisional brake associations, unknown/ambiguous cancels,
   and time-weighted set-speed minus speed-limit comparison. Coverage is explicit;
@@ -598,8 +606,8 @@ checks when stopped:
   not the five-second historian metric series. `cruise.helpers.js` stays in the
   lazy History view and adds no core code or warning behavior.
 - **Trends**: one compact card per history metric, with a plain-English label rather than the raw
-  metric name. Each shows the 7-day and 30-day low/average/high, the typical range of prior trips
-  (median and spread), and the current-trip difference while driving, plus a 24 h sparkline with a
+  metric name. Each shows the 7-day and 30-day low/average/high, the typical range of prior drives
+  (median and spread), and the current-drive difference while driving, plus a 24 h sparkline with a
   time-based x-axis (gaps visible).
 - **Coverage**: one line, `Recording · last sample 4:25 pm`, or the degraded reason, once. A second
   line appears only when it has news. It draws on `coverage.age_seconds`, `last_snapshot_at`,
@@ -824,6 +832,12 @@ resync path, then forces a summary fetch.
   - A tier-2 notice is the broker's `reason`, capitalised, then the action, under the broker's
     `title`: `RR cold pressure 2.9 psi a week below RL's over 4 cold starts. Check the RR tire
     for a slow leak.` It has no duration clause; the card's `since` label carries the time.
+- The dashboard calls historian trips **drives** in its own labels, empty states, event fact labels
+  and in-app docs. API fields, settings ids and `trip:` record references remain unchanged.
+  Backend-supplied warning reasons, rule descriptions, saved evidence and the technical guide are
+  shared with event exports, advisor chat and other `/v1` consumers; they retain their original
+  wording rather than applying a blanket rewrite that could alter cluster Trip A/B or owner text.
+  Caveats explains that remaining technical term. No backend payload or evaluator changes here.
 - **Tiers.** `watch` shows only on the Health card. `warning` state and critical severity also drive
   the top-bar alert and the numeral colour (sections 3 and 3.1). The Health tab badge counts open
   items and turns red when any is critical.
@@ -856,7 +870,7 @@ These are handled in the web tier first, and in the broker later if worth it:
    `sparkline` buckets are too coarse and have no rpm, speed or torque.
 2. **Per-trip statistics** for the last five trips (distance, max speed, max coolant, minimum
    voltage) come from the historian audit's `trip_summaries` loader (~110 ms per trip, cached by trip
-   id), exposed through `/v1/history` and `/v2/summary` (v2.1). Until then, Last trip reads
+   id), exposed through `/v1/history` and `/v2/summary` (v2.1). Until then, Last drive reads
    `65 min · ended 4:25 pm`.
 3. **TPMS cold baseline per wheel** is a server product: `baseline{cold_median, mad, trips,
    computed_at}` from the historian audit's D.3.3 cold-regime query (56 ms). It cannot be derived
@@ -904,7 +918,7 @@ because 1→2 upshifts cross R's band). It was observed live on 2026-09-24 (7th 
   snapshot otherwise ships 13 MB of dependencies.
 - **Browser**: `tools/shoot.mjs` (headless Firefox over WebDriver BiDi) screenshots and measures
   every view at 800×1280 and 1280×800. Pass `--demo` to stop polling and fill both Drive pages
-  plus the History trips card from the coherent illustrative scene in `tools/demo_data.mjs`. It checks:
+  plus the History Drives card from the coherent illustrative scene in `tools/demo_data.mjs`. It checks:
   - document height (Drive ≤ 1 screen in portrait) and DOM nodes (Drive ≤ 350);
   - text under 13 px, tap targets under 44 px, overflow/overlap hits and console errors;
   - a MutationObserver/rAF sample on Drive (≤ 12 writes/s live, 0 when unchanged, no rAF gap over

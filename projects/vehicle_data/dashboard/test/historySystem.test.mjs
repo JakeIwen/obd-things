@@ -100,7 +100,7 @@ test("trend metrics follow the owner's reading order with friendly titles", () =
   ]);
   assert.deepEqual(metrics.slice(-4), ["tire.pressure.fl", "tire.pressure.fr", "tire.pressure.rl", "tire.pressure.rr"]);
   const cards = H.historyCards(HISTORY);
-  assert.equal(cards[0].id, "trips");
+  assert.deepEqual(cards[0], { id: "trips", label: "Drives" });
   assert.equal(cards[1].id, "trend:engine.coolant_temperature");
   assert.equal(cards[1].label, "Coolant trend");
   for (const card of cards) assert.doesNotMatch(card.label, /\w\.\w/, "no raw metric ids as labels: " + card.label);
@@ -191,7 +191,7 @@ test("trips: open trip, unusual end reasons, cap at five, empty", () => {
   assert.deepEqual(t.current, { duration: "27 min", title: "In progress", meta: "started 12:30 pm · 300 samples" });
   assert.equal(t.rows.length, 5);
   assert.match(t.rows[1].meta, /ended when the broker restarted$/);
-  assert.deepEqual(H.tripsModel({ recent_trips: [] }, { nowMs: NOW }).emptyText, "No trips recorded yet.");
+  assert.deepEqual(H.tripsModel({ recent_trips: [] }, { nowMs: NOW }).emptyText, "No drives recorded yet.");
   assert.equal(H.tripsModel(null, { nowMs: NOW }).emptyText, "Waiting for history…");
 });
 
@@ -210,7 +210,7 @@ test("trend card: 7- and 30-day low/avg/high with units, usual trip, no dead cur
   const thirty = HISTORY.metric_trends["engine.coolant_temperature"].days_30;
   assert.equal(m.stats[1].low, String(Math.round(thirty.minimum)));
   assert.equal(m.stats[1].high, String(Math.round(thirty.maximum)));
-  assert.equal(m.typical, "Usual trip 194 ± 5 °F avg · 10 trips");
+  assert.equal(m.typical, "Usual drive 194 ± 5 °F avg · 10 drives");
   assert.equal(m.current, null);
   assert.equal(m.emptyText, null);
   assert.doesNotMatch(shownText(m), JARGON);
@@ -218,17 +218,17 @@ test("trend card: 7- and 30-day low/avg/high with units, usual trip, no dead cur
 
 test("trend card: voltage keeps two decimals; the trip difference reads above/below/same", () => {
   const v = H.trendModel("battery.voltage", HISTORY.metric_trends["battery.voltage"], { nowMs: NOW });
-  assert.equal(v.typical, "Usual trip 13.81 ± 0.17 V avg · 10 trips");
+  assert.equal(v.typical, "Usual drive 13.81 ± 0.17 V avg · 10 drives");
   assert.equal(v.stats[0].low, "11.20");
 
   const t = clone(HISTORY.metric_trends["engine.coolant_temperature"]);
   t.current_trip = { mean: 201.2, minimum: 150, maximum: 210 };
   t.current_minus_prior_median = 7.3;
-  assert.equal(H.trendModel("engine.coolant_temperature", t, { nowMs: NOW }).current, "This trip 201 °F avg · 7 above usual");
+  assert.equal(H.trendModel("engine.coolant_temperature", t, { nowMs: NOW }).current, "This drive 201 °F avg · 7 above usual");
   t.current_minus_prior_median = -3.4;
-  assert.equal(H.trendModel("engine.coolant_temperature", t, { nowMs: NOW }).current, "This trip 201 °F avg · 3 below usual");
+  assert.equal(H.trendModel("engine.coolant_temperature", t, { nowMs: NOW }).current, "This drive 201 °F avg · 3 below usual");
   t.current_minus_prior_median = 0.2;
-  assert.equal(H.trendModel("engine.coolant_temperature", t, { nowMs: NOW }).current, "This trip 201 °F avg · same as usual");
+  assert.equal(H.trendModel("engine.coolant_temperature", t, { nowMs: NOW }).current, "This drive 201 °F avg · same as usual");
   // A closed trip hides the current line even if a stale aggregate lingers.
   assert.equal(H.trendModel("engine.coolant_temperature", t, { nowMs: NOW, tripOpen: false }).current, null);
 });

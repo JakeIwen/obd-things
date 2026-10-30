@@ -109,7 +109,7 @@ function CoverageLine() {
 function TripsCard() {
   const t = trips.value;
   return (
-    <Card title="Trips" wide>
+    <Card title="Drives" wide>
       {t.fuel ? <p class="list__meta">{t.fuel}</p> : null}
       {t.current ? (
         <div class="history-trip history-trip--now">

@@ -200,7 +200,7 @@ const trip = computed(() => {
 function TripCard() {
   const t = trip.value;
   return (
-    <Card title="Last trip">
+    <Card title="Last drive">
       {t.last ? (
         <div class="parked-trip">
           <span class="parked-trip__value num">{t.last.duration}</span>
@@ -209,7 +209,7 @@ function TripCard() {
       ) : null}
       {t.current ? (
         <p class="parked-trip__now">
-          This trip: <b class="num">{t.current.duration}</b>
+          This drive: <b class="num">{t.current.duration}</b>
           {t.current.text ? " · " + t.current.text : ""}
         </p>
       ) : null}
