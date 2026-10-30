@@ -3,23 +3,6 @@
    nothing under 13 px, tap targets ≥ 44 px. Class contract is documented in docs/design.md. */
 
 :root {
-  color-scheme: dark;
-  --bg: #0e1412;
-  --card: #172120;
-  --card-2: #1d2a27;
-  --line: #26332f;
-  --line-strong: #34443f;
-  --text: #f3f6f4;
-  --text-2: #aab6b1;
-  --dim: #7f8b87;
-  --amber: #f5b642;
-  --amber-bg: #2a2214;
-  --red: #ff5d4d;
-  --red-bg: #2c1a18;
-  --green: #5fd39a;
-  --blue: #6fb7ff;
-  --overspeed: #ff958a;
-  --band-ok: #52665f;
   --hero: clamp(64px, 11vh, 128px);
   --large: clamp(40px, 6.2vh, 72px);
   --value: clamp(34px, 5vh, 56px);
@@ -105,9 +88,9 @@ a { color: var(--blue); }
 .tab__badge {
   position: absolute; top: 10px; right: calc(50% - 34px);
   min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px;
-  background: var(--amber); color: #1a1408; font-size: 13px; font-weight: 700; line-height: 20px;
+  background: var(--amber); color: var(--on-amber); font-size: 13px; font-weight: 700; line-height: 20px;
 }
-.tab__badge--red { background: var(--red); color: #fff; }
+.tab__badge--red { background: var(--red); color: var(--on-red); }
 
 /* ---------- Drive grid (portrait: 3 columns, 4 rows filling the height) ---------- */
 .drive {
@@ -331,9 +314,9 @@ a { color: var(--blue); }
 .card__head { display: flex; align-items: center; gap: 10px; min-height: 32px; margin-bottom: 8px; }
 .card__title { flex: 1 1 auto; min-width: 0; margin: 0; font-size: 18px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card__badge { flex: none; padding: 4px 10px; border-radius: 12px; font-size: 13px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; background: var(--card-2); color: var(--text-2); }
-.card__badge--amber { background: var(--amber); color: #1a1408; }
-.card__badge--red { background: var(--red); color: #fff; }
-.card__badge--green { background: var(--green); color: #082014; }
+.card__badge--amber { background: var(--amber); color: var(--on-amber); }
+.card__badge--red { background: var(--red); color: var(--on-red); }
+.card__badge--green { background: var(--green); color: var(--on-green); }
 .card__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .card__foot { margin-top: 10px; font-size: 14px; color: var(--dim); }
 .card__foot a { color: var(--text-2); }
@@ -382,7 +365,7 @@ a { color: var(--blue); }
   font-size: 16px; font-weight: 600; cursor: pointer; text-decoration: none;
 }
 .btn:disabled { opacity: .45; cursor: default; }
-.btn--primary { background: var(--green); border-color: var(--green); color: #082014; }
+.btn--primary { background: var(--green); border-color: var(--green); color: var(--on-green); }
 .btn--danger { border-color: var(--red); color: var(--red); }
 .btn--ghost { background: none; border-color: transparent; color: var(--text-2); }
 .btn--small { min-height: 44px; padding: 0 12px; font-size: 15px; }
@@ -415,7 +398,7 @@ a { color: var(--blue); }
   /* Inherited by the dialog's own scrollers (event list, chat log); without it Firefox paints a light track. */
   scrollbar-color: var(--line-strong) var(--card);
 }
-.dialog::backdrop { background: #000; opacity: .7; }
+.dialog::backdrop { background: var(--backdrop); opacity: .7; }
 .dialog__head { position: sticky; top: 0; display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--line); background: var(--card); }
 .dialog__title { flex: 1 1 auto; margin: 0; font-size: 18px; font-weight: 700; min-width: 0; }
 .dialog__close { width: 48px; height: 48px; border: 0; border-radius: 8px; background: none; color: var(--text-2); font-size: 26px; line-height: 1; }
@@ -424,7 +407,7 @@ a { color: var(--blue); }
 .dialog__section h3 { margin: 0 0 6px; font-size: 16px; }
 .msgs { display: flex; flex-direction: column; gap: 10px; }
 .msg { padding: 10px 12px; border-radius: 8px; background: var(--card-2); font-size: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.msg--me { background: #1f2f2b; align-self: flex-end; max-width: 90%; }
+.msg--me { background: var(--message-me); align-self: flex-end; max-width: 90%; }
 .msg--error { border: 1px solid var(--red); }
 
 /* ---------- docs pages ---------- */

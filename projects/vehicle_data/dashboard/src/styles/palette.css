@@ -1,0 +1,25 @@
+/* Dark is the default palette. Theme sheets override tokens, never component rules. */
+:root {
+  color-scheme: dark;
+  --bg: #0e1412;
+  --card: #172120;
+  --card-2: #1d2a27;
+  --line: #26332f;
+  --line-strong: #34443f;
+  --text: #f3f6f4;
+  --text-2: #aab6b1;
+  --dim: #7f8b87;
+  --amber: #f5b642;
+  --amber-bg: #2a2214;
+  --red: #ff5d4d;
+  --red-bg: #2c1a18;
+  --green: #5fd39a;
+  --blue: #6fb7ff;
+  --overspeed: #ff958a;
+  --band-ok: #52665f;
+  --on-amber: #1a1408;
+  --on-red: #fff;
+  --on-green: #082014;
+  --backdrop: #000;
+  --message-me: #1f2f2b;
+}

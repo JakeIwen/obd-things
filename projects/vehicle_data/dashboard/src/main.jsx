@@ -4,6 +4,7 @@
  */
 
 import { render } from "preact";
+import "./styles/palette.css";
 import "./styles/app.css";
 import "./styles/lighting.css";
 import "./styles/acc-distance.css";

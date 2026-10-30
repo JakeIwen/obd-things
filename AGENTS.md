@@ -77,6 +77,7 @@ applies it before shooting each view. Extend the scene when a feature it doesn't
 Caption every such image as illustrative demo data, and list tracked ones in
 `dashboard/screenshots/manifest.json`. They are never drive evidence, and never show the full
 VIN or a real location.
+Dashboard default colour tokens live in `dashboard/src/styles/palette.css`; component styles consume them and `night.css` overrides them.
 Dashboard warning state/headings live in `dashboard/src/warningContext.js`;
 formatted cards are lazy in `dashboard/src/app/warningCards.js`, and System
 vehicle-state text lives in `dashboard/src/views/systemVehicle.helpers.js`.

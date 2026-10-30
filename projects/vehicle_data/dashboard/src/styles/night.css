@@ -17,8 +17,7 @@
   --blue: #456f99;
   --overspeed: #a25d55;
   --band-ok: #293b32;
+  --on-red: #a9b5ad;
+  --message-me: var(--card-2);
   accent-color: var(--green);
 }
-/* These badges use a light foreground over a solid alert colour by day. */
-:root.dim .tab__badge--red, :root.dim .card__badge--red { color: #a9b5ad; }
-:root.dim .msg--me { background: var(--card-2); }
