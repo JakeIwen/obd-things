@@ -89,7 +89,8 @@ Speeding colour and chime: `dashboard/src/overspeed.helpers.js` (pure rule),
 `overspeed.js` (shared signal and app-wide chime effect) and `chime.js` (Web Audio).
 `components/AccDistance.jsx` and `styles/acc-distance.css` render the selected
 one-to-four-bar gap and, above it, the cluster's vehicle-ahead car icon; they are
-display-only.
+display-only. Page 1's speed-limit sign between the Speed numeral and that gap readout is
+`dashboard/src/views/SpeedLimitSign.jsx` with `styles/speed-limit-sign.css`.
 
 Light telltales use `lighting.json` (shared source/field/metric contract),
 `lighting.py` (fixed passive decoder and metric definitions), and the existing

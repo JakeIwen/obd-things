@@ -108,12 +108,12 @@ what they meant and where that information lives now.
   five seconds, so a short drive can be off by a few percent more. Drives recorded before the fuel
   rate was added (October 2026) have no figure, and until a window has a full 7 or 30 days of
   fuel readings it counts only the driving since then and says `since Oct 20` instead.
-- **Speed limit** (Drive page 2, and `limit 55 mph` under Speed on page 1): the number the
+- **Speed limit** (Drive page 2, and the sign beside Speed on page 1): the number the
   instrument cluster's traffic-sign display shows, copied from C-CAN frame `0x0E0` byte 0 in mph.
   It is whatever the van's camera last recognised, not a map value: it can lag a new sign, miss
   one, or keep the previous road's limit. It was checked against the cluster on a September 27
-  drive (every noted change matched). The cluster sends 0 when it shows no limit, and the tile
-  then reads `—`.
+  drive (every noted change matched). The cluster sends 0 when it shows no limit; the page-2 tile
+  then reads `—` and the page-1 sign is hidden.
 - **Speeding colour and chime**: more than 15 % over the speed limit (strictly; 63.3 mph in a 55)
   turns Speed's number and the limit sign soft red. Both readings must be current; when the limit
   goes stale the tile shows `—` and nothing is red. Once that has held without a break for five

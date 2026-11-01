@@ -1,0 +1,20 @@
+/* ---------- Speed limit sign beside the Speed numeral (src/views/SpeedLimitSign.jsx) ---------- */
+/* The box takes the free width between the numeral's unit and the ACC gap readout, so the sign
+   sits centred in that gap and the readout stays at the right edge. Sized in em of the hero
+   numeral (4:5, like the 24 × 30 in R2-1 sign), it scales with it. When a phone leaves less than
+   half an em, the sign and readout wrap onto a line under the numeral instead of shrinking the
+   sign past legibility; phones size the Speed row to its content (speed-economy.css). */
+.area-speed .tile__value { flex-wrap: wrap; }
+.speed-limit {
+  flex: 1 0 .5em; min-width: 0; align-self: center;
+  display: flex; justify-content: center;
+}
+.speed-limit[hidden] { display: none; }
+.speed-limit__sign { width: .64em; max-width: 100%; height: .8em; }
+.speed-limit__outline { fill: none; stroke: currentColor; stroke-width: 2.5; }
+.speed-limit__words, .speed-limit__value { fill: currentColor; text-anchor: middle; letter-spacing: 0; }
+.speed-limit__words { font-size: 9.5px; font-weight: 700; }
+.speed-limit__value { font-size: 28px; font-weight: 700; }
+.speed-limit__value--wide { font-size: 20px; }
+/* More than 15 % over the limit (src/overspeed.js): the sign turns soft red with the numeral. */
+.tile--overspeed .speed-limit { color: var(--overspeed); }

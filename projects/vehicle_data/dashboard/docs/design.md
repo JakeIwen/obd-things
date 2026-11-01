@@ -371,7 +371,7 @@ tab bar, with 16 px gutters and 12 px gaps.
 
 | row | content |
 |---|---|
-| A | **SPEED** (2 cols, hero numerals, `mph`; under the numeral an estimated economy row `now ≈ 19 mpg`; two-line footer: `limit 55 mph` while live, then `ACC 66 mph · engaged · vehicle ahead`; a four-bar gap readout sits beside the speed numeral; regular cruise uses `Cruise`; current off/ready/standby/override states are explicit) · **RPM** (1 col; the unit is in the label; the footer reads `gear 6` once a live gear metric exists and is empty until then; 15-min sparkline) |
+| A | **SPEED** (2 cols, hero numerals, `mph`; under the numeral an estimated economy row `now ≈ 19 mpg`; one-line footer `ACC 66 mph · engaged · vehicle ahead`; beside the numeral a `SPEED LIMIT 55` sign while the limit is live, then the four-bar gap readout at the right edge; regular cruise uses `Cruise`; current off/ready/standby/override states are explicit) · **RPM** (1 col; the unit is in the label; the footer reads `gear 6` once a live gear metric exists and is empty until then; 15-min sparkline) |
 | B | **COOLANT** · **TRANS OIL** · **OIL PRESSURE**: value, unit, band bar, 15-min sparkline |
 | C | **VOLTAGE** (1 decimal; sub-line `alternator 42 %`) · **POWER** (`hp`; sub-line `165 lb-ft`) · **OIL TEMP (VVT)** |
 | D | **TIRES** (2 cols: 2×2 grid FL FR / RL RR) · **THIS DRIVE** (Time, Distance `≈ 12.3 mi`, MPG `≈ 16.4 mpg`, Coolant max, Avg power; info icon on the heading) |
@@ -386,9 +386,16 @@ height, type and rows scale together.
 
 Rules for Drive tiles:
 
-- Speed's footer keeps its existing speed limit and adds ACC in the same card;
-  the grid and every other tile remain intact. Both lines are 14 px with 20 px
-  line height. A missing/stale/unknown ACC state hides all cruise details,
+- The speed limit is a US regulatory sign (`SPEED / LIMIT / 55`, 4:5, outline
+  only so night mode stays dark, as on page 2) centred in the gap between
+  the numeral's unit and the gap readout (2026-11-01, owner request; it
+  replaced the footer's `limit 55 mph` line). `src/views/SpeedLimitSign.jsx`
+  and `styles/speed-limit-sign.css` own it. It is sized in em of the hero
+  numeral (0.64 × 0.8 em), hidden while the limit is not live, and tinted
+  with the numeral when speeding. Where less than half an em is free (narrow
+  phones), the extras wrap under the numeral rather than shrinking the sign.
+- Speed's footer is the one ACC line, 14 px with 20 px line height; the grid
+  and every other tile remain intact. A missing/stale/unknown ACC state hides all cruise details,
   off/ready hides cached set speed, and `vehicle ahead` requires adaptive
   engaged/override. Standby explicitly identifies remembered set speed. All
   ACC information is display-only and cannot cause warnings.
@@ -446,7 +453,7 @@ Rules for Drive tiles:
   speed ÷ live fuel rate at ≥ 5 mph (`≈ 99+` from 99 up and during the fuel cut, `—` when stopped
   or either record is stale). The single instant rule in `src/fuelEconomy.helpers.js` is shared
   with page 2's Fuel rate sub-line. Its numeral scales with the viewport
-  (`clamp(18px, 11.5vh − 103px, 44px)`, 44 px on the 1,280 px tablet) so it fits above the two-line
+  (`clamp(18px, 11.5vh − 103px, 44px)`, 44 px on the 1,280 px tablet) so it fits above the
   footer at the 1,096 px gate and in landscape; the scrolling phone grid gives Speed its natural
   content height so the hero numeral, economy and ACC graphic do not overlap. `src/views/SpeedEconomy.jsx` renders it through Tile's `detail` slot with
   `styles/speed-economy.css`. The drive-average figure no longer appears under Speed.

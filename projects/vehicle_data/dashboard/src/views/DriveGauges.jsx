@@ -9,6 +9,7 @@ import { currentAcc } from "../accDisplay.js";
 import { overspeed } from "../overspeed.js";
 import { DriveFooter } from "./DriveFooter.jsx";
 import { SpeedEconomy } from "./SpeedEconomy.jsx";
+import { SpeedLimitSign } from "./SpeedLimitSign.jsx";
 import { liveValue, isHidden, minuteClock, engineRunning } from "../app/derive.js";
 import { tripDistanceMiles } from "../app/rings.js";
 import * as store from "../store.js";
@@ -23,7 +24,7 @@ const alternatorSub = computed(() => {
 // Display records expire in the store; the current ACC state gates every detail.
 const speedSub = computed(() => {
   const acc = currentAcc.value;
-  return speedFooter(liveValue("vehicle.speed_limit").value, acc.state, acc.setSpeed, acc);
+  return speedFooter(acc.state, acc.setSpeed, acc);
 });
 const torqueSub = computed(() => {
   const t = liveValue("engine.crankshaft_torque").value;
@@ -93,7 +94,7 @@ export default function DriveGauges({ page, onPageChange }) {
   return (
     <>
       <div class="drive">
-        {show("speed") && <Tile name="vehicle.speed" label="Speed" area="speed" size="hero" sub={speedSub} extra={<AccDistance />} detail={<SpeedEconomy />} overspeed={overspeed} />}
+        {show("speed") && <Tile name="vehicle.speed" label="Speed" area="speed" size="hero" sub={speedSub} extra={<><SpeedLimitSign /><AccDistance /></>} detail={<SpeedEconomy />} overspeed={overspeed} />}
         {show("rpm") && <Tile name="engine.rpm" label="RPM" area="rpm" size="large" sub={rpmSub} spark showUnit={false} />}
         {show("coolant") && <Tile name="engine.coolant_temperature" label="Coolant" area="coolant" band spark />}
         {show("trans") && <Tile name="transmission.oil_temperature" label="Trans oil" area="trans" band spark />}

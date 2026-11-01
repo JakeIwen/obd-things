@@ -9,6 +9,7 @@ import "./styles/app.css";
 import "./styles/lighting.css";
 import "./styles/acc-distance.css";
 import "./styles/speed-economy.css";
+import "./styles/speed-limit-sign.css";
 import "./styles/compass.css";
 import "./styles/light.css";
 import "./styles/night.css";
