@@ -24,11 +24,11 @@
   "images": [
     {
       "file": "01-drive-gauges.png",
-      "caption": "Drive Gauges page from build b3abd6e816f1 with illustrative demo highway data: 63 mph with now ≈ 19 mpg under the speed, RPM, temperatures, oil pressure, voltage, power, tire pressures and This drive (time, distance, ≈ 16.4 mpg, coolant max, average power).",
+      "caption": "Drive Gauges page from build 22f4963f9a4e with illustrative demo highway data: 63 mph with a SPEED LIMIT 65 sign and the ACC gap beside it and now ≈ 19 mpg under the speed, RPM, temperatures, oil pressure, voltage, power, tire pressures and This drive (time, distance, ≈ 16.4 mpg, coolant max, average power).",
       "width": 800,
       "height": 1280,
-      "bytes": 143720,
-      "sha256": "39ca7d53f68a22a045997da14b1f8dc1fe6e546796218e07d0b121f299ebcaec"
+      "bytes": 146076,
+      "sha256": "ce8fad8e424a69775d91b10b55ff77ceef28a595b2ce8481c98820bdc9d908c7"
     },
     {
       "file": "02-drive-sensors.png",
