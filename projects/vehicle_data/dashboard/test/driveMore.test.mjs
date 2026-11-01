@@ -134,14 +134,6 @@ test("ratioText needs both shafts and a turning output", () => {
   assert.equal(H.ratioText(2000, null), "");
 });
 
-test("speedLimitText: whole mph, or — when the cluster shows none", () => {
-  assert.equal(H.speedLimitText(55), "55");
-  assert.equal(H.speedLimitText(30), "30");
-  assert.equal(H.speedLimitText(0), "—");
-  assert.equal(H.speedLimitText(null), "—");
-  assert.equal(H.speedLimitText(NaN), "—");
-});
-
 test("swipeTarget pages only on a deliberate horizontal swipe", () => {
   assert.equal(swipeTarget(-120, 10, 300, 1), 2);
   assert.equal(swipeTarget(120, -10, 300, 2), 1);

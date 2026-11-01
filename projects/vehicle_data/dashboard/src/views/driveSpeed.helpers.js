@@ -1,4 +1,5 @@
 import { accTileModel } from "../accDisplay.helpers.js";
+import { DASH } from "../format.js";
 
 /** Two short lines in the existing Speed footer; display information only. */
 export function speedFooter(limit, state, setSpeed, shown) {
@@ -15,4 +16,13 @@ export function speedFooter(limit, state, setSpeed, shown) {
     lines.push(label + speed + " · " + status + ahead);
   }
   return lines.join("\n");
+}
+
+/**
+ * Speed-limit sign text: whole mph, or `—` when the cluster shows no limit (the broker never
+ * publishes the frame's 0, so "none" arrives as no live value).
+ * @param {number|null} mph live `vehicle.speed_limit`
+ */
+export function speedLimitText(mph) {
+  return typeof mph === "number" && Number.isFinite(mph) && mph > 0 ? String(Math.round(mph)) : DASH;
 }

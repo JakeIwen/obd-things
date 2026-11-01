@@ -1,6 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { speedFooter } from "../src/views/driveSpeed.helpers.js";
+import { speedFooter, speedLimitText } from "../src/views/driveSpeed.helpers.js";
+
+test("speedLimitText: whole mph, or — when the cluster shows none", () => {
+  assert.equal(speedLimitText(55), "55");
+  assert.equal(speedLimitText(30), "30");
+  assert.equal(speedLimitText(0), "—");
+  assert.equal(speedLimitText(null), "—");
+  assert.equal(speedLimitText(NaN), "—");
+});
 
 test("Speed footer keeps limit, set speed and vehicle ahead within two lines", () => {
   assert.equal(speedFooter(55, "engaged", 66, {mode: "adaptive", lead: true}),

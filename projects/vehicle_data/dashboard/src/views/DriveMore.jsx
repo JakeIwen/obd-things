@@ -25,8 +25,8 @@ import {
   radarTileModel,
   gearText,
   ratioText,
-  speedLimitText,
 } from "./driveMore.helpers.js";
+import { speedLimitText } from "./driveSpeed.helpers.js";
 
 // Speed limit: the number the cluster's traffic-sign display shows, in a sign outline; `—` when
 // it shows none (the broker publishes nothing for the frame's 0, so the record goes stale).

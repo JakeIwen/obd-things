@@ -111,12 +111,3 @@ export function ratioText(turbine, output) {
   if (!isNum(turbine) || !isNum(output) || output < 100 || turbine < 0) return "";
   return "ratio " + fmtFixed(turbine / output, 2);
 }
-
-/**
- * Speed-limit sign text: whole mph, or `—` when the cluster shows no limit (the broker never
- * publishes the frame's 0, so "none" arrives as no live value).
- * @param {number|null} mph live `vehicle.speed_limit`
- */
-export function speedLimitText(mph) {
-  return isNum(mph) && mph > 0 ? String(Math.round(mph)) : DASH;
-}
