@@ -310,8 +310,8 @@ opens a network or CAN connection. `TRACE_JSON` is optional; keep it under
 - **CSS class contract.** `src/styles/app.css` holds the shared classes (frame, top bar, tab bar,
   tiles, band bar, cards, disclosures, key/value lists, rows, buttons, dialogs and docs pages).
   Colours live in `styles/palette.css`, overridden only by `light.css` and `night.css`;
-  the compact theme control is in `styles/theme-control.css`. Each view or dialog appends its own classes at the end, under a comment
-  naming its source file, with a prefix: `.chat-*`, `.evh-*`, `.cust-*`, `.oil-*`, `.health-*`,
+  the compact top-bar controls are in `styles/topbar-controls.css`. Each view or dialog appends
+  its own classes at the end, under a comment naming its source file, with a prefix: `.chat-*`, `.evh-*`, `.cust-*`, `.oil-*`, `.health-*`,
   `.parked-*`, and `.history-*` / `.system-*` for the views in progress. No file restyles another
   file's prefix.
 

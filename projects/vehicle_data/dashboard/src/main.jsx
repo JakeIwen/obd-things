@@ -13,7 +13,7 @@ import "./styles/speed-limit-sign.css";
 import "./styles/compass.css";
 import "./styles/light.css";
 import "./styles/night.css";
-import "./styles/theme-control.css";
+import "./styles/topbar-controls.css";
 import * as store from "./store.js";
 import { createLink } from "./link.js";
 import { startRings, ringFor } from "./app/rings.js";
