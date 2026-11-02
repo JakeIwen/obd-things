@@ -24,11 +24,11 @@
   "images": [
     {
       "file": "01-drive-gauges.png",
-      "caption": "Drive Gauges page from build 22f4963f9a4e with illustrative demo highway data: 63 mph with a SPEED LIMIT 65 sign and the ACC gap beside it and now ≈ 19 mpg under the speed, RPM, temperatures, oil pressure, voltage, power, tire pressures and This drive (time, distance, ≈ 16.4 mpg, coolant max, average power).",
+      "caption": "Drive Gauges page from build 00d8780d2c87 with illustrative demo highway data: 63 mph with a SPEED LIMIT 65 sign and the ACC gap beside it and now ≈ 19 mpg under the speed, RPM, temperatures, oil pressure, voltage, power, tire pressures and This drive (time, distance, ≈ 16.4 mpg, coolant max, average power).",
       "width": 800,
       "height": 1280,
-      "bytes": 146076,
-      "sha256": "ce8fad8e424a69775d91b10b55ff77ceef28a595b2ce8481c98820bdc9d908c7"
+      "bytes": 145807,
+      "sha256": "c6745bbc7a28e469b483b2e9fd5737da2ff9fd46d8b0c261fb2d5b46d554af8e"
     },
     {
       "file": "02-drive-sensors.png",
@@ -152,11 +152,11 @@
     },
     {
       "file": "17-drive-live-fuel-economy.png",
-      "caption": "Drive Sensors page from build c6b0c4e25406 with illustrative demo highway data, including ≈ 3.3 gal/h and now ≈ 19 mpg.",
+      "caption": "Drive Sensors page from build 00d8780d2c87 with illustrative demo highway data, including ≈ 3.3 gal/h and now ≈ 19 mpg.",
       "width": 800,
       "height": 1280,
-      "bytes": 136357,
-      "sha256": "d4e7ad73ea5a30f48e0f5dd14a2758c4ab40e7c897a211ae526e948ff7b8e5e0"
+      "bytes": 140061,
+      "sha256": "e41f2c370dc12cf1a863f57996918742041d042850f673fd9a07a12c705ac449"
     }
   ]
 }
