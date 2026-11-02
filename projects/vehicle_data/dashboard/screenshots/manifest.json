@@ -1,7 +1,7 @@
 {
-  "captured_on": "2026-10-20",
+  "captured_on": "2026-11-01",
   "app": "Pi-hosted Van telemetry dashboard",
-  "build": "57d1d25746dd",
+  "build": "00d8780d2c87",
   "viewport": {
     "width": 800,
     "height": 1280,
@@ -9,14 +9,14 @@
     "scale": "CSS pixels"
   },
   "tablet_reference": "projects/vehicle_data/dashboard/docs/design.md: portrait-mounted tablet, 800 × 1280 CSS pixels; physical DPR unconfirmed.",
-  "capture_method": "Clean Chromium browser displaying the current built app. Browser-only reactive-store fixtures, saved historical ranges, canvas/SVG and text changes, and intercepted advisor/scan API responses supplied demo data.",
-  "data_notice": "Portfolio demonstration images combine saved app data with representative values from historical telemetry ranges, charts, trip/cruise summaries and assistant conversations. They are not evidence of a live drive, diagnosis, model response or service action. The two Drive images (01 and 17) show the demo scene in dashboard/tools/demo_data.mjs, whose values agree with each other.",
-  "primary_trip_source": "Images 01 and 17 (Drive) use the demo scene in dashboard/tools/demo_data.mjs: a 42-minute, 39.8-mile illustrative highway trip at 63 mph. The other images keep the 2026-10-20 replay: Trip 65 in tmp/vehicle_data/warning_replay/replay-current@wave4-20261004T030357326Z.sqlite3: 64.2 minutes, 53.47 miles integrated from fresh speed samples, and 210.2 °F maximum coolant. The displayed 15 hp average is the 15.21 hp prior-trip median in dashboard/test/fixtures/summary-v2.json.",
+  "capture_method": "browser_clean (Playwright Chromium), 800 × 1280 at DPR 1, Roboto and Roboto Mono loaded in the capture browser, browser clock pinned to an illustrative afternoon (2026-10-28 15:30 CDT). The current build was served locally by web_v2 (cache-only, warning chat off) over a forwarded broker socket; every data route was answered in the browser by dashboard/tools/demo_capture.mjs and the sequence is dashboard/tools/readme_shots.playwright.js.",
+  "data_notice": "All images show illustrative demo data, never a live drive, diagnosis, model response or service action. Values come from dashboard/tools/demo_data.mjs (the highway scene, whose readings agree with each other), demo_views.mjs (trips, history baselines, parked state, service records, radar reference), demo_events.mjs and demo_assistant.mjs (saved events and simulated conversations), plus the tracked test fixture summary-v2.json with its times moved to the capture time (diagnostic codes, broker and bus status, 7- and 30-day statistics).",
+  "primary_trip_source": "The illustrative drive in dashboard/tools/demo_data.mjs: 42 minutes and 39.8 miles at 63 mph, ≈ 16.4 mpg. Running images (01, 02, 04-08, 10-13, 16, 17) show it in progress; parked images (03, 09, 14, 15) are 50 minutes after it ended; 18 is stopped with the engine idling.",
   "suggested_public_caption": "Van telemetry dashboard — tablet UI with illustrative demo data.",
-  "safety": "No vehicle actions, scan execution, warning installation, maintenance saves, deployments or service changes. Mutating requests were blocked or fulfilled locally in the capture browser.",
+  "safety": "No vehicle actions, scan, calibration, warning installation, maintenance save, deployment or service change. The capture browser aborted every request that was not GET or HEAD and answered the one chat-opening POST locally; the listener log shows only GET requests.",
   "suggested_homepage_images": [
     "01-drive-gauges.png",
-    "02-drive-sensors.png",
+    "17-drive-live-fuel-economy.png",
     "03-parked-battery-tires-and-service.png",
     "07-history-trips-and-temperature-trends.png",
     "13-create-custom-early-warning.png"
@@ -24,139 +24,147 @@
   "images": [
     {
       "file": "01-drive-gauges.png",
-      "caption": "Drive Gauges page from build 00d8780d2c87 with illustrative demo highway data: 63 mph with a SPEED LIMIT 65 sign and the ACC gap beside it and now ≈ 19 mpg under the speed, RPM, temperatures, oil pressure, voltage, power, tire pressures and This drive (time, distance, ≈ 16.4 mpg, coolant max, average power).",
+      "caption": "Drive Gauges page with illustrative demo highway data: 63 mph with a SPEED LIMIT 65 sign and the ACC gap (3 of 4, vehicle ahead) beside it, now ≈ 19 mpg under the speed, RPM, temperatures, oil pressure, voltage, power, tire pressures, This drive (42 min, ≈ 39.8 mi, ≈ 16.4 mpg, coolant max, average power), light indicators and compass.",
       "width": 800,
       "height": 1280,
-      "bytes": 145807,
-      "sha256": "c6745bbc7a28e469b483b2e9fd5737da2ff9fd46d8b0c261fb2d5b46d554af8e"
+      "bytes": 102691,
+      "sha256": "cdae419db7d518acc505053fc847741dcf798b623227629d0a1a503f9f0eaa90"
     },
     {
       "file": "02-drive-sensors.png",
-      "caption": "Sensors dashboard with adaptive cruise, following distance, estimated gear, radar alignment and transmission shaft speeds.",
+      "caption": "Drive Sensors page in the light theme with the same illustrative highway scene as 17: speed-limit sign, ACC at 65 mph with gap 3 of 4, ≈ 3.3 gal/h and now ≈ 19 mpg, estimated 7th gear, radar aim, shaft speeds, torque and odometer.",
       "width": 800,
       "height": 1280,
-      "bytes": 87534,
-      "sha256": "875ba305f377e6a6969491cf8d852d8e4e477585428c740f72196bf8564693b5"
+      "bytes": 101686,
+      "sha256": "5c5f1d1e71dbc2de8508591c633ab7a9fea887625771e7f3e1ef0ebf0b281485"
     },
     {
       "file": "03-parked-battery-tires-and-service.png",
-      "caption": "Parked overview with battery trend, tire pressures, last trip, maintenance and warning summaries.",
+      "caption": "Parked overview 50 minutes after the illustrative drive: resting battery with its engine-off reading and 24-hour trend, last tire pressures, last drive, an illustrative service record and oil life, and the tire warning awaiting fresh readings.",
       "width": 800,
       "height": 1280,
-      "bytes": 106418,
-      "sha256": "cad5c5f08b3e92fbd9bec01e6ce03eba352450fdc85eaae4e49e50fa85a67b91"
+      "bytes": 108849,
+      "sha256": "135f9710caedf6c936440d206342ae22a0cc47f0ed57e8dcb4eb7f48d2d1d716"
     },
     {
       "file": "04-health-warnings-and-diagnostics.png",
-      "caption": "Health overview with an early warning and diagnostic trouble codes.",
+      "caption": "Health page during the illustrative drive: one open early warning (RR tire 79 psi against its usual 82), system notes and the saved diagnostic code list from the tracked test fixture, dated as illustrative.",
       "width": 800,
       "height": 1280,
-      "bytes": 193118,
-      "sha256": "37e5e35f469fec52c4e6407f51c5c66172793709fe1640539113025902a2eef2"
+      "bytes": 143645,
+      "sha256": "467e2d3968b92c2b731b236ddc2dec929ba7154595798fc4826cdefc4c69b7b1"
     },
     {
       "file": "05-saved-warning-events.png",
-      "caption": "Searchable saved warning events and lifecycle states.",
+      "caption": "Saved warning events list with illustrative events and lifecycle states.",
       "width": 800,
       "height": 1280,
-      "bytes": 132184,
-      "sha256": "066c818722090ab025cdfe87f0af133067fa29a07c5763f870b8126252cea841"
+      "bytes": 141389,
+      "sha256": "3a4a52e40cbdbb40ea202af00d4727aa89b882fe4f63ba36ba0288551dc1c71d"
     },
     {
       "file": "06-warning-event-evidence.png",
-      "caption": "Warning evidence with opening readings, baseline comparison, sample chart and event timeline.",
+      "caption": "Illustrative evidence for the open RR tire event: opening readings against the baseline, latest evaluation, saved samples with the opening boundary, and the event timeline.",
       "width": 800,
       "height": 1280,
-      "bytes": 120036,
-      "sha256": "7315c5192b8e13aa447783282cd2b47918ee75185324f25fe3b1dfa528129df7"
+      "bytes": 123737,
+      "sha256": "97eeb4d99804741195791c4a17c188c7699110784a2b8116bebb8dafad159af6"
     },
     {
       "file": "07-history-trips-and-temperature-trends.png",
-      "caption": "Trip history with cruise-use summaries and temperature trends.",
+      "caption": "History page with the illustrative drive in progress, recent illustrative drives with fuel economy and cruise summaries, and coolant and transmission trends against usual drives.",
       "width": 800,
       "height": 1280,
-      "bytes": 161516,
-      "sha256": "45693554c7cba7cbbd394e2065507d5f5c1a6597df835cfe893b1d9986ba6002"
+      "bytes": 162051,
+      "sha256": "f577e1031ec7ed69139248b07d5364a4c744da8a2d3ef2915366419e0e72643a"
     },
     {
       "file": "08-history-pressure-voltage-and-power.png",
-      "caption": "Historical pressure, temperature, voltage, alternator, power and tire trends.",
+      "caption": "History trend cards (oil pressure, oil temperature, battery voltage, alternator duty, power and tires) with illustrative last-24-hour series and usual-drive baselines.",
       "width": 800,
       "height": 1280,
-      "bytes": 150058,
-      "sha256": "e63204772c57116116dc2e2ca33fa453474941aca49eafd0b6aef388de711cab"
+      "bytes": 140431,
+      "sha256": "567c8a2c3dc2f2e453cf9a6fbb66b3d4f97e723d6ceb72041e48d5629b4d18b0"
     },
     {
       "file": "09-system-bus-health-and-radar.png",
-      "caption": "System overview with CAN bus health, broker status and radar alignment.",
+      "caption": "System page while parked: vehicle state, listen-only buses, broker status and radar alignment shown as change since an illustrative saved reference point.",
       "width": 800,
       "height": 1280,
-      "bytes": 136458,
-      "sha256": "a73b18d8ba3b9999ef5eb6b93cb27cb5d3654b025e316776ddeff6b9d1c01ea0"
+      "bytes": 128509,
+      "sha256": "c80421db41b0c9dd30ac204e2dd26f3bc0a2989dd17ef2b99225fd7e4182a6a2"
     },
     {
       "file": "10-system-metric-catalog.png",
-      "caption": "Metric catalog with values, sources, quality and freshness policies.",
+      "caption": "Metric catalog with the illustrative scene's values, each metric's sources, quality and freshness policy.",
       "width": 800,
       "height": 1280,
-      "bytes": 142722,
-      "sha256": "8efb34572ee2abf529d22edb5feafdb691e541ab1cc59d0279660a5543e04ad5"
+      "bytes": 140266,
+      "sha256": "451058383b1c09b1801cce6953eb3f8f39cb021f31155813193d11358d238fbf"
     },
     {
       "file": "11-customise-dashboard-tiles.png",
-      "caption": "Per-device dashboard tile customization.",
+      "caption": "Per-device Drive tile customization dialog.",
       "width": 800,
       "height": 1280,
-      "bytes": 120310,
-      "sha256": "81cd26766ea3216a4c852d45777ed0849bdec861024ff309928be5a38627f29b"
+      "bytes": 117469,
+      "sha256": "0ff839ab31e2b99e39f0e5fbc65dcc335dffb9073f9c0a5cc61a0a95df10effb"
     },
     {
       "file": "12-codex-warning-explanation.png",
-      "caption": "Codex explanation of a saved warning, with a simulated conversation.",
+      "caption": "Ask Codex explanation of the illustrative RR tire event, with a simulated conversation.",
       "width": 800,
       "height": 1280,
-      "bytes": 155423,
-      "sha256": "dc08f0395f1f9a2b70a9453cc287826a6aca4a44e8e07bb3ffc5e7e3a918945c"
+      "bytes": 171520,
+      "sha256": "abd13940f7493589a2e239244ef818a97a5be8b899af7cbd0e6431470d8934c2"
     },
     {
       "file": "13-create-custom-early-warning.png",
-      "caption": "Natural-language custom warning proposal and approval review, with a simulated conversation.",
+      "caption": "Natural-language custom warning proposal and approval review, with a simulated conversation. Nothing was installed.",
       "width": 800,
       "height": 1280,
-      "bytes": 144326,
-      "sha256": "157fc05500982fde5fe23b24cfad8624393e83e1c3d56dfd71e5df0d13088c4c"
+      "bytes": 146972,
+      "sha256": "6cdcc6fd23b3d2cb8e4a6b9179fb7c8452a00a50cdfc6d8e10424ace65aee9db"
     },
     {
       "file": "14-record-oil-change.png",
-      "caption": "Oil-change entry form filled with an unsaved example service record.",
+      "caption": "Oil-change entry form filled with an unsaved illustrative service record, above illustrative service history.",
       "width": 800,
       "height": 1280,
-      "bytes": 130932,
-      "sha256": "04a2d18927b8d94a742ccd934cfa1ad42d3f0fb352311f3f7f01b3992874bebc"
+      "bytes": 137681,
+      "sha256": "6371a8ab6b271182555db5d8ffbe6df5489a70e2e78ef8b30a7dc8546e9abc17"
     },
     {
       "file": "15-guarded-diagnostic-code-scan.png",
       "caption": "Guarded parked diagnostic scan controls, shown using a simulated enabled-listener state. No scan was started.",
       "width": 800,
       "height": 1280,
-      "bytes": 157575,
-      "sha256": "afc77a1091ad171abbaa4553c36df6d470461d74eeccb69f60c21ddb1e68d509"
+      "bytes": 162377,
+      "sha256": "68b16b1c6315be221b98b5c563693aa622a5ee9ccfeab4838f4a18a55b143fc7"
     },
     {
       "file": "16-drive-night-dimming.png",
-      "caption": "Driving dashboard with night dimming enabled.",
+      "caption": "Drive Gauges page with night dimming on, same illustrative highway scene as 01.",
       "width": 800,
       "height": 1280,
-      "bytes": 90598,
-      "sha256": "c15dc08d99f99471583d72ff307d031b08f9b0325b7bc83b936de21bd67fdf9a"
+      "bytes": 96771,
+      "sha256": "dda66c990d80bd1888fb87aaec1367c25d0866d6a3162b5e59e3ed8cc688e809"
     },
     {
       "file": "17-drive-live-fuel-economy.png",
-      "caption": "Drive Sensors page from build 00d8780d2c87 with illustrative demo highway data, including ≈ 3.3 gal/h and now ≈ 19 mpg.",
+      "caption": "Drive Sensors page in the dark theme with illustrative demo highway data, including ≈ 3.3 gal/h and now ≈ 19 mpg.",
       "width": 800,
       "height": 1280,
-      "bytes": 140061,
-      "sha256": "e41f2c370dc12cf1a863f57996918742041d042850f673fd9a07a12c705ac449"
+      "bytes": 101659,
+      "sha256": "c7c06dca10277e58220d2228605d19e8db8dfaa265db6d3818dfb14e7c215493"
+    },
+    {
+      "file": "18-radar-service-alignment.png",
+      "caption": "Radar drive calibration dialog in its ready-to-start state (stopped, engine idling, confirmation ticked), shown using a simulated enabled-listener state. No calibration was started.",
+      "width": 800,
+      "height": 1280,
+      "bytes": 160752,
+      "sha256": "dd6c38659a5e04db38f9b8f4b61efc191b2d9c5bd659a565266771b4fd6e35b3"
     }
   ]
 }

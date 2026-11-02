@@ -11,8 +11,8 @@ with each investigation living under `projects/<name>/`.
 ## Telemetry dashboard
 
 <p align="center">
-  <img src="projects/vehicle_data/dashboard/screenshots/01-drive-gauges.png" width="380" alt="Drive gauges view with illustrative demo data: 63 mph with a speed limit 65 sign beside it and instant fuel economy under the speed, RPM, temperatures, oil pressure, charging voltage, power, tire pressures, This drive time, distance and fuel economy, and light indicators">
-  <img src="projects/vehicle_data/dashboard/screenshots/17-drive-live-fuel-economy.png" width="380" alt="Drive sensors view with an estimated fuel rate of 3.3 gallons per hour and instant economy of 19 mpg, adaptive cruise, estimated gear, radar aim, and transmission speeds">
+  <img src="projects/vehicle_data/dashboard/screenshots/01-drive-gauges.png" width="380" alt="Drive gauges view with illustrative demo data: 63 mph with a speed limit 65 sign and the adaptive cruise gap beside it and instant fuel economy under the speed, RPM, temperatures, oil pressure, charging voltage, power, tire pressures, This drive time, distance and fuel economy, light indicators and compass heading">
+  <img src="projects/vehicle_data/dashboard/screenshots/17-drive-live-fuel-economy.png" width="380" alt="Drive sensors view with illustrative demo data: speed limit sign, adaptive cruise with its following gap, an estimated fuel rate of 3.3 gallons per hour and instant economy of 19 mpg, estimated gear, radar aim, transmission speeds, torque and odometer">
 </p>
 
 The tablet dashboard turns the passive three-bus telemetry stream into a driver-focused view of
@@ -27,11 +27,11 @@ performed no CAN or service actions.
 
 | Parked overview | Trip history and trends |
 |---|---|
-| <img src="projects/vehicle_data/dashboard/screenshots/03-parked-battery-tires-and-service.png" width="300" alt="Parked overview with battery trend, tire pressures, last trip, maintenance and warning summaries"> | <img src="projects/vehicle_data/dashboard/screenshots/07-history-trips-and-temperature-trends.png" width="300" alt="Trip history with recent drives, cruise summaries, and temperature trends"> |
-| Battery trend, tire pressures, last trip, maintenance, and warning summaries. | Recent trips, cruise use, recording coverage, and temperature trends. |
+| <img src="projects/vehicle_data/dashboard/screenshots/03-parked-battery-tires-and-service.png" width="300" alt="Parked overview after the demo drive: resting battery voltage with its engine-off reading and 24-hour trend, last tire pressures, last drive, service record and oil life, and the tire warning awaiting fresh readings"> | <img src="projects/vehicle_data/dashboard/screenshots/07-history-trips-and-temperature-trends.png" width="300" alt="Trip history with the drive in progress, recent drives with fuel economy and cruise summaries, and temperature trends against usual drives"> |
+| Battery trend, tire pressures, last drive, service and oil life, and warning summaries. | Drives with fuel economy and cruise use, recording status, and trends against usual drives. |
 | Health and diagnostics | Custom early warning |
-| <img src="projects/vehicle_data/dashboard/screenshots/04-health-warnings-and-diagnostics.png" width="300" alt="Health view with an early warning and diagnostic trouble codes"> | <img src="projects/vehicle_data/dashboard/screenshots/13-create-custom-early-warning.png" width="300" alt="Natural-language custom early-warning proposal and approval review"> |
-| Early warnings, evidence status, diagnostic codes, and module coverage. | Natural-language warning setup with a simulated proposal and approval review. |
+| <img src="projects/vehicle_data/dashboard/screenshots/04-health-warnings-and-diagnostics.png" width="300" alt="Health view with an open rear-right tire pressure warning, its Details and Ask Codex actions, and diagnostic trouble codes"> | <img src="projects/vehicle_data/dashboard/screenshots/13-create-custom-early-warning.png" width="300" alt="Natural-language custom early-warning proposal and approval review"> |
+| An open early warning, diagnostic codes, and module coverage. | Natural-language warning setup with a simulated proposal and approval review. |
 
 All gallery images use illustrative demo data; simulated conversations and actions are identified in
 the [capture manifest](projects/vehicle_data/dashboard/screenshots/manifest.json).
