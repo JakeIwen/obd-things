@@ -20,8 +20,9 @@ you might want to know about that value is on this page.
   the dot to reload the data from the Pi. This reads only the Pi's cache; it never asks the van for
   anything.
 - **Dim** (top bar) darkens the screen for night driving. Red and amber stay as they are.
-- **Auto** (top bar) lets the dashboard switch between Drive and Parked by itself. When you tap a tab
-  yourself, Auto turns off until the engine next starts or stops.
+- **Auto view** (the two-arrow button in the top bar, green while on) lets the dashboard switch
+  between Drive and Parked by itself. When you tap a tab yourself, it turns off until the engine
+  next starts or stops.
 
 ## What the colours mean
 

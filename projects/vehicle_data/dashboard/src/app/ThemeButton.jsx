@@ -9,11 +9,11 @@ const ICONS = {
   dark: <path d="M20 15A8.5 8.5 0 0 1 9 4a8.5 8.5 0 1 0 11 11Z" />,
 };
 
-/** A distinct icon, never a second bare AUTO beside the view-selection button. */
+/** The theme mode as a glyph (half-disc, sun, moon), distinct from the view toggle's arrows. */
 export function ThemeButton() {
   const label = useComputed(() => themeButtonLabel(settings.value.themeMode));
   return (
-    <button type="button" class="topbar__btn topbar__theme" aria-label={label} title={label} onClick={cycleTheme}>
+    <button type="button" class="topbar__btn topbar__icon topbar__theme" aria-label={label} title={label} onClick={cycleTheme}>
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
         {ICONS[settings.value.themeMode]}
       </svg>

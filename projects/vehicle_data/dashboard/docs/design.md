@@ -328,15 +328,18 @@ red if any is critical).
   that bypasses the 60 s throttle.
 - **State text**: said once, for example `Running · 32 min`, `Asleep · last drive 4:25 pm` or
   `Ignition on · engine off`.
-- **Theme**: the 44 px icon button cycles **Auto → Light → Dark → Auto** (half-disc, sun, moon).
-  Its accessible name and tooltip say the current mode and the next tap's action. It never
-  duplicates the bare AUTO label reserved for automatic view selection.
+- **Auto view**: a 44 px icon button with two swapping arrows (`src/app/AutoViewButton.jsx`),
+  green while on, that toggles automatic view selection (section 5.2), independent of theme.
+  It was a bare `AUTO` label until 2026-11-01, when the owner read it as an automatic mode of the
+  neighbouring Dim; extra space after it (`.topbar__auto`) separates it from the display controls.
 - **Dim**: in manual Light/Dark, the persisted night toggle works as before. In Auto theme,
   a tap overrides the scheduled dim state until the next **dim** boundary; the stored
   `dimOverrideUntil` epoch keeps that override across reloads. Switching theme mode clears it.
   `styles/night.css` darkens text, surfaces, bands, accents and dialogs, even over forced Light.
   This changes app colours, not the tablet backlight.
-- **Auto**: turns automatic view selection back on (section 5.2), unchanged and independent of theme.
+- **Theme**: the 44 px icon button at the right edge cycles **Auto → Light → Dark → Auto**
+  (half-disc, sun, moon). Its accessible name and tooltip say the current mode and the next
+  tap's action.
 
 **Alert in the top bar.** When an item is in `warning` state or has critical severity, the state text
 is replaced by the most severe item in a short `metric value` form, plus `+n` for the rest. Examples:

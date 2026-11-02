@@ -21,6 +21,7 @@ import { dialog, closeDialog, openEvent, openChat, DIALOG_LOADERS } from "./dial
 import { manualRefresh } from "./runtime.js";
 import Drive from "../views/Drive.jsx";
 import { ThemeButton } from "./ThemeButton.jsx";
+import { AutoViewButton } from "./AutoViewButton.jsx";
 import { displayTheme, toggleDim, startTheme } from "../theme.js";
 
 const VIEW_LOADERS = {
@@ -74,8 +75,6 @@ export function TopBar() {
     const state = c.state === "live" ? "Live" : c.state === "unavailable" ? "Broker unavailable" : "Reconnecting";
     return state + " · tap to refresh";
   });
-  const autoCls = useComputed(() => "topbar__btn topbar__auto" + (settings.value.auto ? " topbar__btn--on" : ""));
-  const autoPressed = useComputed(() => (settings.value.auto ? "true" : "false"));
   const dimCls = useComputed(() => "topbar__btn" + (displayTheme.value.dim ? " topbar__btn--on" : ""));
   const dimPressed = useComputed(() => (displayTheme.value.dim ? "true" : "false"));
   const dimTitle = useComputed(() => settings.value.themeMode === "auto"
@@ -88,11 +87,6 @@ export function TopBar() {
     if (a) return a.count > 1 ? " +" + (a.count - 1) : "";
     return vehicleTail.value ? " · " + vehicleTail.value : "";
   });
-  const toggleAuto = () => {
-    const s = settings.peek();
-    saveSettings({ ...s, auto: !s.auto, view: activeView.peek() });
-    evaluateAutoView();
-  };
   const onState = () => {
     const a = alertStrip.peek();
     if (!a) return;
@@ -108,13 +102,12 @@ export function TopBar() {
         {headText}
         <span class="topbar__state-sub">{tailText}</span>
       </button>
-      <ThemeButton />
+      {/* The view toggle, then the display controls (owner order, 2026-11-01). */}
+      <AutoViewButton />
       <button type="button" class={dimCls} aria-pressed={dimPressed} onClick={toggleDim} title={dimTitle}>
         Dim
       </button>
-      <button type="button" class={autoCls} aria-pressed={autoPressed} onClick={toggleAuto} title="Switch between Drive and Parked automatically">
-        Auto
-      </button>
+      <ThemeButton />
     </header>
   );
 }

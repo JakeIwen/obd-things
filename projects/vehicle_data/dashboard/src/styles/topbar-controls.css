@@ -1,15 +1,19 @@
-/* The theme glyph has its own 44px target, leaving AUTO exclusively for views. */
-.topbar__theme {
+/* Icon buttons in the top bar (automatic view toggle, theme glyph): 44 px square targets. */
+.topbar__icon {
   display: flex;
   align-items: center;
   justify-content: center;
   min-width: 44px;
   width: 44px;
   padding: 0;
-  color: var(--text-2);
 }
+/* The theme is always in one of its modes, so its glyph never takes the switched-off colour. */
+.topbar__theme { color: var(--text-2); }
+/* Extra space after the view toggle sets it apart from the display controls (Dim, theme). */
+.topbar__auto { margin-right: 16px; }
 @media (max-width: 640px) {
   .app > .topbar { gap: 4px; padding-right: 4px; }
   .topbar__btn { min-width: 44px; padding: 0 8px; }
-  .topbar__theme { padding: 0; }
+  .topbar__icon { padding: 0; }
+  .topbar__auto { margin-right: 12px; }
 }
