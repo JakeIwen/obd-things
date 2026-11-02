@@ -74,6 +74,10 @@ values that agree with each other (instant mpg is speed ÷ fuel rate, power matc
 `dashboard/tools/demo_data.mjs` holds the scene and its consistency check.
 `node --experimental-websocket tools/shoot.mjs --demo <url> <outdir>` (from `dashboard/`)
 applies it before shooting each view. Extend the scene when a feature it doesn't cover is in view.
+The tracked README set is recaptured in browser_clean instead: `tools/demo_capture.mjs` writes a
+Playwright setup (every non-GET request aborted, every data route answered from `demo_views.mjs`,
+`demo_events.mjs` and `demo_assistant.mjs`, clock pinned) and `tools/readme_shots.playwright.js`
+takes all 18 images; their headers give the order to serve and run them.
 Caption every such image as illustrative demo data, and list tracked ones in
 `dashboard/screenshots/manifest.json`. They are never drive evidence, and never show the full
 VIN or a real location.

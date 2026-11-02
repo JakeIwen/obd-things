@@ -1,5 +1,6 @@
-const MINUTE_MS = 60_000;
-const HOUR_MS = 60 * MINUTE_MS;
+export const MINUTE_MS = 60_000;
+export const HOUR_MS = 60 * MINUTE_MS;
+export const DAY_MS = 24 * HOUR_MS;
 
 /** Metrics needed to fill every tile and indicator on both Drive pages. */
 export const DRIVE_DEMO_METRICS = Object.freeze([
@@ -97,7 +98,7 @@ export const DEMO_SCENE = Object.freeze({
   historyFuel: Object.freeze({days7Mpg: 16.1, days30Mpg: 15.7}),
 });
 
-const iso = (ms) => new Date(ms).toISOString();
+export const iso = (ms) => new Date(ms).toISOString();
 
 function historyAt(nowMs, scene) {
   const started = nowMs - scene.trip.elapsedMinutes * MINUTE_MS;
