@@ -77,7 +77,8 @@ applies it before shooting each view. Extend the scene when a feature it doesn't
 The tracked README set is recaptured in browser_clean instead: `tools/demo_capture.mjs` writes a
 Playwright setup (every non-GET request aborted, every data route answered from `demo_views.mjs`,
 `demo_events.mjs` and `demo_assistant.mjs`, clock pinned) and `tools/readme_shots.playwright.js`
-takes all 18 images; their headers give the order to serve and run them.
+takes all 18 images; their headers give the order to serve and run them. Both harnesses seed the
+Drive sparklines with `tools/demo_sparklines.mjs`.
 Caption every such image as illustrative demo data, and list tracked ones in
 `dashboard/screenshots/manifest.json`. They are never drive evidence, and never show the full
 VIN or a real location.

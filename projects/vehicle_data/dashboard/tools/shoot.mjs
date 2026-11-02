@@ -8,6 +8,7 @@
 import {spawn} from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import {seedDemoSparklines} from "./demo_sparklines.mjs";
 
 const rawArgs = process.argv.slice(2);
 const demo = rawArgs.includes("--demo");
@@ -143,19 +144,7 @@ async function applyDemoScene(scene) {
     store.summary.error.value = null;
     store.summary.fetchedMono.value = now;
     store.statusLite.value = scene.statusLite;
-    for (const [name, values] of Object.entries(scene.sparklines)) {
-      // Sparse knots leave empty canvas columns. Interpolate a bounded five-second
-      // series through the public ring API, without feeding old samples into trip distance.
-      const ring = van.ringFor(name);
-      ring.clear();
-      const count = 169;
-      ring.seed(Array.from({length: count}, (_, i) => {
-        const position = i * (values.length - 1) / (count - 1);
-        const left = Math.floor(position), right = Math.min(left + 1, values.length - 1);
-        return {at: nowWall - (count - 1 - i) * 5000,
-          value: values[left] + (values[right] - values[left]) * (position - left)};
-      }), {nowMono: now, nowEpochMs: nowWall});
-    }
+    (${seedDemoSparklines})(van, scene.sparklines, now, nowWall);
     for (const [name, spec] of Object.entries(scene.metrics)) {
       store.metricSignal(name).value = makeRecord(name, spec.value, now, finalObservedAt);
     }

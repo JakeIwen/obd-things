@@ -1,7 +1,7 @@
 // Write a Playwright setup script that shows the dashboard with illustrative demo data, for README
 // screenshots taken in a shared Playwright browser (the browser_clean MCP's browser_run_code with
 // `filename`). It blocks every request but GET/HEAD, answers each data route from tools/demo_*.mjs,
-// and defines window.__demoApply(variant) for the page to replace live state after load.
+// and defines page.__demo.apply(variant) to replace the page's live state after load.
 // usage: node tools/demo_capture.mjs <outdir> <bundle-url> [nowMs]
 // Serve <outdir> on loopback so <bundle-url> reaches <outdir>/demo-bundle.json, run
 // <outdir>/install-demo.js once per page, navigate, then `await page.__demo.apply("<variant>")`
@@ -10,6 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {fileURLToPath} from "node:url";
 import {buildDemoViews} from "./demo_views.mjs";
+import {seedDemoSparklines} from "./demo_sparklines.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -33,7 +34,7 @@ async function extraRoutes(nowMs) {
  * Runs in the page (serialized): stop the live link, then publish the variant through the store's
  * own snapshot and summary paths, mark the connection live and seed the Drive sparklines.
  */
-async function applyDemoInPage(demo, name) {
+async function applyDemoInPage(seedDemoSparklines, demo, name) {
   const van = window.__van;
   if (!van || !van.store || !van.link) throw new Error("window.__van is unavailable");
   const variant = demo.variants[name];
@@ -50,17 +51,7 @@ async function applyDemoInPage(demo, name) {
   store.connection.value = {state: "live", reason: null, detail: null, sinceMono: now};
   // The sparklines are the highway scene's; a parked or stationary page has no recent trace to show.
   if (variant.metrics["vehicle.speed"].available && variant.metrics["vehicle.speed"].value > 0) {
-    for (const [metric, values] of Object.entries(scene.sparklines)) {
-      // Sparse knots leave empty canvas columns: interpolate a bounded five-second series.
-      const ring = van.ringFor(metric);
-      ring.clear();
-      const count = 169;
-      ring.seed(Array.from({length: count}, (_, i) => {
-        const position = i * (values.length - 1) / (count - 1);
-        const left = Math.floor(position), right = Math.min(left + 1, values.length - 1);
-        return {at: nowWall - (count - 1 - i) * 5000, value: values[left] + (values[right] - values[left]) * (position - left)};
-      }), {nowMono: now, nowEpochMs: nowWall});
-    }
+    seedDemoSparklines(van, scene.sparklines, now, nowWall);
   }
   store.clock.value = Math.round(now / 1000) * 1000;
   window.dispatchEvent(new Event("resize"));
@@ -168,7 +159,8 @@ async function main() {
   const summaryFixture = JSON.parse(fs.readFileSync(path.join(root, "test", "fixtures", "summary-v2.json"), "utf8"));
   const views = buildDemoViews({nowMs, build, summaryFixture});
   const {routes, storage} = await extraRoutes(nowMs);
-  const demo = {...views, routes, storage, applySource: applyDemoInPage.toString()};
+  // The page receives the applier with the shared seeding function already bound to it.
+  const demo = {...views, routes, storage, applySource: `(${applyDemoInPage}).bind(null, ${seedDemoSparklines})`};
   fs.mkdirSync(outDir, {recursive: true});
   fs.writeFileSync(path.join(outDir, "demo-bundle.json"), JSON.stringify(demo, null, 1));
   // The bundle is fetched by the Playwright server, so the script stays small enough to echo.
