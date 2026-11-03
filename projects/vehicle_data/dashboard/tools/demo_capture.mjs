@@ -72,7 +72,8 @@ async function answerDemoRequest(route, DEMO, state) {
   const FONTS = "/__demo-fonts/";
   const method = route.request().method();
   // The MCP sandbox has no URL global; strip the origin and query by hand.
-  const path = route.request().url().replace(/^[a-z]+:\/\/[^/]+/, "").split("?")[0];
+  const target = route.request().url().replace(/^[a-z]+:\/\/[^/]+/, "");
+  const path = target.split("?")[0];
   const answer = [...DEMO.variants[state.variant].routes, ...DEMO.routes].find((r) => r.method === method
     && (r.prefix ? path.startsWith(r.pathname) : path === r.pathname) && (!r.chatScene || r.chatScene === state.chatScene));
   if (answer) return route.fulfill(json(answer.json, answer.status));
@@ -93,7 +94,8 @@ async function answerDemoRequest(route, DEMO, state) {
     return route.fulfill({contentType: "text/css", body: css.replaceAll("https://fonts.gstatic.com/", FONTS)});
   }
   if (path.startsWith(FONTS)) {
-    return route.fulfill({response: await route.fetch({url: "https://fonts.gstatic.com/" + path.slice(FONTS.length)})});
+    // With the query: Google sometimes serves faces as /l/font?kit=…, and without it answers 400.
+    return route.fulfill({response: await route.fetch({url: "https://fonts.gstatic.com/" + target.slice(FONTS.length)})});
   }
   return route.fallback();
 }
@@ -101,6 +103,8 @@ async function answerDemoRequest(route, DEMO, state) {
 /** Runs in the Playwright server (serialized, with the demo bundle passed as DEMO). */
 async function installDemo(page, DEMO) {
   const state = {variant: "running", chatScene: "explain"};
+  // Each shot settles this long after loading; the fixed waits assume a page that keeps up.
+  const SETTLE_MS = 2500;
   page.__demo = {
     use: (name) => { if (!DEMO.variants[name]) throw new Error("unknown variant " + name); state.variant = name; },
     chat: (scene) => { state.chatScene = scene; },
@@ -109,7 +113,14 @@ async function installDemo(page, DEMO) {
   await page.clock.setFixedTime(DEMO.nowMs);
   await page.unrouteAll({behavior: "ignoreErrors"});
   // One handler, so precedence is answerDemoRequest's order rather than Playwright's registration order.
-  await page.route("**/*", (route) => answerDemoRequest(route, DEMO, state));
+  // Each reload cancels the page's in-flight requests (it polls the snapshot many times a second),
+  // and a handler still answering one fails with one of these errors. Playwright waits on a route
+  // until it is answered, so it is aborted then: a no-op for a cancelled request, and if one of these
+  // errors ever hits a live request, the page sees it fail (a console error the report counts).
+  const cancelled = /Route is already handled|Response has been disposed|Request context disposed|Target page, context or browser has been closed/;
+  const ignoreCancelled = (error) => { if (!cancelled.test(String(error && error.message))) throw error; };
+  await page.route("**/*", (route) => answerDemoRequest(route, DEMO, state)
+    .catch((error) => { ignoreCancelled(error); return route.abort().catch(ignoreCancelled); }));
   await page.addInitScript(({storage, fontsCss}) => {
     try { for (const [key, value] of Object.entries(storage)) localStorage.setItem(key, value); } catch (_error) {}
     document.addEventListener("DOMContentLoaded", () => {
@@ -139,7 +150,15 @@ async function installDemo(page, DEMO) {
     }, [settings || {}, trip, DEMO.scene.trip.distanceMiles]);
     await page.reload({waitUntil: "load"});
     await page.evaluate(() => document.fonts.ready.then(() => true));
-    await page.waitForTimeout(2500);
+    // apply rebuilds the store around the catalog that the page's first snapshot brings. A page that
+    // hasn't taken one in within a settle period is starved (a busy host), and the fixed waits would
+    // shoot it half-loaded, so the capture stops instead.
+    await page.waitForFunction(() => Boolean(window.__van && window.__van.store.catalog.peek().length), null,
+      {polling: 100, timeout: SETTLE_MS}).catch((error) => {
+      if (error.name !== "TimeoutError") throw error;
+      throw new Error(`the page had no snapshot ${SETTLE_MS} ms after loading; the host is too busy for the capture's fixed waits`);
+    });
+    await page.waitForTimeout(SETTLE_MS);
     const result = await page.__demo.apply(name);
     await page.waitForTimeout(800);
     // Auto view follows the vehicle state, so any other page is reached the way a person would: its tab.
