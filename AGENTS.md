@@ -74,14 +74,27 @@ values that agree with each other (instant mpg is speed ÷ fuel rate, power matc
 `dashboard/tools/demo_data.mjs` holds the scene and its consistency check.
 `node --experimental-websocket tools/shoot.mjs --demo <url> <outdir>` (from `dashboard/`)
 applies it before shooting each view. Extend the scene when a feature it doesn't cover is in view.
-The tracked README set is recaptured in browser_clean instead: `tools/demo_capture.mjs` writes a
-Playwright setup (every non-GET request aborted, every data route answered from `demo_views.mjs`,
+The tracked README set comes from a Playwright pair instead: `tools/demo_capture.mjs` writes the
+setup (every non-GET request aborted, every data route answered from `demo_views.mjs`,
 `demo_events.mjs` and `demo_assistant.mjs`, clock pinned) and `tools/readme_shots.playwright.js`
-takes all 18 images; their headers give the order to serve and run them. Both harnesses seed the
+takes all 18 images. vanpi takes them with no Mac session: `node tools/readme_shots.mjs
+[--only 01,05]` (from `dashboard/`; needs `npm ci`, the broker socket and internet for Roboto)
+runs the pair in the system Chromium against a scratch build of the checkout, in the time zone and
+locale the committed set shows. It refuses the capture if the listener saw a write or any data
+route but the snapshot. It also stops when a page has no snapshot one settle period after loading:
+a busy Pi (a backup, a compute job) starves Chromium, and the fixed waits would shoot pages half
+loaded, so run it again when `uptime` is calm. Otherwise the shots and `capture.json` replace
+`tmp/readme_screens/`. Look
+at every image, then `--promote` copies them into `screenshots/` and refreshes their manifest
+entries (`tools/screenshot_manifest.mjs`; the set's `captured_on` and `build` move only with all
+18). Captions and `capture_method` stay hand-written. A Mac session can still run the pair in
+browser_clean, in the Mac's own time zone and locale (their headers give the order). Retake all 18
+when the capture host or browser changes, so the gallery isn't mixed. Both harnesses seed the
 Drive sparklines with `tools/demo_sparklines.mjs`.
 Caption every such image as illustrative demo data, and list tracked ones in
-`dashboard/screenshots/manifest.json`. They are never drive evidence, and never show the full
-VIN or a real location.
+`dashboard/screenshots/manifest.json` (`tests/test_dashboard_screenshot_manifest.py` checks each
+entry against its image). They are never drive evidence, and never show the full VIN or a real
+location.
 Dashboard colour tokens live in `dashboard/src/styles/palette.css`, `light.css` and `night.css`; `src/theme.js`, `theme.helpers.js`, `theme.config.js` and `sunTimes.js` own the persisted theme, Denver sun schedule and temporary DIM override.
 Dashboard warning state/headings live in `dashboard/src/warningContext.js`;
 formatted cards are lazy in `dashboard/src/app/warningCards.js`, and System

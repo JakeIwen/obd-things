@@ -1,7 +1,8 @@
 // Write a Playwright setup script that shows the dashboard with illustrative demo data, for README
-// screenshots taken in a shared Playwright browser (the browser_clean MCP's browser_run_code with
-// `filename`). It blocks every request but GET/HEAD, answers each data route from tools/demo_*.mjs,
-// and defines page.__demo.apply(variant) to replace the page's live state after load.
+// screenshots taken in a Playwright browser: the browser_clean MCP's browser_run_code (`filename`)
+// on the Mac, or tools/readme_shots.mjs, which calls writeDemoCapture on the Pi. It blocks every
+// request but GET/HEAD, answers each data route from tools/demo_*.mjs, and defines
+// page.__demo.apply(variant) to replace the page's live state after load.
 // usage: node tools/demo_capture.mjs <outdir> <bundle-url> [nowMs]
 // Serve <outdir> on loopback so <bundle-url> reaches <outdir>/demo-bundle.json, run
 // <outdir>/install-demo.js once per page, navigate, then `await page.__demo.apply("<variant>")`
@@ -20,6 +21,13 @@ const root = path.resolve(here, "..");
  * the last 24 hours clear of a DST change and of the night auto-dim.
  */
 export const DEFAULT_CAPTURE_TIME = Date.parse("2026-10-28T15:30:00-05:00");
+/**
+ * The page formats times in the browser's zone. The committed set reads 3:30 pm, as a Central-time
+ * browser shows DEFAULT_CAPTURE_TIME; browser_clean takes the Mac's zone, readme_shots.mjs sets this.
+ */
+export const CAPTURE_TIME_ZONE = "America/Chicago";
+/** US English, as the committed set shows it: the oil-change form's native date field reads 10/28/2026. */
+export const CAPTURE_LOCALE = "en-US";
 
 /** Saved-event and assistant route tables: [{method, pathname, prefix, status, json, chatScene?}]. */
 async function extraRoutes(nowMs) {
@@ -149,6 +157,10 @@ async function installDemo(page, DEMO) {
       else localStorage.removeItem("van-telemetry.v2.trip");
     }, [settings || {}, trip, DEMO.scene.trip.distanceMiles]);
     await page.reload({waitUntil: "load"});
+    // Without the proxied faces the page falls back to the host's fonts, which would pass unnoticed.
+    // fonts.load waits for Roboto itself; fonts.ready alone can resolve before layout asks for it.
+    const roboto = await page.evaluate(() => document.fonts.load("16px Roboto").then((faces) => faces.length > 0));
+    if (!roboto) throw new Error("Roboto did not load; the font proxy needs fonts.googleapis.com");
     await page.evaluate(() => document.fonts.ready.then(() => true));
     // apply rebuilds the store around the catalog that the page's first snapshot brings. A page that
     // hasn't taken one in within a settle period is starved (a busy host), and the fixed waits would
@@ -170,11 +182,12 @@ async function installDemo(page, DEMO) {
   return {variants: Object.keys(DEMO.variants), routes: DEMO.routes.length};
 }
 
-async function main() {
-  const [outDir, bundleUrl, nowArg] = process.argv.slice(2);
-  if (!outDir || !bundleUrl) throw new Error("usage: node tools/demo_capture.mjs <outdir> <bundle-url> [nowMs]");
-  const nowMs = nowArg ? Number(nowArg) : DEFAULT_CAPTURE_TIME;
-  const build = JSON.parse(fs.readFileSync(path.join(root, "dist", "build.json"), "utf8")).build;
+/**
+ * Write <outDir>/demo-bundle.json and <outDir>/install-demo.js for the build in distDir.
+ * @param {{outDir: string, bundleUrl: string, nowMs?: number, distDir?: string}} options
+ */
+export async function writeDemoCapture({outDir, bundleUrl, nowMs = DEFAULT_CAPTURE_TIME, distDir = path.join(root, "dist")}) {
+  const build = JSON.parse(fs.readFileSync(path.join(distDir, "build.json"), "utf8")).build;
   const summaryFixture = JSON.parse(fs.readFileSync(path.join(root, "test", "fixtures", "summary-v2.json"), "utf8"));
   const views = buildDemoViews({nowMs, build, summaryFixture});
   const {routes, storage} = await extraRoutes(nowMs);
@@ -186,7 +199,13 @@ async function main() {
   const script = `async (page) => {\n${answerDemoRequest}\n${installDemo}\n` +
     `return installDemo(page, await (await page.request.get(${JSON.stringify(bundleUrl)})).json());\n}\n`;
   fs.writeFileSync(path.join(outDir, "install-demo.js"), script);
-  console.log(JSON.stringify({outDir, build, nowMs, variants: Object.keys(views.variants), routes: routes.length}));
+  return {outDir, build, nowMs, variants: Object.keys(views.variants), routes: routes.length};
+}
+
+async function main() {
+  const [outDir, bundleUrl, nowArg] = process.argv.slice(2);
+  if (!outDir || !bundleUrl) throw new Error("usage: node tools/demo_capture.mjs <outdir> <bundle-url> [nowMs]");
+  console.log(JSON.stringify(await writeDemoCapture({outDir, bundleUrl, nowMs: nowArg ? Number(nowArg) : DEFAULT_CAPTURE_TIME})));
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

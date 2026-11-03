@@ -1,11 +1,13 @@
 // README screenshot sequence: a Playwright function for the browser_clean MCP's browser_run_code
-// (`filename`). Prerequisites, in order: the dashboard build served by web_v2 at DASHBOARD, the
-// demo bundle from `node tools/demo_capture.mjs <dir> <url>` served at INSTALL's directory, and
-// optionally `page.__shotsOnly = ["03", ...]` to retake some. Writes <OUT>/<file> for each shot.
+// (`filename`) on the Mac; tools/readme_shots.mjs runs the same file on the Pi. Prerequisites, in
+// order: the dashboard build served by web_v2 at DASHBOARD, the demo bundle from
+// `node tools/demo_capture.mjs <dir> <url>` served at INSTALL's directory, and optionally
+// `page.__shots = {only: ["03", ...]}` to retake some. The page is the only way to pass this
+// function anything, so `page.__shots` also takes `dashboard`, `install` and `out` in place of the
+// Mac defaults below (readme_shots.mjs sets all four). Writes <OUT>/<file> for each shot.
 async (page) => {
-  const DASHBOARD = "http://127.0.0.1:8777/";
-  const INSTALL = "http://127.0.0.1:8791/install-demo.js";
-  const OUT = "/Users/jacobr/dev/obd-things/tmp/readme_screens/";
+  const {only, dashboard: DASHBOARD = "http://127.0.0.1:8777/", install: INSTALL = "http://127.0.0.1:8791/install-demo.js",
+    out: OUT = "/Users/jacobr/dev/obd-things/tmp/readme_screens/"} = page.__shots || {};
   await eval(await (await page.request.get(INSTALL)).text())(page);
   await page.setViewportSize({width: 800, height: 1280});
   if (!page.url().startsWith(DASHBOARD)) await page.goto(DASHBOARD);
@@ -111,7 +113,6 @@ async (page) => {
       await page.waitForTimeout(400);
     },
   };
-  const only = page.__shotsOnly;
   const taken = [];
   for (const [file, prepare] of Object.entries(shots)) {
     if (only && !only.includes(file.slice(0, 2))) continue;

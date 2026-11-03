@@ -38,3 +38,5 @@ node_modules/
 # Telemetry dashboard build output is not tracked: `npm ci && npm run build`
 # in projects/vehicle_data/dashboard is the deploy step; dist/build.json records the build id.
 projects/vehicle_data/dashboard/dist/
+# tools/readme_shots.mjs builds beside dist/ (same build id) and removes the directory when done.
+projects/vehicle_data/dashboard/.readme-shots-*/
