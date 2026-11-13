@@ -1,7 +1,8 @@
 /**
  * Estimated fuel figures as the Drive and History pages show them; pure and node-testable.
  * `engine.fuel_rate` is candidate quality (scaled to match the cluster, not yet checked
- * against a fill-up), so every figure carries "≈" and none is a driver-qualified tile value.
+ * against a fill-up), so no figure is a driver-qualified tile value. The owner asked on 2026-11-13
+ * for these to read plainly, without an "≈" marker, with economy to one decimal.
  * Trip and 7/30-day economy come from the broker's history `fuel_economy` objects.
  */
 
@@ -15,10 +16,10 @@ export const INSTANT_MIN_MPH = 5;
 export const INSTANT_CAP_MPG = 99;
 
 const NO_FIGURE = Object.freeze({ value: DASH, unit: "" });
-const figure = (text) => ({ value: "≈ " + text, unit: "mpg" });
+const figure = (text) => ({ value: text, unit: "mpg" });
 
 /**
- * One history `fuel_economy` object as a Speed-tile figure, `{value: "≈ 14.1", unit: "mpg"}`, or
+ * One history `fuel_economy` object as a Speed-tile figure, `{value: "14.1", unit: "mpg"}`, or
  * `—` with no unit when it holds none (too few running samples, a trip from before fuel was
  * recorded, or no fuel used).
  */
@@ -27,16 +28,16 @@ export function mpgFigure(economy) {
   return figure(economy.mpg.toFixed(1));
 }
 
-/** `≈ 14.1 mpg` from one history `fuel_economy` object, or null when it holds no figure. */
+/** `14.1 mpg` from one history `fuel_economy` object, or null when it holds no figure. */
 export function mpgText(economy) {
   const f = mpgFigure(economy);
   return f.unit ? f.value + " " + f.unit : null;
 }
 
-/** Live fuel rate as `≈ 1.2` (gal/h), or `—` unless the record is current. */
+/** Live fuel rate as `1.2` (gal/h), or `—` unless the record is current. */
 export function fuelRateText(rec) {
   if (!rec || rec.available !== true || rec.stale || !isNum(rec.value) || rec.value < 0) return DASH;
-  return "≈ " + rec.value.toFixed(1);
+  return rec.value.toFixed(1);
 }
 
 /**
@@ -49,24 +50,24 @@ function instantMpg(mph, rec) {
   if (!isNum(mph) || mph < INSTANT_MIN_MPH || fuelRateText(rec) === DASH) return null;
   return rec.value === 0 ? Infinity : mph / rec.value;
 }
-const capped = (mpg) => (mpg > INSTANT_CAP_MPG ? INSTANT_CAP_MPG + "+" : String(Math.round(mpg)));
+const capped = (mpg) => (mpg > INSTANT_CAP_MPG ? INSTANT_CAP_MPG + "+" : mpg.toFixed(1));
 
-/** Speed-tile figure `{value: "≈ 19", unit: "mpg"}`; `≈ 99+` from the cap up and while coasting. */
+/** Speed-tile figure `{value: "19.4", unit: "mpg"}`; `99+` from the cap up and while coasting. */
 export function instantFigure(mph, rec) {
   const mpg = instantMpg(mph, rec);
   return mpg === null ? NO_FIGURE : figure(capped(mpg));
 }
 
-/** Sub-line under the live rate on page 2: `now ≈ 20 mpg`, `coasting, no fuel`, or empty. */
+/** Sub-line under the live rate on page 2: `now 20.0 mpg`, `coasting, no fuel`, or empty. */
 export function instantText(mph, rec) {
   const mpg = instantMpg(mph, rec);
   if (mpg === null) return "";
-  return mpg === Infinity ? "coasting, no fuel" : "now ≈ " + capped(mpg) + " mpg";
+  return mpg === Infinity ? "coasting, no fuel" : "now " + capped(mpg) + " mpg";
 }
 
 /**
  * History line for the broker's 7- and 30-day figures, e.g.
- * `Fuel economy ≈ 15.2 mpg over 7 days · ≈ 15.0 mpg over 30 days`; null when neither has one.
+ * `Fuel economy 15.2 mpg over 7 days · 15.0 mpg over 30 days`; null when neither has one.
  * A window the broker started late, at the first recorded fuel rate, reads `since Oct 20`;
  * when both did, they hold the same figure and it is shown once.
  * @param {{days_7?: object, days_30?: object}|null} summary history `fuel_economy`

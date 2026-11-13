@@ -8,7 +8,7 @@ export function tripRowsModel(history, { running, miles, nowMs }) {
   const trip = history && history.current_trip ? history.current_trip : null;
   const since = trip ? Date.parse(trip.started_at) : NaN;
   const duration = running && isFinite(since) ? fmtDuration((nowMs - since) / 1000) : DASH;
-  const distance = running && miles !== null ? "≈ " + miles.toFixed(1) + " mi" : DASH;
+  const distance = running && miles !== null ? miles.toFixed(1) + " mi" : DASH;
   const mpg = mpgFigure(trip ? trip.fuel_economy : null);
   const cmp = history && history.trip_comparison && history.trip_comparison.metrics;
   const maxOf = (name) => {

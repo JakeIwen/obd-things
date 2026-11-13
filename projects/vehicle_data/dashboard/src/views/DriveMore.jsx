@@ -81,7 +81,7 @@ const batterySub = computed(() => {
 });
 
 // Fuel rate: read from the record like the gear (candidate quality, so derive.obs would never
-// call it live). Estimated, so shown with "≈"; the sub-line is the instant economy while moving.
+// call it live). The sub-line is the instant economy while moving.
 const fuel = computed(() => fuelRateText(store.metricSignal("engine.fuel_rate").value));
 const fuelCls = computed(() => "tile tile--value area-d2fuel " + (fuel.value === DASH ? "tile--off" : "tile--live"));
 const fuelUnit = computed(() => (fuel.value === DASH ? "" : "gal/h"));

@@ -3,7 +3,7 @@ import { liveValue } from "../app/derive.js";
 import * as store from "../store.js";
 import { instantFigure } from "../fuelEconomy.helpers.js";
 
-// Candidate-quality instant economy carries "≈" and never colours the tile or raises a warning.
+// Candidate-quality instant economy never colours the tile or raises a warning.
 const nowFigure = computed(() =>
   instantFigure(liveValue("vehicle.speed").value, store.metricSignal("engine.fuel_rate").value),
 );
@@ -20,7 +20,7 @@ function Figure({ name, figure }) {
   );
 }
 
-/** Estimated instant economy under the Speed numeral: `now ≈ 19 mpg`. */
+/** Estimated instant economy under the Speed numeral: `now 19.4 mpg`. */
 export function SpeedEconomy() {
   return (
     <div class="speed-economy" role="group" aria-label="Fuel economy">

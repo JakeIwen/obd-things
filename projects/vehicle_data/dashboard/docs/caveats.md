@@ -81,8 +81,8 @@ what they meant and where that information lives now.
   far. Only verified and observed-scale values drive a big number on Drive.
 - **candidate**: a strong lead whose offset, scale or identity is not yet settled. A candidate never
   drives an alarm. Candidates shown outside the catalog are the odometer (dimmed with its time,
-  with a small `*` on the Service card), the gear estimate (always written with `~`), fuel rate and
-  fuel economy (always written with `≈`) and the radar angles (System card and Drive page 2), and
+  with a small `*` on the Service card), the gear estimate (always written with `~`), fuel rate,
+  fuel economy and the radar angles (System card and Drive page 2), and
   each is explained in its own section below.
 
 ## Drive and engine
@@ -95,15 +95,15 @@ what they meant and where that information lives now.
   appears only while the van is moving. Page 2 also shows the ratio itself, for example
   `ratio 0.70` (7th is about 0.70 and 5th is 1.00). During shifts or torque-converter slip the ratio
   sits between gears, and the estimate can lag or disappear briefly.
-- **Fuel rate and fuel economy** (`≈`; `now` under Speed and MPG in This drive on Drive page 1,
+- **Fuel rate and fuel economy** (shown unmarked since 2026-11-13, economy to one decimal; `now` under Speed and MPG in This drive on Drive page 1,
   Fuel rate on page 2, and on the History Drives card): estimates. The fuel rate is the engine computer's own fuel-flow
   figure from C-CAN frame `0x2ED` (the coolant frame), read without asking the engine anything. It
   drops to zero when coasting in gear and reads about 0.4–0.5 gal/h at a warm idle. Its scale is
   chosen to match the cluster: the cluster's instant and trip-average mpg both work out to 1.13
   times the engine computer's nominal figure, so the app does the same and should agree with the
   dash within a few percent. Neither has been checked against fuel actually pumped, so treat both
-  as the cluster's opinion, not a measurement. `now ≈ 20 mpg` (under Speed, and under the rate on
-  page 2) is the instant economy while moving; during the fuel cut it reads `≈ 99+` under Speed
+  as the cluster's opinion, not a measurement. `now 20.0 mpg` (under Speed, and under the rate on
+  page 2) is the instant economy while moving; during the fuel cut it reads `99+` under Speed
   and `coasting, no fuel` on page 2, like the cluster's capped readout. Drive and 7/30-day economy are
   average speed over average fuel rate across the Pi's engine-running history samples, one every
   five seconds, so a short drive can be off by a few percent more. Drives recorded before the fuel
@@ -184,8 +184,8 @@ what they meant and where that information lives now.
 - **This drive** (Drive): the dashboard's own automatic drive, separate from the instrument
   cluster's Trip A/B. It starts when the van starts moving or running and ends after 5 minutes
   parked. There is no manual reset. The heading's info icon explains this on hover or tap.
-  Rows show time since it started; distance added up from live speed readings (marked `≈`, gaps
-  longer than 30 s are skipped, and it survives a page reload); estimated MPG (marked `≈`); then
+  Rows show time since it started; distance added up from live speed readings (gaps
+  longer than 30 s are skipped, and it survives a page reload); estimated MPG (one decimal, unmarked); then
   highest coolant and average power from the Pi's drive history, refreshed once a minute.
   Speed shows only instant economy, not this drive's average.
 - **Target torque** (Drive page 2): the transmission's requested crankshaft torque from frame

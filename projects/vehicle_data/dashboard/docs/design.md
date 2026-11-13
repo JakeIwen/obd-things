@@ -374,10 +374,10 @@ tab bar, with 16 px gutters and 12 px gaps.
 
 | row | content |
 |---|---|
-| A | **SPEED** (2 cols, hero numerals, `mph`; under the numeral an estimated economy row `now ≈ 19 mpg`; one-line footer `ACC 66 mph · engaged · vehicle ahead`; beside the numeral a `SPEED LIMIT 55` sign while the limit is live, then the four-bar gap readout at the right edge; regular cruise uses `Cruise`; current off/ready/standby/override states are explicit) · **RPM** (1 col; the unit is in the label; the footer reads `gear 6` once a live gear metric exists and is empty until then; 15-min sparkline) |
+| A | **SPEED** (2 cols, hero numerals, `mph`; under the numeral an estimated economy row `now 19.4 mpg`; one-line footer `ACC 66 mph · engaged · vehicle ahead`; beside the numeral a `SPEED LIMIT 55` sign while the limit is live, then the four-bar gap readout at the right edge; regular cruise uses `Cruise`; current off/ready/standby/override states are explicit) · **RPM** (1 col; the unit is in the label; the footer reads `gear 6` once a live gear metric exists and is empty until then; 15-min sparkline) |
 | B | **COOLANT** · **TRANS OIL** · **OIL PRESSURE**: value, unit, band bar, 15-min sparkline |
 | C | **VOLTAGE** (1 decimal; sub-line `alternator 42 %`) · **POWER** (`hp`; sub-line `165 lb-ft`) · **OIL TEMP (VVT)** |
-| D | **TIRES** (2 cols: 2×2 grid FL FR / RL RR) · **THIS DRIVE** (Time, Distance `≈ 12.3 mi`, MPG `≈ 16.4 mpg`, Coolant max, Avg power; info icon on the heading) |
+| D | **TIRES** (2 cols: 2×2 grid FL FR / RL RR) · **THIS DRIVE** (Time, Distance `12.3 mi`, MPG `16.4 mpg`, Coolant max, Avg power; info icon on the heading) |
 
 The portrait gate is no scrolling within ≤ 1,096 visible px (the browser toolbar stays; see the
 manifest note). In landscape (`min-aspect-ratio: 1/1` and width ≥ 900 px), there are 4 columns:
@@ -450,10 +450,10 @@ Rules for Drive tiles:
   Distance integrates live speed samples (gaps longer than 30 s are skipped) and persists in
   `localStorage` (`van-telemetry.v2.trip`) keyed by the drive's start, so a reload mid-drive keeps
   it. Coolant max and average power come from `history.trip_comparison` (60 s cadence).
-  MPG uses `mpgFigure(history.current_trip.fuel_economy)` (`≈ 16.4 mpg`, or `—` until available).
+  MPG uses `mpgFigure(history.current_trip.fuel_economy)` (`16.4 mpg`, or `—` until available).
   Five equal rows share the old tile's height; `styles/speed-economy.css` owns the row/heading rules.
-- Only instant economy sits under the Speed numeral, above its footer: `now ≈ 19 mpg` is live
-  speed ÷ live fuel rate at ≥ 5 mph (`≈ 99+` from 99 up and during the fuel cut, `—` when stopped
+- Only instant economy sits under the Speed numeral, above its footer: `now 19.4 mpg` is live
+  speed ÷ live fuel rate at ≥ 5 mph (`99+` from 99 up and during the fuel cut, `—` when stopped
   or either record is stale). The single instant rule in `src/fuelEconomy.helpers.js` is shared
   with page 2's Fuel rate sub-line. Its numeral scales with the viewport
   (`clamp(18px, 11.5vh − 103px, 44px)`, 44 px on the 1,280 px tablet) so it fits above the
@@ -486,7 +486,7 @@ content. Page 2 ("Sensors") uses the same frame and the same no-scrolling gate.
   | row | content |
   |---|---|
   | 0 | **SPEED LIMIT** (`vehicle.speed_limit` in a sign outline with `MPH` under it; `—` in a dim outline when the cluster shows none) · **ACC** (2 cols: `acc.set_speed` `66 mph`, four-bar gap graphic beside it; sub-line `engaged · vehicle ahead`, `standby · saved speed`, or `engaged · fixed cruise`; fixed mode labels the tile `Cruise`; standby dims only the saved number; `Off` when off; `—` and `ready · no set speed` before SET) |
-  | A | **ALTERNATOR FIELD** (`generator.field_duty` %, 15-min sparkline, sub-line `battery 14.0 V`; 2 cols until 2026-10-20) · **FUEL RATE** (`≈ 1.2` gal/h from `engine.fuel_rate` while its record is current, else `—`; sub-line `now ≈ 20 mpg` = speed ÷ rate at ≥ 5 mph, or `coasting, no fuel` at zero) · **GEAR** (`~7` from `transmission.gear_estimate` while its record is current, else `—`; sub-line `ratio 0.70` = turbine ÷ output when the output shaft turns ≥ 100 rpm) |
+  | A | **ALTERNATOR FIELD** (`generator.field_duty` %, 15-min sparkline, sub-line `battery 14.0 V`; 2 cols until 2026-10-20) · **FUEL RATE** (`1.2` gal/h from `engine.fuel_rate` while its record is current, else `—`; sub-line `now 20.0 mpg` = speed ÷ rate at ≥ 5 mph, or `coasting, no fuel` at zero) · **GEAR** (`~7` from `transmission.gear_estimate` while its record is current, else `—`; sub-line `ratio 0.70` = turbine ÷ output when the output shaft turns ≥ 100 rpm) |
   | B | **RADAR AIM** (3 cols): Horizontal and Vertical side by side. Each shows its latest angle (`+0.15°`), under it the physical reading of the elevation sign from `src/radarAim.js` (`aimed high · tilt down`, `aimed low · tilt up`, `level`; blank for azimuth), and then `1-min avg` / `5-min avg` / `30-min avg` / `2-h avg` from `status.radar_alignment` windows `"60"`/`"300"`/`"1800"`/`"7200"`; a window the broker has not published yet reads `—`. |
   | C | **TURBINE** (rpm) · **OUTPUT SHAFT** (rpm) · **POWER** (hp, sparkline) |
   | D | **TORQUE** (`engine.crankshaft_torque`, lb-ft) · **TARGET TORQUE** (`engine.target_crankshaft_torque`, lb-ft) · **ODOMETER** (held value with its time; smaller `--tire` numerals so six digits fit a third of the width) |
@@ -603,8 +603,8 @@ checks when stopped:
 
 - **Drives**: the current drive (if open) and the last five, with duration and end time. Distance and
   max speed appear when per-drive statistics exist (v2.1). Each drive's meta line ends with its
-  estimated economy (`≈ 16.1 mpg`) when the broker has one, and the card leads with
-  `Fuel economy ≈ 15.2 mpg over 7 days · ≈ 15.0 mpg over 30 days` (2026-10-20). A window that
+  estimated economy (`16.1 mpg`) when the broker has one, and the card leads with
+  `Fuel economy 15.2 mpg over 7 days · 15.0 mpg over 30 days` (2026-10-20). A window that
   starts at the first fuel reading reads `since Oct 20`, shown once when both do.
   Completed drives also accept an offline `cruise_summary`: engaged time (excluding
   accelerator override), time with the vehicle-ahead icon (including override),

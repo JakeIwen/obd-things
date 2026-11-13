@@ -11,8 +11,8 @@ const context = { running: true, miles: scene.trip.distanceMiles, nowMs: NOW };
 test("This drive groups time, distance and estimated MPG before the existing engine summaries", () => {
   assert.deepEqual(tripRowsModel(scene.history, context), [
     ["Time", "42 min"],
-    ["Distance", "≈ 39.8 mi"],
-    ["MPG", "≈ 16.4 mpg"],
+    ["Distance", "39.8 mi"],
+    ["MPG", "16.4 mpg"],
     ["Coolant max", "209 °F"],
     ["Avg power", "48 hp"],
   ]);
@@ -28,7 +28,7 @@ test("drive MPG uses only the current drive, not a previous drive or a window", 
   }
   history.current_trip = null;
   assert.deepEqual(tripRowsModel(history, context).slice(0, 3), [
-    ["Time", "—"], ["Distance", "≈ 39.8 mi"], ["MPG", "—"],
+    ["Time", "—"], ["Distance", "39.8 mi"], ["MPG", "—"],
   ]);
 });
 
