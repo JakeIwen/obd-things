@@ -10,17 +10,19 @@ import { overspeed } from "../overspeed.js";
 import { DriveFooter } from "./DriveFooter.jsx";
 import { SpeedEconomy } from "./SpeedEconomy.jsx";
 import { SpeedLimitSign } from "./SpeedLimitSign.jsx";
-import { liveValue, isHidden, minuteClock, engineRunning } from "../app/derive.js";
+import { liveValue, tileModel, isHidden, minuteClock, engineRunning } from "../app/derive.js";
 import { tripDistanceMiles } from "../app/rings.js";
 import * as store from "../store.js";
 import { fmtValue } from "../format.js";
+import { voltageFieldText } from "./driveGauges.helpers.js";
 import { speedFooter } from "./driveSpeed.helpers.js";
 
 // Sub-lines computed once at module scope (shared by every mount).
-const alternatorSub = computed(() => {
-  const duty = liveValue("generator.field_duty").value;
-  return duty === null ? "" : "alternator " + fmtValue("generator.field_duty", duty) + " %";
-});
+// Battery voltage (as its tile model shows it) beside the alternator field duty; see voltageFieldText.
+const voltageModel = tileModel("battery.voltage", { decimals: 1 });
+const voltageFieldValue = computed(() =>
+  voltageFieldText(voltageModel.valueText.value, voltageModel.kind.value, liveValue("generator.field_duty").value),
+);
 // Display records expire in the store; the current ACC state gates every detail.
 const speedSub = computed(() => {
   const acc = currentAcc.value;
@@ -99,7 +101,7 @@ export default function DriveGauges({ page, onPageChange }) {
         {show("coolant") && <Tile name="engine.coolant_temperature" label="Coolant" area="coolant" band spark />}
         {show("trans") && <Tile name="transmission.oil_temperature" label="Trans oil" area="trans" band spark />}
         {show("oilp") && <Tile name="engine.oil_pressure" label="Oil pressure" area="oilp" band spark />}
-        {show("volt") && <Tile name="battery.voltage" label="Voltage" area="volt" band spark sub={alternatorSub} decimals={1} />}
+        {show("volt") && <Tile name="battery.voltage" label="Voltage/Field" area="volt" band spark decimals={1} valueText={voltageFieldValue} showUnit={false} />}
         {show("power") && <Tile name="engine.crankshaft_power" label="Power" area="power" spark sub={torqueSub} />}
         {show("oilt") && <Tile name="engine.vvt_oil_temperature" label="Oil temp (VVT)" area="oilt" band spark />}
         {show("tires") && <TireGrid area="tires" />}

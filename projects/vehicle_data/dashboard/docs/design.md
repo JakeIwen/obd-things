@@ -376,12 +376,12 @@ tab bar, with 16 px gutters and 12 px gaps.
 |---|---|
 | A | **SPEED** (2 cols, hero numerals, `mph`; under the numeral an estimated economy row `now 19.4 mpg`; one-line footer `ACC 66 mph · engaged · vehicle ahead`; beside the numeral a `SPEED LIMIT 55` sign while the limit is live, then the four-bar gap readout at the right edge; regular cruise uses `Cruise`; current off/ready/standby/override states are explicit) · **RPM** (1 col; the unit is in the label; the footer reads `gear 6` once a live gear metric exists and is empty until then; 15-min sparkline) |
 | B | **COOLANT** · **TRANS OIL** · **OIL PRESSURE**: value, unit, band bar, 15-min sparkline |
-| C | **VOLTAGE** (1 decimal; sub-line `alternator 42 %`) · **POWER** (`hp`; sub-line `165 lb-ft`) · **OIL TEMP (VVT)** |
+| C | **VOLTAGE/FIELD** (`13.6v/42%`: battery voltage to 1 decimal, then live `generator.field_duty`; the field half is `—` when not live or when the voltage is held (old), `—/42%` with no voltage but a live field, the whole value `—` with neither; value font at most 0.7 × the standard, capped by column width so `13.6v/100%` fits one line) · **POWER** (`hp`; sub-line `165 lb-ft`) · **OIL TEMP (VVT)** |
 | D | **TIRES** (2 cols: 2×2 grid FL FR / RL RR) · **THIS DRIVE** (Time, Distance `12.3 mi`, MPG `16.4 mpg`, Coolant max, Avg power; info icon on the heading) |
 
 The portrait gate is no scrolling within ≤ 1,096 visible px (the browser toolbar stays; see the
 manifest note). In landscape (`min-aspect-ratio: 1/1` and width ≥ 900 px), there are 4 columns:
-SPEED (2) · RPM · TIRES spanning the rows, then COOLANT · TRANS · OIL PRESSURE, then VOLTAGE · POWER ·
+SPEED (2) · RPM · TIRES spanning the rows, then COOLANT · TRANS · OIL PRESSURE, then VOLTAGE/FIELD · POWER ·
 OIL TEMP · THIS DRIVE. Landscape may scroll in v2.0. At ≤ 640 px (phone) Drive becomes two columns and
 scrolls. Type sizes are `clamp()`ed against the viewport height (`--hero: clamp(64px, 11vh, 128px)`,
 with `--large`, `--value` and `--tire` in proportion). Because the rows are fractions of the same

@@ -257,6 +257,14 @@ a { color: var(--blue); }
   flex: 1 1 auto; display: flex; align-items: baseline; gap: 6px; min-height: 0;
   font-size: var(--value); font-weight: 600; line-height: 1; letter-spacing: -.02em; white-space: nowrap;
 }
+/* Cap the reading to the grid column's inner width, including tile padding. */
+.area-volt .tile__value { font-size: min(calc(var(--value) * .7), calc(6vw - 9px)); }
+@media (max-width: 640px) {
+  .area-volt .tile__value { font-size: min(calc(var(--value) * .7), calc(9vw - 9px)); }
+}
+@media (min-aspect-ratio: 1/1) and (min-width: 900px) {
+  .area-volt .tile__value { font-size: min(calc(var(--value) * .7), calc(4.5vw - 9px)); }
+}
 .tile__unit { font-size: .4em; font-weight: 500; color: var(--text-2); letter-spacing: 0; }
 .tile__sub { font-size: 14px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 19px; }
 .area-speed .tile__sub { white-space: pre-line; flex-shrink: 0; line-height: 20px; min-height: 20px; }

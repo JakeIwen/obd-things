@@ -19,7 +19,7 @@ export const DRIVE_TILES = [
   { id: "coolant", label: "Coolant" },
   { id: "trans", label: "Trans oil" },
   { id: "oilp", label: "Oil pressure" },
-  { id: "volt", label: "Voltage" },
+  { id: "volt", label: "Voltage/Field" },
   { id: "power", label: "Power" },
   { id: "oilt", label: "Oil temp (VVT)" },
   { id: "tires", label: "Tires" },
