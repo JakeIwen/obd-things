@@ -20,6 +20,13 @@ from lib import can_operation_state, diagnostic_safety
 from projects.vehicle_data.drive_helper_launch import HELPER_CWD, helper_command
 from projects.vehicle_data.engine_off_voltage import EngineOffVoltageCapture
 from projects.vehicle_data.helper_events import validate_helper_status
+from projects.vehicle_data.helper_startup_grant import (
+    READY_EVENT_TYPE,
+    StartupGrant,
+    cancelled_before_grant_final,
+    pregrant_event_problem,
+    ready_event_problem,
+)
 from projects.vehicle_data.maintenance import MaintenanceStore
 from projects.vehicle_data.last_readings import LastReadings
 from projects.vehicle_data.radar_alignment import (
@@ -197,6 +204,7 @@ class ActiveDriveSupervisor:
             )
         self._lock = threading.Lock()
         self._process = None
+        self._launch = None
 
     def _note_stall(self, stalled: float, credit: float) -> None:
         """Count a tolerated stall and leave one line in the service journal."""
@@ -218,6 +226,10 @@ class ActiveDriveSupervisor:
     def stop(self) -> None:
         with self._lock:
             process = self._process
+            launch = self._launch
+        if launch is not None:
+            # Before the terminate: once cancelled, no startup grant can follow.
+            launch.cancel()
         if process is not None and process.poll() is None:
             try:
                 process.terminate()
@@ -276,6 +288,64 @@ class ActiveDriveSupervisor:
             "restored": False,
         }
 
+    def _start_helper(self, command: list[str], stop_event: threading.Event):
+        """Launch the helper behind a startup grant: (grant, process, early final).
+
+        The grant is registered under the lock before ``Popen`` so ``stop()`` can
+        cancel a launch whose process does not exist yet, and a cancelled launch
+        is never spawned.
+        """
+        if stop_event.is_set():
+            return None, None, cancelled_before_grant_final(
+                "cancelled before the helper was launched"
+            )
+        try:
+            grant = StartupGrant()
+        except OSError as exc:
+            return None, None, {
+                "type": "final",
+                "state": "idle",
+                "interface_mode": "unknown",
+                "reason": "helper_start_failed",
+                "detail": f"could not create the helper startup grant pipe: {exc}",
+                "restored": None,
+            }
+        process = None
+        try:
+            with self._lock:
+                self._launch = grant
+            if stop_event.is_set() or grant.cancelled:
+                return None, None, cancelled_before_grant_final(
+                    "cancelled before the helper was launched"
+                )
+            process = self.popen_factory(
+                [*command, *grant.launch_arguments()],
+                stdout=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                cwd=HELPER_CWD,
+                pass_fds=(grant.child_fd,),
+            )
+        except Exception as exc:
+            return None, None, {
+                "type": "final",
+                "state": "idle",
+                "interface_mode": "unknown",
+                "reason": "helper_start_failed",
+                "detail": f"could not start active-drive helper: {exc}",
+                "restored": None,
+            }
+        finally:
+            grant.release_read_end()
+            if process is None:
+                grant.close()
+                with self._lock:
+                    if self._launch is grant:
+                        self._launch = None
+        with self._lock:
+            self._process = process
+        return grant, process, None
+
     def run(self, stop_event: threading.Event) -> dict[str, object]:
         command = [
             *helper_command(self.helper_module),
@@ -294,24 +364,17 @@ class ActiveDriveSupervisor:
         )
         if self.helper_module == ACTIVE_DRIVE_HELPER:
             command.append("--enable-oil-life")
-        try:
-            process = self.popen_factory(
-                command,
-                stdout=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-                cwd=HELPER_CWD,
-            )
-        except Exception as exc:
-            return {
-                "type": "final",
-                "reason": "helper_start_failed",
-                "detail": f"could not start active-drive helper: {exc}",
-                "restored": None,
-            }
-        with self._lock:
-            self._process = process
-        if stop_event.is_set() and process.poll() is None:
+        grant, process, early_final = self._start_helper(command, stop_event)
+        if early_final is not None:
+            return early_final
+
+        def cancel_requested() -> bool:
+            return stop_event.is_set() or grant.cancelled
+
+        cancel_acted = False
+        ready_seen = False
+        if cancel_requested() and process.poll() is None:
+            cancel_acted = True
             try:
                 process.terminate()
             except (OSError, ProcessLookupError):
@@ -369,10 +432,11 @@ class ActiveDriveSupervisor:
                     if termination_started_at is not None:
                         termination_started_at += credit
                     self._note_stall(stalled, credit)
-                if stop_event.is_set() and termination_started_at is None:
+                if cancel_requested() and termination_started_at is None:
                     termination_started_at = now
                     try:
                         if process.poll() is None:
+                            cancel_acted = True
                             process.terminate()
                     except (OSError, ProcessLookupError):
                         pass
@@ -434,7 +498,15 @@ class ActiveDriveSupervisor:
                         break
                     if termination_started_at is None:
                         termination_started_at = self._monotonic()
-                        if final_event is None:
+                        if cancel_requested():
+                            # Our own cancel raced the loop-top check: the
+                            # close is the cancelled child, not a protocol fault.
+                            cancel_acted = True
+                            try:
+                                process.terminate()
+                            except (OSError, ProcessLookupError):
+                                pass
+                        elif final_event is None:
                             protocol_error = (
                                 "active-drive helper closed stdout without a "
                                 "final restoration event"
@@ -466,6 +538,21 @@ class ActiveDriveSupervisor:
                                 protocol_error = (
                                     "active-drive helper event is not an object"
                                 )
+                            elif event.get("type") == READY_EVENT_TYPE:
+                                protocol_error = (
+                                    "active-drive helper repeated its ready event"
+                                    if ready_seen or final_event is not None
+                                    or grant.grant_attempted
+                                    else ready_event_problem(event, process.pid)
+                                )
+                                if protocol_error is None:
+                                    ready_seen = True
+                                    grant.try_grant(cancel_requested)
+                            elif (
+                                not grant.grant_attempted
+                                and pregrant_event_problem(event)
+                            ):
+                                protocol_error = pregrant_event_problem(event)
                             elif event.get("type") == "final":
                                 if final_event is not None:
                                     protocol_error = (
@@ -538,7 +625,10 @@ class ActiveDriveSupervisor:
                 process_exited = process.poll() is not None
             except Exception:
                 process_exited = False
+            grant.close()
             with self._lock:
+                if self._launch is grant:
+                    self._launch = None
                 if self._process is process and process_exited:
                     self._process = None
         if supervisor_error:
@@ -553,6 +643,17 @@ class ActiveDriveSupervisor:
             )
         if final_event is not None:
             return final_event
+        # stop() cancels the grant before it terminates, so grant.cancelled also
+        # covers a child that stop() itself ended before this loop noticed.
+        if (
+            (cancel_acted or grant.cancelled)
+            and not grant.grant_attempted
+            and return_code is not None
+        ):
+            return cancelled_before_grant_final(
+                "cancelled before CAN startup grant; the helper was terminated "
+                f"and reaped (status {return_code})"
+            )
         return self._unverified_restoration(
             (
                 "active-drive helper exited without a final restoration event "

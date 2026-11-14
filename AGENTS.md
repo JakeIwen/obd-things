@@ -132,6 +132,16 @@ helper contracts. `tests/broker_pure_oracle.py` captures generated helper/state
 cases against whichever checkout `--repo-root` selects; compare old/new output
 rather than keeping a frozen broker implementation in the permanent tests.
 
+`projects/vehicle_data/helper_startup_grant.py` owns the private startup pipe
+contract shared by the supervisor and both drive helpers. The helper waits
+inside its protected session before any CAN ownership or interface effects;
+the supervisor records every grant attempt before writing it. Only a reaped,
+explicitly cancelled child that was never granted permission can omit its final
+restoration event without triggering an inhibit. A child's own no-mutation
+final remains valid. Post-grant missing or failed restoration retains the wildcard inhibit.
+See the [startup cancellation finding](projects/vehicle_data/docs/2026-11-13_helper_startup_cancellation.md)
+for evidence, compatibility, verification and activation status.
+
 Radar Service Drive Alignment (routine `0x0251`) can be started from the dashboard
 since 2026-10-10. It is actuation, opt-in per web listener
 (`--enable-radar-service-alignment`), and had not been run on the vehicle when

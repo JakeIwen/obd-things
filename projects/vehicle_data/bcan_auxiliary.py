@@ -30,7 +30,7 @@ from typing import Callable
 from lib import can_operation_state, canbus, diagnostic_safety
 from lib.can_role_resolver import SysfsCanRoleResolver
 from lib.modules import MODULES
-from projects.vehicle_data import active_drive, auxiliary_polling
+from projects.vehicle_data import active_drive, auxiliary_polling, helper_startup_grant
 from projects.vehicle_data.active_session_gates import SessionOutcome
 
 
@@ -403,6 +403,7 @@ def run_active_session(
     sink: JsonEventSink,
     *,
     termination_guard=None,
+    startup_gate=None,
 ) -> SessionOutcome:
     lock_handle = None
     initial = None
@@ -411,6 +412,13 @@ def run_active_session(
     outcome = SessionOutcome("helper_failed", "B-CAN auxiliary session did not start")
     restored: bool | None = None
     try:
+        if startup_gate is not None:
+            # First statement of the protected session: no lock, socket or
+            # interface effect may precede the supervisor's startup grant.
+            refusal = startup_gate(sink)
+            if refusal is not None:
+                outcome = SessionOutcome("helper_failed", refusal)
+                return outcome
         try:
             lock_handle = diagnostic_safety.acquire_channel_lock(backend.channel)
         except diagnostic_safety.ChannelLockError:
@@ -515,6 +523,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--expected-usb-serial", required=True)
     parser.add_argument("--expected-dev-id", type=lambda value: int(value, 0), required=True)
     parser.add_argument("--expected-parent-pid", type=int, required=True)
+    parser.add_argument(helper_startup_grant.GRANT_FD_FLAG, type=int, default=None)
     return parser
 
 
@@ -535,7 +544,14 @@ def main(argv=None) -> int:
         expected_dev_id=args.expected_dev_id,
     )
     with diagnostic_safety.interrupt_on_termination() as termination:
-        outcome = run_active_session(backend, sink, termination_guard=termination)
+        outcome = run_active_session(
+            backend,
+            sink,
+            termination_guard=termination,
+            startup_gate=helper_startup_grant.child_gate_from_arguments(
+                args.startup_grant_fd, args.expected_parent_pid
+            ),
+        )
     return 0 if outcome.restored is not False else 2
 
 

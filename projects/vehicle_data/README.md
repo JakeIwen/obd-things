@@ -1104,6 +1104,26 @@ both limits, up to 30 s per silence window, and one line is written to the
 service journal. A helper that goes quiet while the supervisor keeps running
 gets no credit, and a stall longer than 30 s still fails closed.
 
+Each helper starts behind a startup grant (`helper_startup_grant.py`, one pipe
+per launch, passed with `--startup-grant-fd`). The helper announces itself with
+a versioned `ready` event and waits, inside its termination guard and before any
+channel lock, socket or interface effect, for the supervisor's one-byte grant.
+The supervisor never forwards `ready`, records every grant attempt before
+writing it, and refuses the grant once the broker has cancelled the launch. A
+helper the broker cancelled that was never granted and is reaped ends with a
+final event whose `restored` is null (`engine_not_running`, mode `unknown`): it
+could not have changed an interface, which is not the same as a verified
+restoration. Any grant attempt keeps every rule above, so a granted helper that
+ends without its final event still latches the persistent inhibit and the broker
+latch. The `ready` event restarts the 10 s silence limit, so a helper may take
+up to 10 s to become ready and 10 s after that to emit its next event, plus any
+stall credit; silence before `ready` is still an unverified restoration. The
+flag is optional: an old broker that launches an updated helper omits it and
+gets the unchanged ungated start. An updated broker never downgrades its launch
+(a failed pipe is a failed start), so rolling back to code without the grant
+needs the guarded parked restart. See the
+[startup cancellation finding](docs/2026-11-13_helper_startup_cancellation.md).
+
 - Reason (2026-09-28, trip 67): at 01:38:30Z the whole Pi stalled for about
   10 s. The journal has a gap and out-of-order entries from 19:38:19 to
   19:38:29 MDT, the drive recorder logged three timed-out broker status

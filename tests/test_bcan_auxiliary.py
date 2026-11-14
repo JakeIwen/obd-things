@@ -279,6 +279,7 @@ class BcanAuxiliaryTests(unittest.TestCase):
                 "expected_usb_serial",
                 "expected_dev_id",
                 "expected_parent_pid",
+                "startup_grant_fd",
             },
         )
 

@@ -223,6 +223,7 @@ class ControlTests(unittest.TestCase):
 
 HELPER_SCRIPT = textwrap.dedent('''
     import json, sys, time
+    from projects.vehicle_data import helper_startup_grant as grant
     from projects.vehicle_data import radar_service_alignment as service
 
     def emit(event_type, **payload):
@@ -233,7 +234,17 @@ HELPER_SCRIPT = textwrap.dedent('''
              request_id=request_id, progress=progress, routine_status=None,
              elapsed_seconds=None, speed_mph=0.0, interface_mode="armed_diagnostic")
 
+    class Sink:
+        emit = staticmethod(emit)
+
+    def flag_value(flag):
+        return int(sys.argv[sys.argv.index(flag) + 1])
+
     assert service.ENABLE_FLAG in sys.argv
+    # The real startup barrier: the supervisor must grant before anything else happens.
+    gate = grant.child_gate_from_arguments(
+        flag_value(grant.GRANT_FD_FLAG), flag_value("--expected-parent-pid"))
+    assert gate(Sink) is None
     reader = service.CommandReader(sys.stdin.fileno())
     report(service.IDLE)
     deadline = time.monotonic() + 20

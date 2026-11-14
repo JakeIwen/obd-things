@@ -1151,8 +1151,10 @@ class ParentDeathHandshakeTests(unittest.TestCase):
                 "expected_dev_id",
                 "expected_parent_pid",
                 "enable_oil_life", "enable_radar_service_alignment",
+                "startup_grant_fd",
             },
         )
+        self.assertIsNone(actions["startup_grant_fd"].default)
         self.assertFalse(actions["enable_oil_life"].default)
         self.assertIsNone(actions["channel"].choices)
         self.assertTrue(actions["channel"].required)
@@ -2280,8 +2282,10 @@ class BrokerActiveDriveTests(unittest.TestCase):
         self.assertEqual(result["reason"], "restoration_failed")
         self.assertFalse(result["restored"])
         self.assertEqual(result["interface_mode"], "armed_diagnostic")
+        # The startup-grant descriptor is the last launch argument pair.
+        self.assertEqual(commands[0][-2], "--startup-grant-fd")
         self.assertEqual(
-            commands[0][1:],
+            commands[0][1:-2],
             [
                 "-m",
                 "projects.vehicle_data.active_drive",
@@ -2329,7 +2333,7 @@ class BrokerActiveDriveTests(unittest.TestCase):
             supervisor.run(threading.Event())
 
         self.assertEqual(
-            commands[0][-5:],
+            commands[0][-7:-2],
             [
                 "--expected-usb-serial",
                 TEST_SERIAL,
@@ -2356,10 +2360,18 @@ class BrokerActiveDriveTests(unittest.TestCase):
             "restored": True,
         }
 
+        ready = {"type": "ready", "protocol": 1, "pid": 4242}
+
         class Process:
+            pid = 4242
+
             def __init__(self):
                 self.stdout = iter(
-                    (json.dumps(status) + "\n", json.dumps(final) + "\n")
+                    (
+                        json.dumps(ready) + "\n",
+                        json.dumps(status) + "\n",
+                        json.dumps(final) + "\n",
+                    )
                 )
                 self.returncode = 0
 
@@ -2390,6 +2402,23 @@ class BrokerActiveDriveTests(unittest.TestCase):
         self.assertEqual(streamed, [status])
         self.assertEqual(result, final)
 
+    def test_supervisor_does_not_spawn_when_stop_is_already_set(self):
+        spawned = []
+        stopped = threading.Event()
+        stopped.set()
+        supervisor = ActiveDriveSupervisor(
+            channel=TEST_CHANNEL,
+            expected_usb_serial=TEST_SERIAL,
+            expected_dev_id=TEST_DEV_ID,
+            event_handler=lambda _event: None,
+            popen_factory=lambda *_args, **_kwargs: spawned.append(1),
+        )
+        result = supervisor.run(stopped)
+
+        self.assertEqual(spawned, [])
+        self.assertEqual(result["reason"], "engine_not_running")
+        self.assertIsNone(result["restored"])
+
     def test_supervisor_honors_stop_set_during_process_start_race(self):
         class Process:
             def __init__(self):
@@ -2413,18 +2442,24 @@ class BrokerActiveDriveTests(unittest.TestCase):
 
         process = Process()
         stopped = threading.Event()
-        stopped.set()
+
+        def popen(*_args, **_kwargs):
+            stopped.set()  # the broker's stop lands while Popen is running
+            return process
+
         supervisor = ActiveDriveSupervisor(
             channel=TEST_CHANNEL,
             expected_usb_serial=TEST_SERIAL,
             expected_dev_id=TEST_DEV_ID,
             event_handler=lambda _event: None,
-            popen_factory=lambda *_args, **_kwargs: process,
+            popen_factory=popen,
         )
         result = supervisor.run(stopped)
 
+        # Never granted and reaped after the broker's own cancel: nothing to restore.
         self.assertEqual(process.terminate_calls, 1)
-        self.assertEqual(result["reason"], "restoration_failed")
+        self.assertEqual(result["reason"], "engine_not_running")
+        self.assertIsNone(result["restored"])
 
     def test_supervisor_retains_and_terminates_child_after_stream_exception(self):
         class BrokenStream:
@@ -2611,7 +2646,11 @@ class BrokerActiveDriveTests(unittest.TestCase):
         def close(self):
             self.lines.put(None)
 
+    READY_LINE = json.dumps({"type": "ready", "protocol": 1, "pid": 4242}) + "\n"
+
     class _ScriptedProcess:
+        pid = 4242
+
         def __init__(self, stream, *, finish_on_terminate=None):
             self.stdout = stream
             self.returncode = None
@@ -2685,6 +2724,7 @@ class BrokerActiveDriveTests(unittest.TestCase):
         supervisor = self._stall_supervisor(process, clock, events)
         with mock.patch("sys.stderr"):
             thread, results = self._run_in_thread(supervisor)
+            process.stdout.lines.put(self.READY_LINE)
             process.stdout.lines.put(json.dumps({"type": "heartbeat"}) + "\n")
             self._wait_for(lambda: len(events) == 1, "the first helper event")
             clock.jump(12.0)  # longer than the 10 s silence limit
@@ -2729,6 +2769,7 @@ class BrokerActiveDriveTests(unittest.TestCase):
         supervisor = self._stall_supervisor(process, clock, events)
         with mock.patch("sys.stderr"):
             thread, results = self._run_in_thread(supervisor)
+            process.stdout.lines.put(self.READY_LINE)
             process.stdout.lines.put(json.dumps({"type": "heartbeat"}) + "\n")
             self._wait_for(lambda: len(events) == 1, "the first helper event")
             clock.jump(45.0)  # 30 s credited, 15 s of silence remain
@@ -2746,9 +2787,15 @@ class BrokerActiveDriveTests(unittest.TestCase):
         process = self._ScriptedProcess(self._ScriptedStream())
         supervisor = self._stall_supervisor(process, clock, [])
         stop_event = threading.Event()
-        stop_event.set()  # the broker asked the helper to stop and restore
         with mock.patch("sys.stderr"):
             thread, results = self._run_in_thread(supervisor, stop_event)
+            process.stdout.lines.put(self.READY_LINE)
+            self._wait_for(
+                lambda: supervisor._launch is not None
+                and supervisor._launch.grant_attempted,
+                "the startup grant",
+            )
+            stop_event.set()  # the broker asked the granted helper to stop and restore
             self._wait_for(lambda: process.terminate_calls >= 1, "termination")
             time.sleep(0.02)
             clock.jump(12.0)  # longer than the 10 s cleanup limit
@@ -2773,6 +2820,7 @@ class BrokerActiveDriveTests(unittest.TestCase):
             process, clock, events, stall_tolerance_seconds=0.0
         )
         thread, results = self._run_in_thread(supervisor)
+        process.stdout.lines.put(self.READY_LINE)
         process.stdout.lines.put(json.dumps({"type": "heartbeat"}) + "\n")
         self._wait_for(lambda: len(events) == 1, "the first helper event")
         clock.jump(12.0)

@@ -39,6 +39,7 @@ from lib.can_runtime_route import LinkExpectation, NetdevIdentityExpectation
 from lib.modules import MODULES
 from projects.vehicle_data import (
     ccan_powertrain,
+    helper_startup_grant,
     pcm_electrical,
     transmit_permit,
     radar_alignment,
@@ -601,6 +602,7 @@ def run_active_session(
     termination_guard=None,
     enable_oil_life: bool = False,
     service_commands=None,
+    startup_gate=None,
 ) -> SessionOutcome:
     """Run one engine-running ownership interval and always restore before unlock."""
     lock_handle = None
@@ -612,6 +614,13 @@ def run_active_session(
     outcome = SessionOutcome("helper_failed", "active-drive session did not start")
     restored: bool | None = None
     try:
+        if startup_gate is not None:
+            # First statement of the protected session: no lock, socket or
+            # interface effect may precede the supervisor's startup grant.
+            refusal = startup_gate(sink)
+            if refusal is not None:
+                outcome = SessionOutcome("helper_failed", refusal)
+                return outcome
         try:
             lock_handle = diagnostic_safety.acquire_channel_lock(backend.channel)
         except diagnostic_safety.ChannelLockError:
@@ -1117,6 +1126,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--expected-parent-pid", type=int, required=True)
     parser.add_argument("--enable-oil-life", action="store_true",
                         help="broker accepts the fixed oil-life metric (rolling-deploy handshake)")
+    parser.add_argument(helper_startup_grant.GRANT_FD_FLAG, type=int, default=None,
+                        help="internal: read end of the supervisor's startup grant pipe")
     parser.add_argument(radar_service_alignment.ENABLE_FLAG, action="store_true",
                         help="broker relays owner service-alignment commands on stdin")
     return parser
@@ -1150,6 +1161,9 @@ def main(argv=None) -> int:
             sink,
             termination_guard=termination,
             enable_oil_life=args.enable_oil_life,
+            startup_gate=helper_startup_grant.child_gate_from_arguments(
+                args.startup_grant_fd, args.expected_parent_pid
+            ),
             service_commands=(
                 radar_service_alignment.CommandReader(sys.stdin.fileno())
                 if args.enable_radar_service_alignment else None
