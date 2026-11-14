@@ -151,7 +151,24 @@ test waits are bounded. Final `repo-full-suite` job
 8 skips**, plus layout checks and scratch dashboard build. All 12 changed Python
 files matched that job's source-manifest hashes. Claude Opus 5.5 completed the
 T3 implementation review and recheck with no remaining findings, approving merge
-and guarded parked/asleep deployment. Deployment remains pending at this review.
+and guarded parked/asleep deployment. Repair commit `0159ae3` was pushed and
+activated on vanpi at **2026-11-13 22:07:57 MST** through the existing guarded
+restart. Post-deployment checks confirmed:
+
+- Broker and both web listeners active with new PIDs and zero crash restarts;
+  the drive recorder remained active with its original PID.
+- Cache-only LAN and Tailscale `/v1/status` both returned HTTP 200; vehicle
+  asleep, helpers idle, no active inhibits, both restoration latches false.
+- Fresh serial-resolved C-CAN/B-CAN/CAN-CH checks proved UP, listen-only,
+  ERROR-ACTIVE, correct rates, classical CAN, ONE-SHOT off and restart-ms zero;
+  the spare remained down.
+- Every role's RX/TX/error counter was unchanged across activation. TX stayed
+  C/B/CH/spare **8670/3544/0/0**. No inhibit was cleared for this deployment.
+- No warning-or-higher entries appeared in the four relevant service journals
+  during the post-deployment check.
+
+The asleep restart proves safe activation, not the moving-vehicle lifecycle.
+Natural-drive engine stop/restart validation remains pending.
 
 Separate follow-up candidates from review, not changed here:
 
@@ -175,9 +192,8 @@ TX delta. An independent cache-only API read at about 21:03 MST confirmed the
 vehicle asleep, no active inhibits, and both helper restoration latches false.
 That recovery does not prove the startup defect is fixed.
 
-After offline verification and implementation review, activation must use the
-existing guarded parked/asleep restart, without clearing any new inhibit just
-to make deployment pass. The next natural drive, preferably with an engine
+Any later activation or rollback must use the existing guarded parked/asleep
+restart, without clearing an inhibit just to make deployment pass. The next natural drive, preferably with an engine
 stop/restart, must demonstrate both helpers rearming, fresh helper-fed metrics,
 no restoration inhibit, and raw recorder continuation. No special engine start,
 CAN transmission, or vehicle actuation is authorized by the offline tests.
