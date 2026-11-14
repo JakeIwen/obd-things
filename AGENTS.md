@@ -333,6 +333,23 @@ pytest filters and prepares dependencies, but omits the layout/build phases.
 See [backend verification](docs/backend-layout.md) for setup, boundaries and
 coverage limits. No test command authorizes vehicle or service activity.
 
+Scoped gate **dashboard** (the global Code shape rule on scoped gates governs its use):
+
+- Command: on vanpi `/home/pi/van_compute/scripts/pi_compute.py run repo-dashboard-suite
+  --wait 60`; elsewhere `python3 run_tests.py --dashboard`. It runs the same preparation,
+  pytest over `DASHBOARD_PYTEST_TARGETS` (every test module that reads the dashboard,
+  including `test_backend_contracts.py`'s package.json launch-target scan), the layout step
+  and the scratch build.
+- Covers: `projects/vehicle_data/dashboard/**` (`DASHBOARD_SCOPE` in `run_tests.py`).
+- Excludes: nothing inside that folder. The gate's own runner and declaration
+  (`run_tests.py`, `tests/test_run_tests.py`, this paragraph, the `repo-dashboard-suite`
+  entry in `.van-compute.json`) lie outside its scope, so changing them runs the whole suite.
+- Correctness: `tests/test_run_tests.py` fails when a test module names the dashboard
+  folder without being listed. A new indirect reader (one that reaches dashboard files
+  through a scan or helper, as `test_backend_contracts.py` does) must be added by hand.
+
+Direct runs in one checkout serialize on `tmp/run_tests.lock`.
+
 The repo-owned checker has no `layout` baseline and is advisory.
 `tests/test_backend_contracts.py` independently enforces library direction,
 selected pure imports, declared launch targets and compute entry packaging.
@@ -385,7 +402,7 @@ caller has retired, with owner/callers/retirement stated in the wrapper header.
 | `tools/dtc_batch_request.py` | van-dtc-batch.service | Batch request worker |
 | `tools/compute_retention.py` | obd-compute-retention.service and owner CLI | Thin adapter to the installed van-compute policy |
 | `python3 -m tests.signal_benchmark_oracle` | Offline refactor verification against a selected checkout | Benchmark CLI/field preservation fixtures |
-| `run_tests.py` | repo-full-suite and repo-tests compute tasks; offline developer verification | Fail-fast Python/Node/layout/scratch-build gate |
+| `run_tests.py` | repo-full-suite, repo-dashboard-suite and repo-tests compute tasks; offline developer verification | Fail-fast Python/Node/layout/scratch-build gate |
 | `tools/dashboard_build.py` | dashboard-test-build compute task | Scratch dashboard tests/build |
 | `tools/telemetry_history_profile.py` | telemetry-history-profile compute task | Bounded offline history, fuel-economy and warning profiles from finalized SQLite backups |
 | `tools/can_signal_benchmark.py` | Owner CLI and offline benchmark recipes | Benchmark file/provenance orchestration; pure rules in signal_benchmark_policy |

@@ -30,6 +30,19 @@ On vanpi, submit the same gate through the established offline compute queue:
 /home/pi/van_compute/scripts/pi_compute.py run repo-full-suite --wait 60
 ```
 
+For change sets confined to `projects/vehicle_data/dashboard/`, `python3
+run_tests.py --dashboard` (compute task `repo-dashboard-suite`) runs the same
+preparation, pytest over `DASHBOARD_PYTEST_TARGETS` (the modules that read the
+dashboard; `tests/test_run_tests.py` has a tripwire for the list), the layout
+step and the scratch build. AGENTS.md declares it as the `dashboard` scoped gate
+(scope, exclusions, and when the whole suite still runs).
+`--pytest-only` and `--dashboard` are mutually exclusive. Every profile holds
+`tmp/run_tests.lock` for the run, so a second run in the same checkout waits
+(up to 30 minutes, then exits 2) instead of wiping the first run's
+`node_modules`; worktrees have separate locks. When `XDG_CACHE_HOME` is set the
+npm download cache lives in `$XDG_CACHE_HOME/npm` and `npm ci` runs with
+`--prefer-offline`.
+
 A wait timeout leaves the job running; use `wait`/`status` with the returned job
 ID. Do not submit a duplicate merely because the wait ended. The existing
 `repo-tests` task retains pytest argument forwarding and prepares dependencies

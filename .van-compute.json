@@ -114,6 +114,33 @@
       "outputs": []
     },
     {
+      "name": "repo-dashboard-suite",
+      "description": "Run the dashboard-scoped pytest modules, layout checks and scratch build: the scoped gate for dashboard-only change sets; no CAN or deployment.",
+      "profile": "python-script",
+      "source_paths": [
+        "run_tests.py",
+        "requirements-test.txt",
+        ".codeshape/config.json",
+        ".gitignore",
+        "AGENTS.md",
+        "README.md",
+        "pyproject.toml",
+        "checks",
+        "lib",
+        "live_data",
+        "projects",
+        "tests",
+        "tools"
+      ],
+      "minimum_inputs": 0,
+      "maximum_inputs": 0,
+      "argv": [
+        "{source:run_tests.py}",
+        "--dashboard"
+      ],
+      "outputs": []
+    },
+    {
       "name": "repo-tests",
       "description": "Prepare pinned dashboard dependencies and run the fail-fast pytest suite, optionally filtered by pytest arguments.",
       "profile": "python-script",

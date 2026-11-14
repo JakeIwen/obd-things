@@ -3,7 +3,10 @@ from io import StringIO
 import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
+import textwrap
+import time
 import unittest
 
 import run_tests
@@ -13,10 +16,10 @@ class SuitePlanTests(unittest.TestCase):
     def test_compute_arguments_preserve_pytest_help_after_separator(self):
         self.assertEqual(
             run_tests.parse_args(["--pytest-only", "--", "--help"]),
-            (True, ("--help",)),
+            (run_tests.Profile.PYTEST_ONLY, ("--help",)),
         )
 
-    def plan(self, scratch: Path, *, pytest_only: bool):
+    def plan(self, scratch: Path, *, profile):
         return run_tests.suite_steps(
             base_python="/runtime/python3",
             test_python="/scratch/venv/bin/python",
@@ -24,12 +27,12 @@ class SuitePlanTests(unittest.TestCase):
             node="/runtime/node",
             scratch=scratch,
             pytest_args=("-k", "focused_case"),
-            pytest_only=pytest_only,
+            profile=profile,
         )
 
     def test_pytest_only_prepares_dependencies_and_forwards_filters(self):
         with tempfile.TemporaryDirectory() as folder:
-            steps = self.plan(Path(folder), pytest_only=True)
+            steps = self.plan(Path(folder), profile=run_tests.Profile.PYTEST_ONLY)
         self.assertEqual(steps[-1].command[-2:], ("-k", "focused_case"))
         self.assertIn("-x", steps[-1].command)
         self.assertFalse(any("--out-dir" in step.command for step in steps))
@@ -37,12 +40,94 @@ class SuitePlanTests(unittest.TestCase):
     def test_full_plan_checks_layout_and_builds_only_in_scratch(self):
         with tempfile.TemporaryDirectory() as folder:
             scratch = Path(folder)
-            steps = self.plan(scratch, pytest_only=False)
+            steps = self.plan(scratch, profile=run_tests.Profile.FULL)
             build = steps[-1]
         self.assertEqual(steps[-2].command[-3:], ("-p", "test_layout_*.py", "-v"))
         self.assertEqual(build.command[-2], "--out-dir")
         self.assertEqual(Path(build.command[-1]), scratch / "dist")
         self.assertNotEqual(Path(build.command[-1]), run_tests.DASHBOARD / "dist")
+
+    def test_dashboard_plan_targets_scope_with_layout_and_scratch_build(self):
+        with tempfile.TemporaryDirectory() as folder:
+            scratch = Path(folder)
+            steps = self.plan(scratch, profile=run_tests.Profile.DASHBOARD)
+        pytest = next(s for s in steps if "pytest" in s.command)
+        for target in run_tests.DASHBOARD_PYTEST_TARGETS:
+            self.assertIn(target, pytest.command)
+        self.assertNotIn("tests", pytest.command)
+        self.assertIn("-x", pytest.command)
+        self.assertEqual(steps[-2].command[-3:], ("-p", "test_layout_*.py", "-v"))
+        self.assertEqual(Path(steps[-1].command[-1]), scratch / "dist")
+
+    def test_dashboard_profile_takes_no_passthrough_and_excludes_pytest_only(self):
+        self.assertEqual(
+            run_tests.parse_args(["--dashboard"]), (run_tests.Profile.DASHBOARD, ())
+        )
+        with redirect_stderr(StringIO()):
+            with self.assertRaises(SystemExit):
+                run_tests.parse_args(["--dashboard", "-k", "x"])
+            with self.assertRaises(SystemExit):
+                run_tests.parse_args(["--dashboard", "--pytest-only"])
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit):
+            run_tests.parse_args(["-k", "x"])
+
+    def test_dashboard_pytest_targets_cover_every_test_reading_the_dashboard(self):
+        """Tripwire, not proof of completeness: a text scan for the dashboard path.
+
+        Indirect readers such as test_backend_contracts.py are listed by hand.
+        """
+        tests = Path(run_tests.ROOT, "tests")
+        readers = {
+            f"tests/{path.name}"
+            for path in tests.glob("test_*.py")
+            if "vehicle_data/dashboard" in path.read_text(encoding="utf-8")
+            and path.name != "test_run_tests.py"
+        }
+        listed = set(run_tests.DASHBOARD_PYTEST_TARGETS)
+        self.assertEqual(readers - listed, set())
+        for target in listed:
+            self.assertTrue(Path(run_tests.ROOT, target).is_file(), target)
+
+    def test_npm_install_prefers_offline_and_cache_follows_xdg(self):
+        with tempfile.TemporaryDirectory() as folder:
+            steps = self.plan(Path(folder), profile=run_tests.Profile.FULL)
+            install = next(s for s in steps if s.command[1] == "ci")
+            self.assertIn("--prefer-offline", install.command)
+            env = run_tests.suite_env(Path(folder), {"XDG_CACHE_HOME": "/cache"})
+            self.assertEqual(env["npm_config_cache"], "/cache/npm")
+            explicit = run_tests.suite_env(
+                Path(folder), {"XDG_CACHE_HOME": "/cache", "npm_config_cache": "/mine"}
+            )
+            self.assertEqual(explicit["npm_config_cache"], "/mine")
+            self.assertNotIn("npm_config_cache", run_tests.suite_env(Path(folder), {}))
+
+    def test_checkout_lock_times_out_while_another_process_holds_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            lock = Path(folder) / "run_tests.lock"
+            holder = subprocess.Popen(
+                [sys.executable, "-c", textwrap.dedent(f"""
+                    import fcntl, sys, time
+                    h = open({str(lock)!r}, "a")
+                    fcntl.flock(h, fcntl.LOCK_EX)
+                    print("held", flush=True)
+                    time.sleep(30)
+                """)],
+                stdout=subprocess.PIPE, text=True,
+            )
+            try:
+                self.assertEqual(holder.stdout.readline().strip(), "held")
+                out = StringIO()
+                started = time.monotonic()
+                with redirect_stdout(out), self.assertRaises(run_tests.LockTimeout):
+                    with run_tests.checkout_lock(lock, timeout=0.5, poll=0.1):
+                        self.fail("lock should be held elsewhere")
+                self.assertGreaterEqual(time.monotonic() - started, 0.5)
+                self.assertIn("Another run_tests.py in this checkout", out.getvalue())
+            finally:
+                holder.kill()
+                holder.wait()
+            with run_tests.checkout_lock(lock, timeout=1, poll=0.1):
+                pass
 
     def test_execution_stops_after_real_child_failure(self):
         with tempfile.TemporaryDirectory() as folder:
