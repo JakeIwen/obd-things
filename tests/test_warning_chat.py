@@ -263,7 +263,9 @@ for event in [
                  ([{"type": "turn.completed"}], "finishing", "waiting for Codex to exit")]
         for events, phase, message in cases:
             with self.subTest(phase=phase):
-                runner = CodexRunner("/unused", Path(self.tmp.name) / "runtime", timeout=.4)
+                # A busy Pi can take over 0.4 s just to start the child and print its
+                # events, so the timeout leaves room for the phase to be reached first.
+                runner = CodexRunner("/unused", Path(self.tmp.name) / "runtime", timeout=2.0)
                 script = "import sys,json,time;json.load(sys.stdin);" + "".join(
                     f"print({json.dumps(event)!r},flush=True);" for event in events) + "sys.stdout.close();sys.stderr.close();time.sleep(5)"
                 diagnostics = {}
