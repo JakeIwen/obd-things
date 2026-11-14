@@ -43,8 +43,12 @@ LIVE_CAN_FILES = (
 )
 
 
+# File types this guard scans beneath LIVE_CAN_ROOTS (run_tests.py's dashboard
+# scoped gate excludes them, since its pytest targets omit this module).
+LIVE_CAN_SUFFIXES = frozenset({".py", ".service", ".sh", ".socket", ".timer"})
+
+
 def maintained_live_can_files():
-    suffixes = {".py", ".service", ".sh", ".socket", ".timer"}
     found = set()
     for root in LIVE_CAN_ROOTS:
         if not root.exists():
@@ -53,7 +57,7 @@ def maintained_live_can_files():
             path
             for path in root.rglob("*")
             if path.is_file()
-            and path.suffix in suffixes
+            and path.suffix in LIVE_CAN_SUFFIXES
             and not path.name.startswith("._")
         )
     found.update(path for path in LIVE_CAN_FILES if path.exists())
