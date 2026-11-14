@@ -352,6 +352,18 @@ Scoped gate **dashboard** (the global Code shape rule on scoped gates governs it
 
 Direct runs in one checkout serialize on `tmp/run_tests.lock`.
 
+The three suite tasks declare the van-compute task cache `"cache": "obd-things-tests"`
+(van-compute release `269b68d6…` and later, 2026-11-14): npm downloads persist per worker.
+The cache is untrusted, evictable at any time and shared by every slot on a host, so nothing
+may depend on its contents: npm verifies each tarball against the lockfile's integrity hashes.
+`run_tests.py` keeps pip's cache and the venv per run, because `requirements-test.txt` has
+ranges and no hashes; sharing pip's cache would need hash-locked requirements. Pi-local
+jobs have no network, so the suite can't install there; only Mac placement is verified
+(2026-11-14). A van-compute release without task caches fails any job that declares one, so
+drop these declarations before rolling van-compute back. Clear the Pi copy with
+`cd /home/pi/van_compute/current && /home/pi/van_compute/venv/bin/python -m van_compute.task_cache
+clear obd-things-dde5f99d3c6fed63/obd-things-tests`; the Mac copy needs a Mac session.
+
 The repo-owned checker has no `layout` baseline and is advisory.
 `tests/test_backend_contracts.py` independently enforces library direction,
 selected pure imports, declared launch targets and compute entry packaging.

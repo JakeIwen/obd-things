@@ -103,11 +103,17 @@ class SuitePlanTests(unittest.TestCase):
             self.assertIn("--prefer-offline", install.command)
             env = run_tests.suite_env(Path(folder), {"XDG_CACHE_HOME": "/cache"})
             self.assertEqual(env["npm_config_cache"], "/cache/npm")
+            # pip stays out of the shared cache: its requirements carry no hashes.
+            self.assertEqual(
+                Path(env["PIP_CACHE_DIR"]), Path(folder).resolve() / "pip-cache"
+            )
             explicit = run_tests.suite_env(
                 Path(folder), {"XDG_CACHE_HOME": "/cache", "npm_config_cache": "/mine"}
             )
             self.assertEqual(explicit["npm_config_cache"], "/mine")
-            self.assertNotIn("npm_config_cache", run_tests.suite_env(Path(folder), {}))
+            plain = run_tests.suite_env(Path(folder), {})
+            self.assertNotIn("npm_config_cache", plain)
+            self.assertNotIn("PIP_CACHE_DIR", plain)
 
     def test_checkout_lock_times_out_while_another_process_holds_it(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -197,12 +197,18 @@ def suite_steps(
 
 
 def suite_env(scratch: Path, environ: dict[str, str]) -> dict[str, str]:
-    """Child environment: scratch TMPDIR, and an npm cache under XDG_CACHE_HOME if set."""
+    """Child environment: scratch TMPDIR; npm's cache under XDG_CACHE_HOME, pip's in scratch."""
     env = dict(environ)
     env["TMPDIR"] = str(scratch.resolve())
-    # Compute jobs set XDG_CACHE_HOME; npm ignores it, so point its cache there.
-    if env.get("XDG_CACHE_HOME") and "npm_config_cache" not in env:
-        env["npm_config_cache"] = str(Path(env["XDG_CACHE_HOME"]) / "npm")
+    # Compute jobs set XDG_CACHE_HOME to a cache other jobs of this repo can write.
+    # npm verifies every tarball against package-lock.json's integrity hashes, so it
+    # may share that cache. requirements-test.txt has ranges and no hashes, so a
+    # poisoned pip cache could change what installs: pip keeps a per-run cache.
+    if env.get("XDG_CACHE_HOME"):
+        if "npm_config_cache" not in env:
+            env["npm_config_cache"] = str(Path(env["XDG_CACHE_HOME"]) / "npm")
+        if "PIP_CACHE_DIR" not in env:
+            env["PIP_CACHE_DIR"] = str(scratch.resolve() / "pip-cache")
     return env
 
 

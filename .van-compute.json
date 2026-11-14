@@ -91,6 +91,7 @@
       "name": "repo-full-suite",
       "description": "Run every offline Python, Node, layout and scratch-build gate with fail-fast reporting; no CAN or deployment.",
       "profile": "python-script",
+      "cache": "obd-things-tests",
       "source_paths": [
         "run_tests.py",
         "requirements-test.txt",
@@ -117,6 +118,7 @@
       "name": "repo-dashboard-suite",
       "description": "Run the dashboard-scoped pytest modules, layout checks and scratch build: the scoped gate for dashboard-only change sets; no CAN or deployment.",
       "profile": "python-script",
+      "cache": "obd-things-tests",
       "source_paths": [
         "run_tests.py",
         "requirements-test.txt",
@@ -144,6 +146,7 @@
       "name": "repo-tests",
       "description": "Prepare pinned dashboard dependencies and run the fail-fast pytest suite, optionally filtered by pytest arguments.",
       "profile": "python-script",
+      "cache": "obd-things-tests",
       "source_paths": [
         "run_tests.py",
         "requirements-test.txt",

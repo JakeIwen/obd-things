@@ -41,7 +41,8 @@ step and the scratch build. AGENTS.md declares it as the `dashboard` scoped gate
 (up to 30 minutes, then exits 2) instead of wiping the first run's
 `node_modules`; worktrees have separate locks. When `XDG_CACHE_HOME` is set the
 npm download cache lives in `$XDG_CACHE_HOME/npm` and `npm ci` runs with
-`--prefer-offline`.
+`--prefer-offline`; pip's cache stays in the run's scratch folder, since the unhashed
+Python requirements can't safely share a cache other jobs write.
 
 A wait timeout leaves the job running; use `wait`/`status` with the returned job
 ID. Do not submit a duplicate merely because the wait ended. The existing
