@@ -99,35 +99,121 @@ class RadarAlignmentTests(unittest.TestCase):
         self.assertEqual(history.summary(55)[metric]["300"]["count"], 1)
         self.assertEqual(history.summary(356)[metric]["300"]["mean"], .1)
 
-    def test_long_windows_span_gaps_that_reset_the_short_ones(self):
+    def test_long_window_spans_gaps_that_reset_the_short_ones(self):
         history = radar.AlignmentHistory()
         metric = radar.METRICS[0]
         for stamp in range(0, 600, 10):
             history.add(metric, 1.0, stamp)
-        # A 50 s gap: the short windows start over, the long ones keep the run before it.
+        # A 50 s gap: the short windows start over, the 30-minute one keeps the run before it.
         history.add(metric, -1.0, 650)
         row = history.summary(650)[metric]
         self.assertEqual(row["60"]["count"], 1)
         self.assertEqual(row["300"]["count"], 1)
         self.assertEqual(row["1800"]["count"], 61)
-        self.assertEqual(row["7200"]["count"], 61)
         self.assertAlmostEqual(row["1800"]["mean"], 59 / 61)
         self.assertEqual(row["1800"]["span_seconds"], 650)
-        # Samples older than two hours leave the longest window; the 30-minute one trails.
-        history.add(metric, -1.0, 7500)
-        row = history.summary(7500)[metric]
-        self.assertEqual(row["7200"]["count"], 32)
-        self.assertEqual(row["1800"]["count"], 1)
-        self.assertAlmostEqual(row["7200"]["mean"], 28 / 32)
-        self.assertEqual(row["7200"]["span_seconds"], 7200)
-        self.assertEqual(sorted(k for k in row if k.isdigit()), ["1800", "300", "60", "7200"])
+        self.assertEqual(sorted(k for k in row if k.isdigit()), ["1800", "300", "60"])
 
-    def test_two_hours_of_ten_second_reads_fit_the_sample_bound(self):
+    def test_drive_change_accumulates_across_a_gap_that_resets_the_windows(self):
+        history = radar.AlignmentHistory()
+        metric = radar.METRICS[0]
+        history.add(metric, .10, 0)
+        history.add(metric, .15, 10)
+        history.add(metric, .30, 70)
+        row = history.summary(70)[metric]
+        self.assertEqual(row["60"]["count"], 1)
+        self.assertAlmostEqual(row["drive"]["change"], .20)
+        self.assertEqual(row["drive"]["start_value"], .10)
+        self.assertEqual(row["drive"]["count"], 3)
+        self.assertEqual(row["drive"]["span_seconds"], 70)
+
+    def test_gap_over_five_minutes_starts_a_new_drive(self):
+        history = radar.AlignmentHistory()
+        metric = radar.METRICS[0]
+        history.add(metric, .10, 0)
+        history.add(metric, .20, 300)
+        self.assertEqual(history.summary(0)[metric]["drive"]["count"], 2)
+        history.add(metric, .50, 601)
+        drive = history.summary(0)[metric]["drive"]
+        self.assertEqual((drive["count"], drive["change"], drive["start_value"]), (1, 0, .50))
+
+    def test_drive_longer_than_the_sample_window_keeps_its_start(self):
+        history = radar.AlignmentHistory()
+        metric = radar.METRICS[1]
+        for stamp in range(0, 3 * 3600, 10):
+            history.add(metric, .1 + stamp / 1e6, stamp)
+        drive = history.summary(0)[metric]["drive"]
+        self.assertEqual(drive["start_value"], .1)
+        self.assertEqual(drive["count"], 1080)
+        self.assertAlmostEqual(drive["change"], 10790 / 1e6)
+        self.assertEqual(drive["span_seconds"], 10790)
+        self.assertLessEqual(len(history.samples[metric]), radar.MAX_SAMPLES)
+
+    def test_drive_continues_after_restart_within_the_gap_only(self):
+        metric = radar.METRICS[0]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "radar.json"
+            history = radar.AlignmentHistory(path)
+            history.add(metric, .2, 10, "2026-09-20T10:00:00+00:00")
+            history.add(metric, .4, 20, "2026-09-20T10:00:10+00:00")
+            history.flush()
+            resumed = radar.AlignmentHistory(path)
+            resumed.add(metric, .7, 1, "2026-09-20T10:04:00+00:00")
+            drive = resumed.summary(0)[metric]["drive"]
+            self.assertAlmostEqual(drive["change"], .5)
+            self.assertEqual((drive["count"], drive["started_at"]), (3, "2026-09-20T10:00:00+00:00"))
+            self.assertEqual(drive["span_seconds"], 240)
+            late = radar.AlignmentHistory(path)
+            late.add(metric, .7, 1, "2026-09-20T10:05:11+00:00")
+            drive = late.summary(0)[metric]["drive"]
+            self.assertEqual((drive["count"], drive["change"]), (1, 0))
+            # A reading stamped before the retained one never continues it.
+            early = radar.AlignmentHistory(path)
+            early.add(metric, .7, 1, "2026-09-20T09:59:00+00:00")
+            self.assertEqual(early.summary(0)[metric]["drive"]["count"], 1)
+
+    def test_saved_file_drops_retired_window_and_loads_without_drive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "radar.json"
+            window = {"count": 2, "mean": .3, "peak_abs": .4, "span_seconds": 10}
+            row = {"latest_value": .4, "observed_at": "2026-09-20T10:00:10+00:00",
+                   "60": window, "300": window, "1800": window, "7200": window}
+            path.write_text(json.dumps({"version": 1, "source": radar.SOURCE,
+                                        "last": {m: dict(row) for m in radar.METRICS}}))
+            history = radar.AlignmentHistory(path)
+            self.assertIsNone(history.storage_error)
+            saved = history.summary(0)[radar.METRICS[0]]
+            self.assertNotIn("7200", saved)
+            self.assertNotIn("drive", saved)
+            history.flush()
+            history.dirty = True
+            history.flush()
+            self.assertNotIn("7200", path.read_text())
+            # The first reading after loading it starts a drive.
+            history.add(radar.METRICS[0], .5, 1, "2026-09-20T10:00:20+00:00")
+            self.assertEqual(history.summary(0)[radar.METRICS[0]]["drive"]["count"], 1)
+
+    def test_invalid_retained_drive_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "radar.json"
+            window = {"count": 2, "mean": .3, "peak_abs": .4, "span_seconds": 10}
+            drive = {"change": .1, "start_value": .3, "started_at": "2026-09-20T10:00:00+00:00",
+                     "count": 2, "span_seconds": 10}
+            for bad in ({"change": 41}, {"count": True}, {"span_seconds": -1},
+                        {"started_at": "2026-09-20T10:00:00"}):
+                row = {"latest_value": .4, "observed_at": "2026-09-20T10:00:10+00:00",
+                       "60": window, "300": window, "drive": {**drive, **bad}}
+                path.write_text(json.dumps({"version": 1, "source": radar.SOURCE,
+                                            "last": {m: dict(row) for m in radar.METRICS}}))
+                with self.subTest(bad=bad):
+                    self.assertIsNotNone(radar.AlignmentHistory(path).storage_error)
+
+    def test_hours_of_ten_second_reads_fit_the_sample_bound(self):
         history = radar.AlignmentHistory()
         metric = radar.METRICS[1]
         for stamp in range(0, 7201, 10):
             history.add(metric, .5, stamp)
-        self.assertEqual(history.summary(7200)[metric]["7200"]["count"], 721)
+        self.assertEqual(history.summary(7200)[metric]["1800"]["count"], 181)
         self.assertLessEqual(len(history.samples[metric]), radar.MAX_SAMPLES)
 
     def test_legacy_saved_summary_loads_without_long_windows(self):
@@ -147,11 +233,11 @@ class RadarAlignmentTests(unittest.TestCase):
                                         "last": {m: dict(row) for m in radar.METRICS}}))
             self.assertIn("required window", radar.AlignmentHistory(path).storage_error)
 
-    def test_history_recovery_rebuilds_a_legacy_summary_with_every_window(self):
+    def test_history_recovery_rebuilds_a_legacy_summary_with_every_window_and_drive(self):
         metric = radar.METRICS[0]
         latest = dict(metric=metric, source=radar.SOURCE, unit="deg", value=.4,
                       observed_at="2026-09-20T10:00:10+00:00", captured_at="2026-09-20T10:00:15+00:00")
-        earlier = {**latest, "value": .2, "observed_at": "2026-09-20T09:20:00+00:00"}
+        earlier = {**latest, "value": .2, "observed_at": "2026-09-20T09:58:00+00:00"}
         historian = mock.Mock()
         historian.latest_sample.side_effect = lambda name: latest if name == metric else None
         historian.query_samples.return_value = [latest, earlier]
@@ -162,17 +248,50 @@ class RadarAlignmentTests(unittest.TestCase):
         history.restore_from_historian(historian)
         result = history.summary(0)[metric]
         self.assertEqual(result["60"]["count"], 1)
-        self.assertEqual(result["1800"]["count"], 1)
-        self.assertEqual(result["7200"]["count"], 2)
-        self.assertAlmostEqual(result["7200"]["mean"], .3)
+        self.assertEqual(result["1800"]["count"], 2)
+        self.assertAlmostEqual(result["1800"]["mean"], .3)
+        self.assertEqual(result["drive"]["count"], 2)
+        self.assertAlmostEqual(result["drive"]["change"], .2)
+        self.assertEqual(result["drive"]["started_at"], earlier["observed_at"])
         kwargs = historian.query_samples.call_args.kwargs
         self.assertEqual(kwargs["limit"], radar.MAX_SAMPLES)
         self.assertEqual((kwargs["end"], kwargs["start"].isoformat()),
-                         (latest["captured_at"], "2026-09-20T08:00:10+00:00"))
+                         (latest["captured_at"], "2026-09-20T07:09:30+00:00"))
         # An up-to-date summary that already has every window is left alone.
         historian.query_samples.reset_mock()
         history.restore_from_historian(historian)
         historian.query_samples.assert_not_called()
+
+    def test_history_recovery_extends_a_saved_drive_instead_of_rebuilding_it(self):
+        # The broker stopped after the historian stored two readings but before the
+        # summary flushed; the saved drive began three hours earlier, beyond the query.
+        metric = radar.METRICS[0]
+        latest = dict(metric=metric, source=radar.SOURCE, unit="deg", value=.55,
+                      observed_at="2026-09-20T13:00:20+00:00", captured_at="2026-09-20T13:00:25+00:00")
+        middle = {**latest, "value": .5, "observed_at": "2026-09-20T13:00:10+00:00"}
+        flushed = {**latest, "value": .45, "observed_at": "2026-09-20T13:00:00+00:00"}
+        historian = mock.Mock()
+        historian.latest_sample.side_effect = lambda name: latest if name == metric else None
+        historian.query_samples.return_value = [latest, latest, middle, flushed, flushed]
+        window = {"count": 1, "mean": .45, "peak_abs": .45, "span_seconds": 0}
+        history = radar.AlignmentHistory()
+        history.last[metric] = {
+            "latest_value": .45, "observed_at": flushed["observed_at"],
+            "60": window, "300": window, "1800": window,
+            "drive": {"change": .35, "start_value": .1, "started_at": "2026-09-20T10:00:00+00:00",
+                      "count": 1000, "span_seconds": 10800.0},
+        }
+        history.restore_from_historian(historian)
+        drive = history.summary(0)[metric]["drive"]
+        self.assertEqual(drive["started_at"], "2026-09-20T10:00:00+00:00")
+        self.assertEqual(drive["count"], 1002)
+        self.assertAlmostEqual(drive["change"], .45)
+        self.assertAlmostEqual(drive["span_seconds"], 10820.0)
+        # The first live reading after the restart keeps extending the same drive.
+        history.add(metric, .6, 5.0, "2026-09-20T13:00:30+00:00")
+        drive = history.summary(0)[metric]["drive"]
+        self.assertEqual((drive["started_at"], drive["count"]), ("2026-09-20T10:00:00+00:00", 1003))
+        self.assertAlmostEqual(drive["change"], .5)
 
     def test_retained_windows_survive_restart_without_becoming_new_samples(self):
         with tempfile.TemporaryDirectory() as directory:

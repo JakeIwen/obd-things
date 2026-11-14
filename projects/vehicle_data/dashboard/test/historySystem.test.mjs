@@ -487,13 +487,13 @@ test("broker: failures are red and named; missing status says waiting", () => {
 // System: radar alignment
 
 test("radar: not live → retained values, neutral badge, last-read time once", () => {
-  // The long windows arrived after this fixture was captured: give elevation both, azimuth neither.
+  // The 30-minute window and drive change arrived after this fixture was captured: give elevation both, azimuth neither.
   const windows = {
     ...FULL.radar_alignment,
     "radar.alignment.elevation": {
       ...FULL.radar_alignment["radar.alignment.elevation"],
       1800: { count: 150, mean: -0.0251, peak_abs: 0.031, span_seconds: 1790 },
-      7200: { count: 610, mean: -0.0348, peak_abs: 0.041, span_seconds: 7190 },
+      drive: { change: -0.0348, start_value: 0.0097, started_at: "2026-09-24T20:30:00+00:00", count: 610, span_seconds: 7190 },
     },
   };
   const r = H.radarModel({
@@ -514,12 +514,12 @@ test("radar: not live → retained values, neutral badge, last-read time once", 
     ["1-min average", "−0.02° (6)"],
     ["5-min average", "−0.02° (16)"],
     ["30-min average", "−0.03° (150)"],
-    ["2-h average", "−0.03° (610)"],
+    ["Change this drive", "−0.03° (610)"],
     ["5-min peak", "0.02°"],
     ["Margin to ±1.00°", "0.98° to spare"],
     ["Aim", "aimed high · tilt down"],
   ]);
-  assert.deepEqual(az.rows.slice(2, 4), [["30-min average", "—"], ["2-h average", "—"]]);
+  assert.deepEqual(az.rows.slice(2, 4), [["30-min average", "—"], ["Change this drive", "—"]]);
   assert.equal(az.rows[5][1], "0.84° to spare");
   assert.deepEqual(az.rows[6], ["Aim", "left/right direction not known"]);
   assert.doesNotMatch(shownText(r), JARGON);

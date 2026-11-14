@@ -336,12 +336,12 @@ and when your phone is notified is on the [warnings page](/docs/warnings.html). 
 Two angles come from the ACC radar identifier `0845`, at candidate quality, read during
 engine-running intervals. The ±1° reference is a monitoring convention for this project, not an OEM
 alignment result. The System view shows the latest angle per axis, and on tap the 1-minute, 5-minute,
-30-minute and 2-hour averages (with sample counts), the 5-minute peak, and the margin to ±1.00°.
+30-minute averages (with sample counts), the change this drive, the 5-minute peak, and the margin to ±1.00°.
 Drive page 2's **Radar aim** tile shows the same angles at a glance: the latest value per axis and
-the four averages. The 1- and 5-minute averages cover one unbroken run of reads and start over after
-a gap of more than 30 seconds, such as an engine stop. The 30-minute and 2-hour averages are plain
-time windows ending at the latest read, so they keep averaging across a fuel stop; their sample
-counts show how much of the window has readings. The values are what the ACC radar module reports
+the three averages and **Δ drive**, the signed change since the first reading of this drive (a drive splits at a gap of more than 5 minutes). The 1- and 5-minute averages cover one unbroken run of reads and start over after
+a gap of more than 30 seconds, such as an engine stop. The 30-minute average is a plain
+time window ending at the latest read, so it keeps averaging across a fuel stop; its sample
+count shows how much of the window has readings. The 2-hour average was removed 2026-11-13. The values are what the ACC radar module reports
 about its own aim. Under the elevation value both views print what the sign means physically:
 `aimed high · tilt down` for a negative angle, `aimed low · tilt up` for a positive one, `level` near
 zero. This comes from the June 2026 repair, when the owner tilted the radar module down by about 1°

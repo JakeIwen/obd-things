@@ -1780,16 +1780,29 @@ retention update, each window ends at its latest radar observation and freezes
 there while parked. The last reading, means, peaks, sample counts and original
 timestamp remain visible with a "LAST RECORDED · NOT LIVE" badge. New samples
 after a gap over 30 seconds start new 1-minute and 5-minute windows; the
-30-minute and 2-hour windows added on 2026-10-10 (`WINDOW_SECONDS` in
-`radar_alignment.py`) are plain time windows ending at the latest read and keep
-averaging across such gaps. Live freshness gates
+30-minute window added on 2026-10-10 (`WINDOW_SECONDS` in
+`radar_alignment.py`) is a plain time window ending at the latest read and keeps
+averaging across such gaps. The 2-hour window was removed on 2026-11-13 at the
+owner's request; saved files drop it on load. In its place each axis publishes
+`drive`: the signed change of the latest angle from the first reading of the
+current drive (`change`, `start_value`, `started_at`, `count`, `span_seconds`).
+A drive is a run of readings with no gap over `DRIVE_GAP_SECONDS` (300 s, the
+historian's nominal trip idle timeout; it counts radar reads rather than vehicle
+activity, so a radar outage mid-drive can split it where a History trip continues). Its start
+is kept in memory, independent of the 30-minute samples, so a long drive keeps it.
+After a broker restart the saved row's drive continues if the first new reading's
+wall time is after the saved reading and within 300 s of it; otherwise a new drive
+starts. The startup historian recovery extends a saved drive with the readings it
+missed instead of rebuilding it, so its start survives the bounded query. Live freshness gates
 remain unchanged, and retained values never enter the live metric cache.
 The small `radar-alignment.json` file beside the history database retains these
 summaries across restarts; the history thread flushes changed summaries. A
-bounded indexed startup query can recover the final two hours of windows from
+bounded indexed startup query can recover the final windows and drive from
 existing historian observations, deduplicating repeated cached samples, and
-rebuilds a saved summary that predates a window. Raw averaging history is
-bounded to two hours/1,024 observations per axis.
+rebuilds a saved summary that predates a window or the drive change. The query
+reaches back at most `MAX_SAMPLES * POLL_INTERVAL_SECONDS` (about 2.8 hours), so
+a restored drive older than that starts at the oldest reading found. Raw
+averaging history is bounded to 30 minutes/1,024 observations per axis.
 Dashboard GETs perform no SQL, disk write, or diagnostic request.
 
 Activation verified September 20 via the live snapshot: the broker restarted

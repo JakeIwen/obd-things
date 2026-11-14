@@ -2,8 +2,9 @@
 
 The signed microdegree interpretation is inferred in the radar project's DID
 map. The 1 degree reference is a monitoring aid, not an ECU trip guarantee.
-Each axis publishes 1-minute, 5-minute, 30-minute and 2-hour windows ending
-at its latest read (see WINDOW_SECONDS for how gaps are treated).
+Each axis publishes 1-minute, 5-minute and 30-minute windows ending at its
+latest read (see WINDOW_SECONDS for how gaps are treated) and the signed change
+since the first reading of the current drive (see DRIVE_GAP_SECONDS).
 """
 
 from collections import deque
@@ -32,15 +33,23 @@ SOURCE = "radar_acc.did.0845"
 # Rolling windows published per axis, keyed by their length in seconds. The
 # short windows average one contiguous run of reads: a gap over
 # STALE_AFTER_SECONDS (an engine stop, a disabled poller) starts them afresh.
-# The long windows are plain time windows ending at the latest read; they keep
-# averaging across such gaps so a fuel stop does not erase the trend.
-WINDOW_SECONDS = (60, 300, 1800, 7200)
+# The 30-minute window is a plain time window ending at the latest read; it keeps
+# averaging across such gaps so a fuel stop does not erase the trend. (A 2-hour
+# window was removed 2026-11-13 at the owner's request; saved files drop it.)
+WINDOW_SECONDS = (60, 300, 1800)
 RUN_WINDOW_SECONDS = frozenset((60, 300))
-# Older saved summaries predate the long windows; they load without them.
+# Older saved summaries predate the 30-minute window; they load without it.
 LEGACY_WINDOW_SECONDS = (60, 300)
 MAX_WINDOW_SECONDS = max(WINDOW_SECONDS)
-# 7,200 s at the 10 s cadence is 720 reads per axis; the bound leaves headroom.
+# 1,800 s at the 10 s cadence is 180 reads per axis; the bound leaves headroom
+# and also caps the history query that rebuilds a drive after a restart.
 MAX_SAMPLES = 1024
+# A drive is a run of radar readings with no gap over this. It borrows the
+# historian's nominal trip idle timeout (history/models.py
+# trip_idle_timeout_seconds) but counts radar reads, not vehicle activity, so a
+# radar outage mid-drive can split it where a History trip continues. Kept as a
+# copy so this module does not import the history package.
+DRIVE_GAP_SECONDS = 300.0
 AXES = ("elevation", "azimuth")
 METRICS = tuple(f"radar.alignment.{axis}" for axis in AXES)
 REQUEST_DATA = bytes.fromhex("03 22 08 45 00 00 00 00")
@@ -204,6 +213,9 @@ class AlignmentHistory:
         self.lock = threading.RLock()
         self.dirty = False
         self.storage_error = None
+        # Per-metric current drive, kept apart from the 30-minute samples deque
+        # so a drive longer than the deque still remembers its first reading.
+        self._drives = {}
         # Set by the reference points (radar_reference.py); called after each stored reading.
         self.on_reading = None
         if self.path is not None:
@@ -218,14 +230,37 @@ class AlignmentHistory:
                     if not row:
                         continue
                     self._validate_retained(row)
-                self.last = {metric: saved["last"][metric] for metric in METRICS}
+                self.last = {metric: self._drop_retired_windows(saved["last"][metric])
+                             for metric in METRICS}
             except FileNotFoundError:
                 pass
             except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
                 self.storage_error = str(exc)
 
     @staticmethod
-    def _validate_retained(row):
+    def _drop_retired_windows(row):
+        # Files saved before a window was removed (7200) must not republish it.
+        return {key: item for key, item in row.items()
+                if not key.isdigit() or int(key) in WINDOW_SECONDS}
+
+    @staticmethod
+    def _validate_drive(drive):
+        def number(name, low, high):
+            value = drive[name]
+            if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                    or not math.isfinite(value) or not low <= value <= high:
+                raise ValueError("invalid retained radar drive")
+        number("change", -40, 40)
+        number("start_value", -20, 20)
+        number("span_seconds", 0, math.inf)
+        count = drive["count"]
+        if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+            raise ValueError("invalid retained radar drive count")
+        if datetime.fromisoformat(drive["started_at"]).tzinfo is None:
+            raise ValueError("saved radar drive start is not timezone-aware")
+
+    @classmethod
+    def _validate_retained(cls, row):
         stamp = datetime.fromisoformat(row["observed_at"])
         if stamp.tzinfo is None:
             raise ValueError("saved radar timestamp is not timezone-aware")
@@ -245,6 +280,8 @@ class AlignmentHistory:
                 value = window[name]
                 if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not low <= value <= high:
                     raise ValueError("invalid retained radar window")
+        if "drive" in row:
+            cls._validate_drive(row["drive"])
 
     def add(self, metric, value, observed_monotonic, observed_at=None):
         if metric not in self.samples or not math.isfinite(value) or abs(value) > 20:
@@ -259,6 +296,7 @@ class AlignmentHistory:
             run_start = _contiguous_run_start(samples)
             row = {"latest_value": value,
                    "observed_at": observed_at or datetime.now(timezone.utc).isoformat()}
+            row["drive"] = self._advance_drive(metric, value, observed_monotonic, row["observed_at"])
             for seconds in WINDOW_SECONDS:
                 earliest = observed_monotonic - seconds
                 if seconds in RUN_WINDOW_SECONDS:
@@ -273,6 +311,42 @@ class AlignmentHistory:
                 }
             self.last[metric] = row
             self.dirty = True
+
+    def _advance_drive(self, metric, value, mono, observed_at):
+        """Extend the metric's current drive with this reading, or start a new one.
+
+        Inside one process the gap is measured on the monotonic clock. With no
+        in-memory drive (a restart), the retained row's drive continues only if
+        this reading's wall time follows its last reading by at most
+        DRIVE_GAP_SECONDS.
+        """
+        drive = self._drives.get(metric)
+        if drive is not None and mono - drive["last_mono"] > DRIVE_GAP_SECONDS:
+            drive = None
+        if drive is None:
+            drive = self._resume_retained_drive(metric, mono, observed_at)
+        if drive is None:
+            drive = {"start_value": value, "started_at": observed_at, "start_mono": mono, "count": 0}
+        drive["count"] += 1
+        drive["last_mono"] = mono
+        self._drives[metric] = drive
+        return {"change": value - drive["start_value"], "start_value": drive["start_value"],
+                "started_at": drive["started_at"], "count": drive["count"],
+                "span_seconds": mono - drive["start_mono"]}
+
+    def _resume_retained_drive(self, metric, mono, observed_at):
+        if metric in self._drives:
+            return None
+        saved = self.last[metric]
+        retained = saved.get("drive") if saved else None
+        if not retained:
+            return None
+        wall_gap = (datetime.fromisoformat(observed_at)
+                    - datetime.fromisoformat(saved["observed_at"])).total_seconds()
+        if not 0 < wall_gap <= DRIVE_GAP_SECONDS:
+            return None
+        return {"start_value": retained["start_value"], "started_at": retained["started_at"],
+                "start_mono": mono - retained["span_seconds"] - wall_gap, "count": retained["count"]}
 
     def observe(self, result):
         """Count one stored broker observation; other metrics are ignored."""
@@ -311,9 +385,13 @@ class AlignmentHistory:
     def restore_from_historian(self, historian):
         """Recover the final observed windows once at startup using bounded reads.
 
-        A saved summary that is as new as the historian but predates a window
-        (a legacy file) is rebuilt too, so every window is published after a
-        code upgrade.
+        A saved summary that is as new as the historian but predates a window or
+        the drive change (a legacy file) is rebuilt too, so everything is
+        published after a code upgrade. A saved drive is extended with the
+        newer readings (same gap rule), keeping its start. With no saved drive
+        the query reaches back at most MAX_SAMPLES * POLL_INTERVAL_SECONDS
+        (about 2.8 h; repeated cached rows count toward the limit), so a rebuilt
+        drive longer than that starts at the oldest reading found.
         """
         for metric in METRICS:
             latest = historian.latest_sample(metric)
@@ -322,20 +400,31 @@ class AlignmentHistory:
             stamp = datetime.fromisoformat(latest["observed_at"])
             saved = self.last[metric]
             if saved and datetime.fromisoformat(saved["observed_at"]) >= stamp and \
-                    all(str(seconds) in saved for seconds in WINDOW_SECONDS):
+                    "drive" in saved and all(str(seconds) in saved for seconds in WINDOW_SECONDS):
                 continue
             rows = historian.query_samples(
-                metric, start=stamp - timedelta(seconds=MAX_WINDOW_SECONDS), end=latest["captured_at"],
+                metric, start=stamp - timedelta(seconds=MAX_SAMPLES * POLL_INTERVAL_SECONDS), end=latest["captured_at"],
                 fresh_only=True, newest_first=True, limit=MAX_SAMPLES,
             )
             restored = AlignmentHistory()
+            # A saved drive knows its true start, which may lie beyond the bounded
+            # query; extend it with the readings it missed rather than rebuild it.
+            extended = None
+            if saved and "drive" in saved:
+                extended = AlignmentHistory()
+                extended.last[metric] = saved
+                saved_at = datetime.fromisoformat(saved["observed_at"])
             for row in reversed(rows):
                 if row.get("source") != SOURCE or row.get("unit") != "deg" or not row.get("observed_at"):
                     continue
                 when = datetime.fromisoformat(row["observed_at"])
                 if when <= stamp:
                     restored.add(metric, row["value"], when.timestamp(), row["observed_at"])
+                    if extended is not None and when > saved_at:
+                        extended.add(metric, row["value"], when.timestamp(), row["observed_at"])
             if restored.last[metric]:
+                if extended is not None and extended.last[metric] is not saved:
+                    restored.last[metric]["drive"] = extended.last[metric]["drive"]
                 self.last[metric] = restored.last[metric]
                 self.dirty = True
         # Recovered wall timestamps never enter the new process's live windows.

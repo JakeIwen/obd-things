@@ -15,7 +15,7 @@ const WINDOWS = {
     60: { count: 6, mean: 0.150841, peak_abs: 0.150841, span_seconds: 54.9 },
     300: { count: 20, mean: 0.15084, peak_abs: 0.150841, span_seconds: 208 },
     1800: { count: 150, mean: 0.1612, peak_abs: 0.1702, span_seconds: 1790 },
-    7200: { count: 610, mean: 0.1748, peak_abs: 0.2014, span_seconds: 7190 },
+    drive: { change: 0.0412, start_value: 0.1096, started_at: "2026-09-24T20:30:00+00:00", count: 250, span_seconds: 2438 },
     latest_value: 0.150841,
     observed_at: "2026-09-24T21:10:38.001564+00:00",
   },
@@ -39,6 +39,13 @@ test("fmtAngleSigned and windowMean", () => {
   assert.equal(H.windowMean({ count: 2 }), "—");
 });
 
+test("driveChange: signed, and a dash without a finite change", () => {
+  assert.equal(H.driveChange({ change: -0.0412 }), MINUS + "0.04°");
+  assert.equal(H.driveChange({ change: 0.2 }), "+0.20°");
+  assert.equal(H.driveChange({}), "—");
+  assert.equal(H.driveChange(null), "—");
+});
+
 test("radar tile: live readings show latest, means and the ±1° reference in words", () => {
   const m = H.radarTileModel({
     axes: { azimuth: { fresh: true, value: 0.150841 }, elevation: { fresh: true, value: -0.017161 } },
@@ -47,11 +54,11 @@ test("radar tile: live readings show latest, means and the ±1° reference in wo
   });
   assert.equal(m.live, true);
   assert.equal(m.sub, "within ±1°");
-  assert.deepEqual(m.axes.azimuth, { latest: "+0.15°", aim: "", m1: "+0.15°", m5: "+0.15°", m30: "+0.16°", h2: "+0.17°" });
-  // The elevation fixture has no 2-hour window yet (a summary saved before it existed).
+  assert.deepEqual(m.axes.azimuth, { latest: "+0.15°", aim: "", m1: "+0.15°", m5: "+0.15°", m30: "+0.16°", drive: "+0.04°" });
+  // The elevation fixture has no drive change yet (a summary saved before it existed).
   assert.deepEqual(m.axes.elevation, {
     latest: MINUS + "0.02°", aim: "aimed high · tilt down",
-    m1: MINUS + "0.02°", m5: MINUS + "0.02°", m30: MINUS + "0.03°", h2: "—",
+    m1: MINUS + "0.02°", m5: MINUS + "0.02°", m30: MINUS + "0.03°", drive: "—",
   });
   const near = H.radarTileModel({ axes: { azimuth: { fresh: true, value: -0.85 } } });
   assert.equal(near.sub, "near the ±1° limit");
@@ -84,7 +91,7 @@ test("radar tile: nothing to show, or reads switched off, says Not reading", () 
   assert.equal(empty.live, false);
   assert.equal(empty.sub, "Not reading");
   for (const axis of H.RADAR_TILE_AXES) {
-    assert.deepEqual(empty.axes[axis.id], { latest: "—", aim: "", m1: "—", m5: "—", m30: "—", h2: "—" });
+    assert.deepEqual(empty.axes[axis.id], { latest: "—", aim: "", m1: "—", m5: "—", m30: "—", drive: "—" });
   }
   const off = H.radarTileModel({
     axes: { azimuth: { fresh: true, value: 0.2 } },

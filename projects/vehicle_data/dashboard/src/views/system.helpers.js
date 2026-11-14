@@ -14,7 +14,7 @@ import { DASH, fmtValue, fmtFixed, fmtUnit, fmtTime, fmtAgeCoarse, fmtInt } from
 import { metricLabel } from "../warningContext.js";
 import { aimText, AZIMUTH_AIM_UNMAPPED, RADAR_AXES, fmtAngle } from "../radarAim.js";
 import { anglesText, pointText, sinceReference } from "../radarReference.js";
-
+import { fmtAngleSigned } from "./driveMore.helpers.js";
 import { DOCS, obj, arr, num, str, wallMs, when, humanize, capital, plural, clip, createStableGate, agoText } from "./view.helpers.js";
 
 export { DOCS, wallMs, humanize, createStableGate, agoText, RADAR_AXES, fmtAngle };
@@ -372,6 +372,12 @@ function windowText(w) {
   return fmtAngle(x.mean) + " (" + fmtInt(x.count) + ")";
 }
 
+function driveText(d) {
+  const x = obj(d);
+  if (!x || num(x.change) === null || !(num(x.count) > 0)) return DASH;
+  return fmtAngleSigned(x.change) + " (" + fmtInt(x.count) + ")";
+}
+
 /**
  * Radar alignment card.
  * @param {{axes:Object<string,{fresh:boolean, value:number|null, held:{value:number,
@@ -429,7 +435,7 @@ export function radarModel(input) {
         ["1-min average", windowText(w["60"])],
         ["5-min average", windowText(w300)],
         ["30-min average", windowText(w["1800"])],
-        ["2-h average", windowText(w["7200"])],
+        ["Change this drive", driveText(w.drive)],
         ["5-min peak", w300 && num(w300.peak_abs) !== null ? fmtFixed(w300.peak_abs, 2) + "°" : DASH],
         ["Margin to ±1.00°", margin],
         ["Aim", axis.id === "azimuth" ? AZIMUTH_AIM_UNMAPPED : aimText(axis.id, value) || DASH],

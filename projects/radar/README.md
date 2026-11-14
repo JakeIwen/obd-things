@@ -78,7 +78,7 @@ vehicle-data README section "Radar alignment reference points".
 
 The telemetry dashboard now has an always-visible alignment panel backed by
 `projects/vehicle_data/radar_alignment.py` (2026-09-16). It displays candidate
-stored `0845` elevation/azimuth and trailing one/five/thirty-minute and two-hour sample averages.
+stored `0845` elevation/azimuth and trailing one/five/thirty-minute sample averages and the signed change over the current drive.
 The +/-1 degree band is an approximate monitoring reference, not a verified
 firmware trip threshold; the signed microdegree scaling remains inferred.
 The instantaneous `0841` pitch signal is not used for this band.

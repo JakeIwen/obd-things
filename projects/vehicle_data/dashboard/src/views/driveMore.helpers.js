@@ -30,6 +30,11 @@ export function windowMean(w) {
   return fmtAngleSigned(w.mean);
 }
 
+/** Signed change over the current drive (`{change}`) as a signed angle, or `—` when absent. */
+export function driveChange(d) {
+  return isObj(d) && isNum(d.change) ? fmtAngleSigned(d.change) : DASH;
+}
+
 /**
  * Radar aim tile model.
  * @param {{axes?: Object<string, {fresh?: boolean, value?: number|null,
@@ -37,9 +42,9 @@ export function windowMean(w) {
  *   polling?: object|null, nowMs?: number}} input
  *   `axes[id]`: `fresh` is a current record, `value` its number, `held` the dated last reading;
  *   `windows` is `status.radar_alignment` (per metric name: `latest_value`, `observed_at` and the
- *   `"60"`/`"300"`/`"1800"`/`"7200"` second windows); `polling` is `status.radar_alignment_polling`.
+ *   `"60"`/`"300"`/`"1800"` second windows and `drive`, the change since this drive's first reading); `polling` is `status.radar_alignment_polling`.
  * @returns {{live: boolean, sub: string, axes: Object<string, {latest: string, aim: string, m1: string,
- *   m5: string, m30: string, h2: string}>}}
+ *   m5: string, m30: string, drive: string}>}}
  *   `aim` is the physical reading of the sign (`aimed high · tilt down`), elevation only.
  */
 export function radarTileModel(input) {
@@ -78,7 +83,7 @@ export function radarTileModel(input) {
       m1: windowMean(w["60"]),
       m5: windowMean(w["300"]),
       m30: windowMean(w["1800"]),
-      h2: windowMean(w["7200"]),
+      drive: driveChange(w.drive),
     };
   }
   let sub;

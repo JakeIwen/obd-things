@@ -151,19 +151,20 @@ function maintenanceAt(nowMs) {
 }
 
 function radarStatusAt(nowMs) {
-  const axis = (latest, means) => ({
+  const axis = (latest, means, startValue) => ({
     latest_value: latest,
     observed_at: iso(nowMs),
     "60": {count: 12, mean: means[0]},
     "300": {count: 60, mean: means[1], peak_abs: Math.abs(latest) + 0.03},
     "1800": {count: 180, mean: means[2]},
-    "7200": {count: 420, mean: means[3]},
+    drive: {change: Math.round((latest - startValue) * 100) / 100, start_value: startValue, started_at: iso(nowMs - 42 * MINUTE_MS),
+      count: 252, span_seconds: 2520},
   });
   return {
     radar_alignment_polling: {commissioned: true},
     radar_alignment: {
-      "radar.alignment.azimuth": axis(0.12, [0.11, 0.10, 0.09, 0.08]),
-      "radar.alignment.elevation": axis(-0.18, [-0.17, -0.16, -0.15, -0.14]),
+      "radar.alignment.azimuth": axis(0.12, [0.11, 0.10, 0.09], 0.05),
+      "radar.alignment.elevation": axis(-0.18, [-0.17, -0.16, -0.15], -0.11),
     },
   };
 }
