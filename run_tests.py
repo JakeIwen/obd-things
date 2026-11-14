@@ -22,6 +22,11 @@ ROOT = Path(__file__).resolve().parent
 DASHBOARD = ROOT / "projects/vehicle_data/dashboard"
 # The paths the dashboard profile covers; docs cite this constant.
 DASHBOARD_SCOPE = "projects/vehicle_data/dashboard/"
+# Backend file types inside DASHBOARD_SCOPE fall outside the gate: repo-wide
+# guards the gate doesn't run read them anywhere under projects/
+# (test_no_legacy_can_topology.LIVE_CAN_SUFFIXES, and
+# test_service_units_start_modules globs projects/**/*.service).
+DASHBOARD_EXCLUDED_SUFFIXES = (".py", ".sh", ".service", ".socket", ".timer")
 
 # Pytest modules that read DASHBOARD_SCOPE. tests/test_run_tests.py guards the
 # list with a text scan; indirect readers are added by hand.

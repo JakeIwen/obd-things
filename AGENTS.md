@@ -341,7 +341,9 @@ Scoped gate **dashboard** (the global Code shape rule on scoped gates governs it
   including `test_backend_contracts.py`'s package.json launch-target scan), the layout step
   and the scratch build.
 - Covers: `projects/vehicle_data/dashboard/**` (`DASHBOARD_SCOPE` in `run_tests.py`).
-- Excludes: nothing inside that folder. The gate's own runner and declaration
+- Excludes: `.py`, `.sh`, `.service`, `.socket` and `.timer` files anywhere in that folder
+  (`DASHBOARD_EXCLUDED_SUFFIXES`), which repo-wide guards outside the gate scan. The gate's
+  own runner and declaration
   (`run_tests.py`, `tests/test_run_tests.py`, this paragraph, the `repo-dashboard-suite`
   entry in `.van-compute.json`) lie outside its scope, so changing them runs the whole suite.
 - Correctness: `tests/test_run_tests.py` fails when a test module names the dashboard

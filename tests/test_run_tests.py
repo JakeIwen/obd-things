@@ -88,6 +88,14 @@ class SuitePlanTests(unittest.TestCase):
         for target in listed:
             self.assertTrue(Path(run_tests.ROOT, target).is_file(), target)
 
+    def test_dashboard_scope_excludes_file_types_repo_wide_guards_scan(self):
+        from tests.test_no_legacy_can_topology import LIVE_CAN_SUFFIXES
+
+        excluded = set(run_tests.DASHBOARD_EXCLUDED_SUFFIXES)
+        self.assertLessEqual(set(LIVE_CAN_SUFFIXES), excluded)
+        # test_service_units_start_modules globs projects/**/*.service.
+        self.assertIn(".service", excluded)
+
     def test_npm_install_prefers_offline_and_cache_follows_xdg(self):
         with tempfile.TemporaryDirectory() as folder:
             steps = self.plan(Path(folder), profile=run_tests.Profile.FULL)
