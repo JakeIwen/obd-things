@@ -289,6 +289,7 @@ class CompactionTests(SpaceFixture):
         with self.assertRaisesRegex(compaction.CompactionRefused, "open"):
             self.run_compact(apply=True, holders=lambda path: ([4242], []))
 
+    @unittest.skipUnless(Path("/proc/self/fd").is_dir(), "processes_holding scans Linux /proc; this host has none")
     def test_scan_finds_a_real_holder(self):
         self.prepared_legacy_database()
         child = subprocess.Popen(
