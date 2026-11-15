@@ -783,8 +783,13 @@ activation are covered by the [systemd installation runbook](docs/systemd-instal
   `/v1` route must keep working.
 - `dist/` is gitignored build output served live. `npm ci && npm run build` in
   `dashboard/` is the frontend deploy step; the build publishes atomically and
-  writes its id to `dist/build.json`. A frontend-only change needs no restart.
-  A `web.py`/`web_v2.py` change needs a restart of the two web units. New
+  writes its id to `dist/build.json`. A frontend-only change needs no restart,
+  and its build may be deployed at any time, including while the van is on or
+  being driven (owner authorization, 2026-11-14). An open tablet keeps the
+  bundle it loaded. The build prunes the previous build's lazy chunks, so a
+  view or dialog that tablet hadn't opened yet stays blank until the page is
+  reloaded: reopen the app, or use System → Reload app if System was opened
+  before the deploy (System is itself a lazy view). A `web.py`/`web_v2.py` change needs a restart of the two web units. New
   broker metrics need a parked `van-telemetry` restart (the broker registry,
   passive reader and active helper snapshot all change).
 - Only the Tailscale listener has DTC jobs, so only one process writes the

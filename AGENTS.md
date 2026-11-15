@@ -66,6 +66,9 @@ class and provides the `/v1` JSON API. The MacBook-managed Van Dashboard reads
 `http://192.168.6.103:8765/v1/snapshot`, so `/v1` routes must keep working. Start with
 `projects/vehicle_data/README.md` section "Telemetry dashboard" and
 `projects/vehicle_data/dashboard/docs/design.md`.
+A frontend-only deploy (the dashboard build, no unit restart) may run at any time, including
+while the van is on or being driven (owner authorization, 2026-11-14): it sends nothing on CAN
+and restarts no service. Web-unit and broker restarts keep their own rules.
 
 Dashboard screenshots always show realistic dummy data that showcases the features in view
 (owner rule, 2026-10-21), whether they go in a README, a doc, a finding, a handoff or a report
