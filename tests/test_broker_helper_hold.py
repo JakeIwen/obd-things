@@ -6,9 +6,11 @@ helper process (``tests/helper_startup_support.py``). Persistent inhibit writes
 are patched out; nothing here reaches CAN, a socket or a service.
 """
 
+import io
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 from projects.vehicle_data import api_server, helper_hold, web, web_v2
@@ -581,6 +583,37 @@ class AlignmentAdmissionTests(HoldCase):
 
         self.assertEqual(broker.radar_service.request(dict(START_REQUEST))[0], 202)
         send.assert_called_once()
+
+
+class HoldEnvelopeTests(HoldCase):
+    """Bodies that are not JSON at all get the server's generic 400 envelope;
+    only parsed JSON reaches the hold's own `bad_request` check."""
+
+    def post(self, broker, body, *, length=None):
+        handler = api_server.TelemetryApiHandler.__new__(api_server.TelemetryApiHandler)
+        handler.path = helper_hold.API_PATH
+        handler.headers = {"Content-Length": str(len(body) if length is None else length)}
+        handler.rfile = io.BytesIO(body)
+        handler.server = SimpleNamespace(broker=broker)
+        replies = []
+        handler._json = lambda code, payload: replies.append((code, payload))
+        handler._do_POST_serialized()
+        return replies[0]
+
+    def test_malformed_and_empty_bodies_get_the_generic_400(self):
+        broker = self.broker(ScriptedSupervisor())
+        with mock.patch.object(broker, "helper_hold_request", wraps=broker.helper_hold_request) as hold:
+            for body, length, detail in (
+                (b"{oops", None, "body must be one JSON object"),
+                (b"", 0, "request body size is invalid"),
+            ):
+                with self.subTest(body=body):
+                    self.assertEqual(self.post(broker, body, length=length), (400, {
+                        "available": False, "reason": "invalid_request", "detail": detail,
+                    }))
+            hold.assert_not_called()
+            self.assertEqual(self.post(broker, b"[]"), (400, {"error": "bad_request"}))
+            self.assertEqual(self.post(broker, b'{"hold": true, "reason": "r"}')[0], 202)
 
 
 class HoldRouteTests(unittest.TestCase):
