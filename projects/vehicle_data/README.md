@@ -1512,8 +1512,9 @@ needs a broker that already has the hold control (a broker that predates it
 answers 404 and is refused), so the first install of that control is a parked
 restart. A restart still loads whatever code is on disk, so a deploy that
 updates files before the restart leaves the running broker on old code until
-then. The unit sets `KillMode=mixed` and `TimeoutStopSec=40` so a stop lets the
-broker stop its helpers in order; after installing the unit and a
+then. The unit sets `KillMode=control-group` and `TimeoutStopSec=40`, so after a
+broker crash the helpers get SIGTERM plus the stop timeout to restore their
+adapters (`mixed` would SIGKILL them as soon as the broker exits); after installing the unit and a
 `daemon-reload`, check `systemctl show -p KillMode,TimeoutStopUSec
 van-telemetry.service`.
 
