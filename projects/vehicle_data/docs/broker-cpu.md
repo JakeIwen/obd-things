@@ -137,7 +137,8 @@ establish the actual deployed improvement.
 
 Raw evidence stays under `tmp/vehicle_data/broker-cpu-20261023/`, with the live
 sample at `tmp/vehicle_data/cpu-before-20261023.jsonl` and the finalized backup
-at `tmp/vehicle_data/cpu-history-20261023.sqlite3`.
+at `tmp/vehicle_data/cpu-history-20261023.sqlite3` (archived on 2026-11-14 to
+`/mnt/EXFAT512/vanpi-root-archive/obd-things/vehicle_data/`; no longer under `tmp/`).
 
 ## Process rows, validation and activation
 
