@@ -25,6 +25,7 @@ import uuid
 
 from lib.timeutil import finite_number, utc_now
 from projects.vehicle_data import radar_reference
+from projects.vehicle_data.helper_hold import HoldRefusal
 from projects.vehicle_data.http_common import exact_json
 from projects.vehicle_data.radar_service_alignment import (
     ACTIVE_STATES, API_PATH, COMPLETED, ENABLE_FLAG, EVENT_FIELDS, EVENT_TYPE, FAILED, IDLE,
@@ -157,7 +158,10 @@ class RadarServiceControl:
     """
 
     def __init__(self, *, history=None, log_dir=DEFAULT_LOG_DIR, popen_factory=subprocess.Popen,
-                 monotonic=time.monotonic):
+                 monotonic=time.monotonic, helpers_held=lambda: False):
+        # The broker's drive-helper hold; read under this lock, which also
+        # admits the hold (unless_run_active), so a start and a hold exclude each other.
+        self._helpers_held = helpers_held
         self.references = radar_reference.RadarReferences(history)
         self._pipe = HelperCommandPipe(popen_factory, on_start=self._helper_started)
         self._log_dir = pathlib.Path(log_dir) if log_dir is not None else None
@@ -291,6 +295,9 @@ class RadarServiceControl:
     def _start(self) -> tuple[int, dict[str, object]]:
         if self._run is not None and self._run.active:
             return self._refused(409, "already_active", "a service alignment is already active")
+        if self._helpers_held():
+            return self._refused(409, HoldRefusal.HELPERS_HELD.value,
+                                 "the drive helpers are held for a broker restart")
         helper = self._helper()
         if not helper["ready"]:
             return self._refused(409, "helper_not_ready", helper["detail"])

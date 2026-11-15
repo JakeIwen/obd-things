@@ -765,7 +765,10 @@ class TelemetryBroker:
 
         self._lock = threading.RLock()
         self._radar_history = radar_history or AlignmentHistory()
-        self.radar_service = RadarServiceControl(history=self._radar_history)
+        self.radar_service = RadarServiceControl(
+            history=self._radar_history,
+            helpers_held=lambda: self._helper_hold.active,
+        )
         # Prevent the passive collector from racing a client-triggered active
         # request before the cross-process observer/exclusive lock is reached.
         self._source_lock = threading.Lock()

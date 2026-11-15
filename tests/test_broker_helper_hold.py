@@ -16,7 +16,7 @@ from projects.vehicle_data.broker import ActiveDriveSupervisor, TelemetryBroker
 from projects.vehicle_data.helper_startup_grant import cancelled_before_grant_final
 from projects.vehicle_data.http_common import route_name
 from projects.vehicle_data.models import failure
-from projects.vehicle_data.radar_service_control import TrackedRun
+from projects.vehicle_data.radar_service_control import START_REQUEST, TrackedRun
 from projects.vehicle_data.radar_service_alignment import RUNNING
 from tests.helper_startup_support import HelperLauncher, ScriptedHelper, WAIT_SECONDS
 import tests.test_active_drive as drive_tests
@@ -515,6 +515,72 @@ class ClaimCleanupTests(HoldCase):
         self.assertEqual(states["auxiliary_drive"], "stopped_unverified")
         self.assertEqual(states["active_drive"], "stopped_verified")
         self.assertFalse(broker._auxiliary_drive_restoration_latched)
+
+
+class AlignmentAdmissionTests(HoldCase):
+    """An alignment start and a hold-on exclude each other, in either order."""
+
+    def ready_radar(self, broker):
+        radar = broker.radar_service
+        radar._supported = True
+        for name in ("alive", "send"):
+            patcher = mock.patch.object(radar._pipe, name, return_value=True)
+            started = patcher.start()
+            self.addCleanup(patcher.stop)
+        return started  # the send mock
+
+    def test_start_is_refused_while_held_and_the_helper_is_slow_to_stop(self):
+        stop_seen, release = threading.Event(), threading.Event()
+
+        class SlowToStop(ScriptedSupervisor):
+            def run(self, stop):
+                final = super().run(stop)
+                stop_seen.set()
+                release.wait(WAIT_SECONDS)  # still restoring
+                return final
+
+        active = SlowToStop()
+        broker = self.broker(active)
+        send = self.ready_radar(broker)
+        thread = self.epoch_in_thread(broker)
+        self.assertTrue(active.started.wait(WAIT_SECONDS))
+        self.assertEqual(broker.helper_hold_request(dict(HOLD_ON))[0], 202)
+        self.assertTrue(stop_seen.wait(WAIT_SECONDS))
+
+        code, body = broker.radar_service.request(dict(START_REQUEST))
+
+        self.assertEqual((code, body["reason"]), (409, "helpers_held"))
+        self.assertIsNone(body["run"])
+        send.assert_not_called()
+        release.set()
+        self.join(thread)
+
+    def test_hold_is_refused_once_a_start_is_admitted(self):
+        active = ScriptedSupervisor()
+        broker = self.broker(active)
+        send = self.ready_radar(broker)
+        thread = self.epoch_in_thread(broker)
+        self.assertTrue(active.started.wait(WAIT_SECONDS))
+
+        self.assertEqual(broker.radar_service.request(dict(START_REQUEST))[0], 202)
+        reply = broker.helper_hold_request(dict(HOLD_ON))
+
+        self.assertEqual(reply, (409, {"error": "alignment_active"}))
+        self.assertFalse(broker.helper_hold_response()["held"])
+        self.assertEqual(active.stop_calls, 0)
+        send.assert_called_once()
+        active.stop()
+        self.join(thread)
+
+    def test_start_is_admitted_again_after_hold_off(self):
+        broker = self.broker(ScriptedSupervisor())
+        send = self.ready_radar(broker)
+        broker.helper_hold_request(dict(HOLD_ON))
+        self.assertEqual(broker.radar_service.request(dict(START_REQUEST))[0], 409)
+        broker.helper_hold_request(dict(HOLD_OFF))
+
+        self.assertEqual(broker.radar_service.request(dict(START_REQUEST))[0], 202)
+        send.assert_called_once()
 
 
 class HoldRouteTests(unittest.TestCase):
