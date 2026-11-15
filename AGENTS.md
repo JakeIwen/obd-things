@@ -145,7 +145,11 @@ the `claimed_run` launch-claim cleanup); blocked-reason writes, supervisor stops
 admission stay in `broker.py`. The unit sets `KillMode=control-group`/`TimeoutStopSec=40` (a
 crashed broker's helpers still get SIGTERM and the full timeout to restore; `mixed` would SIGKILL
 them as soon as the broker exits); check with
-`systemctl show -p KillMode,TimeoutStopUSec van-telemetry.service`. Costs, the 404 rule for a
+`systemctl show -p KillMode,TimeoutStopUSec van-telemetry.service`. On its first full
+reconciliation pass the broker inhibits (`vehicle-data-armed-at-startup-<role>`) any vehicle
+role it finds armed with no owner, the trace a helper killed mid-restoration leaves; the pure
+decision is `projects/vehicle_data/armed_at_startup.py`. A person inspects the adapter,
+restores listen-only and ends the inhibit. Costs, the 404 rule for a
 broker without the hold control and the rolling-deploy hazard are in the vehicle-data README
 section "Restarting the broker".
 
