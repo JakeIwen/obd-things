@@ -21,7 +21,7 @@ import { speedFooter } from "./driveSpeed.helpers.js";
 // Battery voltage (as its tile model shows it) beside the alternator field duty; see voltageFieldParts.
 const voltageModel = tileModel("battery.voltage", { decimals: 1 });
 const voltageFieldValue = computed(() =>
-  voltageFieldParts(voltageModel.valueText.value, voltageModel.kind.value, liveValue("generator.field_duty").value),
+  voltageFieldParts(voltageModel.valueText.value, voltageModel.unitText.value, voltageModel.kind.value, liveValue("generator.field_duty").value),
 );
 const vf = (key) => computed(() => voltageFieldValue.value[key]);
 const VF = { volts: vf("volts"), voltUnit: vf("voltUnit"), sep: vf("sep"), field: vf("field"), fieldUnit: vf("fieldUnit") };
