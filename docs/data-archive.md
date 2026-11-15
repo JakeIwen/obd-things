@@ -11,8 +11,9 @@ anything under either `tmp/` tree tracked or backed up.
   redacted evidence subsets into git.
 - Keep active locks/service state, small inventories, current benchmark inputs, executable ECU
   databases, and near-term working results in the Pi's local `tmp/`.
-- Put large completed captures, cold raw evidence, and compute history in
-  `/mnt/EXFAT512/obd-things/tmp/` after checking the mount and verifying the copy.
+- Put large completed captures and cold raw evidence in
+  `/mnt/EXFAT512/obd-things/tmp/` after checking the mount and verifying the copy. Compute
+  history stays local (see "Compute history").
 - Delete caches, virtual environments, decompiler output, failed staging copies, and other
   mechanical derivatives only when their source remains available.
 - A symlink under local `tmp/` is a convenience pointer, not redundancy. If it appears broken,
@@ -146,28 +147,15 @@ retain working paths.
 
 ## Compute history
 
-The complete compute history at the audit checkpoint is preserved as real directories under:
+All compute history lives locally as real directories under `tmp/compute/done/` and
+`tmp/compute/failed/`. There is no EXFAT copy of it and no `tmp/compute/archive` link: the July
+archive was removed on 2026-11-14 (see the cleanup ledger below). The five failed jobs that only
+the archive held and that tracked findings cite were restored first, so every cited job answers
+`pi_compute.py status` and `result`.
 
-```text
-/mnt/EXFAT512/obd-things/tmp/compute/done/    # 420 jobs
-/mnt/EXFAT512/obd-things/tmp/compute/failed/  # 117 jobs
-```
-
-Local `tmp/compute/archive` points to that root. The 61 completed jobs whose IDs are cited by
-tracked findings/configuration also remain as real local directories under `tmp/compute/done/`,
-so their normal `pi_compute.py status` and `result` commands continue to work.
-
-Van-compute intentionally ignores symlinked job directories. Consequently, an archived-only job
-is read directly through `tmp/compute/archive/{done,failed}/<job-id>/`; it is not visible to
-`pi_compute.py status`, `result`, or `list`. To restore normal queue access, enter van-compute
-maintenance, copy the complete archived job directory back as a real
-`tmp/compute/{done,failed}/<job-id>/` directory, verify its manifest/results, and then leave
-maintenance. Do not replace the queue's `done/` or `failed/` state directory with a symlink:
-completion depends on same-filesystem atomic moves.
-
-EXFAT's allocation unit makes the many small compute source snapshots consume substantially more
-allocated space than their logical byte count. That is expected; the archive prioritizes direct
-per-file access and provenance over compact packing.
+Van-compute ignores symlinked job directories and relies on same-filesystem atomic moves, so
+never replace `done/` or `failed/`, or a job inside them, with a symlink to another volume.
+Completed history is governed by the recurring retention policy above.
 
 ## 2026-07-30 cleanup ledger
 
@@ -282,3 +270,21 @@ install the two obd retention units, run the first cleanup successfully,
 then enable the `.timer`. The old age-only handoff is
 superseded. Actual reclaimed space and installed service behavior remain to
 be verified after the owner runs the replacement activation handoff.
+
+## 2026-11-14 cleanup ledger
+
+The owner ordered removal of the uncited July compute archive and of uncited local compute jobs
+older than 30 days. A job counted as cited when its ID appeared in a tracked file on any local or
+remote branch, in any commit message, in `compute-retention-pins.md`, in a handoff note or other
+non-`tmp/` working file, or in another kept job's manifest or results. IDs found only in
+`tmp/` plan files or test caches did not count. Age came from the ID timestamp (before
+2026-10-15T00:00:00Z) and was re-checked against each manifest's `finished_at`.
+
+- Archive (`/mnt/EXFAT512/obd-things/tmp/compute/`, 420 done and 117 failed jobs): five cited
+  failed jobs (`20260726T232522Z-4ff27360`, `20260728T073319Z-e6b7d187`,
+  `20260728T073320Z-0a1669a1`, `20260728T073321Z-f88c721d`, `20260728T073322Z-346c3e19`) were
+  copied to local `failed/` and verified file by file (names, sizes, SHA-256). The other 61 cited
+  jobs already existed locally with identical contents. All 537 archive job directories, then
+  the empty archive tree and the local link, were removed, freeing about 4.66 GB on EXFAT512.
+- Local: 181 uncited jobs older than 30 days (158 done, 23 failed) were removed, freeing about
+  2.33 GB of the Pi root filesystem. 395 done and 76 failed jobs remain.

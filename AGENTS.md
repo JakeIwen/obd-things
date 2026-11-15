@@ -480,7 +480,7 @@ committed in place.
 
 Cold, large, or completed machine evidence may live in the matching tree under
 `/mnt/EXFAT512/obd-things/tmp/`. Read [`docs/data-archive.md`](docs/data-archive.md) before treating
-a local symlink as missing data or moving archived compute jobs. Verify the mount is the expected
+a local symlink as missing data; compute history stays local. Verify the mount is the expected
 writable EXFAT volume before relying on an archived path. Keep active locks, current service state,
 small inventories, benchmark inputs, and artifacts requiring guaranteed access on the Pi.
 
