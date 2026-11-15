@@ -22,11 +22,10 @@ from projects.vehicle_data.engine_off_voltage import EngineOffVoltageCapture
 from projects.vehicle_data.helper_events import validate_helper_status
 from projects.vehicle_data.helper_hold import (
     HELD_BLOCKED_REASON,
-    HoldRecord,
     HoldRefusal,
     blocked_reason_after_stop,
-    parse_request as parse_hold_request,
 )
+from projects.vehicle_data.helper_hold_control import HelperHoldControl
 from projects.vehicle_data.helper_startup_grant import (
     READY_EVENT_TYPE,
     StartupGrant,
@@ -159,30 +158,6 @@ _BLOCKED_ATTRIBUTES = {
     "active_drive": ("_active_drive_blocked_reason", "_active_drive_blocked_detail"),
     "auxiliary_drive": ("_auxiliary_drive_blocked_reason", "_auxiliary_drive_blocked_detail"),
 }
-
-
-class _StopWhenAny:
-    """A supervisor stop condition set while any of its events is set.
-
-    It joins the broker's shutdown or epoch-end event with the helper hold, so
-    a hold set at any moment is seen by every check the supervisor makes:
-    before the launch, before the startup grant and in the run loop.
-    """
-
-    def __init__(self, *events: threading.Event):
-        self._events = events
-
-    def is_set(self) -> bool:
-        return any(event.is_set() for event in self._events)
-
-    def wait(self, timeout: float | None = None) -> bool:
-        deadline = None if timeout is None else time.monotonic() + timeout
-        while not self.is_set():
-            remaining = 0.05 if deadline is None else deadline - time.monotonic()
-            if remaining <= 0:
-                return False
-            self._events[0].wait(min(remaining, 0.05))
-        return True
 
 
 class ActiveDriveSupervisor:
@@ -866,11 +841,7 @@ class TelemetryBroker:
         self._auxiliary_drive_blocked_reason: str | None = None
         self._auxiliary_drive_blocked_detail: str | None = None
         self._auxiliary_drive_restoration_latched = False
-        # Drive-helper hold (helper_hold.py). The event mirrors the record's
-        # `held` so supervisors can poll it; both change under _hold_lock.
-        self._hold_lock = threading.Lock()
-        self._hold = HoldRecord()
-        self._hold_event = threading.Event()
+        self._helper_hold = HelperHoldControl(lambda: self.monotonic())
         self._wake_authorization_deadline: float | None = None
         self._wake_authorization_owner: int | None = None
         self._active_drive: dict[str, object] = {
@@ -2455,7 +2426,7 @@ class TelemetryBroker:
                 reason="unsupported_mode",
                 detail=f"unsupported acquisition mode {mode!r}",
             )
-        if mode != "passive" and self._hold_event.is_set():
+        if mode != "passive" and self._helper_hold.active:
             # Checked before the rate limit, so a refused wake costs no slot.
             return failure(
                 metric=metric,
@@ -2856,13 +2827,7 @@ class TelemetryBroker:
 
     def helper_hold_response(self) -> dict[str, object]:
         """`GET /v1/helpers/hold`: whether helpers are held and how each one stopped."""
-        with self._lock:
-            pids = {
-                "active_drive": self._active_drive.get("helper_pid"),
-                "auxiliary_drive": self._auxiliary_drive.get("helper_pid"),
-            }
-        with self._hold_lock:
-            return self._hold.reply(self.monotonic(), pids)
+        return self._helper_hold.reply(self._helper_pids())
 
     def helper_hold_request(self, payload: object) -> tuple[int, dict[str, object]]:
         """`POST /v1/helpers/hold`: hold on (202) or off (200), local socket only.
@@ -2870,36 +2835,28 @@ class TelemetryBroker:
         Hold on stops running helpers through the supervisors' normal stop and
         returns at once; callers poll the GET body for each helper's outcome.
         Hold off takes effect at once; the collector lifts the `held` blocked
-        reasons on its next cycle, before it decides any launch.
+        reasons on its next cycle, before it decides any launch. The hold is
+        admitted under the radar control's lock, so no alignment run can start
+        between its check and the hold that would end its helper.
         """
-        parsed = parse_hold_request(payload)
-        if parsed is None:
-            return 400, {"error": HoldRefusal.BAD_REQUEST.value}
-        hold, reason = parsed
-        if not hold:
-            with self._hold_lock:
-                self._hold.end()
-                self._hold_event.clear()
-            return 200, self.helper_hold_response()
-        started: list[bool] = []
+        return self._helper_hold.request(
+            payload,
+            admit=self.radar_service.unless_run_active,
+            stop_helpers=self._stop_drive_helpers,
+            pids=self._helper_pids,
+        )
 
-        def begin() -> None:
-            with self._hold_lock:
-                started.append(self._hold.begin(reason, self.monotonic()))
-                self._hold_event.set()
+    def _helper_pids(self) -> dict[str, int | None]:
+        with self._lock:
+            return {
+                "active_drive": self._active_drive.get("helper_pid"),
+                "auxiliary_drive": self._auxiliary_drive.get("helper_pid"),
+            }
 
-        # Under the radar control's lock, so no alignment run can start between
-        # its check and the hold that would end its helper.
-        if not self.radar_service.unless_run_active(begin):
-            return 409, {"error": HoldRefusal.ALIGNMENT_ACTIVE.value}
-        if started[0]:
-            for supervisor in (
-                self.active_drive_supervisor,
-                self.auxiliary_drive_supervisor,
-            ):
-                if supervisor is not None:
-                    supervisor.stop()
-        return 202, self.helper_hold_response()
+    def _stop_drive_helpers(self) -> None:
+        for supervisor in (self.active_drive_supervisor, self.auxiliary_drive_supervisor):
+            if supervisor is not None:
+                supervisor.stop()
 
     def _settle_helper_hold(self) -> None:
         """Expire a lapsed hold and, once no hold is active, lift `held` blocks.
@@ -2908,11 +2865,7 @@ class TelemetryBroker:
         writes the C-CAN blocked reason, so the end of a hold always takes
         effect before the next launch decision and never races those writes.
         """
-        with self._hold_lock:
-            if self._hold.expire(self.monotonic()):
-                self._hold_event.clear()
-            held = self._hold.held
-        if held:
+        if self._helper_hold.settle():
             return
         with self._lock:
             for reason_attribute, detail_attribute in _BLOCKED_ATTRIBUTES.values():
@@ -2922,14 +2875,11 @@ class TelemetryBroker:
 
     def _claim_helper_launch(self, helper: str) -> bool:
         """Claim a helper launch; False while held. Excludes a concurrent hold-on."""
-        with self._hold_lock:
-            return self._hold.claim(helper)
+        return self._helper_hold.claim(helper)
 
     def _end_helper_run(self, helper: str, outcome: dict[str, object] | None) -> None:
         """Release a launch claim; give a helper a hold stopped the `held` block."""
-        with self._hold_lock:
-            stopped_by_hold = self._hold.finish(helper, outcome)
-            still_held = self._hold.held
+        stopped_by_hold, still_held = self._helper_hold.finish(helper, outcome)
         if not stopped_by_hold:
             return
         reason_attribute, detail_attribute = _BLOCKED_ATTRIBUTES[helper]
@@ -2952,8 +2902,7 @@ class TelemetryBroker:
                 )
 
     def _show_helpers_held(self, *, active: bool = True) -> None:
-        with self._hold_lock:
-            reason = self._hold.reason
+        reason = self._helper_hold.reason
         held = {
             "state": "idle",
             "reason": HELD_BLOCKED_REASON,
@@ -3027,7 +2976,7 @@ class TelemetryBroker:
                 "qualified passive engine-running evidence is absent",
             )
             return
-        if self._hold_event.is_set():
+        if self._helper_hold.active:
             self._show_helpers_held()
             return
         if self._active_drive_blocked_reason is not None:
@@ -3096,7 +3045,7 @@ class TelemetryBroker:
                 outcome = None
                 try:
                     outcome = self.auxiliary_drive_supervisor.run(
-                        _StopWhenAny(auxiliary_stop, self._hold_event)
+                        self._helper_hold.stop_condition(auxiliary_stop)
                     )
                 finally:
                     if outcome is None:  # supervision raised
@@ -3174,7 +3123,7 @@ class TelemetryBroker:
         outcome = None
         try:
             outcome = self.active_drive_supervisor.run(
-                _StopWhenAny(self._collector_stop, self._hold_event)
+                self._helper_hold.stop_condition(self._collector_stop)
             )
         finally:
             if outcome is None:  # supervision raised
