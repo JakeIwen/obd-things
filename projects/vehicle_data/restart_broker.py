@@ -300,6 +300,8 @@ class Hold:
         self.env = env
         self.renewed_at = 0.0
         self.renewals = 0
+        self.sent_at = 0.0  # when the latest hold-on left, accepted or not
+        self.keep = False  # set once a restart may be pending: never release then
         self.engaged = False  # a hold-on we confirmed
         self.unsure = False  # a hold-on whose answer was lost
 
@@ -314,17 +316,19 @@ class Hold:
         """
         if not self.engaged and not self.unsure:
             self._refuse_existing_hold()
-        try:
-            code, body = self._post({"hold": True, "reason": HOLD_REASON})
-        except (OSError, RuntimeError, ValueError):
-            self.unsure = True  # the broker may have accepted it; cleanup checks
-            raise
+        # Mark the request uncertain and stamp it before it leaves: an interrupt or a
+        # lost answer after the broker accepted it must still find it at cleanup.
+        was_unsure, self.unsure = self.unsure, True
+        self.sent_at = self.env.clock()
+        code, body = self._post({"hold": True, "reason": HOLD_REASON})
         if code == 404:
+            self.unsure = was_unsure
             raise HoldFailure("the running broker predates the hold control; "
                               "restart it parked once to install it")
         if code != 202:
+            self.unsure = was_unsure  # a definite refusal: nothing of ours exists
             raise HoldFailure(f"hold refused with {code} {body.get('error', '')}".strip())
-        self.engaged = True
+        self.engaged, self.unsure = True, False
         self.renewed_at = self.env.clock()
         self.renewals += 1
 
@@ -356,15 +360,21 @@ class Hold:
         except (OSError, RuntimeError, ValueError):
             code, body = 0, {}
         if code != 200:
-            left = max(0.0, helper_hold.HOLD_SECONDS - (self.env.clock() - self.renewed_at))
-            out(f"Could not confirm the hold is ours; if it is, it expires on its own within "
-                f"about {left:.0f} s.")
+            out(self.expiry_note("Could not confirm the hold is ours."))
         elif body.get("held") is not True:
             out("The hold had already ended.")
         elif body.get("reason") != HOLD_REASON:
             out(f"Not releasing: the hold now belongs to another request ({body.get('reason')!r}).")
         else:
             out(self._release())
+
+    def expiry_note(self, lead: str) -> str:
+        """What to tell the operator when the hold is left to lapse (an upper bound)."""
+        left = helper_hold.HOLD_SECONDS - (self.env.clock() - max(self.sent_at, self.renewed_at))
+        if left < 1.0:
+            return (f"{lead} If it is ours, its time should already have run out; "
+                    f"confirm with GET {helper_hold.API_PATH}.")
+        return f"{lead} If it is ours, it expires on its own within about {left:.0f} s."
 
     def _release(self) -> str:
         try:
@@ -452,14 +462,66 @@ def _open_events(env: Environment) -> int:
     return 1
 
 
+def _settle(env: Environment) -> bool:
+    env.out(f"Restarted. Waiting {SETTLE_SECONDS:.0f} s for the first evaluations.")
+    env.sleep(SETTLE_SECONDS)
+    return True
+
+
 def _restart(env: Environment) -> bool:
+    """Parked mode: the script's blocking restart; any nonzero status is a failure."""
     code, _ = env.run(RESTART_COMMAND)
     if code != 0:
         env.out(f"systemctl restart failed with exit status {code}")
         return False
-    env.out(f"Restarted. Waiting {SETTLE_SECONDS:.0f} s for the first evaluations.")
-    env.sleep(SETTLE_SECONDS)
-    return True
+    return _settle(env)
+
+
+def _restart_state(env: Environment, pid_before: str) -> str:
+    """After a restart client that did not report success: what really happened.
+
+    "done": a new broker process runs. "not_started": the same broker runs and
+    no job is queued, so nothing is pending. "pending": anything else, a queued
+    job or unreadable state, because a systemctl client that timed out or was
+    interrupted leaves its job to run. Blocking `systemctl restart` is kept over
+    `--no-block` because the sudoers entry matches the literal argv and a new
+    flag would change what must be allowed.
+    """
+    code, pid_out = env.run(["systemctl", "show", "-p", "MainPID", "--value", UNIT])
+    jcode, job_out = env.run(["systemctl", "show", "-p", "Job", "--value", UNIT])
+    pid = pid_out.strip()
+    if code != 0 or jcode != 0 or not pid_before:
+        return "pending"
+    if pid not in ("", "0", pid_before):
+        return "done"
+    return "not_started" if pid == pid_before and not job_out.strip() else "pending"
+
+
+def _submit_restart(env: Environment, hold: Hold, pid_before: str) -> bool:
+    """Running mode: restart, treating a client failure as indeterminate until classified."""
+    try:
+        code, _ = env.run(RESTART_COMMAND)
+    except BaseException:
+        _classify_unconfirmed(env, hold, pid_before)
+        raise
+    if code == 0:
+        return _settle(env)
+    env.out(f"systemctl restart client ended with exit status {code}")
+    state = _classify_unconfirmed(env, hold, pid_before)
+    return state == "done" and _settle(env)
+
+
+def _classify_unconfirmed(env: Environment, hold: Hold, pid_before: str) -> str:
+    state = _restart_state(env, pid_before)
+    if state == "done":
+        hold.keep = True
+        env.out("The restart did complete (a new broker process runs); the old hold ended with it.")
+    elif state == "pending":
+        hold.keep = True
+        env.out("The restart may still be running or its state is unreadable, so the hold is NOT "
+                "released; check `systemctl status van-telemetry.service`. "
+                + hold.expiry_note("Hold left to lapse."))
+    return state
 
 
 def _recorder_line(env: Environment, before: str) -> None:
@@ -568,7 +630,7 @@ def _verified_quiet(env: Environment, hold: Hold) -> str | None:
         return f"the broker could not be read: {error}"
 
 
-def _hold_then_restart(env: Environment, hold: Hold) -> bool:
+def _hold_then_restart(env: Environment, hold: Hold, pid_before: str) -> bool:
     """Engage, verify, restart. The restart follows the last hold check directly:
     nothing unbounded or slow sits between them, so the 60 s of hold time that
     the last check demanded still stands when the restart is submitted."""
@@ -584,7 +646,7 @@ def _hold_then_restart(env: Environment, hold: Hold) -> bool:
     if reason is not None:
         env.out(f"NOT RESTARTING: {reason}")
         return False
-    return _restart(env)
+    return _submit_restart(env, hold, pid_before)
 
 
 def run_while_running(env: Environment, check: bool) -> int:
@@ -602,7 +664,7 @@ def run_while_running(env: Environment, check: bool) -> int:
     hold = Hold(env)
     restarted = False
     try:
-        restarted = _hold_then_restart(env, hold)
+        restarted = _hold_then_restart(env, hold, pid_before)
     finally:
         # One cleanup scope for engagement, verification and restart; it
         # releases only a hold that is ours on the broker that took it, and an
@@ -613,6 +675,8 @@ def run_while_running(env: Environment, check: bool) -> int:
 
 
 def _cleanup(env: Environment, hold: Hold, pid_before: str) -> None:
+    if hold.keep:
+        return
     try:
         same = bool(pid_before) and _main_pid(env, UNIT) == pid_before
         hold.release_if_ours(same)

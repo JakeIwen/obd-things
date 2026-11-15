@@ -60,6 +60,7 @@ class Fake:
         self.pre_body = None  # a hold some other client already holds
         self.lose_first_hold_on = False
         self.hold_get_fails = False
+        self.job_out = ""  # a queued job on the broker unit
         self.pid_delay = 0.0
         self.lock_busy = False
         self.hold_posts = list(hold_posts or [(202, hold_body())])
@@ -104,6 +105,8 @@ class Fake:
     def run(self, argv):
         self.calls.append(("run", tuple(argv)))
         if argv[:2] == ["systemctl", "show"]:
+            if argv[-1] == restart_broker.UNIT and "Job" in argv:
+                return 0, self.job_out + "\n"
             if argv[-1] == restart_broker.UNIT:
                 self.now += self.pid_delay
                 self.pid_delay = 0.0
@@ -454,7 +457,7 @@ def test_interrupted_restart_releases_only_the_same_brokers_hold():
     with pytest.raises(KeyboardInterrupt):
         restart_broker.main(["--while-running"], env)
     assert {"hold": False} not in fake.posts()
-    assert "Not releasing the hold" in fake.text
+    assert "restart did complete" in fake.text
 
 
 def test_a_second_restart_command_refuses_while_one_runs():
@@ -520,3 +523,64 @@ def test_missing_helper_message_says_the_restart_completed():
     fake = Fake(sock_status=status(state="running", running=True, pids=(None, 12)))
     assert fake.go("--while-running") == 1
     assert "the restart completed" in fake.text and "recovery was not verified" in fake.text
+
+
+def test_client_timeout_with_the_restart_still_pending_does_not_release():
+    fake = Fake()
+    fake.restart_rc = 124  # the systemctl client timed out
+    fake.job_out = "4711"  # its job is still queued
+    assert fake.go("--while-running") == 1
+    assert {"hold": False} not in fake.posts()
+    assert "may still be running" in fake.text and "expires on its own" in fake.text
+
+
+def test_client_timeout_after_the_broker_was_replaced_carries_on_to_postchecks():
+    fake = Fake()
+    fake.restart_rc = 124
+    fake.unit_pids = ["100", "200"]
+    assert fake.go("--while-running") == 0
+    assert {"hold": False} not in fake.posts()
+    assert "restart did complete" in fake.text
+
+
+def test_unreadable_unit_state_after_a_failed_client_counts_as_pending():
+    fake = Fake()
+    fake.restart_rc = 1
+    original = fake.run
+    fake.run = lambda argv: (1, "") if argv[:2] == ["systemctl", "show"] and "Job" in argv else original(argv)
+    env = fake.env()
+    env.run = fake.run
+    assert restart_broker.main(["--while-running"], env) == 1
+    assert {"hold": False} not in fake.posts()
+
+
+def test_interrupt_after_the_hold_on_was_accepted_still_releases():
+    fake = Fake()
+    original = fake.socket
+
+    def socket(method, path, payload):
+        reply = original(method, path, payload)
+        if method == "POST" and payload.get("hold"):
+            raise KeyboardInterrupt  # the broker accepted it; SIGINT beat the return
+        return reply
+
+    env = fake.env()
+    env.socket = socket
+    with pytest.raises(KeyboardInterrupt):
+        restart_broker.main(["--while-running"], env)
+    assert fake.posts()[-1] == {"hold": False}
+
+
+def test_definite_refusal_clears_the_uncertainty_so_nothing_is_released():
+    fake = Fake(hold_posts=[(409, {"error": "alignment_active"})])
+    assert fake.go("--while-running") == 1
+    assert {"hold": False} not in fake.posts()
+
+
+def test_expiry_note_does_not_claim_zero_seconds():
+    fake = Fake()
+    hold = restart_broker.Hold(fake.env())
+    hold.sent_at = hold.renewed_at = -500.0
+    assert "already have run out" in hold.expiry_note("x")
+    hold.sent_at = hold.renewed_at = fake.now
+    assert "about 180 s" in hold.expiry_note("x")
