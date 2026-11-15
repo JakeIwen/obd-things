@@ -16,7 +16,8 @@ UMask=0007
 ExecStart=/usr/bin/python3 -m projects.vehicle_data.broker serve --socket /run/van-telemetry/api.sock --can-interface-mode dual-usbcanfd --history-db /var/lib/van-telemetry/history.sqlite3 --history-interval 5 --dtc-cache /home/pi/dev/obd-things/tmp/vehicle_data/dtc-cache.json --enable-advisory-notifications --advisory-ntfy-topic van-telemetry
 Restart=on-failure
 RestartSec=5
-TimeoutStopSec=15
+KillMode=mixed
+TimeoutStopSec=40
 
 [Install]
 WantedBy=multi-user.target

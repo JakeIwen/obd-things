@@ -20,6 +20,13 @@ from lib import can_operation_state, diagnostic_safety
 from projects.vehicle_data.drive_helper_launch import HELPER_CWD, helper_command
 from projects.vehicle_data.engine_off_voltage import EngineOffVoltageCapture
 from projects.vehicle_data.helper_events import validate_helper_status
+from projects.vehicle_data.helper_hold import (
+    HELD_BLOCKED_REASON,
+    HoldRecord,
+    HoldRefusal,
+    blocked_reason_after_stop,
+    parse_request as parse_hold_request,
+)
 from projects.vehicle_data.helper_startup_grant import (
     READY_EVENT_TYPE,
     StartupGrant,
@@ -137,6 +144,47 @@ ACTIVE_DRIVE_FAILURE_REASONS = frozenset(
         "wrong_bus",
     }
 )
+# Helper outcomes that keep a helper off for the rest of the engine-running
+# epoch even when it restored listen-only.
+RELAUNCH_BLOCKING_REASONS = frozenset(
+    {
+        "malformed_response",
+        "response_rejected",
+        "response_timeout",
+        "session_required",
+    }
+)
+# Broker attributes holding each helper's relaunch-blocking reason and detail.
+_BLOCKED_ATTRIBUTES = {
+    "active_drive": ("_active_drive_blocked_reason", "_active_drive_blocked_detail"),
+    "auxiliary_drive": ("_auxiliary_drive_blocked_reason", "_auxiliary_drive_blocked_detail"),
+}
+
+
+class _StopWhenAny:
+    """A supervisor stop condition set while any of its events is set.
+
+    It joins the broker's shutdown or epoch-end event with the helper hold, so
+    a hold set at any moment is seen by every check the supervisor makes:
+    before the launch, before the startup grant and in the run loop.
+    """
+
+    def __init__(self, *events: threading.Event):
+        self._events = events
+
+    def is_set(self) -> bool:
+        return any(event.is_set() for event in self._events)
+
+    def wait(self, timeout: float | None = None) -> bool:
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while not self.is_set():
+            remaining = 0.05 if deadline is None else deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            self._events[0].wait(min(remaining, 0.05))
+        return True
+
+
 class ActiveDriveSupervisor:
     """Supervise the termination-safe active-drive owner subprocess.
 
@@ -818,6 +866,11 @@ class TelemetryBroker:
         self._auxiliary_drive_blocked_reason: str | None = None
         self._auxiliary_drive_blocked_detail: str | None = None
         self._auxiliary_drive_restoration_latched = False
+        # Drive-helper hold (helper_hold.py). The event mirrors the record's
+        # `held` so supervisors can poll it; both change under _hold_lock.
+        self._hold_lock = threading.Lock()
+        self._hold = HoldRecord()
+        self._hold_event = threading.Event()
         self._wake_authorization_deadline: float | None = None
         self._wake_authorization_owner: int | None = None
         self._active_drive: dict[str, object] = {
@@ -2402,6 +2455,14 @@ class TelemetryBroker:
                 reason="unsupported_mode",
                 detail=f"unsupported acquisition mode {mode!r}",
             )
+        if mode != "passive" and self._hold_event.is_set():
+            # Checked before the rate limit, so a refused wake costs no slot.
+            return failure(
+                metric=metric,
+                unit=definition.unit,
+                reason=HoldRefusal.HELPERS_HELD.value,
+                detail="drive helpers are held for a broker restart; only passive reads run",
+            )
 
         key = (metric, mode)
         owner = False
@@ -2791,7 +2852,128 @@ class TelemetryBroker:
             self._engine_epoch_running = False
             capture.observe(result)
 
+    # -- drive-helper hold (shared contract: helper_hold.py) ---------------
+
+    def helper_hold_response(self) -> dict[str, object]:
+        """`GET /v1/helpers/hold`: whether helpers are held and how each one stopped."""
+        with self._lock:
+            pids = {
+                "active_drive": self._active_drive.get("helper_pid"),
+                "auxiliary_drive": self._auxiliary_drive.get("helper_pid"),
+            }
+        with self._hold_lock:
+            return self._hold.reply(self.monotonic(), pids)
+
+    def helper_hold_request(self, payload: object) -> tuple[int, dict[str, object]]:
+        """`POST /v1/helpers/hold`: hold on (202) or off (200), local socket only.
+
+        Hold on stops running helpers through the supervisors' normal stop and
+        returns at once; callers poll the GET body for each helper's outcome.
+        Hold off takes effect at once; the collector lifts the `held` blocked
+        reasons on its next cycle, before it decides any launch.
+        """
+        parsed = parse_hold_request(payload)
+        if parsed is None:
+            return 400, {"error": HoldRefusal.BAD_REQUEST.value}
+        hold, reason = parsed
+        if not hold:
+            with self._hold_lock:
+                self._hold.end()
+                self._hold_event.clear()
+            return 200, self.helper_hold_response()
+        started: list[bool] = []
+
+        def begin() -> None:
+            with self._hold_lock:
+                started.append(self._hold.begin(reason, self.monotonic()))
+                self._hold_event.set()
+
+        # Under the radar control's lock, so no alignment run can start between
+        # its check and the hold that would end its helper.
+        if not self.radar_service.unless_run_active(begin):
+            return 409, {"error": HoldRefusal.ALIGNMENT_ACTIVE.value}
+        if started[0]:
+            for supervisor in (
+                self.active_drive_supervisor,
+                self.auxiliary_drive_supervisor,
+            ):
+                if supervisor is not None:
+                    supervisor.stop()
+        return 202, self.helper_hold_response()
+
+    def _settle_helper_hold(self) -> None:
+        """Expire a lapsed hold and, once no hold is active, lift `held` blocks.
+
+        Runs in the collector thread, which also makes every launch decision and
+        writes the C-CAN blocked reason, so the end of a hold always takes
+        effect before the next launch decision and never races those writes.
+        """
+        with self._hold_lock:
+            if self._hold.expire(self.monotonic()):
+                self._hold_event.clear()
+            held = self._hold.held
+        if held:
+            return
+        with self._lock:
+            for reason_attribute, detail_attribute in _BLOCKED_ATTRIBUTES.values():
+                if getattr(self, reason_attribute) == HELD_BLOCKED_REASON:
+                    setattr(self, reason_attribute, None)
+                    setattr(self, detail_attribute, None)
+
+    def _claim_helper_launch(self, helper: str) -> bool:
+        """Claim a helper launch; False while held. Excludes a concurrent hold-on."""
+        with self._hold_lock:
+            return self._hold.claim(helper)
+
+    def _end_helper_run(self, helper: str, outcome: dict[str, object] | None) -> None:
+        """Release a launch claim; give a helper a hold stopped the `held` block."""
+        with self._hold_lock:
+            stopped_by_hold = self._hold.finish(helper, outcome)
+            still_held = self._hold.held
+        if not stopped_by_hold:
+            return
+        reason_attribute, detail_attribute = _BLOCKED_ATTRIBUTES[helper]
+        with self._lock:
+            current = getattr(self, reason_attribute)
+            blocked = blocked_reason_after_stop(
+                current,
+                stopped_by_hold=True,
+                still_held=still_held,
+                keep_reasons=RELAUNCH_BLOCKING_REASONS,
+            )
+            if blocked != current:
+                setattr(self, reason_attribute, blocked)
+                setattr(
+                    self,
+                    detail_attribute,
+                    "stopped by a drive-helper hold; it may relaunch once the hold ends"
+                    if blocked is not None
+                    else None,
+                )
+
+    def _show_helpers_held(self, *, active: bool = True) -> None:
+        with self._hold_lock:
+            reason = self._hold.reason
+        held = {
+            "state": "idle",
+            "reason": HELD_BLOCKED_REASON,
+            "detail": (
+                f"drive helpers are held ({reason or 'hold ending'}); no helper "
+                "is launched until the hold ends or expires"
+            ),
+            "interface_mode": "listen_only",
+        }
+        with self._lock:
+            if active:
+                self._active_drive.update(held)
+            if (
+                self.auxiliary_drive_enabled
+                and not self._auxiliary_drive_restoration_latched
+            ):
+                self._auxiliary_drive.update(held)
+
     def _run_active_drive_if_ready(self) -> None:
+        self._settle_helper_hold()
         if not self.active_drive_enabled or self.active_drive_supervisor is None:
             return
         if self._active_drive_restoration_latched:
@@ -2845,6 +3027,9 @@ class TelemetryBroker:
                 "qualified passive engine-running evidence is absent",
             )
             return
+        if self._hold_event.is_set():
+            self._show_helpers_held()
+            return
         if self._active_drive_blocked_reason is not None:
             blocked_detail = self._active_drive_blocked_detail or (
                 "the prior active-drive helper ended without retained detail"
@@ -2871,6 +3056,12 @@ class TelemetryBroker:
             self.display_receiver.resume_passive()
             self._record_active_failure("can_busy", "display observer is still releasing its lease")
             return
+        if not self._claim_helper_launch("active_drive"):
+            # A hold landed after the check above; it wins and nothing launches.
+            if self.display_receiver is not None:
+                self.display_receiver.resume_passive()
+            self._show_helpers_held()
+            return
         with self._lock:
             self._active_drive.update(
                 {
@@ -2883,12 +3074,13 @@ class TelemetryBroker:
             )
         auxiliary_stop = threading.Event()
         auxiliary_thread = None
-        if (
+        auxiliary_ready = (
             self.auxiliary_drive_enabled
             and self.auxiliary_drive_supervisor is not None
             and not self._auxiliary_drive_restoration_latched
             and self._auxiliary_drive_blocked_reason is None
-        ):
+        )
+        if auxiliary_ready and self._claim_helper_launch("auxiliary_drive"):
             with self._lock:
                 self._auxiliary_drive.update(
                     {
@@ -2901,7 +3093,14 @@ class TelemetryBroker:
                 )
 
             def supervise_auxiliary() -> None:
-                outcome = self.auxiliary_drive_supervisor.run(auxiliary_stop)
+                outcome = None
+                try:
+                    outcome = self.auxiliary_drive_supervisor.run(
+                        _StopWhenAny(auxiliary_stop, self._hold_event)
+                    )
+                finally:
+                    if outcome is None:  # supervision raised
+                        self._end_helper_run("auxiliary_drive", None)
                 try:
                     self.handle_auxiliary_drive_event(outcome)
                 except (KeyError, TypeError, ValueError) as exc:
@@ -2918,12 +3117,10 @@ class TelemetryBroker:
                     }
                     self.handle_auxiliary_drive_event(outcome)
                 reason = str(outcome.get("reason", "helper_failed"))
-                if outcome.get("restored") is True or reason in {
-                    "malformed_response",
-                    "response_rejected",
-                    "response_timeout",
-                    "session_required",
-                }:
+                if (
+                    outcome.get("restored") is True
+                    or reason in RELAUNCH_BLOCKING_REASONS
+                ):
                     with self._lock:
                         self._auxiliary_drive_blocked_reason = reason
                         self._auxiliary_drive_blocked_detail = str(
@@ -2932,6 +3129,7 @@ class TelemetryBroker:
                         )
                 if reason == "restoration_failed" or outcome.get("restored") is False:
                     self._auxiliary_drive_restoration_latched = True
+                self._end_helper_run("auxiliary_drive", outcome)
 
             auxiliary_thread = threading.Thread(
                 target=supervise_auxiliary,
@@ -2939,6 +3137,9 @@ class TelemetryBroker:
                 daemon=True,
             )
             auxiliary_thread.start()
+        elif auxiliary_ready:
+            # Claim refused: a hold started after this epoch's C-CAN claim.
+            self._show_helpers_held(active=False)
         elif self.auxiliary_drive_enabled:
             auxiliary_detail = self._auxiliary_drive_blocked_detail or (
                 "the prior B-CAN auxiliary helper ended without retained detail"
@@ -2970,9 +3171,14 @@ class TelemetryBroker:
                     }
                 )
 
+        outcome = None
         try:
-            outcome = self.active_drive_supervisor.run(self._collector_stop)
+            outcome = self.active_drive_supervisor.run(
+                _StopWhenAny(self._collector_stop, self._hold_event)
+            )
         finally:
+            if outcome is None:  # supervision raised
+                self._end_helper_run("active_drive", None)
             if self.display_receiver is not None:
                 self.display_receiver.resume_passive()
             auxiliary_stop.set()
@@ -3010,12 +3216,7 @@ class TelemetryBroker:
             }
             self.handle_active_drive_event(outcome)
         reason = str(outcome.get("reason", "helper_failed"))
-        if outcome.get("restored") is True or reason in {
-            "malformed_response",
-            "response_rejected",
-            "response_timeout",
-            "session_required",
-        }:
+        if outcome.get("restored") is True or reason in RELAUNCH_BLOCKING_REASONS:
             with self._lock:
                 self._active_drive_blocked_reason = reason
                 self._active_drive_blocked_detail = str(
@@ -3024,6 +3225,7 @@ class TelemetryBroker:
                 )
         if reason == "restoration_failed" or outcome.get("restored") is False:
             self._active_drive_restoration_latched = True
+        self._end_helper_run("active_drive", outcome)
         self._arm_engine_off_voltage_after_helper(outcome)
         self._refresh_interface_status()
 

@@ -275,6 +275,19 @@ class RadarServiceControl:
             return self._refused(400, "invalid_request",
                                  "body must be the exact start or stop request")
 
+    def unless_run_active(self, action) -> bool:
+        """Call ``action`` under this lock unless a run is active; False if one is.
+
+        The broker's helper hold uses it: stopping the helper would abort a run,
+        and holding the lock keeps a start from landing between check and action.
+        """
+        with self._lock:
+            self._settle()
+            if self._run is not None and self._run.active:
+                return False
+            action()
+            return True
+
     def _start(self) -> tuple[int, dict[str, object]]:
         if self._run is not None and self._run.active:
             return self._refused(409, "already_active", "a service alignment is already active")

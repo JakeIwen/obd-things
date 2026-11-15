@@ -27,6 +27,7 @@ PURE_MODULES = (
     "tools.signal_benchmark_policy",
     "projects.vehicle_data.metric_types",
     "projects.vehicle_data.helper_events",
+    "projects.vehicle_data.helper_hold",
     "projects.vehicle_data.wake_state",
 )
 

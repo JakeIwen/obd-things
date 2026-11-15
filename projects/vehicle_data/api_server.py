@@ -9,6 +9,7 @@ import math
 import os
 import pathlib
 import queue
+import re
 import select
 import socket
 import socketserver
@@ -19,7 +20,7 @@ import types
 from dataclasses import dataclass, field
 from typing import Any
 
-from projects.vehicle_data import radar_service_control
+from projects.vehicle_data import helper_hold, radar_service_control
 from projects.vehicle_data.http_common import (
     MAX_REQUEST_BYTES,
     MAX_OBSERVATION_QUEUE_SECONDS,
@@ -100,6 +101,7 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
         "/v1/diagnostics/dtcs": "cached_dtc_response",
         "/v1/maintenance": "maintenance_response",
         "/v1/metrics": "list_metrics",
+        helper_hold.API_PATH: "helper_hold_response",
     }
     GET_ROUTES = (
         (r"/v1/events(?:/.*)?", "_event_get"),
@@ -113,6 +115,8 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
         (r"/v1/observations/[^/]+", "_observation_post"),
         (r"/v1/maintenance/oil-changes", "_oil_change_post"),
         (radar_service_control.API_ROUTE, "_radar_service_post"),
+        # Broker socket only: web.py has no route for it (helper_hold.py).
+        (re.escape(helper_hold.API_PATH), "_helper_hold_post"),
     )
 
     def _not_found(self, path: str) -> None:
@@ -185,6 +189,9 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
 
     def _radar_service_post(self, path: str, payload: Any) -> None:
         return self._json(*self.broker.radar_service.endpoint(path).request(payload))
+
+    def _helper_hold_post(self, path: str, payload: Any) -> None:
+        return self._json(*self.broker.helper_hold_request(payload))
 
     def _event_post(self, path: str, payload: Any) -> None:
         return self._json(*self.broker.event_request("POST", self.path, payload))
@@ -304,6 +311,7 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
             "source_not_publishable": 403,
             "rate_limited": 429,
             "can_busy": 409,
+            helper_hold.HoldRefusal.HELPERS_HELD.value: 409,
             "restoration_failed": 500,
         }.get(result.reason, 200 if result.available else 503)
         return self._json(status, response)
