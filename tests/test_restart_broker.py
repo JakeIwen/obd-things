@@ -63,6 +63,9 @@ class Fake:
         self.job_out = ""  # a queued job on the broker unit
         self.job_seq = []  # per-read job answers, when a test scripts them
         self.job_raises = False
+        self.restart_duration = 0.0
+        self.expiry = None  # a genuinely time-dependent hold, when a test sets real_hold
+        self.real_hold = False
         self.pid_delay = 0.0
         self.lock_busy = False
         self.hold_posts = list(hold_posts or [(202, hold_body())])
@@ -90,8 +93,10 @@ class Fake:
         if method == "POST":
             if payload.get("hold") is False:
                 self.engaged = False
+                self.expiry = None
             else:
                 self.engaged = True
+                self.expiry = self.now + 180.0
                 if self.lose_first_hold_on:
                     self.lose_first_hold_on = False
                     raise OSError("response lost")
@@ -101,6 +106,10 @@ class Fake:
             raise OSError("socket gone")
         if not self.engaged:
             return 200, self.pre_body or hold_body(held=False)
+        if self.real_hold:
+            if self.expiry is None or self.now >= self.expiry:
+                return 200, hold_body(held=False)
+            return 200, hold_body(S.STOPPED_VERIFIED, S.STOPPED_VERIFIED, remaining=self.expiry - self.now)
         queue = self.hold_gets
         return queue.pop(0) if len(queue) > 1 else queue[0]
 
@@ -124,6 +133,16 @@ class Fake:
             return self.restart_rc, ""
         return 0, ""
 
+    def watched(self, argv, tick):
+        """The restart client takes `restart_duration` fake seconds, ticking every 5."""
+        if argv == RESTART:
+            elapsed = 0.0
+            while elapsed < self.restart_duration:
+                self.now += 5.0
+                elapsed += 5.0
+                tick()
+        return self.run(argv)
+
     def sleep(self, seconds):
         self.now += seconds
 
@@ -131,7 +150,7 @@ class Fake:
         return restart_broker.Environment(
             web=self.web, socket=self.socket, run=self.run,
             tx_counters=lambda: self.tx.pop(0) if len(self.tx) > 1 else self.tx[0],
-            file_inhibits=lambda: tuple(self.file_inhibits), lock=self.lock,
+            file_inhibits=lambda: tuple(self.file_inhibits), lock=self.lock, run_watched=self.watched,
             adapters=lambda: self.adapter_map, sleep=self.sleep,
             clock=lambda: self.now, out=self.lines.append)
 
@@ -439,31 +458,16 @@ def test_failed_restart_command_releases_the_hold():
     assert fake.posts()[-1] == {"hold": False}
 
 
-def test_interrupted_restart_releases_only_the_same_brokers_hold():
+def test_ctrl_c_during_the_restart_client_leaves_the_hold_to_expire():
     fake = Fake()
     fake.unit_pids = ["100", "100"]
-    original = fake.run
-
-    def run(argv):
-        if argv == RESTART:
-            raise KeyboardInterrupt
-        return original(argv)
-
     env = fake.env()
-    env.run = run
-    with pytest.raises(KeyboardInterrupt):
-        restart_broker.main(["--while-running"], env)
-    assert fake.posts()[-1] == {"hold": False}
-
-    fake = Fake()
-    fake.unit_pids = ["100", "200"]  # a new broker is already running
-    original = fake.run
-    env = fake.env()
-    env.run = lambda argv: (_ for _ in ()).throw(KeyboardInterrupt) if argv == RESTART else original(argv)
+    env.run_watched = lambda argv, tick: (_ for _ in ()).throw(KeyboardInterrupt)
     with pytest.raises(KeyboardInterrupt):
         restart_broker.main(["--while-running"], env)
     assert {"hold": False} not in fake.posts()
-    assert "restart did complete" in fake.text
+    assert "NOT released" in fake.text and "systemctl list-jobs" in fake.text
+    assert "will lapse" in fake.text
 
 
 def test_a_second_restart_command_refuses_while_one_runs():
@@ -642,3 +646,45 @@ def test_timeout_with_an_unreadable_job_query_is_pending_and_posts_no_hold_off()
     assert fake.go("--while-running") == 1
     assert {"hold": False} not in fake.posts()
     assert "STILL PENDING" in fake.text
+
+
+def test_hold_is_renewed_while_a_slow_restart_client_runs_and_stays_ours():
+    # The review's scenario: stops verified with ~70 s left, then a restart
+    # client that times out at 120 s. Without renewal the hold expires mid-call.
+    fake = Fake()
+    fake.real_hold = True
+    fake.restart_rc = 124
+    fake.restart_duration = 120.0
+    fake.unit_pids = ["100", "100", "100", "200"]
+    fake.job_seq = ["4711"]
+    env = fake.env()
+    base = env.adapters
+
+    def slow_adapters():
+        fake.now += 110.0  # verification finishes with 70 s of hold left
+        return base()
+
+    env.adapters = slow_adapters
+    assert restart_broker.main(["--while-running"], env) == 0
+    assert len([p for p in fake.posts() if p.get("hold")]) >= 2  # renewed during the client
+    assert "no longer ours" not in fake.text
+    assert "WARNING: the hold that verified" not in fake.text
+
+
+def test_a_lost_hold_makes_a_later_successful_restart_exit_nonzero():
+    fake = Fake()
+    fake.real_hold = True
+    fake.restart_duration = 120.0
+    original = fake.socket
+
+    def socket(method, path, payload):
+        if method == "POST" and payload.get("hold") and fake.now > 40:
+            return 500, {}  # renewals fail, so the 180 s hold lapses during the client
+        return original(method, path, payload)
+
+    env = fake.env()
+    env.socket = socket
+    fake.restart_duration = 200.0
+    assert restart_broker.main(["--while-running"], env) == 1
+    assert "hold that verified the helper stops was lost" in fake.text
+    assert len(fake.restarts) == 1

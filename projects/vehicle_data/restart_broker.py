@@ -57,6 +57,7 @@ READ_TIMEOUT_SECONDS = 10.0
 RESOLVE_BOUND_SECONDS = 600.0
 RESOLVE_POLL_SECONDS = 5.0
 RESTART_TIMEOUT_SECONDS = 120.0
+RESTART_TICK_SECONDS = 5.0
 PREFLIGHT_ATTEMPTS = 6
 PREFLIGHT_RETRY_SECONDS = 5.0
 SETTLE_SECONDS = 90.0
@@ -105,6 +106,27 @@ def _run(argv: list[str]) -> tuple[int, str]:
     return result.returncode, result.stdout
 
 
+def _run_watched(argv: list[str], tick: Callable[[], None]) -> tuple[int, str]:
+    """Run the restart client as a polled subprocess, calling `tick` every few seconds.
+
+    The tick renews the hold, so no interval without renewal is longer than one
+    poll. A client that outlives its bound is killed (its queued job is not),
+    which reads as 124 and is classified like any other unconfirmed restart.
+    """
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    deadline = time.monotonic() + RESTART_TIMEOUT_SECONDS
+    while True:
+        try:
+            out, _ = proc.communicate(timeout=RESTART_TICK_SECONDS)
+            return proc.returncode, out
+        except subprocess.TimeoutExpired:
+            tick()
+            if time.monotonic() >= deadline:
+                proc.kill()
+                proc.communicate()
+                return 124, ""
+
+
 def _tx_counters() -> str:
     parts = []
     for device in sorted(glob.glob("/sys/class/net/can*")):
@@ -141,6 +163,7 @@ class Environment:
     web: Callable[[str, str, dict | None], Reply] = _web_request
     socket: Callable[[str, str, dict | None], Reply] = _socket_request
     run: Callable[[list[str]], tuple[int, str]] = _run
+    run_watched: Callable[[list[str], Callable[[], None]], tuple[int, str]] = _run_watched
     tx_counters: Callable[[], str] = _tx_counters
     file_inhibits: Callable[[], tuple] = can_operation_state.all_active_inhibits
     adapters: Callable[[], dict[str, object]] = _read_adapters
@@ -304,6 +327,7 @@ class Hold:
         self.renewed_at = 0.0
         self.renewals = 0
         self.sent_at = 0.0  # when the latest hold-on left, accepted or not
+        self.lost = False  # the verified hold expired or was replaced before the restart settled
         self.keep = False  # set once a restart may be pending: never release then
         self.engaged = False  # a hold-on we confirmed
         self.unsure = False  # a hold-on whose answer was lost
@@ -513,16 +537,13 @@ def _submit_restart(env: Environment, hold: Hold, pid_before: str) -> bool:
     """
     hold.keep = True
     try:
-        code, _ = env.run(RESTART_COMMAND)
+        code, _ = env.run_watched(RESTART_COMMAND, lambda: _renew_while_pending(env, hold))
     except BaseException:
-        state = _restart_state(env, pid_before)
-        if state == "not_started":
-            hold.keep = False
-            env.out("Interrupted before the restart ran; our hold is released.")
-        elif state == "done":
-            env.out("Interrupted, but the restart did complete (a new broker process runs).")
-        else:
-            env.out("Interrupted with the restart possibly still queued: the hold is NOT released.")
+        # Ctrl-C ends monitoring and leaves the hold to expire: the restart job
+        # may still be queued, so nothing here releases it.
+        env.out("Interrupted: monitoring stopped and the hold is NOT released. Check "
+                "`systemctl list-jobs` and `systemctl show -p MainPID,Job van-telemetry.service`. "
+                + hold.expiry_note("The hold will lapse."))
         raise
     if code == 0:
         hold.keep = False
@@ -564,13 +585,15 @@ def _resolve_pending(env: Environment, hold: Hold, pid_before: str) -> str:
 
 
 def _renew_while_pending(env: Environment, hold: Hold) -> None:
+    """Renew our hold while the restart client or its job runs; note a lost hold."""
     try:
         code, body = env.socket("GET", helper_hold.API_PATH, None)
         if code == 200 and body.get("held") is True and body.get("reason") == HOLD_REASON:
             hold.renew_if_due()
         elif code == 200:
-            env.out("WARNING: the hold is no longer ours or has ended; helpers may relaunch "
-                    "before the pending restart runs.")
+            hold.lost = True
+            env.out("WARNING: the verified hold is no longer ours or has ended; helpers may "
+                    "relaunch before the restart runs.")
     except (OSError, RuntimeError, ValueError, HoldFailure) as error:
         env.out(f"hold renewal failed while the restart is pending: {error}")
 
@@ -722,7 +745,15 @@ def run_while_running(env: Environment, check: bool) -> int:
         # exception in flight (Ctrl-C included) propagates unchanged.
         if not restarted:
             _cleanup(env, hold, pid_before)
-    return _after_restart(env, before, recorder) if restarted else 1
+    if not restarted:
+        return 1
+    status = _after_restart(env, before, recorder)
+    if hold.lost:
+        env.out("WARNING: the hold that verified the helper stops was lost before the restart was "
+                "confirmed, so helpers may have been armed when it ran. Exiting nonzero; inspect the "
+                "adapters and inhibits.")
+        return 1
+    return status
 
 
 def _cleanup(env: Environment, hold: Hold, pid_before: str) -> None:
