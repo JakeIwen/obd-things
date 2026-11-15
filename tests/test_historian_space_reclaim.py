@@ -339,6 +339,36 @@ class CompactionTests(SpaceFixture):
         holders, unverifiable = compaction.processes_holding(self.path, privileged_targets=lambda pid: None)
         self.assertIn(child.pid, unverifiable)  # sudo failed and the process is alive: refuse
 
+    @unittest.skipUnless(Path("/proc/self/fd").is_dir(), "processes_holding scans Linux /proc; this host has none")
+    def test_real_non_dumpable_process_is_listed_through_sudo(self):
+        """End to end: PR_SET_DUMPABLE=0 makes /proc/<pid>/fd root-owned, as for ssh-agent."""
+
+        if subprocess.run(["sudo", "-n", "true"], capture_output=True).returncode != 0:
+            self.skipTest("needs passwordless sudo (vanpi's pi user has it; sandboxed runners do not)")
+        self.prepared_legacy_database()
+        code = (
+            "import ctypes, sys, time\n"
+            "f = open(sys.argv[1], 'rb') if sys.argv[1] else None\n"
+            "ctypes.CDLL(None, use_errno=True).prctl(4, 0, 0, 0, 0)  # PR_SET_DUMPABLE\n"
+            "print('r', flush=True); time.sleep(30)\n"
+        )
+        children = {}
+        for name, arg in (("holder", str(self.path)), ("idle", "")):
+            child = subprocess.Popen([sys.executable, "-c", code, arg], stdout=subprocess.PIPE)
+            self.addCleanup(child.stdout.close)
+            self.addCleanup(child.wait)
+            self.addCleanup(child.kill)
+            child.stdout.readline()
+            children[name] = child.pid
+        for pid in children.values():
+            with self.assertRaises(PermissionError):
+                list(Path(f"/proc/{pid}/fd").iterdir())
+        holders, unverifiable = compaction.processes_holding(self.path)
+        self.assertIn(children["holder"], holders)
+        self.assertNotIn(children["idle"], holders)
+        self.assertNotIn(children["holder"], unverifiable)
+        self.assertNotIn(children["idle"], unverifiable)
+
     def test_privileged_listing_parses_nul_separated_targets_and_rejects_failure(self):
         original = compaction.PRIVILEGED_FD_COMMAND
         self.addCleanup(setattr, compaction, "PRIVILEGED_FD_COMMAND", original)
