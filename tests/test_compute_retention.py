@@ -166,22 +166,6 @@ class ComputeRetentionSystemdTests(unittest.TestCase):
     def test_service_module_exists(self):
         self.assertTrue((REPO / "tools" / "compute_retention.py").is_file())
 
-    def test_path_unit_triggers_on_both_completed_states(self):
-        path = SYSTEMD / "obd-compute-retention.path"
-        watched = [
-            line.partition("=")[2]
-            for line in path.read_text().splitlines()
-            if line.startswith("PathChanged=")
-        ]
-        self.assertEqual(set(watched), {
-            "/home/pi/dev/obd-things/tmp/compute/done",
-            "/home/pi/dev/obd-things/tmp/compute/failed",
-        })
-        self.assertEqual(
-            self.read_unit(path.name)["Path"]["Unit"],
-            "obd-compute-retention.service",
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,14 +1,16 @@
 # Compute retention pins
 
-These 45 job IDs were referenced only in ignored workstream handoffs on
-2026-10-21. They are retained conservatively before enabling the owner's
+These job IDs were referenced only in ignored workstream handoffs (45 on
+2026-10-21, 4 more reconciled on 2026-11-14). They are retained conservatively before enabling the owner's
 30-day cleanup policy. The references do not revalidate their results.
 
 Van-compute scans this tracked file and preserves each job plus its transitive
 dependencies. Move a citation into its canonical finding when the workstream
 finishes; remove a pin only after its owner determines the job is no longer
 needed or the same citation is preserved elsewhere in tracked documentation.
-New handoff-only evidence must be pinned before it reaches 30 days. See
+Pin a job (or cite it in a tracked finding) as soon as its result is evidence
+someone may need: under the size cap an uncited job can be evicted at once, not
+only after 30 days. See
 [data-archive.md](data-archive.md) for the complete retention contract.
 
 ## acc-display-followups
@@ -24,6 +26,10 @@ New handoff-only evidence must be pinned before it reaches 30 days. See
 ## dtc-dashboard-descriptions
 
 - `20260920T191030Z-b39500b5`
+
+## helper-restart-race
+
+- `20261114T051203Z-074775f0`
 
 ## internal-can-unlock
 
@@ -52,6 +58,12 @@ New handoff-only evidence must be pinned before it reaches 30 days. See
 ## radar-service-alignment
 
 - `20261011T225751Z-42eb9f74`
+
+## storage-retention
+
+- `20261021T203049Z-8e5d73a1`
+- `20261021T204550Z-b938556c`
+- `20261021T211321Z-22362449`
 
 ## three-bus-telemetry
 

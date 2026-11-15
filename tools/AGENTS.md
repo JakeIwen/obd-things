@@ -16,7 +16,6 @@ The policy, installation procedure and audit are in `docs/data-archive.md`.
 | `tools.compute_retention` | Owner CLI and `obd-compute-retention.service` | `tools/compute_retention.py`, delegating to installed van-compute |
 | `tools/systemd/obd-compute-retention.service` | Systemd timer, after opt-in installation | This repository; installed as a root-owned regular file |
 | `tools/systemd/obd-compute-retention.timer` | Systemd timers target | This repository; hourly persistent schedule |
-| `tools/systemd/obd-compute-retention.path` | Completed-job directory changes | This repository; checks the budget after completion |
 
 Preview is the default; `--apply` is explicit. No CAN, live telemetry, archive
 or cron configuration belongs in this adapter. Unit validation uses

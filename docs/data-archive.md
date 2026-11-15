@@ -77,13 +77,15 @@ job that a later plan reports as skipped; investigate that entry rather than
 forcing removal. The unit sends SIGINT so the backend can restore its
 submission fence during normal cancellation.
 
-Install all three regular unit files in `/etc/systemd/system/`, run
-`systemctl daemon-reload`, run the first cleanup, and enable both
-`obd-compute-retention.path` and `obd-compute-retention.timer`. Check the timer's
-next scheduled run with `systemctl list-timers obd-compute-retention.timer`;
-inspect completed runs with `journalctl -u obd-compute-retention.service`.
-Disable both triggers with
-`sudo systemctl disable --now obd-compute-retention.{timer,path}` to stop future cleanup.
+Install the two regular unit files in `/etc/systemd/system/`, run
+`systemctl daemon-reload`, run the first cleanup, and enable
+`obd-compute-retention.timer`. Check the timer's next scheduled run with
+`systemctl list-timers obd-compute-retention.timer`; inspect completed runs with
+`journalctl -u obd-compute-retention.service`. There is deliberately no path
+unit: the broker re-chmods the `done` and `failed` directories every poll cycle,
+which `PathChanged=` reports as a change, so it would rescan history every few
+seconds. Disable the timer with
+`sudo systemctl disable --now obd-compute-retention.timer` to stop future cleanup.
 This preserves all remaining data.
 
 The wrapper's public CLI and unit contracts are covered by
