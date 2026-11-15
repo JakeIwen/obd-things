@@ -1500,7 +1500,9 @@ reports a verified or never-started stop and its own read shows every vehicle
 adapter listen-only and ERROR-ACTIVE. It requires its own live hold with time left,
 reruns every blocker (inhibits, latches, owner, radar run) after the stops and just
 before restarting, and otherwise releases the hold and exits nonzero without
-restarting; it also releases the hold if the restart command fails. After the restart it
+restarting; it refuses to take over a hold another client already holds, and it releases only a hold
+that is its own on the broker that took it (on a failed restart, an error or Ctrl-C), saying
+when it cannot tell and the hold will expire by itself. After the restart it
 waits for each configured helper to relaunch and fails if one does not. Costs: both web units are `PartOf` the broker, so
 the tablet reconnects within a few seconds; history and drive recording have a
 gap; and if a helper's restoration fails the broker latches its inhibit, so

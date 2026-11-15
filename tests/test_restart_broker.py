@@ -56,6 +56,11 @@ class Fake:
         self.sock_status = sock_status or status(state="running", running=True, pids=(11, 12))
         self.unit_pids = ["100", "100"]
         self.restart_rc = 0
+        self.engaged = False
+        self.pre_body = None  # a hold some other client already holds
+        self.lose_first_hold_on = False
+        self.hold_get_fails = False
+        self.pid_delay = 0.0
         self.lock_busy = False
         self.hold_posts = list(hold_posts or [(202, hold_body())])
         self.hold_gets = list(hold_gets or [(200, hold_body())])
@@ -80,8 +85,19 @@ class Fake:
         if path == ALIGN:
             return self.align
         if method == "POST":
+            if payload.get("hold") is False:
+                self.engaged = False
+            else:
+                self.engaged = True
+                if self.lose_first_hold_on:
+                    self.lose_first_hold_on = False
+                    raise OSError("response lost")
             queue = self.hold_posts
             return queue.pop(0) if len(queue) > 1 else queue[0]
+        if self.hold_get_fails and self.engaged:
+            raise OSError("socket gone")
+        if not self.engaged:
+            return 200, self.pre_body or hold_body(held=False)
         queue = self.hold_gets
         return queue.pop(0) if len(queue) > 1 else queue[0]
 
@@ -89,6 +105,8 @@ class Fake:
         self.calls.append(("run", tuple(argv)))
         if argv[:2] == ["systemctl", "show"]:
             if argv[-1] == restart_broker.UNIT:
+                self.now += self.pid_delay
+                self.pid_delay = 0.0
                 return 0, (self.unit_pids.pop(0) if len(self.unit_pids) > 1 else self.unit_pids[0]) + "\n"
             return 0, self.recorder.pop(0) + "\n"
         if argv[:2] == ["systemctl", "is-active"]:
@@ -367,6 +385,8 @@ def test_replaced_or_nearly_expired_hold_refuses(body, needle):
     fake = Fake(hold_gets=[(200, body)])
     assert fake.go("--while-running") == 1
     assert needle in fake.text and not fake.restarts
+    if "replaced" in needle:
+        assert {"hold": False} not in fake.posts()
 
 
 def test_a_restart_never_follows_a_reacquired_hold_with_helpers_still_stopping():
@@ -443,3 +463,60 @@ def test_a_second_restart_command_refuses_while_one_runs():
     assert fake.go() == 1 and fake.go("--while-running") == 1
     assert "another restart_broker" in fake.text
     assert not fake.restarts and not fake.posts()
+
+
+def test_a_preexisting_hold_is_refused_and_never_released():
+    fake = Fake()
+    fake.pre_body = hold_body(reason="another maintenance operation")
+    assert fake.go("--while-running") == 1
+    assert "not taking over" in fake.text
+    assert fake.posts() == [] and not fake.restarts
+
+
+def test_a_hold_pointed_at_someone_else_mid_run_is_not_released():
+    fake = Fake(hold_gets=[(200, hold_body(reason="another maintenance operation"))])
+    assert fake.go("--while-running") == 1
+    assert {"hold": False} not in fake.posts()
+    assert "belongs to another request" in fake.text
+
+
+def test_delayed_broker_pid_read_cannot_stretch_the_gap_before_the_restart():
+    fake = Fake()
+    fake.pid_delay = 181.0  # the one MainPID read that happens before the hold exists
+    assert fake.go("--while-running") == 0
+    assert len(fake.restarts) == 1
+    names = [c for c in fake.calls if c[0] == "run" or c[:3] == ("socket", "GET", HOLD)]
+    restart_at = names.index(("run", tuple(RESTART)))
+    assert names[restart_at - 1][:3] == ("socket", "GET", HOLD)  # the last hold check, then the restart
+
+
+def test_interrupt_during_stop_verification_releases_our_hold():
+    fake = Fake()
+    env = fake.env()
+    env.adapters = lambda: (_ for _ in ()).throw(KeyboardInterrupt)
+    with pytest.raises(KeyboardInterrupt):
+        restart_broker.main(["--while-running"], env)
+    assert fake.posts()[-1] == {"hold": False} and not fake.restarts
+
+
+def test_lost_hold_on_response_is_confirmed_before_release():
+    fake = Fake()
+    fake.lose_first_hold_on = True
+    assert fake.go("--while-running") == 1
+    assert fake.posts()[-1] == {"hold": False}
+    assert not fake.restarts
+
+
+def test_lost_hold_on_with_unreadable_state_says_it_will_expire():
+    fake = Fake()
+    fake.lose_first_hold_on = True
+    fake.hold_get_fails = True
+    assert fake.go("--while-running") == 1
+    assert "expires on its own" in fake.text
+    assert {"hold": False} not in fake.posts()
+
+
+def test_missing_helper_message_says_the_restart_completed():
+    fake = Fake(sock_status=status(state="running", running=True, pids=(None, 12)))
+    assert fake.go("--while-running") == 1
+    assert "the restart completed" in fake.text and "recovery was not verified" in fake.text
