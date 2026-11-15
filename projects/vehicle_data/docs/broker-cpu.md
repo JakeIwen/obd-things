@@ -219,7 +219,7 @@ includes the measured safety/interface work described above; it has not been
 fully attributed thread by thread. Remaining history work includes the 7/30-day
 aggregates. No polling cadence or ownership check was weakened to reduce it.
 
-Use the existing `restart-broker-parked.sh` and supplement its checks with
+Use `python3 -m projects.vehicle_data.restart_broker` (parked by default; `s restart_broker`) and supplement its checks with
 fresh serial/dev_id identity, state/freshness, ownership, inhibit, passive
 readback, zero TX/error deltas, advancing historian, and API/journal/event
 verification. Recheck the literal sudo policy in the owner shell. The raw

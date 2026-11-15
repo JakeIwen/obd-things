@@ -135,6 +135,15 @@ helper contracts. `tests/broker_pure_oracle.py` captures generated helper/state
 cases against whichever checkout `--repo-root` selects; compare old/new output
 rather than keeping a frozen broker implementation in the permanent tests.
 
+`projects/vehicle_data/restart_broker.py` (run `s restart_broker`) is the only sanctioned broker
+restart: parked-only by default, `--while-running` for a restart with the van on. The latter
+needs the broker's drive-helper hold, whose shared contract (path, timings, state vocabulary,
+request validation) is `projects/vehicle_data/helper_hold.py`; the route exists only on the
+broker's local socket. The unit sets `KillMode=mixed`/`TimeoutStopSec=40`; check with
+`systemctl show -p KillMode,TimeoutStopUSec van-telemetry.service`. Costs, the 404 rule for a
+broker without the hold control and the rolling-deploy hazard are in the vehicle-data README
+section "Restarting the broker".
+
 `projects/vehicle_data/helper_startup_grant.py` owns the private startup pipe
 contract shared by the supervisor and both drive helpers. The helper waits
 inside its protected session before any CAN ownership or interface effects;
@@ -301,8 +310,8 @@ code without changing behaviour. Old import paths remain as shims, so existing i
     has not been isolated over a drive. The first natural drives (2026-10-07,
     trips 77-80, 96-236 snapshots each) recorded normally with clean journals
     apart from the known LAN `ConnectionResetError`. Rollback target if ever
-    needed: `0c93cd2` via `tmp/vehicle_data/restart-broker-parked.sh` (parked
-    and asleep). Raw latency evidence stays on the Pi in
+    needed: `0c93cd2` via `python3 -m projects.vehicle_data.restart_broker`
+    (parked and asleep). Raw latency evidence stays on the Pi in
     `tmp/vehicle_data/o2-concurrency/`.
 
 ## MacBook-managed `~/scripts` tree
@@ -397,6 +406,7 @@ caller has retired, with owner/callers/retirement stated in the wrapper header.
 | --- | --- | --- |
 | `projects/vehicle_data/broker.py` | van-telemetry.service | Telemetry runtime and ordered CAN lifecycle |
 | `projects/vehicle_data/web_v2.py` | Both van-telemetry-web listeners | Dashboard static serving and web.py /v1 API |
+| `projects/vehicle_data/restart_broker.py` | Owner/agent CLI (`s restart_broker`) | Guarded `van-telemetry.service` restart: parked by default, `--while-running` through the helper hold |
 | `projects/vehicle_data/drive_recorder.py` | van-drive-recorder.service | Receive-only broker drive recording |
 | `projects/vehicle_data/active_drive.py` | Broker drive_helper_launch | C-CAN active-drive helper |
 | `projects/vehicle_data/bcan_auxiliary.py` | Broker drive_helper_launch | B-CAN auxiliary helper |

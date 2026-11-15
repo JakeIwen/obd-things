@@ -77,12 +77,18 @@ before any optional removal; never remove the containing drop-in directories.
 A definition reload does not launch a missed unit or apply `ExecStartPre` to
 an already-running process. The next normal boot uses the new ordering.
 If immediate activation is separately authorized, wait until parked and asleep
-and use **only** the existing guarded restart helper (do not bypass its checks):
+and use **only** the guarded restart command (do not bypass its checks):
 
 ```sh
 cd /home/pi/dev/obd-things
-bash tmp/vehicle_data/restart-broker-parked.sh
+python3 -m projects.vehicle_data.restart_broker   # or: s restart_broker
 ```
+
+Its default is parked-only. `--while-running` restarts with the van on and
+needs a broker that already has the helper hold control; see the vehicle-data
+README section "Restarting the broker" for its costs. The broker unit sets
+`KillMode=mixed` and `TimeoutStopSec=40`; after a `daemon-reload`, verify with
+`systemctl show -p KillMode,TimeoutStopUSec van-telemetry.service`.
 
 ## Verify without activating units
 

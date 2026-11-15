@@ -790,8 +790,9 @@ activation are covered by the [systemd installation runbook](docs/systemd-instal
   view or dialog that tablet hadn't opened yet stays blank until the page is
   reloaded: reopen the app, or use System → Reload app if System was opened
   before the deploy (System is itself a lazy view). A `web.py`/`web_v2.py` change needs a restart of the two web units. New
-  broker metrics need a parked `van-telemetry` restart (the broker registry,
-  passive reader and active helper snapshot all change).
+  broker metrics need a `van-telemetry` restart (the broker registry,
+  passive reader and active helper snapshot all change): parked by default,
+  or `--while-running` with the van on (see "Restarting the broker").
 - Only the Tailscale listener has DTC jobs, so only one process writes the
   unlocked on-disk job pointer. The request file is exclusive-create. Start
   one scan at a time.
@@ -1448,7 +1449,7 @@ The backend history attachment has been live since the broker restart of
 the guarded command, for future broker changes, is:
 
 ```bash
-cd /home/pi/dev/obd-things && bash tmp/vehicle_data/restart-broker-parked.sh
+cd /home/pi/dev/obd-things && python3 -m projects.vehicle_data.restart_broker
 ```
 
 It refuses while awake. No inhibit was ended, no helper request was changed,
@@ -1480,6 +1481,34 @@ contains exact candidates, rates, parked prerequisites and requested approval;
 it authorizes no transmission and changes no existing live gate.
 
 ## Local API
+
+### Restarting the broker
+
+Restart the broker with `s restart_broker` (equivalently
+`cd /home/pi/dev/obd-things && python3 -m projects.vehicle_data.restart_broker`).
+The default is parked-only: it refuses unless the van is asleep with no helper,
+inhibit, outside owner or active request, restarts with
+`sudo -n /usr/bin/systemctl restart van-telemetry.service`, waits 90 s, then
+checks the three units are active, reports whether any CAN transmit counter
+moved and whether `van-drive-recorder.service` kept its process, and lists open
+events. `--check` runs the preflight only. `--while-running` restarts with the
+van on: it asks the broker to hold both drive helpers (`POST /v1/helpers/hold`
+on the local socket, `helper_hold.py`), restarts only after every helper
+reports a verified or never-started stop and its own read shows every vehicle
+adapter listen-only and ERROR-ACTIVE, and otherwise releases the hold and exits
+nonzero without restarting. Costs: both web units are `PartOf` the broker, so
+the tablet reconnects within a few seconds; history and drive recording have a
+gap; and if a helper's restoration fails the broker latches its inhibit, so
+telemetry stays passive for the drive until someone inspects the adapters and
+ends it (`tools/can_operation_state.py inhibit-end NAME`). `--while-running`
+needs a broker that already has the hold control (a broker that predates it
+answers 404 and is refused), so the first install of that control is a parked
+restart. A restart still loads whatever code is on disk, so a deploy that
+updates files before the restart leaves the running broker on old code until
+then. The unit sets `KillMode=mixed` and `TimeoutStopSec=40` so a stop lets the
+broker stop its helpers in order; after installing the unit and a
+`daemon-reload`, check `systemctl show -p KillMode,TimeoutStopUSec
+van-telemetry.service`.
 
 The HTTP implementation is split by responsibility: `api_server.py` owns the
 bounded concurrent-read Unix server and main-thread POST executor, `api_client.py`
