@@ -688,3 +688,20 @@ def test_a_lost_hold_makes_a_later_successful_restart_exit_nonzero():
     assert restart_broker.main(["--while-running"], env) == 1
     assert "hold that verified the helper stops was lost" in fake.text
     assert len(fake.restarts) == 1
+
+
+def test_watched_client_returns_in_bounded_time_even_if_a_descendant_holds_the_pipes(monkeypatch):
+    import time
+
+    monkeypatch.setattr(restart_broker, "RESTART_TICK_SECONDS", 0.1)
+    monkeypatch.setattr(restart_broker, "RESTART_TIMEOUT_SECONDS", 0.3)
+    monkeypatch.setattr(restart_broker, "REAP_BOUND_SECONDS", 0.5)
+    ticks = []
+    started = time.monotonic()
+    # The shell leaves a background sleep that inherits its stdout and stderr,
+    # then itself sleeps past the bound: the old communicate() would block for 5 s.
+    code, _ = restart_broker._run_watched(
+        ["sh", "-c", "sleep 5 & sleep 5"], lambda: ticks.append(time.monotonic()))
+    assert code == 124
+    assert time.monotonic() - started < 3.0
+    assert len(ticks) >= 3  # the hold keeps being renewed through the wait

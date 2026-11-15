@@ -58,6 +58,7 @@ RESOLVE_BOUND_SECONDS = 600.0
 RESOLVE_POLL_SECONDS = 5.0
 RESTART_TIMEOUT_SECONDS = 120.0
 RESTART_TICK_SECONDS = 5.0
+REAP_BOUND_SECONDS = 10.0
 PREFLIGHT_ATTEMPTS = 6
 PREFLIGHT_RETRY_SECONDS = 5.0
 SETTLE_SECONDS = 90.0
@@ -112,19 +113,30 @@ def _run_watched(argv: list[str], tick: Callable[[], None]) -> tuple[int, str]:
     The tick renews the hold, so no interval without renewal is longer than one
     poll. A client that outlives its bound is killed (its queued job is not),
     which reads as 124 and is classified like any other unconfirmed restart.
+    Its output is discarded (DEVNULL) so a descendant such as sudo's child that
+    inherits the pipes can never keep a read blocked, and the reap after the
+    kill is bounded and keeps ticking.
     """
-    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
     deadline = time.monotonic() + RESTART_TIMEOUT_SECONDS
+    if _wait_ticking(proc, deadline, tick):
+        return proc.returncode, ""
+    proc.kill()
+    _wait_ticking(proc, time.monotonic() + REAP_BOUND_SECONDS, tick)
+    return 124, ""
+
+
+def _wait_ticking(proc: subprocess.Popen, deadline: float, tick: Callable[[], None]) -> bool:
+    """Wait for `proc` until `deadline`, ticking each poll; True once it has exited."""
     while True:
         try:
-            out, _ = proc.communicate(timeout=RESTART_TICK_SECONDS)
-            return proc.returncode, out
+            proc.wait(timeout=RESTART_TICK_SECONDS)
+            return True
         except subprocess.TimeoutExpired:
             tick()
             if time.monotonic() >= deadline:
-                proc.kill()
-                proc.communicate()
-                return 124, ""
+                return False
 
 
 def _tx_counters() -> str:
