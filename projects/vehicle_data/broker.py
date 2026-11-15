@@ -3011,6 +3011,10 @@ class TelemetryBroker:
                 self.display_receiver.resume_passive()
             self._show_helpers_held()
             return
+        self._supervise_drive_epoch()
+
+    def _supervise_drive_epoch(self) -> None:
+        """Run one claimed engine-running epoch: both helpers, then their outcomes."""
         with self._lock:
             self._active_drive.update(
                 {
