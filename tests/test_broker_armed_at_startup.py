@@ -37,6 +37,36 @@ def full_pass(**states):
     }
 
 
+def readiness_snapshot(**not_ready):
+    """The reconciler's read-only readiness reply (manager role-status entries).
+
+    ``reconcile_if_needed`` returns it once no role needs reconciliation; a
+    role given here reports that reason instead of verified passive readiness.
+    """
+    def entry(role, channel):
+        reason = not_ready.get(role.replace("-", "_"), "ready")
+        return {
+            "resolution": "resolved",
+            "channel": channel,
+            "expected": {"role": role},
+            "actual": {"present": True, "up": True, "bitrate": 500000,
+                       "fd_enabled": False, "one_shot": False,
+                       "listen_only": reason == "ready",
+                       "controller_state": "ERROR-ACTIVE", "restart_ms": 0},
+            "passive_ready": reason == "ready",
+            "safe": reason == "ready",
+            "reason": reason,
+            "detail": "",
+        }
+    return {
+        "generated_at": "2026-11-15T00:00:01+00:00",
+        "interaction": "read-only readiness check; no link change",
+        "ready": not not_ready,
+        "roles": {role: entry(role, channel) for role, channel in CHANNELS.items()},
+        "changed": False,
+    }
+
+
 class Acquirer(drive_tests.BrokerActiveDriveTests.Acquirer):
     def acquire(self, mode):
         return failure(metric="battery.voltage", unit="V",
@@ -156,6 +186,25 @@ class ArmedAtStartupTests(StartupCase):
 
         self.assertEqual(self.written(), [(f"{INHIBIT_PREFIX}-c-can", "*")])
 
+    def test_a_verified_readiness_snapshot_settles_a_role_first_seen_busy(self):
+        self.cycle(full_pass(can_ch="busy"))
+        self.assertEqual(self.broker._startup_unassessed, {"can-ch"})
+
+        self.cycle(readiness_snapshot())
+        self.assertEqual(self.broker._startup_unassessed, set())
+        self.cycle(full_pass(can_ch="armed"))  # a later event, not a startup trace
+
+        self.begin_inhibit.assert_not_called()
+
+    def test_an_unverified_readiness_entry_leaves_the_role_pending(self):
+        self.cycle(full_pass(can_ch="busy"))
+        self.cycle(readiness_snapshot(can_ch="listen_only_mismatch"))
+        self.assertEqual(self.broker._startup_unassessed, {"can-ch"})
+
+        self.cycle(full_pass(can_ch="armed"))
+
+        self.assertEqual(self.written(), [(f"{INHIBIT_PREFIX}-can-ch", "*")])
+
     def test_a_failed_write_is_retried_on_the_next_pass(self):
         self.begin_inhibit.side_effect = [OSError("read-only"), None]
         with mock.patch("sys.stderr"):
@@ -237,6 +286,14 @@ class AssessStartupRolesTests(unittest.TestCase):
         found = self.decide(full_pass(c_can="armed", b_can="armed"),
                             pending_roles=("b-can",), owned_roles=frozenset({"b-can"}))
         self.assertEqual((found.assessed, found.armed), (frozenset(), ()))
+
+    def test_readiness_entries_settle_only_when_fully_verified(self):
+        found = self.decide(readiness_snapshot(b_can="role_missing"))
+        self.assertEqual(found.assessed, {"c-can", "can-ch"})
+        self.assertEqual(found.armed, ())
+        tampered = readiness_snapshot()
+        tampered["roles"]["c-can"]["actual"]["listen_only"] = False
+        self.assertNotIn("c-can", self.decide(tampered).assessed)
 
     def test_an_inhibit_on_another_channel_does_not_account_for_the_role(self):
         found = self.decide(

@@ -20,7 +20,8 @@ exists; an owner would have made the outcome ``busy``, an inhibit
 activity, and the locks are released before the inhibit is written.
 
 Each role counts once, at its first conclusive outcome: listen-only
-(``ready``/``reconciled``), ``inhibited`` or ``armed``. Anything else
+(``ready``/``reconciled``, or a verified passive-ready entry of the
+reconciler's read-only readiness snapshot), ``inhibited`` or ``armed``. Anything else
 (``busy``, ``failed``, ``unavailable``, ``topology_changed``, missing, a
 role this broker's helper has claimed, or any pass taken while a
 non-passive acquisition is in flight) leaves it pending, so a transient
@@ -72,6 +73,33 @@ class StartupAssessment:
 NO_ASSESSMENT = StartupAssessment(frozenset(), ())
 
 
+def _outcome(entry: object) -> tuple[object, object]:
+    """``(state, channel)`` from either role-entry shape the reconciler returns.
+
+    A reconciliation pass reports ``state``. The read-only readiness check
+    (taken once no role needs reconciliation) reports the manager's role
+    status instead: ``passive_ready``/``reason``, ``resolution`` and the
+    ``actual`` link. It counts as listen-only only when all of those agree.
+    """
+    if not isinstance(entry, dict):
+        return None, None
+    channel = entry.get("channel")
+    if "state" in entry:
+        return entry.get("state"), channel
+    actual = entry.get("actual")
+    if (
+        entry.get("passive_ready") is True
+        and entry.get("reason") == "ready"
+        and entry.get("resolution") == "resolved"
+        and isinstance(actual, dict)
+        and actual.get("listen_only") is True
+        and isinstance(channel, str)
+        and channel
+    ):
+        return "ready", channel
+    return None, channel
+
+
 def assess_startup_roles(
     reconcile: object,
     *,
@@ -96,11 +124,9 @@ def assess_startup_roles(
     assessed = []
     armed = []
     for role in pending_roles:
-        outcome = roles.get(role)
-        if role in owned_roles or not isinstance(outcome, dict):
+        if role in owned_roles:
             continue
-        state = outcome.get("state")
-        channel = outcome.get("channel")
+        state, channel = _outcome(roles.get(role))
         if state not in CONCLUSIVE_STATES:
             continue
         if state == "armed":
