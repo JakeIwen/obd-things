@@ -61,6 +61,8 @@ class Fake:
         self.lose_first_hold_on = False
         self.hold_get_fails = False
         self.job_out = ""  # a queued job on the broker unit
+        self.job_seq = []  # per-read job answers, when a test scripts them
+        self.job_raises = False
         self.pid_delay = 0.0
         self.lock_busy = False
         self.hold_posts = list(hold_posts or [(202, hold_body())])
@@ -106,6 +108,10 @@ class Fake:
         self.calls.append(("run", tuple(argv)))
         if argv[:2] == ["systemctl", "show"]:
             if argv[-1] == restart_broker.UNIT and "Job" in argv:
+                if self.job_seq:
+                    return 0, (self.job_seq.pop(0) if len(self.job_seq) > 1 else self.job_seq[0]) + "\n"
+                if self.job_raises:
+                    raise OSError("systemd unreachable")
                 return 0, self.job_out + "\n"
             if argv[-1] == restart_broker.UNIT:
                 self.now += self.pid_delay
@@ -531,7 +537,11 @@ def test_client_timeout_with_the_restart_still_pending_does_not_release():
     fake.job_out = "4711"  # its job is still queued
     assert fake.go("--while-running") == 1
     assert {"hold": False} not in fake.posts()
-    assert "may still be running" in fake.text and "expires on its own" in fake.text
+    assert "STILL PENDING" in fake.text and "systemctl list-jobs" in fake.text
+    assert "race the hold's expiry" in fake.text
+    renewals = [p for p in fake.posts() if p.get("hold")]
+    assert len(renewals) >= 4  # kept renewing through the whole bound
+    assert fake.now >= restart_broker.RESOLVE_BOUND_SECONDS
 
 
 def test_client_timeout_after_the_broker_was_replaced_carries_on_to_postchecks():
@@ -584,3 +594,51 @@ def test_expiry_note_does_not_claim_zero_seconds():
     assert "already have run out" in hold.expiry_note("x")
     hold.sent_at = hold.renewed_at = fake.now
     assert "about 180 s" in hold.expiry_note("x")
+
+
+def test_pending_restart_that_never_ran_releases_our_hold():
+    fake = Fake()
+    fake.restart_rc = 124
+    fake.job_seq = ["4711", "4711", ""]  # the job leaves the queue; the broker never changed
+    assert fake.go("--while-running") == 1
+    assert "never ran" in fake.text
+    assert fake.posts()[-1] == {"hold": False}
+
+
+def test_pending_restart_that_lands_later_goes_on_to_postchecks():
+    fake = Fake()
+    fake.restart_rc = 124
+    fake.job_seq = ["4711"]
+    fake.unit_pids = ["100", "100", "100", "200"]
+    assert fake.go("--while-running") == 0
+    assert "restart did complete" in fake.text
+    assert {"hold": False} not in fake.posts()
+
+
+def test_ctrl_c_while_the_restart_is_pending_does_not_release():
+    fake = Fake()
+    fake.restart_rc = 124
+    fake.job_seq = ["4711"]
+    env = fake.env()
+    calls = {"n": 0}
+    original = env.sleep
+
+    def sleep(seconds):
+        calls["n"] += 1
+        if calls["n"] > 3 and fake.restarts:
+            raise KeyboardInterrupt
+        original(seconds)
+
+    env.sleep = sleep
+    with pytest.raises(KeyboardInterrupt):
+        restart_broker.main(["--while-running"], env)
+    assert {"hold": False} not in fake.posts()
+
+
+def test_timeout_with_an_unreadable_job_query_is_pending_and_posts_no_hold_off():
+    fake = Fake()
+    fake.restart_rc = 124
+    fake.job_raises = True
+    assert fake.go("--while-running") == 1
+    assert {"hold": False} not in fake.posts()
+    assert "STILL PENDING" in fake.text

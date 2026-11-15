@@ -1502,7 +1502,14 @@ reruns every blocker (inhibits, latches, owner, radar run) after the stops and j
 before restarting, and otherwise releases the hold and exits nonzero without
 restarting; it refuses to take over a hold another client already holds, and it releases only a hold
 that is its own on the broker that took it (on a failed restart, an error or Ctrl-C), saying
-when it cannot tell and the hold will expire by itself. After the restart it
+when it cannot tell and the hold will expire by itself. If the `systemctl restart` client times
+out or is interrupted, the restart counts as submitted but unconfirmed: the command keeps renewing
+its hold and polls `MainPID` and `Job` for up to 10 minutes (`RESOLVE_BOUND_SECONDS`), carries on to
+the postchecks once a new broker runs, and releases the hold only when the same broker runs with
+no job queued. A restart still queued after the bound can still run later and race the hold's
+expiry, with helpers armed; the command then prints what is pending and the hold's remaining time
+and exits nonzero, and the operator checks `systemctl list-jobs` and
+`systemctl show -p MainPID,Job van-telemetry.service`. Ctrl-C during that wait never releases the hold. After the restart it
 waits for each configured helper to relaunch and fails if one does not. Costs: both web units are `PartOf` the broker, so
 the tablet reconnects within a few seconds; history and drive recording have a
 gap; and if a helper's restoration fails the broker latches its inhibit, so

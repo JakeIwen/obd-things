@@ -53,6 +53,9 @@ RECORDER_UNIT = "van-drive-recorder.service"
 RESTART_COMMAND = ["sudo", "-n", "/usr/bin/systemctl", "restart", UNIT]
 
 READ_TIMEOUT_SECONDS = 10.0
+# How long a submitted-but-unconfirmed restart is watched (renewing our hold).
+RESOLVE_BOUND_SECONDS = 600.0
+RESOLVE_POLL_SECONDS = 5.0
 RESTART_TIMEOUT_SECONDS = 120.0
 PREFLIGHT_ATTEMPTS = 6
 PREFLIGHT_RETRY_SECONDS = 5.0
@@ -482,13 +485,16 @@ def _restart_state(env: Environment, pid_before: str) -> str:
 
     "done": a new broker process runs. "not_started": the same broker runs and
     no job is queued, so nothing is pending. "pending": anything else, a queued
-    job or unreadable state, because a systemctl client that timed out or was
-    interrupted leaves its job to run. Blocking `systemctl restart` is kept over
-    `--no-block` because the sudoers entry matches the literal argv and a new
-    flag would change what must be allowed.
+    job or unreadable state (a query that raises included), because a systemctl
+    client that timed out or was interrupted leaves its job to run. Blocking
+    `systemctl restart` is kept over `--no-block` because the sudoers entry
+    matches the literal argv and a new flag would change what must be allowed.
     """
-    code, pid_out = env.run(["systemctl", "show", "-p", "MainPID", "--value", UNIT])
-    jcode, job_out = env.run(["systemctl", "show", "-p", "Job", "--value", UNIT])
+    try:
+        code, pid_out = env.run(["systemctl", "show", "-p", "MainPID", "--value", UNIT])
+        jcode, job_out = env.run(["systemctl", "show", "-p", "Job", "--value", UNIT])
+    except Exception:
+        return "pending"
     pid = pid_out.strip()
     if code != 0 or jcode != 0 or not pid_before:
         return "pending"
@@ -498,30 +504,75 @@ def _restart_state(env: Environment, pid_before: str) -> str:
 
 
 def _submit_restart(env: Environment, hold: Hold, pid_before: str) -> bool:
-    """Running mode: restart, treating a client failure as indeterminate until classified."""
+    """Running mode: restart, treating the restart as indeterminate from the start.
+
+    `hold.keep` is set before systemctl runs and cleared only once a terminal
+    result is established ("not_started", so cleanup may release). A restart
+    that cannot be confirmed keeps the hold renewed until it resolves or the
+    bound passes.
+    """
+    hold.keep = True
     try:
         code, _ = env.run(RESTART_COMMAND)
     except BaseException:
-        _classify_unconfirmed(env, hold, pid_before)
+        state = _restart_state(env, pid_before)
+        if state == "not_started":
+            hold.keep = False
+            env.out("Interrupted before the restart ran; our hold is released.")
+        elif state == "done":
+            env.out("Interrupted, but the restart did complete (a new broker process runs).")
+        else:
+            env.out("Interrupted with the restart possibly still queued: the hold is NOT released.")
         raise
     if code == 0:
+        hold.keep = False
         return _settle(env)
     env.out(f"systemctl restart client ended with exit status {code}")
-    state = _classify_unconfirmed(env, hold, pid_before)
-    return state == "done" and _settle(env)
-
-
-def _classify_unconfirmed(env: Environment, hold: Hold, pid_before: str) -> str:
-    state = _restart_state(env, pid_before)
-    if state == "done":
-        hold.keep = True
+    state = _resolve_pending(env, hold, pid_before)
+    if state == "not_started":
+        hold.keep = False
+        env.out("The restart never ran; releasing our hold.")
+    elif state == "done":
+        hold.keep = False
         env.out("The restart did complete (a new broker process runs); the old hold ended with it.")
-    elif state == "pending":
-        hold.keep = True
-        env.out("The restart may still be running or its state is unreadable, so the hold is NOT "
-                "released; check `systemctl status van-telemetry.service`. "
-                + hold.expiry_note("Hold left to lapse."))
-    return state
+        return _settle(env)
+    return False
+
+
+def _resolve_pending(env: Environment, hold: Hold, pid_before: str) -> str:
+    """Keep our hold renewed until the restart is positively resolved, within a bound.
+
+    Ctrl-C here propagates with the hold left alone: it is never released
+    while the restart is pending.
+    """
+    deadline = env.clock() + RESOLVE_BOUND_SECONDS
+    while True:
+        state = _restart_state(env, pid_before)
+        if state != "pending":
+            return state
+        if env.clock() >= deadline:
+            env.out(
+                f"STILL PENDING after {RESOLVE_BOUND_SECONDS:.0f} s: a restart job may still be "
+                "queued for van-telemetry.service. It can still run and race the hold's expiry, "
+                "with helpers armed. Check `systemctl list-jobs` and "
+                "`systemctl show -p MainPID,Job van-telemetry.service`. "
+                + hold.expiry_note("Hold no longer renewed.")
+            )
+            return "pending"
+        _renew_while_pending(env, hold)
+        env.sleep(RESOLVE_POLL_SECONDS)
+
+
+def _renew_while_pending(env: Environment, hold: Hold) -> None:
+    try:
+        code, body = env.socket("GET", helper_hold.API_PATH, None)
+        if code == 200 and body.get("held") is True and body.get("reason") == HOLD_REASON:
+            hold.renew_if_due()
+        elif code == 200:
+            env.out("WARNING: the hold is no longer ours or has ended; helpers may relaunch "
+                    "before the pending restart runs.")
+    except (OSError, RuntimeError, ValueError, HoldFailure) as error:
+        env.out(f"hold renewal failed while the restart is pending: {error}")
 
 
 def _recorder_line(env: Environment, before: str) -> None:
