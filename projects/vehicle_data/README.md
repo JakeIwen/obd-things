@@ -1531,6 +1531,19 @@ adapters (`mixed` would SIGKILL them as soon as the broker exits); after install
 `daemon-reload`, check `systemctl show -p KillMode,TimeoutStopUSec
 van-telemetry.service`.
 
+Validation status (2026-11-15): the unit change and the hold control (master `cc83b3c`) were
+installed with a parked restart through this command, which passed every postcheck (transmit
+counters unchanged, no inhibits, all three roles listen-only, hold route answering). The owner
+chose not to schedule a dedicated `--while-running` test drive, so the first real use of that
+option is also its first run on the vehicle; watch its output and check for inhibits afterwards.
+Its tests cover the hold and restart logic, not the slow-restore/SIGKILL path or the helpers'
+first-signal window. Two follow-ups from the plan review were not built: ending the pre-guard
+race in the broker itself (a cancelled-before-grant final when no grant was attempted), and an
+`ExecStop=` that posts the hold so manual stops and reboots also shut helpers down in order.
+The pre-module parked script is kept on the Pi as
+`tmp/vehicle_data/restart-broker-parked.sh.pre-module-20261115`; the original path is now a
+wrapper around this command.
+
 The HTTP implementation is split by responsibility: `api_server.py` owns the
 bounded concurrent-read Unix server and main-thread POST executor, `api_client.py`
 owns `TelemetryClient`, and `api.py` re-exports the existing imports (including
