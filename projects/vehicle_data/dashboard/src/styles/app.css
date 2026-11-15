@@ -266,6 +266,8 @@ a { color: var(--blue); }
   .area-volt .tile__value { font-size: min(calc(var(--value) * .7), calc(4.5vw - 9px)); }
 }
 .tile__unit { font-size: .4em; font-weight: 500; color: var(--text-2); letter-spacing: 0; }
+/* Every other tile's unit size, shrinking with this scaled-down numeral when the column is narrow. */
+.volt-field .tile__unit { font-size: min(calc(var(--value) * .4), .6em); margin: 0 2px 0 4px; }
 .tile__sub { font-size: 14px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 19px; }
 .area-speed .tile__sub { white-space: pre-line; flex-shrink: 0; line-height: 20px; min-height: 20px; }
 .tile__band { display: block; width: 100%; height: 6px; margin: 4px 0 2px; }

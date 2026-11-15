@@ -43,13 +43,13 @@ export function BandBar({ name }) {
  * @param {{name: string, label: string, area?: string, size?: 'hero'|'large'|'value',
  *          band?: boolean, spark?: boolean, sub?: import('@preact/signals').ReadonlySignal<string>,
  *          extra?: any, detail?: any, onClick?: Function, decimals?: number, showUnit?: boolean,
- *          overspeed?: import('@preact/signals').ReadonlySignal<boolean>}} props
+ *          overspeed?: import('@preact/signals').ReadonlySignal<boolean>, value?: any}} props
  *   `sub` is an optional live sub-line (e.g. the torque under Power); when the value is
  *   held, the held time stamp replaces it. `overspeed` tints the value soft red while true.
- *   `valueText` is an optional signal replacing the numeral text (state, held time stamp, colour and band stay the metric's, so the text must not imply fresher data than that state).
+ *   `value` is an optional node replacing the numeral text (state, held time stamp, colour and band stay the metric's, so it must not imply fresher data than that state).
  *   `extra` renders beside the numeral; `detail` renders under it, above the band and sub-line.
  */
-export function Tile({ name, label, area, size = "value", band = false, spark = false, sub, extra, detail, onClick, decimals, showUnit = true, overspeed, valueText }) {
+export function Tile({ name, label, area, size = "value", band = false, spark = false, sub, extra, detail, onClick, decimals, showUnit = true, overspeed, value }) {
   const m = tileModel(name, decimals === undefined ? undefined : { decimals });
   const cls = useComputed(() => {
     let c = "tile tile--" + size + " tile--" + m.kind.value;
@@ -68,7 +68,7 @@ export function Tile({ name, label, area, size = "value", band = false, spark = 
     <section class={cls} aria-label={label} onClick={onClick}>
       <div class="tile__label">{label}</div>
       <div class="tile__value num">
-        <span>{valueText || m.valueText}</span>
+        <span>{value || m.valueText}</span>
         {showUnit ? <span class="tile__unit">{m.unitText}</span> : null}
         {extra}
       </div>
