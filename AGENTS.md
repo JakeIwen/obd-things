@@ -139,7 +139,10 @@ rather than keeping a frozen broker implementation in the permanent tests.
 restart: parked-only by default, `--while-running` for a restart with the van on. The latter
 needs the broker's drive-helper hold, whose shared contract (path, timings, state vocabulary,
 request validation) is `projects/vehicle_data/helper_hold.py`; the route exists only on the
-broker's local socket. The unit sets `KillMode=mixed`/`TimeoutStopSec=40`; check with
+broker's local socket. `helper_hold_control.py` is the broker's runtime side of the hold (its
+lock, record and event, the supervisors' `StopWhenAny` stop condition, the request handling and
+the `claimed_run` launch-claim cleanup); blocked-reason writes, supervisor stops and radar
+admission stay in `broker.py`. The unit sets `KillMode=mixed`/`TimeoutStopSec=40`; check with
 `systemctl show -p KillMode,TimeoutStopUSec van-telemetry.service`. Costs, the 404 rule for a
 broker without the hold control and the rolling-deploy hazard are in the vehicle-data README
 section "Restarting the broker".
