@@ -25,7 +25,7 @@ from projects.vehicle_data.helper_hold import (
     HoldRefusal,
     blocked_reason_after_stop,
 )
-from projects.vehicle_data.helper_hold_control import HelperHoldControl
+from projects.vehicle_data.helper_hold_control import HelperHoldControl, claimed_run
 from projects.vehicle_data.helper_startup_grant import (
     READY_EVENT_TYPE,
     StartupGrant,
@@ -3011,10 +3011,14 @@ class TelemetryBroker:
                 self.display_receiver.resume_passive()
             self._show_helpers_held()
             return
-        self._supervise_drive_epoch()
+        with claimed_run(lambda outcome: self._end_helper_run("active_drive", outcome)) as finished:
+            self._supervise_drive_epoch(finished)
 
-    def _supervise_drive_epoch(self) -> None:
-        """Run one claimed engine-running epoch: both helpers, then their outcomes."""
+    def _supervise_drive_epoch(self, finished: list[dict[str, object]]) -> None:
+        """Run one claimed engine-running epoch: both helpers, then their outcomes.
+
+        ``finished`` receives the C-CAN outcome once it is validated and applied.
+        """
         with self._lock:
             self._active_drive.update(
                 {
@@ -3046,50 +3050,52 @@ class TelemetryBroker:
                 )
 
             def supervise_auxiliary() -> None:
-                outcome = None
-                try:
+                with claimed_run(
+                    lambda outcome: self._end_helper_run("auxiliary_drive", outcome)
+                ) as finished:
                     outcome = self.auxiliary_drive_supervisor.run(
                         self._helper_hold.stop_condition(auxiliary_stop)
                     )
-                finally:
-                    if outcome is None:  # supervision raised
-                        self._end_helper_run("auxiliary_drive", None)
-                try:
-                    self.handle_auxiliary_drive_event(outcome)
-                except (KeyError, TypeError, ValueError) as exc:
-                    outcome = {
-                        "type": "final",
-                        "state": "restoration_failed",
-                        "reason": "restoration_failed",
-                        "detail": (
-                            "B-CAN auxiliary final event rejected: "
-                            f"{exc}; passive restoration is unverified"
-                        ),
-                        "restored": False,
-                        "interface_mode": "armed_diagnostic",
-                    }
-                    self.handle_auxiliary_drive_event(outcome)
-                reason = str(outcome.get("reason", "helper_failed"))
-                if (
-                    outcome.get("restored") is True
-                    or reason in RELAUNCH_BLOCKING_REASONS
-                ):
-                    with self._lock:
-                        self._auxiliary_drive_blocked_reason = reason
-                        self._auxiliary_drive_blocked_detail = str(
-                            outcome.get("detail")
-                            or "B-CAN auxiliary helper ended without detail"
-                        )
-                if reason == "restoration_failed" or outcome.get("restored") is False:
-                    self._auxiliary_drive_restoration_latched = True
-                self._end_helper_run("auxiliary_drive", outcome)
+                    try:
+                        self.handle_auxiliary_drive_event(outcome)
+                    except (KeyError, TypeError, ValueError) as exc:
+                        outcome = {
+                            "type": "final",
+                            "state": "restoration_failed",
+                            "reason": "restoration_failed",
+                            "detail": (
+                                "B-CAN auxiliary final event rejected: "
+                                f"{exc}; passive restoration is unverified"
+                            ),
+                            "restored": False,
+                            "interface_mode": "armed_diagnostic",
+                        }
+                        self.handle_auxiliary_drive_event(outcome)
+                    reason = str(outcome.get("reason", "helper_failed"))
+                    if (
+                        outcome.get("restored") is True
+                        or reason in RELAUNCH_BLOCKING_REASONS
+                    ):
+                        with self._lock:
+                            self._auxiliary_drive_blocked_reason = reason
+                            self._auxiliary_drive_blocked_detail = str(
+                                outcome.get("detail")
+                                or "B-CAN auxiliary helper ended without detail"
+                            )
+                    if reason == "restoration_failed" or outcome.get("restored") is False:
+                        self._auxiliary_drive_restoration_latched = True
+                    finished.append(outcome)
 
-            auxiliary_thread = threading.Thread(
-                target=supervise_auxiliary,
-                name="van-telemetry-bcan-auxiliary",
-                daemon=True,
-            )
-            auxiliary_thread.start()
+            try:
+                auxiliary_thread = threading.Thread(
+                    target=supervise_auxiliary,
+                    name="van-telemetry-bcan-auxiliary",
+                    daemon=True,
+                )
+                auxiliary_thread.start()
+            except BaseException:
+                self._end_helper_run("auxiliary_drive", None)  # never ran
+                raise
         elif auxiliary_ready:
             # Claim refused: a hold started after this epoch's C-CAN claim.
             self._show_helpers_held(active=False)
@@ -3124,14 +3130,11 @@ class TelemetryBroker:
                     }
                 )
 
-        outcome = None
         try:
             outcome = self.active_drive_supervisor.run(
                 self._helper_hold.stop_condition(self._collector_stop)
             )
         finally:
-            if outcome is None:  # supervision raised
-                self._end_helper_run("active_drive", None)
             if self.display_receiver is not None:
                 self.display_receiver.resume_passive()
             auxiliary_stop.set()
@@ -3178,7 +3181,7 @@ class TelemetryBroker:
                 )
         if reason == "restoration_failed" or outcome.get("restored") is False:
             self._active_drive_restoration_latched = True
-        self._end_helper_run("active_drive", outcome)
+        finished.append(outcome)
         self._arm_engine_off_voltage_after_helper(outcome)
         self._refresh_interface_status()
 

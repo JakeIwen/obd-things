@@ -457,6 +457,66 @@ class HoldRefusalTests(HoldCase):
         self.assertEqual(calls, ["passive"])
 
 
+class ClaimCleanupTests(HoldCase):
+    """A claim ends however the run ends, and the run's own exception survives."""
+
+    def test_failed_final_processing_releases_the_claim_as_unverified(self):
+        active = ScriptedSupervisor()
+        broker = self.broker(active)
+        thread_errors = []
+
+        def failing_epoch():
+            try:
+                broker._run_active_drive_if_ready()
+            except RuntimeError as exc:
+                thread_errors.append(exc)
+
+        boom = RuntimeError("final processing failed")
+        with mock.patch.object(broker, "handle_active_drive_event", side_effect=boom):
+            thread = threading.Thread(target=failing_epoch, daemon=True)
+            thread.start()
+            self.assertTrue(active.started.wait(WAIT_SECONDS))
+            broker.helper_hold_request(dict(HOLD_ON))
+            self.join(thread)
+
+        self.assertEqual(thread_errors, [boom])  # the original exception, unchanged
+        self.assertEqual(self.states(broker)["active_drive"], "stopped_unverified")
+        # Latch policy is unchanged: only a validated failed restoration latches.
+        self.assertFalse(broker._active_drive_restoration_latched)
+        self.begin_inhibit.assert_not_called()
+        broker.helper_hold_request(dict(HOLD_OFF))
+        broker.helper_hold_request(dict(HOLD_ON))
+        self.assertEqual(self.states(broker)["active_drive"], "idle")  # claim released
+
+    def test_unheld_failure_leaves_no_claim_for_a_later_hold(self):
+        broker = self.broker(ScriptedSupervisor())
+        broker.active_drive_supervisor.stopped.set()  # the helper ends on its own
+        with mock.patch.object(
+            broker, "handle_active_drive_event", side_effect=RuntimeError("boom")
+        ):
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                broker._run_active_drive_if_ready()
+
+        code, body = broker.helper_hold_request(dict(HOLD_ON))
+        self.assertEqual(body["helpers"]["active_drive"]["state"], "idle")
+
+    def test_failed_auxiliary_processing_releases_its_claim_as_unverified(self):
+        active, auxiliary = ScriptedSupervisor(), ScriptedSupervisor()
+        broker = self.broker(active, auxiliary)
+        with mock.patch.object(
+            broker, "handle_auxiliary_drive_event", side_effect=RuntimeError("aux")
+        ), mock.patch("threading.excepthook"):
+            thread = self.epoch_in_thread(broker)
+            self.assertTrue(auxiliary.started.wait(WAIT_SECONDS))
+            broker.helper_hold_request(dict(HOLD_ON))
+            self.join(thread)
+
+        states = self.states(broker)
+        self.assertEqual(states["auxiliary_drive"], "stopped_unverified")
+        self.assertEqual(states["active_drive"], "stopped_verified")
+        self.assertFalse(broker._auxiliary_drive_restoration_latched)
+
+
 class HoldRouteTests(unittest.TestCase):
     def test_broker_socket_serves_the_hold_route(self):
         handler_class = api_server.TelemetryApiHandler

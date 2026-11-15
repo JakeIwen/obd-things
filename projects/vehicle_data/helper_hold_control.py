@@ -9,9 +9,10 @@ check) is passed in or stays in `broker.py`, beside the ordered CAN lifecycle.
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 
 from projects.vehicle_data.helper_hold import HoldRecord, HoldRefusal, parse_request
 
@@ -38,6 +39,28 @@ class StopWhenAny:
                 return False
             self._events[0].wait(min(remaining, 0.05))
         return True
+
+
+@contextlib.contextmanager
+def claimed_run(
+    end: Callable[[dict[str, object] | None], None],
+) -> Iterator[list[dict[str, object]]]:
+    """Release one launch claim however its run ends.
+
+    The body appends the outcome once the broker has validated and applied
+    it; ``end`` then gets that outcome, or None (unverified) when the body
+    raised first. A failing ``end`` never replaces the body's own exception.
+    """
+    finished: list[dict[str, object]] = []
+    try:
+        yield finished
+    except BaseException:
+        try:
+            end(finished[0] if finished else None)
+        except Exception:
+            pass  # the run's own exception is the one to report
+        raise
+    end(finished[0] if finished else None)
 
 
 class HelperHoldControl:
