@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from lib import can_operation_state, diagnostic_safety
+from lib.vehicle_can_roles import B_CAN_ROLE, CAN_BUS_ROLES, C_CAN_ROLE
+from projects.vehicle_data.armed_at_startup import unowned_armed_roles
 from projects.vehicle_data.drive_helper_launch import HELPER_CWD, helper_command
 from projects.vehicle_data.engine_off_voltage import EngineOffVoltageCapture
 from projects.vehicle_data.helper_events import validate_helper_status
@@ -845,6 +847,8 @@ class TelemetryBroker:
         self._auxiliary_drive_blocked_detail: str | None = None
         self._auxiliary_drive_restoration_latched = False
         self._helper_hold = HelperHoldControl(lambda: self.monotonic())
+        # Until the first full reconciliation pass is checked (armed_at_startup.py).
+        self._armed_at_startup_pending = interface_reconciler is not None
         self._wake_authorization_deadline: float | None = None
         self._wake_authorization_owner: int | None = None
         self._active_drive: dict[str, object] = {
@@ -3188,6 +3192,47 @@ class TelemetryBroker:
         self._arm_engine_off_voltage_after_helper(outcome)
         self._refresh_interface_status()
 
+    def _inhibit_armed_at_startup(self, reconcile: dict[str, object]) -> None:
+        """Inhibit every vehicle role the first full pass found armed with no owner.
+
+        The first result with role outcomes is the reconciler's full startup
+        pass. A result that allows no conclusion, or a failed write, keeps the
+        check pending, so the next pass (which reports a still-armed role
+        again) decides or retries it.
+        """
+        if not self._armed_at_startup_pending:
+            return
+        helper_roles = {"active_drive": C_CAN_ROLE, "auxiliary_drive": B_CAN_ROLE}
+        owned = frozenset(
+            helper_roles[helper] for helper in self._helper_hold.claimed_helpers()
+        )
+        with self._lock:
+            nonpassive = any(mode != "passive" for _metric, mode in self._inflight)
+        armed = unowned_armed_roles(
+            reconcile,
+            vehicle_roles=CAN_BUS_ROLES,
+            owned_roles=owned,
+            inhibits=can_operation_state.all_active_inhibits(),
+            nonpassive_inflight=nonpassive,
+        )
+        if armed is None:
+            return
+        written = True
+        for role in armed:
+            try:
+                can_operation_state.begin_inhibit(
+                    role.inhibit_name, channel="*", reason=role.inhibit_reason
+                )
+            except Exception as exc:
+                written = False
+                print(
+                    f"{datetime.now(timezone.utc).isoformat()} could not record "
+                    f"{role.inhibit_name}: {type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+        self._armed_at_startup_pending = not written
+
     def _collector_loop(self) -> None:
         with self._lock:
             self._collector_state = "running"
@@ -3207,6 +3252,7 @@ class TelemetryBroker:
                         }
                     with self._lock:
                         self._interface_reconcile = reconcile
+                    self._inhibit_armed_at_startup(reconcile)
                 # Initial reconciliation records role topology under exclusive
                 # locks. Do not let a long-lived observer overtake that step.
                 if self.display_receiver is not None:

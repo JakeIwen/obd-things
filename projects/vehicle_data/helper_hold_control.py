@@ -136,6 +136,11 @@ class HelperHoldControl:
                 self._event.clear()
             return self._record.held
 
+    def claimed_helpers(self) -> frozenset[str]:
+        """Helpers whose supervisor run is claimed (launched or about to)."""
+        with self._lock:
+            return frozenset(self._record.running)
+
     def claim(self, helper: str) -> bool:
         """Claim a helper launch; False while held. Excludes a concurrent hold-on."""
         with self._lock:
