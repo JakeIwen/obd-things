@@ -2375,7 +2375,8 @@ class TelemetryBroker:
             auxiliary_restoration_latched = self._auxiliary_drive_restoration_latched
             collector_state = self._collector_state
             vehicle_observed = self._vehicle_state_observed_monotonic
-        return wake_state_conflicts(
+            unrecorded = sorted(self._armed_at_startup_faults)
+        conflicts = wake_state_conflicts(
             active_drive=active_drive, auxiliary_drive=auxiliary_drive,
             vehicle_state=vehicle_state, restoration_latched=restoration_latched,
             auxiliary_restoration_latched=auxiliary_restoration_latched,
@@ -2383,6 +2384,13 @@ class TelemetryBroker:
             now=now, collector_interval_seconds=self.collector_interval_seconds,
             require_fresh=require_fresh,
         )
+        if unrecorded:
+            # A found fault blocks a wake TX whether or not its inhibit is on disk yet.
+            conflicts = (*conflicts, (
+                f"broker startup found {', '.join(unrecorded)} armed with no owner; "
+                "its inhibit is not yet recorded"
+            ))
+        return conflicts
 
     def _begin_wake_authorization(self) -> tuple[str, ...]:
         conflicts = self._wake_state_conflicts(require_fresh=True)
@@ -2988,7 +2996,9 @@ class TelemetryBroker:
                 "qualified passive engine-running evidence is absent",
             )
             return
-        if self._armed_at_startup_faults:
+        with self._lock:
+            unrecorded = bool(self._armed_at_startup_faults)
+        if unrecorded:
             self._show_armed_at_startup()
             return
         if self._helper_hold.active:
@@ -3223,13 +3233,16 @@ class TelemetryBroker:
                 nonpassive_inflight=nonpassive,
             )
             self._startup_unassessed -= assessment.assessed
-            for armed in assessment.armed:
-                self._armed_at_startup_faults[armed.role] = armed
+            with self._lock:  # wake authorization reads these from API threads
+                for armed in assessment.armed:
+                    self._armed_at_startup_faults[armed.role] = armed
         self._record_armed_at_startup()
 
     def _record_armed_at_startup(self) -> None:
         """Write each latched fault's wildcard inhibit; keep it latched until written."""
-        for armed in list(self._armed_at_startup_faults.values()):
+        with self._lock:
+            latched = list(self._armed_at_startup_faults.values())
+        for armed in latched:
             try:
                 can_operation_state.begin_inhibit(
                     armed.inhibit_name, channel="*", reason=armed.inhibit_reason
@@ -3245,10 +3258,12 @@ class TelemetryBroker:
                         flush=True,
                     )
                 continue
-            del self._armed_at_startup_faults[armed.role]
+            with self._lock:
+                del self._armed_at_startup_faults[armed.role]
 
     def _show_armed_at_startup(self) -> None:
-        roles = ", ".join(sorted(self._armed_at_startup_faults))
+        with self._lock:
+            roles = ", ".join(sorted(self._armed_at_startup_faults))
         blocked = {
             "state": "idle",
             "reason": "inhibited",

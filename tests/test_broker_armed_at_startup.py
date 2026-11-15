@@ -5,6 +5,7 @@ reconciler's outcome as the seam (contract in armed_at_startup.py).
 Inhibit reads and writes are patched; nothing touches CAN or the state dir.
 """
 
+import threading
 import unittest
 from unittest import mock
 
@@ -204,6 +205,25 @@ class ArmedAtStartupTests(StartupCase):
         self.cycle(full_pass(can_ch="armed"))
 
         self.assertEqual(self.written(), [(f"{INHIBIT_PREFIX}-can-ch", "*")])
+
+    def test_an_unrecorded_fault_blocks_parked_wake_authorization(self):
+        self.begin_inhibit.side_effect = OSError("read-only")
+        with mock.patch("sys.stderr"):
+            self.cycle(full_pass(can_ch="armed"))
+
+        def startup_conflicts(conflicts):
+            return [c for c in conflicts if "can-ch armed with no owner" in c]
+
+        self.assertEqual(len(startup_conflicts(self.broker._begin_wake_authorization())), 1)
+        with self.broker._lock:  # as if authorization had been granted
+            self.broker._wake_authorization_owner = threading.get_ident()
+            self.broker._wake_authorization_deadline = self.broker.monotonic() + 12.0
+        self.assertEqual(len(startup_conflicts(self.broker.wake_prearm_conflicts())), 1)
+
+        self.begin_inhibit.side_effect = None
+        self.cycle(full_pass())  # recorded now: the disk inhibit takes over
+        self.assertEqual(startup_conflicts(self.broker.wake_prearm_conflicts()), [])
+        self.assertEqual(startup_conflicts(self.broker._begin_wake_authorization()), [])
 
     def test_a_failed_write_is_retried_on_the_next_pass(self):
         self.begin_inhibit.side_effect = [OSError("read-only"), None]
