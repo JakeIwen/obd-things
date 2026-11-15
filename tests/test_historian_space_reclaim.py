@@ -4,7 +4,9 @@ import contextlib
 import hashlib
 import io
 import subprocess
+import os
 import sqlite3
+import shutil
 import sys
 import tempfile
 import time
@@ -343,7 +345,9 @@ class CompactionTests(SpaceFixture):
     def test_real_non_dumpable_process_is_listed_through_sudo(self):
         """End to end: PR_SET_DUMPABLE=0 makes /proc/<pid>/fd root-owned, as for ssh-agent."""
 
-        if subprocess.run(["sudo", "-n", "true"], capture_output=True).returncode != 0:
+        if os.geteuid() == 0:
+            self.skipTest("root reads every /proc/<pid>/fd, so there is no denial to exercise")
+        if shutil.which("sudo") is None or subprocess.run(["sudo", "-n", "true"], capture_output=True).returncode != 0:
             self.skipTest("needs passwordless sudo (vanpi's pi user has it; sandboxed runners do not)")
         self.prepared_legacy_database()
         code = (
