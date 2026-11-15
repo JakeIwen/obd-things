@@ -15,11 +15,13 @@ RESTART = restart_broker.RESTART_COMMAND
 
 
 def status(*, state="asleep", running=False, pids=(None, None), inhibits=(), owner=None,
-           inflight=(), latched=(), collector=1.0):
+           inflight=(), latched=(), collector=1.0, disabled=()):
     return {
         "vehicle_state": {"state": state, "running": running},
-        "active_drive": {"helper_pid": pids[0], "restoration_failed": "active_drive" in latched},
-        "auxiliary_drive": {"helper_pid": pids[1], "restoration_failed": "auxiliary_drive" in latched},
+        "active_drive": {"helper_pid": pids[0], "restoration_failed": "active_drive" in latched,
+                         "state": disabled_state("active_drive", disabled)},
+        "auxiliary_drive": {"helper_pid": pids[1], "restoration_failed": "auxiliary_drive" in latched,
+                            "state": disabled_state("auxiliary_drive", disabled)},
         "interface": {"active_inhibits": list(inhibits)},
         "current_owner": owner,
         "inflight": list(inflight),
@@ -27,8 +29,12 @@ def status(*, state="asleep", running=False, pids=(None, None), inhibits=(), own
     }
 
 
-def hold_body(active=S.IDLE, aux=S.IDLE):
-    return {"held": True, "helpers": {"active_drive": {"state": active.value, "pid": None},
+def disabled_state(key, disabled):
+    return "disabled" if key in disabled else "idle"
+
+
+def hold_body(active=S.IDLE, aux=S.IDLE, held=True, remaining=170.0, reason="restart_broker"):
+    return {"held": held, "reason": reason, "remaining_seconds": remaining, "helpers": {"active_drive": {"state": active.value, "pid": None},
                                       "auxiliary_drive": {"state": aux.value, "pid": None}}}
 
 
@@ -47,7 +53,10 @@ class Fake:
         self.calls = []
         self.lines = []
         self.web_status = web_status or status()
-        self.sock_status = sock_status or status(state="running", running=True)
+        self.sock_status = sock_status or status(state="running", running=True, pids=(11, 12))
+        self.unit_pids = ["100", "100"]
+        self.restart_rc = 0
+        self.lock_busy = False
         self.hold_posts = list(hold_posts or [(202, hold_body())])
         self.hold_gets = list(hold_gets or [(200, hold_body())])
         self.adapter_map = adapters if adapters is not None else {
@@ -79,9 +88,13 @@ class Fake:
     def run(self, argv):
         self.calls.append(("run", tuple(argv)))
         if argv[:2] == ["systemctl", "show"]:
+            if argv[-1] == restart_broker.UNIT:
+                return 0, (self.unit_pids.pop(0) if len(self.unit_pids) > 1 else self.unit_pids[0]) + "\n"
             return 0, self.recorder.pop(0) + "\n"
         if argv[:2] == ["systemctl", "is-active"]:
             return (0, "active\n") if self.units_ok else (3, "inactive\n")
+        if argv == RESTART:
+            return self.restart_rc, ""
         return 0, ""
 
     def sleep(self, seconds):
@@ -91,9 +104,19 @@ class Fake:
         return restart_broker.Environment(
             web=self.web, socket=self.socket, run=self.run,
             tx_counters=lambda: self.tx.pop(0) if len(self.tx) > 1 else self.tx[0],
-            file_inhibits=lambda: tuple(self.file_inhibits),
+            file_inhibits=lambda: tuple(self.file_inhibits), lock=self.lock,
             adapters=lambda: self.adapter_map, sleep=self.sleep,
             clock=lambda: self.now, out=self.lines.append)
+
+    def lock(self):
+        import contextlib
+
+        @contextlib.contextmanager
+        def ctx():
+            if self.lock_busy:
+                raise RuntimeError("another restart_broker command is running")
+            yield
+        return ctx()
 
     def go(self, *argv):
         return restart_broker.main(list(argv), self.env())
@@ -141,6 +164,19 @@ def test_parked_refuses_on_a_file_inhibit_the_cached_status_lacks():
     fake = Fake(file_inhibits=[{"name": "disk-only"}])
     assert fake.go() == 1
     assert "disk-only" in fake.text and not fake.restarts
+
+
+def test_parked_refuses_a_helper_owner_with_no_pid():
+    fake = Fake(web_status=status(owner={"kind": "broker_active_drive", "roles": ["c-can"]}))
+    assert fake.go() == 1
+    assert "another owner" in fake.text and not fake.restarts
+
+
+def test_parked_check_fails_when_the_event_index_does_not_answer():
+    fake = Fake()
+    fake.web = lambda m, path, payload: (200, status()) if path == "/v1/status" else (500, {})
+    assert fake.go("--check") == 1
+    assert "did not answer" in fake.text
 
 
 def test_passive_inflight_does_not_block_parked():
@@ -227,7 +263,7 @@ def test_hold_timeout_releases_and_does_not_restart():
 def test_stopped_unverified_explains_the_latched_inhibit():
     fake = Fake(hold_gets=[(200, hold_body(S.STOPPED_UNVERIFIED, S.STOPPED_VERIFIED))])
     assert fake.go("--while-running") == 1
-    assert "latched its inhibit" in fake.text and "active telemetry stays off" in fake.text
+    assert "may mean the broker latched" in fake.text and "may stay off" in fake.text
     assert fake.posts()[-1] == {"hold": False}
     assert not fake.restarts
 
@@ -275,13 +311,11 @@ def test_running_check_never_holds_or_restarts():
 
 def test_postcheck_finds_new_inhibit_after_restart():
     fake = Fake()
-    calls = {"n": 0}
     original = fake.socket
 
     def socket(method, path, payload):
         if path == "/v1/status":
-            calls["n"] += 1
-            if calls["n"] > 1:
+            if fake.restarts:
                 return 200, status(state="running", running=True, pids=(1, 2),
                                    inhibits=["vehicle-data-restoration-failed"])
         return original(method, path, payload)
@@ -291,3 +325,121 @@ def test_postcheck_finds_new_inhibit_after_restart():
     assert restart_broker.main(["--while-running"], env) == 1
     assert "POSTCHECK FAILED" in fake.text
     assert len(fake.restarts) == 1
+
+
+def test_expected_helper_that_never_relaunches_fails_the_postcheck():
+    fake = Fake(sock_status=status(state="running", running=True, pids=(None, None)))
+    assert fake.go("--while-running") == 1
+    assert "active_drive did not relaunch" in fake.text
+    assert "auxiliary_drive did not relaunch" in fake.text
+
+
+def test_disabled_helper_is_not_expected_back():
+    fake = Fake(sock_status=status(state="running", running=True, pids=(11, None),
+                                   disabled=("auxiliary_drive",)))
+    assert fake.go("--while-running") == 0
+
+
+def test_running_helper_may_arm_its_adapter_but_not_leave_it_unhealthy():
+    armed = adapter("can0", listen_only=False)
+    sick = adapter("can0", listen_only=False, controller="BUS-OFF")
+    fake = Fake()
+    env = fake.env()
+    assert restart_broker.adapter_problems(env, ("c-can",)) == []
+    env.adapters = lambda: {"c-can": armed, "b-can": adapter("can1"), "can-ch": adapter("can2")}
+    assert restart_broker.adapter_problems(env, ("c-can",)) == []
+    assert restart_broker.adapter_problems(env, ()) != []
+    env.adapters = lambda: {"c-can": sick, "b-can": adapter("can1"), "can-ch": adapter("can2")}
+    assert "BUS-OFF" in restart_broker.adapter_problems(env, ("c-can",))[0]
+
+
+def test_expired_hold_is_not_accepted_as_a_verified_stop():
+    fake = Fake(hold_gets=[(200, hold_body(S.STOPPED_VERIFIED, S.STOPPED_VERIFIED, held=False))])
+    assert fake.go("--while-running") == 1
+    assert "no longer active" in fake.text and not fake.restarts
+
+
+@pytest.mark.parametrize("body, needle", [
+    (hold_body(reason="someone else"), "replaced"),
+    (hold_body(remaining=5.0), "too little time"),
+])
+def test_replaced_or_nearly_expired_hold_refuses(body, needle):
+    fake = Fake(hold_gets=[(200, body)])
+    assert fake.go("--while-running") == 1
+    assert needle in fake.text and not fake.restarts
+
+
+def test_a_restart_never_follows_a_reacquired_hold_with_helpers_still_stopping():
+    # Stops verify, the command stalls past the renewal point, and the renewal
+    # lands on a fresh hold whose helpers are still stopping.
+    fake = Fake(hold_gets=[(200, hold_body(S.STOPPED_VERIFIED, S.STOPPED_VERIFIED))])
+    reads = {"adapters": 0}
+
+    def slow_adapters():
+        reads["adapters"] += 1
+        fake.now += 130.0
+        if reads["adapters"] == 1:
+            fake.hold_gets[:] = [(200, hold_body(S.STOPPING, S.STOPPING))]
+        return {r: adapter(r) for r in ("c-can", "b-can", "can-ch")}
+
+    env = fake.env()
+    env.adapters = slow_adapters
+    assert restart_broker.main(["--while-running"], env) == 1
+    assert not fake.restarts and fake.posts()[-1] == {"hold": False}
+
+
+def test_inhibit_that_appears_after_the_stops_blocks_the_restart():
+    fake = Fake()
+    env = fake.env()
+    base = env.adapters
+
+    def adapters_then_inhibit():
+        fake.file_inhibits = [{"name": "late-inhibit"}]
+        return base()
+
+    env.adapters = adapters_then_inhibit
+    assert restart_broker.main(["--while-running"], env) == 1
+    assert "late-inhibit" in fake.text and not fake.restarts
+    assert fake.posts()[-1] == {"hold": False}
+
+
+def test_failed_restart_command_releases_the_hold():
+    fake = Fake()
+    fake.restart_rc = 1
+    assert fake.go("--while-running") == 1
+    assert fake.posts()[-1] == {"hold": False}
+
+
+def test_interrupted_restart_releases_only_the_same_brokers_hold():
+    fake = Fake()
+    fake.unit_pids = ["100", "100"]
+    original = fake.run
+
+    def run(argv):
+        if argv == RESTART:
+            raise KeyboardInterrupt
+        return original(argv)
+
+    env = fake.env()
+    env.run = run
+    with pytest.raises(KeyboardInterrupt):
+        restart_broker.main(["--while-running"], env)
+    assert fake.posts()[-1] == {"hold": False}
+
+    fake = Fake()
+    fake.unit_pids = ["100", "200"]  # a new broker is already running
+    original = fake.run
+    env = fake.env()
+    env.run = lambda argv: (_ for _ in ()).throw(KeyboardInterrupt) if argv == RESTART else original(argv)
+    with pytest.raises(KeyboardInterrupt):
+        restart_broker.main(["--while-running"], env)
+    assert {"hold": False} not in fake.posts()
+    assert "Not releasing the hold" in fake.text
+
+
+def test_a_second_restart_command_refuses_while_one_runs():
+    fake = Fake()
+    fake.lock_busy = True
+    assert fake.go() == 1 and fake.go("--while-running") == 1
+    assert "another restart_broker" in fake.text
+    assert not fake.restarts and not fake.posts()

@@ -26,6 +26,8 @@ tests need no live system.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import glob
 import json
 import os
@@ -37,7 +39,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Callable
 
-from lib import canbus, can_operation_state
+from lib import canbus, can_operation_state, diagnostic_safety
 from lib.vehicle_can_roles import CAN_BUS_ROLES
 from projects.vehicle_data import helper_hold
 from projects.vehicle_data.api_client import TelemetryClient
@@ -61,8 +63,16 @@ RELAUNCH_WAIT_CYCLES = 60
 HOLD_REASON = "restart_broker"
 EXPECTED_CONTROLLER_STATE = "ERROR-ACTIVE"
 HELPER_KEYS = ("active_drive", "auxiliary_drive")
-# Owner kinds that are the broker's own helpers, not a foreign bus user.
-OWN_OWNER_KINDS = ("broker", "broker_active_drive", "broker_auxiliary_drive")
+# Owner kinds that are not a foreign bus user. Parked mode allows only the
+# broker itself (a helper owner there means a reserved or starting helper);
+# running mode also allows the broker's own helpers.
+PARKED_OWN_KINDS = ("broker",)
+RUNNING_OWN_KINDS = ("broker", "broker_active_drive", "broker_auxiliary_drive")
+# Remaining hold time required when a restart is authorized: covers the
+# restart command itself (stop budget up to 40 s) with margin to spare.
+MIN_HOLD_REMAINING_SECONDS = 60.0
+VERIFY_ROUNDS = 3
+LOCK_NAME = "restart-broker.lock"
 
 Reply = tuple[int, dict]
 
@@ -93,6 +103,18 @@ def _tx_counters() -> str:
     return " ".join(parts)
 
 
+@contextlib.contextmanager
+def _exclusive_lock():
+    """One restart command at a time; a second one refuses instead of waiting."""
+    os.makedirs(diagnostic_safety.LOCK_DIR, exist_ok=True)
+    with open(os.path.join(diagnostic_safety.LOCK_DIR, LOCK_NAME), "a") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            raise RuntimeError("another restart_broker command is running") from error
+        yield
+
+
 def _read_adapters() -> dict[str, object]:
     manager = PassiveInterfaceManager()
     topology = manager.topology()
@@ -112,6 +134,7 @@ class Environment:
     tx_counters: Callable[[], str] = _tx_counters
     file_inhibits: Callable[[], tuple] = can_operation_state.all_active_inhibits
     adapters: Callable[[], dict[str, object]] = _read_adapters
+    lock: Callable[[], object] = _exclusive_lock
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
     out: Callable[[str], None] = field(default=print)
@@ -136,11 +159,15 @@ def _inhibit_names(status: dict, env: Environment) -> list[str]:
     return names + [name for name in on_disk if name not in names]
 
 
-def _common_blockers(status: dict, env: Environment) -> list[str]:
-    """Blockers both modes share: inhibits, foreign owner and active operations."""
+def _common_blockers(status: dict, env: Environment, own_kinds: tuple[str, ...]) -> list[str]:
+    """Blockers both modes share: inhibits, foreign owner and active operations.
+
+    The inhibit list also reads the disk files, a deliberate addition to the
+    old script (which trusted only the cached status).
+    """
     blockers = []
     owner = status.get("current_owner")
-    foreign = owner is not None and owner.get("kind") not in OWN_OWNER_KINDS
+    foreign = owner is not None and owner.get("kind") not in own_kinds
     active = [op for op in _operations(status) if op.get("mode") != "passive"]
     inhibits = _inhibit_names(status, env)
     if inhibits:
@@ -163,7 +190,7 @@ def parked_blockers(status: dict, env: Environment) -> list[str]:
         blockers.append(f"vehicle is {vehicle.get('state')}, not asleep")
     if any(_helper_pids(status)):
         blockers.append(f"a drive helper is running: {_helper_pids(status)}")
-    return blockers + _common_blockers(status, env)
+    return blockers + _common_blockers(status, env, PARKED_OWN_KINDS)
 
 
 def _latched(status: dict) -> list[str]:
@@ -171,7 +198,7 @@ def _latched(status: dict) -> list[str]:
 
 
 def running_blockers(status: dict, env: Environment) -> list[str]:
-    blockers = _common_blockers(status, env)
+    blockers = _common_blockers(status, env, RUNNING_OWN_KINDS)
     if _latched(status):
         blockers.append(f"restoration latched for: {', '.join(_latched(status))}")
     return blockers + _alignment_blockers(env)
@@ -238,12 +265,34 @@ class HoldFailure(Exception):
     """The hold could not reach a state where a restart is safe."""
 
 
+def _states_in(body: dict) -> dict[str, helper_hold.HelperHoldState]:
+    helpers = body.get("helpers") or {}
+    try:
+        return {key: helper_hold.HelperHoldState(helpers[key]["state"]) for key in helper_hold.HELPERS}
+    except (KeyError, TypeError, ValueError) as error:
+        raise HoldFailure(f"hold status has an unknown helper state: {error!r}") from error
+
+
+def _unsafe_states(states: dict[str, helper_hold.HelperHoldState]) -> dict:
+    """The helpers not yet safe; a stopped_unverified one aborts at once."""
+    for key, state in states.items():
+        if state is helper_hold.HelperHoldState.STOPPED_UNVERIFIED:
+            raise HoldFailure(
+                f"{key} stopped without a verified restoration, which may mean the broker "
+                "latched its restoration inhibit: active telemetry may stay off until the "
+                "adapters are inspected and the inhibit is ended (check /v1/status "
+                "interface.active_inhibits)"
+            )
+    return {k: v for k, v in states.items() if v not in helper_hold.SAFE_STATES}
+
+
 class Hold:
     """The broker's helper hold, with renewal on this command's own clock."""
 
     def __init__(self, env: Environment):
         self.env = env
         self.renewed_at = 0.0
+        self.renewals = 0
 
     def _post(self, payload: dict) -> Reply:
         return self.env.socket("POST", helper_hold.API_PATH, payload)
@@ -256,6 +305,7 @@ class Hold:
         if code != 202:
             raise HoldFailure(f"hold refused with {code} {body.get('error', '')}".strip())
         self.renewed_at = self.env.clock()
+        self.renewals += 1
 
     def renew_if_due(self) -> None:
         if self.env.clock() - self.renewed_at >= helper_hold.RENEW_AFTER_SECONDS:
@@ -265,54 +315,52 @@ class Hold:
         try:
             code, _ = self._post({"hold": False})
         except (OSError, RuntimeError, ValueError) as error:
-            return f"hold release failed ({error}); it expires on its own within {helper_hold.HOLD_SECONDS:.0f} s"
+            return (f"hold release failed ({error}); it expires on its own within "
+                    f"{helper_hold.HOLD_SECONDS:.0f} s")
         return "hold released" if code == 200 else f"hold release answered {code}"
+
+    def snapshot(self) -> dict[str, helper_hold.HelperHoldState]:
+        """Helper states, but only from our own live hold with time left."""
+        code, body = self.env.socket("GET", helper_hold.API_PATH, None)
+        if code != 200:
+            raise HoldFailure(f"hold status answered {code}")
+        if body.get("held") is not True:
+            raise HoldFailure("the hold is no longer active (it expired or was released)")
+        if body.get("reason") != HOLD_REASON:
+            raise HoldFailure(f"the hold was replaced by another request ({body.get('reason')!r})")
+        remaining = body.get("remaining_seconds")
+        if not isinstance(remaining, (int, float)) or remaining < MIN_HOLD_REMAINING_SECONDS:
+            raise HoldFailure(f"the hold has too little time left ({remaining!r} s)")
+        return _states_in(body)
 
     def wait_for_safe(self) -> None:
         deadline = self.env.clock() + HOLD_STOP_BOUND_SECONDS
         while True:
             self.renew_if_due()
-            states = self._helper_states()
-            unsafe = {k: v for k, v in states.items() if v not in helper_hold.SAFE_STATES}
-            self.env.out(f"helpers: { {k: v.value for k, v in states.items()} }")
+            unsafe = _unsafe_states(self.snapshot())
+            self.env.out(f"helpers not yet stopped: { {k: v.value for k, v in unsafe.items()} }")
             if not unsafe:
                 return
-            for key, state in unsafe.items():
-                if state is helper_hold.HelperHoldState.STOPPED_UNVERIFIED:
-                    raise HoldFailure(
-                        f"{key} stopped without a verified restoration; the broker "
-                        "latched its inhibit, so active telemetry stays off until the "
-                        "adapters are inspected and the inhibit is ended"
-                    )
             if self.env.clock() >= deadline:
                 raise HoldFailure(f"helpers still not stopped after {HOLD_STOP_BOUND_SECONDS:.0f} s: "
                                   f"{ {k: v.value for k, v in unsafe.items()} }")
             self.env.sleep(HOLD_POLL_SECONDS)
 
-    def _helper_states(self) -> dict[str, helper_hold.HelperHoldState]:
-        code, body = self.env.socket("GET", helper_hold.API_PATH, None)
-        if code != 200:
-            raise HoldFailure(f"hold status answered {code}")
-        helpers = body.get("helpers") or {}
-        try:
-            return {key: helper_hold.HelperHoldState(helpers[key]["state"]) for key in helper_hold.HELPERS}
-        except (KeyError, TypeError, ValueError) as error:
-            raise HoldFailure(f"hold status has an unknown helper state: {error!r}") from error
-
 
 # -- adapters -------------------------------------------------------------
 
 
-def adapter_problems(env: Environment, skip_roles: tuple[str, ...] = ()) -> list[str]:
+def adapter_problems(env: Environment, armed_roles: tuple[str, ...] = ()) -> list[str]:
+    """Each role must be ERROR-ACTIVE; listen-only too unless a helper legitimately armed it."""
     try:
         states = env.adapters()
     except Exception as error:  # topology or ip failures must fail closed
         return [f"could not read the adapters: {error}"]
     problems = []
     for role, state in states.items():
-        if role in skip_roles:
-            continue
-        if not state.present or not state.listen_only:
+        if not state.present:
+            problems.append(f"{role} ({state.channel}) is not present")
+        elif not state.listen_only and role not in armed_roles:
             problems.append(f"{role} ({state.channel}) is not listen-only")
         elif state.controller_state != EXPECTED_CONTROLLER_STATE:
             problems.append(f"{role} ({state.channel}) controller state is {state.controller_state}")
@@ -380,9 +428,9 @@ def run_parked(env: Environment, check: bool) -> int:
     before, recorder = env.tx_counters(), _main_pid(env, RECORDER_UNIT)
     env.out(f"TX before: {before}")
     if check:
-        _open_events(env)
+        status = _open_events(env)
         env.out("Check only: nothing was restarted.")
-        return 0
+        return status
     if not _restart(env):
         return 1
     if not all([_unit_active(env, unit) for unit in UNITS]):
@@ -392,40 +440,91 @@ def run_parked(env: Environment, check: bool) -> int:
     return _open_events(env)
 
 
-def _running_postchecks(env: Environment) -> list[str]:
+# -- while running --------------------------------------------------------
+
+
+def _engine_running(status: dict) -> bool:
+    return bool(status["vehicle_state"].get("running"))
+
+
+def _expected_helpers(status: dict) -> list[str]:
+    return [key for key in HELPER_KEYS if (status.get(key) or {}).get("state") != "disabled"]
+
+
+def _wait_for_relaunch(env: Environment) -> dict:
+    """Poll status until every configured helper is back, or the bound passes."""
     status = _status_once(env, True)
-    problems = _common_blockers(status, env) + [f"restoration latched: {k}" for k in _latched(status)]
-    pids = _helper_pids(status)
-    skip = tuple(role for role, pid in zip(("c-can", "b-can"), pids) if pid)
-    problems += adapter_problems(env, skip)
-    if (status["vehicle_state"].get("running") or False) and not all(pids):
-        pids = _wait_for_relaunch(env, status)
-    env.out(f"helper pids after restart: {pids}")
+    cycle = float((status.get("collector") or {}).get("interval_seconds") or 1.0)
+    for _ in range(RELAUNCH_WAIT_CYCLES):
+        pids = {k: (status.get(k) or {}).get("helper_pid") for k in _expected_helpers(status)}
+        if not _engine_running(status) or all(pids.values()):
+            break
+        env.sleep(cycle)
+        status = _status_once(env, True)
+    return status
+
+
+def _running_postchecks(env: Environment) -> list[str]:
+    """Judge the final state, after the relaunch wait, never before it."""
+    status = _wait_for_relaunch(env)
+    problems = []
+    if _engine_running(status):
+        problems += [f"{key} did not relaunch" for key in _expected_helpers(status)
+                     if not (status.get(key) or {}).get("helper_pid")]
+    problems += _common_blockers(status, env, RUNNING_OWN_KINDS)
+    problems += [f"restoration latched: {key}" for key in _latched(status)]
+    armed = tuple(role for role, key in (("c-can", "active_drive"), ("b-can", "auxiliary_drive"))
+                  if (status.get(key) or {}).get("helper_pid"))
+    problems += adapter_problems(env, armed)
+    env.out(f"helper pids after restart: {_helper_pids(status)}")
     return problems
 
 
-def _wait_for_relaunch(env: Environment, status: dict) -> list:
-    cycle = float((status.get("collector") or {}).get("interval_seconds") or 1.0)
-    pids = _helper_pids(status)
-    for _ in range(RELAUNCH_WAIT_CYCLES):
-        if all(pids) or not _status_once(env, True)["vehicle_state"].get("running"):
-            break
-        env.sleep(cycle)
-        pids = _helper_pids(_status_once(env, True))
-    return pids
+def _verified_quiet(env: Environment, hold: Hold) -> str | None:
+    """Return why a restart is unsafe, or None once every check holds together.
 
-
-def _hold_and_verify(env: Environment, hold: Hold) -> str | None:
-    """Return the reason a restart is unsafe, or None when it is safe."""
+    Every round ends with a renewal check and a fresh state read, and a round
+    that had to renew starts over, so a hold that lapsed and was re-acquired
+    never authorizes a restart on stale evidence.
+    """
     try:
-        hold.engage()
-        hold.wait_for_safe()
+        for _ in range(VERIFY_ROUNDS):
+            hold.wait_for_safe()
+            problems = adapter_problems(env)
+            problems += running_blockers(_status_once(env, True), env)
+            if problems:
+                return "; ".join(problems)
+            renewals = hold.renewals
+            hold.renew_if_due()
+            if _unsafe_states(hold.snapshot()):
+                continue
+            if hold.renewals == renewals:
+                return None
+        return "the hold had to be renewed repeatedly, so the stops were not confirmed in time"
     except HoldFailure as error:
         return str(error)
-    except (OSError, RuntimeError, ValueError) as error:
-        return f"the hold control could not be reached: {error}"
-    problems = adapter_problems(env)
-    return "; ".join(problems) if problems else None
+    except (OSError, RuntimeError, ValueError, KeyError) as error:
+        return f"the broker could not be read: {error}"
+
+
+def _release_if_same_broker(env: Environment, hold: Hold, pid_before: str) -> None:
+    """Release our hold only while the broker that took it is still the one running."""
+    if pid_before and _main_pid(env, UNIT) == pid_before:
+        env.out(hold.release())
+    else:
+        env.out("Not releasing the hold: the broker was replaced, and its hold ended with it.")
+
+
+def _guarded_restart(env: Environment, hold: Hold) -> bool:
+    pid_before = _main_pid(env, UNIT)
+    try:
+        ok = _restart(env)
+    except BaseException:
+        _release_if_same_broker(env, hold, pid_before)
+        raise
+    if not ok:
+        _release_if_same_broker(env, hold, pid_before)
+    return ok
 
 
 def run_while_running(env: Environment, check: bool) -> int:
@@ -436,27 +535,29 @@ def run_while_running(env: Environment, check: bool) -> int:
     before, recorder = env.tx_counters(), _main_pid(env, RECORDER_UNIT)
     env.out(f"TX before: {before}")
     if check:
-        _open_events(env)
+        status = _open_events(env)
         env.out("Check only: nothing was held or restarted.")
-        return 0
+        return status
     hold = Hold(env)
-    reason = _hold_and_verify(env, hold)
+    try:
+        hold.engage()
+    except HoldFailure as error:
+        env.out(f"NOT RESTARTING: {error}")
+        return 1
+    except (OSError, RuntimeError, ValueError) as error:
+        env.out(f"NOT RESTARTING: the hold control could not be reached: {error}")
+        return 1
+    reason = _verified_quiet(env, hold)
     if reason is not None:
         env.out(f"NOT RESTARTING: {reason}")
         env.out(hold.release())
         return 1
-    try:
-        hold.renew_if_due()
-    except (HoldFailure, OSError, RuntimeError, ValueError) as error:
-        env.out(f"NOT RESTARTING: hold renewal failed: {error}")
-        env.out(hold.release())
+    if not _guarded_restart(env, hold):
         return 1
-    return _restart_and_check(env, before, recorder)
+    return _after_restart(env, before, recorder)
 
 
-def _restart_and_check(env: Environment, before: str, recorder: str) -> int:
-    if not _restart(env):
-        return 1
+def _after_restart(env: Environment, before: str, recorder: str) -> int:
     failed = not all([_unit_active(env, unit) for unit in UNITS])
     try:
         problems = _running_postchecks(env)
@@ -477,7 +578,14 @@ def main(argv: list[str] | None = None, env: Environment | None = None) -> int:
     args = parser.parse_args(argv)
     env = env or Environment()
     runner = run_while_running if args.while_running else run_parked
-    return runner(env, args.check)
+    try:
+        with env.lock():
+            return runner(env, args.check)
+    except RuntimeError as error:
+        if "another restart_broker" not in str(error):
+            raise
+        env.out(f"Not restarting: {error}")
+        return 1
 
 
 if __name__ == "__main__":

@@ -1491,12 +1491,17 @@ inhibit, outside owner or active request, restarts with
 `sudo -n /usr/bin/systemctl restart van-telemetry.service`, waits 90 s, then
 checks the three units are active, reports whether any CAN transmit counter
 moved and whether `van-drive-recorder.service` kept its process, and lists open
-events. `--check` runs the preflight only. `--while-running` restarts with the
+events. `--check` runs the preflight only. The preflight also reads the inhibit files on disk
+(a deliberate addition to the earlier script, which trusted the cached status). Only one
+restart command runs at a time (a lock under `tmp/locks/`). `--while-running` restarts with the
 van on: it asks the broker to hold both drive helpers (`POST /v1/helpers/hold`
 on the local socket, `helper_hold.py`), restarts only after every helper
 reports a verified or never-started stop and its own read shows every vehicle
-adapter listen-only and ERROR-ACTIVE, and otherwise releases the hold and exits
-nonzero without restarting. Costs: both web units are `PartOf` the broker, so
+adapter listen-only and ERROR-ACTIVE. It requires its own live hold with time left,
+reruns every blocker (inhibits, latches, owner, radar run) after the stops and just
+before restarting, and otherwise releases the hold and exits nonzero without
+restarting; it also releases the hold if the restart command fails. After the restart it
+waits for each configured helper to relaunch and fails if one does not. Costs: both web units are `PartOf` the broker, so
 the tablet reconnects within a few seconds; history and drive recording have a
 gap; and if a helper's restoration fails the broker latches its inhibit, so
 telemetry stays passive for the drive until someone inspects the adapters and
