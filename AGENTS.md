@@ -142,7 +142,9 @@ request validation) is `projects/vehicle_data/helper_hold.py`; the route exists 
 broker's local socket. `helper_hold_control.py` is the broker's runtime side of the hold (its
 lock, record and event, the supervisors' `StopWhenAny` stop condition, the request handling and
 the `claimed_run` launch-claim cleanup); blocked-reason writes, supervisor stops and radar
-admission stay in `broker.py`. The unit sets `KillMode=mixed`/`TimeoutStopSec=40`; check with
+admission stay in `broker.py`. The unit sets `KillMode=control-group`/`TimeoutStopSec=40` (a
+crashed broker's helpers still get SIGTERM and the full timeout to restore; `mixed` would SIGKILL
+them as soon as the broker exits); check with
 `systemctl show -p KillMode,TimeoutStopUSec van-telemetry.service`. Costs, the 404 rule for a
 broker without the hold control and the rolling-deploy hazard are in the vehicle-data README
 section "Restarting the broker".

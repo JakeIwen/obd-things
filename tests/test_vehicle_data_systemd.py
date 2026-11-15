@@ -25,14 +25,15 @@ class VehicleDataSystemdTests(unittest.TestCase):
         self.assertIn("van-dtc-batch.path", unit)
         self.assertIn("WantedBy=multi-user.target", unit)
 
-    def test_broker_stop_lets_the_broker_stop_its_helpers_in_order(self):
-        # mixed: only the broker gets SIGTERM, so its supervisors stop each
-        # helper and collect its restoration; 40 s covers the nested waits
-        # (C-CAN helper up to 10 s plus kill, B-CAN join 15 s) before SIGKILL.
+    def test_broker_stop_leaves_helpers_time_to_restore(self):
+        # control-group: every helper gets SIGTERM and the whole stop timeout
+        # to restore listen-only, even when the broker itself died; mixed
+        # would SIGKILL them as soon as the broker exits. 40 s covers the
+        # nested waits (C-CAN helper up to 10 s plus kill, B-CAN join 15 s).
         unit = configparser.ConfigParser(interpolation=None)
         unit.read(SYSTEMD_DIR / "van-telemetry.service")
         service = unit["Service"]
-        self.assertEqual(service["KillMode"], "mixed")
+        self.assertEqual(service["KillMode"], "control-group")
         self.assertEqual(service["TimeoutStopSec"], "40")
 
     def test_web_listener_is_not_independently_boot_enabled(self):

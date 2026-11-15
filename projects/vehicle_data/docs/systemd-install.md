@@ -87,7 +87,10 @@ python3 -m projects.vehicle_data.restart_broker   # or: s restart_broker
 Its default is parked-only. `--while-running` restarts with the van on and
 needs a broker that already has the helper hold control; see the vehicle-data
 README section "Restarting the broker" for its costs. The broker unit sets
-`KillMode=mixed` and `TimeoutStopSec=40`; after a `daemon-reload`, verify with
+`KillMode=control-group` and `TimeoutStopSec=40`, so the drive helpers get
+SIGTERM and the full timeout to restore listen-only even after a broker crash
+(`mixed` would SIGKILL them as soon as the broker exits); after a
+`daemon-reload`, verify with
 `systemctl show -p KillMode,TimeoutStopUSec van-telemetry.service`.
 
 ## Verify without activating units
