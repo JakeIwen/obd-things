@@ -278,7 +278,7 @@ normal coupled installer. Existing unrelated `queue.py` code-shape growth in
 the backend is unchanged; the budget change introduces no size exceptions.
 
 Activation order: deploy the reviewed van-compute backend on Mac and Pi,
-install all three obd retention units, run the first cleanup successfully,
-then enable the `.path` and `.timer` triggers. The old age-only handoff is
+install the two obd retention units, run the first cleanup successfully,
+then enable the `.timer`. The old age-only handoff is
 superseded. Actual reclaimed space and installed service behavior remain to
 be verified after the owner runs the replacement activation handoff.
