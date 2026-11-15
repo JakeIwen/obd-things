@@ -267,9 +267,11 @@ the backend is unchanged; the budget change introduces no size exceptions.
 
 Activation order: deploy the reviewed van-compute backend on Mac and Pi,
 install the two obd retention units, run the first cleanup successfully,
-then enable the `.timer`. The old age-only handoff is
-superseded. Actual reclaimed space and installed service behavior remain to
-be verified after the owner runs the replacement activation handoff.
+then enable the `.timer`. Activated on the Pi 2026-11-15 (23:21 MST
+2026-11-14): first run `Result=success`, hourly timer enabled. It needs
+van-compute 9833257 or later, whose submission drain skips a process exiting
+mid-scan (an older backend failed the first run with `[Errno 3] No such
+process`).
 
 ## 2026-11-14 cleanup ledger
 
@@ -288,3 +290,6 @@ non-`tmp/` working file, or in another kept job's manifest or results. IDs found
   the empty archive tree and the local link, were removed, freeing about 4.66 GB on EXFAT512.
 - Local: 181 uncited jobs older than 30 days (158 done, 23 failed) were removed, freeing about
   2.33 GB of the Pi root filesystem. 395 done and 76 failed jobs remain.
+- Finished jobs no longer keep `source/` (van-compute 359fcc5): `van_compute.py drop-source
+  --purge` removed the copies from all 501 finished jobs on 2026-11-14, freeing 4.79 GB.
+  After the first capped run, `done/` is 425 MB and `failed/` 19 MB.
