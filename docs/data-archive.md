@@ -44,7 +44,7 @@ The policy selected by the owner on October 21 applies to local `done/` and
   and return failure. Never claim the 2 GiB target was met when it was not.
 
 Before the first manual apply or enabling the timer, review the plan's
-eligible IDs. Subsequent weekly runs apply automatically. **Ignored handoffs under
+eligible IDs. Subsequent hourly runs apply automatically. **Ignored handoffs under
 `.agent/` and references inside `tmp/` do not pin jobs.** Promote a needed job
 ID into the tracked finding or project documentation that uses it, then rerun
 the plan. Existing handoff-only references are preserved in
@@ -62,10 +62,10 @@ patch its immutable Pi release. The source owner is
 `/Users/jacobr/dev/van-compute`, with deployment instructions in that repo's
 `pi/docs/compute/VAN_COMPUTE.md`.
 
-`tools/systemd/obd-compute-retention.service`, `.path` and `.timer` apply the
-policy when completed-job directories change and hourly (up to five minutes
-random delay), with persistent missed-run catch-up. A new completed job can
-briefly take history over budget until the triggered maintenance finishes;
+`tools/systemd/obd-compute-retention.service` and `.timer` apply the
+policy hourly (up to five minutes random delay), with persistent missed-run
+catch-up. There is no completion trigger, so new completed jobs can take
+history over budget until the next hourly pass;
 this is a retention limit, not a filesystem quota on active work. They are opt-in: committing these files does
 not install or enable them. The service runs as `pi`, has no CAN or network
 access, and writes only the queue and van-compute's existing submission-fence
@@ -106,7 +106,7 @@ EXFAT space separately. Never use a whole-tree age deletion command.
 
 | Data class | Policy |
 | --- | --- |
-| Completed compute history | 2 GiB cap; at most 30 days for either outcome, with citation/dependency protection above. Check on completion and hourly. |
+| Completed compute history | 2 GiB cap; at most 30 days for either outcome, with citation/dependency protection above. Checked hourly. |
 | Raw CAN, AlfaOBD inputs, inventories, owner references | No automatic deletion. Preserve canonical inputs; archive completed large files only after mount/space checks and hash verification. |
 | Replay databases, extracted arrays, build copies | Review after the workstream ends or after 30 days idle. Remove only after confirming retained source and reproducible command; preserve named oracle fixtures and SQLite WAL/SHM sets. |
 | Browser/Python environments | Review after 30 days unused. Reinstallable, but keep any runtime used by an active workstream; do not repeatedly remove a shared runtime between jobs. |
