@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import statistics
+import time
 from datetime import datetime, timezone
 from typing import Mapping
 
@@ -18,6 +20,16 @@ from .validation import (
     _to_us,
     _utc_datetime,
 )
+
+
+LOGGER = logging.getLogger(__name__)
+
+# One pass frees at most this many pages (256 MiB at 4 KiB) in chunks, so the
+# daily prune's freelist is returned without one long writer-blocking call;
+# anything left is taken by the next day's pass.
+RECLAIM_CHUNK_PAGES = 2_000
+RECLAIM_MAX_PAGES_PER_PASS = 65_536
+AUTO_VACUUM_INCREMENTAL = 2
 
 
 class RollupMixin:
@@ -697,6 +709,61 @@ class RollupMixin:
         )
 
     def run_maintenance(
+        self,
+        *,
+        now: datetime | str | None = None,
+        force: bool = False,
+        max_rollup_passes: int | None = None,
+    ) -> MaintenanceResult:
+        """Prune (see ``_prune_with_rollups``), then give freed pages back."""
+
+        result = self._prune_with_rollups(
+            now=now, force=force, max_rollup_passes=max_rollup_passes
+        )
+        if (
+            result.deleted_metric_samples
+            or result.deleted_interface_samples
+            or result.deleted_snapshots
+        ):
+            self.reclaim_space()
+        return result
+
+    def reclaim_space(self) -> dict[str, object]:
+        """Return freelist pages to the OS in bounded chunks, then checkpoint.
+
+        The connection lock is released between chunks so ingest interleaves.
+        The checkpoint is PASSIVE: it never waits for the dashboard's readers
+        or blocks the writer, and ``journal_size_limit`` truncates the WAL
+        whenever it next resets.  Failures are logged, never raised: space
+        reclamation must not fail a retention pass that already committed.
+        """
+
+        info: dict[str, object] = {"reclaimed_pages": 0, "checkpoint": None}
+        try:
+            with self._lock:
+                mode = self._conn.execute("PRAGMA auto_vacuum").fetchone()[0]
+            if mode == AUTO_VACUUM_INCREMENTAL:
+                while info["reclaimed_pages"] < RECLAIM_MAX_PAGES_PER_PASS:
+                    with self._lock:
+                        free = self._conn.execute("PRAGMA freelist_count").fetchone()[0]
+                        if not free:
+                            break
+                        step = min(RECLAIM_CHUNK_PAGES, free)
+                        self._conn.execute(f"PRAGMA incremental_vacuum({step})").fetchall()
+                    info["reclaimed_pages"] += step
+                    time.sleep(0.02)
+            if self.database != ":memory:":
+                with self._lock:
+                    busy, log, done = self._conn.execute(
+                        "PRAGMA wal_checkpoint(PASSIVE)"
+                    ).fetchone()
+                info["checkpoint"] = {"busy": busy, "log_frames": log, "checkpointed": done}
+        except Exception:
+            LOGGER.exception("historian space reclamation failed")
+        self.last_space_reclaim = info
+        return info
+
+    def _prune_with_rollups(
         self,
         *,
         now: datetime | str | None = None,

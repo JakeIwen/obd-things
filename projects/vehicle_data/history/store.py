@@ -12,6 +12,9 @@ from .models import (
 from .schema import SchemaMixin
 
 
+WAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024
+
+
 class HistorianStore(SchemaMixin):
     """Connection and lock ownership for the SQLite historian."""
 
@@ -35,10 +38,16 @@ class HistorianStore(SchemaMixin):
             check_same_thread=False,
         )
         self._conn.row_factory = sqlite3.Row
+        # Must precede the first table: it only takes effect on an empty
+        # database (an existing one switches through history/compaction.py).
+        self._conn.execute("PRAGMA auto_vacuum = INCREMENTAL")
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.execute("PRAGMA busy_timeout = 10000")
         if self.database != ":memory:":
             self._conn.execute("PRAGMA journal_mode = WAL")
+            # Caps the -wal file once a checkpoint lets it reset; without a
+            # limit a large prune leaves it at its high-water mark forever.
+            self._conn.execute(f"PRAGMA journal_size_limit = {WAL_SIZE_LIMIT_BYTES}")
             self._conn.execute("PRAGMA synchronous = NORMAL")
         self._create_schema()
         self._create_query_indexes()

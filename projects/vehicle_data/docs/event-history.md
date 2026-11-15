@@ -175,6 +175,51 @@ automatic age deletion. Ordinary raw metric/interface retention remains seven
 days by default with the existing rollup-before-prune gate. Storage exceptions
 remain visible and are never reinterpreted as absence of events.
 
+### Database space: vacuum policy
+
+Deleting rows only moves pages to SQLite's freelist; the file never shrinks
+unless the database is vacuumed. The history database therefore runs with
+`PRAGMA auto_vacuum=INCREMENTAL` (set in `history/store.py` before the first
+table, so a new database has it from creation), and:
+
+- **After each retention pass that deleted rows** (`run_maintenance`, the
+  broker's hourly-checked, daily-gated hook), `reclaim_space()` runs
+  `PRAGMA incremental_vacuum(2000)` in chunks of 2,000 pages (8 MiB), releasing
+  the connection lock between chunks so ingest interleaves, capped at 65,536
+  pages (256 MiB) per pass; a longer freelist is finished by later passes. It
+  then runs `wal_checkpoint(PASSIVE)`. PASSIVE never waits on the dashboard's
+  readers or blocks the writer, unlike `TRUNCATE`, which waits up to the 10 s
+  busy timeout while holding the writer. Failures are logged and never fail a
+  committed retention pass. On a database still in `auto_vacuum=NONE` the
+  chunks are skipped (the pragma would be a no-op).
+- **`PRAGMA journal_size_limit` = 64 MiB** on the writer's connection. SQLite
+  truncates the `-wal` file to that size whenever a checkpoint lets the log
+  reset, so a large prune no longer pins the WAL at its high-water mark.
+- **Existing databases** need one full vacuum to switch modes:
+  `history/compaction.py`, run with the broker and every other telemetry unit
+  stopped and the van parked:
+
+  ```sh
+  python3 -m projects.vehicle_data.history.compaction            # plan, changes nothing
+  python3 -m projects.vehicle_data.history.compaction --apply    # compact, keep <db>.pre-compact
+  python3 -m projects.vehicle_data.history.compaction --apply --delete-old
+  ```
+
+  It refuses when any telemetry unit is active, another process holds the file
+  open, the newest recorded `vehicle_state` is `running`/`ignition_on` less than
+  30 minutes old (the broker is stopped, so the database is the only drive
+  evidence), or free space on the database's filesystem is under the compacted
+  size plus 256 MiB. It checkpoints the WAL, runs `VACUUM INTO` a temporary
+  file beside the database with `auto_vacuum=INCREMENTAL`, verifies the copy
+  (`integrity_check`, or `--quick`; `foreign_key_check`; the mode; identical row
+  counts in every table), then swaps by rename. `VACUUM INTO` plus rename was
+  chosen over an in-place `VACUUM` because the original stays intact until the
+  final rename, so any failure leaves the live database untouched, while an
+  in-place vacuum needs the same scratch space plus a second copy in the WAL.
+  Peak disk use is the old file plus the compacted copy; the old file is kept
+  as `<db>.pre-compact` until `--delete-old` or manual removal. Restart the
+  broker afterwards; it reopens the file normally and re-enables WAL.
+
 Legacy opening/event assessments are exposed as saved. When newer checkpoints
 were never recorded, last evaluable evidence is labeled **saved transition
 only**, peaks/duration are unknown, and rule revision is legacy-missing. No
