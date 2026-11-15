@@ -301,6 +301,54 @@ class CompactionTests(SpaceFixture):
         holders, _ = compaction.processes_holding(self.path)
         self.assertIn(child.pid, holders)
 
+    @unittest.skipUnless(Path("/proc/self/fd").is_dir(), "processes_holding scans Linux /proc; this host has none")
+    def test_own_unreadable_process_is_resolved_through_the_privileged_listing(self):
+        """A non-dumpable process of ours (root-owned /proc/<pid>/fd) is listed via sudo."""
+
+        self.prepared_legacy_database()
+        target = str(self.path.resolve())
+        original_iterdir = Path.iterdir
+        blocked = {}
+
+        def iterdir(self_path):
+            # Make our own child's fd directory unreadable, as for a non-dumpable process.
+            if self_path.name == "fd" and self_path.parent.name == str(blocked.get("pid")):
+                raise PermissionError(13, "Permission denied", str(self_path))
+            return original_iterdir(self_path)
+
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        self.addCleanup(child.kill)
+        blocked["pid"] = child.pid
+        Path.iterdir = iterdir
+        self.addCleanup(setattr, Path, "iterdir", original_iterdir)
+
+        asked = []
+
+        def holding(pid):
+            asked.append(pid)
+            return {target} if pid == child.pid else set()
+
+        holders, unverifiable = compaction.processes_holding(self.path, privileged_targets=holding)
+        self.assertIn(child.pid, asked)
+        self.assertIn(child.pid, holders)
+        self.assertNotIn(child.pid, unverifiable)
+
+        holders, unverifiable = compaction.processes_holding(self.path, privileged_targets=lambda pid: {"/dev/null"})
+        self.assertNotIn(child.pid, holders + unverifiable)
+
+        holders, unverifiable = compaction.processes_holding(self.path, privileged_targets=lambda pid: None)
+        self.assertIn(child.pid, unverifiable)  # sudo failed and the process is alive: refuse
+
+    def test_privileged_listing_parses_nul_separated_targets_and_rejects_failure(self):
+        original = compaction.PRIVILEGED_FD_COMMAND
+        self.addCleanup(setattr, compaction, "PRIVILEGED_FD_COMMAND", original)
+        compaction.PRIVILEGED_FD_COMMAND = (sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'/a b\\0/c\\0')")
+        self.assertEqual(compaction.privileged_fd_targets(1), {"/a b", "/c"})
+        compaction.PRIVILEGED_FD_COMMAND = (sys.executable, "-c", "raise SystemExit(1)")
+        self.assertIsNone(compaction.privileged_fd_targets(1))
+        compaction.PRIVILEGED_FD_COMMAND = ("/nonexistent/sudo",)
+        self.assertIsNone(compaction.privileged_fd_targets(1))
+
     def test_unreadable_descriptors_of_our_own_processes_refuse_others_are_noted(self):
         self.prepared_legacy_database()
         with self.assertRaisesRegex(compaction.CompactionRefused, "cannot inspect"):

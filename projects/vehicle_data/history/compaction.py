@@ -12,8 +12,10 @@ It never transmits on CAN and never touches services.  It refuses unless every
 telemetry unit is inactive, no process it can inspect holds the file open, the
 newest recorded vehicle state is not a recent running/ignition-on reading, and
 the filesystem has room.  Run it as the database's owner (``pi``): the units'
-processes run as pi, so no sudo is needed, and a root run would leave
-root-owned ``-wal``/``-shm`` files the broker cannot open.
+processes run as pi, and a root run would leave root-owned ``-wal``/``-shm``
+files the broker cannot open.  Some pi processes are non-dumpable (ssh-agent,
+systemd's ``(sd-pam)``), so their ``/proc/<pid>/fd`` is root-owned; for those
+alone it lists the descriptors through ``sudo -n`` and refuses if that fails.
 
 Usage (units stopped, van parked)::
 
@@ -89,15 +91,47 @@ def systemd_unit_state(unit: str) -> str:
     return result.stdout.strip() or f"no-answer(rc={result.returncode})"
 
 
-def processes_holding(path: Path) -> tuple[list[int], list[int]]:
+# GNU find prints each descriptor's link target, NUL-terminated.
+PRIVILEGED_FD_COMMAND = ("sudo", "-n", "/usr/bin/find")
+
+
+def privileged_fd_targets(pid: int) -> set[str] | None:
+    """Return ``pid``'s descriptor targets read through ``sudo -n``, or None.
+
+    None means the listing could not be trusted (sudo refused, find failed, a
+    descriptor or the process vanished mid-listing); the caller treats the
+    process as unverifiable unless it has exited by then.
+    """
+
+    try:
+        result = subprocess.run(
+            [*PRIVILEGED_FD_COMMAND, f"/proc/{pid}/fd", "-mindepth", "1", "-maxdepth", "1", "-printf", "%l\\0"],
+            capture_output=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return {os.fsdecode(item) for item in result.stdout.split(b"\0") if item}
+
+
+def processes_holding(
+    path: Path,
+    *,
+    privileged_targets: Callable[[int], set[str] | None] | None = None,
+) -> tuple[list[int], list[int]]:
     """Return (holders, unverifiable) PIDs for ``path`` or its -wal/-shm.
 
     A process that exited mid-scan (ENOENT/ESRCH) is skipped.  One whose fds
-    cannot be read (EACCES/EPERM) is unverifiable; those owned by another user
-    are expected without sudo and are reported but not fatal (SQLite's own lock,
-    taken with no busy timeout, still excludes them), while an unreadable
-    process of our own user is returned so the caller can refuse.
+    cannot be read (EACCES/EPERM) is retried through ``privileged_targets``
+    when it belongs to our own user (non-dumpable pi processes); if that fails
+    too it is returned so the caller can refuse.  Unreadable processes of other
+    users are reported but not fatal (SQLite's own lock, taken with no busy
+    timeout, still excludes them).
     """
+
+    privileged_targets = privileged_targets or privileged_fd_targets
 
     proc = Path("/proc")
     if not proc.is_dir():
@@ -127,7 +161,16 @@ def processes_holding(path: Path) -> tuple[list[int], list[int]]:
                     foreign = entry.stat().st_uid != os.geteuid()
                 except OSError:
                     foreign = False
-                unverifiable.append(-pid if foreign else pid)
+                if foreign:
+                    unverifiable.append(-pid)
+                    continue
+                listed = privileged_targets(pid)
+                if listed is None:
+                    if entry.exists():
+                        unverifiable.append(pid)
+                    continue  # unlistable, or exited during the retry
+                if listed & targets:
+                    holders.append(pid)
                 continue
             raise
     return holders, unverifiable
