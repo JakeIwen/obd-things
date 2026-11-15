@@ -187,7 +187,10 @@ table, so a new database has it from creation), and:
   delays the next snapshot. `reclaim_space()` (called by `run_maintenance`,
   including hourly checks with nothing due) therefore frees at most 4,000
   pages (16 MiB) per pass, in chunks of 500, and stops after 0.5 s of wall
-  time, whichever comes first; it releases the connection lock between chunks.
+  time, whichever comes first; it releases the connection lock between chunks. Each chunk and the checkpoint
+  run with no busy wait (the 10 s timeout is restored afterwards), so a pass
+  overruns the budget by at most one chunk plus the checkpoint, and returns at
+  once, reclaiming nothing, when another connection holds the write lock.
   Later hourly checks finish a longer freelist (24 passes a day far exceed the
   daily prune's output). It then runs `wal_checkpoint(PASSIVE)`, which never
   waits on the dashboard's readers or blocks the writer (`TRUNCATE` would wait
@@ -212,8 +215,10 @@ table, so a new database has it from creation), and:
   python3 -m projects.vehicle_data.history.compaction --apply
   ```
 
-  `--quick` uses `quick_check` instead of the full `integrity_check`; exit code
-  2 means it refused. The plan opens the database `mode=ro`, takes no
+  `--quick` uses `quick_check` instead of the full `integrity_check`. Exit code
+  2 means it refused and the database was not changed; exit code 3 means
+  VACUUM committed but verification or the final checkpoint failed, so the
+  database is compacted and must be inspected before units restart. The plan opens the database `mode=ro`, takes no
   checkpoint and says so; checkpoints happen only under `--apply`. It refuses
   unless every unit in `SERVICE_UNITS` (the broker, both web listeners, the
   advisor, the cruise and scan harvest services and timers, the drive recorder

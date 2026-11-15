@@ -66,6 +66,14 @@ class CompactionRefused(RuntimeError):
     """A safety precondition failed; the database was not modified."""
 
 
+class CompactionIncomplete(RuntimeError):
+    """VACUUM committed but a later step failed: the database IS compacted.
+
+    Verification (checks, row counts, final checkpoint, ownership) is
+    unfinished, so inspect before restarting any unit.
+    """
+
+
 def systemd_unit_state(unit: str) -> str:
     """Return ``systemctl is-active`` output; raise when it cannot be trusted."""
 
@@ -226,9 +234,27 @@ def _verify(conn: sqlite3.Connection, quick: bool) -> str:
     return check
 
 
-def compact(
+def compact(database: str | Path = DEFAULT_DATABASE, **options) -> dict[str, object]:
+    """Compact ``database``; see ``_compact`` for the options.
+
+    A failure before VACUUM raises ``CompactionRefused`` (or SQLite's own
+    error) and the database is unchanged.  A failure after VACUUM has committed
+    raises ``CompactionIncomplete``: the database is already compacted.
+    """
+
+    stage = {"vacuumed": False}
+    try:
+        return _compact(database, stage=stage, **options)
+    except (CompactionRefused, sqlite3.Error, OSError) as exc:
+        if stage["vacuumed"]:
+            raise CompactionIncomplete(f"{type(exc).__name__}: {exc}") from exc
+        raise
+
+
+def _compact(
     database: str | Path = DEFAULT_DATABASE,
     *,
+    stage: dict[str, bool],
     apply: bool = False,
     quick: bool = False,
     unit_state: Callable[[str], str] | None = None,
@@ -289,6 +315,7 @@ def compact(
         _verify(conn, quick)
         conn.execute("PRAGMA auto_vacuum = INCREMENTAL")
         conn.execute("VACUUM")
+        stage["vacuumed"] = True  # committed: later failures leave it compacted
         mode_after = conn.execute("PRAGMA auto_vacuum").fetchone()[0]
         if mode_after != AUTO_VACUUM_INCREMENTAL:
             raise CompactionRefused(f"auto_vacuum is {mode_after} after VACUUM, expected 2")
@@ -344,6 +371,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     except CompactionRefused as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 2
+    except CompactionIncomplete as exc:
+        print(
+            f"applied; verification/checkpoint incomplete: {exc}. The database "
+            "was compacted (VACUUM committed); inspect it before restarting units",
+            file=sys.stderr,
+        )
+        return 3
     except sqlite3.OperationalError as exc:
         print(f"refused: SQLite could not proceed ({exc}); the database was not changed", file=sys.stderr)
         return 2

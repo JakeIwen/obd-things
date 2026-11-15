@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import contextlib
 import logging
+import sqlite3
 import statistics
 import time
 from datetime import datetime, timezone
@@ -730,12 +732,30 @@ class RollupMixin:
         self.reclaim_space()
         return result
 
+    @contextlib.contextmanager
+    def _no_busy_wait(self):
+        """Fail at once on a lock instead of queueing for the 10 s busy timeout.
+
+        The caller holds ``self._lock``.  The original timeout is restored so
+        ordinary ingest writes keep waiting for the dashboard's short readers.
+        """
+
+        original = self._conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        self._conn.execute("PRAGMA busy_timeout = 0")
+        try:
+            yield
+        finally:
+            self._conn.execute(f"PRAGMA busy_timeout = {int(original)}")
+
     def reclaim_space(self) -> dict[str, object]:
         """Return freelist pages to the OS in a small bounded pass, then checkpoint.
 
         Bounded by ``RECLAIM_MAX_PAGES_PER_PASS`` and
         ``RECLAIM_TIME_BUDGET_SECONDS`` so ingestion is never held up for long;
-        the connection lock is released between chunks.  The checkpoint is
+        the connection lock is released between chunks.  Each chunk and the
+        checkpoint run with no busy wait, so the pass overruns the budget by at
+        most one chunk (500 pages) plus the checkpoint, and returns at once
+        when another connection holds the write lock.  The checkpoint is
         PASSIVE: it never waits on the dashboard's readers or blocks the
         writer.  Failures are logged, never raised: reclamation must not fail a
         retention pass that already committed.
@@ -751,7 +771,7 @@ class RollupMixin:
                     info["reclaimed_pages"] < RECLAIM_MAX_PAGES_PER_PASS
                     and time.monotonic() - started < RECLAIM_TIME_BUDGET_SECONDS
                 ):
-                    with self._lock:
+                    with self._lock, self._no_busy_wait():
                         free = self._conn.execute("PRAGMA freelist_count").fetchone()[0]
                         step = min(
                             RECLAIM_CHUNK_PAGES,
@@ -766,11 +786,15 @@ class RollupMixin:
                     info["reclaimed_pages"] += step
                     time.sleep(0.005)
             if self.database != ":memory:":
-                with self._lock:
+                with self._lock, self._no_busy_wait():
                     busy, log, done = self._conn.execute(
                         "PRAGMA wal_checkpoint(PASSIVE)"
                     ).fetchone()
                 info["checkpoint"] = {"busy": busy, "log_frames": log, "checkpointed": done}
+        except sqlite3.OperationalError as exc:
+            # Another connection holds the write lock: skip this pass, the next
+            # hourly check retries.  Not an error worth a traceback.
+            LOGGER.info("historian space reclamation skipped: %s", exc)
         except Exception:
             LOGGER.exception("historian space reclamation failed")
         self.last_space_reclaim = info

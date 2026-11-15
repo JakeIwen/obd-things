@@ -1,6 +1,8 @@
 """Space reclamation: incremental auto-vacuum, post-prune vacuum, one-time compaction."""
 
+import contextlib
 import hashlib
+import io
 import subprocess
 import sqlite3
 import sys
@@ -142,6 +144,24 @@ class IncrementalVacuumTests(SpaceFixture):
             self.addCleanup(setattr, rollups, "RECLAIM_TIME_BUDGET_SECONDS", original)
             self.assertEqual(historian.reclaim_space()["reclaimed_pages"], 0)
             self.assertEqual(historian._conn.execute("PRAGMA freelist_count").fetchone()[0], free)
+
+    def test_lock_held_by_another_writer_returns_at_once_and_restores_the_timeout(self):
+        with TelemetryHistorian(self.path) as historian:
+            free = self.big_freelist(historian, rows=500)
+            other = sqlite3.connect(self.path, isolation_level=None)
+            other.execute("BEGIN IMMEDIATE")
+            started = time.monotonic()
+            info = historian.reclaim_space()
+            elapsed = time.monotonic() - started
+            other.execute("ROLLBACK")
+            other.close()
+            self.assertLess(elapsed, 2.0)  # not the connection's 10 s busy timeout
+            self.assertEqual(info["reclaimed_pages"], 0)
+            conn = historian._conn
+            self.assertEqual(conn.execute("PRAGMA busy_timeout").fetchone()[0], 10000)
+            self.assertEqual(conn.execute("PRAGMA freelist_count").fetchone()[0], free)
+            # Once the lock is gone the next pass reclaims normally.
+            self.assertGreater(historian.reclaim_space()["reclaimed_pages"], 0)
 
     def test_hourly_check_with_nothing_due_still_drains_the_freelist(self):
         with TelemetryHistorian(self.path) as historian:
@@ -321,8 +341,39 @@ class CompactionTests(SpaceFixture):
 
         compaction.table_counts = drifting
         self.addCleanup(setattr, compaction, "table_counts", original)
-        with self.assertRaisesRegex(compaction.CompactionRefused, "row counts differ"):
+        with self.assertRaisesRegex(compaction.CompactionIncomplete, "row counts differ"):
             self.run_compact(apply=True)
+        self.assertEqual(pragma(self.path, "auto_vacuum"), 2)  # VACUUM did commit
+
+    def test_failure_after_vacuum_reports_applied_with_exit_code_3(self):
+        self.prepared_legacy_database()
+        original = compaction.table_counts
+        calls = []
+
+        def failing(conn):
+            if calls:
+                raise sqlite3.OperationalError("disk I/O error")
+            calls.append(1)
+            return original(conn)
+
+        compaction.table_counts = failing
+        self.addCleanup(setattr, compaction, "table_counts", original)
+        with self.assertRaisesRegex(compaction.CompactionIncomplete, "disk I/O error"):
+            self.run_compact(apply=True)
+        self.assertEqual(pragma(self.path, "auto_vacuum"), 2)
+        # The CLI path: nothing is refused up front; exit 3 and the message say so.
+        calls.clear()
+        for name, value in (
+            ("systemd_unit_state", lambda unit: "inactive"),
+            ("processes_holding", lambda path: ([], [])),
+        ):
+            self.addCleanup(setattr, compaction, name, getattr(compaction, name))
+            setattr(compaction, name, value)
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code = compaction.main(["--db", str(self.path), "--apply"])
+        self.assertEqual(code, 3)
+        self.assertIn("applied; verification/checkpoint incomplete", stderr.getvalue())
 
     def test_cli_returns_2_when_refused(self):
         self.prepared_legacy_database()
