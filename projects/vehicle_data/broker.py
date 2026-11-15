@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 
 from lib import can_operation_state, diagnostic_safety
 from lib.vehicle_can_roles import B_CAN_ROLE, CAN_BUS_ROLES, C_CAN_ROLE
-from projects.vehicle_data.armed_at_startup import unowned_armed_roles
+from projects.vehicle_data.armed_at_startup import ArmedRole, assess_startup_roles
 from projects.vehicle_data.drive_helper_launch import HELPER_CWD, helper_command
 from projects.vehicle_data.engine_off_voltage import EngineOffVoltageCapture
 from projects.vehicle_data.helper_events import validate_helper_status
@@ -847,8 +847,13 @@ class TelemetryBroker:
         self._auxiliary_drive_blocked_detail: str | None = None
         self._auxiliary_drive_restoration_latched = False
         self._helper_hold = HelperHoldControl(lambda: self.monotonic())
-        # Until the first full reconciliation pass is checked (armed_at_startup.py).
-        self._armed_at_startup_pending = interface_reconciler is not None
+        # Startup armed-adapter check (armed_at_startup.py): vehicle roles not yet
+        # conclusively observed, and faults found but not yet recorded on disk.
+        self._startup_unassessed: set[str] = (
+            set(CAN_BUS_ROLES) if interface_reconciler is not None else set()
+        )
+        self._armed_at_startup_faults: dict[str, ArmedRole] = {}
+        self._armed_at_startup_logged: set[str] = set()
         self._wake_authorization_deadline: float | None = None
         self._wake_authorization_owner: int | None = None
         self._active_drive: dict[str, object] = {
@@ -2983,6 +2988,9 @@ class TelemetryBroker:
                 "qualified passive engine-running evidence is absent",
             )
             return
+        if self._armed_at_startup_faults:
+            self._show_armed_at_startup()
+            return
         if self._helper_hold.active:
             self._show_helpers_held()
             return
@@ -3193,45 +3201,70 @@ class TelemetryBroker:
         self._refresh_interface_status()
 
     def _inhibit_armed_at_startup(self, reconcile: dict[str, object]) -> None:
-        """Inhibit every vehicle role the first full pass found armed with no owner.
+        """Assess pending vehicle roles once each; inhibit any found armed with no owner.
 
-        The first result with role outcomes is the reconciler's full startup
-        pass. A result that allows no conclusion, or a failed write, keeps the
-        check pending, so the next pass (which reports a still-armed role
-        again) decides or retries it.
+        A found fault is latched in memory first; while any latched fault is
+        not yet on disk, no helper is admitted (``_run_active_drive_if_ready``),
+        so the collector never enters a helper epoch and retries the write
+        every cycle.
         """
-        if not self._armed_at_startup_pending:
-            return
-        helper_roles = {"active_drive": C_CAN_ROLE, "auxiliary_drive": B_CAN_ROLE}
-        owned = frozenset(
-            helper_roles[helper] for helper in self._helper_hold.claimed_helpers()
-        )
-        with self._lock:
-            nonpassive = any(mode != "passive" for _metric, mode in self._inflight)
-        armed = unowned_armed_roles(
-            reconcile,
-            vehicle_roles=CAN_BUS_ROLES,
-            owned_roles=owned,
-            inhibits=can_operation_state.all_active_inhibits(),
-            nonpassive_inflight=nonpassive,
-        )
-        if armed is None:
-            return
-        written = True
-        for role in armed:
+        if self._startup_unassessed:
+            helper_roles = {"active_drive": C_CAN_ROLE, "auxiliary_drive": B_CAN_ROLE}
+            owned = frozenset(
+                helper_roles[helper] for helper in self._helper_hold.claimed_helpers()
+            )
+            with self._lock:
+                nonpassive = any(mode != "passive" for _metric, mode in self._inflight)
+            assessment = assess_startup_roles(
+                reconcile,
+                pending_roles=[r for r in CAN_BUS_ROLES if r in self._startup_unassessed],
+                owned_roles=owned,
+                inhibits=can_operation_state.all_active_inhibits(),
+                nonpassive_inflight=nonpassive,
+            )
+            self._startup_unassessed -= assessment.assessed
+            for armed in assessment.armed:
+                self._armed_at_startup_faults[armed.role] = armed
+        self._record_armed_at_startup()
+
+    def _record_armed_at_startup(self) -> None:
+        """Write each latched fault's wildcard inhibit; keep it latched until written."""
+        for armed in list(self._armed_at_startup_faults.values()):
             try:
                 can_operation_state.begin_inhibit(
-                    role.inhibit_name, channel="*", reason=role.inhibit_reason
+                    armed.inhibit_name, channel="*", reason=armed.inhibit_reason
                 )
             except Exception as exc:
-                written = False
-                print(
-                    f"{datetime.now(timezone.utc).isoformat()} could not record "
-                    f"{role.inhibit_name}: {type(exc).__name__}: {exc}",
-                    file=sys.stderr,
-                    flush=True,
-                )
-        self._armed_at_startup_pending = not written
+                if armed.role not in self._armed_at_startup_logged:
+                    self._armed_at_startup_logged.add(armed.role)
+                    print(
+                        f"{datetime.now(timezone.utc).isoformat()} could not record "
+                        f"{armed.inhibit_name} (retrying each cycle; helpers stay off): "
+                        f"{type(exc).__name__}: {exc}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                continue
+            del self._armed_at_startup_faults[armed.role]
+
+    def _show_armed_at_startup(self) -> None:
+        roles = ", ".join(sorted(self._armed_at_startup_faults))
+        blocked = {
+            "state": "idle",
+            "reason": "inhibited",
+            "detail": (
+                f"broker startup found {roles} armed with no owner and has not yet "
+                "recorded its inhibit; no helper is launched"
+            ),
+            "interface_mode": "listen_only",
+        }
+        with self._lock:
+            self._active_drive.update(blocked)
+            if (
+                self.auxiliary_drive_enabled
+                and not self._auxiliary_drive_restoration_latched
+            ):
+                self._auxiliary_drive.update(blocked)
 
     def _collector_loop(self) -> None:
         with self._lock:

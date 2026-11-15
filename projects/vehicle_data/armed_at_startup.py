@@ -4,26 +4,32 @@ A drive helper restores its adapter to listen-only when it is stopped and
 records an inhibit itself if that fails. A helper killed inside that
 restoration (a stop that overran TimeoutStopSec, or an OOM kill) records
 nothing, and the passive reconciler deliberately leaves an UP, armed
-interface as it finds it. So the broker checks its first full reconciliation
-pass: a vehicle role reported ``armed`` (up, not listen-only) that nothing
-accounts for gets a wildcard inhibit, and every helper refuses to start
-until a person inspects the adapter and ends it.
+interface as it finds it. So the broker assesses each vehicle role once at
+startup: a role reconciliation reports ``armed`` (up, not listen-only) that
+nothing accounts for gets a wildcard inhibit, and every helper refuses to
+start until a person inspects the adapter and ends it.
 
-Why "armed" means unowned: the reconciler reports it only while it holds
-that role's exclusive logical-role and channel locks and finds no inhibit
-for the channel. Every participating owner (this broker's helpers, a
-reviewed wake, a foreign CAN tool, a shared observer) holds one of those
-locks while it works, so it would have produced ``busy``, and an existing
-inhibit ``inhibited``. The checks here repeat what the broker itself knows
-at the moment it acts: its claimed helpers, any non-passive acquisition in
-flight, and every same-boot inhibit.
+What "armed" shows: the reconciler reports it only while it holds that
+role's exclusive logical-role and channel locks and finds no inhibit for the
+channel. Every participating owner traced (this broker's helpers, generic
+active routes, a reviewed wake, the DTC batch, Vonstar) holds those locks
+from arming through restoration, and a shared observer holds the channel
+lock too, so at the moment of observation no participating lock holder
+exists; an owner would have made the outcome ``busy``, an inhibit
+``inhibited``. It does not prove the absence of manual or out-of-tree
+activity, and the locks are released before the inhibit is written.
 
-Only the first full pass counts. That is where the gap is: an earlier
-process's helper that died mid-restoration. While this broker runs, its own
-helpers' unverified finals already latch the restoration inhibit, and a
-foreign tool's crash is that tool's restoration to own; widening the check
-would add a way to lose active telemetry mid-drive on evidence nobody has
-audited.
+Each role counts once, at its first conclusive outcome: listen-only
+(``ready``/``reconciled``), ``inhibited`` or ``armed``. Anything else
+(``busy``, ``failed``, ``unavailable``, ``topology_changed``, missing, a
+role this broker's helper has claimed, or any pass taken while a
+non-passive acquisition is in flight) leaves it pending, so a transient
+read failure never exempts it. Once a role is assessed it is not looked at
+again: the gap is an earlier process's helper that died mid-restoration.
+While this broker runs, its own helpers' unverified finals latch the
+restoration inhibit, and a foreign tool's crash is that tool's restoration
+to own; reassessing would add a mid-drive way to lose active telemetry on
+evidence nobody has audited.
 """
 
 from __future__ import annotations
@@ -32,6 +38,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 INHIBIT_PREFIX = "vehicle-data-armed-at-startup"
+# Outcomes that settle a role's startup assessment.
+CONCLUSIVE_STATES = frozenset({"ready", "reconciled", "inhibited", "armed"})
 
 
 @dataclass(frozen=True)
@@ -53,38 +61,52 @@ class ArmedRole:
         )
 
 
-def unowned_armed_roles(
+@dataclass(frozen=True)
+class StartupAssessment:
+    """What one reconciliation result settles for the still-pending roles."""
+
+    assessed: frozenset[str]
+    armed: tuple[ArmedRole, ...]
+
+
+NO_ASSESSMENT = StartupAssessment(frozenset(), ())
+
+
+def assess_startup_roles(
     reconcile: object,
     *,
-    vehicle_roles: Iterable[str],
+    pending_roles: Iterable[str],
     owned_roles: frozenset[str],
     inhibits: Iterable[dict[str, object]],
     nonpassive_inflight: bool,
-) -> tuple[ArmedRole, ...] | None:
-    """Roles of one reconciliation result that need an armed-at-startup inhibit.
+) -> StartupAssessment:
+    """Settle each pending vehicle role this result observed conclusively.
 
     ``reconcile`` is the reconciler's result (``roles`` maps each role to its
     outcome). ``owned_roles`` are roles this broker's helpers hold or are
-    about to; ``inhibits`` every same-boot inhibit. Any inhibit on the
-    channel or the wildcard already stops every helper, so none is added
-    then. None means no conclusion yet: the result has no role outcomes (the
-    pass did not complete), or a non-passive acquisition in flight may own an
-    interface.
+    about to; ``inhibits`` every same-boot inhibit. An armed role already
+    covered by an inhibit on its channel or the wildcard is assessed but
+    needs no new inhibit.
     """
 
     roles = reconcile.get("roles") if isinstance(reconcile, dict) else None
     if not isinstance(roles, dict) or nonpassive_inflight:
-        return None
+        return NO_ASSESSMENT
     inhibited = {item.get("channel") for item in inhibits if isinstance(item, dict)}
-    found = []
-    for role in vehicle_roles:
+    assessed = []
+    armed = []
+    for role in pending_roles:
         outcome = roles.get(role)
-        if not isinstance(outcome, dict) or outcome.get("state") != "armed":
+        if role in owned_roles or not isinstance(outcome, dict):
             continue
+        state = outcome.get("state")
         channel = outcome.get("channel")
-        if role in owned_roles or not isinstance(channel, str) or not channel:
+        if state not in CONCLUSIVE_STATES:
             continue
-        if "*" in inhibited or channel in inhibited:
-            continue
-        found.append(ArmedRole(role, channel))
-    return tuple(found)
+        if state == "armed":
+            if not isinstance(channel, str) or not channel:
+                continue  # unreadable: stays pending
+            if "*" not in inhibited and channel not in inhibited:
+                armed.append(ArmedRole(role, channel))
+        assessed.append(role)
+    return StartupAssessment(frozenset(assessed), tuple(armed))
