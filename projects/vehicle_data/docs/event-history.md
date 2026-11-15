@@ -182,43 +182,57 @@ unless the database is vacuumed. The history database therefore runs with
 `PRAGMA auto_vacuum=INCREMENTAL` (set in `history/store.py` before the first
 table, so a new database has it from creation), and:
 
-- **After each retention pass that deleted rows** (`run_maintenance`, the
-  broker's hourly-checked, daily-gated hook), `reclaim_space()` runs
-  `PRAGMA incremental_vacuum(2000)` in chunks of 2,000 pages (8 MiB), releasing
-  the connection lock between chunks so ingest interleaves, capped at 65,536
-  pages (256 MiB) per pass; a longer freelist is finished by later passes. It
-  then runs `wal_checkpoint(PASSIVE)`. PASSIVE never waits on the dashboard's
-  readers or blocks the writer, unlike `TRUNCATE`, which waits up to the 10 s
-  busy timeout while holding the writer. Failures are logged and never fail a
-  committed retention pass. On a database still in `auto_vacuum=NONE` the
-  chunks are skipped (the pragma would be a no-op).
-- **`PRAGMA journal_size_limit` = 64 MiB** on the writer's connection. SQLite
-  truncates the `-wal` file to that size whenever a checkpoint lets the log
-  reset, so a large prune no longer pins the WAL at its high-water mark.
+- **Bounded reclamation on every maintenance check.** The broker's single
+  history thread runs maintenance inside `ingest_snapshot`, so a reclaim pass
+  delays the next snapshot. `reclaim_space()` (called by `run_maintenance`,
+  including hourly checks with nothing due) therefore frees at most 4,000
+  pages (16 MiB) per pass, in chunks of 500, and stops after 0.5 s of wall
+  time, whichever comes first; it releases the connection lock between chunks.
+  Later hourly checks finish a longer freelist (24 passes a day far exceed the
+  daily prune's output). It then runs `wal_checkpoint(PASSIVE)`, which never
+  waits on the dashboard's readers or blocks the writer (`TRUNCATE` would wait
+  up to the 10 s busy timeout while holding the writer). Failures are logged
+  and never fail a committed retention pass. On a database still in
+  `auto_vacuum=NONE` the vacuum chunks are skipped.
+- **`PRAGMA journal_size_limit` = 64 MiB** on the writer's connection. It caps
+  the `-wal` file only when a checkpoint lets the log reset and it is rewritten
+  from the start; it does not limit how large the WAL grows meanwhile, so one
+  large prune can still exceed it until the next reset.
 - **Existing databases** need one full vacuum to switch modes:
-  `history/compaction.py`, run with the broker and every other telemetry unit
-  stopped and the van parked:
+  `history/compaction.py`, which runs `PRAGMA auto_vacuum=INCREMENTAL; VACUUM`
+  inside SQLite. VACUUM is transactional, so a crash or full disk leaves the
+  original intact, and any other writer that starts meanwhile gets
+  `SQLITE_BUSY` instead of losing commits; the tool itself creates, renames and
+  deletes no files. Run it as `pi` (the units run as pi, so no sudo; a root run
+  would leave root-owned `-wal`/`-shm`) with the telemetry units stopped and
+  the van parked:
 
   ```sh
-  python3 -m projects.vehicle_data.history.compaction            # plan, changes nothing
-  python3 -m projects.vehicle_data.history.compaction --apply    # compact, keep <db>.pre-compact
-  python3 -m projects.vehicle_data.history.compaction --apply --delete-old
+  python3 -m projects.vehicle_data.history.compaction            # read-only plan
+  python3 -m projects.vehicle_data.history.compaction --apply
   ```
 
-  It refuses when any telemetry unit is active, another process holds the file
-  open, the newest recorded `vehicle_state` is `running`/`ignition_on` less than
-  30 minutes old (the broker is stopped, so the database is the only drive
-  evidence), or free space on the database's filesystem is under the compacted
-  size plus 256 MiB. It checkpoints the WAL, runs `VACUUM INTO` a temporary
-  file beside the database with `auto_vacuum=INCREMENTAL`, verifies the copy
-  (`integrity_check`, or `--quick`; `foreign_key_check`; the mode; identical row
-  counts in every table), then swaps by rename. `VACUUM INTO` plus rename was
-  chosen over an in-place `VACUUM` because the original stays intact until the
-  final rename, so any failure leaves the live database untouched, while an
-  in-place vacuum needs the same scratch space plus a second copy in the WAL.
-  Peak disk use is the old file plus the compacted copy; the old file is kept
-  as `<db>.pre-compact` until `--delete-old` or manual removal. Restart the
-  broker afterwards; it reopens the file normally and re-enables WAL.
+  `--quick` uses `quick_check` instead of the full `integrity_check`; exit code
+  2 means it refused. The plan opens the database `mode=ro`, takes no
+  checkpoint and says so; checkpoints happen only under `--apply`. It refuses
+  unless every unit in `SERVICE_UNITS` (the broker, both web listeners, the
+  advisor, the cruise and scan harvest services and timers, the drive recorder
+  and the DTC batch path/service) reports `inactive` or `failed` through
+  `systemctl is-active`; an unrecognized answer or a failing `systemctl` also
+  refuses. `vonstar` and `van-cop-can-wake` never open the database and are not
+  checked. It refuses when a process of its own user holds the file open or has
+  unreadable descriptors; other users' unreadable processes are noted, since
+  SQLite's lock (opened with no busy timeout, so any other holder refuses at
+  once) excludes them. It also refuses when the newest recorded `vehicle_state`
+  (the only drive evidence with the broker stopped) is `running`/`ignition_on`
+  and under 30 minutes old, or when free space on the database's filesystem is
+  below `2 x live data + WAL + 256 MiB` (VACUUM rebuilds the live data in a temp
+  file, which the tool places beside the database via `SQLITE_TMPDIR`, then
+  writes it back through the WAL). Under `--apply` it runs the integrity check
+  and per-table row counts before, vacuums, and requires `auto_vacuum=2`, an
+  identical check and identical row counts after, then a `TRUNCATE`
+  checkpoint and an owner check of any `-wal`/`-shm`. Restart the broker
+  afterwards.
 
 Legacy opening/event assessments are exposed as saved. When newer checkpoints
 were never recorded, last evaluable evidence is labeled **saved transition

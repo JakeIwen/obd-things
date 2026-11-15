@@ -24,11 +24,14 @@ from .validation import (
 
 LOGGER = logging.getLogger(__name__)
 
-# One pass frees at most this many pages (256 MiB at 4 KiB) in chunks, so the
-# daily prune's freelist is returned without one long writer-blocking call;
-# anything left is taken by the next day's pass.
-RECLAIM_CHUNK_PAGES = 2_000
-RECLAIM_MAX_PAGES_PER_PASS = 65_536
+# The broker's single history thread runs maintenance inside
+# ``ingest_snapshot``, so every reclaim pass delays the next snapshot.  A pass
+# is therefore bounded by pages and wall time, whichever ends first; the hourly
+# maintenance check calls it again, so a long freelist drains over hours
+# (4,000 pages x 24 calls is far above the daily prune's output).
+RECLAIM_CHUNK_PAGES = 500
+RECLAIM_MAX_PAGES_PER_PASS = 4_000
+RECLAIM_TIME_BUDGET_SECONDS = 0.5
 AUTO_VACUUM_INCREMENTAL = 2
 
 
@@ -715,27 +718,27 @@ class RollupMixin:
         force: bool = False,
         max_rollup_passes: int | None = None,
     ) -> MaintenanceResult:
-        """Prune (see ``_prune_with_rollups``), then give freed pages back."""
+        """Prune (see ``_prune_with_rollups``), then give freed pages back.
+
+        Reclamation also runs on hourly checks that found nothing due, so a
+        freelist larger than one bounded pass keeps draining.
+        """
 
         result = self._prune_with_rollups(
             now=now, force=force, max_rollup_passes=max_rollup_passes
         )
-        if (
-            result.deleted_metric_samples
-            or result.deleted_interface_samples
-            or result.deleted_snapshots
-        ):
-            self.reclaim_space()
+        self.reclaim_space()
         return result
 
     def reclaim_space(self) -> dict[str, object]:
-        """Return freelist pages to the OS in bounded chunks, then checkpoint.
+        """Return freelist pages to the OS in a small bounded pass, then checkpoint.
 
-        The connection lock is released between chunks so ingest interleaves.
-        The checkpoint is PASSIVE: it never waits for the dashboard's readers
-        or blocks the writer, and ``journal_size_limit`` truncates the WAL
-        whenever it next resets.  Failures are logged, never raised: space
-        reclamation must not fail a retention pass that already committed.
+        Bounded by ``RECLAIM_MAX_PAGES_PER_PASS`` and
+        ``RECLAIM_TIME_BUDGET_SECONDS`` so ingestion is never held up for long;
+        the connection lock is released between chunks.  The checkpoint is
+        PASSIVE: it never waits on the dashboard's readers or blocks the
+        writer.  Failures are logged, never raised: reclamation must not fail a
+        retention pass that already committed.
         """
 
         info: dict[str, object] = {"reclaimed_pages": 0, "checkpoint": None}
@@ -743,15 +746,25 @@ class RollupMixin:
             with self._lock:
                 mode = self._conn.execute("PRAGMA auto_vacuum").fetchone()[0]
             if mode == AUTO_VACUUM_INCREMENTAL:
-                while info["reclaimed_pages"] < RECLAIM_MAX_PAGES_PER_PASS:
+                started = time.monotonic()
+                while (
+                    info["reclaimed_pages"] < RECLAIM_MAX_PAGES_PER_PASS
+                    and time.monotonic() - started < RECLAIM_TIME_BUDGET_SECONDS
+                ):
                     with self._lock:
                         free = self._conn.execute("PRAGMA freelist_count").fetchone()[0]
-                        if not free:
+                        step = min(
+                            RECLAIM_CHUNK_PAGES,
+                            free,
+                            RECLAIM_MAX_PAGES_PER_PASS - info["reclaimed_pages"],
+                        )
+                        if step <= 0:
                             break
-                        step = min(RECLAIM_CHUNK_PAGES, free)
-                        self._conn.execute(f"PRAGMA incremental_vacuum({step})").fetchall()
+                        # execute() steps this pragma once (one page); the script
+                        # form runs all `step` pages.
+                        self._conn.executescript(f"PRAGMA incremental_vacuum({step});")
                     info["reclaimed_pages"] += step
-                    time.sleep(0.02)
+                    time.sleep(0.005)
             if self.database != ":memory:":
                 with self._lock:
                     busy, log, done = self._conn.execute(

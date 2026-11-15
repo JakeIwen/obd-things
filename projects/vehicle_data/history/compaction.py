@@ -1,27 +1,30 @@
 """One-time offline compaction of the telemetry history database.
 
 Switches an existing database to ``auto_vacuum=INCREMENTAL`` (a new one gets it
-at creation) and returns its freelist to the filesystem.  It never transmits on
-CAN and never touches the live service: it refuses while any telemetry unit is
-active, while another process holds the file open, or while the last recorded
-vehicle state says the van may be running.
+at creation) and returns its freelist to the filesystem, by running
+``PRAGMA auto_vacuum=INCREMENTAL; VACUUM`` inside SQLite.  VACUUM is
+transactional: a crash, a full disk or a failed statement leaves the original
+database intact, and any other connection that tries to write meanwhile gets
+SQLITE_BUSY instead of silently losing commits.  The tool creates, renames and
+deletes no files itself.
 
-Method: ``VACUUM INTO`` a temporary file beside the database, verify it, then
-swap by rename.  The original stays byte-for-byte intact until the final
-renames, so a crash, a full disk or a failed check leaves the live database
-untouched; an in-place ``VACUUM`` would need the same scratch space plus a
-second copy in the WAL and has no such fallback.  The old file is kept as
-``<db>.pre-compact`` until ``--delete-old`` (or by hand).
+It never transmits on CAN and never touches services.  It refuses unless every
+telemetry unit is inactive, no process it can inspect holds the file open, the
+newest recorded vehicle state is not a recent running/ignition-on reading, and
+the filesystem has room.  Run it as the database's owner (``pi``): the units'
+processes run as pi, so no sudo is needed, and a root run would leave
+root-owned ``-wal``/``-shm`` files the broker cannot open.
 
-Usage (service stopped)::
+Usage (units stopped, van parked)::
 
-    python3 -m projects.vehicle_data.history.compaction            # plan only
+    python3 -m projects.vehicle_data.history.compaction            # read-only plan
     python3 -m projects.vehicle_data.history.compaction --apply
 """
 
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import shutil
@@ -33,68 +36,102 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 DEFAULT_DATABASE = "/var/lib/van-telemetry/history.sqlite3"
-# Units that open the history database or restart the broker that owns it.
+# Units that open the history database or start something that does.  vonstar
+# and van-cop-can-wake never open it, so they are not listed.
 SERVICE_UNITS = (
     "van-telemetry.service",
     "van-telemetry-web.service",
     "van-telemetry-web-tailscale.service",
     "van-telemetry-advisor.service",
-    "van-scan-harvest.service",
     "van-cruise-harvest.service",
+    "van-cruise-harvest.timer",
+    "van-scan-harvest.service",
+    "van-scan-harvest.timer",
     "van-drive-recorder.service",
     "van-dtc-batch.service",
+    "van-dtc-batch.path",
 )
-BUSY_UNIT_STATES = ("active", "activating", "reloading", "deactivating")
+# Only these systemctl answers prove a unit is not running; anything else
+# (including unrecognized output or a failed call) refuses.
+IDLE_UNIT_STATES = ("inactive", "failed")
 # The snapshot rows record the broker's last vehicle_state; with the broker
 # stopped there is nothing fresher, so a recent "on" reading blocks the run.
 VEHICLE_ON_STATES = ("running", "ignition_on")
 VEHICLE_STATE_MAX_AGE_SECONDS = 30 * 60
 SPACE_MARGIN_BYTES = 256 * 1024 * 1024
-BACKUP_SUFFIX = ".pre-compact"
-TEMP_SUFFIX = ".compact-tmp"
 AUTO_VACUUM_INCREMENTAL = 2
 
 
 class CompactionRefused(RuntimeError):
-    """A safety precondition failed; nothing was changed."""
+    """A safety precondition failed; the database was not modified."""
 
 
 def systemd_unit_state(unit: str) -> str:
-    """Return systemd's ActiveState for a unit ('inactive' when unknown)."""
+    """Return ``systemctl is-active`` output; raise when it cannot be trusted."""
 
-    result = subprocess.run(
-        ["systemctl", "show", "-p", "ActiveState", "--value", unit],
-        capture_output=True,
-        text=True,
-        timeout=15,
-    )
-    return result.stdout.strip() or "inactive"
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", unit],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise CompactionRefused(f"cannot ask systemd about {unit}: {exc}") from exc
+    return result.stdout.strip() or f"no-answer(rc={result.returncode})"
 
 
-def processes_holding(path: Path) -> list[int]:
-    """PIDs (other than ours) with ``path`` or its -wal/-shm open (Linux /proc)."""
+def processes_holding(path: Path) -> tuple[list[int], list[int]]:
+    """Return (holders, unverifiable) PIDs for ``path`` or its -wal/-shm.
+
+    A process that exited mid-scan (ENOENT/ESRCH) is skipped.  One whose fds
+    cannot be read (EACCES/EPERM) is unverifiable; those owned by another user
+    are expected without sudo and are reported but not fatal (SQLite's own lock,
+    taken with no busy timeout, still excludes them), while an unreadable
+    process of our own user is returned so the caller can refuse.
+    """
 
     proc = Path("/proc")
     if not proc.is_dir():
-        return []
+        return [], []
     targets = {str(path.resolve()) + suffix for suffix in ("", "-wal", "-shm")}
     holders: list[int] = []
+    unverifiable: list[int] = []
     for entry in proc.iterdir():
         if not entry.name.isdigit() or int(entry.name) == os.getpid():
             continue
+        pid = int(entry.name)
         try:
             for fd in (entry / "fd").iterdir():
-                if os.readlink(fd) in targets:
-                    holders.append(int(entry.name))
-                    break
-        except OSError:
-            continue  # exited, or not ours to inspect
-    return holders
+                try:
+                    if os.readlink(fd) in targets:
+                        holders.append(pid)
+                        break
+                except OSError as exc:
+                    if exc.errno in (errno.ENOENT, errno.ESRCH):
+                        continue  # that descriptor closed
+                    raise
+        except OSError as exc:
+            if exc.errno in (errno.ENOENT, errno.ESRCH):
+                continue  # process exited
+            if exc.errno in (errno.EACCES, errno.EPERM):
+                try:
+                    foreign = entry.stat().st_uid != os.geteuid()
+                except OSError:
+                    foreign = False
+                unverifiable.append(-pid if foreign else pid)
+                continue
+            raise
+    return holders, unverifiable
 
 
-def _connect(database: Path, *, read_only: bool = False) -> sqlite3.Connection:
+def _connect(database: Path, *, read_only: bool) -> sqlite3.Connection:
     uri = f"file:{database}?mode={'ro' if read_only else 'rw'}"
-    return sqlite3.connect(uri, uri=True, timeout=10.0)
+    # No busy timeout: any other holder of a conflicting lock refuses the run
+    # at once instead of queueing behind it.  Autocommit so VACUUM may run.
+    conn = sqlite3.connect(uri, uri=True, timeout=0, isolation_level=None)
+    conn.execute("PRAGMA busy_timeout = 0")
+    return conn
 
 
 def last_vehicle_state(database: Path) -> tuple[str | None, float | None]:
@@ -131,23 +168,38 @@ def check_preconditions(
     database: Path,
     *,
     unit_state: Callable[[str], str] | None = None,
-    holders: Callable[[Path], list[int]] | None = None,
+    holders: Callable[[Path], tuple[list[int], list[int]]] | None = None,
     now_state: Callable[[Path], tuple[str | None, float | None]] | None = None,
-) -> None:
+) -> list[int]:
+    """Refuse unless the database is quiet; return other users' unreadable PIDs."""
+
     unit_state = unit_state or systemd_unit_state
     holders = holders or processes_holding
     now_state = now_state or last_vehicle_state
     if not database.is_file():
         raise CompactionRefused(f"{database} is not a file")
-    busy = {unit: state for unit in SERVICE_UNITS if (state := unit_state(unit)) in BUSY_UNIT_STATES}
-    if busy:
+    if database.stat().st_uid != os.geteuid():
         raise CompactionRefused(
-            "stop these units first (the parent stops them; this tool never does): "
-            + ", ".join(f"{unit}={state}" for unit, state in busy.items())
+            f"run as the database owner (uid {database.stat().st_uid}), not uid "
+            f"{os.geteuid()}: files SQLite creates would be owned by the wrong user"
         )
-    pids = holders(database)
+    not_idle = {
+        unit: state for unit in SERVICE_UNITS if (state := unit_state(unit)) not in IDLE_UNIT_STATES
+    }
+    if not_idle:
+        raise CompactionRefused(
+            "these units are not inactive (stop them first; this tool never does): "
+            + ", ".join(f"{unit}={state}" for unit, state in not_idle.items())
+        )
+    pids, unverifiable = holders(database)
     if pids:
         raise CompactionRefused(f"processes {pids} have {database} open")
+    own_unreadable = [pid for pid in unverifiable if pid > 0]
+    if own_unreadable:
+        raise CompactionRefused(
+            f"cannot inspect descriptors of our own processes {own_unreadable}; "
+            "cannot tell whether they hold the database"
+        )
     state, age = now_state(database)
     if state in VEHICLE_ON_STATES and age is not None and age < VEHICLE_STATE_MAX_AGE_SECONDS:
         raise CompactionRefused(
@@ -155,135 +207,128 @@ def check_preconditions(
             f"may be driving. Retry once it has been parked for "
             f"{VEHICLE_STATE_MAX_AGE_SECONDS // 60} minutes"
         )
-    for leftover in (
-        database.with_name(database.name + TEMP_SUFFIX),
-        database.with_name(database.name + BACKUP_SUFFIX),
-    ):
-        if leftover.exists():
-            raise CompactionRefused(f"{leftover} exists; inspect and remove it first")
+    return [-pid for pid in unverifiable if pid < 0]
 
 
-def check_space(database: Path, live_bytes: int) -> int:
-    """Require room for the compacted copy beside the kept original."""
+def required_free_bytes(live_bytes: int, wal_bytes: int) -> int:
+    """VACUUM rebuilds the live data in a temp file (placed beside the database,
+    see ``compact``) and writes it back through the WAL, so it needs about two
+    copies of the live data plus the existing WAL and a margin."""
 
-    needed = live_bytes + SPACE_MARGIN_BYTES
-    free = shutil.disk_usage(database.parent).free
-    if free < needed:
-        raise CompactionRefused(
-            f"need {needed} bytes free beside {database} (compacted copy plus "
-            f"margin), have {free}"
-        )
-    return needed
+    return 2 * live_bytes + wal_bytes + SPACE_MARGIN_BYTES
+
+
+def _verify(conn: sqlite3.Connection, quick: bool) -> str:
+    check = "quick_check" if quick else "integrity_check"
+    verdict = [row[0] for row in conn.execute(f"PRAGMA {check}")]
+    if verdict != ["ok"]:
+        raise CompactionRefused(f"{check} failed: {verdict[:5]}")
+    return check
 
 
 def compact(
     database: str | Path = DEFAULT_DATABASE,
     *,
     apply: bool = False,
-    delete_old: bool = False,
     quick: bool = False,
     unit_state: Callable[[str], str] | None = None,
-    holders: Callable[[Path], list[int]] | None = None,
+    holders: Callable[[Path], tuple[list[int], list[int]]] | None = None,
     now_state: Callable[[Path], tuple[str | None, float | None]] | None = None,
     log: Callable[[str], None] = print,
 ) -> dict[str, object]:
     database = Path(database).resolve()
-    check_preconditions(database, unit_state=unit_state, holders=holders, now_state=now_state)
-    temp = database.with_name(database.name + TEMP_SUFFIX)
-    backup = database.with_name(database.name + BACKUP_SUFFIX)
+    foreign_unreadable = check_preconditions(
+        database, unit_state=unit_state, holders=holders, now_state=now_state
+    )
+    if foreign_unreadable:
+        log(
+            f"note: descriptors of {len(foreign_unreadable)} other-user processes are "
+            "unreadable without sudo; SQLite's lock (no busy timeout) still excludes them"
+        )
+    wal = database.with_name(database.name + "-wal")
+    wal_bytes = wal.stat().st_size if wal.exists() else 0
 
-    conn = _connect(database)
+    conn = _connect(database, read_only=not apply)
     try:
-        # Fold the WAL into the main file so the swap cannot orphan frames.
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
         page_size = conn.execute("PRAGMA page_size").fetchone()[0]
         pages = conn.execute("PRAGMA page_count").fetchone()[0]
         free_pages = conn.execute("PRAGMA freelist_count").fetchone()[0]
         mode_before = conn.execute("PRAGMA auto_vacuum").fetchone()[0]
+        live_bytes = (pages - free_pages) * page_size
+        needed = required_free_bytes(live_bytes, wal_bytes)
+        free = shutil.disk_usage(database.parent).free
         plan = {
             "database": str(database),
             "pages": pages,
             "free_pages": free_pages,
             "page_size": page_size,
+            "wal_bytes": wal_bytes,
             "auto_vacuum_before": mode_before,
-            "expected_compacted_bytes": (pages - free_pages) * page_size,
+            "required_free_bytes": needed,
+            "free_bytes": free,
         }
-        needed = check_space(database, (pages - free_pages) * page_size)
-        plan["required_free_bytes"] = needed
         log(f"plan: {json.dumps(plan)}")
+        if free < needed:
+            raise CompactionRefused(
+                f"need {needed} bytes free beside {database} (VACUUM temp copy, "
+                f"WAL and margin), have {free}"
+            )
         if not apply:
-            log("dry run: nothing changed; re-run with --apply")
+            log(
+                "plan only: opened read-only, no checkpoint, nothing changed; "
+                "re-run with --apply"
+            )
             return {"applied": False, **plan}
 
         started = time.monotonic()
+        # Keep VACUUM's temp copy on the database's filesystem, the one just
+        # checked, rather than a possibly small tmpfs.
+        os.environ["SQLITE_TMPDIR"] = str(database.parent)
         before = table_counts(conn)
         log(f"row counts before: {json.dumps(before)}")
+        _verify(conn, quick)
         conn.execute("PRAGMA auto_vacuum = INCREMENTAL")
-        try:
-            conn.execute("VACUUM INTO ?", (str(temp),))
-        except BaseException:
-            temp.unlink(missing_ok=True)
-            raise
+        conn.execute("VACUUM")
+        mode_after = conn.execute("PRAGMA auto_vacuum").fetchone()[0]
+        if mode_after != AUTO_VACUUM_INCREMENTAL:
+            raise CompactionRefused(f"auto_vacuum is {mode_after} after VACUUM, expected 2")
+        check = _verify(conn, quick)
+        after = table_counts(conn)
+        if after != before:
+            diff = {
+                k: (before.get(k), after.get(k))
+                for k in set(before) | set(after)
+                if before.get(k) != after.get(k)
+            }
+            raise CompactionRefused(
+                f"row counts differ (before, after): {diff}; a writer appeared "
+                "mid-run or the vacuum misbehaved: do not restart units, inspect"
+            )
+        busy, _log_frames, _done = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        if busy:
+            raise CompactionRefused("final TRUNCATE checkpoint was blocked by another connection")
+        free_after = conn.execute("PRAGMA freelist_count").fetchone()[0]
     finally:
         conn.close()
 
-    try:
-        new = _connect(temp)
-        try:
-            mode_after = new.execute("PRAGMA auto_vacuum").fetchone()[0]
-            if mode_after != AUTO_VACUUM_INCREMENTAL:
-                raise CompactionRefused(f"compacted copy has auto_vacuum={mode_after}, expected 2")
-            check = "quick_check" if quick else "integrity_check"
-            verdict = [row[0] for row in new.execute(f"PRAGMA {check}")]
-            if verdict != ["ok"]:
-                raise CompactionRefused(f"{check} failed: {verdict[:5]}")
-            after = table_counts(new)
-            fk = new.execute("PRAGMA foreign_key_check").fetchall()
-            if fk:
-                raise CompactionRefused(f"foreign_key_check found {len(fk)} violations")
-            if after != before:
-                diff = {k: (before.get(k), after.get(k)) for k in set(before) | set(after) if before.get(k) != after.get(k)}
-                raise CompactionRefused(f"row counts differ (before, after): {diff}")
-            # Leave the copy in rollback-journal form; the broker re-enables WAL.
-            new.execute("PRAGMA journal_mode = DELETE").fetchall()
-        finally:
-            new.close()
-        shutil.copymode(database, temp)
-        try:
-            os.chown(temp, database.stat().st_uid, database.stat().st_gid)
-        except PermissionError:
-            pass
-        with open(temp, "rb") as handle:
-            os.fsync(handle.fileno())
-        wal = database.with_name(database.name + "-wal")
-        if wal.exists() and wal.stat().st_size:
-            raise CompactionRefused(f"{wal} still holds frames; aborting swap")
-        os.rename(database, backup)
-        os.rename(temp, database)
-        for sidecar in ("-wal", "-shm"):
-            database.with_name(database.name + sidecar).unlink(missing_ok=True)
-        dir_fd = os.open(database.parent, os.O_RDONLY)
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
-    except BaseException:
-        temp.unlink(missing_ok=True)
-        raise
+    # Whatever SQLite left beside the database must still belong to its owner,
+    # or the broker could not open it after the restart.
+    owner = database.stat().st_uid
+    for suffix in ("-wal", "-shm"):
+        sidecar = database.with_name(database.name + suffix)
+        if sidecar.exists() and sidecar.stat().st_uid != owner:
+            raise CompactionRefused(f"{sidecar} is not owned by uid {owner}; fix before restart")
 
     result = {
         "applied": True,
         **plan,
         "auto_vacuum_after": mode_after,
+        "free_pages_after": free_after,
         "check": check,
         "row_counts": after,
         "new_bytes": database.stat().st_size,
-        "old_kept_as": str(backup),
         "seconds": round(time.monotonic() - started, 1),
     }
-    if delete_old:
-        backup.unlink()
-        result["old_kept_as"] = None
     log(f"done: {json.dumps({k: v for k, v in result.items() if k != 'row_counts'})}")
     return result
 
@@ -291,14 +336,16 @@ def compact(
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--db", default=DEFAULT_DATABASE)
-    parser.add_argument("--apply", action="store_true", help="do the compaction (default: plan only)")
-    parser.add_argument("--delete-old", action="store_true", help="remove <db>.pre-compact after a verified swap")
+    parser.add_argument("--apply", action="store_true", help="do the compaction (default: read-only plan)")
     parser.add_argument("--quick", action="store_true", help="quick_check instead of the full integrity_check")
     args = parser.parse_args(argv)
     try:
-        compact(args.db, apply=args.apply, delete_old=args.delete_old, quick=args.quick)
+        compact(args.db, apply=args.apply, quick=args.quick)
     except CompactionRefused as exc:
         print(f"refused: {exc}", file=sys.stderr)
+        return 2
+    except sqlite3.OperationalError as exc:
+        print(f"refused: SQLite could not proceed ({exc}); the database was not changed", file=sys.stderr)
         return 2
     return 0
 
