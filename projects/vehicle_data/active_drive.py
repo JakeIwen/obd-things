@@ -41,6 +41,7 @@ from projects.vehicle_data import (
     ccan_powertrain,
     helper_startup_grant,
     pcm_electrical,
+    oil_life_drive_step,
     transmit_permit,
     radar_alignment,
     radar_drive_steps,
@@ -693,8 +694,10 @@ def run_active_session(
         # Old running brokers do not know this metric. Only a newly loaded
         # broker advertises support through the fixed CLI flag, so an old
         # process launching updated source cannot receive an unknown event.
-        oil_life_enabled = enable_oil_life
-        next_oil_life = next_cycle
+        oil_life_step = oil_life_drive_step.OilLifeDriveStep(
+            backend, sink, pcm_poller, lock_handle, initial,
+            enabled=enable_oil_life, next_due=next_cycle,
+        )
         radar_steps = radar_drive_steps.RadarDriveSteps(
             backend, sink, radar_poller,
             radar_drive_steps.FreshAuthority(
@@ -934,45 +937,16 @@ def run_active_session(
                         interface_mode="armed_diagnostic",
                     )
 
-            # Maintenance data is slow. Wait for preceding PCM/TPMS replies,
-            # require a new one-use permit, and never retry a failed epoch.
-            if oil_life_enabled and backend.monotonic() >= next_oil_life:
-                gate_failure = _active_gate(backend, initial)
-                if gate_failure is not None:
-                    outcome = gate_failure
-                    break
-                try:
-                    oil_permit = transmit_permit.issue(
-                        lock_handle, snapshot,
-                        purpose=transmit_permit.PCM_OIL_LIFE,
-                        channel=backend.channel, monotonic=backend.monotonic,
-                    )
-                except transmit_permit.StaleTransmitEvidenceError:
-                    next_cycle = _wait_for_next_cycle(backend, next_cycle, cycle_started)
-                    continue
-                oil_result = pcm_poller.poll_oil_life(oil_permit)
-                if oil_result.reason == "transmit_permit_expired":
-                    next_cycle = _wait_for_next_cycle(backend, next_cycle, cycle_started)
-                    continue
-                next_oil_life = backend.monotonic() + OIL_LIFE_INTERVAL_SECONDS
-                failed = _pcm_outcome(oil_result)
-                if failed is not None:
-                    oil_life_enabled = False
-                    sink.emit(
-                        "metric_failure", metric=oil_result.metric,
-                        unit=oil_result.unit, source=oil_result.source,
-                        bus=oil_result.bus, quality=oil_result.quality,
-                        reason=failed.reason, detail=failed.detail,
-                        interface_mode="armed_diagnostic",
-                    )
-                else:
-                    sink.emit(
-                        "observation", metric=oil_result.metric,
-                        value=oil_result.value, unit=oil_result.unit,
-                        source=oil_result.source, bus=oil_result.bus,
-                        quality=oil_result.quality, detail=oil_result.detail,
-                        interface_mode="armed_diagnostic",
-                    )
+            oil_step_result = oil_life_step.run(
+                snapshot, active_gate=_active_gate, pcm_outcome=_pcm_outcome,
+                permit_api=transmit_permit, interval_seconds=OIL_LIFE_INTERVAL_SECONDS,
+            )
+            if oil_step_result.outcome is not None:
+                outcome = oil_step_result.outcome
+                break
+            if oil_step_result.skip_cycle:
+                next_cycle = _wait_for_next_cycle(backend, next_cycle, cycle_started)
+                continue
 
             # The radar's 0845 read and any owner-started service alignment.
             radar_stop = radar_steps.run(snapshot)

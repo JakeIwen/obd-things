@@ -209,6 +209,9 @@ format; `dashboard/src/dialogs/useController.js` creates a dialog's controller
 once per mount; `dashboard/src/jsonReply.js` reads a fetch reply that must be one
 JSON object.
 
+`projects/vehicle_data/oil_life_drive_step.py` owns the optional oil-life cadence
+and failed-epoch isolation; the active session owns its gates, permits and cleanup.
+
 Oil-life telemetry is enabled (owner activation 2026-10-03):
 `engine.oil_life_remaining` is PCM DID `2185`, unsigned percent, polled at
 most once per minute during qualified engine-running intervals. The Service
@@ -484,6 +487,7 @@ caller has retired, with owner/callers/retirement stated in the wrapper header.
 | `projects/vehicle_data/web_v2.py` | Both van-telemetry-web listeners | Dashboard static serving and web.py /v1 API |
 | `projects/vehicle_data/restart_broker.py` | Owner/agent CLI (`s restart_broker`) | Guarded `van-telemetry.service` restart: parked by default, `--while-running` through the helper hold |
 | `projects/vehicle_data/drive_recorder.py` | van-drive-recorder.service | Receive-only broker drive recording |
+| `projects/vehicle_data/oil_life_drive_step.py` | active_drive.run_active_session | Optional oil-life cycle step |
 | `projects/vehicle_data/active_drive.py` | Broker drive_helper_launch | C-CAN active-drive helper |
 | `projects/vehicle_data/bcan_auxiliary.py` | Broker drive_helper_launch | B-CAN auxiliary helper |
 | `projects/vehicle_data/cop_can_wake.py` | van-cop-can-wake.service | Fixed wake supervisor |
