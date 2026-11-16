@@ -8,6 +8,7 @@ import tempfile
 import textwrap
 import time
 import unittest
+from unittest import mock
 
 import run_tests
 
@@ -142,6 +143,66 @@ class SuitePlanTests(unittest.TestCase):
                 holder.wait()
             with run_tests.checkout_lock(lock, timeout=1, poll=0.1):
                 pass
+
+    def make_read_only_checkout(self, root: Path) -> None:
+        """A tree shaped like a Pi-local van-compute snapshot: files 0400, dirs 0500."""
+        (root / "pkg").mkdir(parents=True)
+        (root / "pkg/module.py").write_text("VALUE = 1\n")
+        (root / "tmp").mkdir()
+        (root / "tmp/run_tests.lock").write_text("")
+        (root / ".git").write_text("gitdir: elsewhere\n")
+        (root / "run_tests.py").write_text(textwrap.dedent("""
+            import os, sys
+            from pathlib import Path
+            here = Path(__file__).resolve().parent
+            (here / "tmp").mkdir()  # fails in the read-only original
+            first_path = os.environ["PYTHONPATH"].split(os.pathsep)[0]
+            same_args = sys.argv[1:] == ["--dashboard"]
+            raise SystemExit(3 if same_args and Path(first_path) == here else 4)
+        """))
+        for path in sorted(root.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+            path.chmod(0o500 if path.is_dir() else 0o400)
+        root.chmod(0o500)
+
+    def test_read_only_checkout_reruns_from_writable_copy_with_same_arguments(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve() / "source"
+            self.make_read_only_checkout(root)
+            out = StringIO()
+            try:
+                env = {"PYTHONPATH": f"{root}{os.pathsep}/elsewhere"}
+                with mock.patch.dict(os.environ, env), redirect_stdout(out):
+                    status = run_tests.run_from_copy(root, ["--dashboard"])
+            finally:
+                for path in [root, *root.rglob("*")]:
+                    path.chmod(0o700)
+        # 3: the child ran in a writable copy with the same arguments and a
+        # PYTHONPATH pointing at the copy; its exit status passes through.
+        self.assertEqual(status, 3)
+        self.assertIn("is read-only; running from a scratch copy", out.getvalue())
+
+    def test_checkout_copy_is_writable_and_skips_snapshot_exclusions(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve() / "source"
+            self.make_read_only_checkout(root)
+            try:
+                copy = run_tests.copy_checkout(root, Path(folder) / "copy")
+                self.assertEqual((copy / "pkg/module.py").read_text(), "VALUE = 1\n")
+                (copy / "pkg/new.py").write_text("")
+                (copy / "pkg/module.py").write_text("VALUE = 2\n")
+                self.assertFalse((copy / "tmp").exists())
+                self.assertFalse((copy / ".git").exists())
+            finally:
+                for path in [root, *root.rglob("*")]:
+                    path.chmod(0o700)
+
+    def test_pythonpath_entries_for_the_checkout_follow_the_copy(self):
+        old, new = Path("/job/source"), Path("/job/tmp/copy")
+        self.assertEqual(
+            run_tests.retarget_pythonpath(f"/job/source{os.pathsep}/other", old, new),
+            f"/job/tmp/copy{os.pathsep}/other",
+        )
+        self.assertIsNone(run_tests.retarget_pythonpath(None, old, new))
 
     def test_execution_stops_after_real_child_failure(self):
         with tempfile.TemporaryDirectory() as folder:

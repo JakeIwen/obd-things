@@ -46,6 +46,13 @@ LOCK_PATH = ROOT / "tmp/run_tests.lock"
 LOCK_TIMEOUT_SECONDS = 1800
 LOCK_POLL_SECONDS = 2
 
+# A Pi-local van-compute job mounts its source snapshot read-only (files 0400,
+# directories 0500), while the suite writes tmp/, node_modules and fixtures into
+# its checkout. Such a run copies the checkout to scratch first. The skipped
+# names match what van-compute leaves out of a snapshot: VCS data, machine
+# output and bytecode never belong in the copy.
+COPY_SKIPPED_NAMES = (".git", "tmp", "__pycache__", ".pytest_cache")
+
 
 class Profile(str, Enum):
     FULL = "full"
@@ -277,6 +284,53 @@ def parse_args(argv: list[str] | None) -> tuple[Profile, tuple[str, ...]]:
     return profile, tuple(pytest_args)
 
 
+def copy_checkout(root: Path, destination: Path) -> Path:
+    """Copy a read-only checkout to `destination` with owner write access restored."""
+    shutil.copytree(
+        root, destination, symlinks=True, ignore=shutil.ignore_patterns(*COPY_SKIPPED_NAMES)
+    )
+    for current, _directories, files in os.walk(destination):
+        os.chmod(current, os.stat(current).st_mode | 0o700)
+        for name in files:
+            path = os.path.join(current, name)
+            if not os.path.islink(path):
+                os.chmod(path, os.stat(path).st_mode | 0o200)
+    return destination
+
+
+def retarget_pythonpath(value: str | None, old: Path, new: Path) -> str | None:
+    """Point PYTHONPATH entries naming the original checkout at its copy."""
+    if not value:
+        return value
+    return os.pathsep.join(
+        str(new) if entry and Path(entry).resolve() == old else entry
+        for entry in value.split(os.pathsep)
+    )
+
+
+def run_from_copy(root: Path, argv: list[str]) -> int:
+    """Re-run this runner, with the same arguments, from a writable scratch copy.
+
+    The copy lives under TMPDIR (a compute job's private scratch), so it is
+    bounded by the snapshot's size and removed when the run ends.
+    """
+    with tempfile.TemporaryDirectory(prefix="suite-checkout-") as folder:
+        try:
+            copy = copy_checkout(root, Path(folder).resolve() / "checkout")
+        except OSError as exc:
+            print(f"SETUP ERROR: cannot copy read-only checkout {root}: {exc}", file=sys.stderr)
+            return 2
+        print(f"Checkout {root} is read-only; running from a scratch copy at {copy}.", flush=True)
+        env = dict(os.environ)
+        pythonpath = retarget_pythonpath(env.get("PYTHONPATH"), root.resolve(), copy)
+        if pythonpath is not None:
+            env["PYTHONPATH"] = pythonpath
+        child = subprocess.run(
+            [sys.executable, str(copy / Path(__file__).name), *argv], cwd=copy, env=env
+        )
+        return child.returncode
+
+
 DONE_MESSAGES = {
     Profile.FULL: "All offline repository gates passed.",
     Profile.PYTEST_ONLY: "Pytest gate passed.",
@@ -301,6 +355,8 @@ def run_plan(profile: Profile, pytest_args: tuple[str, ...], npm: str, node: str
 
 def main(argv: list[str] | None = None, lock_timeout: float | None = None) -> int:
     profile, pytest_args = parse_args(argv)
+    if not os.access(ROOT, os.W_OK):
+        return run_from_copy(ROOT, list(sys.argv[1:] if argv is None else argv))
 
     try:
         require_executable("git")
