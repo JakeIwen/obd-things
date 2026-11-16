@@ -56,15 +56,23 @@ On one clock, `backend.monotonic` (CLOCK_MONOTONIC):
 1. `FreshAuthority.acquire` (`radar_drive_steps.py`): a fresh broadcast snapshot with running RPM,
    the active gates (identity, interface state, topology, inhibits) and one permit. Stale evidence
    gives `not_sent` / `evidence_stale`; a failed gate ends the helper session as for every step.
-2. The admission checks (`DriveDtcSteps._admission_problem`): no service-alignment run attempted
-   and no command pending, the pass window still open, a clean foreign-tester watch (drained
-   now), module spacing, the radar margin.
+2. The admission checks (`DriveDtcSteps._admission_problem`), in this order: drain the
+   foreign-tester watch (the only step that takes time); no service-alignment run attempted and no
+   command pending (memory and a zero-timeout `select`); a clean watch; then one clock reading for
+   module spacing, the module's own hour, the radar margin and, last, the send guard: the clock must
+   be at least `SEND_GUARD_SECONDS` before the window end, which is the pass deadline.
 3. Transport preparation: the radar borrows the open 0845 link and drains it (bounded, 32
    frames); the BCM gets a new `CAN_RAW` socket with an exact EFF filter for `18DAF140` (RTR and
    ERR rejected), drained, and closed after the exchange. A drain failure is `drain_failed`.
 4. **The same admission checks again** (the transport's `admit()`), immediately before the permit
-   is consumed, so preparation time can never carry a send past a check that has since failed. A
-   refusal is `not_sent`, unattempted, with the permit unspent.
+   is consumed, so neither preparation nor the drain inside the checks can carry a send past a
+   check that has since failed. A refusal is `not_sent`, unattempted, with the permit unspent.
+   `SEND_GUARD_SECONDS` (`drive_dtc_steps.py`) is the permit lifetime
+   (`transmit_permit.PERMIT_TTL_SECONDS`, 250 ms) plus a declared 62.5 ms margin. A permit expires
+   a lifetime after its evidence, which precedes the final check, so a request admitted at the
+   last allowed instant is consumed before the window ends or not at all: no request can be on
+   the wire after its window by more than the residual, which is the consume-and-send call itself
+   (the in-memory marker and one `send` system call).
 5. Permit consumption, then the in-memory attempted marker (`before_send`, no I/O), then the
    socket send. From the marker on, the module is never retried in that pass, even when the send
    raises ambiguously. An expired permit is `not_sent` / `permit_expired`, unattempted.
@@ -96,8 +104,9 @@ All timing is declared in `drive_dtc.json` and enforced in `drive_dtc_steps.py`:
   any authority or permit is acquired (output back-pressure cannot age a permit), and the pass
   consumes its hour even if nothing is then sent.
 - **The hour per module.** The helper never requests a module within 3600 s of its own previous
-  request to that module in the session (the marker time). If that cannot happen before the
-  window ends, the module gets one `not_sent` / `module_hour` outcome for the pass. Across
+  request to that module in the session, counted from the end of that exchange (after its frame
+  left, so the send's own duration needs no bound). If that cannot happen by the window's last
+  admissible instant, the module gets one `not_sent` / `module_hour` outcome for the pass. Across
   sessions the budget's session-end bound covers it (below).
 - **One module per cycle**, at least 2 s after the previous try of either module, and the first
   module that is ready is read, so neither holds the other back.
@@ -158,8 +167,11 @@ far inside the broker's 15 s acknowledgement and the supervisor's 10 s silence l
   `due_in = 3600 − (now − bound)`, clamped to 0–3600, and at least `3600 − age` of the last
   harvested van sweep (wall clock, consulted at launch only); `first_due = max(300, due_in)`.
 - **Session end.** The broker records `bound = min(session_end, t_k + 600)` for the latest
-  `t_k ≤ session_end`, the latest moment a pass, and therefore any of its requests, could have
-  happened; it never uses helper events to shorten the cooldown.
+  `t_k ≤ session_end`, the latest moment a pass could have started; it never uses helper events
+  to shorten the cooldown. Every request of that session was sent before its window end (the send
+  guard) and before the session ended, so the bound is after every request, and the next
+  session's first pass, at least 3600 s after the bound, is at least 3600 s after any module's
+  previous request (`tests/test_drive_dtc_cross_session.py`).
 - **Recovery invariant.** Within one boot the earliest permitted pass time, the durable bound plus
   3600 s, never moves earlier: an update may raise or keep the bound, never lower or clear it, and
   short sessions cannot erase an uncertain-recovery wait (reserve at 100, end at 200, reserve at

@@ -12,6 +12,12 @@ from lib.timeutil import finite_number, utc_now
 from projects.vehicle_data import vehicle_speed, drive_dtc_contract as contract
 from projects.vehicle_data import drive_dtc_transport, drive_dtc_watch
 from projects.vehicle_data.radar_drive_steps import SessionEnding
+from projects.vehicle_data.transmit_permit import PERMIT_TTL_SECONDS
+
+# A permit expires PERMIT_TTL_SECONDS after its evidence, which precedes the
+# final admission check, so a request admitted no later than this before its
+# window end is consumed (and sent) before the window ends, or not at all.
+SEND_GUARD_SECONDS = PERMIT_TTL_SECONDS + contract.TIMING['send_guard_margin_seconds']
 
 
 @dataclass(frozen=True)
@@ -165,7 +171,7 @@ class DriveDtcSteps:
             # leave the radar alone for the rest of the session.
             return "radar_unavailable"
         requested = self.last_request.get(module)
-        if requested is not None and requested + contract.INTERVAL_SECONDS > window_end:
+        if requested is not None and requested + contract.INTERVAL_SECONDS > window_end - SEND_GUARD_SECONDS:
             return "module_hour"
         return None
 
@@ -204,15 +210,22 @@ class DriveDtcSteps:
                           reason="first_attempt", detail="drive DTC pass started",
                           started_monotonic=now)
 
-    def _radar_has_margin(self, module):
+    def _radar_has_margin(self, module, now=None):
         # Reached only while 0845 polling is enabled, that is, when a poll can occur.
+        now = self.backend.monotonic() if now is None else now
         return module != "radar_acc" or (
-            self.radar.next_alignment - self.backend.monotonic() >= contract.RADAR_MARGIN_SECONDS)
+            self.radar.next_alignment - now >= contract.RADAR_MARGIN_SECONDS)
 
     def _mark_attempted(self, module):
         """Memory only: runs between permit consumption and the socket send."""
         self.current.attempted.add(module)
         self.last_request[module] = self.backend.monotonic()
+
+    def _exchange_ended(self, module):
+        # The frame left during the exchange; counting the module's hour from
+        # its end, not the marker just before the send, needs no send-time bound.
+        if module in self.current.attempted:
+            self.last_request[module] = self.backend.monotonic()
 
     def _read_payload(self, module, result, started_at, evidence):
         samples = getattr(evidence, "rpm_samples", ())
@@ -254,9 +267,10 @@ class DriveDtcSteps:
         elif self.current.settled >= set(contract.MODULES):
             self._finish("all_modules_done")
 
-    def _ready(self, module):
+    def _ready(self, module, now=None):
         """Timing conditions that a later cycle can satisfy; nothing is sent until then."""
-        current, now = self.current, self.backend.monotonic()
+        current = self.current
+        now = self.backend.monotonic() if now is None else now
         if current.last_attempt is not None and now - current.last_attempt < contract.MODULE_SPACING_SECONDS:
             return False
         tried = current.last_try.get(module)
@@ -265,23 +279,29 @@ class DriveDtcSteps:
         requested = self.last_request.get(module)
         if requested is not None and now - requested < contract.INTERVAL_SECONDS:
             return False
-        return self._radar_has_margin(module)
+        return self._radar_has_margin(module, now)
 
     def _admission_problem(self, module):
         """Every check a send needs, as a not-sent reason, or None to send.
 
         Runs after fresh authority and again inside the transport after its
         preparation (BCM socket, reply drain), just before the permit is consumed.
-        Consumes neither commands nor permits and emits nothing.
+        The watch drain is the only step here that takes time, so it runs first;
+        then only memory, a zero-timeout select on the command pipe and one clock
+        reading, with the time checks last. The window end is the pass deadline;
+        a send must be admitted SEND_GUARD_SECONDS before it. Consumes neither
+        commands nor permits and emits nothing.
         """
+        clean = self.watch.drain()
         if self._service_blocked():
             return "service_latch"
-        if self.backend.monotonic() > self._window_end():
-            return "window_closed"
-        if not self.watch.drain():
+        if not clean:
             return "foreign_tester"
-        if not self._ready(module):
+        now = self.backend.monotonic()
+        if not self._ready(module, now):
             return "deferred"
+        if now > self._window_end() - SEND_GUARD_SECONDS:
+            return "window_closed"
         return None
 
     def _next_module(self):
@@ -315,6 +335,7 @@ class DriveDtcSteps:
             result = self.transport.read(
                 module, permits[0], admit=lambda: self._admission_problem(module),
                 before_send=lambda: self._mark_attempted(module))
+        self._exchange_ended(module)
         # Module spacing counts every try, sent or not, but not a module
         # settled without one (an unusable radar, the module's own hour).
         self.current.last_attempt = self.backend.monotonic()

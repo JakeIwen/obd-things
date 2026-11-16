@@ -6,7 +6,7 @@
   "request_frame": "03 19 02 8F 00 00 00 00",
   "coverage": "failed, pending, confirmed or warning-lamp codes only (19 02 8F)",
   "modules": {"radar_acc": "radar_acc.dtc_read", "bcm_ccan": "bcm_ccan.dtc_read"},
-  "timing": {"minimum_session_seconds": 300, "interval_seconds": 3600, "window_seconds": 600, "module_spacing_seconds": 2, "not_sent_retry_seconds": 10, "radar_margin_seconds": 5, "first_reply_seconds": 1, "pending_reply_seconds": 2.5, "foreign_quiet_seconds": 120},
+  "timing": {"minimum_session_seconds": 300, "interval_seconds": 3600, "window_seconds": 600, "module_spacing_seconds": 2, "send_guard_margin_seconds": 0.0625, "not_sent_retry_seconds": 10, "radar_margin_seconds": 5, "first_reply_seconds": 1, "pending_reply_seconds": 2.5, "foreign_quiet_seconds": 120},
   "limits": {"watch_drain_frames": 64, "reply_drain_frames": 32, "detail_characters": 512, "passes": 200, "results_bytes": 262144, "result_queue": 64, "not_sent_attempts": 3},
   "interface_mode": "armed_diagnostic",
   "events": {

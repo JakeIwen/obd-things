@@ -120,17 +120,19 @@ def test_missed_windows_are_not_carried_and_helpers_wait_own_five_minutes():
 
 
 def test_actual_pass_start_hour_separation_even_at_adjacent_window_edges():
+    # The last instant a send may be admitted is the send guard before each window end.
+    first, second = 1900. - steps.SEND_GUARD_SECONDS, 5500. - steps.SEND_GUARD_SECONDS
     h = Harness()
-    h.cycle(1900.)
-    h.cycle(1902.)
+    h.cycle(first)
+    h.cycle(first + 2.)
     assert len(h.transport.reads) == 1  # the window ended before the BCM slot
     h.cycle(4900.)
-    h.cycle(5499.999)
+    h.cycle(second - 0.001)
     assert len(h.transport.reads) == 1
-    h.cycle(5500.)
+    h.cycle(second)
     assert len(h.transport.reads) == 2
     starts = h.events('dtc_pass')[::2]
-    assert [e['started_monotonic'] for e in starts] == [1900., 5500.]
+    assert [e['started_monotonic'] for e in starts] == [first, second]
     assert [e['pass'] for e in starts] == [0, 1]
 
 

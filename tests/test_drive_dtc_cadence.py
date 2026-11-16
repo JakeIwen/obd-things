@@ -4,11 +4,14 @@ Real: DriveDtcBudget (its writer thread and files in tmp_path), DriveDtcControl
 (reservation, launch arguments, ready check, event cadence check, session end),
 the helper's argument parsing and DriveDtcSteps (windows, the hour between pass
 starts, the per-module hour, retries, admission). Scripted: the clock, the boot
-id, the watch, the radar's fresh authority and the transport's socket I/O.
+id, the watch, the radar's fresh authority and the transport's socket I/O; the
+watch drain, authority and preparation each take time, and a permit expires a
+lifetime after its evidence, as consume() enforces.
 
 Asserted for every request actually sent: a pass start is at least an hour after
 the previous one in the same boot; a module is never requested again within an
-hour, in the same boot or across a reboot (real time); a reservation made from
+hour, in the same boot or across a reboot (real time); no request is sent after
+its window end; a reservation made from
 uncertain history (reboot, corrupted record, lost session end) has no pass in
 its first hour; and the broker never has to reject a well-behaved helper.
 """
@@ -23,7 +26,7 @@ import pytest
 
 from projects.vehicle_data import (
     active_drive, drive_dtc_budget as budget_mod, drive_dtc_contract as contract,
-    drive_dtc_control as control_mod, drive_dtc_steps as steps_mod,
+    drive_dtc_control as control_mod, drive_dtc_steps as steps_mod, transmit_permit,
 )
 from projects.vehicle_data.drive_dtc_transport import ReadResult
 
@@ -36,7 +39,7 @@ class World:
     def __init__(self, seed):
         self.rng = random.Random(seed)
         self.mono, self.real, self.boot_n = 50., 0., 1
-        self.starts, self.sends, self.uncertain = [], [], []
+        self.starts, self.sends, self.uncertain, self.window_ends = [], [], [], []
         self.rejections = 0
 
     @property
@@ -103,6 +106,7 @@ class Helper:
                 pass
 
             def drain(self):
+                world.advance(rng.uniform(0., 0.12))  # a drain takes time, even inside admit()
                 return rng.random() > 0.02
 
         class Authority:
@@ -110,6 +114,7 @@ class Helper:
 
             def acquire(self, purposes, *, absent_detail):
                 world.advance(rng.uniform(0.05, 0.35))
+                self.evidence_at = world.mono  # a permit expires a lifetime after its evidence
                 return None if rng.random() < 0.08 else (object(),)
 
         class Transport:
@@ -121,11 +126,15 @@ class Helper:
                 refused = admit()
                 if refused is not None:
                     return ReadResult(contract.NOT_SENT, refused)
-                if rng.random() < 0.05:
+                expired = world.mono - helper.radar.authority.evidence_at >= transmit_permit.PERMIT_TTL_SECONDS
+                if expired or rng.random() < 0.05:  # consume() refuses an expired permit
                     return ReadResult(contract.NOT_SENT, 'permit_expired')
                 before_send()
+                reservation, index = helper.reservation, helper.steps.current.index
+                world.window_ends.append((world.mono, contract.window_start(
+                    reservation.origin, reservation.first_due, index) + contract.WINDOW_SECONDS))
                 world.sends.append((world.boot, world.mono, world.real, module,
-                                    helper.reservation.session, helper.steps.current.index))
+                                    reservation.session, index))
                 world.advance(rng.uniform(0.01, 2.5))
                 return ReadResult(contract.NO_RESPONSE, 'timeout', True)
 
@@ -225,5 +234,6 @@ def test_production_step_and_broker_keep_both_hours(tmp_path, seed):
                 assert mono_b - mono_a >= contract.INTERVAL_SECONDS
     for boot, launched in world.uncertain:
         assert not [s for b, s, _ in world.starts if b == boot and launched <= s < launched + 3600]
+    assert all(sent < end for sent, end in world.window_ends)  # never on the wire after its window
     passes = [(session, index, module) for *_, module, session, index in world.sends]
     assert len(passes) == len(set(passes))

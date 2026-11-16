@@ -14,6 +14,7 @@ from projects.vehicle_data import (
 )
 from tests.drive_dtc_support import CHANNEL, EMPTY, ScriptedModule, can_frame
 from tests.test_drive_dtc_steps import Harness
+from projects.vehicle_data import drive_dtc_steps as steps
 
 PREPARATION_SECONDS = 0.10
 
@@ -98,3 +99,62 @@ def test_unchanged_conditions_still_send_once_after_preparation(monkeypatch, mod
     h.cycle(1302. if module == 'bcm_ccan' else 1300.)
     assert len(sock.sent) == 1
     assert h.events('dtc_read')[-1]['outcome'] == 'complete'
+
+
+# Time spent inside admit() itself: its watch drain is the one step there that
+# takes time, so it runs before every other check. Cases: (start, drain seconds).
+EDGE = 1900. - steps.SEND_GUARD_SECONDS
+CASES = {
+    # The re-review's reproduction: checks at 1899.95, a 0.10 s drain, a send at 1900.05.
+    'reviewed': (1899.95, 0.10, 'window_closed'),
+    # The drain itself carries the clock past the window end.
+    'window': (EDGE - 0.01, 0.40, 'window_closed'),
+    # The drain carries the clock past the last admissible instant, short of the window end.
+    'deadline': (EDGE - 0.05, 0.10, 'window_closed'),
+    'pending': (None, 0.10, 'service_latch'),
+}
+
+
+@pytest.mark.parametrize('change', CASES)
+@pytest.mark.parametrize('module', ['radar_acc', 'bcm_ccan'])
+def test_time_inside_admission_drain_cannot_carry_a_send(monkeypatch, module, change):
+    start, drain_seconds, reason = CASES[change]
+    h = Harness()
+    h.radar.service = SimpleNamespace(run_attempted=False,
+                                      commands=SimpleNamespace(pending=lambda: False))
+    if module == 'bcm_ccan':
+        prepare_radar_first(h)
+    prepared = []
+    sock = production_transport(h, monkeypatch, module, lambda: prepared.append(True))
+
+    def drain_inside_admit():
+        if prepared:  # only the drain inside the transport's admit(), after preparation
+            h.clock.value += drain_seconds
+            if change == 'pending':
+                h.radar.service.commands.pending = lambda: True
+
+    h.watch.on_drain = drain_inside_admit
+    h.cycle(start or (1302. if module == 'bcm_ccan' else 1300.))
+    assert sock.sent == []
+    assert module not in h.step.last_request  # never marked attempted
+    read = h.events('dtc_read')[-1]
+    assert (read['module'], read['outcome'], read['reason']) == (module, 'not_sent', reason)
+    if change != 'reviewed':  # that one is now refused before preparation by the guard
+        assert prepared
+
+
+@pytest.mark.parametrize('module', ['radar_acc', 'bcm_ccan'])
+@pytest.mark.parametrize('late', [0., 1e-6])
+def test_last_admissible_instant_sends_before_the_window_end(monkeypatch, module, late):
+    edge = 1900. - steps.SEND_GUARD_SECONDS
+    h = Harness()
+    if module == 'bcm_ccan':
+        h.cycle(edge - 10.)  # the radar is read by the scripted transport
+    sock = production_transport(h, monkeypatch, module, lambda: None)
+    sent_at = []
+    sock.on_send = lambda: sent_at.append(h.clock())
+    h.cycle(edge + late)
+    if late:
+        assert sock.sent == [] and h.events('dtc_read')[-1]['reason'] == 'window_closed'
+    else:
+        assert len(sock.sent) == 1 and sent_at[0] < 1900.
