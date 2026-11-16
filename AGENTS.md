@@ -483,8 +483,9 @@ Its contract, gates, cadence, storage, dashboard rule, activation and rollback a
 Where things live: `drive_dtc.json` / `drive_dtc_contract.py` (vocabulary, timing, schedule,
 frame parser, event validator); `drive_dtc_transport.py` (the only code that builds or sends
 the two frames); `drive_dtc_watch.py` (receive-only foreign-tester watch);
-`drive_dtc_steps.py` (the helper's per-cycle step and both hours, composed by
-`active_drive.py`); `drive_dtc_budget.py` (the broker's durable launch budget);
+`drive_dtc_steps.py` (the helper's per-cycle step and both hours);
+`drive_dtc_launch.py` (what `active_drive.py` imports: arguments and the step, loading the
+contract only when DTC arguments are present); `drive_dtc_budget.py` (the broker's durable launch budget);
 `drive_dtc_control.py` (broker capability, cadence check, results writer); `drive_reads.py`
 (validated `drive_reads` block of the DTC response).
 

@@ -372,7 +372,9 @@ First-drive acceptance:
 
 `drive_dtc.json` and `drive_dtc_contract.py` (vocabulary, timing, schedule, parser, event
 validator); `drive_dtc_transport.py` (the two frames); `drive_dtc_watch.py`;
-`drive_dtc_steps.py` (the per-cycle step, composed by `active_drive.py`);
+`drive_dtc_steps.py` (the per-cycle step); `drive_dtc_launch.py` (the helper's entry: it loads
+the contract only when DTC arguments are present, so a damaged `drive_dtc.json` cannot stop a
+flag-off helper from starting, and with DTC arguments the helper starts without the capability);
 `drive_dtc_budget.py` and `drive_dtc_control.py` (broker side); `drive_reads.py` (projection);
 `dashboard/src/views/dtcSources.helpers.js`. Tests: `tests/test_drive_dtc_*.py`,
 `tests/test_active_drive_dtc.py`, `tests/test_broker_drive_dtc.py`, `tests/test_drive_reads.py`,

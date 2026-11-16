@@ -39,7 +39,7 @@ from lib.can_runtime_route import LinkExpectation, NetdevIdentityExpectation
 from lib.modules import MODULES
 from projects.vehicle_data import (
     ccan_powertrain,
-    drive_dtc_steps,
+    drive_dtc_launch,
     helper_startup_grant,
     pcm_electrical,
     oil_life_drive_step,
@@ -707,7 +707,7 @@ def run_active_session(
                 backend, lock_handle, initial, snapshot_seconds=ACTIVE_SNAPSHOT_SECONDS),
             next_due=next_cycle, service_commands=service_commands,
         )
-        dtc_steps = drive_dtc_steps.DriveDtcSteps(
+        dtc_steps = drive_dtc_launch.steps(
             backend, sink, radar_steps, reservation=drive_dtc, rf_hub_profiles=TPMS_PROFILES)
         while True:
             cycle_started = backend.monotonic()
@@ -1114,14 +1114,14 @@ def build_parser() -> argparse.ArgumentParser:
                         help="internal: read end of the supervisor's startup grant pipe")
     parser.add_argument(radar_service_alignment.ENABLE_FLAG, action="store_true",
                         help="broker relays owner service-alignment commands on stdin")
-    drive_dtc_steps.add_arguments(parser)
+    drive_dtc_launch.add_arguments(parser)
     return parser
 
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        drive_dtc = drive_dtc_steps.reservation_from_arguments(args)
+        drive_dtc = drive_dtc_launch.reservation_from_arguments(args)
     except ValueError as exc:
         raise SystemExit(str(exc)) from None
     if not re.fullmatch(r"can[0-9]+", args.channel):
@@ -1153,7 +1153,7 @@ def main(argv=None) -> int:
             drive_dtc=drive_dtc,
             startup_gate=helper_startup_grant.child_gate_from_arguments(
                 args.startup_grant_fd, args.expected_parent_pid,
-                capabilities=drive_dtc_steps.capabilities(drive_dtc),
+                capabilities=drive_dtc_launch.capabilities(drive_dtc),
             ),
             service_commands=(
                 radar_service_alignment.CommandReader(sys.stdin.fileno())

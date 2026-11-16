@@ -25,7 +25,7 @@ import uuid
 import pytest
 
 from projects.vehicle_data import (
-    active_drive, drive_dtc_budget as budget_mod, drive_dtc_contract as contract,
+    active_drive, drive_dtc_budget as budget_mod, drive_dtc_launch, drive_dtc_contract as contract,
     drive_dtc_control as control_mod, drive_dtc_steps as steps_mod, transmit_permit,
 )
 from projects.vehicle_data.drive_dtc_transport import ReadResult
@@ -83,7 +83,7 @@ class Helper:
     def __init__(self, world, control, argv, session_end):
         rng = world.rng
         args = active_drive.build_parser().parse_args(HELPER_ARGS + argv)
-        self.reservation = steps_mod.reservation_from_arguments(args)
+        self.reservation = drive_dtc_launch.reservation_from_arguments(args)
         self.world, self.control, self.session_end = world, control, session_end
         helper = self
 

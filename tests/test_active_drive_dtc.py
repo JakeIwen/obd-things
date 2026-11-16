@@ -223,3 +223,44 @@ def test_unexpected_step_failure_still_closes_watch_under_guard_and_restores(rig
     assert rig.feed.closed and rig.radar_sock.closed
     assert rig.trace.index('cleanup_guard') < rig.trace.index('watch_close') < rig.trace.index('restore')
     assert rig.events[-1]['type'] == 'final' and rig.events[-1]['restored'] is True
+
+
+def _helper_with_damaged_vocabulary(body):
+    """Run ``body`` in a fresh interpreter where drive_dtc.json cannot be parsed."""
+    import subprocess
+    import sys
+    from pathlib import Path
+    program = (
+        "import pathlib\n"
+        "read = pathlib.Path.read_text\n"
+        "def damaged(self, *a, **kw):\n"
+        "    return '{damaged' if self.name == 'drive_dtc.json' else read(self, *a, **kw)\n"
+        "pathlib.Path.read_text = damaged\n" + body)
+    return subprocess.run([sys.executable, '-c', program], cwd=Path(__file__).resolve().parents[1],
+                          capture_output=True, text=True, check=True)
+
+
+def test_flag_off_helper_never_loads_the_dtc_vocabulary():
+    result = _helper_with_damaged_vocabulary(
+        "import sys\n"
+        "from projects.vehicle_data import active_drive, drive_dtc_launch\n"
+        "args = active_drive.build_parser().parse_args(['--channel', 'can7', '--expected-usb-serial',"
+        " 'x', '--expected-dev-id', '0', '--expected-parent-pid', '1', '--startup-grant-fd', '9'])\n"
+        "steps = drive_dtc_launch.steps(None, None, None, reservation=drive_dtc_launch"
+        ".reservation_from_arguments(args))\n"
+        "assert steps.run(None) is None\n"
+        "print('projects.vehicle_data.drive_dtc_contract' in sys.modules)\n")
+    assert result.stdout.strip() == 'False'
+
+
+def test_damaged_vocabulary_fails_the_capability_closed_and_the_helper_starts():
+    result = _helper_with_damaged_vocabulary(
+        "from projects.vehicle_data import active_drive, drive_dtc_launch\n"
+        "args = active_drive.build_parser().parse_args(['--channel', 'can7', '--expected-usb-serial',"
+        " 'x', '--expected-dev-id', '0', '--expected-parent-pid', '1', '--startup-grant-fd', '9',"
+        " '--enable-drive-dtc', '--drive-dtc-reservation', '" + SESSION + "', '--drive-dtc-origin',"
+        " '0', '--drive-dtc-first-due', '300'])\n"
+        "reservation = drive_dtc_launch.reservation_from_arguments(args)\n"
+        "print(reservation, drive_dtc_launch.capabilities(reservation))\n")
+    assert result.stdout.strip() == 'None ()'
+    assert 'drive DTC contract unavailable' in result.stderr

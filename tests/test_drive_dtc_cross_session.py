@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from projects.vehicle_data import (
-    active_drive, drive_dtc_budget as budget_mod, drive_dtc_contract as contract,
+    active_drive, drive_dtc_budget as budget_mod, drive_dtc_launch, drive_dtc_contract as contract,
     drive_dtc_control as control_mod, drive_dtc_steps as steps_mod, transmit_permit,
 )
 from projects.vehicle_data.drive_dtc_transport import ReadResult
@@ -30,7 +30,7 @@ class World:
 def helper_session(world, control, cycles, *, drain_seconds):
     """Run the production step at the given clock values; each admission drain takes time."""
     args = active_drive.build_parser().parse_args(HELPER_ARGS + control.launch_arguments())
-    reservation = steps_mod.reservation_from_arguments(args)
+    reservation = drive_dtc_launch.reservation_from_arguments(args)
 
     class Watch:
         def __init__(self, *a, **kw):
