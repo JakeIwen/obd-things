@@ -33,6 +33,7 @@ export const RETAIN_LAST_READING = new Set([
   "battery.voltage",
   "vehicle.odometer",
   "vehicle.compass_direction",
+  "fuel.tank_level",
   "engine.oil_life_remaining",
   "engine.coolant_temperature",
   "engine.vvt_oil_temperature",
@@ -48,6 +49,7 @@ export const RETAIN_LAST_READING = new Set([
 /** Metrics whose `candidate` quality may still be retained. Rule 15. */
 export const RETAIN_CANDIDATE_ESTIMATES = new Set([
   "vehicle.odometer",
+  "fuel.tank_level",
   "radar.alignment.azimuth",
   "radar.alignment.elevation",
 ]);

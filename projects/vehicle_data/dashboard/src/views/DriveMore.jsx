@@ -20,6 +20,7 @@ import { liveValue, obs, isHidden, dayClock } from "../app/derive.js";
 import * as store from "../store.js";
 import { DASH, fmtFixed } from "../format.js";
 import { fuelRateText, instantText } from "../fuelEconomy.helpers.js";
+import { FUEL_LEVEL, fuelLevelText } from "../fuelLevel.js";
 import {
   RADAR_TILE_AXES,
   radarTileModel,
@@ -85,9 +86,15 @@ const batterySub = computed(() => {
 const fuel = computed(() => fuelRateText(store.metricSignal("engine.fuel_rate").value));
 const fuelCls = computed(() => "tile tile--value area-d2fuel " + (fuel.value === DASH ? "tile--off" : "tile--live"));
 const fuelUnit = computed(() => (fuel.value === DASH ? "" : "gal/h"));
-const fuelSub = computed(() =>
-  instantText(liveValue("vehicle.speed").value, store.metricSignal("engine.fuel_rate").value),
+// The tank level shares the fuel tile's sub-line (candidate quality, read from the record like
+// the rate), so the one-screen layout gains no tile.
+const tankLevel = computed(() =>
+  fuelLevelText(store.metricSignal(FUEL_LEVEL.metric).value, obs(FUEL_LEVEL.metric).value),
 );
+const fuelSub = computed(() => {
+  const economy = instantText(liveValue("vehicle.speed").value, store.metricSignal("engine.fuel_rate").value);
+  return economy && tankLevel.value ? economy + " · " + tankLevel.value : economy || tankLevel.value;
+});
 
 function FuelTile() {
   return (

@@ -985,3 +985,11 @@ report remains at 70% opacity after the ten-second announcement age expires or t
 connection/receiver stops; persistence never renews the observation timestamp. No report
 means an empty indicator. The accessible name identifies last-reported values. See
 the [compass contract](../../docs/compass-display.md) for acquisition and retention details.
+
+### Fuel tank level (November 15)
+
+Page 2's fuel tile appends `tank ~NN%` to its sub-line (after the instant economy, separated by a
+middle dot), so the one-screen layout gains no tile. The metric `fuel.tank_level` is candidate
+quality (the `~`), is retained as a dated last reading (`tank ~NN% (last)`), and `fuel_level.json`
+shares its name and 1-100 range with the backend. It also appears in the System catalog as
+"Fuel tank level".

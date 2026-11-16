@@ -96,6 +96,7 @@ test("exports the retention and quality sets", () => {
   assert.ok(RETAIN_LAST_READING.has("battery.voltage") && RETAIN_LAST_READING.has("tire.pressure.rr"));
   assert.ok(!RETAIN_LAST_READING.has("vehicle.speed") && !RETAIN_LAST_READING.has("engine.rpm"));
   assert.deepEqual([...RETAIN_CANDIDATE_ESTIMATES].sort(), [
+    "fuel.tank_level",
     "radar.alignment.azimuth",
     "radar.alignment.elevation",
     "vehicle.odometer",
