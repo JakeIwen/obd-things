@@ -3062,6 +3062,40 @@ class TelemetryBroker:
         with claimed_run(lambda outcome: self._end_helper_run("active_drive", outcome)) as finished:
             self._supervise_drive_epoch(finished)
 
+    def _resume_bcan_passive(self) -> None:
+        if self.display_receiver is not None:
+            self.display_receiver.resume_bcan_passive()
+
+    def _admit_auxiliary_launch(self, auxiliary_ready: bool) -> str:
+        """Order a B-CAN auxiliary launch like the C-CAN one: pause, then claim.
+
+        Returns "launch" (claimed; the auxiliary thread resumes the passive
+        companion when its run ends), "busy" (the companion kept its lease) or
+        "held" / "skip". Every non-launch outcome leaves the companion resumed.
+        """
+        if not auxiliary_ready:
+            return "skip"
+        receiver = self.display_receiver
+        if receiver is not None and not receiver.pause_bcan_passive():
+            receiver.resume_bcan_passive()
+            return "busy"
+        if self._claim_helper_launch("auxiliary_drive"):
+            return "launch"
+        self._resume_bcan_passive()
+        return "held"
+
+    def _show_auxiliary_can_busy(self) -> None:
+        with self._lock:
+            self._auxiliary_drive.update(
+                {
+                    "state": "idle",
+                    "reason": "can_busy",
+                    "detail": "the B-CAN companion observer is still releasing its lease",
+                    "interface_mode": "listen_only",
+                    "last_event_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+
     def _supervise_drive_epoch(self, finished: list[dict[str, object]]) -> None:
         """Run one claimed engine-running epoch: both helpers, then their outcomes.
 
@@ -3085,7 +3119,8 @@ class TelemetryBroker:
             and not self._auxiliary_drive_restoration_latched
             and self._auxiliary_drive_blocked_reason is None
         )
-        if auxiliary_ready and self._claim_helper_launch("auxiliary_drive"):
+        auxiliary_admission = self._admit_auxiliary_launch(auxiliary_ready)
+        if auxiliary_admission == "launch":
             with self._lock:
                 self._auxiliary_drive.update(
                     {
@@ -3097,7 +3132,7 @@ class TelemetryBroker:
                     }
                 )
 
-            def supervise_auxiliary() -> None:
+            def run_auxiliary() -> None:
                 with claimed_run(
                     lambda outcome: self._end_helper_run("auxiliary_drive", outcome)
                 ) as finished:
@@ -3134,6 +3169,14 @@ class TelemetryBroker:
                         self._auxiliary_drive_restoration_latched = True
                     finished.append(outcome)
 
+            def supervise_auxiliary() -> None:
+                try:
+                    run_auxiliary()
+                finally:
+                    # Only a finished run frees B-CAN for the passive companion; the
+                    # epoch's bounded join below must not, since it proves nothing.
+                    self._resume_bcan_passive()
+
             try:
                 auxiliary_thread = threading.Thread(
                     target=supervise_auxiliary,
@@ -3143,7 +3186,10 @@ class TelemetryBroker:
                 auxiliary_thread.start()
             except BaseException:
                 self._end_helper_run("auxiliary_drive", None)  # never ran
+                self._resume_bcan_passive()
                 raise
+        elif auxiliary_admission == "busy":
+            self._show_auxiliary_can_busy()
         elif auxiliary_ready:
             # Claim refused: a hold started after this epoch's C-CAN claim.
             self._show_helpers_held(active=False)

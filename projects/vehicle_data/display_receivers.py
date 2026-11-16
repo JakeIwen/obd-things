@@ -1,4 +1,4 @@
-"""Lifecycle facade for the existing C-CAN display feed and B-CAN compass."""
+"""Lifecycle facade for the C-CAN display feed and the B-CAN compass/fuel companion."""
 
 from projects.vehicle_data.compass_receiver import CompassReceiver
 from projects.vehicle_data.display_receiver import DisplayReceiver
@@ -29,3 +29,10 @@ class DisplayReceivers:
 
     def resume_passive(self):
         self.cluster.resume_passive()
+
+    def pause_bcan_passive(self, timeout=2.0):
+        """Release the B-CAN companion's passive leases before the auxiliary helper claims the bus."""
+        return self.compass.pause_passive(timeout)
+
+    def resume_bcan_passive(self):
+        self.compass.resume_passive()
