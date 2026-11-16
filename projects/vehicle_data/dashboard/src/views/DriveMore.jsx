@@ -86,18 +86,17 @@ const batterySub = computed(() => {
 const fuel = computed(() => fuelRateText(store.metricSignal("engine.fuel_rate").value));
 const fuelCls = computed(() => "tile tile--value area-d2fuel " + (fuel.value === DASH ? "tile--off" : "tile--live"));
 const fuelUnit = computed(() => (fuel.value === DASH ? "" : "gal/h"));
-// The tank level and distance to empty share the fuel tile's sub-line (candidate quality, read from the record like
-// the rate), so the one-screen layout gains no tile.
+// The tank level and distance to empty get a second sub-line under the economy (candidate quality,
+// read from the record like the rate): one line is too narrow for both in a third-width tile.
 const tankLevel = computed(() =>
   fuelGaugeText(
     store.metricSignal(FUEL_LEVEL.metric).value, obs(FUEL_LEVEL.metric).value,
     store.metricSignal(FUEL_RANGE.metric).value, obs(FUEL_RANGE.metric).value,
   ),
 );
-const fuelSub = computed(() => {
-  const economy = instantText(liveValue("vehicle.speed").value, store.metricSignal("engine.fuel_rate").value);
-  return economy && tankLevel.value ? economy + " · " + tankLevel.value : economy || tankLevel.value;
-});
+const fuelSub = computed(() =>
+  instantText(liveValue("vehicle.speed").value, store.metricSignal("engine.fuel_rate").value),
+);
 
 function FuelTile() {
   return (
@@ -108,6 +107,7 @@ function FuelTile() {
         <span class="tile__unit">{fuelUnit}</span>
       </div>
       <div class="tile__sub">{fuelSub}</div>
+      <div class="tile__sub">{tankLevel}</div>
     </section>
   );
 }

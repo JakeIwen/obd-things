@@ -67,6 +67,26 @@ async function applyDemoInPage(seedDemoSparklines, demo, name) {
 }
 
 /**
+ * The listener's catalog comes from the running broker, which predates any metric added since its
+ * last restart; without a catalog entry the page cannot show that metric at all. Add an entry for
+ * each demo metric the broker's catalog lacks, from the demo record itself. Self-contained: the
+ * capture script carries this function's source.
+ * @param {object[]} catalog the broker's metric catalog
+ * @param {Record<string, {value: *, unit: string, quality: string, source: string}>} metrics demo records
+ */
+export function catalogWithDemoMetrics(catalog, metrics) {
+  const known = new Set(catalog.map((entry) => entry.name));
+  const added = Object.entries(metrics).filter(([name]) => !known.has(name)).map(([name, record]) => ({
+    name, unit: record.unit, stale_after_seconds: 3600, allowed_acquisition_modes: [],
+    value_type: typeof record.value === "boolean" ? "boolean" : Number.isInteger(record.value) ? "integer"
+      : typeof record.value === "number" ? "number" : "string",
+    sources: [{name: record.source, quality: record.quality, bus: "demo", acquisition_class: "passive_broadcast",
+      bitrate: 0, provenance: "illustrative demo record", side_effects: "none", publisher_allowed: false}],
+  }));
+  return [...catalog, ...added];
+}
+
+/**
  * Runs in the Playwright server for every request (serialized beside installDemo): the variant's
  * and shared demo routes first, then the block on anything that could change state, the
  * snapshot, and the same-origin font proxy; everything else reaches the listener.
@@ -94,7 +114,7 @@ async function answerDemoRequest(route, DEMO, state) {
     // start has arrived, or it begins a new trip at zero miles. __demo.apply then sets the variant.
     const live = await (await route.fetch()).json();
     const v = DEMO.variants.parked;
-    return route.fulfill(json({catalog: live.catalog, metrics: v.metrics, status: v.summary.status_full, web: v.web,
+    return route.fulfill(json({catalog: catalogWithDemoMetrics(live.catalog, v.metrics), metrics: v.metrics, status: v.summary.status_full, web: v.web,
       web_delivery: live.web_delivery}));
   }
   if (path === FONTS + "roboto.css") {
@@ -196,7 +216,7 @@ export async function writeDemoCapture({outDir, bundleUrl, nowMs = DEFAULT_CAPTU
   fs.mkdirSync(outDir, {recursive: true});
   fs.writeFileSync(path.join(outDir, "demo-bundle.json"), JSON.stringify(demo, null, 1));
   // The bundle is fetched by the Playwright server, so the script stays small enough to echo.
-  const script = `async (page) => {\n${answerDemoRequest}\n${installDemo}\n` +
+  const script = `async (page) => {\n${catalogWithDemoMetrics}\n${answerDemoRequest}\n${installDemo}\n` +
     `return installDemo(page, await (await page.request.get(${JSON.stringify(bundleUrl)})).json());\n}\n`;
   fs.writeFileSync(path.join(outDir, "install-demo.js"), script);
   return {outDir, build, nowMs, variants: Object.keys(views.variants), routes: routes.length};
