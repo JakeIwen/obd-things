@@ -152,6 +152,7 @@ class PiRequestSetSyncTests(unittest.TestCase):
             uds(pcm_electrical.GENERATOR_DUTY_REQUEST_DATA),
             uds(pcm_electrical.CRANKSHAFT_TORQUE_REQUEST_DATA),
             uds(pcm_electrical.VVT_OIL_TEMPERATURE_REQUEST_DATA),
+            uds(pcm_electrical.OIL_LIFE_REQUEST_DATA),
         }
         self.assertEqual(harvest.PI_FIXED_REQUESTS[target(MODULES["pcm"])], pcm)
         tpms = {bytes((0x22, did >> 8, did & 0xFF)) for did, _ in active_drive.TPMS_PROFILES}
@@ -173,6 +174,13 @@ class PiRequestSetSyncTests(unittest.TestCase):
         self.assertEqual(stats["pi_requests"], 2)
         self.assertEqual([e["request_hex"] for e in exchanges], ["19028F"])
         self.assertEqual(exchanges[0]["target"], "10")
+
+    def test_oil_life_request_is_only_excluded_for_pcm(self):
+        lines = exchange(T0, "10", "222185", "62218552")
+        lines += exchange(T0 + 1, "2A", "222185", "62218552")
+        exchanges, _, _, stats = harvest.process_frames("c-can", frames_of(lines))
+        self.assertEqual(stats["pi_requests"], 1)
+        self.assertEqual([(e["target"], e["request_hex"]) for e in exchanges], [("2A", "222185")])
 
     def test_dtc_tooling(self):
         from tools import dtc_inventory
