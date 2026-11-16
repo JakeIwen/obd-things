@@ -108,7 +108,7 @@ class RadarServiceTransport:
         self.link = link
 
     def _payload(self, spec: Exchange, flow_permit, deadline: float) -> bytes:
-        first = self.link.receive(deadline)
+        first = self.link.receive_reply(deadline)
         frame_type = first[0] >> 4
         if frame_type == 0:
             length = first[0] & 0x0F

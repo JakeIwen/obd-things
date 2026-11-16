@@ -142,6 +142,24 @@ class RadarAlignmentPoller:
             raise ValueError("radar CAN identifier, flags, or DLC mismatch")
         return data[:dlc]
 
+    def receive_reply(self, deadline, max_stale=4):
+        """Discard bounded late DTC answers without extending another exchange.
+
+        Stage 1a sends no flow control, so a DTC answer can only be a
+        SingleFrame or FirstFrame. Neither service echo can answer 0845 or
+        service alignment; a fifth stale frame keeps the malformed behavior.
+        """
+        for index in range(max_stale + 1):
+            frame = self.receive(deadline)
+            single = (len(frame) >= 3 and 2 <= frame[0] <= 7
+                      and len(frame) > frame[0])
+            late = (single and (frame[1:3] == b"\x59\x02"
+                                or (frame[0] == 3 and frame[1:3] == b"\x7f\x19")))
+            late |= (len(frame) == 8 and frame[0] >> 4 == 1
+                     and frame[2:4] == b"\x59\x02")
+            if not late or index == max_stale:
+                return frame
+
     def drain(self):
         # Bounded drain: a flood cannot hold the owner or age permits forever.
         self.sock.settimeout(0)
@@ -161,7 +179,7 @@ class RadarAlignmentPoller:
             self.send_fixed(REQUEST_DATA, request_permit, transmit_permit.RADAR_ALIGNMENT)
             sent = True
             deadline = self.monotonic() + self.timeout
-            first = self.receive(deadline)
+            first = self.receive_reply(deadline)
             if len(first) >= 4 and first[:3] == b"\x03\x7f\x22":
                 return RadarResult(False, reason=(
                     "session_required" if first[3] in (0x7E, 0x7F) else "response_rejected"

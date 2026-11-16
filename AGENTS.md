@@ -186,6 +186,9 @@ helper flag and command pipe, run record, event validation, run log under
 `tmp/radar/service_alignment/`); the web relay in `web.py`; and
 `dashboard/src/dialogs/RadarCalibration{.jsx,.helpers.js}`. The run state is
 not in `/v1/status`. `tests/radar_service_support.py` holds the scripted radar.
+`RadarAlignmentPoller.receive_reply` skips up to four identifiable late DTC
+SingleFrames/FirstFrames under the original deadline for the first reply of
+0845 and service-alignment exchanges; it never sends or extends a deadline.
 
 Shared pieces added with it (2026-10-11): `active_session_gates.py` holds the
 C-CAN active-drive session's gates and the `SessionOutcome` both drive helpers
