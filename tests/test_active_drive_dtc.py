@@ -171,6 +171,35 @@ def test_invalid_schedule_refused_before_parent_or_backend_effects(monkeypatch, 
         active_drive.main(args)
 
 
+def test_enabled_launch_without_startup_grant_is_refused_before_any_effect(monkeypatch):
+    """Valid DTC arguments without --startup-grant-fd could not confirm the capability."""
+    monkeypatch.setattr(active_drive, '_set_parent_death_signal', lambda *a: pytest.fail('parent effect'))
+    monkeypatch.setattr(active_drive, 'SystemBackend', lambda *a, **kw: pytest.fail('backend constructed'))
+    monkeypatch.setattr(active_drive, 'run_active_session', lambda *a, **kw: pytest.fail('session started'))
+    monkeypatch.setattr(drive_dtc_steps, 'DriveDtcSteps', lambda *a, **kw: pytest.fail('step constructed'))
+    args = ['--channel', CHANNEL, '--expected-usb-serial', 'test', '--expected-dev-id', '0',
+            '--expected-parent-pid', '42', '--enable-drive-dtc', '--drive-dtc-reservation', SESSION,
+            '--drive-dtc-origin', '0', '--drive-dtc-first-due', '300']
+    with pytest.raises(SystemExit, match='requires the supervisor.s --startup-grant-fd'):
+        active_drive.main(args)
+
+
+def test_legacy_ungated_launch_stays_accepted_with_dtc_off(monkeypatch):
+    started = []
+    monkeypatch.setattr(active_drive, '_set_parent_death_signal', lambda *a: None)
+    monkeypatch.setattr(active_drive, 'SystemBackend', lambda *a, **kw: object())
+    monkeypatch.setattr(diagnostic_safety, 'interrupt_on_termination', lambda: nullcontext(object()))
+
+    def session(*args, **kwargs):
+        started.append(kwargs)
+        return SimpleNamespace(restored=True)
+
+    monkeypatch.setattr(active_drive, 'run_active_session', session)
+    assert active_drive.main(['--channel', CHANNEL, '--expected-usb-serial', 'test',
+                              '--expected-dev-id', '0', '--expected-parent-pid', '42']) == 0
+    assert started[0]['drive_dtc'] is None and started[0]['startup_gate'] is None
+
+
 def test_unexpected_step_failure_still_closes_watch_under_guard_and_restores(rig, monkeypatch):
     def fail_read(*args, **kwargs):
         raise RuntimeError('injected step fault')

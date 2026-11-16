@@ -35,11 +35,19 @@ def add_arguments(parser):
 
 
 def reservation_from_arguments(args):
+    """The reservation, or None; refuses an enabled launch without the startup grant.
+
+    The capability is confirmed only through the grant pipe's ready event, so a
+    launch with DTC arguments but no grant descriptor (not the broker's) would
+    send unconfirmed. The legacy ungated start stays valid only with DTC off.
+    """
     supplied = (args.drive_dtc_reservation, args.drive_dtc_origin, args.drive_dtc_first_due)
     if not args.enable_drive_dtc:
         if any(value is not None for value in supplied):
             raise ValueError("drive-DTC schedule requires --enable-drive-dtc")
         return None
+    if getattr(args, "startup_grant_fd", None) is None:
+        raise ValueError("--enable-drive-dtc requires the supervisor's --startup-grant-fd")
     return Reservation(*supplied)
 
 
