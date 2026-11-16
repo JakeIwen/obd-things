@@ -48,8 +48,9 @@ Raw replies and adaptive-engagement frames contradict treating the inferred
 ±1° reference as a firmware cutoff. The October 8 parked DTC scan returned
 C1418-78 status `08` (history only); it does not validate physical alignment.
 The successful 15-module scan reserved the existing cooperative handoffs before
-calling the unchanged batch worker; the continuous display observer otherwise
-holds a shared C-CAN lease. Verify current permissions before handing off a
+calling the unchanged batch worker; the continuous display observers otherwise
+hold shared C-CAN and B-CAN leases (B-CAN-targeting exclusive tools need `can_handoff.active_turn('b-can')`;
+see the compass display contract). Verify current permissions before handing off a
 command, and preserve every worker-side state, identity and restoration gate.
 
 ## Telemetry dashboard (one app, port 8765)
@@ -254,8 +255,11 @@ Compass direction is B-CAN `0x088`, DLC 5, byte3 bits 5–3 (N/NE/E/SE/S/SW/W/NW
 see the [owner route video](projects/ecu_mapping/findings/promaster_2022/2026-10-14_compass_direction_video.md)
 and [compass display contract](projects/vehicle_data/docs/compass-display.md).
 `compass.py`/`compass.json` own the decoder, metric and shared labels;
-`compass_receiver.py` receives continuously beside the proven B-CAN auxiliary
-owner, and `display_receivers.py` coordinates it with the C-CAN receiver.
+`compass_receiver.py` receives continuously on the B-CAN (a shared passive lease when the
+auxiliary helper is not armed, a borrowed route beside it while it is; `display_route.py` holds the
+lease admission and route check it shares with the C-CAN `display_receiver.py`), and
+`display_receivers.py` coordinates it with the C-CAN receiver, including the B-CAN pause the broker
+takes before claiming the auxiliary helper.
 `display_contract.py` shares display metric definitions and pure callback
 validation; locks and cache mutation remain in the broker. The source announces
 changes only: retain the original receipt time, expire freshness after ten
@@ -265,7 +269,7 @@ letters at the Drive footer right; `styles/night.css` owns the stronger Dim pale
 Fuel tank level is B-CAN `0x356` byte 0, percent (candidate; see the
 [November 15 finding](projects/ecu_mapping/findings/promaster_2022/2026-11-15_fuel_level_0x356.md)).
 `fuel_level.py`/`fuel_level.json` own its decoder, metric `fuel.tank_level` and contract; it rides the
-same companion receiver as the compass (`bcan_companion.py` merges the two frame sets and decoders;
+same companion receiver as the compass, parked or driving (`bcan_companion.py` merges the two frame sets and decoders;
 a decoder returning `None` means "understood, no value", which keeps the reading instead of ending
 live evidence). Distance to empty (`fuel.range`, miles) is B-CAN `0x760` bytes 4-5 and has its own
 `fuel_range.py`/`fuel_range.json` beside it; `bcan_companion.py` throttles both periodic readings. The

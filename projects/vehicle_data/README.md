@@ -750,14 +750,17 @@ Documents, in reading order:
 
 Compass letters appear at the right of the Drive footer on both pages,
 in a separate monospace font. Stale directions stay visible at 70% opacity.
-The event-driven B-CAN `0x088` feed is receive-only beside the existing
-auxiliary drive owner; it preserves actual receipt times and never polls for
-heading. The Dim button now darkens all shared colours and backgrounds for
+The event-driven B-CAN `0x088` feed is receive-only (a shared passive lease with ignition on
+and engine off, a borrowed route beside the auxiliary drive owner while that helper is armed);
+it preserves actual receipt times and never polls for heading. The Dim button now darkens all shared colours and backgrounds for
 night use. See the [compass and night display contract](docs/compass-display.md)
 for ownership, retention, validation and activation details.
 
 The fuel tank level (`fuel.tank_level`, percent, candidate) is B-CAN `0x356` byte 0, received by the
-same companion receiver as the compass and never transmitting. Raw 0 (key-off/wake) keeps the previous
+same companion receiver as the compass and never transmitting, also parked with ignition on and
+engine off (the receiver holds a shared passive B-CAN lease then; the contract, including which
+exclusive B-CAN tools now need `can_handoff.active_turn('b-can')`, is in
+[compass-display.md](docs/compass-display.md)). Raw 0 (key-off/wake) keeps the previous
 reading; above 100 (or a malformed `0x356`) is invalid and ends live evidence for the fuel metric only;
 transport or ownership loss ends it for both companion metrics. Identical readings publish at most every
 2 s, so the 4 Hz frame does not run the route check on every frame. The Drive page 2 fuel

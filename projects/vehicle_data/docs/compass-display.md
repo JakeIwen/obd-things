@@ -23,19 +23,60 @@ observed. The ten-second freshness period concerns the age of the last actual
 announcement, not proof that direction changed or that the sender failed.
 There is no synthetic periodic sample, timestamp renewal or diagnostic query.
 
-`compass_receiver.py` runs a continuous filtered receive socket **only while
-the broker proves that its existing B-CAN auxiliary helper owns the armed
-route**. It reuses `broker_secondary_route` and `admit_secondary_route`, including
-fresh identity/interface checks, and also bounds the interval to the same
-helper PID. `LocalBrokerStatusClient` implements the reused checker’s exact
-status-GET request contract against the broker callback, without HTTP I/O.
-Cancellation is rechecked after route validation before publication. It acquires no passive lease, so it cannot hold up the helper's
-arming or restoration. It never configures a link, transmits or starts an owner.
-With the helper disabled, blocked or stopped, no compass socket is opened.
-This means engine-off accessory-only compass changes are not currently collected.
+`compass_receiver.py` runs a continuous filtered receive socket on the B-CAN and
+takes one of two routes per session. The same receiver carries the fuel level
+(`0x356`) and range (`0x760`) frames.
+
+- **Armed route**: while the broker proves that its B-CAN auxiliary helper owns
+  the armed route, it reuses `broker_secondary_route` and `admit_secondary_route`,
+  including fresh identity/interface checks, and bounds the interval to the same
+  helper PID. `LocalBrokerStatusClient` implements the reused checker's exact
+  status-GET request contract against the broker callback, without HTTP I/O.
+  Cancellation is rechecked after route validation before publication. This
+  route acquires no lease, so it cannot hold up the helper's arming or restoration.
+  Its observations carry interface mode `armed_diagnostic`; the session also
+  ends when the broker resumes the passive route.
+- **Passive route**: otherwise (ignition on and engine off, or an engine epoch
+  with the helper disabled, blocked or not yet launched) it holds the shared role
+  and channel leases behind `can_handoff.passive_turn('b-can')`, exactly as the
+  C-CAN display receiver does (`display_route.py` holds the shared lease admission
+  and route check). The route is re-proven about once a second (B-CAN USB
+  identity, link up, 125 kbit/s, FD, one-shot and auto-restart off, ERROR-ACTIVE,
+  listen-only, no operation inhibit), and a cooperative exclusive user waiting on
+  the handoff gate ends the session within one receive timeout. Observations
+  carry interface mode `listen_only`. An armed adapter with no broker proof (an
+  orphan after a failed restoration) fails the listen-only check and never
+  becomes a passive route. An idle socket on a sleeping bus receives nothing and
+  cannot wake it.
+
+Neither route configures a link, transmits or starts an owner.
+
+The broker pauses the passive route before it claims the B-CAN auxiliary helper
+(`DisplayReceivers.pause_bcan_passive`, which returns only once both shared
+leases are released; if they are not, the helper is not launched and
+`auxiliary_drive` reports `can_busy`) and resumes it in the auxiliary thread's
+outermost `finally`, after the helper's outcome and launch claim are handled.
+The C-CAN pause/resume is separate: a C-CAN-only epoch never pauses the B-CAN
+route. The epoch's bounded join does not resume it.
+
+Effects on other B-CAN users, as on C-CAN: shared passive readers
+(`bcan_drive_recorder`, `bcan_voltage`, the broker's voltage samples) coexist.
+Cooperative exclusive users that reserve `can_handoff.active_turn('b-can')`
+(B-CAN wake profiles) are served within the handoff's bounded wait. Exclusive
+users that do not reserve the handoff fail immediately with `can_busy` while the
+broker runs and B-CAN is passive-ready: `dtc_batch`, `dtc_inventory`,
+`identity_inventory`, `did_sweep`, `ecu_discover`, `routine_scan`,
+`signal_correlate`, `uds_send` and `live_data` (shared path
+`lib/can_runtime_route.py`). Workaround: hold `can_handoff.active_turn('b-can')`
+for the run, as the batch scans already do for every role in the batch. A full
+reconciliation (broker startup, topology generation change) takes exclusive
+leases, so while the companion holds its lease it reports B-CAN `busy`; that is
+a safe exclusion, and the startup armed-at-startup assessment stays pending
+until a verified readiness snapshot settles the role.
 
 `display_receivers.py` coordinates the two receiver lifecycles. Its C-CAN
-member retains the existing pause/resume and cooperative wake handoffs.
+member retains the existing pause/resume and cooperative wake handoffs; the
+B-CAN member has its own pause/resume (`pause_bcan_passive`/`resume_bcan_passive`).
 `display_receiver.receive_display_frames` shares timestamped, exact-ID/DLC
 receive mechanics; the compass path additionally monitors receive queue loss.
 `display_contract.display_results` validates all observations before the broker
