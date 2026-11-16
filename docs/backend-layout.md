@@ -44,6 +44,11 @@ npm download cache lives in `$XDG_CACHE_HOME/npm` and `npm ci` runs with
 `--prefer-offline`; pip's cache stays in the run's scratch folder, since the unhashed
 Python requirements can't safely share a cache other jobs write.
 
+When the checkout is not writable (a Pi-local compute job mounts its source
+snapshot read-only), the runner copies it into `TMPDIR`, skipping `.git`,
+`tmp/` and bytecode as a snapshot does, and re-runs itself from the copy with
+the same arguments. The copy is removed when the run ends.
+
 A wait timeout leaves the job running; use `wait`/`status` with the returned job
 ID. Do not submit a duplicate merely because the wait ended. The existing
 `repo-tests` task retains pytest argument forwarding and prepares dependencies
@@ -56,6 +61,41 @@ skip an explicitly identified platform-only case or local vehicle evidence
 that is absent from the source payload; that is not a live vehicle validation.
 Browser checks are separate when UI behavior changes. Backend-only changes do
 not require inventing a visual comparison.
+
+### Pi-local placement
+
+Verified 2026-11-15 against van-compute release `8ad2c255…` (the source is
+read-only on the Pi at `/home/pi/van_compute/current/van_compute/`). The three
+suite tasks pass on Mac workers only. A Pi-local suite job fails:
+
+- Placement: the broker runs a job on the Pi only after every Mac lease has
+  lapsed (45 s, then a 30 s grace), and `pi_compute.py` has no option to force
+  it. The broker also holds or requeues a Pi-local job while any
+  `tmp/locks/active-diagnostics-*.lock` is write-locked (a CAN transmitter,
+  such as a drive helper), so it may not run during a drive.
+- Sandbox (`engine.py` `_bubblewrap_runtime`): `--unshare-net` with only
+  loopback, no `/etc/ssl`, source snapshot read-only, uid 0 in a user
+  namespace with no capabilities. The writable places are `TMPDIR`, `HOME`
+  and the task cache, which only Pi-local jobs (offline) can fill.
+- Limits (`broker.py` defaults, `limited_child.py`): per-process
+  `RLIMIT_AS` 768 MiB, `RLIMIT_CPU` 1200 s, 256 open files, 1800 s wall; the
+  broker unit adds `MemoryMax=1G` (broker and job together) and
+  `CPUQuota=150%`.
+- Python: the job's interpreter is the van-compute venv (pytest 9.1.1,
+  numpy 1.26.4, can-isotp 2.0.7, no cantools). The runner's venv cannot
+  download anything, so "Python test dependency install" fails.
+- Node: `npm ci` aborts with a V8 out-of-memory error under the 768 MiB
+  address-space limit even from a full cache (it works at 1 GiB), and the
+  esbuild binary reserves about 1.27 GB of address space at start and
+  crashes below about 1.5 GiB. The dashboard build and `build.test.mjs`
+  need esbuild.
+
+Passing on the Pi needs van-compute changes: an address-space limit of at
+least 2 GiB for this job, a way to provide the Python and npm dependencies
+offline, and likely a longer wall-time limit. The Mac's suite runs peak at
+770–890 MB of process-group RSS, which leaves little room under the Pi
+broker's `MemoryMax=1G`. Until those land, a Pi-local suite job is not
+evidence about the change set; resubmit it when a Mac worker is back.
 
 ## Lasting checks and limits
 

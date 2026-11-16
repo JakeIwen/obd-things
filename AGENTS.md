@@ -397,9 +397,17 @@ The three suite tasks declare the van-compute task cache `"cache": "obd-things-t
 The cache is untrusted, evictable at any time and shared by every slot on a host, so nothing
 may depend on its contents: npm verifies each tarball against the lockfile's integrity hashes.
 `run_tests.py` keeps pip's cache and the venv per run, because `requirements-test.txt` has
-ranges and no hashes; sharing pip's cache would need hash-locked requirements. Pi-local
-jobs have no network, so the suite can't install there; only Mac placement is verified
-(2026-11-14). A van-compute release without task caches fails any job that declares one, so
+ranges and no hashes; sharing pip's cache would need hash-locked requirements.
+
+The three suite tasks pass only on a Mac worker today (verified 2026-11-15). A job is placed
+on the Pi only when every Mac lease has lapsed, and nothing forces Pi placement. The Pi job
+then fails at "Python test dependency install": its sandbox has no network. It also mounts
+the source read-only (`run_tests.py` copies a read-only checkout to scratch) and caps each
+process at 768 MiB of address space, which crashes `npm ci` and esbuild. Fixing that needs
+van-compute changes; the facts and the changes needed are in
+[backend verification](docs/backend-layout.md) section "Pi-local placement".
+
+A van-compute release without task caches fails any job that declares one, so
 drop these declarations before rolling van-compute back. Clear the Pi copy with
 `cd /home/pi/van_compute/current && /home/pi/van_compute/venv/bin/python -m van_compute.task_cache
 clear obd-things-dde5f99d3c6fed63/obd-things-tests`; the Mac copy needs a Mac session.
