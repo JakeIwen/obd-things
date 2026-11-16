@@ -142,6 +142,9 @@ def permit_for(clock, module):
 
 def rig(monkeypatch, module, replies=()):
     """Use real permit issue/consume and actual CAN packet parsing, fake only I/O."""
+    # Radar open() evaluates these Linux constants even with a fake factory.
+    monkeypatch.setattr(socket, 'AF_CAN', ccan_powertrain.AF_CAN, raising=False)
+    monkeypatch.setattr(socket, 'CAN_RAW', ccan_powertrain.CAN_RAW, raising=False)
     monkeypatch.setattr(transmit_permit.diagnostic_safety, 'validate_channel_lock',
                         lambda *args: None)
     clock = Clock()

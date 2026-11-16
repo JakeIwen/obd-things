@@ -3,6 +3,7 @@ from contextlib import nullcontext
 import io
 import json
 import os
+import socket
 from types import SimpleNamespace
 
 import pytest
@@ -19,6 +20,9 @@ from tests.test_active_drive import FakeBackend, snapshot, rpm_observation, spee
 
 @pytest.fixture
 def rig(monkeypatch):
+    # The scripted radar exercises open() on hosts without Linux SocketCAN.
+    monkeypatch.setattr(socket, 'AF_CAN', active_drive.AF_CAN, raising=False)
+    monkeypatch.setattr(socket, 'CAN_RAW', active_drive.CAN_RAW, raising=False)
     clock, events, trace = Clock(0.), [], []
     radar_sock = FakeRadar()
     radar_sock.setsockopt = lambda *args: trace.append('radar_filter')
