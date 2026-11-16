@@ -747,13 +747,9 @@ class TelemetryBroker:
             raise ValueError("history interval must be positive")
         self.passive_powertrain_reader = passive_powertrain_reader
         self.display_receiver = display_receiver
-        self.active_drive_supervisor = active_drive_supervisor
-        self.active_drive_enabled = bool(
-            active_drive_enabled and active_drive_supervisor is not None
-        )
-        self.auxiliary_drive_supervisor = auxiliary_drive_supervisor
-        self.auxiliary_drive_enabled = bool(
-            auxiliary_drive_enabled and auxiliary_drive_supervisor is not None
+        self._configure_drive_helpers(
+            active_drive_supervisor, active_drive_enabled,
+            auxiliary_drive_supervisor, auxiliary_drive_enabled,
         )
         self.interface_reconciler = interface_reconciler
         self.insights = insights
@@ -899,6 +895,20 @@ class TelemetryBroker:
         self._recent_data_quality: list[dict[str, object]] = []
         self._vehicle_state_observed_monotonic: float | None = None
         self._vehicle_state: dict[str, object] = initial_vehicle_state()
+
+    def _configure_drive_helpers(
+        self, active_drive_supervisor, active_drive_enabled,
+        auxiliary_drive_supervisor, auxiliary_drive_enabled,
+    ) -> None:
+        """Keep each helper's enablement conditional on its actual supervisor."""
+        self.active_drive_supervisor = active_drive_supervisor
+        self.active_drive_enabled = bool(
+            active_drive_enabled and active_drive_supervisor is not None
+        )
+        self.auxiliary_drive_supervisor = auxiliary_drive_supervisor
+        self.auxiliary_drive_enabled = bool(
+            auxiliary_drive_enabled and auxiliary_drive_supervisor is not None
+        )
 
     def list_metrics(self) -> dict[str, object]:
         return {
@@ -3399,6 +3409,14 @@ class TelemetryBroker:
         self.last_readings.flush()
 
 
+def _reading_stores(history_db):
+    """Construct the three dated-reading stores beside the configured history."""
+    maintenance_store = MaintenanceStore(pathlib.Path(history_db).with_name("maintenance.json"))
+    radar_history = AlignmentHistory(pathlib.Path(history_db).with_name("radar-alignment.json"))
+    last_readings = LastReadings(METRICS, pathlib.Path(history_db).with_name("last-readings.json"))
+    return maintenance_store, radar_history, last_readings
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     if (
@@ -3493,9 +3511,7 @@ def main(argv=None) -> int:
             supervisor_factory=AuxiliaryDriveSupervisor,
         )
 
-    maintenance_store = MaintenanceStore(pathlib.Path(args.history_db).with_name("maintenance.json"))
-    radar_history = AlignmentHistory(pathlib.Path(args.history_db).with_name("radar-alignment.json"))
-    last_readings = LastReadings(METRICS, pathlib.Path(args.history_db).with_name("last-readings.json"))
+    maintenance_store, radar_history, last_readings = _reading_stores(args.history_db)
     insights = None
     if not args.no_history:
         historian = TelemetryHistorian(args.history_db)

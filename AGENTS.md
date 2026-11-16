@@ -125,6 +125,9 @@ dataclasses; `metrics.py` re-exports them and remains the public registry.
 
 `projects/vehicle_data/broker_cli.py` owns broker arguments and defaults;
 `broker.py` re-exports its public parser and defaults for existing callers.
+Its `_configure_drive_helpers` keeps supervisor enablement together;
+`_reading_stores` preserves the constructor order and history-adjacent paths
+of maintenance, radar alignment and last-reading stores.
 
 Broker pure internals are split into `projects/vehicle_data/status_view.py`
 (snapshot-only status builders), `vehicle_state.py` (passive evidence conclusions),
