@@ -25,6 +25,7 @@ from projects.vehicle_data import drift_warnings
 from projects.vehicle_data.api import MAX_RESPONSE_BYTES
 from projects.vehicle_data.dtc_descriptions import describe_dtc
 from projects.vehicle_data.drive_reads import RESULTS_FILENAME, drive_reads_response
+from projects.vehicle_data.dtc_response_fit import fit_response
 from projects.vehicle_data.early_warning import (
     EarlyWarningEvaluator,
     InfrastructureHealthEvaluator,
@@ -1316,17 +1317,7 @@ class TelemetryInsights:
         drive = drive_reads_response(self.dtc_cache_path.with_name(RESULTS_FILENAME))
         if drive.get("reason") != "not_read":
             payload["drive_reads"] = drive
-        def too_large():
-            return len(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()) >= MAX_RESPONSE_BYTES
-        if "drive_reads" in payload and too_large():  # the newest, optional block goes first
-            payload["drive_reads"] = {"available": False, "reason": "drive_reads_too_large"}
-        if too_large():
-            payload["in_vehicle_scan"] = {
-                "available": False,
-                "reason": "in_vehicle_scan_too_large",
-                "detail": "in-vehicle scan results exceed the broker transport limit",
-            }
-        return payload
+        return fit_response(payload, MAX_RESPONSE_BYTES)
 
     def _van_scan_response(self) -> dict[str, object]:
         """Read the harvester's bounded atomic cache; never perform diagnostic I/O."""

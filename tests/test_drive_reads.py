@@ -168,3 +168,64 @@ def test_an_oversized_response_drops_the_drive_block_before_the_van_block(tmp_pa
         response = insights.dtc_response()
     assert response['drive_reads'] == {'available': False, 'reason': 'drive_reads_too_large'}
     assert response['in_vehicle_scan']['available'] is True
+
+
+def sized_insights(tmp_path, *, van):
+    from tests.test_vehicle_insights import van_scan_cache
+    cache = tmp_path / 'dtc-cache.json'
+    cache.write_text(json.dumps(compact_dtc_cache()))
+    if van:
+        (tmp_path / 'van-scan-cache.json').write_text(json.dumps(van_scan_cache()))
+    return TelemetryInsights(FakeHistorian(), warning_evaluator=mock.Mock(), dtc_cache_path=cache,
+                             history_metrics=('battery.voltage',))
+
+
+def encoded(response):
+    return len(json.dumps(response, sort_keys=True, separators=(',', ':')).encode())
+
+
+@pytest.mark.parametrize('case', ['under', 'at', 'drive_marker_too_big', 'van_marker_too_big'])
+def test_response_always_fits_and_sheds_drive_then_van(tmp_path, case):
+    from projects.vehicle_data import insights as insights_module
+    insights = sized_insights(tmp_path, van=True)
+    without_drive = insights.dtc_response()
+    parked = {k: v for k, v in without_drive.items() if k != 'in_vehicle_scan'}
+    (tmp_path / 'drive-dtc-results.json').write_text(json.dumps(results()))
+    full = insights.dtc_response()
+    limit = {'under': encoded(full) + 1, 'at': encoded(full),
+             'drive_marker_too_big': encoded(without_drive) + 10,
+             'van_marker_too_big': encoded(parked) + 10}[case]
+    with mock.patch.object(insights_module, 'MAX_RESPONSE_BYTES', limit):
+        response = insights.dtc_response()
+    assert encoded(response) < limit
+    assert {k: v for k, v in response.items() if k not in ('in_vehicle_scan', 'drive_reads')} == parked
+    if case == 'under':
+        assert response == full
+    elif case == 'at':
+        assert response['drive_reads'] == {'available': False, 'reason': 'drive_reads_too_large'}
+        assert response['in_vehicle_scan'] == full['in_vehicle_scan']
+    elif case == 'drive_marker_too_big':
+        assert 'drive_reads' not in response and response['in_vehicle_scan'] == full['in_vehicle_scan']
+    else:
+        assert 'drive_reads' not in response and 'in_vehicle_scan' not in response
+
+
+def test_reviewed_case_at_the_real_transport_limit(tmp_path):
+    """The re-review's shape: parked plus van fit under 1 MiB; with drive data they do not."""
+    from projects.vehicle_data.api import MAX_RESPONSE_BYTES
+    insights = sized_insights(tmp_path, van=False)
+    (tmp_path / 'drive-dtc-results.json').write_text(json.dumps(results()))
+    built = insights._pi_dtc_response
+
+    def padded():
+        payload = built()
+        payload['padding'] = ''
+        payload['padding'] = 'x' * (MAX_RESPONSE_BYTES - 40 - encoded(
+            {**payload, 'in_vehicle_scan': insights._van_scan_response()}))
+        return payload
+
+    insights._pi_dtc_response = padded
+    response = insights.dtc_response()
+    assert encoded(response) < MAX_RESPONSE_BYTES
+    assert 'drive_reads' not in response
+    assert response['in_vehicle_scan']['reason'] == 'not_harvested'

@@ -241,7 +241,9 @@ thread (separate from the budget writer), from its in-memory state in arrival or
   response (omitted when no file exists). Any failure while reading it, including the
   `RecursionError` of deep nesting and the `OverflowError` of an enormous number, makes only that
   block unavailable; the parked and van sources are served unchanged. If the response is too
-  large, `drive_reads` is dropped first, then `in_vehicle_scan`.
+  large, `dtc_response_fit.py` sheds `drive_reads` first, then `in_vehicle_scan`: each is replaced
+  by a small unavailable marker, and omitted entirely when even the marker does not fit, checking
+  the encoded size after every change. The parked result is served whenever it fits on its own.
 
 ## Dashboard: three sources
 

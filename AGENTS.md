@@ -487,7 +487,8 @@ the two frames); `drive_dtc_watch.py` (receive-only foreign-tester watch);
 `drive_dtc_launch.py` (what `active_drive.py` imports: arguments and the step, loading the
 contract only when DTC arguments are present); `drive_dtc_budget.py` (the broker's durable launch budget);
 `drive_dtc_control.py` (broker capability, cadence check, results writer); `drive_reads.py`
-(validated `drive_reads` block of the DTC response).
+(validated `drive_reads` block of the DTC response); `dtc_response_fit.py` (keeps that
+response under the transport limit by shedding the drive block, then the van block).
 
 ## Backend ownership and dependency direction
 
