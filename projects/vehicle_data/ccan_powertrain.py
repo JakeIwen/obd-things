@@ -21,6 +21,9 @@ from dataclasses import dataclass
 from typing import Callable
 
 from lib import broadcast_signals
+from lib.timeutil import finite_number
+
+MAX_SPEED_MPH = 200.0
 
 # Linux SocketCAN numeric constants keep fake-socket offline tests portable to
 # Python builds that do not expose AF_CAN/CAN_RAW (for example macOS workers).
@@ -352,6 +355,16 @@ class BroadcastSnapshot:
     completed_monotonic: float | None = None
     quality_events: tuple[DataQualityEvent, ...] = ()
 
+
+
+def speed_mph(snapshot: object) -> float | None:
+    """Read one finite, physically bounded vehicle-speed observation."""
+    for observation in getattr(snapshot, "observations", ()):
+        if getattr(observation, "metric", None) == "vehicle.speed":
+            value = getattr(observation, "value", None)
+            if finite_number(value) and 0 <= value <= MAX_SPEED_MPH:
+                return float(value)
+    return None
 
 def decode_frame_observations(
     can_id: int, data: bytes

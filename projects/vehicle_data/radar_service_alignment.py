@@ -27,6 +27,7 @@ import re
 import sys
 
 from lib.timeutil import finite_number
+from projects.vehicle_data.ccan_powertrain import MAX_SPEED_MPH, speed_mph as _speed_mph
 from projects.vehicle_data.radar_service_transport import (
     ENTER_SESSION, KEEP_ALIVE, NEGATIVE, POSITIVE, READ_STATUS, ROUTINE_COMPLETED, ROUTINE_IDLE,
     SKIPPED, START_ROUTINE, STOP_ROUTINE, Exchange, RadarServiceTransport, Reply, RoutineStatus,
@@ -59,7 +60,6 @@ EVENT_FIELDS = (
     "elapsed_seconds", "speed_mph", "interface_mode",
 )
 MAX_DETAIL_CHARS = 400
-MAX_SPEED_MPH = 200.0
 
 STATIONARY_MAX_MPH = 0.5
 # No fixed duration: the June run needed 17 minutes of steady driving. A run
@@ -147,15 +147,6 @@ class CommandReader:
             else:
                 commands.append(command)
         return commands
-
-
-def _speed_mph(snapshot: object) -> float | None:
-    for observation in getattr(snapshot, "observations", ()):
-        if getattr(observation, "metric", None) == "vehicle.speed":
-            value = getattr(observation, "value", None)
-            if finite_number(value) and 0 <= value <= MAX_SPEED_MPH:
-                return float(value)
-    return None
 
 
 class Phase(enum.Enum):

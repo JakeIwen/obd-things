@@ -187,7 +187,9 @@ and permits for every radar send); `radar_service_control.py` (broker side:
 helper flag and command pipe, run record, event validation, run log under
 `tmp/radar/service_alignment/`); the web relay in `web.py`; and
 `dashboard/src/dialogs/RadarCalibration{.jsx,.helpers.js}`. The run state is
-not in `/v1/status`. `ServiceAlignment.run_attempted` retains any created run for the helper epoch,
+not in `/v1/status`. `ccan_powertrain.speed_mph` owns the shared finite, bounded speed reader;
+`radar_service_alignment._speed_mph` remains a compatibility alias.
+`ServiceAlignment.run_attempted` retains any created run for the helper epoch,
 and `CommandReader.pending()` observes partial lines, readability and EOF
 without consuming commands. `tests/radar_service_support.py` holds the scripted radar.
 `RadarAlignmentPoller.receive_reply` skips up to four identifiable late DTC
