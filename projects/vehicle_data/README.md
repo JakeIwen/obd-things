@@ -758,7 +758,9 @@ for ownership, retention, validation and activation details.
 
 The fuel tank level (`fuel.tank_level`, percent, candidate) is B-CAN `0x356` byte 0, received by the
 same companion receiver as the compass and never transmitting. Raw 0 (key-off/wake) keeps the previous
-reading; above 100 is invalid and ends live evidence for both companion metrics. The Drive page 2 fuel
+reading; above 100 (or a malformed `0x356`) is invalid and ends live evidence for the fuel metric only;
+transport or ownership loss ends it for both companion metrics. Identical readings publish at most every
+2 s, so the 4 Hz frame does not run the route check on every frame. The Drive page 2 fuel
 tile shows `tank ~NN%`, with `(last)` once it is a retained reading. Evidence and open scale questions:
 [finding](../ecu_mapping/findings/promaster_2022/2026-11-15_fuel_level_0x356.md).
 
