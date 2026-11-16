@@ -48,7 +48,7 @@ def _decode_display(can_id, data):
 def receive_display_frames(channel, *, valid, stopped, publish,
                            socket_factory=socket.socket, monotonic=time.monotonic,
                            wall_time=time.time, frame_dlcs=DISPLAY_FRAME_DLCS,
-                           decode=_decode_display, lost=None):
+                           decode=_decode_display, lost=None, frame_lost=None):
     """Keep one filtered socket open, publishing each received frame immediately.
 
     Kernel receipt timestamps prevent a host stall or a queued frame from
@@ -56,6 +56,9 @@ def receive_display_frames(channel, *, valid, stopped, publish,
     participates in this path. ``valid`` also cooperatively yields ownership.
     """
     notify_loss = lost if lost is not None else (lambda: None)
+    # A rejection specific to one frame ID (bad DLC or payload) may end only that ID's evidence;
+    # transport-wide loss (truncation, overflow, stale queue) always goes to ``lost``.
+    notify_frame_loss = (lambda can_id: frame_lost(can_id)) if frame_lost is not None else (lambda _id: notify_loss())
     sock = socket_factory(cp.AF_CAN, socket.SOCK_RAW, cp.CAN_RAW)
     try:
         sock.setsockopt(cp.SOL_CAN_RAW, cp.CAN_RAW_FILTER, b"".join(
@@ -92,7 +95,7 @@ def receive_display_frames(channel, *, valid, stopped, publish,
             if can_id not in frame_dlcs or can_id & cp.FRAME_TYPE_FLAGS:
                 continue
             if dlc != frame_dlcs[can_id]:
-                notify_loss()
+                notify_frame_loss(can_id)
                 continue
             received = _received_timestamp(ancillary)
             if received is None:
@@ -107,7 +110,7 @@ def receive_display_frames(channel, *, valid, stopped, publish,
                 publish(observations, datetime.fromtimestamp(received, timezone.utc),
                         monotonic() - max(0.0, age))
             elif observations is not None:  # None: understood, nothing to publish
-                notify_loss()
+                notify_frame_loss(can_id)
     finally:
         sock.close()
 

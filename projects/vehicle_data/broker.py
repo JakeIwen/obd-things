@@ -43,7 +43,7 @@ from projects.vehicle_data.radar_alignment import (
 from projects.vehicle_data.radar_service_control import RadarServiceControl
 from projects.vehicle_data.metrics import METRICS, MetricDefinition
 from projects.vehicle_data.display_contract import DISPLAY_SOURCES, display_results
-from projects.vehicle_data.bcan_companion import METRICS as BCAN_COMPANION_METRICS
+from projects.vehicle_data.bcan_companion import METRICS as BCAN_COMPANION_METRICS, METRICS_BY_FRAME
 from projects.vehicle_data.receive_watch import ReceiveSilenceWatch
 from projects.vehicle_data.can_availability import CanAvailability
 from projects.vehicle_data.wake_state import wake_state_conflicts
@@ -1660,10 +1660,14 @@ class TelemetryBroker:
                 self._cache[result.metric] = result
                 self.last_readings.observe(result)
 
-    def invalidate_bcan_companion(self):
-        """Keep the dated last readings, but end their live receive evidence."""
+    def invalidate_bcan_companion(self, can_id=None):
+        """Keep the dated last readings, but end their live receive evidence.
+
+        ``can_id`` limits it to that frame's metrics; None is transport-wide loss.
+        """
+        metrics = BCAN_COMPANION_METRICS if can_id is None else METRICS_BY_FRAME.get(can_id, ())
         with self._lock:
-            for metric in BCAN_COMPANION_METRICS:
+            for metric in metrics:
                 self._cache.pop(metric, None)
 
     def _refresh_derived_power(self) -> None:

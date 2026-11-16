@@ -40,7 +40,7 @@ def armed_compass_route(status):
 
 
 class CompassReceiver:
-    def __init__(self, manager, *, status_reader, publish, invalidate,
+    def __init__(self, manager, *, status_reader, publish, invalidate, invalidate_frame=None,
                  receiver=receive_display_frames, admit=admit_secondary_route,
                  monotonic=time.monotonic):
         self.manager = manager
@@ -48,6 +48,7 @@ class CompassReceiver:
         self.status_client = LocalBrokerStatusClient(status_reader)
         self.publish = publish
         self.invalidate = invalidate
+        self.invalidate_frame = invalidate_frame
         self.receiver = receiver
         self.admit = admit
         self.monotonic = monotonic
@@ -91,7 +92,12 @@ class CompassReceiver:
                 next_check = now + 1.0
             return not self._stop.is_set()
 
+        throttle = bcan_companion.FuelThrottle()
+
         def publish(observations, observed_at, observed_monotonic):
+            # Throttle only the publication; the ownership/route check runs in full on each admit.
+            if not throttle.admit(observations, observed_monotonic):
+                return
             if not valid(force=True):
                 return
             self.publish(observations, observed_at, observed_monotonic, 'armed_diagnostic')
@@ -99,11 +105,20 @@ class CompassReceiver:
                 self._status['frames'] += 1
                 self._status['last_received_at'] = observed_at.isoformat()
 
+        # After any loss the cache entry is gone, so the next fuel frame must publish at once.
+        def lost():
+            throttle.reset()
+            self.invalidate()
+
+        def frame_lost(can_id):
+            throttle.reset()
+            self.invalidate_frame(can_id)
+
         with self._lock:
             self._status.update(state='receiving', channel=route.channel, reason=None)
         self.receiver(route.channel, valid=valid, stopped=self._stop.is_set, publish=publish,
                       frame_dlcs=bcan_companion.FRAME_DLCS, decode=bcan_companion.decode_bcan_companion,
-                      lost=self.invalidate)
+                      lost=lost, frame_lost=frame_lost if self.invalidate_frame else None)
 
     def run(self):
         try:
