@@ -375,6 +375,21 @@ Scoped gate **dashboard** (the global Code shape rule on scoped gates governs it
   folder without being listed. A new indirect reader (one that reaches dashboard files
   through a scan or helper, as `test_backend_contracts.py` does) must be added by hand.
 
+Scoped gate **notes** (owner decision 2026-11-15: amending a finding or a doc does not run the
+suite, which is expensive and reads none of these files):
+
+- Command: `python3 -m pytest tests/test_notes_gate.py -q` from the repo root, run directly on
+  any host with pytest. It takes seconds and needs no compute job.
+- Covers: Markdown under `projects/*/findings/` and the root `docs/` (`NOTES_SCOPE` in that test).
+- Excludes: every other file type in those folders (the JSON, CSV and logs beside a finding are
+  fixtures and evidence that tests read), and Markdown elsewhere: `AGENTS.md` (the layout checker
+  and contract tests read its Contracts table), README files and the dashboard's own docs.
+- Correctness: the test fails when a Python test module's code names a Markdown file in scope
+  (docstrings excepted). It is a text tripwire: a test that reaches these files through a helper
+  must be caught by hand, and then the file leaves the scope or the gate runs that test.
+- The gate's declaration and test (`tests/test_notes_gate.py`, this paragraph) lie outside its
+  scope.
+
 Direct runs in one checkout serialize on `tmp/run_tests.lock`.
 
 The three suite tasks declare the van-compute task cache `"cache": "obd-things-tests"`
