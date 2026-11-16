@@ -1,0 +1,9 @@
+{
+  "metric": "fuel.tank_level",
+  "source": "bcan.broadcast.0x356",
+  "frame_id": 854,
+  "dlc": 8,
+  "stale_after_seconds": 10.0,
+  "minimum": 1,
+  "maximum": 100
+}

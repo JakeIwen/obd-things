@@ -106,7 +106,7 @@ def receive_display_frames(channel, *, valid, stopped, publish,
             if observations:
                 publish(observations, datetime.fromtimestamp(received, timezone.utc),
                         monotonic() - max(0.0, age))
-            else:
+            elif observations is not None:  # None: understood, nothing to publish
                 notify_loss()
     finally:
         sock.close()

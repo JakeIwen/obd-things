@@ -1,9 +1,9 @@
-"""Receive compass events beside the broker's existing armed B-CAN owner.
+"""Receive compass events and the fuel tank level beside the broker's existing armed B-CAN owner.
 
 There is no passive lease here: this companion exists only during the proven
 auxiliary owner's interval. It cannot block that owner's startup/restoration,
 configure an interface, transmit, or launch a helper. Outside the interval the
-last direction remains a dated retained reading.
+last direction and fuel level remain a dated retained reading.
 """
 
 from collections.abc import Callable
@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import threading
 import time
 
-from projects.vehicle_data import compass
+from projects.vehicle_data import bcan_companion
 from projects.vehicle_data.api_schema import StatusResponse
 from projects.vehicle_data.display_receiver import CONTROL_SECONDS, receive_display_frames
 from projects.vehicle_data.drive_recorder import admit_secondary_route, broker_secondary_route
@@ -102,7 +102,7 @@ class CompassReceiver:
         with self._lock:
             self._status.update(state='receiving', channel=route.channel, reason=None)
         self.receiver(route.channel, valid=valid, stopped=self._stop.is_set, publish=publish,
-                      frame_dlcs=compass.FRAME_DLCS, decode=compass.decode_compass_observations,
+                      frame_dlcs=bcan_companion.FRAME_DLCS, decode=bcan_companion.decode_bcan_companion,
                       lost=self.invalidate)
 
     def run(self):

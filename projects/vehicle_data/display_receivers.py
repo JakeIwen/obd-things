@@ -10,7 +10,7 @@ class DisplayReceivers:
                                        publish=broker.store_display_frame)
         self.compass = CompassReceiver(manager, status_reader=broker.status_response,
                                       publish=broker.store_display_frame,
-                                      invalidate=broker.invalidate_compass)
+                                      invalidate=broker.invalidate_bcan_companion)
 
     def status(self):
         return {**self.cluster.status(), 'compass': self.compass.status()}

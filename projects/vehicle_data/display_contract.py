@@ -4,15 +4,15 @@ This pure module avoids importing the receiver's recorder/ownership machinery
 back into the broker merely to share its source allowlist.
 """
 
-from projects.vehicle_data import ccan_powertrain as cp, lighting, compass
+from projects.vehicle_data import ccan_powertrain as cp, lighting, compass, fuel_level
 from projects.vehicle_data.models import success
 
 
 DISPLAY_SOURCES = frozenset((cp.SPEED_LIMIT_SOURCE, cp.ACC_DISPLAY_SOURCE, lighting.SOURCE))
 DISPLAY_FRAME_DLCS = {cp.SPEED_LIMIT_ID: 4, cp.ACC_DISPLAY_ID: 8, lighting.FRAME_ID: lighting.DLC}
 DISPLAY_FRAME_IDS = tuple(DISPLAY_FRAME_DLCS)
-CONTINUOUS_SOURCES = DISPLAY_SOURCES | {compass.SOURCE}
-DISPLAY_METRICS = (*lighting.METRICS, compass.DEFINITION)
+CONTINUOUS_SOURCES = DISPLAY_SOURCES | {compass.SOURCE, fuel_level.SOURCE}
+DISPLAY_METRICS = (*lighting.METRICS, compass.DEFINITION, fuel_level.DEFINITION)
 
 
 def display_results(observations, definitions, observed_at, observed_monotonic, mode, validate):
@@ -34,7 +34,7 @@ def display_results(observations, definitions, observed_at, observed_monotonic, 
             observed_monotonic=observed_monotonic, interface_mode=mode,
             detail=('continuous cluster frame, kernel receipt timestamp'
                     if source.name in DISPLAY_SOURCES else
-                    'compass announcement, kernel receipt timestamp'),
+                    'B-CAN companion frame, kernel receipt timestamp'),
         )
         checked = validate(observation.metric, definition, result)
         if not checked.available:

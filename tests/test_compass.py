@@ -60,7 +60,7 @@ class CompassDecodeTests(unittest.TestCase):
         old = broker.metric_response(compass.METRIC)
         self.assertEqual((old['value'], old['stale'], old['age_ms']), (6, True, 360000))
         self.assertEqual(old['observed_at'], first['observed_at'])
-        broker.invalidate_compass()
+        broker.invalidate_bcan_companion()
         retained = broker.metric_response(compass.METRIC)
         self.assertFalse(retained['available'])
         self.assertEqual(retained['last_recorded']['value'], 6)
@@ -118,7 +118,7 @@ class CompassReceiveTests(unittest.TestCase):
             finish.wait(3)
 
         worker = cr.CompassReceiver(None, status_reader=lambda: status, receiver=receive,
-            publish=broker.store_display_frame, invalidate=broker.invalidate_compass)
+            publish=broker.store_display_frame, invalidate=broker.invalidate_bcan_companion)
         with mock.patch('projects.vehicle_data.drive_recorder.query_interface',
                         return_value=interface(listen_only=False, bitrate=125000)) as query:
             worker.start()

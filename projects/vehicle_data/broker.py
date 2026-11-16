@@ -43,7 +43,7 @@ from projects.vehicle_data.radar_alignment import (
 from projects.vehicle_data.radar_service_control import RadarServiceControl
 from projects.vehicle_data.metrics import METRICS, MetricDefinition
 from projects.vehicle_data.display_contract import DISPLAY_SOURCES, display_results
-from projects.vehicle_data.compass import METRIC as COMPASS_METRIC
+from projects.vehicle_data.bcan_companion import METRICS as BCAN_COMPANION_METRICS
 from projects.vehicle_data.receive_watch import ReceiveSilenceWatch
 from projects.vehicle_data.can_availability import CanAvailability
 from projects.vehicle_data.wake_state import wake_state_conflicts
@@ -1660,10 +1660,11 @@ class TelemetryBroker:
                 self._cache[result.metric] = result
                 self.last_readings.observe(result)
 
-    def invalidate_compass(self):
-        """Keep the dated last reading, but end its live receive evidence."""
+    def invalidate_bcan_companion(self):
+        """Keep the dated last readings, but end their live receive evidence."""
         with self._lock:
-            self._cache.pop(COMPASS_METRIC, None)
+            for metric in BCAN_COMPANION_METRICS:
+                self._cache.pop(metric, None)
 
     def _refresh_derived_power(self) -> None:
         """Derive ECU-estimated crankshaft horsepower from exact fresh inputs."""
