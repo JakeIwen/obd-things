@@ -303,6 +303,12 @@ ground truth. The owner subsequently said they no longer remember the adjustment
 direction; no retrospective polarity assignment was made. No corresponding
 horizontal polarity was established.
 
+**Polarity settled by the owner, 2026-11-16:** allowing for the mount's pivot
+axis, the June nudge aimed the radar **up**. So a positive elevation means
+aimed high, corrected by tilting down. An October 10 recollection of a downward
+tilt had set the opposite rule, which the dashboard's aim text followed until
+November 16, so the October and November corrections below were judged by it.
+
 ### What supplies the alignment reference?
 
 The exact reference frame and meaning of `0845` remain unresolved. Its value
@@ -557,7 +563,7 @@ span several drives give the first start and last end.
   drives: −3.77° to +1.84° over trips 88–92, five drives in three days, after
   the 110-minute hold described above.
 - **The October correction overshot.** The reading passed through zero and
-  settled at +1.84° (aimed low by the dashboard's sign rule), then crept to
+  settled at +1.84° (aimed high by the corrected sign rule), then crept to
   +1.94° over the following month. Adaptive cruise worked throughout that
   month.
 - **Elevation has not responded to anything since October 15.** Its largest
@@ -570,6 +576,12 @@ span several drives give the first start and last end.
   spacers did. The azimuth change reverses the +0.05° per drive of the
   preceding four drives. If the radar is now aimed further inward, that makes
   "more negative = more inward" a candidate; 0.06° is too small to settle it.
+- **The spacers moved the aim the wrong way (owner, 2026-11-16).** They were
+  added to tilt the radar up, following the dashboard's former reading of
+  +1.94° as "aimed low". By the corrected sign rule +1.94° is aimed high, so
+  they aimed it further from zero, which fits trip 122's +1.94° → +1.97°. The
+  indicated correction is to tilt the radar down from its pre-spacer position;
+  the degree scale of the reading is unverified, so the amount is not known.
 
 ### Evening of November 13: azimuth changed while parked
 

@@ -39,7 +39,7 @@ AlfaOBD write-up `radar_acc_alfaobd_bugreport.md`.
 
 ## ✅ RESOLVED (2026-06-27) — DIY Service Drive Alignment fixed it
 C1418-78 is **cleared and ACC/FCW is functional again.** Full write-up: [`../findings/adjustment_1_results_3.md`].
-What worked, in order: (1) a **physical nudge** of the radar ~1.3° (tilted **downward**, owner-reported; negative elevation = aimed high) brought it back inside the auto-align
+What worked, in order: (1) a **physical nudge** of the radar ~1.3° (aimed **up**, owner-reported, corrected 2026-11-16 for the mount's pivot axis; positive elevation = aimed high) brought it back inside the auto-align
 window (drive #1 converged −1.26°→+0.28°); (2) the **DIY SDA** — `radar_acc_sda_drive.py --arm` started
 routine `0x0251`, held the session with `3E`, and we drove a steady ~40 mph for ~17 min. The radar's SDA
 **progress counter** (routine-status byte[2], 0x00→0x64 = 0–100%) climbed to 100% and **committed**: the

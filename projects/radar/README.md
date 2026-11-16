@@ -33,10 +33,12 @@ finding's "October 11 follow-up".
 ## ✅ RESOLVED (2026-06-27) — see `findings/adjustment_1_results_3.md`
 C1418-78 is **cleared and ACC/FCW works again.** Path that fixed it: a **physical nudge** (~1.3°) brought
 the −1.26° boresight back inside the radar's auto-align window (drive #1: −1.26°→+0.28°), then the **DIY
-**Sign convention (owner-reported, recorded 2026-10-10):** that nudge **tilted the radar module
-downward by about 1°**, and the stored elevation estimate moved from −1.26° up through zero. So a
-**negative `0845` elevation means the radar is aimed higher than its calibration and is corrected by
-tilting the module down**; positive means aimed low, tilt up. The dashboard's radar views print this
+**Sign convention (owner-reported, corrected 2026-11-16):** that nudge **aimed the radar up by
+about 1°**, and the stored elevation estimate moved from −1.26° up through zero. So a **positive
+`0845` elevation means the radar is aimed higher than its calibration and is corrected by tilting it
+down**; negative means aimed low, tilt up. The October 10 record of a downward tilt was wrong: it
+did not account for the mount's pivot axis. The November 15 spacers were added on that wrong rule
+and aimed the radar further up (see the October 8 finding's November follow-up). The dashboard's radar views print this
 reading beside the elevation value (`dashboard/src/radarAim.js`). No left/right mapping has been
 established for azimuth. Continued:
 Service Drive Alignment** — `radar_acc_sda_drive.py --arm` started routine `0x0251`, held the session with

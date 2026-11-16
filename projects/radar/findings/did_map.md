@@ -10,7 +10,7 @@ internal C-CAN — this is why UDS works here and why OBD-II PIDs don't route. C
 ## ★ Alignment / dynamic signals (the ones that matter for C1418-78)
 | DID | idle raw | decode | meaning | conf |
 |---|---|---|---|---|
-| `0x0845` | `FFECC849 FFFFE55F` | 2×i32 ÷1e6 → (**−1.259°**, −0.007°) | Candidate **(elevation, azimuth) learned alignment estimates**. Flat in the historical faulted drive; gradual, axis-dependent changes and startup reversions observed in October. Neither a direct bracket measurement nor an established C1418-78 threshold input. **Elevation sign (owner-reported, 2026-10-10):** the June fix tilted the module *downward* ≈1° and the elevation moved from −1.26° up through 0, so negative = aimed higher than calibration, corrected by tilting down. Azimuth left/right direction unmapped. | I |
+| `0x0845` | `FFECC849 FFFFE55F` | 2×i32 ÷1e6 → (**−1.259°**, −0.007°) | Candidate **(elevation, azimuth) learned alignment estimates**. Flat in the historical faulted drive; gradual, axis-dependent changes and startup reversions observed in October. Neither a direct bracket measurement nor an established C1418-78 threshold input. **Elevation sign (owner-reported, corrected 2026-11-16):** allowing for the mount's pivot axis, the June fix aimed the radar *up* ≈1° and the elevation moved from −1.26° up through 0, so positive = aimed higher than calibration, corrected by tilting down; negative = aimed low, tilt up. Azimuth left/right direction unmapped. | I |
 | `0x0850` | `FFED44D4 FFFF7E86` | 2×i32 ÷1e6 → (−1.228°, −0.033°) | (elevation, azimuth), **2nd / noisier live-ish** source; wanders −1.2…−1.36° while driving, no trend to 0 | I |
 | `0x0841` | `FAE8` | i16 ÷1000 → −1.304° | **LIVE instantaneous** vertical estimate — swings **±10°** while driving (vehicle pitch), ~0 parked. **NOT** the stored fault; do not treat as the misalignment. | I |
 | `0x0861` | `FEE3 0080` | 2×i16 → (−285, +128) | aux angle pair, scale/meaning uncertain (azimuth-ish, ~in-spec) | S |
@@ -38,10 +38,12 @@ running/moving monitor. Job `dtc-owner-20261008T090715Z` verified passive restor
 hypothesis, not a recorded observation of the successful adjustment. The
 [June 26 result](adjustment_1_results_1.md) records a ~1.3° nudge, −1.26° before,
 and approximately +0.28° after driving, but never says whether the physical aim
-was moved upward or downward. Thus **negative = downward** exists as a historical
-inference; physical polarity is not yet verified from the documented intervention.
-On October 8 the owner could no longer recall upward versus downward adjustment,
-so that physical reference remains missing. Degree scale and compensation-versus-
+was moved upward or downward. Thus **negative = downward** was only an inference.
+On October 8 the owner could no longer recall the direction; on October 10 they
+recalled a downward tilt; on November 16 they corrected that: allowing for the
+mount's pivot axis, the June nudge aimed the radar **up**. So **positive elevation
+= aimed high, corrected by tilting down** (owner-reported, not instrument-measured),
+the opposite of the October 10 rule. Degree scale and compensation-versus-
 residual semantics are separate uncertainties.
 
 **Reference frame:** no matched Bosch/FCA definition of `0845` establishes whether

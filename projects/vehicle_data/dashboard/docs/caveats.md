@@ -343,9 +343,10 @@ a gap of more than 30 seconds, such as an engine stop. The 30-minute average is 
 time window ending at the latest read, so it keeps averaging across a fuel stop; its sample
 count shows how much of the window has readings. The 2-hour average was removed 2026-11-13. The values are what the ACC radar module reports
 about its own aim. Under the elevation value both views print what the sign means physically:
-`aimed high · tilt down` for a negative angle, `aimed low · tilt up` for a positive one, `level` near
-zero. This comes from the June 2026 repair, when the owner tilted the radar module down by about 1°
-and the stored elevation moved from −1.26° up through zero. It is an owner-reported direction, relative
+`aimed high · tilt down` for a positive angle, `aimed low · tilt up` for a negative one, `level` near
+zero. This comes from the June 2026 repair, when the owner aimed the radar up by about 1° (allowing
+for the mount's pivot axis; owner correction 2026-11-16) and the stored elevation moved from −1.26°
+up through zero. It is an owner-reported direction, relative
 to the radar's own calibration, not a measured bracket angle. The horizontal (azimuth) sign has no
 known left/right mapping, so the System view says so instead of guessing. They are not
 a measurement of the van, and no alignment result or calibration is implied. Its footer reads

@@ -517,7 +517,7 @@ test("radar: not live → retained values, neutral badge, last-read time once", 
     ["Change this drive", "−0.03° (610)"],
     ["5-min peak", "0.02°"],
     ["Margin to ±1.00°", "0.98° to spare"],
-    ["Aim", "aimed high · tilt down"],
+    ["Aim", "aimed low · tilt up"],
   ]);
   assert.deepEqual(az.rows.slice(2, 4), [["30-min average", "—"], ["Change this drive", "—"]]);
   assert.equal(az.rows[5][1], "0.84° to spare");
@@ -569,7 +569,7 @@ test("radar: live values colour the badge; outside the reference shows the overs
   assert.deepEqual(out.badge, { text: "Outside ±1°", tone: "red" });
   assert.equal(out.note, null);
   assert.equal(out.axes[0].rows[5][1], "0.20° beyond");
-  assert.equal(out.axes[0].rows[6][1], "aimed low · tilt up");
+  assert.equal(out.axes[0].rows[6][1], "aimed high · tilt down");
   assert.equal(out.axes[0].rows[0][1], "—");
 });
 
