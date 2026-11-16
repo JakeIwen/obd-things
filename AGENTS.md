@@ -387,6 +387,9 @@ suite, which is expensive and reads none of these files):
 - Correctness: the test fails when a Python test module's code names a Markdown file in scope
   (docstrings excepted). It is a text tripwire: a test that reaches these files through a helper
   must be caught by hand, and then the file leaves the scope or the gate runs that test.
+- Without Git data (a compute source snapshot) the test lists the snapshot's own files, so
+  every task that runs it (`repo-full-suite`, `repo-tests`) must carry `docs` and every
+  `projects/*/findings` folder; `test_suite_tasks_carry_every_note_folder` checks that.
 - The gate's declaration and test (`tests/test_notes_gate.py`, this paragraph) lie outside its
   scope.
 
