@@ -29,8 +29,11 @@ directly; AGENTS.md "Safe automated suite" gives the rule. In short:
 
 ```sh
 /home/pi/van_compute/scripts/van_compute.py available | jq .available
-# true: a Mac worker will take the job (add --source-root <checkout> from a worktree)
+# true: a Mac worker will take the job (add --source-root <checkout> from a worktree,
+# and --cancel-on-timeout when you will not come back for the job after the wait)
 /home/pi/van_compute/scripts/pi_compute.py run repo-full-suite --wait 60
+# no longer needed, or its status shows "placement": "pi-local": withdraw it
+/home/pi/van_compute/scripts/pi_compute.py cancel <job id>
 # false, or the job's status shows "placement": "pi-local": from the checkout
 nice -n 10 ionice -c2 -n7 python3 run_tests.py
 ```
@@ -98,7 +101,9 @@ source is read-only on the Pi at `/home/pi/van_compute/current/van_compute/`).
 
 - Placement: the broker runs a job on the Pi only after every Mac lease has
   lapsed (45 s, then a 30 s grace), and `pi_compute.py` has no option to force
-  it. The broker also holds or requeues a Pi-local job while any
+  it. A job that lands on the Pi anyway can be withdrawn with
+  `pi_compute.py cancel <id>` (release `7dff8425…`, 2026-11-15); the broker
+  stops its process group and the job ends `cancelled`, not `failed`. The broker also holds or requeues a Pi-local job while any
   `tmp/locks/active-diagnostics-*.lock` is write-locked (a CAN transmitter,
   such as a drive helper), so it may not run during a drive.
 - Sandbox (`engine.py` `_bubblewrap_runtime`): `--unshare-net` with only
