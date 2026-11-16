@@ -509,6 +509,7 @@ const CATALOG_LABELS = Object.freeze({
   "engine.target_crankshaft_torque": "Torque request",
   "engine.fuel_rate": "Fuel rate",
   "fuel.tank_level": "Fuel tank level",
+  "fuel.range": "Distance to empty",
   "transmission.output_speed": "Output shaft speed",
   "transmission.turbine_speed": "Turbine speed",
   "radar.alignment.azimuth": "Radar horizontal angle",

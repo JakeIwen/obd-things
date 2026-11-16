@@ -993,3 +993,8 @@ middle dot), so the one-screen layout gains no tile. The metric `fuel.tank_level
 quality (the `~`), is retained as a dated last reading (`tank ~NN% (last)`), and `fuel_level.json`
 shares its name and 1-100 range with the backend. It also appears in the System catalog as
 "Fuel tank level".
+
+The same sub-line carries the distance to empty (`fuel.range`, candidate, `fuel_range.json`) as
+`tank ~49% · 126 mi`. A single trailing `(last)` marks the line when any shown part is a retained
+reading, so the retained form stays short enough for the tile at 800 px portrait. The System catalog
+labels it "Distance to empty".

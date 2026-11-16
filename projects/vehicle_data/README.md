@@ -764,6 +764,11 @@ transport or ownership loss ends it for both companion metrics. Identical readin
 tile shows `tank ~NN%`, with `(last)` once it is a retained reading. Evidence and open scale questions:
 [finding](../ecu_mapping/findings/promaster_2022/2026-11-15_fuel_level_0x356.md).
 
+Distance to empty (`fuel.range`, miles, candidate) is B-CAN `0x760` bytes 4-5, `(b4 << 3) | (b5 >> 5)`,
+on the same receiver; raw `0x7FF` is no value and keeps the previous reading. Its decoder ignores the
+frame's odometer field. It shares the 2 s change-or-refresh publish throttle (state kept per metric).
+The tile line reads `tank ~49% · 126 mi`, with one `(last)` at the end once any shown part is retained.
+
 ### Serving and deployment
 
 Unit-only updates, boot ordering, the optional LAN address wait, and safe

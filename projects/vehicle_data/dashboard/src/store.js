@@ -34,6 +34,7 @@ export const RETAIN_LAST_READING = new Set([
   "vehicle.odometer",
   "vehicle.compass_direction",
   "fuel.tank_level",
+  "fuel.range",
   "engine.oil_life_remaining",
   "engine.coolant_temperature",
   "engine.vvt_oil_temperature",
@@ -50,6 +51,7 @@ export const RETAIN_LAST_READING = new Set([
 export const RETAIN_CANDIDATE_ESTIMATES = new Set([
   "vehicle.odometer",
   "fuel.tank_level",
+  "fuel.range",
   "radar.alignment.azimuth",
   "radar.alignment.elevation",
 ]);
