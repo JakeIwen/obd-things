@@ -21,6 +21,15 @@ NOTES_SCOPE = ("projects/*/findings/*.md", "projects/*/findings/**/*.md", "docs/
 TEST_MODULE_DIRS = ("tests", "checks")
 # Path fragments that put a ".md" string inside the scope.
 SCOPE_MARKERS = ("findings/", "docs/")
+# Every folder that holds notes, by hand: a snapshot that left one out could not tell, so the
+# payload check uses this list, and a checkout with Git data compares it with the tracked notes.
+NOTE_ROOTS = (
+    "docs",
+    "projects/ecu_mapping/findings",
+    "projects/radar/findings",
+    "projects/tpms/findings",
+    "projects/vehicle_configuration/findings",
+)
 
 
 def in_scope(path):
@@ -128,14 +137,21 @@ class NotesGateTests(unittest.TestCase):
         self.assertTrue([path for path in found if fnmatch(path, "projects/*/findings/*")])
 
     def test_suite_tasks_carry_every_note_folder(self):
-        folders = {str(Path(path).parent) for path in notes(REPO)}
         tasks = suite_tasks(REPO)
         self.assertEqual(
             {task["name"] for task in tasks}, {"repo-full-suite", "repo-tests"}
         )
         for task in tasks:
-            missing = sorted(f for f in folders if not covered(f, task["source_paths"]))
+            missing = [f for f in NOTE_ROOTS if not covered(f, task["source_paths"])]
             self.assertEqual(missing, [], task["name"])
+
+    @unittest.skipUnless((REPO / ".git").exists(), "a source snapshot cannot list what it left out")
+    def test_note_roots_list_every_folder_with_notes(self):
+        roots = {
+            "docs" if path.startswith("docs/") else "/".join(path.split("/")[:3])
+            for path in notes(REPO)
+        }
+        self.assertEqual(roots, set(NOTE_ROOTS))
 
     def test_no_test_module_names_a_note(self):
         readers, scanned = note_readers(REPO, skip=Path(__file__).resolve())
