@@ -247,21 +247,30 @@ writes a file, and no acknowledgement round trip exists.
 - `origin_monotonic` (CLOCK_MONOTONIC at reservation), `first_due`, `interval` (3600), `window`
   (600);
 - `session_end_monotonic` (null until that reservation's session ends);
-- `last_pass_bound_monotonic` (the latest moment a pass could have started, carried forward within a
-  boot).
+- `last_pass_bound_monotonic` (the latest moment a pass could have started, or a synthetic
+  conservative start at uncertain recovery, carried forward within a boot).
 
 ### Computation (before each launch)
 
-1. If the record is missing, unreadable or corrupt, has another `boot_id`, or its
-   `session_end_monotonic` is still null (a session that ended without its update): **uncertain** →
-   `due_in = 3600`. There is no wall-clock shortcut across a reboot.
-2. Otherwise `elapsed = now − last_pass_bound_monotonic` (no bound yet → no constraint from earlier
-   passes).
+1. If the record is missing, unreadable or corrupt, has another `boot_id`, has no durable pass
+   bound, or its `session_end_monotonic` is still null (a session that ended without its update):
+   **uncertain** → `due_in = 3600` and the new reservation records a synthetic
+   `last_pass_bound_monotonic = now`, exactly as if a pass just happened. No real pass or event is
+   needed. There is no wall-clock shortcut across a reboot.
+2. Otherwise `elapsed = now − last_pass_bound_monotonic`; carry the existing bound into the new
+   reservation.
 3. Harvested van sweep: `van-scan-cache.json` `last_scan.completed_at` (wall clock); if its age by
    the current wall clock is under 3600 s, `due_in` is at least `3600 − age`. (A wall-clock jump can
    only move a Pi pass relative to a van sweep; our own cadence uses only the monotonic clock.)
 4. `due_in = clamp(3600 − elapsed, 0, 3600)` combined with step 3 (the larger), and
    `first_due = max(300, due_in)`.
+
+**Invariant:** within one boot the earliest permitted pass time, the durable bound plus 3600 s,
+never moves earlier. A reservation or session-end update may raise the bound or keep it, never
+lower or clear it; the writer rejects an update that would. After a reboot recovery is uncertain
+again, so a new synthetic bound applies in the new monotonic epoch. Short sessions cannot erase
+an uncertain-recovery wait: reserve at 100, end at 200, reserve at 250 still permits no pass
+before 3700 (not 550). A null bound in an older or damaged record is uncertain evidence.
 
 ### Helper schedule
 
@@ -279,7 +288,7 @@ evidence, the 3600 s rule) is skipped, not carried over.
 ### Session end
 
 When the helper's supervision ends, the broker computes
-`last_pass_bound = min(session_end, t_k + 600)` for the latest `t_k ≤ session_end` (unchanged if
+`last_pass_bound = min(session_end, t_k + 600)` for the latest `t_k ≤ session_end` (unchanged, including a synthetic recovery bound, if
 the session ended before `t_0`) and submits a session-end update for that `reservation_id`. This
 assumes every scheduled pass happened at the latest moment it could have started, so even if every
 helper event is lost, consecutive pass starts are at least 3600 s apart: within a session by the
@@ -586,6 +595,11 @@ For the builder, and for the code reviewer to confirm:
    restoration, not a protocol error. Expiry before the first send leaves that module unattempted
    and the recorded pass start unchanged. The session-end budget remains conservative and never
    uses events to shorten a cooldown.
+9. **Uncertain recovery survives short sessions.** Reboot, missing/corrupt/unreadable records
+   and lost session ends create a synthetic bound at reservation time. Test several short
+   sessions, an end before first due, stale-end rejection and direct lowering/clearing refusal.
+   Deterministic random launch/end/lost-end/reboot sequences must preserve hourly spacing and
+   a full hour after every uncertain recovery.
 
 ## Code shape
 
@@ -721,6 +735,8 @@ Build corrections approved by the coordinator: actual monotonic pass-start event
 fresh authority/permits; the transport's memory-only `before_send` marker follows successful
 permit consumption; the speed reader lives in `vehicle_speed.py`, not the oversized C-CAN
 receiver; and the closed-CLI test lives separately from the oversized active-session tests.
+Uncertain recovery also records a synthetic pass bound that cannot decrease within a boot;
+this corrects a defect where a short session could erase the reboot/lost-end wait.
 The two broker collaborator extractions and speed/test moves have byte-identical output evidence.
 `web_v2.dtc_lite` preserves the new read-only `drive_reads` block so the dashboard can consume it.
 

@@ -1218,7 +1218,10 @@ are observations, never a reason to change a session or request mask.
 The helper waits at least five minutes into its ownership interval. The broker
 reserves a durable same-boot monotonic schedule before granting the capability:
 one ten-minute window each hour, plus a full-hour wait after reboot or uncertain
-budget recovery. A pass records its actual monotonic start before acquiring
+budget recovery. Uncertain recovery records a synthetic pass bound at the
+reservation time; short sessions cannot erase that wait. Within one boot the
+durable bound may rise or stay, never decrease or clear. A pass records its
+actual monotonic start before acquiring
 any permit and consumes the hour even when nothing can be sent. The helper
 also enforces 3600 seconds between actual starts; missed windows are skipped.
 This is elapsed time, not accumulated driving hours; running while parked

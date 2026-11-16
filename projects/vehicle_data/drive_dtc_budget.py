@@ -89,6 +89,10 @@ class Reservation:
                 '--drive-dtc-first-due', str(self.first_due)]
 
 
+class ClockEvidenceError(ValueError):
+    """Recognizable same-boot clock evidence cannot safely be discarded."""
+
+
 def parse_record(payload: dict) -> Reservation:
     if set(payload) != set(Reservation.__dataclass_fields__):
         raise ValueError('invalid drive-DTC budget fields')
@@ -100,22 +104,58 @@ def parse_record(payload: dict) -> Reservation:
             or type(record.interval) is not int or record.interval != INTERVAL_SECONDS
             or type(record.window) is not int or record.window != WINDOW_SECONDS):
         raise ValueError('invalid drive-DTC budget identity')
-    window_start(record.origin_monotonic, record.first_due, 0)
+    try:
+        window_start(record.origin_monotonic, record.first_due, 0)
+    except ValueError as exc:
+        raise ClockEvidenceError('invalid drive-DTC clock or schedule') from exc
     end, bound = record.session_end_monotonic, record.last_pass_bound_monotonic
     if end is not None and (not finite_number(end) or end < record.origin_monotonic):
-        raise ValueError('invalid drive-DTC session end')
+        raise ClockEvidenceError('invalid drive-DTC session end')
     if bound is not None and (not finite_number(bound) or bound < 0
                               or (end is not None and bound > end)):
-        raise ValueError('invalid drive-DTC pass bound')
+        raise ClockEvidenceError('invalid drive-DTC pass bound')
     return record
+
+
+def recovery_uncertain(previous: Reservation | None, *, boot_id: str, now: float) -> bool:
+    """Only another boot can retire a known clock bound that lies in the future."""
+    if not finite_number(now) or now < 0:
+        raise ClockEvidenceError('invalid current monotonic time')
+    if previous is None or previous.boot_id != boot_id:
+        return True
+    for stamp in (previous.origin_monotonic, previous.session_end_monotonic,
+                  previous.last_pass_bound_monotonic):
+        if stamp is not None and (not finite_number(stamp) or stamp < 0 or stamp > now):
+            raise ClockEvidenceError('same-boot budget clock evidence is invalid or future')
+    return (previous.session_end_monotonic is None
+            or previous.last_pass_bound_monotonic is None)
+
+
+def validate_transition(previous: Reservation | None, record: Reservation, *, now: float) -> None:
+    """Reject clearing/lowering a same-boot bound before any writer mutation."""
+    parse_record(asdict(record))
+    if record.last_pass_bound_monotonic is None:
+        raise ClockEvidenceError('new drive-DTC records require a pass bound')
+    recovery_uncertain(record, boot_id=record.boot_id, now=now)
+    if previous is None or previous.boot_id != record.boot_id:
+        return
+    recovery_uncertain(previous, boot_id=record.boot_id, now=now)
+    old, new = previous.last_pass_bound_monotonic, record.last_pass_bound_monotonic
+    if old is not None and (new is None or new < old):
+        raise ClockEvidenceError('drive-DTC pass bound cannot decrease or clear within a boot')
+    if record.origin_monotonic < previous.origin_monotonic:
+        raise ClockEvidenceError('drive-DTC reservation origin cannot decrease within a boot')
+    if (record.reservation_id == previous.reservation_id
+            and previous.session_end_monotonic is not None
+            and (record.session_end_monotonic is None
+                 or record.session_end_monotonic < previous.session_end_monotonic)):
+        raise ClockEvidenceError('drive-DTC session end cannot decrease or clear')
 
 
 def first_due(previous: Reservation | None, *, boot_id: str, now: float,
               harvest_completed: datetime | None, wall_now: datetime) -> float:
     """Conservative same-boot cooldown, with launch-only van harvest evidence."""
-    uncertain = (previous is None or previous.boot_id != boot_id
-                 or previous.session_end_monotonic is None
-                 or previous.session_end_monotonic > now)
+    uncertain = recovery_uncertain(previous, boot_id=boot_id, now=now)
     due = float(INTERVAL_SECONDS) if uncertain else 0.0
     if not uncertain and previous.last_pass_bound_monotonic is not None:
         elapsed = now - previous.last_pass_bound_monotonic
@@ -128,7 +168,7 @@ def first_due(previous: Reservation | None, *, boot_id: str, now: float,
 
 def ended_record(record: Reservation, ended: float) -> Reservation:
     if not finite_number(ended) or ended < record.origin_monotonic:
-        raise ValueError('invalid drive-DTC session end')
+        raise ClockEvidenceError('invalid drive-DTC session end')
     first = window_start(record.origin_monotonic, record.first_due, 0)
     bound = record.last_pass_bound_monotonic
     if ended >= first:
@@ -165,6 +205,7 @@ class DriveDtcBudget:
         self._queue: queue.Queue[_Operation] = queue.Queue(maxsize=QUEUE_SIZE)
         self._closing = threading.Event()
         self._record: Reservation | None = None
+        self._clock_fault_boot: str | None = None
         self._thread = threading.Thread(target=self._run, name='drive-dtc-budget', daemon=True)
         self._thread.start()
 
@@ -198,7 +239,11 @@ class DriveDtcBudget:
     def _load(self) -> None:
         try:
             clear_temporary_files(self.path)
-            self._record = parse_record(read_bounded_json(self.path, MAX_RECORD_BYTES))
+            payload = read_bounded_json(self.path, MAX_RECORD_BYTES)
+            self._record = parse_record(payload)
+        except ClockEvidenceError:
+            self._clock_fault_boot = payload['boot_id']
+            self._record = None
         except (OSError, ValueError, TypeError, OverflowError):
             self._record = None
 
@@ -213,12 +258,15 @@ class DriveDtcBudget:
 
     def _reserve(self) -> Reservation:
         boot, now = self._boot_id(), self._monotonic()
+        if self._clock_fault_boot == boot:
+            raise ClockEvidenceError('saved same-boot clock evidence is corrupt')
         previous = self._record
+        uncertain = recovery_uncertain(previous, boot_id=boot, now=now)
         due = first_due(previous, boot_id=boot, now=now,
                         harvest_completed=self._harvest_completed(), wall_now=self._wall_now())
-        bound = previous.last_pass_bound_monotonic if previous and previous.boot_id == boot else None
-        if bound is not None and bound > now:
-            bound = None
+        # A full-hour wait must survive early clean ends and subsequent short
+        # sessions: persist it as though a pass happened at recovery time.
+        bound = now if uncertain else previous.last_pass_bound_monotonic
         return Reservation(uuid.uuid4().hex, boot, now, due, last_pass_bound_monotonic=bound)
 
     def _apply(self, operation: _Operation) -> None:
@@ -230,8 +278,8 @@ class DriveDtcBudget:
             record = ended_record(self._record, operation.ended)
         else:
             return  # A delayed final from a previous helper cannot modify a new reservation.
+        validate_transition(self._record, record, now=self._monotonic())
         payload = asdict(record)
-        parse_record(payload)
         if json_size(payload) > MAX_RECORD_BYTES:
             raise ValueError('drive-DTC budget exceeds one KiB')
         # Keep the conservative pending record even if rename or directory fsync fails.

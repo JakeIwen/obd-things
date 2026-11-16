@@ -492,7 +492,8 @@ the unchanged ownership/restoration interval. `FreshAuthority.last_snapshot`
 retains the actual acquisition evidence for DTC event reporting. Flag-off helper
 runs construct no watch or BCM socket and emit no DTC events.
 `drive_dtc_budget.py` serializes crash-durable launch reservations with a
-bounded two-second caller wait; `drive_dtc_control.py` owns opt-in arguments,
+bounded two-second caller wait and a never-decreasing same-boot pass bound
+(including synthetic uncertain-recovery bounds); `drive_dtc_control.py` owns opt-in arguments,
 capability cancellation, cadence-violation stops and the separate bounded
 results writer. `drive_reads.py` validates/reparses saved results for insights
 and the dashboard's three-source merge. Filenames, timing and event outcomes
