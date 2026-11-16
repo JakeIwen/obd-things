@@ -598,6 +598,33 @@ unrecorded disturbance are all open; the logs cannot choose.
 - Whether the cluster messages clear without a fault-code read or a Service
   Drive Alignment. Neither has been run since the messages appeared.
 
+### Parked radar code read, November 15, 11:02 pm Mountain
+
+Owner-authorized, with the ignition on, the engine off and the van in Park. Job
+`dtc-owner-radar-20261116T060236Z` sent one physical `19 02 FF` request to the radar
+(`radar_acc`) through the unchanged guarded batch worker and got one positive reply. The
+adapters were verified listen-only afterwards. Report:
+`tmp/inventories/radar_acc/dtcs_batch_dtc-owner-radar-20261116T060236Z_radar_acc.json`.
+
+| Code | Status | Meaning | October 8 |
+| --- | --- | --- | --- |
+| C1418-78 | `8F`: failed now, pending, confirmed, warning lamp requested | No reviewed FCA title; the standard subtype `78` is "alignment or adjustment incorrect" | `08`, history only |
+| C1409-97 | `08`: confirmed, not failing now | No reviewed FCA title; the standard subtype `97` is "component or system operation obstructed or blocked" | absent |
+| C1420-25, C1420-66, C1422-49, C1422-66, C1425-45, C1429-66, C1429-68 | `40`: test not completed this cycle | Blinded, internal plausibility, program memory and high-temperature monitors that had not run yet | same seven, same status |
+
+The one active fault is the alignment code, which went from history to active between October 8
+and this read. The blocked code is new since October 8 and is stored but not failing, which fits
+the cluster's "Temporarily Blocked" message having come first and "ACC Unavailable Service
+Required" staying latched. The read does not show which stored angle or limit the radar judged
+out of range, and it does not validate the physical aim.
+
+How the read was run: the continuous display receiver holds a shared C-CAN lease, so the batch
+was started inside `lib.can_handoff.active_turn("c-can")`. The batch's first gate needs the
+broker's ignition-on, engine-off view to be under 5 s old, the broker refreshes that view about
+every 4 s, and it stops refreshing while the handoff is held. Two attempts therefore stopped at
+"broker vehicle state is not fresh" before any request. The third took the handoff right after a
+fresh observation (147 ms old) and passed every gate unchanged.
+
 ## Reproduction and provenance
 
 Working evidence: `tmp/radar/post-collision-20261008/`. Inputs are unchanged.
