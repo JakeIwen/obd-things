@@ -607,8 +607,10 @@ New modules, one concern each, with their AGENTS.md map entries in the same comm
 Extended in place: `transmit_permit.py` (two purposes), `radar_alignment.py` (`receive_reply`, used
 by `poll`), `radar_service_transport.py` (one call in `_payload`), `radar_service_alignment.py`
 (`run_attempted`, `CommandReader.pending`), `helper_startup_grant.py` (the optional `capabilities`
-key in `ready`), `ccan_powertrain.py` (the speed reader promoted from
-`radar_service_alignment._speed_mph`).
+key in `ready`), `vehicle_speed.py` (a new pure sibling holding the speed reader and bound promoted from
+`radar_service_alignment._speed_mph`; the radar module retains its original aliases,
+while `ccan_powertrain.py` is unchanged). Fixed speed decoding remains in
+`lib/broadcast_signals.py`, without duplicated IDs or scaling.
 
 Over-limit files gain no net lines: `active_drive.py` / `run_active_session` (the oil-life block
 moves to a sibling step first), `broker.py` (`build_parser` moves to `broker_cli.py` first),

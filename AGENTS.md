@@ -190,7 +190,8 @@ and permits for every radar send); `radar_service_control.py` (broker side:
 helper flag and command pipe, run record, event validation, run log under
 `tmp/radar/service_alignment/`); the web relay in `web.py`; and
 `dashboard/src/dialogs/RadarCalibration{.jsx,.helpers.js}`. The run state is
-not in `/v1/status`. `ccan_powertrain.speed_mph` owns the shared finite, bounded speed reader;
+not in `/v1/status`. `vehicle_speed.speed_mph` owns the shared finite, bounded speed reader;
+it selects an already-decoded observation, never duplicates broadcast scaling.
 `radar_service_alignment._speed_mph` remains a compatibility alias.
 `ServiceAlignment.run_attempted` retains any created run for the helper epoch,
 and `CommandReader.pending()` observes partial lines, readability and EOF
@@ -521,6 +522,7 @@ caller has retired, with owner/callers/retirement stated in the wrapper header.
 | `projects/vehicle_data/dashboard/src/views/dtcSources.helpers.js` | health.helpers.js | Diagnostic source merge |
 | `projects/vehicle_data/drive_dtc_contract.py` | Drive DTC helper, broker and tests | Fixed frames, timing, parser and standalone event contract |
 | `projects/vehicle_data/drive_dtc.json` | drive_dtc_contract and dashboard | Shared DTC vocabulary and bounds |
+| `projects/vehicle_data/vehicle_speed.py` | Radar service alignment and DriveDtcSteps | Pure bounded reader of decoded speed observations |
 | `projects/vehicle_data/drive_dtc_steps.py` | active_drive.run_active_session | Opt-in reservation schedule, per-cycle DTC checks and event emission |
 | `projects/vehicle_data/drive_dtc_transport.py` | Drive DTC step | Fixed single-request-frame exchanges, no flow control |
 | `projects/vehicle_data/drive_dtc_watch.py` | Drive DTC step | Bounded receive-only tester watch |

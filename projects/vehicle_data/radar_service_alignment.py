@@ -27,7 +27,7 @@ import re
 import sys
 
 from lib.timeutil import finite_number
-from projects.vehicle_data.ccan_powertrain import MAX_SPEED_MPH, speed_mph as _speed_mph
+from projects.vehicle_data.vehicle_speed import MAX_SPEED_MPH, speed_mph as _speed_mph
 from projects.vehicle_data.radar_service_transport import (
     ENTER_SESSION, KEEP_ALIVE, NEGATIVE, POSITIVE, READ_STATUS, ROUTINE_COMPLETED, ROUTINE_IDLE,
     SKIPPED, START_ROUTINE, STOP_ROUTINE, Exchange, RadarServiceTransport, Reply, RoutineStatus,

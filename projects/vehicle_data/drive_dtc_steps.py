@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from lib.timeutil import finite_number, utc_now
-from projects.vehicle_data import ccan_powertrain, drive_dtc_contract as contract
+from projects.vehicle_data import vehicle_speed, drive_dtc_contract as contract
 from projects.vehicle_data import drive_dtc_transport, drive_dtc_watch
 from projects.vehicle_data.radar_drive_steps import SessionEnding
 
@@ -178,7 +178,7 @@ class DriveDtcSteps:
         return self._emit(
             contract.READ_EVENT, **{"pass": self.current.index}, module=module,
             request=contract.REQUEST, started_at=started_at, completed_at=self.wall_now(),
-            rpm=rpm, speed_mph=ccan_powertrain.speed_mph(evidence), **result.event_fields(),
+            rpm=rpm, speed_mph=vehicle_speed.speed_mph(evidence), **result.event_fields(),
         )
 
     def _read(self, module):

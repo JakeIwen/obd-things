@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from projects.vehicle_data import (
-    active_session_gates, ccan_powertrain, drive_dtc_contract as contract,
+    active_session_gates, vehicle_speed, drive_dtc_contract as contract,
     drive_dtc_steps as steps, drive_dtc_transport, radar_alignment,
     radar_drive_steps, radar_service_alignment, transmit_permit,
 )
@@ -376,5 +376,5 @@ def test_window_edge_read_may_finish_late_without_moving_pass_start():
                                            (float('nan'), None), (float('inf'), None)])
 def test_promoted_speed_reader_preserves_service_boundaries(value, expected):
     evidence = snapshot((750, 751, 752), speed_observation(value))
-    assert ccan_powertrain.speed_mph(evidence) == expected
+    assert vehicle_speed.speed_mph(evidence) == expected
     assert radar_service_alignment._speed_mph(evidence) == expected
