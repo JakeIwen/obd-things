@@ -463,6 +463,10 @@ something in the van: a calibration that finishes changes how the radar aims.
   carries its own date ("parked read Oct 8 …").
 - "Last read" is the newest successful read from any source; with no success yet it shows the last
   attempt.
+- The parked scan returns at most 25 codes per group. Beside a newer filtered read, the ones it
+  counted but did not return appear as "+N more in the parked read", apart from the codes shown,
+  because the filtered read may list some of them; a total that depends on both is a range, for
+  example "26–27 current".
 
 ## Buses and adapters
 

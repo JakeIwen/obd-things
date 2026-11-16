@@ -145,7 +145,7 @@ function applyRead(records, read, module) {
   }));
 }
 
-/** Three-source merge. Parked module facts and hidden parked group counts never change. */
+/** Three-source merge. Parked module facts never change; hidden parked counts are reported apart. */
 export function mergeVanScan(d) {
   const sources = sourceReads(d);
   if (!sources.size) return d;
@@ -186,7 +186,10 @@ export function mergeVanScan(d) {
     records.forEach((r) => groups[recordGroup(r)].push(r));
   });
   return { ...d, groups, modules: [...modules.values()],
-    group_counts: Object.fromEntries(DTC_GROUPS.map(([name]) => [name, groups[name].length + hidden[name]])),
+    // A filtered read may list a code the parked read counted but did not return, so a sum of
+    // shown and hidden records is not a unique total: the hidden parked count stays separate.
+    group_counts: Object.fromEntries(DTC_GROUPS.map(([name]) => [name, groups[name].length])),
+    group_hidden_counts: hidden,
     group_returned_counts: Object.fromEntries(DTC_GROUPS.map(([name]) => [name, groups[name].length])),
     van: vanCount ? { modules: vanCount, lastAt: vanAt, scanAt: vanAt } : null };
 }

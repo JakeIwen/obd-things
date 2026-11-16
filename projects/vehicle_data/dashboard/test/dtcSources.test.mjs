@@ -132,11 +132,12 @@ test("parked truncation retains unreturned counts while only returned records mo
   const d = input({ total: 30, drive: [read(T1)] });
   const merged = mergeVanScan(d);
   assert.equal(merged.groups_truncated, true);
-  assert.equal(merged.group_counts.confirmed_history, 29);
+  assert.equal(merged.group_counts.confirmed_history, 0);
+  assert.equal(merged.group_hidden_counts.confirmed_history, 29);
   assert.equal(merged.group_counts.not_reported, 1);
-  assert.match(codesView(d, NOW, false).groups.find((g) => g.key === "confirmed_history").moreText, /\+29 more from the parked read/);
-  assert.equal(codesView(d, NOW, false).groups.find((g) => g.key === "confirmed_history").summary,
-    "Confirmed history · 29 · showing 0 of 29");
+  const group = codesView(d, NOW, false).groups.find((g) => g.key === "confirmed_history");
+  assert.match(group.moreText, /The parked read counted 29 more it did not return/);
+  assert.equal(group.summary, "Confirmed history · 0 shown · +29 more in the parked read");
 });
 
 test("Mountain dates include explicit source, coverage, date and seasonal zone", () => {
@@ -208,4 +209,26 @@ test("review: empty reads with null, zero or partial masks say zero codes report
     assert.match(codesView(cleanParked([drive]), REVIEW_NOW, false).modules.rows.find((r) => r.key === "radar_acc").meta,
       /no failed, pending, confirmed or warning-lamp codes · from the Pi’s drive read/);
   }
+});
+
+test("review: hidden parked counts are never summed with filtered records into an exact total", () => {
+  // 26 current codes in the parked read, 25 returned; a newer read lists all 26, the hidden one too.
+  const codes = Array.from({ length: 26 }, (_, i) => (0x963200 + i).toString(16).toUpperCase());
+  const current = (code) => ({ ...record(code, "09", T0), display_group: "current",
+    observation_state: "observed" });
+  const d = input({ records: codes.slice(0, 25).map(current), total: 26,
+    drive: [read(T1, codes.map(current), "FF")] });
+  d.groups = { current: d.groups.confirmed_history };
+  d.group_counts = { current: 26 };
+  d.group_returned_counts = { current: 25 };
+  const merged = mergeVanScan(d);
+  const shown = Object.values(merged.groups).flat().length;
+  assert.equal(shown, 26);
+  assert.equal(merged.group_counts.current, 26, "shown records only");
+  assert.equal(merged.group_hidden_counts.current, 1);
+  const vm = codesView(d, NOW, false);
+  assert.equal(vm.current.summary, "Current · 26 shown · +1 more in the parked read");
+  assert.doesNotMatch(vm.current.summary, /\b27\b/);
+  assert.deepEqual(vm.badge, { text: "26–27 current", tone: "amber" });
+  assert.match(vm.current.moreText, /some may be codes shown here/);
 });

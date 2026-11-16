@@ -276,8 +276,11 @@ Rules:
    and is withheld when a newer truncated drive read reported codes; the card then names the module
    and count. Beside newer filtered lines a module's parked status carries its date.
 8. "Last read" is the newest successful read from any source; with none, the last attempt.
-9. Every filtered result shows its source, coverage and Mountain date and time. Truncated parked
-   groups keep their "+N more".
+9. Every filtered result shows its source, coverage and Mountain date and time.
+10. Records the parked read counted but did not return (it returns at most 25 per group) are a
+    separate figure ("26 shown · +1 more in the parked read"), never added to the shown records
+    as an exact total: a filtered read may list one of them. A count that depends on both is shown
+    as a range ("26–27 current").
 
 The dashboard's caveats page ("Three sources on one card") says the same for the owner.
 

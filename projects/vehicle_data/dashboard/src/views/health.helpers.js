@@ -428,6 +428,13 @@ export function modulesView(dtcs, nowMs) {
   };
 }
 
+/** A group's unique count, or its bounds when hidden parked records may repeat shown ones. */
+function countRange(group) {
+  if (!group.hidden) return fmtInt(group.total);
+  const low = Math.max(group.returned, group.hidden);
+  return low === group.total ? fmtInt(low) : fmtInt(low) + "–" + fmtInt(group.total);
+}
+
 function sumCounts(counts) {
   let total = 0;
   const keys = Object.keys(counts);
@@ -447,13 +454,15 @@ function codeGroups(d, nowMs) {
   const groups = obj(d.groups) || {};
   const counts = obj(d.group_counts) || {};
   const returnedCounts = obj(d.group_returned_counts) || {};
+  const hiddenCounts = obj(d.group_hidden_counts);
   const cutoff = historyCutoff(nowMs);
   const groupModels = [];
   for (let g = 0; g < DTC_GROUPS.length; g += 1) {
     const key = DTC_GROUPS[g][0];
     const title = DTC_GROUPS[g][1];
     const entries = arr(groups[key]).filter(obj);
-    const total = num(counts[key]) !== null ? counts[key] : entries.length;
+    const hidden = hiddenCounts ? num(hiddenCounts[key]) || 0 : 0;
+    const total = (num(counts[key]) !== null ? counts[key] : entries.length) + hidden;
     const returned = Math.min(entries.length, num(returnedCounts[key]) !== null ? returnedCounts[key] : entries.length);
     if ((key === "other" || key === "not_reported") && total <= 0) continue;
     const recent = [];
@@ -466,14 +475,22 @@ function codeGroups(d, nowMs) {
     }
     uniqueKeys(recent.concat(older));
     const cut = returned < total;
+    // Merged with filtered reads, `total` is shown + hidden, an upper bound, never shown as exact.
+    const summary = hidden > 0
+      ? title + " · " + fmtInt(returned) + " shown · +" + fmtInt(hidden) + " more in the parked read"
+      : title + " · " + fmtInt(total) + (cut ? " · showing " + returned + " of " + fmtInt(total) : "");
+    const moreText = hidden > 0
+      ? "The parked read counted " + fmtInt(hidden) + " more it did not return; some may be codes shown here."
+      : cut && d.drive_reads?.available === true ? "+" + fmtInt(total - returned) + " more from the parked read (not returned in this list)" : null;
     groupModels.push({
       key,
       title,
       total,
       returned,
-      summary: title + " · " + fmtInt(total) + (cut ? " · showing " + returned + " of " + fmtInt(total) : ""),
+      hidden,
+      summary,
       rows: recent,
-      moreText: cut && d.drive_reads?.available === true ? "+" + fmtInt(total - returned) + " more from the parked read (not returned in this list)" : null,
+      moreText,
       older,
       olderSummary: older.length ? "Older than one month · " + older.length : null,
       note: key === "incomplete_only" ? "Not a fault: the module had not finished that self-test when it was read." : null,
@@ -508,7 +525,8 @@ export function codesView(dtcs, nowMs, scanEnabled) {
   const anyRead = newest || str(coverage.last_attempt_at);
   const unlisted = unlistedReports(d);
   const groupModels = codeGroups(d, nowMs);
-  const records = Object.keys(counts).length ? sumCounts(counts) : groupModels.reduce((n, g) => n + g.total, 0);
+  const records = (Object.keys(counts).length ? sumCounts(counts) : groupModels.reduce((n, g) => n + g.total, 0)) +
+    sumCounts(obj(d.group_hidden_counts) || {});
   const modules = modulesView(d, nowMs);
   const moduleRows = moduleList(d);
   const authoritativeZero =
@@ -536,7 +554,7 @@ export function codesView(dtcs, nowMs, scanEnabled) {
   const current = groupModels.find((g) => g.key === "current") || null;
   const currentCount = current ? current.total : 0;
   let badge = null;
-  if (currentCount > 0) badge = { text: currentCount + " current", tone: "amber" };
+  if (currentCount > 0) badge = { text: countRange(current) + " current", tone: "amber" };
   else if (anyRead) badge = { text: moduleList(d).some((m) => m.van_read || m.drive_read || m.drive_truncated)
     ? "None shown current" : "None current", tone: "" };
   const van = obj(d.van);
