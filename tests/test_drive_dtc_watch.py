@@ -9,6 +9,10 @@ from projects.vehicle_data import drive_dtc_watch as watch
 from tests.drive_dtc_support import CHANNEL, Clock, WatchFeed, watch_entry
 
 
+# Linux-only flag: the scripted feed also runs on macOS without SocketCAN.
+MSG_CONFIRM = getattr(socket, "MSG_CONFIRM", 0x800)
+
+
 def make_watch(entries=()):
     clock, feed = Clock(), WatchFeed(entries)
     sentinel = watch.ForeignTesterWatch(CHANNEL, rf_hub_profiles=active_drive.TPMS_PROFILES,
@@ -63,7 +67,7 @@ def test_every_existing_helper_request_is_ours_only_with_local_flag():
 
 
 @pytest.mark.parametrize('entry', [
-    foreign(), watch_entry(0x98DA2AF1, contract.REQUEST_DATA, flags=socket.MSG_CONFIRM),
+    foreign(), watch_entry(0x98DA2AF1, contract.REQUEST_DATA, flags=MSG_CONFIRM),
     watch_entry(0x98DA2AF1, b'\x03\x19\x02\xff\0\0\0\0'),
     watch_entry(0x98DA2AF2, contract.REQUEST_DATA),
     watch_entry(0x98DA2AF1, contract.REQUEST_DATA, dlc=7),
