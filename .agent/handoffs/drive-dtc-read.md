@@ -108,9 +108,12 @@ Each module read is one synchronous, bounded exchange in one helper cycle, on on
   2. the foreign-tester and service checks (sections below);
   3. `drain` (radar: the poller's bounded 32-frame drain; a drain failure → `not_sent`,
      `drain_failed`);
-  4. **mark the module attempted for this pass** (in memory), then call send. From this point the
-     module is never retried in this pass, even if the send raises ambiguously (an `OSError` after
-     which the frame may or may not have gone out);
+  4. consume the permit; immediately after successful consumption, the transport calls its
+     `before_send` hook to **mark the module attempted for this pass** (in memory only), then
+     performs the fixed socket send. No event emission or other I/O occurs between permit
+     consumption and sending. From the marker onward the module is never retried in this pass,
+     even if the send raises ambiguously (an `OSError` after which the frame may or may not have
+     gone out);
   5. receive until a final answer or the deadline:
      - first answer within 1.0 s of the send;
      - `7F 19 78` (response pending) extends the deadline to 2.5 s after the send, never beyond;
@@ -124,7 +127,8 @@ Each module read is one synchronous, bounded exchange in one helper cycle, on on
      - any other frame → `malformed`; deadline → `no_response`.
 - Exceptions: `OSError`, `ValueError` and timeouts become outcomes (as in the radar poller).
   `ExpiredTransmitPermitError` raised before the frame is sent becomes `not_sent`
-  (`permit_expired`); the module is then not marked attempted. Any other `TransmitPermitError` stays
+  (`permit_expired`); the module is then not marked attempted and can retry inside the same pass
+  window. This does not move the recorded pass start or refund its hourly budget. Any other `TransmitPermitError` stays
   fatal (`helper_failed`), as for every existing transport.
 - Late frames:
   - BCM: after its socket closes, a late frame reaches no consumer.
@@ -263,9 +267,13 @@ writes a file, and no acknowledgement round trip exists.
 
 Launch arguments: `--enable-drive-dtc --drive-dtc-reservation <reservation_id> --drive-dtc-origin
 <origin_monotonic> --drive-dtc-first-due <first_due>`. Window k (k = 0, 1, …) is
-`[t_k, t_k + 600]` with `t_k = origin + first_due + k·3600`. A pass starts (its first module is
-marked attempted) only inside a window **and** at least 3600 monotonic seconds after the previous
-actual pass start in this session. A pass that cannot start in its window (gates, dirty watch, stale
+`[t_k, t_k + 600]` with `t_k = origin + first_due + k·3600`. A pass starts only inside a window **and** at least 3600 monotonic seconds after the previous
+actual pass start in this session. Before acquiring fresh authority or any permit for its first
+module, the helper requires a clean foreign-tester watch and clear service-attempt/pending-command
+checks, records `started_monotonic` from CLOCK_MONOTONIC, and emits `dtc_pass started`. This reading
+is the start used for the helper's 3600-second rule. The pass consumes the hour even if no module
+is subsequently sent. Authority acquisition and sends happen in a later step, so emitting the
+start event cannot consume a permit's 250 ms lifetime. A pass that cannot start in its window (gates, dirty watch, stale
 evidence, the 3600 s rule) is skipped, not carried over.
 
 ### Session end
@@ -304,8 +312,11 @@ helper's own rule, across sessions in a boot by the bound, across reboots by the
 
 ### Other
 
-- Helper events are not part of the budget. A `dtc_pass started` outside the scheduled windows, or
-  less than 3600 s after the previous one in the session (a code fault), makes the broker drop that
+- Helper events are not part of the budget. The broker checks `dtc_pass started` using its
+  `started_monotonic` field, never receipt time: the field must be inside the reserved window, at
+  least 3600 s after the previous start in the session, and no later than the broker's own
+  monotonic reading at receipt. An arbitrarily delayed event is valid, including a window-edge
+  start received after the window closes. A violation (a code fault) makes the broker drop that
   helper's results, stop it through the ordinary supervisor stop (its restoration and final event
   are processed as for any stop), and launch without the capability for the rest of its lifetime.
 - Harvested sweeps are consulted at launch only (a stated relaxation). A sweep imported after a
@@ -360,6 +371,7 @@ the step disables itself for the epoch instead.
  "detail": "...", "interface_mode": "armed_diagnostic"}
 {"type": "dtc_pass", "session": "<reservation_id>", "pass": 0, "state": "started|finished",
  "reason": "first_attempt|all_modules_done|window_closed|service_latch|foreign_tester|session_ending",
+ "started_monotonic": 12345.0,
  "detail": "...", "interface_mode": "armed_diagnostic"}
 {"type": "dtc_read", "session": "<reservation_id>", "pass": 0, "module": "radar_acc|bcm_ccan",
  "request": "19 02 8F",
@@ -371,8 +383,11 @@ the step disables itself for the epoch instead.
 ```
 
 - `session` is the launch's reservation id and `pass` the window index k, so passes from different
-  launches are never combined. `dtc_pass started` is emitted when the first module of a pass is
-  marked attempted. `count` is present for `complete` (0 or 1) and `truncated` (from the FirstFrame
+  launches are never combined. `dtc_pass started` requires `started_monotonic`; `finished` omits
+  it. The start is recorded and emitted before fresh authority or permits are acquired, even if
+  no module is ultimately sent. The `first_attempt` reason denotes admission to the first
+  attempt, not proof that a request was sent. Per-module events carry the pass identity and
+  their existing wall-time observation fields, not a second monotonic pass start. `count` is present for `complete` (0 or 1) and `truncated` (from the FirstFrame
   length), otherwise null. `frame_hex` is the final answer frame as received.
 - The broker parses `frame_hex` itself; a frame it cannot parse is stored as `unparsed`, a storage
   value, never a protocol error.
@@ -565,6 +580,12 @@ For the builder, and for the code reviewer to confirm:
    the commit message).
 7. **Approval covers building, not activation.** Turning the broker flag on is a separate step after
    the code review.
+8. **Actual start time, not event receipt.** A start at the final instant of its window delivered
+   after the window closes is accepted. A start before its window, less than 3600 s after the
+   previous start, or later than receipt takes the normal cadence-violation stop with verified
+   restoration, not a protocol error. Expiry before the first send leaves that module unattempted
+   and the recorded pass start unchanged. The session-end budget remains conservative and never
+   uses events to shorten a cooldown.
 
 ## Code shape
 

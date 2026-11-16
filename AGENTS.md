@@ -468,6 +468,16 @@ caches; `insights.py` retains its public imports. Dashboard diagnostic source
 merging lives in `dashboard/src/views/dtcSources.helpers.js`, re-exported
 through `health.helpers.js`.
 
+The opt-in drive DTC library shares frames, purposes, schedule and event vocabulary
+in `projects/vehicle_data/drive_dtc.json` / `drive_dtc_contract.py`.
+`drive_dtc_transport.py` sends only one fixed `19 02 8F` request to each of
+`radar_acc` and `bcm_ccan`, never flow control; `drive_dtc_watch.py` owns the
+bounded receive-only foreign-tester watch. An optional in-memory radar send
+marker runs after permit consumption and before socket send. A pass's
+`started_monotonic` is recorded before any permit is acquired, so event delivery
+cannot age a permit or be confused with actual-start timing. These library
+components do not enable the broker capability.
+
 ## Backend ownership and dependency direction
 
 `projects/vehicle_data/van_scan_pi_requests.py` owns the passive harvester’s fixed Pi request tables;
@@ -496,6 +506,10 @@ caller has retired, with owner/callers/retirement stated in the wrapper header.
 | --- | --- | --- |
 | `projects/vehicle_data/van_scan_cache.py` | TelemetryInsights | Harvested scan cache validation |
 | `projects/vehicle_data/dashboard/src/views/dtcSources.helpers.js` | health.helpers.js | Diagnostic source merge |
+| `projects/vehicle_data/drive_dtc_contract.py` | Drive DTC helper, broker and tests | Fixed frames, timing, parser and standalone event contract |
+| `projects/vehicle_data/drive_dtc.json` | drive_dtc_contract and dashboard | Shared DTC vocabulary and bounds |
+| `projects/vehicle_data/drive_dtc_transport.py` | Drive DTC step | Fixed single-request-frame exchanges, no flow control |
+| `projects/vehicle_data/drive_dtc_watch.py` | Drive DTC step | Bounded receive-only tester watch |
 | `projects/vehicle_data/broker_cli.py` | broker.main and offline parser callers | Broker command-line parser and defaults |
 | `projects/vehicle_data/broker.py` | van-telemetry.service | Telemetry runtime and ordered CAN lifecycle |
 | `projects/vehicle_data/web_v2.py` | Both van-telemetry-web listeners | Dashboard static serving and web.py /v1 API |

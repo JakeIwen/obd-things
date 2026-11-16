@@ -18,6 +18,7 @@ from typing import Callable
 from lib import diagnostic_safety
 from lib.modules import MODULES
 from projects.vehicle_data import ccan_powertrain
+from projects.vehicle_data.drive_dtc_contract import PURPOSES as DTC_PURPOSES
 
 
 PCM_GENERATOR_DUTY = "pcm.generator_field_duty"
@@ -25,6 +26,8 @@ PCM_CRANKSHAFT_TORQUE = "pcm.crankshaft_torque"
 PCM_VVT_OIL_TEMPERATURE = "pcm.vvt_oil_temperature"
 PCM_OIL_LIFE = "pcm.oil_life_remaining"
 RF_HUB_PRESSURE = "rf_hub.pressure"
+RADAR_DTC_READ = DTC_PURPOSES["radar_acc"]
+BCM_DTC_READ = DTC_PURPOSES["bcm_ccan"]
 RADAR_ALIGNMENT = "radar_acc.alignment"
 RADAR_ALIGNMENT_FLOW = "radar_acc.alignment_flow_control"
 # Owner-started Service Drive Alignment (radar_service_alignment.py): one
@@ -38,6 +41,7 @@ RADAR_SERVICE_FLOW = "radar_acc.service_alignment.flow_control"
 ALLOWED_PURPOSES = frozenset(
     (PCM_GENERATOR_DUTY, PCM_CRANKSHAFT_TORQUE, PCM_VVT_OIL_TEMPERATURE, PCM_OIL_LIFE,
      RF_HUB_PRESSURE, RADAR_ALIGNMENT, RADAR_ALIGNMENT_FLOW,
+     RADAR_DTC_READ, BCM_DTC_READ,
      RADAR_SERVICE_SESSION, RADAR_SERVICE_START, RADAR_SERVICE_STOP,
      RADAR_SERVICE_STATUS, RADAR_SERVICE_KEEPALIVE, RADAR_SERVICE_FLOW)
 )
