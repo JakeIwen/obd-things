@@ -140,7 +140,8 @@ class PiRequestSetSyncTests(unittest.TestCase):
     """The exclusion set must match what the Pi's helpers can actually send."""
 
     def test_fixed_helpers(self):
-        from projects.vehicle_data import active_drive, bcan_auxiliary, pcm_electrical, radar_alignment
+        from projects.vehicle_data import (active_drive, bcan_auxiliary, pcm_electrical,
+                                           radar_alignment, radar_service_transport)
 
         def uds(frame: bytes) -> bytes:
             return frame[1 : 1 + frame[0]]
@@ -159,7 +160,8 @@ class PiRequestSetSyncTests(unittest.TestCase):
         self.assertEqual(harvest.PI_FIXED_REQUESTS[target(MODULES["rf_hub"])], tpms)
         self.assertEqual(
             harvest.PI_FIXED_REQUESTS[target(radar_alignment.MODULE)],
-            {uds(radar_alignment.REQUEST_DATA), bytes.fromhex("19 02 8F")},
+            {uds(radar_alignment.REQUEST_DATA), bytes.fromhex("19 02 8F")}
+            | {uds(spec.request) for spec in radar_service_transport.EXCHANGES},
         )
         self.assertEqual(
             harvest.PI_FIXED_REQUESTS[target(bcan_auxiliary.ICS)],
@@ -181,6 +183,19 @@ class PiRequestSetSyncTests(unittest.TestCase):
         exchanges, _, _, stats = harvest.process_frames("c-can", frames_of(lines))
         self.assertEqual(stats["pi_requests"], 1)
         self.assertEqual([(e["target"], e["request_hex"]) for e in exchanges], [("2A", "222185")])
+
+    def test_radar_service_requests_are_only_excluded_for_radar(self):
+        from projects.vehicle_data import radar_service_transport
+
+        lines = []
+        for i, spec in enumerate(radar_service_transport.EXCHANGES):
+            payload = spec.request[1:1 + spec.request[0]].hex()
+            lines += exchange(T0 + 2 * i, "2A", payload, "7F" + payload[:2] + "31")
+            lines += exchange(T0 + 2 * i + 1, "10", payload, "7F" + payload[:2] + "31")
+        exchanges, _, _, stats = harvest.process_frames("c-can", frames_of(lines))
+        self.assertEqual(stats["pi_requests"], len(radar_service_transport.EXCHANGES))
+        self.assertEqual(len(exchanges), len(radar_service_transport.EXCHANGES))
+        self.assertTrue(all(e["target"] == "10" for e in exchanges))
 
     def test_dtc_tooling(self):
         from tools import dtc_inventory
