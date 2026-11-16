@@ -47,7 +47,20 @@ Python requirements can't safely share a cache other jobs write.
 When the checkout is not writable (a Pi-local compute job mounts its source
 snapshot read-only), the runner copies it into `TMPDIR`, skipping `.git`,
 `tmp/` and bytecode as a snapshot does, and re-runs itself from the copy with
-the same arguments. The copy is removed when the run ends.
+the same arguments. It refuses (exit 2) a `TMPDIR` inside the checkout, where the
+copy would copy itself. The copied run gets its own process group. SIGTERM,
+SIGINT or SIGHUP to the runner is forwarded to that group, escalated to SIGKILL
+after 5 s (under van-compute's 10 s SIGTERM-to-SIGKILL grace), and the copy is
+removed once the group is gone. The runner then ends by the same signal, as it
+does when the copied run dies by one, so a shell sees 143 for SIGTERM, not 241.
+
+SIGKILL can't be caught. Under van-compute the copy path happens only on the Pi,
+where the job runs in bubblewrap's PID namespace with `--die-with-parent`: when
+the broker kills a job every process in it dies, and the broker deletes the
+job's work directory, which holds `TMPDIR` and the copy. A direct run killed
+with SIGKILL leaves its copied run going until it finishes (each step has its
+own timeout) and leaves one copy, the size of the checkout, in `TMPDIR` until
+something cleans that.
 
 A wait timeout leaves the job running; use `wait`/`status` with the returned job
 ID. Do not submit a duplicate merely because the wait ended. The existing
