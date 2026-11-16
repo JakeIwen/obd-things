@@ -1,4 +1,6 @@
 import { parseDate } from "../format.js";
+import contract from "../../../drive_dtc.json" with { type: "json" };
+import { SUN_REFERENCE } from "../theme.config.js";
 
 /** Plain group titles in display order. */
 export const DTC_GROUPS = Object.freeze([
@@ -7,6 +9,7 @@ export const DTC_GROUPS = Object.freeze([
   ["confirmed_history", "Confirmed history"],
   ["incomplete_only", "Test not completed"],
   ["other", "Other status combinations"],
+  ["not_reported", "Not reported by a later filtered read"],
 ]);
 
 /** `source` marker on records and module rows taken from the van's own health check. */
@@ -38,113 +41,171 @@ export function moduleList(dtcs) {
   return o ? Object.keys(o).map((k) => o[k]).filter(obj) : [];
 }
 
-function vanRead(vm) {
-  return {
-    count: num(vm.dtc_count) !== null ? vm.dtc_count : arr(vm.dtcs).length,
-    observed_at: vm.observed_at,
-    scan_started_at: str(vm.scan_started_at) || vm.observed_at,
-    status_availability_mask: vm.status_availability_mask ?? null,
-  };
+export const DRIVE_SOURCE = "drive";
+export const OUTCOME = Object.freeze(Object.fromEntries(Object.keys(contract.outcomes).map((key) => [key, key])));
+const DRIVE_STATUS_MASK = parseInt(contract.request.split(" ").pop(), 16);
+const COVERAGE = Object.freeze({
+  van: "failed, pending or confirmed codes only",
+  drive: contract.coverage.replace(/ \(.*\)$/, ""),
+});
+const mountain = new Intl.DateTimeFormat("en-US", {
+  timeZone: SUN_REFERENCE.timeZone, year: "numeric", month: "short", day: "numeric",
+  hour: "numeric", minute: "2-digit", timeZoneName: "short",
+});
+
+/** Filtered evidence always carries an explicit date and Mountain zone, even today. */
+export function filteredTime(iso) {
+  const at = parseDate(iso);
+  return at ? mountain.format(at) : "unknown time";
 }
 
-function statusByte(record) {
-  const s = str(record.status);
-  const n = s ? parseInt(s, 16) : NaN;
-  return isFinite(n) ? n : null;
+export function filteredSourceLine(source, iso) {
+  return (source === VAN_SOURCE ? "from the van’s own health check" : "from the Pi’s drive read") +
+    " · " + COVERAGE[source] + " · " + filteredTime(iso);
 }
 
-/**
- * Per module, keep whichever read is newer: the Pi's saved scan or the van's own health check
- * (`dtcs.in_vehicle_scan`, harvested passively from drive recordings). When the van's read is
- * newer, the Pi's records for that module inside the van's status mask are replaced by the van's
- * records; Pi records outside the mask (for example "test not completed" only) stay, because the
- * van's check cannot see them. Group totals are adjusted by what was replaced among the returned
- * records. Returns the input unchanged when there is no usable in-vehicle result.
- * @param {object} d `summary.dtcs`
- * @returns {object} a dtcs-shaped object with `van: {modules, lastAt}` added
- */
-export function mergeVanScan(d) {
+function stamp(value) {
+  const at = parseDate(value);
+  return at ? at.getTime() : -Infinity;
+}
+
+function statusByte(value) {
+  return typeof value === "string" && /^[0-9a-f]{2}$/i.test(value) ? parseInt(value, 16) : 0;
+}
+
+function effectiveMask(read) {
+  return (read.source === VAN_SOURCE ? VAN_STATUS_MASK : DRIVE_STATUS_MASK) &
+    statusByte(read.status_availability_mask);
+}
+
+function latest(reads) {
+  return reads.reduce((best, read) => !best || stamp(read.observed_at) > stamp(best.observed_at) ? read : best, null);
+}
+
+function sourceReads(d) {
+  const byKey = new Map();
+  function add(module, read) {
+    if (!str(module.module_key) || stamp(read.observed_at) === -Infinity) return;
+    if (!byKey.has(module.module_key)) byKey.set(module.module_key, { module, reads: [] });
+    byKey.get(module.module_key).reads.push(read);
+  }
   const van = obj(d.in_vehicle_scan);
-  if (!van || van.available !== true || !Array.isArray(van.modules) || !van.modules.length) return d;
-  const piRows = moduleList(d);
-  const piByKey = new Map();
-  for (let i = 0; i < piRows.length; i += 1) piByKey.set(piRows[i].module_key, piRows[i]);
-  const use = new Map();
-  const reads = new Map();
-  let lastAt = null;
-  let scanLast = null;
-  for (let i = 0; i < van.modules.length; i += 1) {
-    const vm = obj(van.modules[i]);
-    const key = vm ? str(vm.module_key) : null;
-    const at = vm ? parseDate(vm.observed_at) : null;
-    if (!key || !at) continue;
-    reads.set(key, vm);
-    const pi = piByKey.get(key);
-    const piAt = pi ? parseDate(pi.last_success_at) : null;
-    if (piAt && piAt.getTime() >= at.getTime()) continue;
-    use.set(key, vm);
-    if (!lastAt || at.getTime() > parseDate(lastAt).getTime()) lastAt = vm.observed_at;
-    const scanAt = parseDate(vm.scan_started_at) ? vm.scan_started_at : vm.observed_at;
-    if (!scanLast || parseDate(scanAt).getTime() > parseDate(scanLast).getTime()) scanLast = scanAt;
-  }
-  if (!reads.size) return d;
-
-  const groups = obj(d.groups) || {};
-  const counts = obj(d.group_counts) || {};
-  const returnedCounts = obj(d.group_returned_counts) || {};
-  const outGroups = {};
-  const outCounts = {};
-  const outReturned = {};
-  for (let g = 0; g < DTC_GROUPS.length; g += 1) {
-    const name = DTC_GROUPS[g][0];
-    const entries = arr(groups[name]).filter(obj);
-    const kept = entries.filter((e) => {
-      if (!use.has(e.module_key)) return true;
-      const status = statusByte(e);
-      return status !== null && (status & VAN_STATUS_MASK) === 0;
-    });
-    const removed = entries.length - kept.length;
-    outGroups[name] = kept;
-    outCounts[name] = Math.max(0, (num(counts[name]) !== null ? counts[name] : entries.length) - removed);
-    outReturned[name] = Math.max(0, (num(returnedCounts[name]) !== null ? returnedCounts[name] : entries.length) - removed);
-  }
-  use.forEach((vm, key) => {
-    const records = arr(vm.dtcs).filter(obj);
-    for (let i = 0; i < records.length; i += 1) {
-      const r = records[i];
-      const group = DTC_GROUPS.some((x) => x[0] === r.display_group) ? r.display_group : "other";
-      outGroups[group].push({
-        ...r,
-        module_key: key,
-        module_name: str(vm.module_name) || (piByKey.get(key) || {}).module_name || key,
-        logical_bus: vm.logical_bus,
-        last_seen_at: vm.observed_at,
-        van_scan_at: str(vm.scan_started_at) || vm.observed_at,
-        source: VAN_SOURCE,
-      });
-      outCounts[group] += 1;
-      outReturned[group] += 1;
-    }
+  if (van?.available === true) arr(van.modules).filter(obj).forEach((m) => add(m, {
+    ...m, count: num(m.dtc_count) ?? arr(m.dtcs).length, source: VAN_SOURCE, outcome: OUTCOME.complete,
+  }));
+  const drive = obj(d.drive_reads);
+  if (drive?.available === true) arr(drive.modules).filter(obj).forEach((m) => {
+    arr(m.reads).filter(obj).forEach((r) => add(m, { ...r, source: DRIVE_SOURCE }));
   });
-  const modules = piRows.map((m) => reads.has(m.module_key)
-    ? { ...m, van_read: vanRead(reads.get(m.module_key)) } : m);
-  reads.forEach((vm, key) => {
-    if (!piByKey.has(key)) modules.push({
-      module_key: key,
-      module_name: str(vm.module_name) || key,
-      logical_bus: vm.logical_bus,
-      availability: "never_scanned",
-      parked_module: false,
-      van_read: vanRead(vm),
-    });
-  });
-  return {
-    ...d,
-    groups: outGroups,
-    group_counts: outCounts,
-    group_returned_counts: outReturned,
-    modules,
-    van: use.size ? { modules: use.size, lastAt, scanAt: scanLast } : null,
-  };
+  return byKey;
 }
 
+function selectedReads(reads) {
+  const van = latest(reads.filter((r) => r.source === VAN_SOURCE));
+  const drive = reads.filter((r) => r.source === DRIVE_SOURCE);
+  const complete = latest(drive.filter((r) => r.outcome === OUTCOME.complete));
+  const truncated = latest(drive.filter((r) => r.outcome === OUTCOME.truncated));
+  const success = latest([complete, truncated].filter(Boolean));
+  const failure = latest(drive.filter((r) => ![OUTCOME.complete, OUTCOME.truncated].includes(r.outcome)));
+  return { van, complete,
+    truncated: truncated && (!complete || stamp(truncated.observed_at) > stamp(complete.observed_at)) ? truncated : null,
+    failure: failure && (!success || stamp(failure.observed_at) > stamp(success.observed_at)) ? failure : null };
+}
+
+function recordGroup(record) {
+  if (record.observation_state === "not_reported_by_source") return "not_reported";
+  return DTC_GROUPS.some(([key]) => key === record.display_group) ? record.display_group : "other";
+}
+
+function applyRead(records, read, module) {
+  const listed = new Map(arr(read.dtcs).filter(obj).map((r) => [r.raw_dtc, r]));
+  records.forEach((r, key) => {
+    if (stamp(r.last_seen_at) >= stamp(read.observed_at)) { listed.delete(key); return; }
+    if (listed.has(key)) return;
+    if ((statusByte(r.status) & effectiveMask(read)) !== 0) records.set(key, {
+      ...r, observation_state: "not_reported_by_source", not_reported_source: read.source,
+      not_reported_at: read.observed_at,
+    });
+  });
+  listed.forEach((record, key) => records.set(key, {
+    ...record, module_key: module.module_key, module_name: module.module_name || module.module_key,
+    logical_bus: module.logical_bus, last_seen_at: read.observed_at,
+    observation_state: "observed_in_filtered_read", source: read.source,
+  }));
+}
+
+/** Three-source merge. Parked module facts and hidden parked group counts never change. */
+export function mergeVanScan(d) {
+  const sources = sourceReads(d);
+  if (!sources.size) return d;
+  const piRows = moduleList(d);
+  const modules = new Map(piRows.map((m) => [m.module_key, { ...m }]));
+  const groups = Object.fromEntries(DTC_GROUPS.map(([name]) => [name, arr(d.groups?.[name]).filter(obj)]));
+  const hidden = Object.fromEntries(DTC_GROUPS.map(([name]) => [name,
+    Math.max(0, (num(d.group_counts?.[name]) ?? groups[name].length) - groups[name].length)]));
+  let vanCount = 0;
+  let vanAt = null;
+  sources.forEach(({ module, reads }, key) => {
+    const parked = modules.get(key);
+    const m = parked || { module_key: key, module_name: module.module_name || key,
+      logical_bus: module.logical_bus, availability: "never_scanned", parked_module: false };
+    const selected = selectedReads(reads);
+    if (selected.van) {
+      m.van_read = selected.van;
+      vanCount += 1;
+      if (stamp(selected.van.observed_at) > stamp(vanAt)) vanAt = selected.van.observed_at;
+    }
+    if (selected.complete) m.drive_read = selected.complete;
+    if (selected.truncated) m.drive_truncated = selected.truncated;
+    if (selected.failure) m.drive_failure = selected.failure;
+    modules.set(key, m);
+    const records = new Map();
+    DTC_GROUPS.forEach(([group]) => {
+      groups[group].filter((r) => r.module_key === key).forEach((r) => records.set(r.raw_dtc, { ...r, display_group: group }));
+      groups[group] = groups[group].filter((r) => r.module_key !== key);
+    });
+    [selected.van, selected.complete].filter(Boolean)
+      .sort((a, b) => stamp(a.observed_at) - stamp(b.observed_at))
+      .forEach((read) => applyRead(records, read, m));
+    if (selected.truncated) {
+      const shown = [...records.values()].filter((r) =>
+        (statusByte(r.status) & effectiveMask(selected.truncated)) !== 0).length;
+      m.drive_truncated = { ...selected.truncated, count_mismatch: shown !== selected.truncated.count };
+    }
+    records.forEach((r) => groups[recordGroup(r)].push(r));
+  });
+  return { ...d, groups, modules: [...modules.values()],
+    group_counts: Object.fromEntries(DTC_GROUPS.map(([name]) => [name, groups[name].length + hidden[name]])),
+    group_returned_counts: Object.fromEntries(DTC_GROUPS.map(([name]) => [name, groups[name].length])),
+    van: vanCount ? { modules: vanCount, lastAt: vanAt, scanAt: vanAt } : null };
+}
+
+function returnedCoverageNote(read) {
+  const requested = read.source === VAN_SOURCE ? VAN_STATUS_MASK : DRIVE_STATUS_MASK;
+  const effective = effectiveMask(read);
+  if (effective === requested) return "";
+  return effective === 0
+    ? " · no returned status coverage; older codes cannot be ruled out"
+    : " · limited returned status coverage; only covered older statuses can be ruled out";
+}
+
+export function filteredReadText(read) {
+  const coverage = read.source === VAN_SOURCE ? "failed, pending or confirmed" : "failed, pending, confirmed or warning-lamp";
+  const result = read.count === 0 ? "no " + coverage + " codes" :
+    read.count + (read.count === 1 ? " code reported" : " codes reported");
+  return result + " · " + filteredSourceLine(read.source, read.observed_at) + returnedCoverageNote(read);
+}
+
+export function driveReadLines(module) {
+  const lines = [];
+  if (module.drive_read) lines.push(filteredReadText(module.drive_read));
+  const read = module.drive_truncated;
+  if (read) lines.push(read.count + " codes reported, list not retrieved; first " +
+    (read.first_code?.fca_display || read.first_code?.raw_dtc || "unknown") + " · " +
+    filteredSourceLine(DRIVE_SOURCE, read.observed_at) + returnedCoverageNote(read) +
+    (read.count_mismatch ? " · count differs from the codes shown" : ""));
+  const failure = module.drive_failure;
+  if (failure) lines.push("drive read failed (" + String(failure.reason || failure.outcome).replace(/_/g, " ") +
+    ") · " + filteredSourceLine(DRIVE_SOURCE, failure.observed_at));
+  return lines;
+}

@@ -440,12 +440,12 @@ const VAN_SCAN = {
   modules: [
     {
       module_key: "bcm_ccan", module_name: "Body Control Module (C-CAN diagnostic endpoint)", logical_bus: "c-can",
-      observed_at: "2026-09-24T21:25:43.308Z", scan_started_at: "2026-09-24T21:12:17.587Z", dtc_count: 2,
+      observed_at: "2026-09-24T21:25:43.308Z", scan_started_at: "2026-09-24T21:12:17.587Z", status_availability_mask: "FF", dtc_count: 2,
       dtcs: [vanRecord("B1632-15", "963215", "4D", "current"), vanRecord("B1636-15", "963615", "4D", "current")],
     },
     {
       module_key: "abs_canch", module_name: "Antilock Brake System (ABS/ESC)", logical_bus: "can-ch",
-      observed_at: "2026-09-24T21:25:32.759Z", scan_started_at: "2026-09-24T21:12:17.587Z", dtc_count: 1,
+      observed_at: "2026-09-24T21:25:32.759Z", scan_started_at: "2026-09-24T21:12:17.587Z", status_availability_mask: "FF", dtc_count: 1,
       dtcs: [vanRecord("C1200-17", "520017", "4C", "pending")],
     },
     {
@@ -459,12 +459,12 @@ const VAN_NOW = Date.parse("2026-09-24T23:00:00Z");
 test("codes: the van's newer health check replaces that module's codes inside its status mask", () => {
   const dtcs = { ...SUMMARY.dtcs, in_vehicle_scan: VAN_SCAN };
   const vm = H.codesView(dtcs, VAN_NOW, false);
-  const at = fmtTime("2026-09-24T21:12:17.587Z", new Date(VAN_NOW));
+  const source = H.vanSourceLine("2026-09-24T21:25:43.308Z", VAN_NOW);
   // Pi: 5 current (all BCM, 0x4D) -> van: 2 current BCM codes.
   assert.equal(vm.current.total, 2);
   assert.deepEqual(vm.current.rows.map((r) => r.code).sort(), ["B1632-15", "B1636-15"]);
   const row = vm.current.rows.find((r) => r.code === "B1636-15");
-  assert.equal(row.meta, "Body Control Module (C-CAN diagnostic endpoint) · from the van’s own health check · " + at);
+  assert.equal(row.meta, "Body Control Module (C-CAN diagnostic endpoint) · " + source);
   assert.deepEqual(vm.badge, { text: "2 current", tone: "amber" });
   const byKey = Object.fromEntries(vm.groups.map((g) => [g.key, g]));
   // BCM's five 0x08 confirmed-history records were inside the van's mask, so they are gone.
@@ -474,15 +474,15 @@ test("codes: the van's newer health check replaces that module's codes inside it
   assert.equal(vm.modules.summary, "Parked reads · 11 of 16 answered");
   const abs = vm.modules.rows.find((r) => r.key === "abs_canch");
   assert.match(abs.meta, /CAN-CH · never read · 1 code reported .*from the van’s own health check/);
-  assert.match(vm.modules.rows.find((r) => r.key === "ics_bcan").meta, /B-CAN · no codes · no codes reported/);
-  assert.equal(vm.source, "2 modules from the van’s own health check · " + at);
+  assert.match(vm.modules.rows.find((r) => r.key === "ics_bcan").meta, /B-CAN · no codes · no failed, pending or confirmed codes/);
+  assert.equal(vm.source, "3 modules " + source);
   for (const t of textsOf(vm, [], ["meaning"])) {
     assert.doesNotMatch(t, JARGON, t);
     assert.doesNotMatch(t, /\bF1\b|19 02|0D\b|in-vehicle scan/, t);
   }
 });
 
-test("codes: Pi records outside the van's mask stay; a newer Pi read wins", () => {
+test("codes: Pi records outside coverage retain their own date despite a newer module success", () => {
   const dtcs = {
     available: true,
     coverage: { last_attempt_at: "2026-07-25T02:31:34Z", total_modules: 1, available_modules: 1 },
@@ -497,8 +497,8 @@ test("codes: Pi records outside the van's mask stay; a newer Pi read wins", () =
   assert.equal(vm.current.total, 2);
   const newer = { ...dtcs, modules: [{ ...dtcs.modules[0], last_attempt_at: "2026-09-25T00:00:00Z", last_success_at: "2026-09-25T00:00:00Z" }] };
   const kept = H.codesView(newer, VAN_NOW, false);
-  assert.equal(kept.current.total, 0, "the Pi's newer BCM read has no current codes");
-  assert.equal(kept.source, "2 modules from the van’s own health check · " + fmtTime("2026-09-24T21:12:17.587Z", new Date(VAN_NOW)));
+  assert.equal(kept.current.total, 2, "module success must not override records with older own timestamps");
+  assert.equal(kept.source, "3 modules " + H.vanSourceLine("2026-09-24T21:25:43.308Z", VAN_NOW));
 });
 
 test("codes: the van's check still shows when the Pi's saved list is unavailable; absent or not harvested changes nothing", () => {
@@ -539,6 +539,6 @@ test("codes: empty van-only read never asserts an authoritative clean result", (
   assert.equal(merged.modules[0].result_state, undefined);
   assert.equal(merged.modules[0].absence_authoritative, undefined);
   const view = H.codesView(dtcs, VAN_NOW, false);
-  assert.match(view.modules.rows[0].meta, /never read · no codes reported .*requests failed, pending and confirmed/);
+  assert.match(view.modules.rows[0].meta, /never read · no failed, pending or confirmed codes .*codes only/);
   assert.notEqual(view.emptyText, "No codes in the last read of every module.");
 });

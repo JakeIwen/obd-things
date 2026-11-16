@@ -11,7 +11,10 @@
 
 import { fmtTime, fmtInt, parseDate } from "../format.js";
 import { OPEN_STATES, metricLabel } from "../warningContext.js";
-import { DTC_GROUPS, VAN_SOURCE, obj, arr, num, str, moduleList, mergeVanScan } from "./dtcSources.helpers.js";
+import {
+  DTC_GROUPS, VAN_SOURCE, obj, arr, num, str, moduleList, mergeVanScan,
+  filteredSourceLine, filteredReadText, driveReadLines,
+} from "./dtcSources.helpers.js";
 export { DTC_GROUPS, VAN_SOURCE, VAN_STATUS_MASK, mergeVanScan } from "./dtcSources.helpers.js";
 
 /** Health cards in default order; ids are what the customiser stores. */
@@ -331,9 +334,12 @@ export function codeRow(entry, nowMs) {
   const subtype = meaning && e.description_reviewed === false ? /failure subtype:\s*(.+)$/i.exec(meaning) : null;
   if (subtype) meaning = "meaning not reviewed · " + subtype[1].trim();
   const module = str(e.module_name) || str(e.module_key) || str(e.module);
-  const van = e.source === VAN_SOURCE;
+  const filtered = e.source === VAN_SOURCE || e.source === "drive";
   const seen = when(e.last_seen_at, nowMs);
-  const note = !van && str(e.observation_state) ? OBSERVATION_NOTES[e.observation_state] || null : null;
+  const note = e.observation_state === "not_reported_by_source"
+    ? "not reported by the " + (e.not_reported_source === VAN_SOURCE ? "van" : "drive") +
+      " read · " + filteredSourceLine(e.not_reported_source, e.not_reported_at)
+    : str(e.observation_state) ? OBSERVATION_NOTES[e.observation_state] || null : null;
   return {
     key: (str(e.module_key) || str(e.module) || "") + ":" + (str(e.raw_dtc) || codeOf(e)),
     code: codeOf(e),
@@ -344,7 +350,7 @@ export function codeRow(entry, nowMs) {
         module,
         warningLightRequested(e) ? "warning light requested" : null,
         note,
-        van ? vanSourceLine(e.van_scan_at || e.last_seen_at, nowMs) : seen ? "last seen " + seen : null,
+        filtered ? filteredSourceLine(e.source, e.last_seen_at) : seen ? "last seen " + seen : null,
       ]
         .filter(Boolean)
         .join(" · ") || null,
@@ -384,12 +390,6 @@ export function moduleStatus(module, nowMs) {
   return { text: count === null ? "codes saved" : plural(count, "code", "codes"), tone: "", gap: false, rank: 3 };
 }
 
-function vanReadText(read, nowMs) {
-  const count = num(read.count);
-  const result = count ? plural(count, "code", "codes") + " reported" : "no codes reported";
-  return result + " (check requests failed, pending and confirmed codes) · " + vanSourceLine(read.observed_at, nowMs);
-}
-
 /** Module coverage block: summary line and rows (gaps first, then the modules that answered). */
 export function modulesView(dtcs, nowMs) {
   const modules = moduleList(dtcs);
@@ -397,13 +397,13 @@ export function modulesView(dtcs, nowMs) {
   const rows = modules.map((m, i) => {
     const status = moduleStatus(m, nowMs);
     const vanRead = obj(m.van_read);
-    const vanText = vanRead ? vanReadText(vanRead, nowMs) : null;
-    const failedAt = vanRead && m.availability === "unavailable" ? when(m.last_attempt_at, nowMs) : null;
+    const vanText = vanRead ? filteredReadText(vanRead) : null;
+    const failedAt = (vanRead || m.drive_read || m.drive_truncated || m.drive_failure) && m.availability === "unavailable" ? when(m.last_attempt_at, nowMs) : null;
     const parkedText = failedAt ? status.text + " · parked read failed " + failedAt : status.text;
     return {
       key: str(m.module_key) || "module:" + i,
       name: str(m.module_name) || str(m.module_key) || "Unknown module",
-      meta: [busName(m.logical_bus), parkedText, vanText].filter(Boolean).join(" · "),
+      meta: [busName(m.logical_bus), parkedText, vanText, ...driveReadLines(m)].filter(Boolean).join(" · "),
       tone: status.tone,
       gap: status.gap,
       rank: status.rank,
@@ -417,7 +417,7 @@ export function modulesView(dtcs, nowMs) {
   const total = num(coverage.total_modules) !== null ? coverage.total_modules : modules.filter((m) => m.parked_module !== false).length;
   const gaps = rows.filter((r) => r.gap).length;
   return {
-    summary: (modules.some((m) => m.van_read) ? "Parked reads" : "Modules") +
+    summary: (modules.some((m) => m.van_read || m.drive_read || m.drive_truncated || m.drive_failure) ? "Parked reads" : "Modules") +
       (total > 0 ? " · " + answered + " of " + total + " answered" : " · no coverage yet"),
     rows: rows.map((r) => ({ key: r.key, name: r.name, meta: r.meta, tone: r.tone })),
     gaps,
@@ -434,39 +434,16 @@ function sumCounts(counts) {
 // ---------------------------------------------------------------------------
 // the van's own health check (docs/caveats.md "The van's own health check")
 
-/** Plain source line: `from the van's own health check · 3:12 pm`. */
+/** Filtered source line with coverage and an explicit Mountain date. */
 export function vanSourceLine(iso, nowMs) {
-  const at = when(iso, nowMs);
-  return "from the van\u2019s own health check" + (at ? " · " + at : "");
+  return filteredSourceLine(VAN_SOURCE, iso);
 }
 
-/**
- * Diagnostic-codes card model. Totals come from `group_counts` (the broker truncates each group at
- * `per_group_limit`, 25 today); `showing n of m` appears when a group was cut.
- * @param {object|null} dtcs `summary.dtcs` slice
- * @param {number} nowMs wall clock for labels and the one-month cut-off
- * @param {boolean} scanEnabled this listener can queue the guarded scan
- */
-export function codesView(dtcs, nowMs, scanEnabled) {
-  const base = { status: "ok", badge: null, lastRead: null, source: null, emptyText: null, current: null, groups: [], modules: null };
-  if (dtcs === null || dtcs === undefined) return { ...base, status: "loading", emptyText: "Waiting for the saved code list…" };
-  let d = obj(dtcs) || {};
-  if (d.available === false) {
-    const van = obj(d.in_vehicle_scan);
-    if (!van || van.available !== true) {
-      return { ...base, status: "unavailable", emptyText: str(d.detail) || "The saved code list is unavailable." };
-    }
-    // The Pi's saved list is unavailable, but the van's own check can still be shown.
-    d = { in_vehicle_scan: van, groups: {}, group_counts: {}, group_returned_counts: {}, coverage: {}, modules: [] };
-  }
-  d = mergeVanScan(d);
+function codeGroups(d, nowMs) {
   const groups = obj(d.groups) || {};
   const counts = obj(d.group_counts) || {};
   const returnedCounts = obj(d.group_returned_counts) || {};
-  const coverage = obj(d.coverage) || {};
-  const newest = str(coverage.last_attempt_at) || str(coverage.last_success_at) || str(obj(d.van)?.lastAt);
   const cutoff = historyCutoff(nowMs);
-
   const groupModels = [];
   for (let g = 0; g < DTC_GROUPS.length; g += 1) {
     const key = DTC_GROUPS[g][0];
@@ -474,7 +451,7 @@ export function codesView(dtcs, nowMs, scanEnabled) {
     const entries = arr(groups[key]).filter(obj);
     const total = num(counts[key]) !== null ? counts[key] : entries.length;
     const returned = Math.min(entries.length, num(returnedCounts[key]) !== null ? returnedCounts[key] : entries.length);
-    if (key === "other" && total <= 0) continue;
+    if ((key === "other" || key === "not_reported") && total <= 0) continue;
     const recent = [];
     const older = [];
     for (let i = 0; i < returned; i += 1) {
@@ -492,11 +469,41 @@ export function codesView(dtcs, nowMs, scanEnabled) {
       returned,
       summary: title + " · " + fmtInt(total) + (cut ? " · showing " + returned + " of " + fmtInt(total) : ""),
       rows: recent,
+      moreText: cut && d.drive_reads?.available === true ? "+" + fmtInt(total - returned) + " more from the parked read (not returned in this list)" : null,
       older,
       olderSummary: older.length ? "Older than one month · " + older.length : null,
       note: key === "incomplete_only" ? "Not a fault: the module had not finished that self-test when it was read." : null,
     });
   }
+  return groupModels;
+}
+
+/**
+ * Diagnostic-codes card model. Totals come from `group_counts` (the broker truncates each group at
+ * `per_group_limit`, 25 today); `showing n of m` appears when a group was cut.
+ * @param {object|null} dtcs `summary.dtcs` slice
+ * @param {number} nowMs wall clock for labels and the one-month cut-off
+ * @param {boolean} scanEnabled this listener can queue the guarded scan
+ */
+export function codesView(dtcs, nowMs, scanEnabled) {
+  const base = { status: "ok", badge: null, lastRead: null, source: null, emptyText: null, current: null, groups: [], modules: null };
+  if (dtcs === null || dtcs === undefined) return { ...base, status: "loading", emptyText: "Waiting for the saved code list…" };
+  let d = obj(dtcs) || {};
+  if (d.available === false) {
+    const van = obj(d.in_vehicle_scan);
+    if ((!van || van.available !== true) && d.drive_reads?.available !== true) {
+      return { ...base, status: "unavailable", emptyText: str(d.detail) || "The saved code list is unavailable." };
+    }
+    // The Pi's saved list is unavailable, but the van's own check can still be shown.
+    d = { in_vehicle_scan: van, drive_reads: d.drive_reads, groups: {}, group_counts: {}, group_returned_counts: {}, coverage: {}, modules: [] };
+  }
+  d = mergeVanScan(d);
+  const counts = obj(d.group_counts) || {};
+  const coverage = obj(d.coverage) || {};
+  const newest = str(coverage.last_attempt_at) || str(coverage.last_success_at) || str(obj(d.van)?.lastAt) ||
+    moduleList(d).flatMap((m) => [m.drive_read, m.drive_truncated, m.drive_failure]).filter(Boolean)
+      .map((r) => r.observed_at).sort().pop();
+  const groupModels = codeGroups(d, nowMs);
   const records = Object.keys(counts).length ? sumCounts(counts) : groupModels.reduce((n, g) => n + g.total, 0);
   const modules = modulesView(d, nowMs);
   const moduleRows = moduleList(d);
@@ -522,7 +529,8 @@ export function codesView(dtcs, nowMs, scanEnabled) {
   const currentCount = current ? current.total : 0;
   let badge = null;
   if (currentCount > 0) badge = { text: currentCount + " current", tone: "amber" };
-  else if (newest) badge = { text: "None current", tone: "" };
+  else if (newest) badge = { text: moduleList(d).some((m) => m.van_read || m.drive_read || m.drive_truncated)
+    ? "None shown current" : "None current", tone: "" };
   const van = obj(d.van);
   return {
     ...base,

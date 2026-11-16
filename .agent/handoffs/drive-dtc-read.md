@@ -1,6 +1,6 @@
 ---
 workstream: drive-dtc-read
-status: plan approved to build (third review), activation not approved
+status: stage 1a built disabled; code review and activation pending
 tier: T3
 last reviewed commit: 7c44321 (third review: approve to build with listed changes, written in here)
 ---
@@ -711,7 +711,28 @@ pending behaviour at speed for these two modules.
 
 ## Status
 
-Plan approved to build by the third cross-family review, with its findings 1–4 written in above and
-5–7 carried as build checks. Activation is not approved. Nothing built; no CAN traffic, service
-change or live write. The read-only queries behind it used `mode=ro` on
-`tmp/vehicle_data/dtc-history.sqlite3` and the archived 2026-09-24 capture on `/mnt/EXFAT512`.
+Stage 1a build steps 1–13 are implemented in the isolated worktree. The broker flag defaults off,
+the tracked service unit is unchanged, and there has been no CAN traffic, live socket access,
+service change or activation. Cross-family code review remains required before merge; activation
+is a separate later flag commit and guarded parked deployment. The complete offline gate must
+pass on the final rebased commit; its job/result is reported by the builder at handoff.
+
+Build corrections approved by the coordinator: actual monotonic pass-start events precede
+fresh authority/permits; the transport's memory-only `before_send` marker follows successful
+permit consumption; the speed reader lives in `vehicle_speed.py`, not the oversized C-CAN
+receiver; and the closed-CLI test lives separately from the oversized active-session tests.
+The two broker collaborator extractions and speed/test moves have byte-identical output evidence.
+`web_v2.dtc_lite` preserves the new read-only `drive_reads` block so the dashboard can consume it.
+
+Verification entry points: `test_drive_dtc_contract.py`, `test_drive_dtc_transport.py`,
+`test_drive_dtc_watch.py`, `test_drive_dtc_steps.py`, `test_active_drive_dtc.py`,
+`test_drive_dtc_budget.py`, `test_drive_dtc_control.py`, `test_broker_drive_dtc.py`,
+`test_drive_reads.py`, the dashboard's `dtcSources.test.mjs`, and the existing radar/startup,
+insights/web and harvester suites. The broker oracle is byte-identical with the flag off.
+The gate oracle's 882 tool records are byte-identical (16/16); its full capture metadata adds
+only the two relocated `broker_cli` default-path redirects, not a changed gate outcome.
+
+Unverified on hardware: first `8F` responses, `MSG_DONTROUTE` attribution on this kernel,
+actual scheduling latency and any DTCs logged after unanswered FirstFrames. Deployment's
+five-pass/three-drive checks and later complete parked comparison remain required. The original
+read-only evidence queries used `mode=ro`; no production database was changed during the build.

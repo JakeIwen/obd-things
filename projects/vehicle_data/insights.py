@@ -24,6 +24,7 @@ from lib.timeutil import nonnegative_int as _nonnegative_int
 from projects.vehicle_data import drift_warnings
 from projects.vehicle_data.api import MAX_RESPONSE_BYTES
 from projects.vehicle_data.dtc_descriptions import describe_dtc
+from projects.vehicle_data.drive_reads import RESULTS_FILENAME, drive_reads_response
 from projects.vehicle_data.early_warning import (
     EarlyWarningEvaluator,
     InfrastructureHealthEvaluator,
@@ -1302,16 +1303,20 @@ class TelemetryInsights:
         return self.notification_dispatcher.dispatch()
 
     def dtc_response(self) -> dict[str, object]:
-        """Saved Pi DTC cache plus the van's own latest health-check results.
+        """Saved parked, van and optional drive reads, never diagnostic I/O.
 
         ``in_vehicle_scan`` is additive: the Pi's groups, modules and coverage are unchanged, and
         the in-vehicle results (a ``19 02 0D`` status mask read by the van's own diagnostic
         client, harvested passively) are never merged into them here.  Neither part can start a
-        diagnostic request.
+        diagnostic request. ``drive_reads`` is a separate, validated projection of
+        bounded saved results, omitted when its file is absent.
         """
 
         payload = self._pi_dtc_response()
         payload["in_vehicle_scan"] = self._van_scan_response()
+        drive = drive_reads_response(self.dtc_cache_path.with_name(RESULTS_FILENAME))
+        if drive.get("reason") != "not_read":
+            payload["drive_reads"] = drive
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         if len(encoded) >= MAX_RESPONSE_BYTES:
             payload["in_vehicle_scan"] = {
@@ -1319,6 +1324,8 @@ class TelemetryInsights:
                 "reason": "in_vehicle_scan_too_large",
                 "detail": "in-vehicle scan results exceed the broker transport limit",
             }
+        if "drive_reads" in payload and len(json.dumps(payload, separators=(",", ":")).encode()) >= MAX_RESPONSE_BYTES:
+            payload["drive_reads"] = {"available": False, "reason": "drive_reads_too_large"}
         return payload
 
     def _van_scan_response(self) -> dict[str, object]:

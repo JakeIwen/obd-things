@@ -74,6 +74,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--read-timeout", type=float, default=2.0)
     parser.add_argument("--no-collector", action="store_true")
     parser.add_argument(
+        "--enable-drive-dtc-reads", action="store_true",
+        help="opt in to bounded hourly radar/BCM DTC reads during qualified drives",
+    )
+    parser.add_argument(
         "--no-active-drive",
         action="store_true",
         help="disable the coordinated engine-running diagnostic collector",

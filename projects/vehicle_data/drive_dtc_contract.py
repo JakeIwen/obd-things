@@ -18,6 +18,7 @@ from lib.timeutil import finite_number, nonnegative_int
 
 VOCABULARY = json.loads(Path(__file__).with_name('drive_dtc.json').read_text())
 SCHEMA = VOCABULARY['schema']
+RESULTS_FILENAME = VOCABULARY['results_filename']
 CAPABILITY = VOCABULARY['capability']
 REQUEST = VOCABULARY['request']
 REQUEST_DATA = bytes.fromhex(VOCABULARY['request_frame'])

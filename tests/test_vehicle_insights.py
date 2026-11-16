@@ -514,6 +514,14 @@ class InVehicleScanResponseTests(unittest.TestCase):
         self.van_cache.write_text(json.dumps(van_scan_cache()))
         lite = dtc_lite(self.insights.dtc_response())
         self.assertTrue(lite["in_vehicle_scan"]["available"])
+        self.assertNotIn("drive_reads", lite)
+        from projects.vehicle_data.drive_dtc_contract import COVERAGE
+
+        results_path = self.cache.with_name("drive-dtc-results.json")
+        results_path.write_text(json.dumps({"schema": 1, "coverage": COVERAGE, "passes": []}))
+        response = self.insights.dtc_response()
+        self.assertEqual(dtc_lite(response)["drive_reads"], response["drive_reads"])
+        self.assertEqual(response["drive_reads"], {"available": True, "coverage": COVERAGE, "modules": []})
 
 
 if __name__ == "__main__":

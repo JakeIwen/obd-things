@@ -141,7 +141,7 @@ class PiRequestSetSyncTests(unittest.TestCase):
 
     def test_fixed_helpers(self):
         from projects.vehicle_data import (active_drive, bcan_auxiliary, pcm_electrical,
-                                           radar_alignment, radar_service_transport)
+                                           drive_dtc_contract, radar_alignment, radar_service_transport)
 
         def uds(frame: bytes) -> bytes:
             return frame[1 : 1 + frame[0]]
@@ -160,9 +160,11 @@ class PiRequestSetSyncTests(unittest.TestCase):
         self.assertEqual(harvest.PI_FIXED_REQUESTS[target(MODULES["rf_hub"])], tpms)
         self.assertEqual(
             harvest.PI_FIXED_REQUESTS[target(radar_alignment.MODULE)],
-            {uds(radar_alignment.REQUEST_DATA), bytes.fromhex("19 02 8F")}
+            {uds(radar_alignment.REQUEST_DATA), uds(drive_dtc_contract.REQUEST_DATA)}
             | {uds(spec.request) for spec in radar_service_transport.EXCHANGES},
         )
+        self.assertEqual(harvest.PI_FIXED_REQUESTS[target(MODULES["bcm_ccan"])],
+                         {uds(drive_dtc_contract.REQUEST_DATA)})
         self.assertEqual(
             harvest.PI_FIXED_REQUESTS[target(bcan_auxiliary.ICS)],
             {uds(bcan_auxiliary.REQUEST_PAYLOAD)},

@@ -186,6 +186,7 @@ function CodeGroup({ group }) {
         <>
           {group.note ? <p class="health-note">{group.note}</p> : null}
           {group.rows.length ? <CodeList rows={group.rows} /> : null}
+          {group.moreText ? <p class="health-note">{group.moreText}</p> : null}
           {group.older.length ? (
             <LazyDisclosure cls="health-sub" summary={group.olderSummary} render={() => <CodeList rows={group.older} />} />
           ) : null}
@@ -235,6 +236,7 @@ function CodesCard() {
         <>
           <h3 class="section-title">{current.summary}</h3>
           {current.rows.length ? <CodeList rows={current.rows} /> : <Empty>No current codes.</Empty>}
+          {current.moreText ? <p class="health-note">{current.moreText}</p> : null}
         </>
       ) : null}
       {vm.groups.map((group) => (

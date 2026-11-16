@@ -22,6 +22,9 @@ from projects.vehicle_data.broker_cli import (
 )
 from projects.vehicle_data.armed_at_startup import ArmedRole, assess_startup_roles
 from projects.vehicle_data.drive_helper_launch import HELPER_CWD, helper_command
+from projects.vehicle_data.drive_dtc_control import (
+    DriveDtcControl, drive_dtc_arguments, grant_helper_ready,
+)
 from projects.vehicle_data.engine_off_voltage import EngineOffVoltageCapture
 from projects.vehicle_data.helper_events import validate_helper_status
 from projects.vehicle_data.helper_hold import (
@@ -186,6 +189,7 @@ class ActiveDriveSupervisor:
         event_silence_timeout_seconds: float = 10.0,
         queue_poll_seconds: float = 0.1,
         helper_module: str = ACTIVE_DRIVE_HELPER,
+        drive_dtc=None,
         stall_tolerance_seconds: float = 30.0,
         stall_detection_seconds: float = 1.0,
         monotonic=time.monotonic,
@@ -204,6 +208,7 @@ class ActiveDriveSupervisor:
         self.expected_usb_serial = expected_usb_serial
         self.expected_dev_id = expected_dev_id
         self.helper_module = helper_module
+        self.drive_dtc = drive_dtc
         if (
             not isinstance(self.expected_usb_serial, str)
             or not self.expected_usb_serial
@@ -387,7 +392,7 @@ class ActiveDriveSupervisor:
             ]
         )
         if self.helper_module == ACTIVE_DRIVE_HELPER:
-            command.append("--enable-oil-life")
+            command.extend(["--enable-oil-life", *drive_dtc_arguments(self.drive_dtc)])
         grant, process, early_final = self._start_helper(command, stop_event)
         if early_final is not None:
             return early_final
@@ -571,7 +576,7 @@ class ActiveDriveSupervisor:
                                 )
                                 if protocol_error is None:
                                     ready_seen = True
-                                    grant.try_grant(cancel_requested)
+                                    grant_helper_ready(self.drive_dtc, grant, event, cancel_requested)
                             elif (
                                 not grant.grant_attempted
                                 and pregrant_event_problem(event)
@@ -731,6 +736,7 @@ class TelemetryBroker:
         maintenance_store=None,
         radar_history=None,
         last_readings=None,
+        drive_dtc=None,
     ):
         if acquirer is None:
             raise ValueError(
@@ -749,7 +755,7 @@ class TelemetryBroker:
         self.display_receiver = display_receiver
         self._configure_drive_helpers(
             active_drive_supervisor, active_drive_enabled,
-            auxiliary_drive_supervisor, auxiliary_drive_enabled,
+            auxiliary_drive_supervisor, auxiliary_drive_enabled, drive_dtc=drive_dtc,
         )
         self.interface_reconciler = interface_reconciler
         self.insights = insights
@@ -898,9 +904,10 @@ class TelemetryBroker:
 
     def _configure_drive_helpers(
         self, active_drive_supervisor, active_drive_enabled,
-        auxiliary_drive_supervisor, auxiliary_drive_enabled,
+        auxiliary_drive_supervisor, auxiliary_drive_enabled, *, drive_dtc=None,
     ) -> None:
         """Keep each helper's enablement conditional on its actual supervisor."""
+        self.drive_dtc = drive_dtc or DriveDtcControl()
         self.active_drive_supervisor = active_drive_supervisor
         self.active_drive_enabled = bool(
             active_drive_enabled and active_drive_supervisor is not None
@@ -1921,6 +1928,8 @@ class TelemetryBroker:
 
     def handle_active_drive_event(self, event: dict[str, object]) -> None:
         """Validate one trusted helper-pipe event; never expose this as an API."""
+        if self.drive_dtc.handle_event(event):
+            return
         event_type = event.get("type")
         if event_type == "observation":
             if event.get("interface_mode") != "armed_diagnostic":
@@ -3170,8 +3179,8 @@ class TelemetryBroker:
                 )
 
         try:
-            outcome = self.active_drive_supervisor.run(
-                self._helper_hold.stop_condition(self._collector_stop)
+            outcome = self.drive_dtc.run(
+                self.active_drive_supervisor, self._helper_hold.stop_condition(self._collector_stop)
             )
         finally:
             if self.display_receiver is not None:
@@ -3407,6 +3416,7 @@ class TelemetryBroker:
         self.maintenance.flush()
         self._radar_history.flush()
         self.last_readings.flush()
+        self.drive_dtc.close()
 
 
 def _reading_stores(history_db):
@@ -3500,7 +3510,8 @@ def main(argv=None) -> int:
             event_handler=lambda event: broker_holder[
                 "broker"
             ].handle_active_drive_event(event),
-            supervisor_factory=lambda **kwargs: broker_holder["broker"].radar_service.supervisor(ActiveDriveSupervisor, **kwargs),
+            supervisor_factory=lambda **kwargs: broker_holder["broker"].radar_service.supervisor(
+                ActiveDriveSupervisor, drive_dtc=broker_holder["broker"].drive_dtc, **kwargs),
         )
     if auxiliary_drive_enabled:
         auxiliary_supervisor = RoleAwareAuxiliaryDriveSupervisor(
@@ -3549,6 +3560,7 @@ def main(argv=None) -> int:
         maintenance_store=maintenance_store,
         radar_history=radar_history,
         last_readings=last_readings,
+        drive_dtc=DriveDtcControl.from_args(args),
     )
     broker_holder["broker"] = broker
     from projects.vehicle_data.display_receivers import DisplayReceivers

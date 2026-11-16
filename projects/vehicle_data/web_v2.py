@@ -303,6 +303,7 @@ def dtc_lite(dtcs: Any) -> Any:
             "broker_cache",
             # The van's own health-check results (passive, additive; see van_scan_harvest.py).
             "in_vehicle_scan",
+            "drive_reads",
         )
         if key in dtcs
     }

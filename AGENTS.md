@@ -491,6 +491,14 @@ opt-in helper schedule and per-cycle step; `active_drive.py` composes it inside
 the unchanged ownership/restoration interval. `FreshAuthority.last_snapshot`
 retains the actual acquisition evidence for DTC event reporting. Flag-off helper
 runs construct no watch or BCM socket and emit no DTC events.
+`drive_dtc_budget.py` serializes crash-durable launch reservations with a
+bounded two-second caller wait; `drive_dtc_control.py` owns opt-in arguments,
+capability cancellation, cadence-violation stops and the separate bounded
+results writer. `drive_reads.py` validates/reparses saved results for insights
+and the dashboard's three-source merge. Filenames, timing and event outcomes
+are shared through `drive_dtc.json`; parked DTC storage is unchanged. The
+broker flag `--enable-drive-dtc-reads` defaults off and is absent from the unit;
+activation and the first-drive checks remain separately reviewed work.
 
 ## Backend ownership and dependency direction
 
@@ -522,6 +530,9 @@ caller has retired, with owner/callers/retirement stated in the wrapper header.
 | `projects/vehicle_data/dashboard/src/views/dtcSources.helpers.js` | health.helpers.js | Diagnostic source merge |
 | `projects/vehicle_data/drive_dtc_contract.py` | Drive DTC helper, broker and tests | Fixed frames, timing, parser and standalone event contract |
 | `projects/vehicle_data/drive_dtc.json` | drive_dtc_contract and dashboard | Shared DTC vocabulary and bounds |
+| `projects/vehicle_data/drive_dtc_budget.py` | DriveDtcControl | Serialized durable launch budget, two queued operations and two-second wait |
+| `projects/vehicle_data/drive_dtc_control.py` | TelemetryBroker and ActiveDriveSupervisor | Disabled-by-default capability, cadence checks and bounded results writer |
+| `projects/vehicle_data/drive_reads.py` | TelemetryInsights | Read-only validated drive result projection |
 | `projects/vehicle_data/vehicle_speed.py` | Radar service alignment and DriveDtcSteps | Pure bounded reader of decoded speed observations |
 | `projects/vehicle_data/drive_dtc_steps.py` | active_drive.run_active_session | Opt-in reservation schedule, per-cycle DTC checks and event emission |
 | `projects/vehicle_data/drive_dtc_transport.py` | Drive DTC step | Fixed single-request-frame exchanges, no flow control |
