@@ -26,7 +26,8 @@ the owner's **2 GiB cap for completed compute history**, with a maximum age
 of **30 days for both successful and failed jobs**. It prints the backend's JSON plan
 and changes no data. `--apply` explicitly deletes eligible completed jobs.
 This is the storage-administration exception to the usual `pi_compute.py`
-frontend rule: analysis and tests still go through the named compute tasks.
+frontend rule: analysis still goes through the named compute tasks, and tests
+follow the "Safe automated suite" rule in `AGENTS.md`.
 The wrapper calls the installed administrative entry point in an isolated
 child process; it does not duplicate queue locking, citation scanning or deletion.
 

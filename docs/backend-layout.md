@@ -41,8 +41,9 @@ broker treats as a lease. A job submitted while it says `true` can still land
 on the Pi if the Mac sleeps before claiming it, so check `placement` before
 reading a failure.
 
-A direct run outside the sandbox uses pip's and npm's per-user caches
-(`~/.cache/pip`, `~/.npm`) because it sets no `XDG_CACHE_HOME`. With them warm
+A direct run from a shell with no `XDG_CACHE_HOME` in its environment, the
+normal case on vanpi, leaves pip and npm on their configured per-user caches
+(by default `~/.cache/pip` and `~/.npm`). With them warm
 it downloads nothing; on 2026-11-15 they held 21 MB and 45 MB and did not grow
 over a run. They grow only when `requirements-test.txt` resolves to new
 versions or the lockfile changes; `pip cache purge` and `npm cache clean
@@ -66,7 +67,8 @@ step and the scratch build. AGENTS.md declares it as the `dashboard` scoped gate
 `node_modules`; worktrees have separate locks. When `XDG_CACHE_HOME` is set the
 npm download cache lives in `$XDG_CACHE_HOME/npm` and `npm ci` runs with
 `--prefer-offline`; pip's cache stays in the run's scratch folder, since the unhashed
-Python requirements can't safely share a cache other jobs write.
+Python requirements can't safely share a cache other jobs write. An
+`npm_config_cache` or `PIP_CACHE_DIR` already in the environment is kept as it is.
 
 When the checkout is not writable, the runner stops before writing anything
 with a setup error (exit 2). A Pi-local compute job mounts its source that way,
@@ -131,8 +133,11 @@ Direct full runs on vanpi, outside the sandbox, on 2026-11-15:
   1,200 s per process).
 - At `nice -n 10 ionice -c2 -n7`, load average 4–6: passed in 926 s, 782 s of
   it pytest, whose process used 308 s of CPU.
+- At `nice -n 10 ionice -c2 -n7`, load average 2 at the start and rising as
+  other work began: passed in 1,517 s, 1,174 s of it pytest. The layout step
+  took 201 s, against 47–54 s in the other runs.
 
-Sampled each second, the process tree peaked at 343–385 MiB RSS. Address space
+Sampled each second, the process tree peaked at 343–394 MiB RSS. Address space
 (VmPeak) ran far higher: 1,811 MiB for pytest, 1,080 MiB for `npm ci`, 4,911 MiB
 for one Node test. VmPeak counts reservations, which can shrink under a limit:
 that Node test (`test/readmeShots.test.mjs`) passes under a 1 GiB `ulimit -v`.

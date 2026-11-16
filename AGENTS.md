@@ -372,8 +372,8 @@ fails for sandbox reasons that say nothing about the change set):
    child missed its 20 s hang guard, and the suite has about 70 such guards. The run needs
    the Pi's internet only when pip's or npm's user cache lacks a pinned package.
 
-A direct full run on vanpi takes 15–24 minutes, depending on what else the Pi is doing
-(four runs on 2026-11-15; [backend verification](docs/backend-layout.md) section "Pi-local
+A direct full run on vanpi takes 15–25 minutes, depending on what else the Pi is doing
+(five passing runs on 2026-11-15; [backend verification](docs/backend-layout.md) section "Pi-local
 placement" has the measurements). Don't start two suites at once on the Pi; check `uptime`
 first.
 
@@ -418,8 +418,10 @@ The three suite tasks declare the van-compute task cache `"cache": "obd-things-t
 (van-compute release `269b68d6…` and later, 2026-11-14): npm downloads persist per worker.
 The cache is untrusted, evictable at any time and shared by every slot on a host, so nothing
 may depend on its contents: npm verifies each tarball against the lockfile's integrity hashes.
-`run_tests.py` keeps pip's cache and the venv per run, because `requirements-test.txt` has
-ranges and no hashes; sharing pip's cache would need hash-locked requirements.
+The venv is always per run. When `XDG_CACHE_HOME` is set, as in these jobs, `run_tests.py` also
+keeps pip's cache per run unless `PIP_CACHE_DIR` is already set, because `requirements-test.txt`
+has ranges and no hashes; sharing pip's cache would need hash-locked requirements. With no
+`XDG_CACHE_HOME` (a direct run from a shell) pip and npm use their per-user caches.
 
 The three suite tasks pass only on a Mac worker (verified 2026-11-15). A job is placed
 on the Pi only when every Mac lease has lapsed, and nothing forces Pi placement. There it
