@@ -500,6 +500,104 @@ indexed per-trip statements, maximum 0.462 s); trips 69–73 had aged out and
 come from the October 8 `samples.csv`. Fresh rows deduplicated by observation
 timestamp. No CAN transmission or service change.
 
+## November 15 follow-up: latched ACC messages, a third physical change and the per-drive record
+
+### Owner report (2026-11-15)
+
+- The cluster shows "ACC Front Radar Sensor Temporarily Blocked" and "ACC
+  Unavailable Service Required" with the amber ACC warning lamp. The owner
+  first saw them on November 14; fixed-speed cruise still engages. Adaptive
+  cruise had worked from October 12 until then.
+- Physical history of the mount, as the owner states it: one spacer on two of
+  the mounting bolts since the June repair and Service Drive Alignment; the
+  October correction before trip 87 was bending the bumper itself back into
+  place (the section above calls it a bracket correction); on November 15 two
+  more spacers were added on each side on top of that one, which the owner
+  estimates at about 1° of tilt each, aiming to cancel the +1.94° reading.
+  Trip 122 (November 15, from 3:49 pm) is the first drive with them in.
+- The owner believes slight differences in washer size also left the radar
+  pointed slightly more inward (toward the vehicle centreline; the radar sits
+  offset to the passenger side), and is waiting for a larger azimuth change
+  before settling which sign of the reading means inward.
+- No collision or contact on November 13–14. The owner notes it may have been
+  the coldest weather of the season so far.
+
+The Pi cannot see either cluster message. No decoded broadcast carries a
+blocked or unavailable flag, and no radar fault codes have been read since the
+October 8 parked scan, so the latched fault behind "Service Required" is
+unidentified.
+
+### Per-drive change on each axis, September 17 to November 15
+
+Start and end are the medians of each trip's first and last 60-second
+historian rollup bucket for `radar.alignment.azimuth` and
+`radar.alignment.elevation` (`metric_rollups`, read-only, 80 trips between 42 and 122).
+Dates and times in this section are Mountain time, the Pi's zone. Rows that
+span several drives give the first start and last end.
+
+| Drives | Azimuth | Elevation |
+|---|---|---|
+| Sep 16 – Oct 1 (trips 42–72, includes the collision drive) | +0.09° → +0.12° | +0.04° → +0.18° |
+| Oct 3 9:28 pm (trip 73, first after the collision) | **+0.12° → −1.12°** | +0.18° → +0.17° |
+| Oct 4 3:38 pm (trip 74) | **−1.12° → −1.34°** | +0.17° → +0.13° |
+| Oct 4 – Oct 10 (trips 75–86) | −1.30° → −1.41° | **+0.14° → −3.76°** |
+| Oct 11 6:17 pm (trip 87, first after the bumper was bent back) | **−1.41° → −0.07°** | −3.76° → −3.77° |
+| Oct 11 8:33 pm (trip 88) | −0.07° → −0.15° | **−3.77° → −0.95°** |
+| Oct 14 12:04 pm (trip 89) | −0.15° → −0.15° | **−0.95° → +1.11°** |
+| Oct 14 afternoon and evening (trips 90–92) | −0.15° → −0.16° | **+1.07° → +1.84°** |
+| Oct 15 – Nov 13 5:57 pm (trips 93–114) | −0.16° → −0.08° | +1.84° → +1.93° |
+| Nov 13 10:17 pm – Nov 15 2:48 pm (trips 115–121) | −0.33° → −0.13° | +1.93° → +1.94° |
+| Nov 15 3:49 pm (trip 122, first with the added spacers; under way at 5:01 pm) | −0.13° → −0.19° | +1.94° → +1.97° |
+
+- **One axis per drive holds for every large change.** In each drive where one
+  axis moved more than 0.2°, the other moved less than 0.1°. The quiet axis is
+  not exactly still: it drifts by up to a few hundredths of a degree.
+- **Azimuth first, elevation later.** After both earlier physical changes
+  azimuth moved on the first drive at speed. Elevation then took several
+  drives: −3.77° to +1.84° over trips 88–92, five drives in three days, after
+  the 110-minute hold described above.
+- **The October correction overshot.** The reading passed through zero and
+  settled at +1.84° (aimed low by the dashboard's sign rule), then crept to
+  +1.94° over the following month. Adaptive cruise worked throughout that
+  month.
+- **Elevation has not responded to anything since October 15.** Its largest
+  change in any of the 29 drives from trip 93 to trip 121 is 0.03°.
+- **Trip 122, the first drive with the added spacers.** In its first 72
+  recorded minutes, mostly at highway speed, elevation went from +1.938° to
+  +1.969° and azimuth from −0.134° to −0.193°. The elevation change is small
+  and away from zero; after the October correction the elevation held for 110
+  recorded minutes before it stepped, so this does not yet show what the
+  spacers did. The azimuth change reverses the +0.05° per drive of the
+  preceding four drives. If the radar is now aimed further inward, that makes
+  "more negative = more inward" a candidate; 0.06° is too small to settle it.
+
+### Evening of November 13: azimuth changed while parked
+
+Trip 114 ended at 5:57 pm on November 13 with azimuth −0.075°. Trip 115
+started at 10:17 pm with −0.325° in its first reading, a 0.25° change with the
+engine off, and the value moved back by about 0.05° per drive over the next
+four drives (−0.13° by trip 119). Elevation did not change across that stop. A parked change has one
+precedent here: about 1.5° of the October 7 elevation fall happened between
+trips 76 and 77.
+
+The owner first saw the cluster messages the next day, and this is the only
+recorded change that separates those days from the preceding month. Coolant temperature at start, the only
+cold-soak proxy the historian keeps, was 37.4 °F for trip 113 (November 12,
+9:17 pm) and 39.2 °F for trip 114 (November 13, 5:47 pm), the two coldest starts on record; trip 115
+itself started warm (98.6 °F) after a 4 h 20 min stop. So the cold nights
+preceded the change, but the two coldest starts themselves show no azimuth
+step. Cold, a latched fault changing what the radar reports, and an
+unrecorded disturbance are all open; the logs cannot choose.
+
+### To check on the next drives
+
+- Azimuth: a change large enough to settle which sign means inward.
+- Elevation after an hour or more at highway speed, then over several drives;
+  the target is a fall from +1.94° toward zero. The owner expects no
+  substantial change before the second drive with the spacers.
+- Whether the cluster messages clear without a fault-code read or a Service
+  Drive Alignment. Neither has been run since the messages appeared.
+
 ## Reproduction and provenance
 
 Working evidence: `tmp/radar/post-collision-20261008/`. Inputs are unchanged.
