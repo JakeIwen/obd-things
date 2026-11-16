@@ -1152,6 +1152,8 @@ class ParentDeathHandshakeTests(unittest.TestCase):
                 "expected_parent_pid",
                 "enable_oil_life", "enable_radar_service_alignment",
                 "startup_grant_fd",
+                "enable_drive_dtc", "drive_dtc_reservation",
+                "drive_dtc_origin", "drive_dtc_first_due",
             },
         )
         self.assertIsNone(actions["startup_grant_fd"].default)

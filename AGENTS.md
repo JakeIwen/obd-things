@@ -482,7 +482,11 @@ bounded receive-only foreign-tester watch. An optional in-memory radar send
 marker runs after permit consumption and before socket send. A pass's
 `started_monotonic` is recorded before any permit is acquired, so event delivery
 cannot age a permit or be confused with actual-start timing. These library
-components do not enable the broker capability.
+components do not enable the broker capability. `drive_dtc_steps.py` owns the
+opt-in helper schedule and per-cycle step; `active_drive.py` composes it inside
+the unchanged ownership/restoration interval. `FreshAuthority.last_snapshot`
+retains the actual acquisition evidence for DTC event reporting. Flag-off helper
+runs construct no watch or BCM socket and emit no DTC events.
 
 ## Backend ownership and dependency direction
 
@@ -514,6 +518,7 @@ caller has retired, with owner/callers/retirement stated in the wrapper header.
 | `projects/vehicle_data/dashboard/src/views/dtcSources.helpers.js` | health.helpers.js | Diagnostic source merge |
 | `projects/vehicle_data/drive_dtc_contract.py` | Drive DTC helper, broker and tests | Fixed frames, timing, parser and standalone event contract |
 | `projects/vehicle_data/drive_dtc.json` | drive_dtc_contract and dashboard | Shared DTC vocabulary and bounds |
+| `projects/vehicle_data/drive_dtc_steps.py` | active_drive.run_active_session | Opt-in reservation schedule, per-cycle DTC checks and event emission |
 | `projects/vehicle_data/drive_dtc_transport.py` | Drive DTC step | Fixed single-request-frame exchanges, no flow control |
 | `projects/vehicle_data/drive_dtc_watch.py` | Drive DTC step | Bounded receive-only tester watch |
 | `projects/vehicle_data/broker_cli.py` | broker.main and offline parser callers | Broker command-line parser and defaults |

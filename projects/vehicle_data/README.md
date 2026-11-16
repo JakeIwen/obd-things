@@ -1100,8 +1100,24 @@ Those are the only other CAN frames it can construct:
 18DAC7F1#032231D300000000
 ```
 
+The optional stage-1a drive-DTC capability adds only these two fixed request
+frames, at most once each per pass (no flow control, retries after an attempted
+send, session changes, or other module addresses):
+
+```text
+18DA2AF1#0319028F00000000
+18DA40F1#0319028F00000000
+```
+
+Each needs fresh running evidence and its own one-use permit. The internal
+`--enable-drive-dtc` argument requires a complete broker reservation schedule;
+without it there are no DTC events, watch socket, BCM socket or DTC sends.
+The `drive_dtc_steps.py` step runs after radar work, at most one module per cycle,
+with two seconds between module attempts and five seconds before the next
+0845 poll. This staged helper support does not authorize vehicle activation.
+
 The fixed radar `0845` read and, only after an owner request relayed by the
-broker, the radar service-alignment requests are the helper's remaining frames;
+broker, the radar service-alignment requests are the helper's other frames;
 see "Radar alignment dashboard" and "Radar Service Drive Alignment from the
 dashboard" below. Those service requests are the one place this helper changes
 a diagnostic session or sends TesterPresent.

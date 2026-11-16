@@ -32,12 +32,14 @@ class FreshAuthority:
         self.lock_handle = lock_handle
         self.initial = initial
         self.snapshot_seconds = snapshot_seconds
+        self.last_snapshot = None
 
     def acquire(self, purposes, *, absent_detail):
         """One permit per purpose, or None when the evidence aged out and
         nothing may be sent this cycle. Raises :class:`SessionEnding` when the
         engine is no longer running or an active gate fails."""
         snapshot = self.backend.broadcast_snapshot(self.snapshot_seconds)
+        self.last_snapshot = snapshot
         if not gates.running_snapshot(snapshot):
             raise SessionEnding(gates.SessionOutcome("engine_not_running", absent_detail))
         gate_failure = gates.active_gate(self.backend, self.initial)
