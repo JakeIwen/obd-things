@@ -35,8 +35,8 @@
       "caption": "Drive Sensors page in the light theme with the same illustrative highway scene as 17: speed-limit sign, ACC at 65 mph with gap 3 of 4, ≈ 3.3 gal/h and now ≈ 19 mpg, estimated 7th gear, radar aim, shaft speeds, torque and odometer.",
       "width": 800,
       "height": 1280,
-      "bytes": 101686,
-      "sha256": "5c5f1d1e71dbc2de8508591c633ab7a9fea887625771e7f3e1ef0ebf0b281485"
+      "bytes": 95704,
+      "sha256": "01641361c0f0878cfc968cbeaac9337f0cbdfa9e2cba3e58e15dac2f9b5fbfd0"
     },
     {
       "file": "03-parked-battery-tires-and-service.png",
@@ -91,8 +91,8 @@
       "caption": "System page while parked: vehicle state, listen-only buses, broker status and radar alignment shown as change since an illustrative saved reference point.",
       "width": 800,
       "height": 1280,
-      "bytes": 128509,
-      "sha256": "c80421db41b0c9dd30ac204e2dd26f3bc0a2989dd17ef2b99225fd7e4182a6a2"
+      "bytes": 116943,
+      "sha256": "d24fd9712d235ef8c711c10aa500b685ee3357f18fe84fc9fbc141cc597f55aa"
     },
     {
       "file": "10-system-metric-catalog.png",
@@ -155,8 +155,8 @@
       "caption": "Drive Sensors page in the dark theme with illustrative demo highway data, including ≈ 3.3 gal/h and now ≈ 19 mpg.",
       "width": 800,
       "height": 1280,
-      "bytes": 101659,
-      "sha256": "c7c06dca10277e58220d2228605d19e8db8dfaa265db6d3818dfb14e7c215493"
+      "bytes": 96113,
+      "sha256": "d70c087a02b9f2ff044d87110084b6413ac9772c7466519e51efb772b4bc08fa"
     },
     {
       "file": "18-radar-service-alignment.png",
