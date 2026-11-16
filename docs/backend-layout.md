@@ -24,11 +24,32 @@ the dashboard in scratch space. It prints the actual Python and Node versions.
 It reports unrun phases after a failure and removes its own scratch environment.
 It never builds the served `dashboard/dist`, touches CAN, or controls services.
 
-On vanpi, submit the same gate through the established offline compute queue:
+On vanpi, send the gate to a Mac worker when one is up, and otherwise run it
+directly; AGENTS.md "Safe automated suite" gives the rule. In short:
 
 ```sh
+/home/pi/van_compute/scripts/van_compute.py available | jq .available
+# true: a Mac worker will take the job (add --source-root <checkout> from a worktree)
 /home/pi/van_compute/scripts/pi_compute.py run repo-full-suite --wait 60
+# false, or the job's status shows "placement": "pi-local": from the checkout
+nice -n 15 ionice -c3 python3 run_tests.py
 ```
+
+`available` reads the worker heartbeats in the queue's `workers/` folder and
+calls a worker available while its heartbeat is at most 45 s old, the age the
+broker treats as a lease. A job submitted while it says `true` can still land
+on the Pi if the Mac sleeps before claiming it, so check `placement` before
+reading a failure.
+
+A direct run outside the sandbox uses pip's and npm's per-user caches
+(`~/.cache/pip`, `~/.npm`) because it sets no `XDG_CACHE_HOME`. With them warm
+it downloads nothing; on 2026-11-15 they held 21 MB and 45 MB and did not grow
+over a run. They grow only when `requirements-test.txt` resolves to new
+versions or the lockfile changes; `pip cache purge` and `npm cache clean
+--force` empty them. Everything else the run writes is per run: the scratch
+folder under the checkout's `tmp/` (a 117 MB venv plus the build output) is
+removed at the end, and `dashboard/node_modules` (27 MB) is replaced by each
+`npm ci`.
 
 For change sets confined to `projects/vehicle_data/dashboard/`, `python3
 run_tests.py --dashboard` (compute task `repo-dashboard-suite`) runs the same
@@ -103,12 +124,19 @@ suite tasks pass on Mac workers only. A Pi-local suite job fails:
   crashes below about 1.5 GiB. The dashboard build and `build.test.mjs`
   need esbuild.
 
+A direct full run on vanpi (2026-11-15, outside the sandbox, `nice -n 15
+ionice -c3`, load average 11–14 from other sessions) passed in 1,427 s, 1,181 s
+of it pytest. Sampled each second, its process tree peaked at 343 MiB RSS; the
+pytest process alone reached 1,811 MiB of address space (VmPeak), so the
+768 MiB `RLIMIT_AS` would stop pytest as well as npm and esbuild.
+
 Passing on the Pi needs van-compute changes: an address-space limit of at
 least 2 GiB for this job, a way to provide the Python and npm dependencies
-offline, and likely a longer wall-time limit. The Mac's suite runs peak at
-770–890 MB of process-group RSS, which leaves little room under the Pi
-broker's `MemoryMax=1G`. Until those land, a Pi-local suite job is not
-evidence about the change set; resubmit it when a Mac worker is back.
+offline, and a wall-time limit with room over the 1,800 s default, since the
+direct run took 1,427 s without the sandbox's `CPUQuota=150%`. The Mac's suite
+runs peak at 770–890 MB of process-group RSS, which leaves little room under
+the Pi broker's `MemoryMax=1G`. Until those land, a Pi-local suite job is not
+evidence about the change set: run the suite directly instead.
 
 ## Lasting checks and limits
 

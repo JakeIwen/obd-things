@@ -351,17 +351,33 @@ misleading split between deployed files and their authoritative source.
 
 `python3 run_tests.py` is the complete offline gate (Python 3.11+, Node 20+,
 npm and Git): isolated dependency setup, full pytest including dashboard Node
-tests, installed layout tests/scan and a scratch dashboard build. On vanpi use
-`/home/pi/van_compute/scripts/pi_compute.py run repo-full-suite --wait 60`;
-placement remains the compute service's decision. `repo-tests` still accepts
+tests, installed layout tests/scan and a scratch dashboard build. `repo-tests` still accepts
 pytest filters and prepares dependencies, but omits the layout/build phases.
 See [backend verification](docs/backend-layout.md) for setup, boundaries and
 coverage limits. No test command authorizes vehicle or service activity.
 
+On vanpi, the route depends on whether a Mac worker is up (a Pi-local compute suite job always
+fails for sandbox reasons that say nothing about the change set):
+
+1. Run `/home/pi/van_compute/scripts/van_compute.py available | jq .available`. `true` means a
+   Mac worker heartbeat is under 45 s old, the same lease the broker uses to keep work off the Pi.
+2. `true`: submit `/home/pi/van_compute/scripts/pi_compute.py run repo-full-suite --wait 60`
+   (`repo-dashboard-suite` for the dashboard gate). It snapshots `/home/pi/dev/obd-things`
+   unless given `--source-root <checkout>`, which a worktree needs. On a wait timeout use
+   `pi_compute.py wait <id>` with the job's `id` field instead of resubmitting.
+3. `false`, or the job's `status` shows `"placement": "pi-local"`: run the suite directly from
+   the checkout, outside the sandbox, at low priority so the telemetry broker keeps its CPU:
+   `nice -n 15 ionice -c3 python3 run_tests.py` (add `--dashboard` for the dashboard gate).
+   It needs the Pi's internet only when pip's or npm's user cache lacks a pinned package.
+
+A direct full run on vanpi passed on 2026-11-15 in 24 minutes (pytest 20 of them) under a load
+average of 11–14, with peak process-tree RSS about 350 MiB. Don't start two suites at once on
+the Pi; check `uptime` first.
+
 Scoped gate **dashboard** (the global Code shape rule on scoped gates governs its use):
 
-- Command: on vanpi `/home/pi/van_compute/scripts/pi_compute.py run repo-dashboard-suite
-  --wait 60`; elsewhere `python3 run_tests.py --dashboard`. It runs the same preparation,
+- Command: `python3 run_tests.py --dashboard`; on vanpi, compute task `repo-dashboard-suite`
+  or the direct run, by the vanpi route above. It runs the same preparation,
   pytest over `DASHBOARD_PYTEST_TARGETS` (every test module that reads the dashboard,
   including `test_backend_contracts.py`'s package.json launch-target scan), the layout step
   and the scratch build.
@@ -402,13 +418,13 @@ may depend on its contents: npm verifies each tarball against the lockfile's int
 `run_tests.py` keeps pip's cache and the venv per run, because `requirements-test.txt` has
 ranges and no hashes; sharing pip's cache would need hash-locked requirements.
 
-The three suite tasks pass only on a Mac worker today (verified 2026-11-15). A job is placed
+The three suite tasks pass only on a Mac worker (verified 2026-11-15). A job is placed
 on the Pi only when every Mac lease has lapsed, and nothing forces Pi placement. The Pi job
 then fails at "Python test dependency install": its sandbox has no network. It also mounts
 the source read-only (`run_tests.py` copies a read-only checkout to scratch) and caps each
 process at 768 MiB of address space, which crashes `npm ci` and esbuild. Fixing that needs
-van-compute changes; the facts and the changes needed are in
-[backend verification](docs/backend-layout.md) section "Pi-local placement".
+van-compute changes; until then the direct run above is the Pi route. The facts and the
+changes needed are in [backend verification](docs/backend-layout.md) section "Pi-local placement".
 
 A van-compute release without task caches fails any job that declares one, so
 drop these declarations before rolling van-compute back. Clear the Pi copy with
