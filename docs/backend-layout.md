@@ -124,24 +124,34 @@ suite tasks pass on Mac workers only. A Pi-local suite job fails:
   crashes below about 1.5 GiB. The dashboard build and `build.test.mjs`
   need esbuild.
 
-A direct full run on vanpi (2026-11-15, outside the sandbox, at `nice -n 15
-ionice -c3` with a load average of 11–14 from other sessions) passed in
-1,427 s, 1,181 s of it pytest. The next run at that priority failed when load
-reached 18: `tests/test_campaign_cli_entrypoints.py` starts a plan-only CLI
-that takes under 1 s, and it missed its 20 s timeout. At nice 15 a process gets
-about 3% of a core contended by nice-0 work, and with the idle I/O class
-mq-deadline (the Pi's scheduler) may hold each read for its 10 s
-`prio_aging_expire`; hence the documented `nice -n 10 ionice -c2 -n7`. Sampled each second, its process tree peaked at 343 MiB RSS; the
-pytest process alone reached 1,811 MiB of address space (VmPeak), so the
-768 MiB `RLIMIT_AS` would stop pytest as well as npm and esbuild.
+Direct full runs on vanpi, outside the sandbox, on 2026-11-15:
+
+- At `nice -n 15 ionice -c3`, load average 11–14 from other sessions: passed
+  in 1,427 s, 1,181 s of it pytest.
+- At the same priority, load average 18: failed. `tests/test_campaign_cli_entrypoints.py`
+  starts a plan-only CLI that takes under 1 s, and it missed its 20 s timeout.
+  At nice 15 a process gets about 3% of a core contended by nice-0 work, and
+  mq-deadline (the Pi's I/O scheduler) may hold each idle-class read for its
+  10 s `prio_aging_expire`. Hence the documented `nice -n 10 ionice -c2 -n7`.
+- At `nice -n 10 ionice -c2 -n7`: passed in 1,299 s, 1,069 s of it pytest. The
+  pytest process used 357 s of CPU (`RLIMIT_CPU` is 1,200 s per process).
+
+Sampled each second, the process tree peaked at 343–385 MiB RSS. Address space
+(VmPeak) ran far higher: 1,811 MiB for pytest, 1,080 MiB for `npm ci`, 4,911 MiB
+for one Node test. VmPeak counts reservations, which can shrink under a limit:
+that Node test (`test/readmeShots.test.mjs`) passes under a 1 GiB `ulimit -v`.
+Whether pytest passes under 768 MiB was not tested; npm and esbuild do not
+(above). With warm user caches the direct runs downloaded nothing.
 
 Passing on the Pi needs van-compute changes: an address-space limit of at
-least 2 GiB for this job, a way to provide the Python and npm dependencies
-offline, and a wall-time limit with room over the 1,800 s default, since the
-direct run took 1,427 s without the sandbox's `CPUQuota=150%`. The Mac's suite
-runs peak at 770–890 MB of process-group RSS, which leaves little room under
-the Pi broker's `MemoryMax=1G`. Until those land, a Pi-local suite job is not
-evidence about the change set: run the suite directly instead.
+least 2 GiB for this job (proven only for npm and esbuild; a trial run under
+the chosen limit settles the rest), a way to provide the Python and npm
+dependencies offline, and a wall-time limit with room over the 1,800 s
+default, since the direct runs took 1,299–1,427 s without the sandbox's
+`CPUQuota=150%`. The Mac's suite runs peak at 770–890 MB of process-group RSS,
+which leaves little room under the Pi broker's `MemoryMax=1G`. Until those
+land, a Pi-local suite job is not evidence about the change set: run the suite
+directly instead.
 
 ## Lasting checks and limits
 

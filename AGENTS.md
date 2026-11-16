@@ -372,9 +372,9 @@ fails for sandbox reasons that say nothing about the change set):
    child missed its 20 s hang guard, and the suite has about 70 such guards. The run needs
    the Pi's internet only when pip's or npm's user cache lacks a pinned package.
 
-A direct full run on vanpi passed on 2026-11-15 in 24 minutes (pytest 20 of them) under a load
-average of 11–14, with peak process-tree RSS about 350 MiB. Don't start two suites at once on
-the Pi; check `uptime` first.
+Direct full runs on vanpi passed on 2026-11-15 in 22–24 minutes (pytest 18–20 of them) with
+other sessions keeping the load average at 7–14, peaking at 343–385 MiB of process-tree RSS.
+Don't start two suites at once on the Pi; check `uptime` first.
 
 Scoped gate **dashboard** (the global Code shape rule on scoped gates governs its use):
 
