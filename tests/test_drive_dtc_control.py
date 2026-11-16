@@ -364,3 +364,23 @@ def test_results_cleanup_failure_latches_without_writing(tmp_path, monkeypatch):
         assert not results.path.exists()
     finally:
         results.close(2)
+
+
+def test_flag_off_dtc_events_are_noted_once_per_session_and_ignored(capsys):
+    control = DriveDtcControl()
+    handled = []
+
+    def helper(stop):
+        for event in (pass_event(), read_event(), {'type': 'dtc_step'}):
+            handled.append(control.handle_event(event))
+        assert not stop.is_set()
+        return FINAL
+
+    stop = threading.Event()
+    assert control.run(Supervisor(helper), stop) == FINAL
+    assert handled == [True, True, True] and not stop.is_set()
+    first = capsys.readouterr().err.splitlines()
+    assert len(first) == 1 and "ignored unexpected 'dtc_pass' event" in first[0]
+    assert control.run(Supervisor(helper), stop) == FINAL  # a new helper session notes again
+    assert len(capsys.readouterr().err.splitlines()) == 1
+    assert control.launch_arguments() == [] and not control.handle_event({'type': 'observation'})

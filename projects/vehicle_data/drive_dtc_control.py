@@ -7,9 +7,11 @@ writer, so neither can hold up the other or a broker status request.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import os
 from pathlib import Path
 import queue
+import sys
 import threading
 import time
 
@@ -215,6 +217,7 @@ class DriveDtcControl:
         self._monotonic = monotonic
         self._disabled = threading.Event()
         self._session: _Session | None = None
+        self._unexpected_noted = False
         if enabled and directory is None and (budget is None or results is None):
             raise ValueError('enabled drive-DTC control needs its storage directory')
         self.budget = (budget or DriveDtcBudget(directory, monotonic=monotonic)) if enabled else None
@@ -249,6 +252,7 @@ class DriveDtcControl:
             reservation = None  # A concurrent storage failure leaves the unused budget null-ended.
         session = _Session(reservation) if reservation is not None else None
         self._session = session
+        self._unexpected_noted = False
         try:
             stop = StopWhenAny(stop_event, session.stop) if session is not None else stop_event
             return supervisor.run(stop)
@@ -271,6 +275,9 @@ class DriveDtcControl:
         kind = event.get('type')
         if not isinstance(kind, str) or kind not in contract.EVENT_TYPES:
             return False
+        if not self.enabled:
+            self._note_unexpected(kind)
+            return True
         session = self._session
         try:
             contract.validate_event(event)
@@ -286,6 +293,23 @@ class DriveDtcControl:
         except (ValueError, TypeError, KeyError, OverflowError):
             self._reject_session()
         return True
+
+    def _note_unexpected(self, kind: str) -> None:
+        """A flag-off broker never asks for DTC events: note one per session, ignore all.
+
+        Ignoring keeps such an event from ever becoming a protocol error, a stop
+        or an inhibit; the note makes it visible in the broker's journal.
+        """
+        if self._unexpected_noted:
+            return
+        self._unexpected_noted = True
+        try:
+            print(f"{datetime.now(timezone.utc).isoformat()} drive DTC: ignored unexpected "
+                  f"{kind!r} event from a helper launched without the capability "
+                  "(further ones this helper session are ignored silently)",
+                  file=sys.stderr, flush=True)
+        except Exception:
+            pass
 
     def _pass_started(self, event: dict, session: _Session) -> None:
         reservation = session.reservation
