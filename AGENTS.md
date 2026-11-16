@@ -245,6 +245,12 @@ changes only: retain the original receipt time, expire freshness after ten
 seconds, and keep stale/restored letters slightly dimmed as the owner requested.
 Frontend `compass.js`, `components/Compass.jsx` and `styles/compass.css` render
 letters at the Drive footer right; `styles/night.css` owns the stronger Dim palette.
+Fuel tank level is B-CAN `0x356` byte 0, percent (candidate; see the
+[November 15 finding](projects/ecu_mapping/findings/promaster_2022/2026-11-15_fuel_level_0x356.md)).
+`fuel_level.py`/`fuel_level.json` own its decoder, metric `fuel.tank_level` and contract; it rides the
+same companion receiver as the compass (`bcan_companion.py` merges the two frame sets and decoders;
+a decoder returning `None` means "understood, no value", which keeps the reading instead of ending
+live evidence). The dashboard shows it in the page-2 fuel tile sub-line via `src/fuelLevel.js`.
 `tools/candump_arrays.py` (`candump-id-arrays` compute task) saves finalized
 candump logs as per-identifier numpy arrays for offline reference syncs.
 `lib.reports.require_distinct_output` protects evidence inputs from report

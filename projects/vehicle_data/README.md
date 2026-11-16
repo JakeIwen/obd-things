@@ -756,6 +756,12 @@ heading. The Dim button now darkens all shared colours and backgrounds for
 night use. See the [compass and night display contract](docs/compass-display.md)
 for ownership, retention, validation and activation details.
 
+The fuel tank level (`fuel.tank_level`, percent, candidate) is B-CAN `0x356` byte 0, received by the
+same companion receiver as the compass and never transmitting. Raw 0 (key-off/wake) keeps the previous
+reading; above 100 is invalid and ends live evidence for both companion metrics. The Drive page 2 fuel
+tile shows `tank ~NN%`, with `(last)` once it is a retained reading. Evidence and open scale questions:
+[finding](../ecu_mapping/findings/promaster_2022/2026-11-15_fuel_level_0x356.md).
+
 ### Serving and deployment
 
 Unit-only updates, boot ordering, the optional LAN address wait, and safe
