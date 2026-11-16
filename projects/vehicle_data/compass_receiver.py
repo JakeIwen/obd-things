@@ -1,4 +1,4 @@
-"""Receive compass events and the fuel tank level beside the broker's existing armed B-CAN owner.
+"""Receive compass events, the fuel tank level and the range beside the broker's existing armed B-CAN owner.
 
 There is no passive lease here: this companion exists only during the proven
 auxiliary owner's interval. It cannot block that owner's startup/restoration,
@@ -92,7 +92,7 @@ class CompassReceiver:
                 next_check = now + 1.0
             return not self._stop.is_set()
 
-        throttle = bcan_companion.FuelThrottle()
+        throttle = bcan_companion.PublishThrottle()
 
         def publish(observations, observed_at, observed_monotonic):
             # Throttle only the publication; the ownership/route check runs in full on each admit.

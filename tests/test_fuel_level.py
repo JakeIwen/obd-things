@@ -7,7 +7,7 @@ import struct
 from types import SimpleNamespace
 import unittest
 
-from projects.vehicle_data import bcan_companion, compass_receiver as cr, compass, display_receiver as dr, fuel_level
+from projects.vehicle_data import bcan_companion, compass_receiver as cr, compass, display_receiver as dr, fuel_level, fuel_range
 from projects.vehicle_data.broker import TelemetryBroker
 from projects.vehicle_data.metrics import METRICS
 from tests.test_display_frames import raw_frame
@@ -40,7 +40,7 @@ class FuelLevelDecodeTests(unittest.TestCase):
             self.assertEqual(fuel_level.decode_fuel_level_observations(0x356, payload), ())
 
     def test_companion_dispatch_keeps_compass_and_fuel_apart(self):
-        self.assertEqual(set(bcan_companion.FRAME_DLCS), {0x088, 0x356})
+        self.assertEqual(set(bcan_companion.FRAME_DLCS), {0x088, 0x356, 0x760})
         fuel, = bcan_companion.decode_bcan_companion(0x356, frame(60))
         self.assertEqual(fuel.metric, fuel_level.METRIC)
         direction, = bcan_companion.decode_bcan_companion(0x088, bytes.fromhex('000003C000'))
@@ -185,6 +185,55 @@ class FuelThrottleTests(unittest.TestCase):
         self.clock.now = 2.0 + fuel_level.CONTRACT['stale_after_seconds'] + 1
         self.assertTrue(broker.metric_response(fuel_level.METRIC)['stale'])
 
+
+
+def range_frame(miles):
+    raw = miles & 0x7FF
+    return bytes([0x00, 0x00, 0x00, 0x00, raw >> 3, (raw & 7) << 5])
+
+
+class FuelRangeDecodeTests(unittest.TestCase):
+    def test_eleven_bit_miles_decode_with_the_owner_and_drive_values(self):
+        for miles in (0, 1, 126, 260, 281, 2046):
+            obs, = fuel_range.decode_fuel_range_observations(0x760, range_frame(miles))
+            self.assertEqual((obs.metric, obs.value, obs.unit, obs.quality),
+                             ('fuel.range', miles, 'mi', 'candidate'))
+        # Captured wake payload minus its odometer bytes: 0x7FF is no value.
+        self.assertIsNone(fuel_range.decode_fuel_range_observations(0x760, bytes.fromhex('FFF15C8EFFE0')))
+        self.assertIsNone(fuel_range.decode_fuel_range_observations(0x760, range_frame(2047)))
+        self.assertIs(METRICS[fuel_range.METRIC], fuel_range.DEFINITION)
+
+    def test_wrong_id_or_length_ends_live_evidence(self):
+        good = range_frame(260)
+        for can_id in (0x761, 0x80000760, 0x40000760):
+            self.assertEqual(fuel_range.decode_fuel_range_observations(can_id, good), ())
+        for payload in (b'', good[:-1], good + b'\0'):
+            self.assertEqual(fuel_range.decode_fuel_range_observations(0x760, payload), ())
+
+    def test_companion_dispatch_and_per_frame_isolation_both_directions(self):
+        self.assertEqual(set(bcan_companion.FRAME_DLCS), {0x088, 0x356, 0x760})
+        feed = PerMetricInvalidationTests.run_feed
+        probe = PerMetricInvalidationTests('available')
+        bad_range = raw_frame(0x760, range_frame(260)[:5])
+        broker = feed(probe, [(1, raw_frame(0x356, frame(50))), (2, raw_frame(0x088, COMPASS_FRAME)),
+                              (3, raw_frame(0x760, range_frame(260))), (4, bad_range)], 5)
+        self.assertTrue(broker.metric_response(fuel_level.METRIC)['available'])
+        self.assertTrue(broker.metric_response(compass.METRIC)['available'])
+        self.assertFalse(broker.metric_response(fuel_range.METRIC)['available'])
+        for bad in (raw_frame(0x356, frame(101)), raw_frame(0x088, bytes.fromhex('0000038000'))):
+            broker = feed(probe, [(1, raw_frame(0x760, range_frame(260))), (2, bad)], 3)
+            self.assertTrue(broker.metric_response(fuel_range.METRIC)['available'])
+
+    def test_range_is_throttled_per_metric_and_publishes_changes_at_once(self):
+        throttle = bcan_companion.PublishThrottle()
+        obs = lambda m, v: fuel_range.decode_fuel_range_observations(0x760, range_frame(v)) if m == 'r' \
+            else fuel_level.decode_fuel_level_observations(0x356, frame(v))
+        self.assertTrue(throttle.admit(obs('r', 260), 0.0))
+        self.assertTrue(throttle.admit(obs('l', 50), 0.1))  # separate state per metric
+        self.assertFalse(throttle.admit(obs('r', 260), 1.0))
+        self.assertTrue(throttle.admit(obs('r', 259), 1.0))
+        self.assertFalse(throttle.admit(obs('r', 259), 2.5))
+        self.assertTrue(throttle.admit(obs('r', 259), 3.0))
 
 
 if __name__ == '__main__':

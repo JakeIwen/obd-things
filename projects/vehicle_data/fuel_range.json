@@ -1,0 +1,10 @@
+{
+  "metric": "fuel.range",
+  "source": "bcan.broadcast.0x760",
+  "frame_id": 1888,
+  "dlc": 6,
+  "stale_after_seconds": 10.0,
+  "minimum": 0,
+  "maximum": 2046,
+  "no_value_raw": 2047
+}
