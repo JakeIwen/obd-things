@@ -1,0 +1,17 @@
+/* ---------- ACC / Cruise text above the gap readout (src/views/SpeedAcc.jsx) ---------- */
+/* Third column of the Speed tile, right-aligned like the readout it wraps. Two compact 14 px lines
+   (`ACC 65` over the state word) keep the column about 80 px wide, so the numeral and the limit
+   sign beside it do not move. Colours are the tile's tokens; a remembered (standby) speed dims
+   like the gap graphic. */
+.speed-acc {
+  flex: 0 0 auto; align-self: center; margin-left: auto;
+  display: flex; flex-direction: column; align-items: center; gap: 0;
+  font-size: 14px; line-height: 1.2; letter-spacing: 0; font-weight: 500; white-space: nowrap;
+  color: var(--text);
+}
+.speed-acc[hidden] { display: none; }
+.speed-acc__title { font-weight: 600; }
+.speed-acc__status { color: var(--text-2); min-height: 1.2em; }
+.speed-acc__status:empty { min-height: 0; }
+.speed-acc--saved { color: var(--text-2); }
+.speed-acc .acc-distance { margin: 4px 0 0; flex: none; }

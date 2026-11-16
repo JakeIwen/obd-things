@@ -8,6 +8,7 @@ import "./styles/palette.css";
 import "./styles/app.css";
 import "./styles/lighting.css";
 import "./styles/acc-distance.css";
+import "./styles/speed-acc.css";
 import "./styles/speed-economy.css";
 import "./styles/speed-limit-sign.css";
 import "./styles/compass.css";
