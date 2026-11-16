@@ -335,7 +335,7 @@ test("codes: loading, unavailable, never read, clean and unproven-clean states",
     ],
   };
   const cleanVm = H.codesView(clean, NOW, false);
-  assert.equal(cleanVm.emptyText, "No codes in the last read of every module.");
+  assert.equal(cleanVm.emptyText, "No codes in the last parked read of every module · Sep 20, 2026, 4:00 AM MDT.");
   assert.deepEqual(cleanVm.badge, { text: "None current", tone: "" });
   assert.equal(cleanVm.groups.length, 0);
 
@@ -474,7 +474,9 @@ test("codes: the van's newer health check replaces that module's codes inside it
   assert.equal(vm.modules.summary, "Parked reads · 11 of 16 answered");
   const abs = vm.modules.rows.find((r) => r.key === "abs_canch");
   assert.match(abs.meta, /CAN-CH · never read · 1 code reported .*from the van’s own health check/);
-  assert.match(vm.modules.rows.find((r) => r.key === "ics_bcan").meta, /B-CAN · no codes · no failed, pending or confirmed codes/);
+  // The van's ICS read returned no availability mask, so its empty result proves nothing.
+  assert.match(vm.modules.rows.find((r) => r.key === "ics_bcan").meta,
+    /B-CAN · no codes · parked read Jul 21, 2026, 8:34 PM MDT · zero codes reported · from the van’s own health check/);
   assert.equal(vm.source, "3 modules " + source);
   for (const t of textsOf(vm, [], ["meaning"])) {
     assert.doesNotMatch(t, JARGON, t);

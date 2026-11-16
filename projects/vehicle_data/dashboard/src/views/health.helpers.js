@@ -13,7 +13,7 @@ import { fmtTime, fmtInt, parseDate } from "../format.js";
 import { OPEN_STATES, metricLabel } from "../warningContext.js";
 import {
   DTC_GROUPS, VAN_SOURCE, obj, arr, num, str, moduleList, mergeVanScan,
-  filteredSourceLine, filteredReadText, driveReadLines,
+  filteredSourceLine, filteredReadText, driveReadLines, filteredTime, newestSuccess, unlistedReports,
 } from "./dtcSources.helpers.js";
 export { DTC_GROUPS, VAN_SOURCE, VAN_STATUS_MASK, mergeVanScan } from "./dtcSources.helpers.js";
 
@@ -398,8 +398,12 @@ export function modulesView(dtcs, nowMs) {
     const status = moduleStatus(m, nowMs);
     const vanRead = obj(m.van_read);
     const vanText = vanRead ? filteredReadText(vanRead) : null;
-    const failedAt = (vanRead || m.drive_read || m.drive_truncated || m.drive_failure) && m.availability === "unavailable" ? when(m.last_attempt_at, nowMs) : null;
-    const parkedText = failedAt ? status.text + " · parked read failed " + failedAt : status.text;
+    const filtered = vanRead || m.drive_read || m.drive_truncated || m.drive_failure;
+    const failedAt = filtered && m.availability === "unavailable" ? when(m.last_attempt_at, nowMs) : null;
+    // Beside newer filtered lines, a parked conclusion carries its own date.
+    const parkedAt = filtered && m.availability === "available" && parseDate(m.last_success_at)
+      ? " · parked read " + filteredTime(m.last_success_at) : "";
+    const parkedText = failedAt ? status.text + " · parked read failed " + failedAt : status.text + parkedAt;
     return {
       key: str(m.module_key) || "module:" + i,
       name: str(m.module_name) || str(m.module_key) || "Unknown module",
@@ -500,9 +504,9 @@ export function codesView(dtcs, nowMs, scanEnabled) {
   d = mergeVanScan(d);
   const counts = obj(d.group_counts) || {};
   const coverage = obj(d.coverage) || {};
-  const newest = str(coverage.last_attempt_at) || str(coverage.last_success_at) || str(obj(d.van)?.lastAt) ||
-    moduleList(d).flatMap((m) => [m.drive_read, m.drive_truncated, m.drive_failure]).filter(Boolean)
-      .map((r) => r.observed_at).sort().pop();
+  const newest = newestSuccess(d);
+  const anyRead = newest || str(coverage.last_attempt_at);
+  const unlisted = unlistedReports(d);
   const groupModels = codeGroups(d, nowMs);
   const records = Object.keys(counts).length ? sumCounts(counts) : groupModels.reduce((n, g) => n + g.total, 0);
   const modules = modulesView(d, nowMs);
@@ -515,12 +519,16 @@ export function codesView(dtcs, nowMs, scanEnabled) {
 
   let emptyText = null;
   if (records === 0) {
-    if (!newest) {
+    if (!anyRead) {
       emptyText =
         "No saved code read yet. " +
         (scanEnabled ? "The parked scan below can read the modules." : "This screen cannot start a scan.");
+    } else if (unlisted.length) {
+      emptyText = "No codes listed, but " + unlisted.map((u) => u.name + " reported " +
+        plural(u.count, "code", "codes") + " " + filteredTime(u.at)).join("; ") + " (list not retrieved).";
     } else if (authoritativeZero) {
-      emptyText = "No codes in the last read of every module.";
+      emptyText = "No codes in the last parked read of every module" +
+        (parseDate(coverage.last_success_at) ? " · " + filteredTime(coverage.last_success_at) : "") + ".";
     } else {
       emptyText = "No saved codes, but some modules did not answer fully, so a clean result is not proven.";
     }
@@ -529,13 +537,14 @@ export function codesView(dtcs, nowMs, scanEnabled) {
   const currentCount = current ? current.total : 0;
   let badge = null;
   if (currentCount > 0) badge = { text: currentCount + " current", tone: "amber" };
-  else if (newest) badge = { text: moduleList(d).some((m) => m.van_read || m.drive_read || m.drive_truncated)
+  else if (anyRead) badge = { text: moduleList(d).some((m) => m.van_read || m.drive_read || m.drive_truncated)
     ? "None shown current" : "None current", tone: "" };
   const van = obj(d.van);
   return {
     ...base,
     badge,
-    lastRead: newest ? "Last read " + fmtTime(newest, new Date(nowMs)) : null,
+    lastRead: newest ? "Last read " + fmtTime(newest, new Date(nowMs))
+      : anyRead ? "Last attempt " + fmtTime(anyRead, new Date(nowMs)) : null,
     source: van
       ? plural(van.modules, "module", "modules") + " " + vanSourceLine(van.scanAt || van.lastAt, nowMs)
       : null,

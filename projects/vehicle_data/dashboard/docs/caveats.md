@@ -419,9 +419,10 @@ something in the van: a calibration that finishes changes how the radar aims.
   the Pi's own fixed requests. It saves each check under `tmp/vehicle_data/van_scans/`, in
   separate tables of the DTC history, and in `van-scan-cache.json`. The broker adds that file to
   its saved-codes answer as `in_vehicle_scan`.
-- **Health → Diagnostic codes** uses the newer read for each module, the Pi's or the van's. Codes
-  and modules taken from the van's check say "from the van's own health check · 3:12 pm". That time
-  is when the check started. The line under "Last read" counts how many modules came from it.
+- **Health → Diagnostic codes** applies the van's latest successful read of each module on top of
+  the Pi's parked list, in time order (next section). Codes and modules taken from the van's check
+  say "from the van's own health check · failed, pending or confirmed codes only", then the date
+  and time in Mountain time. The line under "Last read" counts how many modules came from it.
 - The van asks only for codes whose status has *test failed*, *pending* or *confirmed* set (UDS
   `19 02 0D`, status mask `0x0D`). The Pi's parked scan asks for every status (`19 02 FF`). So when
   the van's read is newer, the Pi's older codes *inside* that mask are replaced. The Pi's codes
@@ -440,6 +441,28 @@ something in the van: a calibration that finishes changes how the radar aims.
 - The harvester runs from a timer (`van-scan-harvest.timer`) against completed recorder chunks
   only, so a check appears some minutes after it ends. It never appears while the chunk holding it
   is still being written.
+
+### Three sources on one card
+
+- Codes come from up to three reads of each module: the Pi's parked scan (every status), the van's
+  own check (mask `0x0D`) and, when the owner has turned it on, the Pi's hourly drive read of the
+  radar and the BCM (mask `0x8F`: failed, pending, confirmed or warning-lamp codes; see
+  `projects/vehicle_data/docs/drive-dtc-read.md`). Failed reads never change codes; a newer failed
+  drive read shows as its own line ("drive read failed (no response)", or "not sent" when the Pi
+  held it back).
+- A filtered read can only speak for the statuses it asked about **and** the module said it
+  supports (its returned availability mask). An empty read whose module returned all of them says
+  "no failed, pending or confirmed codes" (van) or "no failed, pending, confirmed or warning-lamp
+  codes" (drive). When the module returned no mask, a zero mask or only some of those bits, it says
+  "zero codes reported" instead, with a note that older codes cannot be ruled out.
+- A drive read whose answer was too long for one frame shows "N codes reported, list not
+  retrieved; first …": it gives a count and the first code, without statuses.
+- "No codes in the last parked read of every module" is the parked scan's conclusion, with its
+  date. It is not shown when a newer drive read reported codes the list cannot show; the card then
+  says which module reported how many. Beside newer filtered lines, a module's parked status
+  carries its own date ("parked read Oct 8 …").
+- "Last read" is the newest successful read from any source; with no success yet it shows the last
+  attempt.
 
 ## Buses and adapters
 

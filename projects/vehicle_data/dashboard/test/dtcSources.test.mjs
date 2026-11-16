@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mergeVanScan, filteredTime } from "../src/views/dtcSources.helpers.js";
 import { codesView } from "../src/views/health.helpers.js";
+import { fmtTime } from "../src/format.js";
 
 const T0 = "2026-11-15T16:00:00Z";
 const T1 = "2026-11-15T17:00:00Z";
@@ -35,6 +36,8 @@ test("effective coverage intersects request and availability; null and zero neve
     assert.equal(all(merged)[0].last_seen_at, T0);
     const meta = codesView(input({ van: read(T1, [], mask), drive: [read(T2, [], mask)] }), NOW, false).modules.rows[0].meta;
     assert.match(meta, /no returned status coverage; older codes cannot be ruled out/);
+    assert.match(meta, /zero codes reported/);
+    assert.doesNotMatch(meta, /no failed, pending/, "an empty read without full coverage claims no absence");
   }
   assert.match(codesView(input({ drive: [read(T1, [], "08")] }), NOW, false).modules.rows[0].meta,
     /limited returned status coverage/);
@@ -54,6 +57,9 @@ test("newer failed drive/parked attempts remain separate from older complete suc
   assert.match(meta, /parked read failed/);
   assert.match(meta, /drive read failed \(timeout\).*MST/);
   assert.match(meta, /1 code reported/);
+  const unsent = { ...failure, outcome: "not_sent", reason: "radar_unavailable" };
+  assert.match(codesView(input({ drive: [unsent, read(T1)] }), NOW, false).modules.rows[0].meta,
+    /drive read not sent \(radar unavailable\)/);
 });
 
 test("chronological latest complete and van success win in either source order", () => {
@@ -146,4 +152,60 @@ test("optional absent and unavailable drive blocks render exactly the existing p
   const expected = codesView(d, NOW, false);
   assert.deepEqual(codesView({ ...d, drive_reads: { available: false } }, NOW, false), expected);
   assert.deepEqual(codesView({ ...d, drive_reads: { available: true, modules: [] } }, NOW, false), expected);
+});
+
+// The Astra code review's counterexamples (2026-11-15).
+const OCT8 = "2026-10-08T09:12:00Z";
+const NOV15 = "2026-11-15T21:05:00Z";
+const REVIEW_NOW = Date.parse("2026-11-15T22:00:00Z");
+function cleanParked(drive) {
+  const row = (key, name) => ({ module_key: key, module_name: name, logical_bus: "c-can",
+    availability: "available", result_state: "no_dtcs", absence_authoritative: true,
+    last_success_dtc_count: 0, last_attempt_at: OCT8, last_success_at: OCT8 });
+  return { available: true, modules: [row("radar_acc", "Radar"), row("bcm_ccan", "BCM")],
+    groups: {}, group_counts: { current: 0, pending: 0, confirmed_history: 0, incomplete_only: 0, other: 0 },
+    coverage: { last_attempt_at: OCT8, last_success_at: OCT8, total_modules: 2, available_modules: 2 },
+    drive_reads: { available: true, modules: drive } };
+}
+const truncatedBcm = { module_key: "bcm_ccan", module_name: "BCM", reads: [{ observed_at: NOV15,
+  outcome: "truncated", count: 2, status_availability_mask: "FF", dtcs: [],
+  first_code: { raw_dtc: "963611", fca_display: "B1636-11" } }] };
+
+test("review: a newer truncated drive read reporting codes rules out the parked clean conclusion", () => {
+  const vm = codesView(cleanParked([truncatedBcm]), REVIEW_NOW, false);
+  assert.notEqual(vm.emptyText, "No codes in the last read of every module.");
+  assert.doesNotMatch(vm.emptyText, /^No codes in the last/);
+  assert.match(vm.emptyText, /^No codes listed, but BCM reported 2 codes Nov 15, 2026.*MST \(list not retrieved\)\.$/);
+  assert.equal(vm.lastRead, "Last read " + fmtTime(NOV15, new Date(REVIEW_NOW)));
+  const bcm = vm.modules.rows.find((r) => r.key === "bcm_ccan").meta;
+  assert.match(bcm, /^C-CAN · no codes · parked read Oct 8, 2026, 3:12 AM MDT · 2 codes reported, list not retrieved; first B1636-11/);
+});
+
+test("review: a parked clean conclusion is labelled parked and dated; newer empty reads keep it", () => {
+  const empty = { module_key: "radar_acc", reads: [{ observed_at: NOV15, outcome: "complete", count: 0,
+    status_availability_mask: "FF", dtcs: [] }] };
+  const vm = codesView(cleanParked([empty]), REVIEW_NOW, false);
+  assert.equal(vm.emptyText, "No codes in the last parked read of every module · Oct 8, 2026, 3:12 AM MDT.");
+  assert.equal(vm.lastRead, "Last read " + fmtTime(NOV15, new Date(REVIEW_NOW)));
+  const plain = codesView({ ...cleanParked([]), drive_reads: undefined }, REVIEW_NOW, false);
+  assert.equal(plain.lastRead, "Last read " + fmtTime(OCT8, new Date(REVIEW_NOW)));
+  // An older truncated read is superseded by the newer parked success.
+  const older = { ...truncatedBcm, reads: [{ ...truncatedBcm.reads[0], observed_at: "2026-10-01T00:00:00Z" }] };
+  assert.match(codesView(cleanParked([older]), REVIEW_NOW, false).emptyText, /^No codes in the last parked read/);
+});
+
+test("review: empty reads with null, zero or partial masks say zero codes reported, never absence", () => {
+  for (const mask of [null, "00", "0D", "08", "40"]) {
+    const drive = { module_key: "radar_acc", reads: [{ observed_at: NOV15, outcome: "complete", count: 0,
+      status_availability_mask: mask, dtcs: [] }] };
+    const meta = codesView(cleanParked([drive]), REVIEW_NOW, false).modules.rows.find((r) => r.key === "radar_acc").meta;
+    assert.match(meta, /zero codes reported · from the Pi’s drive read · failed, pending, confirmed or warning-lamp codes only/);
+    assert.doesNotMatch(meta, /no failed, pending, confirmed or warning-lamp codes/);
+  }
+  for (const mask of ["FF", "8F"]) {
+    const drive = { module_key: "radar_acc", reads: [{ observed_at: NOV15, outcome: "complete", count: 0,
+      status_availability_mask: mask, dtcs: [] }] };
+    assert.match(codesView(cleanParked([drive]), REVIEW_NOW, false).modules.rows.find((r) => r.key === "radar_acc").meta,
+      /no failed, pending, confirmed or warning-lamp codes · from the Pi’s drive read/);
+  }
 });

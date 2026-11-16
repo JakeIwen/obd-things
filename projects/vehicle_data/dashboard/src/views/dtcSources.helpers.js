@@ -73,9 +73,20 @@ function statusByte(value) {
   return typeof value === "string" && /^[0-9a-f]{2}$/i.test(value) ? parseInt(value, 16) : 0;
 }
 
+function requestMask(read) {
+  return read.source === VAN_SOURCE ? VAN_STATUS_MASK : DRIVE_STATUS_MASK;
+}
+
 function effectiveMask(read) {
-  return (read.source === VAN_SOURCE ? VAN_STATUS_MASK : DRIVE_STATUS_MASK) &
-    statusByte(read.status_availability_mask);
+  return requestMask(read) & statusByte(read.status_availability_mask);
+}
+
+/**
+ * Whether an empty filtered read may say "no <coverage> codes": the module returned availability
+ * for every requested status bit. A null, zero or partial availability mask never can.
+ */
+export function fullCoverage(read) {
+  return effectiveMask(read) === requestMask(read);
 }
 
 function latest(reads) {
@@ -181,17 +192,15 @@ export function mergeVanScan(d) {
 }
 
 function returnedCoverageNote(read) {
-  const requested = read.source === VAN_SOURCE ? VAN_STATUS_MASK : DRIVE_STATUS_MASK;
-  const effective = effectiveMask(read);
-  if (effective === requested) return "";
-  return effective === 0
+  if (fullCoverage(read)) return "";
+  return effectiveMask(read) === 0
     ? " · no returned status coverage; older codes cannot be ruled out"
     : " · limited returned status coverage; only covered older statuses can be ruled out";
 }
 
 export function filteredReadText(read) {
   const coverage = read.source === VAN_SOURCE ? "failed, pending or confirmed" : "failed, pending, confirmed or warning-lamp";
-  const result = read.count === 0 ? "no " + coverage + " codes" :
+  const result = read.count === 0 ? (fullCoverage(read) ? "no " + coverage + " codes" : "zero codes reported") :
     read.count + (read.count === 1 ? " code reported" : " codes reported");
   return result + " · " + filteredSourceLine(read.source, read.observed_at) + returnedCoverageNote(read);
 }
@@ -205,7 +214,30 @@ export function driveReadLines(module) {
     filteredSourceLine(DRIVE_SOURCE, read.observed_at) + returnedCoverageNote(read) +
     (read.count_mismatch ? " · count differs from the codes shown" : ""));
   const failure = module.drive_failure;
-  if (failure) lines.push("drive read failed (" + String(failure.reason || failure.outcome).replace(/_/g, " ") +
+  if (failure) lines.push((failure.outcome === OUTCOME.not_sent ? "drive read not sent (" : "drive read failed (") +
+    String(failure.reason || failure.outcome).replace(/_/g, " ") +
     ") · " + filteredSourceLine(DRIVE_SOURCE, failure.observed_at));
   return lines;
+}
+
+/**
+ * The newest successful read behind a merged model (`mergeVanScan` output): the parked cache's last
+ * success, a module's van read, or its latest complete or truncated drive read. Failures never count.
+ */
+export function newestSuccess(d) {
+  const stamps = [obj(d.coverage)?.last_success_at, obj(d.van)?.lastAt];
+  moduleList(d).forEach((m) => stamps.push(m.drive_read?.observed_at, m.drive_truncated?.observed_at));
+  return stamps.filter((s) => stamp(s) > -Infinity).reduce((best, s) => (!best || stamp(s) > stamp(best) ? s : best), null);
+}
+
+/**
+ * Codes a module reported after its last parked success that no list shows: a truncated drive
+ * read gives only a count. Any such report rules out an overall "no codes" conclusion.
+ */
+export function unlistedReports(d) {
+  return moduleList(d)
+    .filter((m) => m.drive_truncated && num(m.drive_truncated.count) > 0 &&
+      stamp(m.drive_truncated.observed_at) > stamp(m.last_success_at))
+    .map((m) => ({ name: str(m.module_name) || m.module_key, count: m.drive_truncated.count,
+      at: m.drive_truncated.observed_at }));
 }
