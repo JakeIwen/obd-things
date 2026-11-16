@@ -158,12 +158,21 @@ class PiRequestSetSyncTests(unittest.TestCase):
         self.assertEqual(harvest.PI_FIXED_REQUESTS[target(MODULES["rf_hub"])], tpms)
         self.assertEqual(
             harvest.PI_FIXED_REQUESTS[target(radar_alignment.MODULE)],
-            {uds(radar_alignment.REQUEST_DATA)},
+            {uds(radar_alignment.REQUEST_DATA), bytes.fromhex("19 02 8F")},
         )
         self.assertEqual(
             harvest.PI_FIXED_REQUESTS[target(bcan_auxiliary.ICS)],
             {uds(bcan_auxiliary.REQUEST_PAYLOAD)},
         )
+
+    def test_drive_dtc_requests_are_only_excluded_for_reviewed_targets(self):
+        lines = []
+        for i, target in enumerate(("2A", "40", "10")):
+            lines += exchange(T0 + i, target, "19028F", "59028F")
+        exchanges, _, _, stats = harvest.process_frames("c-can", frames_of(lines))
+        self.assertEqual(stats["pi_requests"], 2)
+        self.assertEqual([e["request_hex"] for e in exchanges], ["19028F"])
+        self.assertEqual(exchanges[0]["target"], "10")
 
     def test_dtc_tooling(self):
         from tools import dtc_inventory

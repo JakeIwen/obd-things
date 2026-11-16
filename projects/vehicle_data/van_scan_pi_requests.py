@@ -8,7 +8,8 @@ from typing import Mapping
 PI_FIXED_REQUESTS: Mapping[int, frozenset[bytes]] = {
     0x10: frozenset(bytes.fromhex(h) for h in ("22 01 A1", "22 06 DA", "22 06 9F")),
     0xC7: frozenset(bytes.fromhex(h) for h in ("22 31 D0", "22 31 D1", "22 31 D2", "22 31 D3")),
-    0x2A: frozenset((bytes.fromhex("22 08 45"),)),
+    0x2A: frozenset(bytes.fromhex(h) for h in ("22 08 45", "19 02 8F")),
+    0x40: frozenset((bytes.fromhex("19 02 8F"),)),
     0x85: frozenset((bytes.fromhex("22 20 01"),)),
 }
 # The Pi's DTC tooling (lib/dtc_batch.py, tools/dtc_inventory.py) may address any module.
