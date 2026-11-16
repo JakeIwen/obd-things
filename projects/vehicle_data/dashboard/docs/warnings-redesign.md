@@ -247,6 +247,6 @@ diverge.
    retired: the first is crank and key-on dips, and the second is a common-mode pressure drop
    across all four wheels.
 3. Unit tests cover every rule and the grouping, cooldown and quiet-hours path. The full suite runs
-   via `pi_compute run repo-tests`.
+   as AGENTS.md "Safe automated suite" describes.
 4. Deployment is an owner action (a broker restart while asleep), recorded in the vehicle_data
    README with the replay numbers. Nothing is deployed yet.

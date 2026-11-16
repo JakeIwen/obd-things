@@ -390,8 +390,8 @@ Do not reconstruct a historical recipe on an ephemeral `canN`.
 ## Offline development checks
 
 The complete automated gate is `python3 run_tests.py` (Python 3.11+, Node 20+,
-npm and Git). On vanpi, submit `repo-full-suite` through the existing compute
-queue. It covers pytest, dashboard Node tests, backend layout checks and a
+npm and Git). On vanpi, follow AGENTS.md "Safe automated suite", which says
+when to use the compute queue and when to run it directly. It covers pytest, dashboard Node tests, backend layout checks and a
 scratch production build; it does not deploy or use the vehicle.
 The offline benchmark preservation harness is
 `python3 -m tests.signal_benchmark_oracle --repo-root CHECKOUT --output OUTPUT`.

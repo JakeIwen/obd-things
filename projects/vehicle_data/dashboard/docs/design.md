@@ -923,8 +923,8 @@ because 1→2 upshifts cross R's band). It was observed live on 2026-09-24 (7th 
 - **Python**: `tests/test_web_v2.py` covers routes, the traversal guard, gzip, cache headers, stream
   shape, summary trimming (uncapped warning lists, `omitted_count`), and origin behaviour on port
   8765. `tests/test_dashboard_v2_node.py` runs the node suite from the Python runners, and skips
-  without Node 20+ or `node_modules`. Both run inside `pi_compute run repo-tests` as the regression
-  gate. Owner action: add `node_modules` and `dist` to van_compute's ignored directories, because the
+  without Node 20+ or `node_modules`. Both run in the full suite (`run_tests.py`; AGENTS.md
+  "Safe automated suite" says how to run it on vanpi). Owner action: add `node_modules` and `dist` to van_compute's ignored directories, because the
   snapshot otherwise ships 13 MB of dependencies.
 - **Browser**: `tools/shoot.mjs` (headless Firefox over WebDriver BiDi) screenshots and measures
   every view at 800×1280 and 1280×800. Pass `--demo` to stop polling and fill both Drive pages

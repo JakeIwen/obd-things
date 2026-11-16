@@ -90,9 +90,8 @@ seconds. Disable the timer with
 This preserves all remaining data.
 
 The wrapper's public CLI and unit contracts are covered by
-`tests/test_compute_retention.py`. Run the whole repository suite through
-the `repo-tests` compute task, plus `dashboard-test-build` when its Node wrapper
-cannot execute on the worker's platform. Validate the units with
+`tests/test_compute_retention.py`. Run the whole repository suite as
+AGENTS.md "Safe automated suite" describes. Validate the units with
 `systemd-analyze verify` before installation. The backend remains responsible
 for its own deletion and concurrency tests.
 
