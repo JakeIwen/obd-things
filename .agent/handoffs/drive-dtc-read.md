@@ -1,8 +1,8 @@
 ---
 workstream: drive-dtc-read
-status: plan awaiting review (second revision)
+status: plan awaiting review (third revision)
 tier: T3
-last reviewed commit: none (first plan reviewed as "rework"; this revision not yet reviewed)
+last reviewed commit: none (8031e8d reviewed as "rework"; this revision not yet reviewed)
 ---
 
 # Hourly DTC read during drives: plan
@@ -15,506 +15,450 @@ warnings, and nothing on the Pi has read a module's fault codes since the parked
 2026-10-08 (03:12–03:13 MDT). The van's own F1 sweeps were harvested only twice (2026-08-30
 20:38 MDT and 2026-09-24 15:12 MDT) and are not expected while the Pi polls on every drive.
 
-Tier T3: new CAN transmission while the van is driven, new broker/helper contracts, and it cannot
-be verified by running it in a development session. Build in the worktree branch
+Tier T3: new CAN transmission while the van is driven and new broker/helper contracts; it cannot be
+verified by running it in a development session. Build in the worktree branch
 `worktree-agent-ace5b03e8cf37934c`; a cross-family review comes before any merge, install or
 deploy.
 
+Design rule for this feature: it is one small read an hour, so prefer designs in which a failure
+path does not exist over designs that handle it. Nothing in it may block the helper's polling
+thread on file I/O, and no expected condition may end in a helper protocol error or an inhibit.
+
 ## Settled decisions
 
-These were settled by the parent session on the owner's behalf (2026-11-15).
+Settled by the parent session on the owner's behalf (2026-11-15).
 
-1. **Mechanism.** The Pi reads codes itself, inside the C-CAN active-drive helper, with fresh
-   engine-running evidence and one-use transmit permits; physical 29-bit addressing, default
-   session, one module at a time. Only UDS `19 02 8F` and its flow control are sent; never `14`,
-   `10`, `27`, `2E`, `2F`, `31` or `3E`.
+1. **Mechanism.** The Pi reads codes itself inside the C-CAN active-drive helper, with fresh
+   engine-running evidence and a one-use transmit permit per send; physical 29-bit addressing,
+   default session. Never `14`, `10`, `27`, `2E`, `2F`, `31` or `3E`.
 2. **Mask `19 02 8F`** (warningIndicatorRequested | confirmed | pending |
-   testFailedThisOperationCycle | testFailed). Reasons: `FF` returns the "test not completed" bits
-   that change through every drive (on Oct 8, 278 of 300 records were status `0x40` only), and
-   `0D` is the harvester's signature for the van's own sweep. On the Oct 8 data `8F` keeps all 22
-   fault-relevant records, including the warning-lamp bit the latched cluster warnings depend on.
-3. **First cut: the radar (DASM) and the BCM only**, each with the flow-control form already proven
-   on that module while driving. Cluster, RF Hub, TCM, shifter and telematics wait until those two
-   have run clean on several drives. The PCM is the next phase after that (below: what its design
-   needs). B-CAN modules and the CAN-CH modules (ABS, EPS, HALF, ORC) stay parked-only (the
-   existing batch).
-4. **Storage.** The parked history (`module_scans`, `dtc_state`, `dtc_transitions`, the v2 cache
-   and its `request_hex` CHECK) does not change. Drive reads go into their own separately
-   versioned, bounded storage, and the dashboard merges them per module with their coverage
-   shown.
-5. **Cadence is an elapsed-time cooldown.** A pass is allowed during a qualified engine-running
+   testFailedThisOperationCycle | testFailed). `FF` returns the "test not completed" bits that
+   change through every drive (Oct 8: 278 of 300 records were status `0x40` only); `0D` is the
+   harvester's signature for the van's own sweep. On the Oct 8 data `8F` keeps all 22
+   fault-relevant records.
+3. **Modules: the radar (DASM) and the BCM only.** Cluster, RF Hub, TCM, shifter and telematics
+   wait until these two have run clean on several drives; the PCM is the phase after that; B-CAN
+   and CAN-CH modules stay parked-only.
+4. **Storage.** The parked history (`module_scans`, `dtc_state`, `dtc_transitions`, the v2 cache,
+   its `request_hex` CHECK) does not change. Drive reads have their own bounded storage.
+5. **Cadence is an elapsed-time cooldown**: a pass is allowed during a qualified engine-running
    interval once the helper session is 300 s old, when at least 60 minutes have passed since the
-   last pass started and since the last harvested van sweep completed. This is elapsed time, not
-   accumulated driving time: a 20-minute drive followed by a 45-minute stop and another 20-minute
-   drive reads once in each drive, and trips under five minutes never read (section "Accumulated
-   driving hours" says what the other reading of "once per hour of driving" would take; the parent
-   is putting that choice to the owner). Engine running while parked counts as a qualified
-   interval.
-6. **Opt-in and off switch.** Broker CLI flag `--enable-drive-dtc-reads`, off by default. Without
-   it the broker never enables the helper's DTC step, so removing the flag disables every new send.
-   The broker/helper handshake makes every mix of old and new broker and helper harmless.
+   last pass could have happened and since the last harvested van sweep completed. This is elapsed
+   time, not accumulated driving time; trips under five minutes never read. "Accumulated driving
+   hours" below says what the other reading takes; the parent is putting the choice to the owner.
+   Engine running while parked counts.
+6. **Opt-in.** Broker CLI flag `--enable-drive-dtc-reads`, off by default. Removing it disables
+   every new send.
 
-## Evidence (read-only, 2026-11-15)
+## Staging
 
-- Oct 8 parked `19 02 FF` history (counts confirmed independently by the parent): 300
-  observations across 13 modules, 278 status `0x40` only, 22 matching `8F`. The radar had 8
-  records, one matching `8F` (status `0x08`); the BCM had 106, six matching `8F`.
-- The van's own sweep while driving (2026-09-24, finding `2026-09-24_in_vehicle_f1_scan.md` and
-  its exchanges CSV; frames checked in the archived capture):
-  - requests `18DAxxF1#0319020D00000000` (DLC 8, `00` padding);
-  - radar `0x2A`: `19 02 0D` answered with a 7-byte SingleFrame after a response-pending
-    (`7F 19 78`) for 143 ms; its 67-byte `22 F1A0` reply completed after the tester's unpadded
-    FlowControl `18DA2AF1#300000` (DLC 3);
-  - BCM `0x40`: `19 02 0D` answered with a 27-byte reply (FirstFrame 3.1 ms after the request,
-    three ConsecutiveFrames) after `18DA40F1#300000` (DLC 3); no response-pending;
-  - PCM: `19 02 0D` → `7F 19 11` (serviceNotSupported); KWP `18 00 FF 00` → `58 00`.
-- The Pi's own drive polling to the radar uses `22 08 45` with FlowControl
-  `18DA2AF1#3001000000000000` (padded, BlockSize 1), proven for a one-ConsecutiveFrame reply.
-- Helper structure (verified in code): one thread runs the cycle serially (`active_drive.py`
-  `run_active_session`): broadcast snapshot (≤0.35 s), PCM duty and torque, RF Hub pressure, VVT
-  temperature every 5 s, oil life every 60 s, then `RadarDriveSteps.run` (0845 every 10 s and any
-  owner-started service alignment), then a wait to the next 1 s slot.
-  - `PcmElectricalPoller` reads the first frame on its socket with no drain; a stray frame ends the
-    session through the generator-duty failure path.
-  - `RfHubPressurePoller` drains before each read, but a frame that arrives during its reply wait
-    is taken as the reply; a malformed one ends the session (`active_drive.py`, the
-    `pressure.reason` branch).
-  - `RadarAlignmentPoller.drain` reads at most 32 frames and raises beyond that; a malformed 0845
-    reply disables 0845 polling for the epoch (`radar_drive_steps.py`).
-- Radar service alignment (`radar_service_alignment.py`): a start that times out goes to `_fail`
-  and clears the active phase although the ECU may have accepted it; a completed routine leaves the
-  extended session to lapse on its own. "No active phase" therefore does not prove the radar is
-  back in its default state.
-- The bus-identity classifier already uses response-only CAN-CH diagnostic signatures
-  (`lib/canbus.py` `CANCH_DIAG_SIG`, commit `2fe75a4`).
-- Harvester: `PI_DTC_TOOL_REQUESTS` excludes `19 02 FF` for any target and deliberately not
-  `19 02 0D`; `PI_FIXED_REQUESTS` lacks PCM `22 21 85` and the radar service requests.
-- File sizes: `broker.py` 3624, `active_drive.py` 1176, `insights.py` 1562, `lib/dtc.py` 1147,
-  `van_scan_harvest.py` 1050 lines; `run_active_session` is far over 80 lines.
+- **Stage 1a (this plan): one request frame per module per pass, no flow control at all.**
+- **Stage 1b (separate plan and review, after 1a has run clean on several drives):** add a flow
+  control for a segmented reply, with its own fresh authority and permit taken when the FirstFrame
+  arrives (a permit lives 250 ms, so the request's permit can never cover it after a pending
+  response).
+
+Why stage: sending no flow control removes the paired-permit lifetime problem, every late
+ConsecutiveFrame, the separate radar socket and the endpoint-ownership window, which were the
+sources of most failure paths in the earlier revisions. What 1a gives up: for a segmented reply it
+records the count and the first code only.
+
+What 1a returns, from the Oct 8 statuses: the radar had one record matching `8F` (status `0x08`),
+so its reply should be a complete SingleFrame; the BCM had six (its LED-lamp codes), so its reply
+should be a FirstFrame, recorded as "6 codes reported, list not retrieved; first code B1636".
+
+Leaving a FirstFrame unanswered:
+
+- ISO 15765-2: the sender waits N_Bs (typically 1 s) for a flow control, then abandons the message
+  and returns to idle. It is a transport-level timeout, not a diagnostic request.
+- Seen on this van: the van's own tester left PCM FirstFrames unanswered more than a dozen times in
+  one sweep on 2026-09-24 (the PCM ignores its unpadded flow control, and for `22 1FD9` it sent
+  none), and the PCM then answered its next requests normally and reported zero stored codes
+  (`58 00`). The Pi's 0845 poller also sends no flow control for a FirstFrame it rejects.
+- Not known: whether the radar or the BCM logs anything for an abandoned transmission (no such
+  code is in the repo's reviewed DTC tables or the Oct 8 results). The first drives check both
+  modules' next `8F` replies for any new code.
 
 ## What goes on the bus
 
-All new frames are in one module, `drive_dtc_transport.py`, each behind its own one-use permit:
+Two fixed frames, both in `drive_dtc_transport.py`, each behind its own one-use permit purpose:
 
-| module | request (29-bit, DLC 8) | FlowControl, only after a valid FirstFrame |
+| module | frame (29-bit, DLC 8) | permit purpose |
 | --- | --- | --- |
-| `radar_acc` (DASM) | `18DA2AF1#0319028F00000000` | `18DA2AF1#300000` (DLC 3) |
-| `bcm_ccan` | `18DA40F1#0319028F00000000` | `18DA40F1#300000` (DLC 3) |
+| `radar_acc` (DASM) | `18DA2AF1#0319028F00000000` | `radar_acc.dtc_read` |
+| `bcm_ccan` | `18DA40F1#0319028F00000000` | `bcm_ccan.dtc_read` |
 
-- The request has the framing of the van's own driving sweep; only the mask byte differs (`8F`
-  for `0D`). ISO 14229 defines every mask value; `8F` itself has not been sent to these modules
-  before, so the first drive is its first use.
-- The FlowControl is ContinueToSend, BlockSize 0, STmin 0, unpadded DLC 3: the exact form the van's
-  tester used on both modules while driving. BlockSize 0 means one FlowControl per reply. No
-  padded form is used; the PCM's padding requirement is not carried over to other modules.
-- Expected replies from the Oct 8 statuses: radar one record (7 bytes, a SingleFrame, so normally
-  no FlowControl); BCM six records (27 bytes: FirstFrame, FlowControl, three ConsecutiveFrames).
-- Accepted reply length: radar at most 163 bytes (40 records, a FirstFrame and at most 23
-  ConsecutiveFrames, which keeps everything the 0845 poller's socket also receives under its
-  32-frame drain); BCM at most 515 bytes (128 records). A longer declared length gets no
-  FlowControl and is recorded `incomplete`.
-- Bus occupancy: a pass is about 10 frames (radar: request, one to three SingleFrames; BCM:
-  request, FirstFrame, FlowControl, three ConsecutiveFrames). A 29-bit frame with 8 data bytes is
-  roughly 130–160 bits with stuffing, about 0.3 ms at 500 kbit/s, so a pass occupies the bus for
-  about 3–4 ms per hour, with the BCM's ConsecutiveFrames sent back to back for about 1 ms. While
-  one of these frames is on the bus, any other frame that becomes ready, including powertrain
-  broadcasts, waits for it to finish (up to one frame time); arbitration only decides which waiting
-  frame goes next. For comparison, the helper already sends four to six requests a second.
+- The framing is the van tester's own while driving (`03 19 02 0D`, DLC 8, `00` padding); only the
+  mask byte differs. `8F` has not been sent to these modules before.
+- Bus occupancy: each pass sends two frames and receives about two to five (a SingleFrame or a
+  FirstFrame, plus any response-pending frames). A 29-bit frame with 8 data bytes is about 130–160
+  bits with stuffing, about 0.3 ms at 500 kbit/s, so a pass occupies roughly 1–2 ms of bus time.
+  While one of these frames is on the bus, any other frame that becomes ready waits for it to
+  finish. For comparison, the helper already sends four to six requests a second.
 
-## Reception, timing and endpoint ownership
+## The exchange
 
-Reception is a small state machine that advances in bounded slices, never in one long blocking
-wait.
+Each module read is one synchronous, bounded exchange in one helper cycle, on one clock
+(`backend.monotonic`, which is `time.monotonic`, CLOCK_MONOTONIC).
 
-- **Sockets.** Each module transaction opens its own raw `CAN_RAW` socket (exact EFF response ID
-  `18DAF1tt`, RTR/ERR rejected, `SO_TIMESTAMPNS` on) and closes it when the transaction ends. No
-  kernel ISO-TP, so nothing is sent automatically.
-- **Request slice.** A request is sent only on a cycle where at least 0.30 s remain before the next
-  1 s slot after the cycle's other work. Its permits come from `FreshAuthority.acquire` (a fresh
-  broadcast snapshot of up to 0.35 s, three RPM samples ≥ 400, identity, ERROR-ACTIVE, topology,
-  inhibits). Then the sentinel check (below), the request, and a receive slice of at most 0.25 s.
-- **Later slices.** If the transaction is still open, each later cycle gives it one receive slice of
-  at most 0.25 s, after the radar steps, clamped to the time left before the next slot (no slice
-  when under 0.10 s remains) and to the transaction deadline.
-- **Deadlines** (measured on frame receive timestamps): first response 1.0 s after the request; each
-  `7F 19 78` sets a new 2.0 s deadline, at most two; after the FlowControl, each ConsecutiveFrame
-  within 1.0 s; hard cap 6.0 s from the request.
-- **FlowControl.** Sent only (a) after a FirstFrame `1L LL 59 02 …` with a length within the
-  module's bound and (length − 3) % 4 == 0, (b) within 0.5 s of that FirstFrame's receive
-  timestamp (the ECU waits about 1 s for it), (c) with the FlowControl permit issued alongside the
-  request and still unexpired, and (d) after a clean sentinel check. If any of these fails, no
-  FlowControl is sent and the read is `incomplete`; the ECU abandons the reply on its own timer.
-- **Outcomes.** `positive` (complete `59 02`); `negative` (any NRC other than `78`; `7E`/`7F`
-  are labelled `session_required` and never lead to a session change); `no_response`; `incomplete`
-  (a FirstFrame without the FlowControl, or ConsecutiveFrames missing or out of sequence);
-  `malformed` (another service, a bad length, a FirstFrame that is not `59 02`); `skipped` (the
-  request permit expired, or evidence was stale, **before** the request was sent: nothing went on
-  the bus; retried next cycle, at most three times). A FlowControl permit that expires **after** the
-  request was sent is `incomplete`, never `skipped`, and never retried.
-- **Quiet guard and late replies.** When a transaction ends, its endpoint stays owned until the
-  socket has seen 2.0 s without a frame from that module, up to 12 s from the request. Then the
-  socket closes.
-  - BCM: nothing else in the helper listens to `18DAF140`, so a late frame reaches no consumer.
-  - Radar: the 0845 poller's socket also receives every radar reply frame. While the DTC step owns
-    the radar endpoint (from the cycle before the request to the end of the quiet guard),
-    `RadarDriveSteps.run` does neither the 0845 poll nor the service-alignment cycle; queued service
-    commands wait in their pipe (at most 12 s, below the broker's 15 s request acknowledgement
-    limit). The 0845 poller's own bounded drain removes the queued DTC frames at its next poll (at
-    most 27 frames by the length bound). Residual: if the radar sends a frame after 2 s of silence
-    and it lands inside a later 0845 reply wait, that read is malformed and 0845 polling stops for
-    the rest of the epoch (the existing handling). If the radar is still sending at 12 s, the step
-    releases the endpoint and no further radar DTC read happens that epoch.
-- **Effect on the 1 s polling.** The PCM and RF Hub reads keep their place at the start of every
-  cycle. A request cycle adds at most 0.35 s (the fresh snapshot) plus 0.25 s; a later cycle adds
-  at most 0.25 s. The worst gap between PCM reads is therefore about 1.6 s, once per module per
-  hour. The supervisor's 10 s silence limit is unaffected because the cycle's ordinary observations
-  are still emitted every cycle.
-- **Pass shape.** One module at a time, radar first, then the BCM; each module transaction
-  completes (including its quiet guard) before the next request; at least 2.0 s between requests;
-  pass deadline 60 s. A typical pass takes 10–20 s.
-- Parsing reuses `lib.dtc.parse_dtc_list_response` (strict); a reply it rejects is stored as
-  `unparsed`.
+- Socket:
+  - radar: the open `RadarAlignmentPoller` link (`drain`, `send_fixed`, `receive`), the pattern of
+    `RadarServiceTransport`. The radar keeps one tester socket.
+  - BCM: a raw `CAN_RAW` socket opened for the exchange (exact EFF filter `18DAF140`, RTR/ERR
+    rejected) and closed after it. Nothing else in the helper listens to `18DAF140`.
+- Steps: `FreshAuthority.acquire((purpose,))`, then the foreign-tester and service checks, then
+  `drain` (radar: the poller's bounded 32-frame drain; a drain failure means the read is not sent),
+  then the send, then receive until a final answer or the deadline:
+  - first answer within 1.0 s of the send;
+  - `7F 19 78` (response pending) extends the deadline to 2.5 s after the send, and never beyond;
+    the request is never resent;
+  - SingleFrame `59 02 mask [code status]` (length 3 or 7) → `complete` (zero or one code);
+  - FirstFrame `1L LL 59 02 mask c1 c2 c3` with (length − 3) % 4 == 0 → `truncated`, with
+    count = (length − 3) / 4 and the first code without its status; nothing is sent back;
+  - `7F 19 nn` (other NRC) → `negative` with the NRC (`7E`/`7F` reported as `session_required`;
+    nothing changes the session);
+  - any other frame → `malformed`;
+  - deadline → `no_response`.
+- Exceptions: `OSError`, `ValueError` and timeouts become outcomes (as in the radar poller).
+  `ExpiredTransmitPermitError` before the send becomes `not_sent` (`permit_expired`). Any other
+  `TransmitPermitError` stays fatal (`helper_failed`), as for every existing transport.
+- Late frames:
+  - BCM: after the socket closes, a late frame reaches no consumer.
+  - Radar: a frame that arrives after the exchange (a final answer later than 2.5 s, or an
+    unanswered FirstFrame's nothing) stays queued on the poller's socket and is removed by the next
+    `drain` (0845 poll or service exchange). The radar read is sent only when the next 0845 poll is
+    at least 5 s away (`RadarDriveSteps.next_alignment`), so a late answer normally lands in the
+    queue, not inside an 0845 wait. Residual: a radar answer later than about 5 s could land inside
+    an 0845 wait; that read is malformed and 0845 polling stops for the rest of the epoch (the
+    existing handling, no inhibit). The same residual applies to a service-alignment exchange begun
+    within seconds of a radar read: its first reply could be the late answer, and that run fails
+    safely before the routine starts and can be requested again.
 
-## Foreign-tester check
+## Timing, from the loop as it is
 
-A sentinel `CAN_RAW` socket on the C-CAN channel, opened when the DTC step is constructed, with
-filters for every diagnostic request a tester could send:
+The cycle (`active_drive.py` `run_active_session`, lines 704–985) runs serially: broadcast
+snapshot (`ACTIVE_SNAPSHOT_SECONDS = 0.35`, line 63), PCM duty and torque, RF Hub, VVT temperature
+when due, oil life when due, `radar_steps.run` (0845 when due, service-alignment commands), then
+`_wait_for_next_cycle` (lines 584–595), which starts the next cycle at `max(next_cycle + 1.0,
+cycle_started)`, that is, immediately when a cycle overran.
 
-- 29-bit physical and functional requests from any tester-range source:
-  `0x18DA00F0`/`0x18DB00F0` with mask `0x1FFF00F0` (source `F0`–`FF`, which includes our `F1`);
-- 11-bit OBD requests: `0x7DF` and `0x7E0`–`0x7E7`.
+The DTC step runs after `radar_steps.run` and before `_wait_for_next_cycle`, at most one module per
+cycle, the two modules at least 2 s apart. Its duration D is at most 0.35 s (the fresh snapshot in
+`FreshAuthority.acquire`) + 2.5 s (exchange deadline) + a non-blocking sentinel drain (at most 64
+frames), about 2.9 s. Added delay relative to each metric's normal cadence, twice per pass:
 
-It is read with `recvmsg` (`SO_RXQ_OVFL` on). A frame counts as ours only if it carries
-`MSG_DONTROUTE` (created on this host) **and** is exactly one of the frames this helper can send (the
-PCM, RF Hub, 0845, service-alignment and DTC frames, compared by ID and data). Anything else is
-foreign: a frame without `MSG_DONTROUTE` (the van's own client, AlfaOBD on the Y-splitter, an OBD
-dongle) or a local frame that is not one of the helper's (a manual `cansend`).
-
-- The check runs immediately before **every** request and **every** FlowControl: drain the sentinel
-  non-blocking, at most 256 frames. It fails closed (treated as foreign) on any receive error, a
-  truncated frame or truncated metadata (`MSG_TRUNC`/`MSG_CTRUNC`), a changed overflow counter, or
-  an exhausted drain budget.
-- A pass starts only if the sentinel has been open for at least 120 s with no foreign frame. A
-  foreign frame at any check abandons the pass (`foreign_tester`): no further request, and no
-  FlowControl for a reply in progress.
-- If the sentinel cannot open, the DTC step is disabled for the epoch.
-- Residual race: a foreign tester can still start in the moment between our last check and our
-  frame reaching the bus, or while we wait for a reply. Both testers then see replies on the same
-  `18DAF1tt` IDs. Our read may then be malformed, or (only if the foreign tester sent the same
-  module the same service at the same instant) accept a reply meant for it; the foreign tester may
-  likewise see ours. Nothing we send changes ECU state, and the next check abandons the pass.
+- everything the next cycle publishes (broadcast observations, PCM duty and torque at 1 Hz, the RF
+  Hub round-robin at 1 Hz): its next sample is at most D later than its normal slot;
+- VVT temperature (5 s), radar 0845 (10 s) and oil life (60 s): delayed by at most D, only when
+  their next read falls due in that window;
+- service-alignment command intake: at most D later than it would otherwise be read (intake stays
+  in `radar_steps.run`; the DTC step never reads or holds commands);
+- the supervisor's 10 s event-silence limit: the cycle's observations are emitted before the DTC
+  step, so silence grows by at most D.
 
 ## Radar service alignment
 
-`ServiceAlignment` gains a read-only `run_attempted` property, true once any start command has
-created a run record in this helper epoch (including runs refused as moving or unsupported, and
-runs that failed or timed out ambiguously). Once it is true, the DTC step reads nothing for the rest
-of the epoch, whatever the run's outcome, because a timed-out start or a completed routine can
-leave the radar in its extended session or routine with no active phase in the helper. A new epoch
-(the helper restarts at the next engine-running interval) starts clean.
+- `ServiceAlignment` gains a read-only `run_attempted` property: true once any start command has
+  created a run record in this helper epoch, whatever its outcome (refused, failed, timed out,
+  completed). A timed-out start or a completed routine can leave the radar in its extended session
+  with no active phase in the helper.
+- `CommandReader` gains a non-consuming `pending()` check: its partial-line buffer is not empty, or
+  `select` reports the pipe readable (including end of file).
+- Before the radar send and again before the BCM send, the step reads nothing further for the rest
+  of the epoch when `run_attempted` is true or `pending()` is true. A command that arrives during a
+  radar exchange is read at the next intake (at most D later) and wins: the step never consumes or
+  defers it, and the latch then blocks the BCM send.
+- The radar exchange's window, from the start of `acquire` to the end of receive, is at most about
+  2.9 s, well under the broker's 15 s acknowledgement deadline (`REQUEST_ACK_SECONDS`).
+- Without the radar service flag there is no command pipe, so only `run_attempted` applies (it stays
+  false).
 
-## Scheduling and the durable budget
+## Foreign-tester watch
 
-The helper owns the budget, because it is the process about to send.
+- One `CAN_RAW` socket opened when the DTC step is constructed (if it cannot open, the step is
+  disabled for the epoch and reports so), with filters for tester requests: 29-bit
+  `0x18DA00F0`/`0x18DB00F0` with mask `0x1FFF00F0` (sources `F0`–`FF`, including our `F1`) and
+  11-bit `0x7DF` and `0x7E0`–`0x7E7`. `SO_RXQ_OVFL` is on.
+- Drained every cycle, non-blocking, at most 64 frames, with `recvmsg`, so our own polling (about
+  four to six frames a cycle) never fills it; and drained again immediately before each DTC send.
+- A frame is ours only if it carries `MSG_DONTROUTE` and equals one of the frames this helper can
+  send (the fixed PCM, RF Hub, 0845, service-alignment and DTC frames). Anything else is foreign.
+  The watch is "dirty" for 120 s after a foreign frame, and also after any receive error, truncation
+  (`MSG_TRUNC`/`MSG_CTRUNC`), overflow-counter change or a drain that hits its 64-frame bound.
+- A DTC send happens only when the watch is clean at the check just before it. A dirty watch means
+  "not sent this window" (`not_sent`, `foreign_tester`), never a helper failure.
+- Attribution limit, stated plainly: `MSG_DONTROUTE` marks frames created on this host, not by this
+  process. The only other local senders are the repo's own diagnostic tools, which take the channel
+  lock this helper holds exclusively and so cannot run during the epoch, and manual commands such as
+  `cansend` that ignore the lock. A manual local command that sends exactly one of the helper's own
+  frames is indistinguishable from the helper.
+- Residual race: a foreign tester can start between our last check and our frame reaching the bus,
+  or while we wait for the answer. Both testers then receive answers on the same `18DAF1tt` ID; our
+  read may be `malformed`, or may accept an answer meant for the other tester if it asked the same
+  module the same service at that moment. Nothing we send changes ECU state.
 
-- **Budget file** `tmp/vehicle_data/drive-dtc-budget.json`: one record, rewritten in place,
-  at most 1 KiB: `pass_id`, `reserved_at` (UTC), `boot_id` (`/proc/sys/kernel/random/boot_id`),
-  `reserved_boottime` (`CLOCK_BOOTTIME` seconds), `clock_synchronized` (from `adjtimex`, not
-  `STA_UNSYNC`).
-- **Reservation before sending.** Before a pass's first request the helper writes the new record to
-  a temporary file, `fsync`s it, renames it over the old one and `fsync`s the directory. Only when
-  every step succeeds does it emit `dtc_pass reserved` and proceed. Any failure disables DTC reads
-  for the epoch (event `dtc_pass` `disabled`, reason `budget_not_persisted`). The acknowledgement
-  is the sending process's own completed `fsync`, so no cross-process handshake can be lost
-  between reservation and send.
-- **Eligibility, evaluated before every pass** (not only at launch):
-  1. the DTC step is enabled for this epoch (handshake, sentinel open, no service run attempted,
-     storage not disabled by the broker);
-  2. the session is at least 300 s old (monotonic);
-  3. the last reservation is at least 3600 s old: same `boot_id` → measured with `CLOCK_BOOTTIME`
-     (immune to wall-clock jumps); different boot → measured by wall clock only if both the record
-     and the current clock are synchronized, otherwise the pass waits until this helper session is
-     3600 s old (a conservative reboot policy; with no record at all, only the 300 s settle
-     applies);
-  4. the latest harvested van sweep (`van-scan-cache.json` `last_scan.completed_at`, read fresh,
-     size-capped at 256 KiB and validated by a small pure parser) completed at least 3600 s ago by
-     a synchronized wall clock; a missing or invalid cache counts as no sweep;
-  5. the sentinel has been clean for 120 s and no module transaction is open.
-- **Within a session**, later passes follow the same rule, so a long drive reads about every 60
-  minutes.
-- **Harvester lag.** The harvester imports sweeps from completed recording chunks every 20 minutes,
-  up to about 30 minutes behind. A van sweep in that gap is not yet in the cache; the sentinel covers
-  a sweep in progress. A sweep that ran and ended while no helper was running (the van's client
-  waits for Pi F1 traffic to be quiet) and is not imported yet can be followed by one Pi pass; both
-  are stored separately and labelled by source.
-- **Broker cross-check.** The broker records the monotonic time of every `dtc_pass reserved` event
-  it receives. A second reservation less than 3595 s after the previous one within the same broker
-  lifetime is a cadence violation: the broker stops that helper through the ordinary supervisor
-  stop (the helper's restoration and final event are processed exactly as for any stop), records
-  nothing more from it, and does not enable the DTC step for the rest of its lifetime.
+## Cooldown budget (broker-owned)
+
+The broker reserves the budget before it launches a helper with the capability, so the helper never
+writes a file and no acknowledgement round trip exists.
+
+- **Budget record** `tmp/vehicle_data/drive-dtc-budget.json`, one JSON object, at most 1 KiB:
+  `schema`, `boot_id`, `origin_monotonic` and `origin_wall` (the launch), `clock_synchronized`
+  (`adjtimex` without `STA_UNSYNC`), `first_due`, `interval` (3600), `window` (600),
+  `session_end_monotonic`/`_wall` (null until the session ends), `last_pass_bound_monotonic`/`_wall`
+  (the latest time a pass could have happened, carried forward).
+- **Before each launch with the capability** (on a short-lived broker thread, never the helper):
+  1. read the record; compute `elapsed` since the later of `last_pass_bound` and the newest
+     harvested van sweep (`van-scan-cache.json` `last_scan.completed_at`, wall clock):
+     - same `boot_id`: by CLOCK_MONOTONIC (one clock shared by both processes in a boot);
+     - different boot: by wall clock only if the record and the current clock are both
+       synchronized and the result is not negative;
+     - uncertain (no record, unreadable or corrupt record, `session_end` still null from a crash,
+       different boot without a trustworthy clock): `elapsed = 0`, a full hour's wait;
+  2. `due_in = clamp(3600 − elapsed, 0, 3600)`, `first_due = max(300, due_in)`;
+  3. write the new record (temporary file, `fsync`, rename, directory `fsync`), carrying
+     `last_pass_bound` forward, with a 2 s limit. If the write fails (read-only or full disk, any
+     error) or does not finish in 2 s, launch the helper **without** the capability. A write that
+     completes late leaves a record claiming a schedule that never ran, which only makes the next
+     computation more conservative.
+  4. launch with `--enable-drive-dtc --drive-dtc-origin <origin_monotonic> --drive-dtc-first-due
+     <first_due>`.
+- **Helper schedule**, fully determined by those arguments and CLOCK_MONOTONIC: pass k may start
+  only within `[origin + first_due + k·3600, origin + first_due + k·3600 + window]` (k = 0, 1, …).
+  A pass that cannot start in its window (gates, dirty watch, stale evidence) is skipped, not
+  carried over.
+- **At session end** the broker sets `session_end` and `last_pass_bound = min(session_end, t_k +
+  window)` for the latest window start `t_k` at or before `session_end` (unchanged if the session
+  ended before `t_0`), and rewrites the record without waiting for it. If that write is lost, the
+  next launch sees `session_end` null and waits a full hour.
+- The bound assumes every scheduled pass happened, so even if every helper event is lost there is
+  never more than one pass per hour.
+- Helper events are not part of the budget. A `dtc_pass` outside the scheduled windows (a code
+  fault) makes the broker drop its results, stop the helper through the ordinary supervisor stop
+  (its restoration and final event are processed as for any stop), and launch without the
+  capability for the rest of its lifetime.
+- Harvested sweeps are checked at launch only. A sweep imported after a launch is first seen at the
+  next launch. The sentinel covers a sweep in progress; a sweep that ran before the session and was
+  imported mid-session (the harvester runs every 20 minutes, up to about 30 minutes behind) can be
+  followed by one Pi pass in that session. Both are stored separately and labelled by source.
+- Rollback keeps the budget file.
 
 ### Accumulated driving hours (not implemented; for the owner's choice)
 
-Reading "once per hour of driving" as accumulated qualified engine-running time would need: a
-persisted counter of running seconds since the last pass (in the budget file), incremented by the
-helper during each session and written durably at least once a minute and at session end; a pass
-when the counter reaches 3600 s (plus the settle period in the current session); reset at
-reservation. Short trips would then contribute; a crash would lose at most about a minute of
-counted time; the extra cost is one small `fsync`ed write per minute of driving on the SD card.
-The rest of this plan (transport, gates, storage, dashboard) is unchanged by that choice.
+With the budget on the broker this is a change to the broker's computation only: keep
+`running_seconds_since_last_pass` in the record, add each session's duration (origin to
+`session_end`) at session end, and set `due_in = 3600 − running_seconds_since_last_pass` (still at
+least 300 s into a session). Short trips then contribute; a lost `session_end` resets the
+accumulation (assumes a pass happened), which is conservative. The helper is unchanged.
 
-## Handshake and the off switch
+## Capability handshake
 
-- The broker enables the step through the helper's **environment**, not its argument list:
-  `VAN_TELEMETRY_DRIVE_DTC=drive-dtc-v1:<broker pid>`. The new helper enables the DTC step only when
-  the value has exactly its own protocol version and the PID equals its required
-  `--expected-parent-pid`.
-- The new broker always builds the child environment explicitly: it removes the variable when the
-  flag is off and sets it only when the flag is on, so a value inherited from the unit's
-  environment can never enable the step.
+- Explicit broker-added arguments (the oil-life pattern): the broker adds `--enable-drive-dtc` and
+  its two schedule arguments only when started with `--enable-drive-dtc-reads`, with no latch set and
+  with a reserved budget.
+- Positive confirmation in the startup exchange (new; oil life has none today): a helper launched
+  with `--enable-drive-dtc` adds `"capabilities": ["drive_dtc_v1"]` to its `ready` event, and only
+  then, because an old broker validates `ready` with the exact keys `type`, `protocol`, `pid`. A new
+  broker that passed the argument requires the capability; if a valid `ready` lacks it, the broker
+  does not grant (the existing cancel-before-grant path: the helper is reaped with a final of
+  `restored: null`, no inhibit) and launches without the capability for the rest of its lifetime.
 - Combinations:
-  - old broker, new helper: no variable (or one carrying another PID) → the step is off; no new
-    event type is ever emitted to a broker that does not know it;
-  - new broker, old helper: the old helper ignores an unknown environment variable → it runs exactly
-    as before, sends nothing new and never fails to start (an argument-list flag would have made it
-    exit with an argparse error at every launch);
-  - new broker with the flag removed: the variable is removed → the step is never constructed, and
-    the transport and sentinel sockets are never opened.
-- No `ACTIVE_DRIVE_FAILURE_REASONS` or final-event change; `helper_events.py` is unchanged.
+  - old broker, new helper: no argument → the step is off; no new event type is ever emitted;
+  - new broker without the flag, any helper: no argument → no DTC send, no sentinel socket;
+  - new broker with the flag, old helper: the old helper rejects the unknown argument and exits
+    before `ready`, which the supervisor treats as unverified restoration (as for oil life). It
+    arises only if the checkout is reverted under a running flagged broker; the rollback order
+    below prevents it.
+- Rollback order: (1) remove `--enable-drive-dtc-reads` from the installed unit, `daemon-reload`,
+  `s restart_broker` (the new broker, flag off); (2) revert the code; (3) `s restart_broker`. Never
+  start an old broker while the unit still carries the flag: it cannot parse it and fails to start.
 
-## Gates and stopping
+## Helper events
 
-A request is sent only when: eligibility (above) holds for the pass; the module's endpoint is owned
-by the DTC step; `FreshAuthority.acquire` succeeds (otherwise `skipped`, or `SessionEnding` ends the
-session exactly as today); the sentinel check is clean; the permit is unexpired at the send.
+Every value the helper can emit is in the declared vocabulary (`drive_dtc.json`), and every event is
+valid without any reservation or pass state, so no expected condition can be rejected by the broker.
+The helper validates each event with the same contract function the broker uses before emitting it;
+an event that would fail is not emitted, and the step disables itself for the epoch instead.
 
-A pass stops early on: `SessionEnding` (engine stopped, traffic gone, adapter/topology/inhibit
-change), a foreign tester, a service-alignment command (run attempted), a send `OSError`
-(`transport_error`; the session's own gates handle the adapter), the 60 s pass deadline, or helper
-termination. A `TransmitPermitError` other than expiry stays fatal (`helper_failed`), as for every
-other transport.
+```json
+{"type": "dtc_step", "state": "enabled|disabled",
+ "reason": "capability|sentinel_unavailable|service_run_attempted|contract_error",
+ "detail": "...", "interface_mode": "armed_diagnostic"}
+{"type": "dtc_read", "pass": 0, "module": "radar_acc|bcm_ccan", "request": "19 02 8F",
+ "outcome": "complete|truncated|negative|no_response|malformed|not_sent",
+ "reason": "<NRC text, or for not_sent: evidence_stale|permit_expired|foreign_tester|service_latch|drain_failed|window_closed>",
+ "nrc": "31|null", "pending_count": 0, "frame_hex": "<at most 8 bytes>|null",
+ "count": 6, "started_at": "<UTC ISO>", "completed_at": "<UTC ISO>",
+ "rpm": 1650.0, "speed_mph": 61.2, "interface_mode": "armed_diagnostic"}
+```
 
-Restoration is unchanged: the DTC step's sockets (transaction and sentinel) close in the session's
-`finally` before restoration. Worst case, the helper is killed mid-transaction: the ECU abandons
-the reply on its own ISO-TP timer; the read changed no ECU state (default session, read service);
-the interface follows today's rule (an unverified restoration sets the wildcard inhibit and the
-broker latch). The budget was reserved before the request, so the pass counts.
+- `pass` is the schedule index k. `count` is present for `complete` (0 or 1) and `truncated` (from
+  the FirstFrame length), otherwise null. `frame_hex` is the final answer frame as received (at
+  most 8 bytes).
+- The broker parses `frame_hex` itself. A frame it cannot parse is stored with the stored outcome
+  `unparsed`; that is a storage value, not a helper value, and never a protocol error.
+- Dispatch: `broker.handle_active_drive_event` hands `dtc_step` and `dtc_read` to
+  `drive_dtc_control.py` before `validate_helper_status`. That handler only validates and enqueues
+  (`put_nowait`); it never raises for a full queue or a storage error.
+- No change to `ACTIVE_DRIVE_FAILURE_REASONS`, final events or `helper_events.py`.
 
 ## Storage
 
-A separate SQLite file, `tmp/vehicle_data/drive-dtc.sqlite3`, written only by the broker. Reasons
-for a separate file rather than additive tables in `dtc-history.sqlite3`: no shared WAL, schema
-check or writer with the parked history, the harvester or the parked batch; rollback is deleting the
-file; its bound is enforced independently.
+One JSON file, `tmp/vehicle_data/drive-dtc-results.json`, written only by one broker thread.
 
-- Schema (version 1, key `drive_dtc_schema_version` in its own `metadata` table), created only with
-  `CREATE TABLE IF NOT EXISTS`, so opening it is additive and idempotent; a higher stored version
-  makes the opener refuse (fail closed) without changing anything. Tables:
-  - `drive_passes` (`pass_id` primary key, `reserved_at`, `finished_at`, `state`, `reason`,
-    `boot_id`);
-  - `drive_module_reads` (`id`, `pass_id` → `drive_passes` with cascade, `module_key`,
-    `request_hex` CHECK `= '19 02 8F'`, `started_at`, `completed_at`, `outcome` CHECK in the
-    vocabulary, `nrc`, `pending_count`, `status_availability_mask`, `dtc_count`, `response_hex`,
-    `rpm`, `speed_mph`);
-  - `drive_dtc_observations` (`read_id` → `drive_module_reads` with cascade, `raw_dtc`, `status`).
-- Retention is a plain observation window: after each pass, delete passes beyond the newest 500 or
-  older than 90 days (cascading to their reads and observations). Nothing is derived across deleted
-  rows; "first seen" and counts are within the window only. Bound: 500 passes × 2 modules, each read
-  at most about 1.6 KB of text, about 2 MiB with indexes; inside the existing
+- Content: `schema` (1), `coverage` ("failed, pending, confirmed or warning-lamp codes only
+  (19 02 8F)"), and the newest 200 passes' reads: per read the event fields plus the parsed code
+  (`complete` with one code: code, status and `lib.dtc.status_semantics`) or the count and first code
+  (`truncated`). This file is also what the dashboard reads.
+- Bound: at most 200 passes × 2 reads, about 300 bytes each, about 120 KiB; the writer refuses to
+  exceed 256 KiB (it drops the oldest passes first). Written by temporary file and rename, so the
+  transient peak is two copies, at most 512 KiB. No database, so no journal or WAL. The budget record
+  adds at most 2 KiB with its temporary file. Both lie under the existing
   `/home/pi/dev/obd-things/tmp` root budget (5120 MiB), so no new `ROOTFS_PATH_BUDGETS_MIB` entry.
-- Writer: one broker thread with a bounded queue (64 items) processes events in arrival order:
-  insert, prune, then regenerate the dashboard cache `tmp/vehicle_data/drive-dtc-cache.json`
-  (schema 1, at most 64 KiB, atomic replace) from the database. Because one thread regenerates the
-  whole cache from the database each time, an older publication cannot overwrite a newer one. A
-  queue overflow or a write failure latches `drive_dtc_storage_failed` in the broker: it stops
-  enabling the DTC step at later launches (no reads whose results cannot be stored) and reports the
-  latch in its journal.
-- Cache content per module: the latest attempt (time, outcome, reason) and, separately, the latest
-  successful read (time, codes with status semantics from `lib.dtc.status_semantics`, the
-  availability mask), the coverage text "failed, pending, confirmed or warning-lamp codes only
-  (19 02 8F)", and the last pass summary.
+- Retention semantics: a window of the newest 200 passes (about 200 hours of driving at one pass an
+  hour). Nothing is derived across dropped passes.
+- Failure: a full queue (64 items) or a write error drops the results and latches
+  `drive_dtc_storage_failed` in the broker, which launches later helpers without the capability. The
+  running helper continues its schedule, which the budget still limits to one pass an hour; its
+  results are dropped. That is the whole effect of a storage failure.
+- Because one thread rewrites the whole file from its in-memory state in arrival order, an older
+  publication cannot overwrite a newer one.
 
-## Helper events and broker handling
+## Dashboard: the three-source rule
 
-```json
-{"type": "dtc_pass", "pass_id": "<32 hex>",
- "state": "reserved|completed|abandoned|disabled", "reason": "<vocabulary>",
- "detail": "...", "modules": ["radar_acc", "bcm_ccan"], "modules_read": 0,
- "interface_mode": "armed_diagnostic"}
-{"type": "dtc_read", "pass_id": "<32 hex>", "module": "bcm_ccan", "request": "19 02 8F",
- "outcome": "positive|negative|no_response|incomplete|malformed|skipped",
- "nrc": "31|null", "pending_count": 0, "response_hex": "59 02 4F ...|null",
- "started_at": "<UTC ISO>", "completed_at": "<UTC ISO>", "rpm": 1650.0, "speed_mph": 61.2,
- "detail": "...", "interface_mode": "armed_diagnostic"}
-```
+Per module there are up to three kinds of successful observation:
 
-- Validation in the pure contract module (`drive_dtc_contract.py`, vocabulary shared through
-  `drive_dtc.json`): exact key sets; module in the first-cut tuple; request equal to the constant;
-  outcome and reason in the vocabulary; `response_hex` present only for `positive` and within the
-  module's length bound; `pass_id` matching the reserved pass; timestamps within ±120 s of receipt
-  (otherwise the receipt time is stored and the difference noted). A violation is a protocol error,
-  handled like any other helper protocol error.
-- Dispatch: `broker.handle_active_drive_event` passes the two new types to `drive_dtc_control.py`
-  before `validate_helper_status`. The broker accepts them only from a helper it launched with the
-  variable set.
-- `skipped` reads are stored as attempts that sent nothing (outcome `skipped`), so the history shows
-  them but the dashboard never counts them as failures of the module.
+- **parked** `19 02 FF` (all status bits; the existing cache);
+- **van** `19 02 0D` (failed, pending, confirmed);
+- **drive** `19 02 8F` (failed, failed this cycle, pending, confirmed, warning lamp), `complete` or
+  `truncated`.
 
-## Dashboard
+Algorithm, per module:
 
-`/v1/diagnostics/dtcs` gains a `drive_reads` block from `drive-dtc-cache.json` (read by a new
-sibling of `insights.py`; absent or invalid → omitted, the rest of the response unchanged). The
-merge per module follows the van-sweep pattern, generalised:
+1. Successes and failed attempts are separate lists. Failed attempts never change codes; a source's
+   failed attempt newer than that source's latest success is shown as its own line ("drive read
+   failed (no response) at 14:05 MST").
+2. Start from the latest parked success's returned records, each labelled with that read's date.
+3. Apply the van and drive successes newer than the parked success in chronological order. A
+   `complete` filtered read with mask M at time t:
+   - a shown code it lists takes its status and time t;
+   - a shown code it does not list, whose last known status has a bit in M, is moved to "not
+     reported by the <source> read at t" (its covered bits were clear then);
+   - a shown code whose last known status has no bit in M (for example `0x40` only) is left alone,
+     still labelled with its own earlier date, so it is never implied current;
+   - a code it lists that is not shown is added, labelled with t.
+4. A `truncated` drive read changes no code. It shows a module line "<count> codes reported at t,
+   list not retrieved; first <code>", and "count differs from the codes shown" when the number of
+   shown codes with a bit in `8F` differs.
+5. An empty `complete` filtered read reads "no failed, pending, confirmed or warning-lamp codes at
+   t" (van: "no failed, pending or confirmed codes at t"); never "no DTCs". The module's
+   `result_state`, `no_dtcs` and `absence_authoritative` come from parked reads only.
+6. A truncated parked group (`groups_truncated` in the compact cache) keeps its "+N more" line;
+   filtered reads act only on returned records, and counts change only for returned records.
+7. Every filtered result shows its coverage text and its source and time in Mountain time.
 
-- Successful observations and failed attempts are compared separately. Codes come from the newest
-  **successful** read of each source; a failed attempt never hides another source's newer success.
-  A failed drive attempt newer than every success shows as its own line ("drive read failed
-  (reason) at <time>").
-- A filtered read (`8F` from the Pi while driving, `0D` from the van's sweep) replaces the parked
-  records only within its coverage and keeps the parked records outside it (for example "test not
-  completed" records), as `mergeVanScan` already does for `0D`.
-- Coverage is shown explicitly on each filtered result: "failed, pending, confirmed or warning-lamp
-  codes only". An empty `8F` reply reads "none of those codes in the last drive read", never "no
-  DTCs" for the module, and never changes the module's parked `no_dtcs` state.
-- Times are shown in Mountain time with the source ("read while driving").
-- The existing `mergeVanScan` compares the van's observation with the Pi's last **attempt**, so a
-  failed Pi attempt can hide a newer successful van observation. That fix (compare successes) is a
-  behaviour change in its own commit.
-
-## Harvester
-
-- `19 02 8F` is added to `PI_DTC_TOOL_REQUESTS` (any target), so our pass counts as Pi activity and
-  never as a van sweep or foreign traffic; our FlowControls are already skipped by its reassembly.
-- `22 21 85` (oil life) is added to `PI_FIXED_REQUESTS[0x10]`, and the exact radar service-alignment
-  requests (`10 03`, `31 01 0251`, `31 02 0251`, `31 03 0251`, `3E 00`) to `PI_FIXED_REQUESTS[0x2A]`,
-  each in its own commit; the sync tests take the bytes from the helper modules.
-- `van_scan_harvest.py` is over 800 lines, so a tidying commit first moves the two request tables
-  into a sibling module (`van_scan_pi_requests.py`), re-exported unchanged.
+The existing `mergeVanScan` compares the van read with the Pi's last attempt and sets `no_dtcs` and
+`absence_authoritative` for van results. Both are fixed in their own behaviour commit, before the
+drive source is added.
 
 ## PCM: what its later design needs (not designed here)
 
-The owner named the PCM; it comes after the radar and BCM have run clean on several drives. Its
+The owner named the PCM; it follows after the radar and BCM have run clean on several drives. Its
 own plan and review must cover:
 
-- the service: the PCM rejects UDS `19` (`7F 19 11`); its DTCs come from KWP2000 `18 00 FF 00`,
-  whose reply is `58 NN` then three bytes per code (two-byte code, status byte with KWP semantics,
-  not UDS bits), so it needs its own parsing, status presentation and storage protocol field;
-- framing: the only PCM KWP DTC reply seen from the bus is `58 00` (a SingleFrame). A segmented KWP
-  DTC reply has not been observed or proven; AlfaOBD's July `58 03 …` is not a bus capture of the
-  framing. The PCM needs an 8-byte zero-padded FlowControl (proven only for `1A 87`, 2026-08-30);
-- endpoint ownership: the PCM poller reads with no drain and its 1 s duty/torque reads end the
-  session on a stray frame, so the design must suspend those reads during the transaction or give
-  the PCM poller a bounded drain (a change to the protected PCM path), and state the metric gap;
-- a parked, owner-authorized validation of a segmented KWP DTC read before any drive use.
+- the service: the PCM rejects UDS `19` (`7F 19 11`); its codes come from KWP2000 `18 00 FF 00`,
+  answered `58 NN` then three bytes per code with KWP status semantics, so parsing, presentation and
+  storage differ;
+- framing: only `58 00` (a SingleFrame) has been seen on the bus. A segmented KWP DTC reply has not
+  been observed; a stage-1a-style read would record a count; a full list needs the PCM's 8-byte
+  zero-padded flow control (proven only for `1A 87`, 2026-08-30);
+- endpoint: the PCM poller reads with no drain, and its 1 s duty/torque reads end the session on a
+  stray frame, so the design must keep every PCM answer off that socket or give it a bounded drain
+  (a change to the protected PCM path);
+- a parked, owner-authorized validation first.
 
 ## Deployment
 
-Each step is safe on its own because nothing sends until the broker flag is on.
-
-1. Land the commits (flag off). The harvester's request recognition is live from its next run.
-   Helper code on disk changes, but no broker sets the variable.
-2. Guarded parked restart (`s restart_broker`) to load the new broker, flag still off. The broker
-   status hashes are unchanged (`tests/broker_status_hashes.json`).
-3. Activation commit: add `--enable-drive-dtc-reads` to `ExecStart` in the tracked
+1. Land the commits with the flag off. The harvester recognises the new request from its next run;
+   no broker passes the new argument.
+2. `s restart_broker` (parked) to load the new broker, flag off. The status hashes are unchanged
+   (`tests/broker_status_hashes.json`).
+3. Activation: add `--enable-drive-dtc-reads` to `ExecStart` in the tracked
    `projects/vehicle_data/systemd/van-telemetry.service`; install it the way the vehicle-data README
    deployment section says (copy, `daemon-reload`); check
    `systemctl show -p KillMode,TimeoutStopUSec van-telemetry.service`; `s restart_broker` parked.
-   The drive store and cache are created empty at the broker's first DTC event.
-4. Off: remove the flag (edit the installed unit, or a drop-in that restates `ExecStart` without it),
-   `daemon-reload`, then `s restart_broker` (parked) or `s restart_broker --while-running`. The
-   restart ends any running helper; every later helper is launched without the variable.
-5. Rollback of code: any broker/helper mix is harmless (Handshake), so revert and restart parked in
-   either order. The parked history was never touched; the drive store, its cache and the budget
-   file can stay or be deleted.
-6. First drive, to call the first cut validated:
-   - journal/events: `dtc_pass reserved` about 5 minutes after arming, two `dtc_read` events,
-     `dtc_pass completed`, final `restored: true`;
-   - the C-CAN drive recording around the pass: one `18DA2AF1#0319028F00000000`, one
-     `18DA40F1#0319028F00000000`, at most one `18DA40F1#300000` (after a `59 02` FirstFrame) and no
-     radar FlowControl unless the radar's reply is segmented; no other new identifier or payload;
-     the sentinel reports no foreign frame while only the Pi is on the bus (this also confirms
-     `MSG_DONTROUTE` on this kernel);
-   - the PCM duty/torque, RF Hub, oil-life and radar 0845 metrics have no gap over 2 s around the
-     pass, and 0845 polling continues after it;
-   - `drive-dtc.sqlite3` rows and the dashboard showing both modules with coverage and source;
-   - the budget file holds the reservation; the next harvester report has no `other_f1_traffic`
-     window for the pass (or for oil life);
-   - on a drive over 65 minutes a second pass about 60 minutes after the first; after a stop under
-     an hour, no pass in the next drive until the hour has elapsed.
-   "Run clean on several drives", before widening the module list, means at least five passes on
-   at least three drives with every check above.
+4. Off: the rollback order's step (1). Every later helper launches without the argument.
+5. Rollback: the rollback order above. The budget file stays; the results file can stay.
+6. First drive:
+   - `ready` carries the capability; `dtc_step enabled`; two `dtc_read` events about 5 minutes after
+     launch; final `restored: true`;
+   - the C-CAN recording around the pass: one `18DA2AF1#0319028F00000000` and one
+     `18DA40F1#0319028F00000000`, no frame from us after either, no other new identifier or payload;
+   - the watch reports no foreign frame while only the Pi is on the bus (this confirms
+     `MSG_DONTROUTE` on this kernel; if it is missing, every check is dirty and nothing is sent);
+   - in the history around each read: no metric's next sample later than its normal slot plus about
+     2.9 s; 0845 polling continues afterwards;
+   - the results file and the dashboard show the radar's `complete` read and the BCM's `truncated`
+     read with coverage, source and time;
+   - the budget record has `session_end` set after the drive; on a drive over 65 minutes a second pass
+     about an hour after the first; after a stop under an hour, no pass until the hour has elapsed.
+   - "Several clean drives" before stage 1b or more modules: at least five passes on at least three
+     drives meeting every check, and no new code in either module's following reads.
 
 ## Tests
 
-- `tests/drive_dtc_support.py`: a scripted module ECU (SingleFrame, segmented reply that asserts the
-  unpadded DLC-3 FlowControl arrives only after a valid FirstFrame, NRCs, 0–3 pendings, silence,
-  malformed FirstFrame, wrong sequence, late frames after the quiet guard), a scripted sentinel feed
-  (local/foreign flags, truncation, overflow counter, receive errors, drain exhaustion), reusing
-  `Clock`, `FakeAuthority` and `Sink` from `tests/radar_service_support.py`.
-- Transport: exact IDs, data and DLC per module; no FlowControl after any rejected FirstFrame, after
-  an expired FlowControl permit, after a late FirstFrame or after a foreign frame; exactly one
-  FlowControl per reply; expiry before the request is `skipped`, after it `incomplete`; slices never
-  exceed their clamp; the length bounds.
-- Steps: settle; reservation before the first request (and no request when the write, either
-  `fsync` or the rename fails); same-boot and cross-boot budget rules, clock jumps both ways;
-  harvest refresh per pass; one transaction at a time; radar endpoint ownership skipping 0845 and
-  service cycles, and the queued command delay bound; the epoch disable after any service attempt
-  (including a refused and a timed-out start); the foreign-tester check before every request and
-  FlowControl; pass deadline; event shapes.
-- Helper (`test_active_drive.py`): without the variable, or with a wrong version or PID, no DTC frame
-  is ever sent and no DTC socket is opened (scan every sent frame and socket); with it, frames only
-  after settle; DTC sockets closed before restoration; the worst-case PCM gap.
-- `test_transmit_permit`: the four new purposes, bound per module and frame.
-- Broker control: event validation; the environment is built explicitly (inherited variable removed;
-  set only with the flag; PID bound); cadence violation stops the helper through the normal stop and
-  its final event is still processed; writer order, overflow and failure latch; old/new
-  broker-helper combinations through the launch tests.
-- Store: additive idempotent open, higher-version refusal, CHECK constraints, retention window,
-  cache regeneration and size cap.
-- Dashboard Node tests: success versus attempt comparison, coverage text, empty filtered reply,
-  per-source precedence, the `mergeVanScan` fix.
-- Harvester: sync tests for `22 21 85`, the radar service requests and `19 02 8F`.
-- Oracles: `broker_pure_oracle` status hashes unchanged; `gate_oracle` byte-identical (no DTC tool
-  changes); `active_route_effect_oracle` unchanged; every tidying commit compared old/new by output
-  (tests plus, for the harvester move, a report run on a saved fixture).
+- `tests/drive_dtc_support.py`: a scripted module ECU (SingleFrame, FirstFrame, NRCs, 0–3 pendings,
+  silence, malformed frames, late answers), a scripted watch feed (local/foreign flags, truncation,
+  overflow, errors, bound reached), reusing `Clock`, `FakeAuthority` and `Sink` from
+  `tests/radar_service_support.py`.
+- Transport: exact frame per module; never any other frame (no flow control under any input); the
+  2.5 s deadline; `not_sent` before the send versus outcomes after it.
+- Step: schedule windows from the arguments; one module per cycle and 2 s spacing; the radar read
+  only with the next 0845 at least 5 s away; the service latch (`run_attempted`, `pending()`,
+  rechecked before the BCM); the watch drained every cycle and checked before each send; D within
+  bound; every emitted event passes the contract validator.
+- Helper (`test_active_drive.py`): without the argument no DTC frame and no new socket (scan every
+  sent frame and socket); `ready` carries the capability only with the argument.
+- Broker: budget computation (same boot, other boot synchronized and not, corrupt record, missing
+  `session_end`, harvested sweep newer than the bound), the write timeout and failure paths (launch
+  without capability), session-end update, the missing-capability cancel path, the out-of-window
+  pass stop, event handling that never raises, storage failure latch, results-file bound.
+- `test_transmit_permit`: the two purposes.
+- Dashboard Node tests: the seven rules above, the `mergeVanScan` fixes.
+- Harvester: sync tests for `19 02 8F`, `22 21 85` and the radar service requests.
+- Oracles: `broker_pure_oracle` status hashes unchanged; `gate_oracle` byte-identical; every tidying
+  commit compared old/new by output.
 - Whole suite before every commit that leaves the worktree and before the review:
-  `/home/pi/van_compute/scripts/pi_compute.py run repo-full-suite --wait 60`. As of 2026-11-15 that
-  job is red on master: `tests/test_notes_gate.py::test_no_test_module_names_a_note` runs
-  `git ls-files` in a compute bundle without `.git`. It must be fixed (by its owner, or gated with a
-  named environment skip) before this work can commit.
+  `/home/pi/van_compute/scripts/pi_compute.py run repo-full-suite --wait 60`. As of 2026-11-15 it is
+  red on master: `tests/test_notes_gate.py::test_no_test_module_names_a_note` runs `git ls-files`
+  in a compute bundle without `.git`. That must be fixed before this work can commit.
 
 ## Code shape
 
 New modules, one concern each, with their AGENTS.md map entries in the same commit:
 
-- `projects/vehicle_data/drive_dtc_contract.py` + `drive_dtc.json`: the module tuple, frames,
-  length bounds, timing constants, event vocabulary and validation, the eligibility rule.
-- `projects/vehicle_data/drive_dtc_transport.py`: the only code that can build or send the new
-  frames; the transaction state machine.
-- `projects/vehicle_data/drive_dtc_sentinel.py`: the foreign-tester socket and its check.
-- `projects/vehicle_data/drive_dtc_budget.py`: the budget file (reserve, read, clock and boot
-  rules).
-- `projects/vehicle_data/drive_dtc_steps.py`: the per-cycle step (eligibility, slices, endpoint
-  ownership, pass state).
-- `projects/vehicle_data/drive_dtc_store.py`: the separate SQLite store, retention and cache writer.
-- `projects/vehicle_data/drive_dtc_control.py`: broker side (environment, dispatch, writer thread,
-  cadence check, latches).
+- `projects/vehicle_data/drive_dtc_contract.py` + `drive_dtc.json`: frames, purposes, timing
+  constants, schedule rule, event vocabulary and validator.
+- `projects/vehicle_data/drive_dtc_transport.py`: the only code that builds or sends the two frames.
+- `projects/vehicle_data/drive_dtc_watch.py`: the foreign-tester watch.
+- `projects/vehicle_data/drive_dtc_steps.py`: the per-cycle step.
+- `projects/vehicle_data/drive_dtc_budget.py`: the broker's budget record and computation.
+- `projects/vehicle_data/drive_dtc_control.py`: broker side (arguments, capability check, dispatch,
+  writer thread, latches).
 - A sibling of `insights.py` for the `drive_reads` block; `dashboard/src/views/dtcSources.helpers.js`
-  (the per-source merge, moved out of `health.helpers.js`).
+  (the three-source merge, moved out of `health.helpers.js`).
 - `projects/vehicle_data/van_scan_pi_requests.py` (the harvester's Pi request tables).
 
-Extended in place: `transmit_permit.py` (purposes), `radar_service_alignment.py` (the
-`run_attempted` property), `radar_drive_steps.py` (the endpoint-owned skip), `ccan_powertrain.py`
-(the speed reader promoted from `radar_service_alignment._speed_mph`, not copied).
+Extended in place: `transmit_permit.py` (two purposes), `radar_service_alignment.py`
+(`run_attempted`, `CommandReader.pending`), `helper_startup_grant.py` (the optional `capabilities`
+key in `ready`), `ccan_powertrain.py` (the speed reader promoted from
+`radar_service_alignment._speed_mph`).
 
 Over-limit files gain no net lines: `active_drive.py` / `run_active_session` (the oil-life block
 moves to a sibling step first), `broker.py` (`build_parser` moves to `broker_cli.py` first),
-`insights.py` (the new block is a sibling; wiring offset by moving the van-scan cache validator),
-`van_scan_harvest.py` (request tables move out first). `lib/dtc.py` is not changed.
-
-The vehicle-data README's frame list under "Coordinated engine-running diagnostic interval" gains
-the four frames in the commit that wires the step; a new section "Hourly DTC read during drives"
-holds the contract, deployment, rollback and validation record.
+`insights.py` (the van-scan cache validator moves out), `van_scan_harvest.py` (request tables move
+out). `lib/dtc.py` and `radar_alignment.py` are not changed. The vehicle-data README frame list
+gains the two frames in the commit that wires the step.
 
 ## Build order (each commit safe to land alone)
 
@@ -522,63 +466,96 @@ holds the contract, deployment, rollback and validation record.
 2. Harvester: recognise `19 02 8F` from the Pi (before anything can send it).
 3. Harvester: recognise `22 21 85`.
 4. Harvester: recognise the radar service-alignment requests.
-5. Tidying: oil-life block out of `run_active_session` (behaviour-identical; `test_active_drive`,
-   active-route oracle).
+5. Tidying: oil-life block out of `run_active_session` (behaviour-identical).
 6. Tidying: `broker.build_parser` → `broker_cli.py` (`--help` and broker oracle identical).
 7. Tidying: `mergeVanScan` → `dtcSources.helpers.js`; the van-scan cache validator out of
    `insights.py` (outputs identical).
-8. Dashboard fix: compare the van sweep with the Pi's last success, not last attempt.
-9. Contract, vocabulary and the drive store (no sender).
-10. Transmit-permit purposes, transport, sentinel, budget (library only, not wired).
-11. `ServiceAlignment.run_attempted` and the endpoint-owned skip in `RadarDriveSteps` (inert unless
-    a DTC step owns the endpoint).
-12. Steps module (not wired).
-13. Helper wiring behind the environment handshake (inert: no broker sets the variable).
-14. Broker control, writer, dispatch, environment construction with the flag off by default, the
+8. Dashboard fixes: compare successes, not attempts; no `no_dtcs`/`absence_authoritative` from a
+   filtered read.
+9. Contract, vocabulary, transmit-permit purposes, transport, watch (library only).
+10. `run_attempted`, `CommandReader.pending`, the optional `ready` capability key (inert).
+11. Step module and helper wiring behind `--enable-drive-dtc` (inert: no broker passes it).
+12. Broker: budget, control, writer, capability check, the flag (off by default), the
     `drive_reads` block and dashboard display; README frame list and section.
-15. Activation: the unit flag (after the review and the parked deploy of 1–14).
+13. Activation: the unit flag (after the review and the parked deploy of 1–12).
 
-## Review findings (first plan, rework) and where this plan answers them
+## Review findings and where this plan answers them
+
+First review (of the first plan):
 
 | # | Finding | Position | Where |
 | --- | --- | --- | --- |
-| 1 | Foreign-tester send-time gap | Accepted | Foreign-tester check (before every request and FlowControl, fail closed, other testers and unexpected local frames, residual race) |
-| 2 | Service-alignment inactivity is not ECU inactivity | Accepted (verified: `_fail` after a timed-out start; completion lets the session lapse) | Radar service alignment |
-| 3 | Five-second blocking reads; late replies on shared endpoints | Accepted (verified: RF Hub malformed reply ends the session; 0845 failure disables polling) | Reception, timing and endpoint ownership |
-| 4 | Migration backup and rollback could lose history | Accepted; the migration is removed | Storage (separate file, parked history untouched) |
-| 5 | Migration from ordinary constructors; cache version; new-broker/old-helper | Accepted | Storage (additive idempotent schema); Handshake (environment, PID-bound) |
-| 6 | Retention neither preserved history nor bounded growth | Accepted | Storage (plain window, no preservation claim) |
-| 7 | Budget not durable before sending; launch-only harvest check | Accepted. The acknowledgement is the sending helper's own completed `fsync` rather than a broker reply, which leaves no message to lose between reservation and send | Scheduling and the durable budget |
-| 8 | Limited coverage and source precedence | Accepted | Dashboard; Storage (single-writer cache) |
-| 9 | First-drive scope; padded FC; "harmless" wording | Accepted | Settled decision 3; What goes on the bus (proven per-module FC, occupancy stated) |
-| 10 | Obsolete classifier prerequisite; harvester size; build order | Accepted (verified `2fe75a4`, `van_scan_harvest.py` 1050 lines) | Evidence; Harvester; Build order |
+| 1 | Foreign-tester send-time gap | Accepted | Foreign-tester watch |
+| 2 | Service inactivity is not ECU inactivity | Accepted (resolved) | Radar service alignment |
+| 3 | Blocking reads; late replies on shared endpoints | Accepted | The exchange; Timing |
+| 4 | Migration backup and rollback | Accepted (resolved: no migration) | Storage |
+| 5 | Migration activation; new-broker/old-helper | Accepted | Storage; Capability handshake |
+| 6 | Retention | Accepted | Storage |
+| 7 | Budget durability; harvest refresh | Accepted in part: durability on the broker; harvest checked at launch only (see below) | Cooldown budget |
+| 8 | Coverage and source precedence | Accepted | Dashboard |
+| 9 | First-drive scope; FC form; wording | Accepted (resolved) | Settled decision 3; Staging |
+| 10 | Classifier prerequisite; build order | Accepted (resolved) | Build order |
+
+Second review (of `8031e8d`):
+
+| # | Finding | Position | Where |
+| --- | --- | --- | --- |
+| 1 | Helper-side `fsync` can stall into an inhibit | Accepted; the helper writes nothing (the reviewer's asynchronous-helper remedy replaced by the parent's broker-side reservation) | Cooldown budget |
+| 2 | Service-command delay past its 15 s deadline | Accepted; intake is never paused, the radar window is at most about 2.9 s, latch rechecked before the BCM | Radar service alignment; Timing |
+| 3 | Watch maintenance and attribution | Accepted | Foreign-tester watch |
+| 4 | Timing, permit lifetime, radar queue, timestamps | Accepted; no flow control in 1a, one clock, the radar socket shared, bounds derived from the loop | Staging; The exchange; Timing |
+| 5 | Environment handshake | Accepted; explicit argument, confirmation in `ready`, rollback order | Capability handshake |
+| 6 | Cooldown recovery; storage shutdown | Accepted | Cooldown budget; Storage |
+| 7 | Expected failures as protocol errors | Accepted | Helper events |
+| 8 | Three-source merge | Accepted | Dashboard |
+| 9 | Storage bound and gap wording | Accepted | Storage; Deployment step 6 |
+
+Departures, stated:
+
+- **Harvest eligibility is checked at launch, not before each pass** (first review, finding 7, and
+  an earlier parent decision). A check before each pass needs the helper to read a file or a
+  broker-to-helper channel; the schedule fixed at launch needs neither. The cost: a van sweep
+  imported between a launch and that session's pass can be followed by one Pi pass in that session.
+  The van's client only sweeps while Pi F1 traffic is quiet, so such a sweep ran before the session.
+- **Positive capability confirmation is new**, not the oil-life mechanism: oil life has a
+  broker-added argument and no confirmation.
+
+## Counts against the previous revision (8031e8d)
+
+- Transmit paths: 2 fixed frames (one request per module), down from 4 (two requests and two flow
+  controls) on per-module sockets plus a sliced transaction state machine.
+- New helper paths to a protocol error, unverified restoration or inhibit under expected conditions:
+  none, down from four (a helper `fsync` stall past the silence limit, a `disabled` event rejected
+  without a reservation, `unparsed` outside the vocabulary, and the environment handshake enabling
+  the step under an old broker).
+- What remains:
+  - an unexpected exception in the step ends the session as `helper_failed` with verified
+    restoration (the existing path for every step);
+  - two degrading residuals with no inhibit: a very late radar answer can stop 0845 polling for the
+    epoch, or fail a service start begun within seconds of a radar read;
+  - new broker plus old helper, procedure-guarded by the rollback order (as for oil life).
 
 ## Open questions and risks
 
-1. **Accumulated driving hours versus elapsed cooldown**: with the parent, for the owner. Elapsed is
-   specified; the alternative's cost is stated above.
-2. **The first `8F` request**: the mask byte has not been sent to these modules before. If a module
-   answers `7F 19 12` or `31`, the read is stored as negative and the next step is a review, not a
-   mask change in the field.
-3. **`MSG_DONTROUTE` through Python's `recvmsg` on this kernel**: documented by SocketCAN, not yet
-   observed here; if absent, every check fails closed and no pass runs (visible on the first drive).
-4. **Radar late frames after the quiet guard**: the residual can stop 0845 polling for the rest of an
-   epoch; first-drive evidence decides whether the guard needs lengthening.
-5. **The radar's `8F` reply may be segmented** if it now holds more than one matching code; the
-   unpadded FlowControl is proven on the radar for a 67-byte reply, so that path is covered, but it
-   would be the first segmented DTC reply from the radar.
-6. **The Pi's continuous F1 polling suppresses the van's own health check** (and with it any
-   Uconnect Vehicle Health Report, if the telematics unit is the client). Unchanged by this plan; for
-   the owner.
-7. **Notification of a new current code during a drive** (advisory ntfy): out of scope.
-8. **Red suite on master** (`test_notes_gate.py` in compute bundles): blocks committing this work
-   until fixed.
+1. **Elapsed cooldown or accumulated driving hours**: with the parent, for the owner; both costs
+   above.
+2. **Whether the radar or the BCM logs anything after an unanswered FirstFrame**: unknown; checked on
+   the first drives.
+3. **The first `8F` request** to these modules: a `7F 19 12`/`31` is stored as `negative`; the next
+   step is a review, not a mask change in the field.
+4. **`MSG_DONTROUTE` through Python's `recvmsg` on this kernel**: documented, not yet observed here;
+   if absent, nothing is sent (visible on the first drive).
+5. **Stage 1a's BCM result is a count and first code.** Its six expected codes are the owner's
+   known LED-lamp codes; a change in the count is the signal. Stage 1b retrieves the list.
+6. **The Pi's continuous F1 polling suppresses the van's own health check**: unchanged; for the
+   owner.
+7. **Red suite on master** (`test_notes_gate.py` in compute bundles): blocks committing this work.
 
-Not determinable from the repository: what triggers the van's own sweep; reply sizes and pending
-behaviour for `8F` specifically; whether the radar or BCM answer `78` more often at speed.
+Not determinable from the repository: what triggers the van's own sweep; `8F` reply sizes and
+pending behaviour at speed for these two modules.
 
 ## Status
 
-Second revision awaiting cross-family review. Nothing built; no CAN traffic, service change or live
+Third revision awaiting cross-family review. Nothing built; no CAN traffic, service change or live
 write. The read-only queries used `mode=ro` on `tmp/vehicle_data/dtc-history.sqlite3` and the
 archived 2026-09-24 capture on `/mnt/EXFAT512`.
