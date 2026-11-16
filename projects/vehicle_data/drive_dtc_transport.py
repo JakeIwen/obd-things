@@ -1,8 +1,10 @@
 """Only the two fixed stage-1a 19 02 8F requests; never a FlowControl.
 
-The caller owns fresh authority, watch/service checks and per-pass scheduling.
-The radar borrows the 0845 link; the BCM has an exact-filtered temporary socket.
-Every actual send consumes a fresh one-use permit before its in-memory marker.
+The caller owns fresh authority, watch/service checks and per-pass scheduling;
+its ``admit`` check runs again after preparation, just before the permit is
+consumed. The radar borrows the 0845 link; the BCM has an exact-filtered
+temporary socket. Every actual send consumes a fresh one-use permit before its
+in-memory marker.
 """
 from __future__ import annotations
 
@@ -137,9 +139,13 @@ class DriveDtcTransport:
         self.channel, self.radar_link = channel, radar_link
         self.socket_factory, self.monotonic = socket_factory, monotonic
 
-    def read(self, module: str, permit: object, *, before_send) -> ReadResult:
+    def read(self, module: str, permit: object, *, admit, before_send) -> ReadResult:
         """One bounded exchange. ``before_send()`` records only attempted state.
 
+        ``admit()`` returns None, or a not-sent reason that ends the exchange
+        unsent and unattempted. It runs after the BCM socket is created and the
+        reply queue drained, immediately before the permit is consumed, so
+        preparation time cannot carry a send past a check that has since failed.
         The marker runs after permit consumption and before send; it must not
         perform I/O or block. OSError/ValueError from the socket become results;
         marker errors and non-expiry permit errors remain fatal to the helper.
@@ -157,7 +163,7 @@ class DriveDtcTransport:
                     return ReadResult(contract.NOT_SENT, 'drain_failed')
             if link is None:
                 return ReadResult(contract.NOT_SENT, 'drain_failed')
-            return self._exchange(link, module, permit, before_send)
+            return self._exchange(link, module, permit, admit, before_send)
         finally:
             if owned and link is not None and link is not self.radar_link:
                 # Closing a failed exchange cannot create another transmission.
@@ -166,11 +172,14 @@ class DriveDtcTransport:
                 except OSError:
                     pass
 
-    def _exchange(self, link, module, permit, before_send):
+    def _exchange(self, link, module, permit, admit, before_send):
         try:
             link.drain()
         except (OSError, ValueError):
             return ReadResult(contract.NOT_SENT, 'drain_failed')
+        refused = admit()
+        if refused is not None:
+            return ReadResult(contract.NOT_SENT, refused)
         sent_at = None
 
         def mark():

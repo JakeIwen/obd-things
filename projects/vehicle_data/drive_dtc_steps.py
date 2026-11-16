@@ -189,29 +189,44 @@ class DriveDtcSteps:
             rpm=rpm, speed_mph=vehicle_speed.speed_mph(evidence), **result.event_fields(),
         )
 
+    def _ready(self, module):
+        """Timing conditions that a later cycle can satisfy; nothing is sent until then."""
+        last = self.current.last_attempt
+        if last is not None and self.backend.monotonic() - last < contract.MODULE_SPACING_SECONDS:
+            return False
+        return self._radar_has_margin(module)
+
+    def _admission_problem(self, module):
+        """Every check a send needs, as a not-sent reason, or None to send.
+
+        Runs after fresh authority and again inside the transport after its
+        preparation (BCM socket, reply drain), just before the permit is consumed.
+        Consumes neither commands nor permits and emits nothing.
+        """
+        if self._service_blocked():
+            return "service_latch"
+        if self.backend.monotonic() > self._window_end():
+            return "window_closed"
+        if not self.watch.drain():
+            return "foreign_tester"
+        if not self._ready(module):
+            return "deferred"
+        return None
+
     def _read(self, module):
         started_at = self.wall_now()
         permits = self.radar.authority.acquire(
             (contract.PURPOSES[module],), absent_detail="drive DTC read lost fresh running evidence")
         evidence = self.radar.authority.last_snapshot
-        if permits is None:
-            result = drive_dtc_transport.ReadResult(contract.NOT_SENT, "evidence_stale")
+        problem = "evidence_stale" if permits is None else self._admission_problem(module)
+        if problem is not None:
+            result = drive_dtc_transport.ReadResult(contract.NOT_SENT, problem)
         else:
             # No events or other blocking output may intervene between permit
-            # issue and send. These checks consume neither commands nor permits.
-            blocked = self._service_blocked()
-            clean = self.watch.drain()
-            if blocked:
-                result = drive_dtc_transport.ReadResult(contract.NOT_SENT, "service_latch")
-            elif self.backend.monotonic() > self._window_end():
-                result = drive_dtc_transport.ReadResult(contract.NOT_SENT, "window_closed")
-            elif not clean:
-                result = drive_dtc_transport.ReadResult(contract.NOT_SENT, "foreign_tester")
-            elif not self._radar_has_margin(module):
-                return
-            else:
-                result = self.transport.read(
-                    module, permits[0], before_send=lambda: self._mark_attempted(module))
+            # issue and send; the transport repeats the admission checks last.
+            result = self.transport.read(
+                module, permits[0], admit=lambda: self._admission_problem(module),
+                before_send=lambda: self._mark_attempted(module))
         if not self._read_event(module, result, started_at, evidence):
             return
         if result.reason == "service_latch":
@@ -233,10 +248,7 @@ class DriveDtcSteps:
         if not self._start_pass(self.backend.monotonic()):
             return None
         module = next(key for key in contract.MODULES if key not in self.current.attempted)
-        if not self._radar_has_margin(module):
-            return None
-        if (self.current.last_attempt is not None and
-                self.backend.monotonic() - self.current.last_attempt < contract.MODULE_SPACING_SECONDS):
+        if not self._ready(module):
             return None
         try:
             self._read(module)

@@ -19,7 +19,7 @@
     "negative": ["session_required", "nrc"],
     "no_response": ["timeout", "send_error", "receive_error"],
     "malformed": ["invalid_frame"],
-    "not_sent": ["evidence_stale", "permit_expired", "foreign_tester", "service_latch", "drain_failed", "window_closed"]
+    "not_sent": ["evidence_stale", "permit_expired", "foreign_tester", "service_latch", "drain_failed", "window_closed", "deferred"]
   },
   "negative_reason_format": "nrc_{nrc}",
   "session_required_nrcs": [126, 127]

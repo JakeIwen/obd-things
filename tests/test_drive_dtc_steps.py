@@ -47,7 +47,10 @@ class Transport:
         self.results = []
         self.after_send = lambda: None
 
-    def read(self, module, permit, *, before_send):
+    def read(self, module, permit, *, admit, before_send):
+        refused = admit()
+        if refused is not None:
+            return drive_dtc_transport.ReadResult('not_sent', refused)
         result = (self.results.pop(0) if self.results else
                   drive_dtc_transport.ReadResult('complete', 'single_frame', True,
                                                 frame_hex=EMPTY.hex(' ').upper(), count=0))
