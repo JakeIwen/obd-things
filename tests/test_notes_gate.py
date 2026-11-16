@@ -63,6 +63,14 @@ def names_a_note(text, note_names):
 
 # Names a van-compute source snapshot always leaves out, plus installed packages.
 SNAPSHOT_SKIPPED = {"tmp", "__pycache__", ".pytest_cache", "node_modules"}
+# macOS metadata the Mac writes beside files over the SMB share. .gitignore drops them from Git's
+# listing; a snapshot carries them, and a "._name.py" resource fork is binary, not Python.
+MAC_METADATA_NAMES = (".DS_Store",)
+MAC_METADATA_PREFIX = "._"
+
+
+def is_mac_metadata(path):
+    return path.name in MAC_METADATA_NAMES or path.name.startswith(MAC_METADATA_PREFIX)
 # The snapshot always carries the task declarations, so a snapshot can check them too.
 TASKS_FILE = ".van-compute.json"
 
@@ -79,7 +87,9 @@ def listed_files(root, *paths, untracked=False):
             path.relative_to(root).as_posix()
             for top in paths
             for path in (root / top).rglob("*")
-            if path.is_file() and not SNAPSHOT_SKIPPED & set(path.relative_to(root).parts)
+            if path.is_file()
+            and not is_mac_metadata(path)
+            and not SNAPSHOT_SKIPPED & set(path.relative_to(root).parts)
         )
     flags = ["-co", "--exclude-standard"] if untracked else []
     listed = subprocess.run(
@@ -169,6 +179,8 @@ class NotesGateTests(unittest.TestCase):
             ):
                 (root / path).parent.mkdir(parents=True, exist_ok=True)
                 (root / path).write_text(text)
+            (root / "tests/._test_reader.py").write_bytes(b"\x00\x05\x16\x07Mac OS X\x00")
+            (root / "tests/.DS_Store").write_bytes(b"\x00\x00\x00\x01Bud1")
             readers, scanned = note_readers(root)
         self.assertEqual(scanned, ["tests/test_reader.py"])
         self.assertEqual(readers, {"tests/test_reader.py": ["agent-context.md"]})
