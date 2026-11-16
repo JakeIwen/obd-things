@@ -69,7 +69,7 @@ class Harness:
         self.authority.last_snapshot = snapshot((1600, 1601, 1602),
                                                rpm_observation(1602), speed_observation(61.2))
         self.radar = SimpleNamespace(service=None, poller=None, authority=self.authority,
-                                     next_alignment=math.inf)
+                                     next_alignment=math.inf, alignment_enabled=True)
         self.step = steps.DriveDtcSteps(
             SimpleNamespace(channel=CHANNEL, monotonic=self.clock), self.sink, self.radar,
             reservation=steps.Reservation(SESSION, session_origin, first_due),
@@ -139,11 +139,13 @@ def test_expiry_and_stale_evidence_do_not_change_start_or_consume_module():
     h.transport.results.append(drive_dtc_transport.ReadResult('not_sent', 'permit_expired'))
     h.cycle(1300.)
     h.authority.script.append(FakeAuthority.SKIP)
-    h.cycle(1301.)
-    h.cycle(1302.)
-    h.cycle(1304.)
+    h.cycle(1302.)  # the radar's retry is not due for ten seconds; the BCM goes
+    h.cycle(1310.)
+    h.cycle(1312.)
     assert h.transport.reads == ['radar_acc', 'radar_acc', 'bcm_ccan']
-    assert [e['reason'] for e in h.events('dtc_read')][:2] == ['permit_expired', 'evidence_stale']
+    assert [(e['module'], e['reason']) for e in h.events('dtc_read')] == [
+        ('radar_acc', 'permit_expired'), ('bcm_ccan', 'evidence_stale'),
+        ('radar_acc', 'single_frame'), ('bcm_ccan', 'single_frame')]
     starts = [e for e in h.events('dtc_pass') if e['state'] == 'started']
     assert len(starts) == 1 and starts[0]['started_monotonic'] == 1300.
 
@@ -158,12 +160,13 @@ def test_an_unsent_pass_still_consumes_the_hour():
     assert [e['started_monotonic'] for e in h.events('dtc_pass') if e['state'] == 'started'] == [1900.]
 
 
-def test_radar_margin_is_rechecked_after_authority_cost():
+def test_radar_margin_is_rechecked_after_authority_cost_and_never_holds_the_bcm():
     h = Harness()
     h.radar.next_alignment = 1304.999
-    h.cycle(1300.)
-    assert not h.authority.requested
-    h.radar.next_alignment = 1306.
+    h.cycle(1300.)  # the radar lacks its margin; the BCM is not held back by that
+    assert h.authority.requested == [('bcm_ccan.dtc_read',)]
+    assert h.transport.reads == ['bcm_ccan']
+    h.radar.next_alignment = 1308.
     acquire = h.authority.acquire
 
     def slow_authority(*args, **kwargs):
@@ -172,12 +175,14 @@ def test_radar_margin_is_rechecked_after_authority_cost():
         return permits
 
     h.authority.acquire = slow_authority
-    h.cycle(1300.)
-    assert not h.transport.reads
+    h.cycle(1302.)  # 6 s of margin before authority, 4.999 s after it
+    assert h.transport.reads == ['bcm_ccan']
     h.authority.acquire = acquire
-    h.radar.next_alignment = 1310.
-    h.cycle(1302.)
-    assert h.transport.reads == ['radar_acc']
+    h.radar.next_alignment = 1330.
+    h.cycle(1313.1)
+    assert h.transport.reads == ['bcm_ccan', 'radar_acc']
+    assert [e['reason'] for e in h.events('dtc_read') if e['module'] == 'radar_acc'] == [
+        'deferred', 'single_frame']
 
 
 def test_dirty_watch_blocks_start_and_is_rechecked_before_each_module():

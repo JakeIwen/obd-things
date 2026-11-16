@@ -33,16 +33,22 @@ MINIMUM_SESSION_SECONDS = TIMING['minimum_session_seconds']
 INTERVAL_SECONDS = TIMING['interval_seconds']
 WINDOW_SECONDS = TIMING['window_seconds']
 MODULE_SPACING_SECONDS = TIMING['module_spacing_seconds']
+NOT_SENT_RETRY_SECONDS = TIMING['not_sent_retry_seconds']
 RADAR_MARGIN_SECONDS = TIMING['radar_margin_seconds']
 FIRST_REPLY_SECONDS = TIMING['first_reply_seconds']
 PENDING_REPLY_SECONDS = TIMING['pending_reply_seconds']
 FOREIGN_QUIET_SECONDS = TIMING['foreign_quiet_seconds']
 MAX_DETAIL = LIMITS['detail_characters']
+NOT_SENT_ATTEMPTS = LIMITS['not_sent_attempts']
 INTERFACE_MODE = VOCABULARY['interface_mode']
 STEP_EVENT, PASS_EVENT, READ_EVENT = 'dtc_step', 'dtc_pass', 'dtc_read'
 EVENT_TYPES = frozenset((*VOCABULARY['events'], READ_EVENT))
 COMPLETE, TRUNCATED, NEGATIVE, NO_RESPONSE, MALFORMED, NOT_SENT = VOCABULARY['outcomes']
 OUTCOMES = frozenset(VOCABULARY['outcomes'])
+# Not-sent reasons a later cycle of the same pass may retry; any other settles.
+RETRYABLE_NOT_SENT = frozenset(VOCABULARY['retryable_not_sent'])
+if not RETRYABLE_NOT_SENT <= set(VOCABULARY['outcomes'][NOT_SENT]):
+    raise ValueError('retryable reasons must be declared not_sent reasons')
 SESSION_ID = re.compile(r'[0-9a-f]{32}')
 HEX_BYTE = re.compile(r'[0-9A-F]{2}')
 FRAME_HEX = re.compile(r'[0-9A-F]{2}(?: [0-9A-F]{2}){0,7}')

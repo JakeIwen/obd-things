@@ -58,12 +58,24 @@ def capabilities(reservation):
 @dataclass
 class _Pass:
     index: int
-    attempted: set[str] = field(default_factory=set)
-    last_attempt: float | None = None
+    window_end: float
+    attempted: set[str] = field(default_factory=set)  # sent, or possibly sent
+    settled: set[str] = field(default_factory=set)  # no further try in this pass
+    last_attempt: float | None = None  # any module's latest try, sent or not
+    tries: dict[str, int] = field(default_factory=dict)  # retryable not-sent tries
+    last_try: dict[str, float] = field(default_factory=dict)
+    held: dict[str, dict] = field(default_factory=dict)  # latest unrecorded retry
 
 
 class DriveDtcSteps:
-    """One module per cycle, bounded windows and a monotonic hour between passes."""
+    """One module per cycle, bounded windows and a monotonic hour between passes.
+
+    The hour holds twice within a session: between the starts of actual passes
+    and between any two requests to the same module. A module that cannot be
+    requested in a pass (no usable radar link, or its own hour would end after
+    the window) gets one declared not-sent outcome there and never blocks the
+    other; a pass that could request neither is not started and costs no hour.
+    """
 
     def __init__(self, backend, sink, radar_steps, *, reservation=None,
                  rf_hub_profiles=(), watch_factory=None, transport_factory=None, wall_now=utc_now):
@@ -75,6 +87,7 @@ class DriveDtcSteps:
         self.current = None
         self.finished_window = -1
         self.last_started = None
+        self.last_request: dict[str, float] = {}  # per module, this session
         if not self.enabled:
             return
         self.minimum_start = backend.monotonic() + contract.MINIMUM_SESSION_SECONDS
@@ -115,12 +128,18 @@ class DriveDtcSteps:
         return True
 
     def _finish(self, reason):
-        if self.current is not None:
-            index = self.current.index
-            self.finished_window = index
-            self.current = None
-            self._emit(contract.PASS_EVENT, **{"pass": index}, state="finished",
-                       reason=reason, detail="drive DTC pass ended")
+        current = self.current
+        if current is None:
+            return
+        # A suppressed retry is the module's final outcome once the pass ends.
+        held, current.held = list(current.held.values()), {}
+        for payload in held:
+            if not self._emit(contract.READ_EVENT, **payload):
+                return
+        self.finished_window = current.index
+        self.current = None
+        self._emit(contract.PASS_EVENT, **{"pass": current.index}, state="finished",
+                   reason=reason, detail="drive DTC pass ended")
 
     def _disable(self, reason):
         self.enabled = False
@@ -137,8 +156,18 @@ class DriveDtcSteps:
             self.watch.drain()
 
     def _window_end(self):
-        return contract.window_start(self.reservation.origin, self.reservation.first_due,
-                                     self.current.index) + contract.WINDOW_SECONDS
+        return self.current.window_end
+
+    def _unavailable(self, module, window_end):
+        """Why a module cannot be requested at all in a pass ending at window_end."""
+        if module == "radar_acc" and not self.radar.alignment_enabled:
+            # No 0845 link, or its polling stopped after a failure this session:
+            # leave the radar alone for the rest of the session.
+            return "radar_unavailable"
+        requested = self.last_request.get(module)
+        if requested is not None and requested + contract.INTERVAL_SECONDS > window_end:
+            return "module_hour"
+        return None
 
     def _start_pass(self, now):
         if self.current is not None:
@@ -151,7 +180,12 @@ class DriveDtcSteps:
         if now < max(first, self.minimum_start):
             return False
         index = int((now - first) // contract.INTERVAL_SECONDS)
-        if index <= self.finished_window or not self.watch.drain():
+        if index <= self.finished_window:
+            return False
+        window_end = contract.window_start(schedule.origin, schedule.first_due, index) + contract.WINDOW_SECONDS
+        if all(self._unavailable(module, window_end) for module in contract.MODULES):
+            return False  # nothing could be requested: no start, so no hour is consumed
+        if not self.watch.drain():
             return False
         if self._service_blocked():
             self._disable("service_run_attempted")
@@ -164,35 +198,72 @@ class DriveDtcSteps:
             return False
         # Record and publish before fresh evidence/permits: even an unsent pass
         # consumes the hour, and output backpressure cannot expire a permit.
-        self.current = _Pass(index)
+        self.current = _Pass(index, window_end)
         self.last_started = now
         return self._emit(contract.PASS_EVENT, **{"pass": index}, state="started",
                           reason="first_attempt", detail="drive DTC pass started",
                           started_monotonic=now)
 
     def _radar_has_margin(self, module):
+        # Reached only while 0845 polling is enabled, that is, when a poll can occur.
         return module != "radar_acc" or (
             self.radar.next_alignment - self.backend.monotonic() >= contract.RADAR_MARGIN_SECONDS)
 
     def _mark_attempted(self, module):
+        """Memory only: runs between permit consumption and the socket send."""
         self.current.attempted.add(module)
-        self.current.last_attempt = self.backend.monotonic()
+        self.last_request[module] = self.backend.monotonic()
 
-    def _read_event(self, module, result, started_at, evidence):
+    def _read_payload(self, module, result, started_at, evidence):
         samples = getattr(evidence, "rpm_samples", ())
         rpm = samples[-1] if samples else None
         if not finite_number(rpm) or rpm < 0:
             rpm = None
-        return self._emit(
-            contract.READ_EVENT, **{"pass": self.current.index}, module=module,
-            request=contract.REQUEST, started_at=started_at, completed_at=self.wall_now(),
-            rpm=rpm, speed_mph=vehicle_speed.speed_mph(evidence), **result.event_fields(),
-        )
+        return dict(**{"pass": self.current.index}, module=module, request=contract.REQUEST,
+                    started_at=started_at, completed_at=self.wall_now(), rpm=rpm,
+                    speed_mph=vehicle_speed.speed_mph(evidence), **result.event_fields())
+
+    def _record(self, module, result, started_at, evidence):
+        """Emit a module's first and final outcome in a pass, never every retry.
+
+        A retryable not-sent outcome leaves the module open for at most
+        NOT_SENT_ATTEMPTS tries, NOT_SENT_RETRY_SECONDS apart; repeats are held
+        and only the last is emitted, when it turns out to be final.
+        """
+        current, now = self.current, self.backend.monotonic()
+        payload = self._read_payload(module, result, started_at, evidence)
+        if (result.outcome == contract.NOT_SENT and result.reason in contract.RETRYABLE_NOT_SENT
+                and module not in current.attempted):
+            tries = current.tries[module] = current.tries.get(module, 0) + 1
+            current.last_try[module] = now
+            if tries < contract.NOT_SENT_ATTEMPTS:
+                if tries > 1:
+                    current.held[module] = payload
+                    return True
+                return self._emit(contract.READ_EVENT, **payload)
+        current.held.pop(module, None)
+        current.settled.add(module)
+        return self._emit(contract.READ_EVENT, **payload)
+
+    def _after_record(self, result):
+        if result.reason == "service_latch":
+            self._finish("service_latch")
+            self._disable("service_run_attempted")
+        elif result.outcome == contract.NOT_SENT and result.reason in ("window_closed", "foreign_tester"):
+            self._finish(result.reason)
+        elif self.current.settled >= set(contract.MODULES):
+            self._finish("all_modules_done")
 
     def _ready(self, module):
         """Timing conditions that a later cycle can satisfy; nothing is sent until then."""
-        last = self.current.last_attempt
-        if last is not None and self.backend.monotonic() - last < contract.MODULE_SPACING_SECONDS:
+        current, now = self.current, self.backend.monotonic()
+        if current.last_attempt is not None and now - current.last_attempt < contract.MODULE_SPACING_SECONDS:
+            return False
+        tried = current.last_try.get(module)
+        if tried is not None and now - tried < contract.NOT_SENT_RETRY_SECONDS:
+            return False
+        requested = self.last_request.get(module)
+        if requested is not None and now - requested < contract.INTERVAL_SECONDS:
             return False
         return self._radar_has_margin(module)
 
@@ -213,6 +284,23 @@ class DriveDtcSteps:
             return "deferred"
         return None
 
+    def _next_module(self):
+        """The first module ready now; settles unrequestable ones with their reason."""
+        for module in contract.MODULES:
+            if module in self.current.settled:
+                continue
+            reason = self._unavailable(module, self._window_end())
+            if reason is not None:
+                result = drive_dtc_transport.ReadResult(contract.NOT_SENT, reason)
+                if not self._record(module, result, self.wall_now(), None):
+                    return None
+                self._after_record(result)
+                if self.current is None:
+                    return None
+            elif self._ready(module):
+                return module
+        return None
+
     def _read(self, module):
         started_at = self.wall_now()
         permits = self.radar.authority.acquire(
@@ -227,15 +315,11 @@ class DriveDtcSteps:
             result = self.transport.read(
                 module, permits[0], admit=lambda: self._admission_problem(module),
                 before_send=lambda: self._mark_attempted(module))
-        if not self._read_event(module, result, started_at, evidence):
-            return
-        if result.reason == "service_latch":
-            self._finish("service_latch")
-            self._disable("service_run_attempted")
-        elif result.reason in ("window_closed", "foreign_tester"):
-            self._finish(result.reason)
-        elif len(self.current.attempted) == len(contract.MODULES):
-            self._finish("all_modules_done")
+        # Module spacing counts every try, sent or not, but not a module
+        # settled without one (an unusable radar, the module's own hour).
+        self.current.last_attempt = self.backend.monotonic()
+        if self._record(module, result, started_at, evidence):
+            self._after_record(result)
 
     def run(self, snapshot):
         """Session-ending outcome, or None for ordinary/disabled/skipped work."""
@@ -247,8 +331,8 @@ class DriveDtcSteps:
             return None
         if not self._start_pass(self.backend.monotonic()):
             return None
-        module = next(key for key in contract.MODULES if key not in self.current.attempted)
-        if not self._ready(module):
+        module = self._next_module()
+        if module is None:
             return None
         try:
             self._read(module)
