@@ -126,7 +126,9 @@ class IncrementalVacuumTests(SpaceFixture):
             self.assertLess(historian._conn.execute("PRAGMA freelist_count").fetchone()[0], left)
 
     def test_one_pass_returns_within_the_wall_time_budget(self):
-        self.patch_budget(0.05)
+        # Shorter than the 5 ms pause after each chunk, so exactly one chunk fits whatever the
+        # storage speed (fast SSDs drained 4,000 pages inside a 50 ms budget).
+        self.patch_budget(0.001)
         with TelemetryHistorian(self.path) as historian:
             free = self.big_freelist(historian)
             started = time.monotonic()
