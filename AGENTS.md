@@ -474,7 +474,9 @@ selected pure imports, declared launch targets and compute entry packaging.
 Never rebaseline as part of a feature or to pass the suite.
 
 `projects/vehicle_data/van_scan_cache.py` owns validation of harvested scan
-caches; `insights.py` retains its public imports. Dashboard diagnostic source
+caches; `dtc_cache_validation.py` holds what it shares with the parked-cache
+validator in `insights.py` (`DtcCacheValidationError`, `HEX_BYTE`,
+`timestamp_or_none`). Dashboard diagnostic source
 merging lives in `dashboard/src/views/dtcSources.helpers.js`, re-exported
 through `health.helpers.js`.
 

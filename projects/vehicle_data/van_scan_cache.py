@@ -1,31 +1,11 @@
 """Validation of the passively harvested in-vehicle scan cache."""
 
-from datetime import datetime
 import re
 
 from lib.timeutil import nonnegative_int as _nonnegative_int
-
-_HEX_BYTE = re.compile(r"[0-9A-F]{2}\Z")
-
-
-class DtcCacheValidationError(ValueError):
-    """A saved DTC cache does not match the compact schema-v2 contract."""
-
-
-def _timestamp_or_none(value: object) -> bool:
-    if value is None:
-        return True
-    if not isinstance(value, str) or not value.strip():
-        return False
-    text = value.strip()
-    if text.endswith("Z"):
-        text = f"{text[:-1]}+00:00"
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return False
-    return parsed.tzinfo is not None
-
+from projects.vehicle_data.dtc_cache_validation import (
+    HEX_BYTE, DtcCacheValidationError, timestamp_or_none,
+)
 
 MAX_VAN_SCAN_CACHE_BYTES = 256 * 1024
 VAN_SCAN_CACHE_SCHEMA_VERSION = 1
@@ -33,7 +13,7 @@ VAN_SCAN_CACHE_NAME = "van-scan-cache.json"
 _HEX_TEXT = re.compile(r"(?:[0-9A-F]{2})+\Z")
 
 
-def _validate_van_scan_cache(payload: object) -> dict[str, object]:
+def validate_van_scan_cache(payload: object) -> dict[str, object]:
     """Validate ``van_scan_harvest.py``'s cache of the van's own (source F1) health checks."""
 
     if not isinstance(payload, dict):
@@ -51,7 +31,7 @@ def _validate_van_scan_cache(payload: object) -> dict[str, object]:
         if not isinstance(last_scan, dict):
             raise DtcCacheValidationError("in-vehicle scan cache last_scan must be an object")
         for field in ("started_at", "completed_at"):
-            if not isinstance(last_scan.get(field), str) or not _timestamp_or_none(last_scan[field]):
+            if not isinstance(last_scan.get(field), str) or not timestamp_or_none(last_scan[field]):
                 raise DtcCacheValidationError(f"last_scan.{field} is not a timestamp")
         if not isinstance(last_scan.get("pi_quiet"), bool):
             raise DtcCacheValidationError("last_scan.pi_quiet must be a boolean")
@@ -67,7 +47,7 @@ def _validate_van_scan_cache(payload: object) -> dict[str, object]:
             raise DtcCacheValidationError(f"modules[{index}].module_key is invalid or repeated")
         seen.add(key)
         observed = module.get("observed_at")
-        if not isinstance(observed, str) or not _timestamp_or_none(observed):
+        if not isinstance(observed, str) or not timestamp_or_none(observed):
             raise DtcCacheValidationError(f"modules[{index}].observed_at is not a timestamp")
         dtcs = module.get("dtcs")
         if not isinstance(dtcs, list):
@@ -79,7 +59,7 @@ def _validate_van_scan_cache(payload: object) -> dict[str, object]:
                 or not _HEX_TEXT.fullmatch(record["raw_dtc"])
                 or not isinstance(record.get("fca_display"), str)
                 or not isinstance(record.get("status"), str)
-                or _HEX_BYTE.fullmatch(record["status"]) is None
+                or HEX_BYTE.fullmatch(record["status"]) is None
                 or not isinstance(record.get("display_group"), str)
             ):
                 raise DtcCacheValidationError(

@@ -30,10 +30,9 @@ from projects.vehicle_data.early_warning import (
     InfrastructureHealthEvaluator,
 )
 from projects.vehicle_data.historian import TelemetryHistorian
+from projects.vehicle_data.dtc_cache_validation import HEX_BYTE, DtcCacheValidationError, timestamp_or_none
 from projects.vehicle_data.van_scan_cache import (
-    DtcCacheValidationError, MAX_VAN_SCAN_CACHE_BYTES, VAN_SCAN_CACHE_NAME,
-    VAN_SCAN_CACHE_SCHEMA_VERSION, _HEX_BYTE, _HEX_TEXT, _timestamp_or_none,
-    _validate_van_scan_cache,
+    MAX_VAN_SCAN_CACHE_BYTES, VAN_SCAN_CACHE_NAME, validate_van_scan_cache,
 )
 
 
@@ -245,7 +244,7 @@ def _validate_module_result_fields(
             raise DtcCacheValidationError(
                 f"module row {module_key!r}.{field} must be nonnegative"
             )
-    if not _timestamp_or_none(row["last_attempt_at"]) or not _timestamp_or_none(
+    if not timestamp_or_none(row["last_attempt_at"]) or not timestamp_or_none(
         row["last_success_at"]
     ):
         raise DtcCacheValidationError(
@@ -258,7 +257,7 @@ def _validate_module_result_fields(
         )
     mask = row["status_availability_mask"]
     if mask is not None and (
-        not isinstance(mask, str) or _HEX_BYTE.fullmatch(mask) is None
+        not isinstance(mask, str) or HEX_BYTE.fullmatch(mask) is None
     ):
         raise DtcCacheValidationError(
             f"module row {module_key!r} has an invalid status mask"
@@ -412,7 +411,7 @@ def _validate_dtc_status_fields(record: Mapping, *, group: str, index: int) -> N
         record["raw_dtc"]
     ) is None:
         raise DtcCacheValidationError(f"groups.{group}[{index}] has an invalid DTC")
-    if not isinstance(record["status"], str) or _HEX_BYTE.fullmatch(
+    if not isinstance(record["status"], str) or HEX_BYTE.fullmatch(
         record["status"]
     ) is None:
         raise DtcCacheValidationError(
@@ -492,7 +491,7 @@ def _validate_dtc_grouping(record: Mapping, *, group: str, index: int) -> None:
 
 def _validate_dtc_history_fields(record: Mapping, *, group: str, index: int) -> None:
     mask = record["status_availability_mask"]
-    if not isinstance(mask, str) or _HEX_BYTE.fullmatch(mask) is None:
+    if not isinstance(mask, str) or HEX_BYTE.fullmatch(mask) is None:
         raise DtcCacheValidationError(
             f"groups.{group}[{index}] has an invalid status mask"
         )
@@ -559,7 +558,7 @@ def _validated_dtc_cache_header(payload: object) -> tuple[dict, int]:
         raise DtcCacheValidationError("saved DTC cache is not schema version 2")
     if payload["acquisition"] != "cache_only" or payload["compact"] is not True:
         raise DtcCacheValidationError("saved DTC cache is not a compact cache-only summary")
-    if not _timestamp_or_none(payload["generated_at"]) or payload["generated_at"] is None:
+    if not timestamp_or_none(payload["generated_at"]) or payload["generated_at"] is None:
         raise DtcCacheValidationError("saved DTC cache has no generation timestamp")
     limit = payload["per_group_limit"]
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1000:
@@ -612,7 +611,7 @@ def _validate_dtc_coverage(
     for field in _COVERAGE_KEYS - {"last_attempt_at", "last_success_at"}:
         if not _nonnegative_int(coverage[field]):
             raise DtcCacheValidationError(f"coverage.{field} must be nonnegative")
-    if not _timestamp_or_none(coverage["last_attempt_at"]) or not _timestamp_or_none(
+    if not timestamp_or_none(coverage["last_attempt_at"]) or not timestamp_or_none(
         coverage["last_success_at"]
     ):
         raise DtcCacheValidationError("coverage timestamps are invalid")
@@ -1363,7 +1362,7 @@ class TelemetryInsights:
                 "detail": "in-vehicle scan cache exceeds its 256 KiB limit",
             }
         try:
-            cache = _validate_van_scan_cache(json.loads(raw))
+            cache = validate_van_scan_cache(json.loads(raw))
         except (UnicodeDecodeError, json.JSONDecodeError, DtcCacheValidationError) as exc:
             return {
                 "available": False,
