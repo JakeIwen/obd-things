@@ -1,4 +1,9 @@
 """The two new purposes retain ordinary one-use, lock and evidence gates."""
+import json
+from pathlib import Path
+import subprocess
+import sys
+
 import pytest
 
 from projects.vehicle_data import drive_dtc_contract as contract, transmit_permit
@@ -44,3 +49,21 @@ def test_no_flow_control_purpose_was_added():
     assert transmit_permit.BCM_DTC_READ == contract.PURPOSES['bcm_ccan']
     assert {name for name in transmit_permit.ALLOWED_PURPOSES if '.dtc_' in name} == set(
         contract.PURPOSES.values())
+
+
+def test_literal_purposes_equal_the_shared_vocabulary_file():
+    vocabulary = json.loads(Path(contract.__file__).with_name('drive_dtc.json').read_text())
+    assert {transmit_permit.RADAR_DTC_READ, transmit_permit.BCM_DTC_READ} == set(
+        vocabulary['modules'].values())
+    assert vocabulary['modules'] == {'radar_acc': transmit_permit.RADAR_DTC_READ,
+                                     'bcm_ccan': transmit_permit.BCM_DTC_READ}
+
+
+def test_permit_module_does_not_load_the_drive_dtc_contract():
+    """Every C-CAN helper imports transmit_permit before ready; the DTC JSON must not gate it."""
+    probe = ('import sys; import projects.vehicle_data.transmit_permit; '
+             'print("projects.vehicle_data.drive_dtc_contract" in sys.modules)')
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run([sys.executable, '-c', probe], cwd=root, capture_output=True,
+                            text=True, check=True)
+    assert result.stdout.strip() == 'False'

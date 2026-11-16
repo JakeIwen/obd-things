@@ -18,7 +18,6 @@ from typing import Callable
 from lib import diagnostic_safety
 from lib.modules import MODULES
 from projects.vehicle_data import ccan_powertrain
-from projects.vehicle_data.drive_dtc_contract import PURPOSES as DTC_PURPOSES
 
 
 PCM_GENERATOR_DUTY = "pcm.generator_field_duty"
@@ -26,8 +25,10 @@ PCM_CRANKSHAFT_TORQUE = "pcm.crankshaft_torque"
 PCM_VVT_OIL_TEMPERATURE = "pcm.vvt_oil_temperature"
 PCM_OIL_LIFE = "pcm.oil_life_remaining"
 RF_HUB_PRESSURE = "rf_hub.pressure"
-RADAR_DTC_READ = DTC_PURPOSES["radar_acc"]
-BCM_DTC_READ = DTC_PURPOSES["bcm_ccan"]
+# Literal on purpose: every C-CAN helper imports this module before `ready`,
+# so a damaged drive_dtc.json must not break them. A test pins these to it.
+RADAR_DTC_READ = "radar_acc.dtc_read"
+BCM_DTC_READ = "bcm_ccan.dtc_read"
 RADAR_ALIGNMENT = "radar_acc.alignment"
 RADAR_ALIGNMENT_FLOW = "radar_acc.alignment_flow_control"
 # Owner-started Service Drive Alignment (radar_service_alignment.py): one
