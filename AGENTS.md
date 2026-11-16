@@ -366,9 +366,11 @@ fails for sandbox reasons that say nothing about the change set):
    unless given `--source-root <checkout>`, which a worktree needs. On a wait timeout use
    `pi_compute.py wait <id>` with the job's `id` field instead of resubmitting.
 3. `false`, or the job's `status` shows `"placement": "pi-local"`: run the suite directly from
-   the checkout, outside the sandbox, at low priority so the telemetry broker keeps its CPU:
-   `nice -n 15 ionice -c3 python3 run_tests.py` (add `--dashboard` for the dashboard gate).
-   It needs the Pi's internet only when pip's or npm's user cache lacks a pinned package.
+   the checkout, outside the sandbox, below the telemetry broker's CPU and I/O priority:
+   `nice -n 10 ionice -c2 -n7 python3 run_tests.py` (add `--dashboard` for the dashboard
+   gate). Go no lower: at `nice -n 15 ionice -c3` and a load average of 18 a sub-second test
+   child missed its 20 s hang guard, and the suite has about 70 such guards. The run needs
+   the Pi's internet only when pip's or npm's user cache lacks a pinned package.
 
 A direct full run on vanpi passed on 2026-11-15 in 24 minutes (pytest 20 of them) under a load
 average of 11–14, with peak process-tree RSS about 350 MiB. Don't start two suites at once on

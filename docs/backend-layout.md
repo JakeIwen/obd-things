@@ -32,7 +32,7 @@ directly; AGENTS.md "Safe automated suite" gives the rule. In short:
 # true: a Mac worker will take the job (add --source-root <checkout> from a worktree)
 /home/pi/van_compute/scripts/pi_compute.py run repo-full-suite --wait 60
 # false, or the job's status shows "placement": "pi-local": from the checkout
-nice -n 15 ionice -c3 python3 run_tests.py
+nice -n 10 ionice -c2 -n7 python3 run_tests.py
 ```
 
 `available` reads the worker heartbeats in the queue's `workers/` folder and
@@ -124,9 +124,14 @@ suite tasks pass on Mac workers only. A Pi-local suite job fails:
   crashes below about 1.5 GiB. The dashboard build and `build.test.mjs`
   need esbuild.
 
-A direct full run on vanpi (2026-11-15, outside the sandbox, `nice -n 15
-ionice -c3`, load average 11–14 from other sessions) passed in 1,427 s, 1,181 s
-of it pytest. Sampled each second, its process tree peaked at 343 MiB RSS; the
+A direct full run on vanpi (2026-11-15, outside the sandbox, at `nice -n 15
+ionice -c3` with a load average of 11–14 from other sessions) passed in
+1,427 s, 1,181 s of it pytest. The next run at that priority failed when load
+reached 18: `tests/test_campaign_cli_entrypoints.py` starts a plan-only CLI
+that takes under 1 s, and it missed its 20 s timeout. At nice 15 a process gets
+about 3% of a core contended by nice-0 work, and with the idle I/O class
+mq-deadline (the Pi's scheduler) may hold each read for its 10 s
+`prio_aging_expire`; hence the documented `nice -n 10 ionice -c2 -n7`. Sampled each second, its process tree peaked at 343 MiB RSS; the
 pytest process alone reached 1,811 MiB of address space (VmPeak), so the
 768 MiB `RLIMIT_AS` would stop pytest as well as npm and esbuild.
 
