@@ -460,6 +460,11 @@ The repo-owned checker has no `layout` baseline and is advisory.
 selected pure imports, declared launch targets and compute entry packaging.
 Never rebaseline as part of a feature or to pass the suite.
 
+`projects/vehicle_data/van_scan_cache.py` owns validation of harvested scan
+caches; `insights.py` retains its public imports. Dashboard diagnostic source
+merging lives in `dashboard/src/views/dtcSources.helpers.js`, re-exported
+through `health.helpers.js`.
+
 ## Backend ownership and dependency direction
 
 `projects/vehicle_data/van_scan_pi_requests.py` owns the passive harvester’s fixed Pi request tables;
@@ -486,6 +491,8 @@ caller has retired, with owner/callers/retirement stated in the wrapper header.
 
 | Path | Caller | Owner |
 | --- | --- | --- |
+| `projects/vehicle_data/van_scan_cache.py` | TelemetryInsights | Harvested scan cache validation |
+| `projects/vehicle_data/dashboard/src/views/dtcSources.helpers.js` | health.helpers.js | Diagnostic source merge |
 | `projects/vehicle_data/broker_cli.py` | broker.main and offline parser callers | Broker command-line parser and defaults |
 | `projects/vehicle_data/broker.py` | van-telemetry.service | Telemetry runtime and ordered CAN lifecycle |
 | `projects/vehicle_data/web_v2.py` | Both van-telemetry-web listeners | Dashboard static serving and web.py /v1 API |
