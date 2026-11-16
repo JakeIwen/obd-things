@@ -46,7 +46,10 @@ A direct run outside the sandbox uses pip's and npm's per-user caches
 it downloads nothing; on 2026-11-15 they held 21 MB and 45 MB and did not grow
 over a run. They grow only when `requirements-test.txt` resolves to new
 versions or the lockfile changes; `pip cache purge` and `npm cache clean
---force` empty them. Everything else the run writes is per run: the scratch
+--force` empty them. They predate this route and are not bounded by
+anything the repository controls, and neither has an entry in the root-budget
+table (`ROOTFS_PATH_BUDGETS_MIB`, in the Mac-managed scripts repo's
+`pi/scripts/backup/backup_conf.sh`). Everything else the run writes is per run: the scratch
 folder under the checkout's `tmp/` (a 117 MB venv plus the build output) is
 removed at the end, and `dashboard/node_modules` (27 MB) is replaced by each
 `npm ci`.
@@ -65,23 +68,10 @@ npm download cache lives in `$XDG_CACHE_HOME/npm` and `npm ci` runs with
 `--prefer-offline`; pip's cache stays in the run's scratch folder, since the unhashed
 Python requirements can't safely share a cache other jobs write.
 
-When the checkout is not writable (a Pi-local compute job mounts its source
-snapshot read-only), the runner copies it into `TMPDIR`, skipping `.git`,
-`tmp/` and bytecode as a snapshot does, and re-runs itself from the copy with
-the same arguments. It refuses (exit 2) a `TMPDIR` inside the checkout, where the
-copy would copy itself. The copied run gets its own process group. SIGTERM,
-SIGINT or SIGHUP to the runner is forwarded to that group, escalated to SIGKILL
-after 5 s (under van-compute's 10 s SIGTERM-to-SIGKILL grace), and the copy is
-removed once the group is gone. The runner then ends by the same signal, as it
-does when the copied run dies by one, so a shell sees 143 for SIGTERM, not 241.
-
-SIGKILL can't be caught. Under van-compute the copy path happens only on the Pi,
-where the job runs in bubblewrap's PID namespace with `--die-with-parent`: when
-the broker kills a job every process in it dies, and the broker deletes the
-job's work directory, which holds `TMPDIR` and the copy. A direct run killed
-with SIGKILL leaves its copied run going until it finishes (each step has its
-own timeout) and leaves one copy, the size of the checkout, in `TMPDIR` until
-something cleans that.
+When the checkout is not writable, the runner stops before writing anything
+with a setup error (exit 2). A Pi-local compute job mounts its source that way,
+and the suite cannot pass there (next section); the error points at the direct
+run instead.
 
 A wait timeout leaves the job running; use `wait`/`status` with the returned job
 ID. Do not submit a duplicate merely because the wait ended. The existing
@@ -98,9 +88,11 @@ not require inventing a visual comparison.
 
 ### Pi-local placement
 
-Verified 2026-11-15 against van-compute release `8ad2c255…` (the source is
-read-only on the Pi at `/home/pi/van_compute/current/van_compute/`). The three
-suite tasks pass on Mac workers only. A Pi-local suite job fails:
+A suite job placed on the Pi cannot pass, and making it pass is not planned:
+the direct run passes on vanpi without the sandbox, and lifting the sandbox's
+limits would loosen the Pi's guardrails for no gain in coverage. The facts
+below were verified 2026-11-15 against van-compute release `8ad2c255…` (the
+source is read-only on the Pi at `/home/pi/van_compute/current/van_compute/`).
 
 - Placement: the broker runs a job on the Pi only after every Mac lease has
   lapsed (45 s, then a 30 s grace), and `pi_compute.py` has no option to force
@@ -108,16 +100,17 @@ suite tasks pass on Mac workers only. A Pi-local suite job fails:
   `tmp/locks/active-diagnostics-*.lock` is write-locked (a CAN transmitter,
   such as a drive helper), so it may not run during a drive.
 - Sandbox (`engine.py` `_bubblewrap_runtime`): `--unshare-net` with only
-  loopback, no `/etc/ssl`, source snapshot read-only, uid 0 in a user
-  namespace with no capabilities. The writable places are `TMPDIR`, `HOME`
-  and the task cache, which only Pi-local jobs (offline) can fill.
+  loopback, no `/etc/ssl`, source snapshot read-only (where `run_tests.py`
+  stops with its setup error), uid 0 in a user namespace with no
+  capabilities. The writable places are `TMPDIR`, `HOME` and the task cache,
+  which only Pi-local jobs (offline) can fill.
 - Limits (`broker.py` defaults, `limited_child.py`): per-process
   `RLIMIT_AS` 768 MiB, `RLIMIT_CPU` 1200 s, 256 open files, 1800 s wall; the
   broker unit adds `MemoryMax=1G` (broker and job together) and
   `CPUQuota=150%`.
 - Python: the job's interpreter is the van-compute venv (pytest 9.1.1,
   numpy 1.26.4, can-isotp 2.0.7, no cantools). The runner's venv cannot
-  download anything, so "Python test dependency install" fails.
+  download anything, so "Python test dependency install" would fail.
 - Node: `npm ci` aborts with a V8 out-of-memory error under the 768 MiB
   address-space limit even from a full cache (it works at 1 GiB), and the
   esbuild binary reserves about 1.27 GB of address space at start and
@@ -133,8 +126,11 @@ Direct full runs on vanpi, outside the sandbox, on 2026-11-15:
   At nice 15 a process gets about 3% of a core contended by nice-0 work, and
   mq-deadline (the Pi's I/O scheduler) may hold each idle-class read for its
   10 s `prio_aging_expire`. Hence the documented `nice -n 10 ionice -c2 -n7`.
-- At `nice -n 10 ionice -c2 -n7`: passed in 1,299 s, 1,069 s of it pytest. The
-  pytest process used 357 s of CPU (`RLIMIT_CPU` is 1,200 s per process).
+- At `nice -n 10 ionice -c2 -n7`, load average 7–10: passed in 1,299 s,
+  1,069 s of it pytest. The pytest process used 357 s of CPU (`RLIMIT_CPU` is
+  1,200 s per process).
+- At `nice -n 10 ionice -c2 -n7`, load average 4–6: passed in 926 s, 782 s of
+  it pytest, whose process used 308 s of CPU.
 
 Sampled each second, the process tree peaked at 343–385 MiB RSS. Address space
 (VmPeak) ran far higher: 1,811 MiB for pytest, 1,080 MiB for `npm ci`, 4,911 MiB
@@ -143,15 +139,19 @@ that Node test (`test/readmeShots.test.mjs`) passes under a 1 GiB `ulimit -v`.
 Whether pytest passes under 768 MiB was not tested; npm and esbuild do not
 (above). With warm user caches the direct runs downloaded nothing.
 
-Passing on the Pi needs van-compute changes: an address-space limit of at
-least 2 GiB for this job (proven only for npm and esbuild; a trial run under
-the chosen limit settles the rest), a way to provide the Python and npm
-dependencies offline, and a wall-time limit with room over the 1,800 s
-default, since the direct runs took 1,299–1,427 s without the sandbox's
-`CPUQuota=150%`. The Mac's suite runs peak at 770–890 MB of process-group RSS,
-which leaves little room under the Pi broker's `MemoryMax=1G`. Until those
-land, a Pi-local suite job is not evidence about the change set: run the suite
-directly instead.
+Not planned: what van-compute would need for a Pi-local suite job to pass.
+
+- An address-space limit of at least 2 GiB for this job, proven only for npm
+  and esbuild; a trial run under the chosen limit would settle the rest.
+- A way to provide the Python and npm dependencies offline.
+- A wall-time limit with room over the 1,800 s default: the slowest direct run
+  above took 1,427 s without the sandbox's `CPUQuota=150%`.
+- Room under the broker's `MemoryMax=1G`, which covers broker and job
+  together; the Mac's suite runs peak at 770–890 MB of process-group RSS.
+- A way to run the source snapshot writable, or the refusal above stays.
+
+A Pi-local suite job is therefore never evidence about a change set: run the
+suite directly instead.
 
 ## Lasting checks and limits
 

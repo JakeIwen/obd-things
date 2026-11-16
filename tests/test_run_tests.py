@@ -1,16 +1,14 @@
-import contextlib
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 import os
 from pathlib import Path
-import signal
+import shutil
 import sys
 import subprocess
 import tempfile
 import textwrap
 import time
 import unittest
-from unittest import mock
 
 import run_tests
 
@@ -146,65 +144,29 @@ class SuitePlanTests(unittest.TestCase):
             with run_tests.checkout_lock(lock, timeout=1, poll=0.1):
                 pass
 
-    def make_read_only_checkout(self, root: Path) -> None:
-        """A tree shaped like a Pi-local van-compute snapshot: files 0400, dirs 0500."""
-        (root / "pkg").mkdir(parents=True)
-        (root / "pkg/module.py").write_text("VALUE = 1\n")
-        (root / "tmp").mkdir()
-        (root / "tmp/run_tests.lock").write_text("")
-        (root / ".git").write_text("gitdir: elsewhere\n")
-        (root / "run_tests.py").write_text(textwrap.dedent("""
-            import os, sys
-            from pathlib import Path
-            here = Path(__file__).resolve().parent
-            (here / "tmp").mkdir()  # fails in the read-only original
-            first_path = os.environ["PYTHONPATH"].split(os.pathsep)[0]
-            same_args = sys.argv[1:] == ["--dashboard"]
-            raise SystemExit(3 if same_args and Path(first_path) == here else 4)
-        """))
-        for path in sorted(root.rglob("*"), key=lambda p: len(p.parts), reverse=True):
-            path.chmod(0o500 if path.is_dir() else 0o400)
-        root.chmod(0o500)
-
-    def test_read_only_checkout_reruns_from_writable_copy_with_same_arguments(self):
+    @unittest.skipIf(os.geteuid() == 0, "root writes through directory permissions")
+    def test_read_only_checkout_is_refused_before_any_write(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder).resolve() / "source"
-            self.make_read_only_checkout(root)
-            out = StringIO()
+            checkout = Path(folder) / "checkout"
+            checkout.mkdir()
+            shutil.copy2(run_tests.__file__, checkout / "run_tests.py")
+            checkout.chmod(0o500)
             try:
-                env = {"PYTHONPATH": f"{root}{os.pathsep}/elsewhere"}
-                with mock.patch.dict(os.environ, env), redirect_stdout(out):
-                    status = run_tests.run_from_copy(root, ["--dashboard"])
+                result = subprocess.run(
+                    [sys.executable, "run_tests.py"],
+                    cwd=checkout,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
             finally:
-                for path in [root, *root.rglob("*")]:
-                    path.chmod(0o700)
-        # 3: the child ran in a writable copy with the same arguments and a
-        # PYTHONPATH pointing at the copy; its exit status passes through.
-        self.assertEqual(status, 3)
-        self.assertIn("is read-only; running from a scratch copy", out.getvalue())
-
-    def test_checkout_copy_is_writable_and_skips_snapshot_exclusions(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder).resolve() / "source"
-            self.make_read_only_checkout(root)
-            try:
-                copy = run_tests.copy_checkout(root, Path(folder) / "copy")
-                self.assertEqual((copy / "pkg/module.py").read_text(), "VALUE = 1\n")
-                (copy / "pkg/new.py").write_text("")
-                (copy / "pkg/module.py").write_text("VALUE = 2\n")
-                self.assertFalse((copy / "tmp").exists())
-                self.assertFalse((copy / ".git").exists())
-            finally:
-                for path in [root, *root.rglob("*")]:
-                    path.chmod(0o700)
-
-    def test_pythonpath_entries_for_the_checkout_follow_the_copy(self):
-        old, new = Path("/job/source"), Path("/job/tmp/copy")
-        self.assertEqual(
-            run_tests.retarget_pythonpath(f"/job/source{os.pathsep}/other", old, new),
-            f"/job/tmp/copy{os.pathsep}/other",
-        )
-        self.assertIsNone(run_tests.retarget_pythonpath(None, old, new))
+                checkout.chmod(0o700)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("SETUP ERROR: checkout", result.stderr)
+            self.assertIn("is read-only", result.stderr)
+            self.assertIn("Safe automated suite", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertEqual(sorted(path.name for path in checkout.iterdir()), ["run_tests.py"])
 
     def test_execution_stops_after_real_child_failure(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -237,123 +199,6 @@ class SuitePlanTests(unittest.TestCase):
             with redirect_stdout(StringIO()):
                 status = run_tests.run_steps(steps, env)
             self.assertEqual(status, 0)
-
-
-COPY_STUB = """
-import os, signal, subprocess, sys, time
-from pathlib import Path
-mode = sys.argv[1]
-if mode == "self-term":
-    os.kill(os.getpid(), signal.SIGTERM)
-if mode == "ignore-term":
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)  # the grandchild inherits this
-grandchild = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
-Path(os.environ["SUITE_TEST_MARKER"]).write_text(f"{os.getpid()} {grandchild.pid}")
-time.sleep(120)
-"""
-
-# Runs the real wrapper in its own process, as `python3 run_tests.py` would.
-COPY_DRIVER = """
-import sys
-from pathlib import Path
-import run_tests
-run_tests.CHILD_STOP_GRACE_SECONDS = 0.5
-run_tests.exit_with(run_tests.run_from_copy(Path(sys.argv[1]), [sys.argv[2]]))
-"""
-
-
-def pid_gone(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return True
-    try:  # an unreaped zombie is already dead
-        return Path(f"/proc/{pid}/stat").read_text().split(")")[-1].split()[0] == "Z"
-    except OSError:
-        return False
-
-
-class CopyRunProcessTests(unittest.TestCase):
-    """The read-only-checkout wrapper as a real process: cancellation and exit status."""
-
-    def setUp(self):
-        folder = tempfile.TemporaryDirectory()
-        self.addCleanup(folder.cleanup)
-        self.base = Path(folder.name).resolve()
-        self.root = self.base / "source"
-        self.scratch = self.base / "scratch"
-        self.marker = self.base / "marker"
-        (self.root / "pkg").mkdir(parents=True)
-        (self.root / "run_tests.py").write_text(COPY_STUB)
-        self.scratch.mkdir()
-        self.addCleanup(lambda: [p.chmod(0o700) for p in (self.root, *self.root.rglob("*"))])
-
-    def start(self, mode: str, *, tmpdir: Path | None = None) -> subprocess.Popen:
-        for path in (self.root, *self.root.rglob("*")):
-            if tmpdir is None or path != tmpdir:
-                path.chmod(0o500 if path.is_dir() else 0o400)
-        env = {
-            **os.environ,
-            "TMPDIR": str(tmpdir or self.scratch),
-            "SUITE_TEST_MARKER": str(self.marker),
-            "PYTHONPATH": str(Path(run_tests.__file__).resolve().parent),
-        }
-        return subprocess.Popen(
-            [sys.executable, "-c", COPY_DRIVER, str(self.root), mode],
-            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
-        )
-
-    def wait_for_marker(self) -> list[int]:
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            if self.marker.exists() and self.marker.read_text():
-                return [int(pid) for pid in self.marker.read_text().split()]
-            time.sleep(0.05)
-        self.fail("the copy's runner never started")
-
-    def assert_tree_and_copy_gone(self, pids: list[int]) -> None:
-        deadline = time.monotonic() + 10
-        while not all(pid_gone(pid) for pid in pids) and time.monotonic() < deadline:
-            time.sleep(0.05)
-        self.assertEqual([pid for pid in pids if not pid_gone(pid)], [])
-        self.assertEqual(list(self.scratch.iterdir()), [])
-
-    def cancel(self, mode: str) -> None:
-        wrapper = self.start(mode)
-        pids = self.wait_for_marker()
-        wrapper.send_signal(signal.SIGTERM)  # the wrapper alone, as `kill PID` would
-        try:
-            wrapper.wait(timeout=30)
-        finally:
-            for pid in pids:  # never leave a sleeper behind if an assertion fails
-                with contextlib.suppress(ProcessLookupError):
-                    os.kill(pid, signal.SIGKILL)
-        self.assertEqual(wrapper.returncode, -signal.SIGTERM)
-        self.assert_tree_and_copy_gone(pids)
-
-    def test_cancellation_stops_the_copied_run_tree_and_removes_the_copy(self):
-        self.cancel("sleep")
-
-    def test_cancellation_escalates_to_sigkill_when_the_tree_ignores_sigterm(self):
-        self.cancel("ignore-term")
-
-    def test_copied_run_killed_by_a_signal_ends_the_wrapper_by_that_signal(self):
-        wrapper = self.start("self-term")
-        wrapper.wait(timeout=60)
-        # Not 241, the value SystemExit(-15) would give.
-        self.assertEqual(wrapper.returncode, -signal.SIGTERM)
-        self.assertEqual(list(self.scratch.iterdir()), [])
-
-    def test_tmpdir_inside_the_checkout_is_refused_before_copying(self):
-        inside = self.root / ".scratch"
-        inside.mkdir()
-        # A writable folder inside an otherwise read-only checkout.
-        wrapper = self.start("sleep", tmpdir=inside)
-        _, errors = wrapper.communicate(timeout=60)
-        self.assertEqual(wrapper.returncode, 2)
-        self.assertIn("is inside the read-only checkout", errors)
-        self.assertEqual(list(inside.iterdir()), [])
-        self.assertFalse(self.marker.exists())
 
 
 if __name__ == "__main__":

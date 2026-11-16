@@ -11,12 +11,11 @@ import fcntl
 import os
 from pathlib import Path
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
 import time
-from typing import Iterator, NoReturn
+from typing import Iterator
 
 
 ROOT = Path(__file__).resolve().parent
@@ -47,21 +46,14 @@ LOCK_PATH = ROOT / "tmp/run_tests.lock"
 LOCK_TIMEOUT_SECONDS = 1800
 LOCK_POLL_SECONDS = 2
 
-# A Pi-local van-compute job mounts its source snapshot read-only (files 0400,
-# directories 0500), while the suite writes tmp/, node_modules and fixtures into
-# its checkout. Such a run copies the checkout to scratch first. The skipped
-# names match what van-compute leaves out of a snapshot: VCS data, machine
-# output and bytecode never belong in the copy.
-COPY_SKIPPED_NAMES = (".git", "tmp", "__pycache__", ".pytest_cache")
-# Signals that cancel a run from the copy: van-compute stops a job with SIGTERM to
-# its process group and SIGKILL after a grace (engine_process._finish_wait: 10 s,
-# 1 s when a CAN transmitter appears); a terminal sends SIGINT or SIGHUP.
-CANCEL_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
-# How long the copy's process group gets to exit after a forwarded cancellation
-# before SIGKILL; shorter than the service's usual grace so cleanup ends first.
-CHILD_STOP_GRACE_SECONDS = 5.0
-# How long to wait for a killed group's last members to disappear.
-GROUP_EXIT_TIMEOUT_SECONDS = 5.0
+# The suite writes tmp/, node_modules and fixtures into its checkout. A Pi-local
+# van-compute job mounts its source read-only, where the suite can't run anyway
+# (no network, a 768 MiB address-space limit), so it is refused before any write.
+READ_ONLY_CHECKOUT_ERROR = (
+    "checkout {root} is read-only. A Pi-local van-compute job mounts its source this "
+    "way, and the suite cannot pass there; on vanpi run it directly from a writable "
+    'checkout instead (AGENTS.md "Safe automated suite").'
+)
 
 
 class Profile(str, Enum):
@@ -294,134 +286,6 @@ def parse_args(argv: list[str] | None) -> tuple[Profile, tuple[str, ...]]:
     return profile, tuple(pytest_args)
 
 
-def copy_checkout(root: Path, destination: Path) -> Path:
-    """Copy a read-only checkout to `destination` with owner write access restored."""
-    shutil.copytree(
-        root, destination, symlinks=True, ignore=shutil.ignore_patterns(*COPY_SKIPPED_NAMES)
-    )
-    for current, _directories, files in os.walk(destination):
-        os.chmod(current, os.stat(current).st_mode | 0o700)
-        for name in files:
-            path = os.path.join(current, name)
-            if not os.path.islink(path):
-                os.chmod(path, os.stat(path).st_mode | 0o200)
-    return destination
-
-
-def retarget_pythonpath(value: str | None, old: Path, new: Path) -> str | None:
-    """Point PYTHONPATH entries naming the original checkout at its copy."""
-    if not value:
-        return value
-    return os.pathsep.join(
-        str(new) if entry and Path(entry).resolve() == old else entry
-        for entry in value.split(os.pathsep)
-    )
-
-
-def signal_group(group: int, signum: int) -> None:
-    try:
-        os.killpg(group, signum)
-    except ProcessLookupError:
-        pass
-
-
-def wait_for_group_exit(group: int, timeout: float = GROUP_EXIT_TIMEOUT_SECONDS) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            os.killpg(group, 0)
-        except ProcessLookupError:
-            return
-        time.sleep(0.05)
-
-
-def supervise(command: list[str], cwd: Path, env: dict[str, str]) -> int:
-    """Run `command` in its own process group; return its status, or -signal if cancelled.
-
-    Its own group lets a cancellation reach the whole tree (each step, pytest and
-    its Node children) without signalling whoever started this runner. A caught
-    cancellation is forwarded to that group, escalated to SIGKILL after
-    CHILD_STOP_GRACE_SECONDS, and the group is gone before this returns.
-    """
-    received: list[int] = []
-    child: subprocess.Popen | None = None
-
-    def forward(signum: int, _frame: object) -> None:
-        received.append(signum)
-        if child is not None:
-            signal_group(child.pid, signum)
-
-    previous = {signum: signal.signal(signum, forward) for signum in CANCEL_SIGNALS}
-    try:
-        child = subprocess.Popen(command, cwd=cwd, env=env, process_group=0)
-        if received:  # a signal that arrived while the child was starting
-            signal_group(child.pid, received[0])
-        deadline = None
-        while True:
-            try:
-                status = child.wait(timeout=0.2)
-                break
-            except subprocess.TimeoutExpired:
-                pass
-            if received and deadline is None:
-                deadline = time.monotonic() + CHILD_STOP_GRACE_SECONDS
-            if deadline is not None and time.monotonic() >= deadline:
-                signal_group(child.pid, signal.SIGKILL)
-        if received:
-            # Members that outlived the runner (a step's own children) go too.
-            signal_group(child.pid, signal.SIGKILL)
-            wait_for_group_exit(child.pid)
-    finally:
-        for signum, handler in previous.items():
-            signal.signal(signum, handler)
-    return -received[0] if received else status
-
-
-def run_from_copy(root: Path, argv: list[str]) -> int:
-    """Re-run this runner, with the same arguments, from a writable scratch copy.
-
-    Returns the copy's exit status, or -signal when it or this run was killed by
-    one. The copy lives under TMPDIR and is removed when the run ends, including
-    after a caught cancellation; docs/backend-layout.md says what a SIGKILL
-    leaves behind.
-    """
-    scratch_parent = Path(tempfile.gettempdir()).resolve()
-    source = root.resolve()
-    if scratch_parent == source or source in scratch_parent.parents:
-        # copytree would copy its own output until a path or disk limit stops it.
-        print(
-            f"SETUP ERROR: TMPDIR {scratch_parent} is inside the read-only checkout "
-            f"{source}; point TMPDIR outside it.",
-            file=sys.stderr,
-        )
-        return 2
-    with tempfile.TemporaryDirectory(prefix="suite-checkout-", dir=scratch_parent) as folder:
-        try:
-            copy = copy_checkout(root, Path(folder) / "checkout")
-        except OSError as exc:
-            print(f"SETUP ERROR: cannot copy read-only checkout {root}: {exc}", file=sys.stderr)
-            return 2
-        print(f"Checkout {root} is read-only; running from a scratch copy at {copy}.", flush=True)
-        env = dict(os.environ)
-        pythonpath = retarget_pythonpath(env.get("PYTHONPATH"), source, copy)
-        if pythonpath is not None:
-            env["PYTHONPATH"] = pythonpath
-        return supervise([sys.executable, str(copy / Path(__file__).name), *argv], copy, env)
-
-
-def exit_with(status: int) -> NoReturn:
-    """Exit with `status`; a negative one re-raises that signal on this process.
-
-    A run killed by a signal must end the same way: SystemExit(-15) would turn
-    it into exit status 241, which callers can't tell from a test failure.
-    """
-    if status < 0:
-        signal.signal(-status, signal.SIG_DFL)
-        os.kill(os.getpid(), -status)
-        raise SystemExit(128 - status)  # reached only if the signal is blocked
-    raise SystemExit(status)
-
-
 DONE_MESSAGES = {
     Profile.FULL: "All offline repository gates passed.",
     Profile.PYTEST_ONLY: "Pytest gate passed.",
@@ -447,7 +311,8 @@ def run_plan(profile: Profile, pytest_args: tuple[str, ...], npm: str, node: str
 def main(argv: list[str] | None = None, lock_timeout: float | None = None) -> int:
     profile, pytest_args = parse_args(argv)
     if not os.access(ROOT, os.W_OK):
-        return run_from_copy(ROOT, list(sys.argv[1:] if argv is None else argv))
+        print(f"SETUP ERROR: {READ_ONLY_CHECKOUT_ERROR.format(root=ROOT)}", file=sys.stderr)
+        return 2
 
     try:
         require_executable("git")
@@ -474,4 +339,4 @@ def main(argv: list[str] | None = None, lock_timeout: float | None = None) -> in
 
 
 if __name__ == "__main__":
-    exit_with(main())
+    raise SystemExit(main())

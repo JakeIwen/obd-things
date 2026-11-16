@@ -372,9 +372,10 @@ fails for sandbox reasons that say nothing about the change set):
    child missed its 20 s hang guard, and the suite has about 70 such guards. The run needs
    the Pi's internet only when pip's or npm's user cache lacks a pinned package.
 
-Direct full runs on vanpi passed on 2026-11-15 in 22–24 minutes (pytest 18–20 of them) with
-other sessions keeping the load average at 7–14, peaking at 343–385 MiB of process-tree RSS.
-Don't start two suites at once on the Pi; check `uptime` first.
+A direct full run on vanpi takes 15–24 minutes, depending on what else the Pi is doing
+(four runs on 2026-11-15; [backend verification](docs/backend-layout.md) section "Pi-local
+placement" has the measurements). Don't start two suites at once on the Pi; check `uptime`
+first.
 
 Scoped gate **dashboard** (the global Code shape rule on scoped gates governs its use):
 
@@ -421,12 +422,12 @@ may depend on its contents: npm verifies each tarball against the lockfile's int
 ranges and no hashes; sharing pip's cache would need hash-locked requirements.
 
 The three suite tasks pass only on a Mac worker (verified 2026-11-15). A job is placed
-on the Pi only when every Mac lease has lapsed, and nothing forces Pi placement. The Pi job
-then fails at "Python test dependency install": its sandbox has no network. It also mounts
-the source read-only (`run_tests.py` copies a read-only checkout to scratch) and caps each
-process at 768 MiB of address space, which crashes `npm ci` and esbuild. Fixing that needs
-van-compute changes; until then the direct run above is the Pi route. The facts and the
-changes needed are in [backend verification](docs/backend-layout.md) section "Pi-local placement".
+on the Pi only when every Mac lease has lapsed, and nothing forces Pi placement. There it
+mounts the source read-only, so `run_tests.py` refuses it at once (exit 2, a setup error that
+points here). It could not pass anyway: the sandbox has no network for pip and npm and caps
+each process at 768 MiB of address space, which crashes `npm ci` and esbuild. Making it pass
+is not planned, because the direct run above already passes on the Pi; see
+[backend verification](docs/backend-layout.md) section "Pi-local placement".
 
 A van-compute release without task caches fails any job that declares one, so
 drop these declarations before rolling van-compute back. Clear the Pi copy with
