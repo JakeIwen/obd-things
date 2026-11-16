@@ -456,6 +456,9 @@ Never rebaseline as part of a feature or to pass the suite.
 
 ## Backend ownership and dependency direction
 
+`projects/vehicle_data/van_scan_pi_requests.py` owns the passive harvester’s fixed Pi request tables;
+`van_scan_harvest.py` classifies captured exchanges using them.
+
 Keep `lib/`, `tools/`, `live_data/` and `projects/` as the checkout packages.
 `lib/signal_search_contract.py` owns the offline search bounds, evidence labels,
 field record and legacy geometry shared by correlation and benchmarking.
