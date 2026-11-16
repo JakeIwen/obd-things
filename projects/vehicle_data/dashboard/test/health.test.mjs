@@ -471,10 +471,10 @@ test("codes: the van's newer health check replaces that module's codes inside it
   assert.equal(byKey.confirmed_history.total, 38 - 5);
   assert.equal(byKey.pending.total, 1);
   // Modules: ABS (never read by the Pi) now answered; ICS keeps the Pi's newer read.
-  assert.equal(vm.modules.summary, "Modules · 12 of 16 answered");
+  assert.equal(vm.modules.summary, "Parked reads · 11 of 16 answered");
   const abs = vm.modules.rows.find((r) => r.key === "abs_canch");
-  assert.equal(abs.meta, "CAN-CH · 1 code · from the van’s own health check · " + at);
-  assert.equal(vm.modules.rows.find((r) => r.key === "ics_bcan").meta, "B-CAN · no codes");
+  assert.match(abs.meta, /CAN-CH · never read · 1 code reported .*from the van’s own health check/);
+  assert.match(vm.modules.rows.find((r) => r.key === "ics_bcan").meta, /B-CAN · no codes · no codes reported/);
   assert.equal(vm.source, "2 modules from the van’s own health check · " + at);
   for (const t of textsOf(vm, [], ["meaning"])) {
     assert.doesNotMatch(t, JARGON, t);
@@ -495,7 +495,7 @@ test("codes: Pi records outside the van's mask stay; a newer Pi read wins", () =
   const vm = H.codesView(dtcs, VAN_NOW, false);
   assert.equal(vm.groups.find((g) => g.key === "incomplete_only").total, 1);
   assert.equal(vm.current.total, 2);
-  const newer = { ...dtcs, modules: [{ ...dtcs.modules[0], last_attempt_at: "2026-09-25T00:00:00Z" }] };
+  const newer = { ...dtcs, modules: [{ ...dtcs.modules[0], last_attempt_at: "2026-09-25T00:00:00Z", last_success_at: "2026-09-25T00:00:00Z" }] };
   const kept = H.codesView(newer, VAN_NOW, false);
   assert.equal(kept.current.total, 0, "the Pi's newer BCM read has no current codes");
   assert.equal(kept.source, "2 modules from the van’s own health check · " + fmtTime("2026-09-24T21:12:17.587Z", new Date(VAN_NOW)));
@@ -505,9 +505,40 @@ test("codes: the van's check still shows when the Pi's saved list is unavailable
   const vm = H.codesView({ available: false, detail: "DTC cache unreadable", in_vehicle_scan: VAN_SCAN }, VAN_NOW, false);
   assert.equal(vm.status, "ok");
   assert.equal(vm.current.total, 2);
-  assert.equal(vm.modules.summary, "Modules · 3 of 3 answered");
+  assert.equal(vm.modules.summary, "Parked reads · no coverage yet");
   const plain = H.codesView(SUMMARY.dtcs, VAN_NOW, false);
   const off = H.codesView({ ...SUMMARY.dtcs, in_vehicle_scan: { available: false, reason: "not_harvested" } }, VAN_NOW, false);
   assert.deepEqual(off, plain);
   assert.equal(plain.source, null);
+});
+
+
+test("codes: failed parked attempt stays visible while older van success supplies codes", () => {
+  const parked = { module_key: "bcm_ccan", module_name: "BCM", availability: "unavailable",
+    unavailable_reason: "no_response", result_state: "unavailable", last_attempt_at: "2026-09-25T00:00:00Z",
+    last_success_at: "2026-09-01T00:00:00Z", last_success_dtc_count: 0, absence_authoritative: false };
+  const dtcs = { available: true, modules: [parked], groups: {}, group_counts: {},
+    coverage: { total_modules: 1, available_modules: 0, last_attempt_at: parked.last_attempt_at },
+    in_vehicle_scan: { ...VAN_SCAN, modules: [VAN_SCAN.modules[0]] } };
+  const merged = H.mergeVanScan(dtcs);
+  for (const [key, value] of Object.entries(parked)) assert.deepEqual(merged.modules[0][key], value);
+  assert.deepEqual(merged.coverage, dtcs.coverage);
+  assert.equal(merged.modules[0].van_read.count, 2);
+  const view = H.codesView(dtcs, VAN_NOW, false);
+  assert.equal(view.current.total, 2);
+  assert.match(view.modules.rows[0].meta, /no answer .*parked read failed .*2 codes reported .*van’s own health check/);
+  assert.equal(view.modules.summary, "Parked reads · 0 of 1 answered");
+});
+
+test("codes: empty van-only read never asserts an authoritative clean result", () => {
+  const empty = { ...VAN_SCAN.modules[0], dtc_count: 0, dtcs: [] };
+  const dtcs = { available: true, modules: [], groups: {}, group_counts: {}, coverage: {},
+    in_vehicle_scan: { ...VAN_SCAN, modules: [empty] } };
+  const merged = H.mergeVanScan(dtcs);
+  assert.equal(merged.modules[0].availability, "never_scanned");
+  assert.equal(merged.modules[0].result_state, undefined);
+  assert.equal(merged.modules[0].absence_authoritative, undefined);
+  const view = H.codesView(dtcs, VAN_NOW, false);
+  assert.match(view.modules.rows[0].meta, /never read · no codes reported .*requests failed, pending and confirmed/);
+  assert.notEqual(view.emptyText, "No codes in the last read of every module.");
 });

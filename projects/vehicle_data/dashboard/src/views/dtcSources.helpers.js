@@ -38,6 +38,15 @@ export function moduleList(dtcs) {
   return o ? Object.keys(o).map((k) => o[k]).filter(obj) : [];
 }
 
+function vanRead(vm) {
+  return {
+    count: num(vm.dtc_count) !== null ? vm.dtc_count : arr(vm.dtcs).length,
+    observed_at: vm.observed_at,
+    scan_started_at: str(vm.scan_started_at) || vm.observed_at,
+    status_availability_mask: vm.status_availability_mask ?? null,
+  };
+}
+
 function statusByte(record) {
   const s = str(record.status);
   const n = s ? parseInt(s, 16) : NaN;
@@ -61,6 +70,7 @@ export function mergeVanScan(d) {
   const piByKey = new Map();
   for (let i = 0; i < piRows.length; i += 1) piByKey.set(piRows[i].module_key, piRows[i]);
   const use = new Map();
+  const reads = new Map();
   let lastAt = null;
   let scanLast = null;
   for (let i = 0; i < van.modules.length; i += 1) {
@@ -68,15 +78,16 @@ export function mergeVanScan(d) {
     const key = vm ? str(vm.module_key) : null;
     const at = vm ? parseDate(vm.observed_at) : null;
     if (!key || !at) continue;
+    reads.set(key, vm);
     const pi = piByKey.get(key);
-    const piAt = pi ? parseDate(pi.last_attempt_at) : null;
+    const piAt = pi ? parseDate(pi.last_success_at) : null;
     if (piAt && piAt.getTime() >= at.getTime()) continue;
     use.set(key, vm);
     if (!lastAt || at.getTime() > parseDate(lastAt).getTime()) lastAt = vm.observed_at;
     const scanAt = parseDate(vm.scan_started_at) ? vm.scan_started_at : vm.observed_at;
     if (!scanLast || parseDate(scanAt).getTime() > parseDate(scanLast).getTime()) scanLast = scanAt;
   }
-  if (!use.size) return d;
+  if (!reads.size) return d;
 
   const groups = obj(d.groups) || {};
   const counts = obj(d.group_counts) || {};
@@ -115,53 +126,25 @@ export function mergeVanScan(d) {
       outReturned[group] += 1;
     }
   });
-  const modules = piRows.map((m) => {
-    const vm = use.get(m.module_key);
-    if (!vm) return m;
-    const count = num(vm.dtc_count) !== null ? vm.dtc_count : arr(vm.dtcs).length;
-    return {
-      ...m,
-      availability: "available",
-      result_state: count > 0 ? "dtcs_present" : "no_dtcs",
-      last_attempt_at: vm.observed_at,
-      last_success_at: vm.observed_at,
-      last_success_dtc_count: count,
-      absence_authoritative: true,
-      van_scan_at: str(vm.scan_started_at) || vm.observed_at,
-      source: VAN_SOURCE,
-    };
-  });
-  use.forEach((vm, key) => {
-    if (piByKey.has(key)) return;
-    const count = num(vm.dtc_count) !== null ? vm.dtc_count : arr(vm.dtcs).length;
-    modules.push({
+  const modules = piRows.map((m) => reads.has(m.module_key)
+    ? { ...m, van_read: vanRead(reads.get(m.module_key)) } : m);
+  reads.forEach((vm, key) => {
+    if (!piByKey.has(key)) modules.push({
       module_key: key,
       module_name: str(vm.module_name) || key,
       logical_bus: vm.logical_bus,
-      availability: "available",
-      result_state: count > 0 ? "dtcs_present" : "no_dtcs",
-      last_attempt_at: vm.observed_at,
-      last_success_at: vm.observed_at,
-      last_success_dtc_count: count,
-      absence_authoritative: true,
-      van_scan_at: str(vm.scan_started_at) || vm.observed_at,
-      source: VAN_SOURCE,
+      availability: "never_scanned",
+      parked_module: false,
+      van_read: vanRead(vm),
     });
   });
-  const coverage = { ...(obj(d.coverage) || {}) };
-  coverage.available_modules = modules.filter((m) => m.availability === "available").length;
-  coverage.total_modules = modules.length;
-  if (!str(coverage.last_attempt_at) || parseDate(coverage.last_attempt_at).getTime() < parseDate(lastAt).getTime()) {
-    coverage.last_attempt_at = lastAt;
-  }
   return {
     ...d,
     groups: outGroups,
     group_counts: outCounts,
     group_returned_counts: outReturned,
     modules,
-    coverage,
-    van: { modules: use.size, lastAt, scanAt: scanLast },
+    van: use.size ? { modules: use.size, lastAt, scanAt: scanLast } : null,
   };
 }
 

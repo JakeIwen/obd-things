@@ -365,15 +365,6 @@ function uniqueKeys(rows) {
 /** Plain status of one module's saved read. */
 export function moduleStatus(module, nowMs) {
   const m = obj(module) || {};
-  if (m.source === VAN_SOURCE) {
-    const count = num(m.last_success_dtc_count);
-    return {
-      text: (count ? plural(count, "code", "codes") : "no codes") + " · " + vanSourceLine(m.van_scan_at || m.last_success_at, nowMs),
-      tone: "",
-      gap: false,
-      rank: 3,
-    };
-  }
   if (m.availability === "never_scanned") return { text: "never read", tone: "", gap: true, rank: 2 };
   if (m.availability === "unavailable") {
     const reason = str(m.unavailable_reason);
@@ -393,16 +384,26 @@ export function moduleStatus(module, nowMs) {
   return { text: count === null ? "codes saved" : plural(count, "code", "codes"), tone: "", gap: false, rank: 3 };
 }
 
+function vanReadText(read, nowMs) {
+  const count = num(read.count);
+  const result = count ? plural(count, "code", "codes") + " reported" : "no codes reported";
+  return result + " (check requests failed, pending and confirmed codes) · " + vanSourceLine(read.observed_at, nowMs);
+}
+
 /** Module coverage block: summary line and rows (gaps first, then the modules that answered). */
 export function modulesView(dtcs, nowMs) {
   const modules = moduleList(dtcs);
   const coverage = obj(dtcs.coverage) || {};
   const rows = modules.map((m, i) => {
     const status = moduleStatus(m, nowMs);
+    const vanRead = obj(m.van_read);
+    const vanText = vanRead ? vanReadText(vanRead, nowMs) : null;
+    const failedAt = vanRead && m.availability === "unavailable" ? when(m.last_attempt_at, nowMs) : null;
+    const parkedText = failedAt ? status.text + " · parked read failed " + failedAt : status.text;
     return {
       key: str(m.module_key) || "module:" + i,
       name: str(m.module_name) || str(m.module_key) || "Unknown module",
-      meta: [busName(m.logical_bus), status.text].filter(Boolean).join(" · "),
+      meta: [busName(m.logical_bus), parkedText, vanText].filter(Boolean).join(" · "),
       tone: status.tone,
       gap: status.gap,
       rank: status.rank,
@@ -413,10 +414,11 @@ export function modulesView(dtcs, nowMs) {
   const answered = num(coverage.available_modules) !== null
     ? coverage.available_modules
     : modules.filter((m) => m.availability === "available").length;
-  const total = num(coverage.total_modules) !== null ? coverage.total_modules : modules.length;
+  const total = num(coverage.total_modules) !== null ? coverage.total_modules : modules.filter((m) => m.parked_module !== false).length;
   const gaps = rows.filter((r) => r.gap).length;
   return {
-    summary: total > 0 ? "Modules · " + answered + " of " + total + " answered" : "Modules · no coverage yet",
+    summary: (modules.some((m) => m.van_read) ? "Parked reads" : "Modules") +
+      (total > 0 ? " · " + answered + " of " + total + " answered" : " · no coverage yet"),
     rows: rows.map((r) => ({ key: r.key, name: r.name, meta: r.meta, tone: r.tone })),
     gaps,
   };
@@ -462,7 +464,7 @@ export function codesView(dtcs, nowMs, scanEnabled) {
   const counts = obj(d.group_counts) || {};
   const returnedCounts = obj(d.group_returned_counts) || {};
   const coverage = obj(d.coverage) || {};
-  const newest = str(coverage.last_attempt_at) || str(coverage.last_success_at);
+  const newest = str(coverage.last_attempt_at) || str(coverage.last_success_at) || str(obj(d.van)?.lastAt);
   const cutoff = historyCutoff(nowMs);
 
   const groupModels = [];
