@@ -66,18 +66,27 @@ def _project_read(event: dict) -> dict:
 
 
 def drive_reads_response(path: Path) -> dict:
-    """Read at most 256 KiB; missing/corrupt evidence is unavailable, never clean."""
+    """Read at most 256 KiB; missing/corrupt evidence is unavailable, never clean.
+
+    Every failure stays inside this block (including the RecursionError of deep
+    nesting and the OverflowError of an enormous number), so the parked and van
+    sources beside it in the response are never lost to a bad drive file.
+    """
     try:
-        with path.open('rb') as stream:
-            raw = stream.read(contract.LIMITS['results_bytes'] + 1)
-        if len(raw) > contract.LIMITS['results_bytes']:
-            raise ValueError('drive-DTC results exceed 256 KiB')
-        reads = validate_results(json.loads(raw))
+        return _drive_reads(path)
     except FileNotFoundError:
         return {'available': False, 'reason': 'not_read', 'detail': 'No saved drive reads yet.'}
-    except (OSError, ValueError, TypeError, KeyError) as exc:
+    except Exception as exc:
         return {'available': False, 'reason': 'drive_reads_unavailable',
-                'detail': f'Saved drive reads are invalid or unreadable: {exc}'}
+                'detail': f'Saved drive reads are invalid or unreadable: {type(exc).__name__}: {exc}'[:300]}
+
+
+def _drive_reads(path: Path) -> dict:
+    with path.open('rb') as stream:
+        raw = stream.read(contract.LIMITS['results_bytes'] + 1)
+    if len(raw) > contract.LIMITS['results_bytes']:
+        raise ValueError('drive-DTC results exceed 256 KiB')
+    reads = validate_results(json.loads(raw))
     modules = []
     for key in contract.MODULES:
         rows = [read for read in reads if read['module_key'] == key]

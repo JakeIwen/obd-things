@@ -7,6 +7,7 @@ writer, so neither can hold up the other or a broker status request.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 import queue
 import threading
@@ -20,6 +21,9 @@ from projects.vehicle_data.drive_dtc_budget import (
 from projects.vehicle_data.helper_hold_control import StopWhenAny
 
 RESULTS_FILENAME = contract.RESULTS_FILENAME
+# One fixed sibling for an unreadable or outdated results file: replacing it
+# each time keeps at most one set-aside copy beside the live file.
+SET_ASIDE_FILENAME = 'drive-dtc-results.invalid.json'
 
 
 def drive_dtc_arguments(control) -> list[str]:
@@ -63,7 +67,7 @@ def retain_read(payload: dict, event: dict) -> None:
 
 
 def load_results(path: Path) -> dict:
-    clear_temporary_files(path)
+    """The saved results, revalidated; raises for anything this writer cannot extend."""
     try:
         saved = read_bounded_json(path, contract.LIMITS['results_bytes'])
     except FileNotFoundError:
@@ -141,9 +145,24 @@ class DriveDtcResults:
         clear_temporary_files(self.path)
         self._write(self.path, payload)
 
+    def _load(self) -> dict:
+        # Interrupted writes leave only this writer's own temporary files; a
+        # failure to remove them is a storage fault, latched by the caller.
+        clear_temporary_files(self.path)
+        try:
+            return load_results(self.path)
+        except Exception:
+            # A damaged file, or one an older or newer vocabulary rejects, is
+            # set aside rather than stopping every later read from being kept.
+            try:
+                os.replace(self.path, self.path.with_name(SET_ASIDE_FILENAME))
+            except OSError:
+                pass  # the next publication replaces it in place
+            return empty_results()
+
     def _run(self) -> None:
         try:
-            payload = load_results(self.path)
+            payload = self._load()
         except Exception:
             self.failed.set()
             payload = empty_results()

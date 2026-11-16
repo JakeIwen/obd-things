@@ -122,3 +122,49 @@ def test_file_retention_bound_accepts_two_hundred_unique_passes():
         entry['reads'][0]['pass'] = index
         payload['passes'].append(entry)
     assert len(validate_results(payload)) == 200
+
+
+def huge_rpm_file():
+    """The Astra review's ~1.1 KB input: a valid read whose RPM is a 1,001-digit integer."""
+    raw = json.dumps(results()).replace('"rpm": 1600.0', '"rpm": 1' + '0' * 1000)
+    assert len(raw) < contract.LIMITS['results_bytes']
+    return raw
+
+
+def deep_file():
+    """The Astra review's ~4 KB input: JSON nested about two thousand levels deep."""
+    return '[' * 2000 + ']' * 2000
+
+
+def parked_and_van_insights(tmp_path):
+    from tests.test_vehicle_insights import van_scan_cache
+    cache = tmp_path / 'dtc-cache.json'
+    cache.write_text(json.dumps(compact_dtc_cache()))
+    (tmp_path / 'van-scan-cache.json').write_text(json.dumps(van_scan_cache()))
+    return TelemetryInsights(FakeHistorian(), warning_evaluator=mock.Mock(), dtc_cache_path=cache,
+                             history_metrics=('battery.voltage',))
+
+
+@pytest.mark.parametrize('raw', [huge_rpm_file(), deep_file()], ids=['huge-number', 'deep-nesting'])
+def test_any_drive_file_failure_stays_inside_the_drive_block(tmp_path, raw):
+    insights = parked_and_van_insights(tmp_path)
+    before = insights.dtc_response()
+    path = tmp_path / 'drive-dtc-results.json'
+    path.write_text(raw)
+    assert drive_reads_response(path)['reason'] == 'drive_reads_unavailable'
+    response = insights.dtc_response()
+    drive = response.pop('drive_reads')
+    assert drive['available'] is False and drive['reason'] == 'drive_reads_unavailable'
+    assert response['available'] is True and response['in_vehicle_scan']['available'] is True
+    assert json.dumps(response, sort_keys=True) == json.dumps(before, sort_keys=True)
+
+
+def test_an_oversized_response_drops_the_drive_block_before_the_van_block(tmp_path):
+    from projects.vehicle_data import insights as insights_module
+    insights = parked_and_van_insights(tmp_path)
+    without_drive = len(json.dumps(insights.dtc_response(), sort_keys=True, separators=(',', ':')))
+    (tmp_path / 'drive-dtc-results.json').write_text(json.dumps(results()))
+    with mock.patch.object(insights_module, 'MAX_RESPONSE_BYTES', without_drive + 200):
+        response = insights.dtc_response()
+    assert response['drive_reads'] == {'available': False, 'reason': 'drive_reads_too_large'}
+    assert response['in_vehicle_scan']['available'] is True

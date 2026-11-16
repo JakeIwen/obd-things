@@ -1316,15 +1316,16 @@ class TelemetryInsights:
         drive = drive_reads_response(self.dtc_cache_path.with_name(RESULTS_FILENAME))
         if drive.get("reason") != "not_read":
             payload["drive_reads"] = drive
-        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-        if len(encoded) >= MAX_RESPONSE_BYTES:
+        def too_large():
+            return len(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()) >= MAX_RESPONSE_BYTES
+        if "drive_reads" in payload and too_large():  # the newest, optional block goes first
+            payload["drive_reads"] = {"available": False, "reason": "drive_reads_too_large"}
+        if too_large():
             payload["in_vehicle_scan"] = {
                 "available": False,
                 "reason": "in_vehicle_scan_too_large",
                 "detail": "in-vehicle scan results exceed the broker transport limit",
             }
-        if "drive_reads" in payload and len(json.dumps(payload, separators=(",", ":")).encode()) >= MAX_RESPONSE_BYTES:
-            payload["drive_reads"] = {"available": False, "reason": "drive_reads_too_large"}
         return payload
 
     def _van_scan_response(self) -> dict[str, object]:

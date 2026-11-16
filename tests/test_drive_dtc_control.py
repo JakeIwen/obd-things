@@ -304,14 +304,28 @@ def test_existing_saved_reads_are_revalidated_and_retained(tmp_path):
     assert [row['pass'] for row in rows] == [0, 1]
 
 
-def test_corrupt_results_disable_new_reads_without_changing_budget(tmp_path):
-    (tmp_path / control_module.RESULTS_FILENAME).write_text('{broken')
+@pytest.mark.parametrize('damaged', [
+    '{broken',
+    '[' * 2000 + ']' * 2000,  # RecursionError while parsing
+    json.dumps({'schema': 1, 'coverage': contract.COVERAGE, 'passes': [{
+        'session': SESSION, 'pass': 0,
+        'reads': [{**read_event(), 'rpm': 10 ** 1000, 'parsed': {}}]}]}),  # OverflowError
+    json.dumps({'schema': 2, 'coverage': 'another vocabulary', 'passes': []}),
+], ids=['broken', 'deep', 'huge-number', 'outdated'])
+def test_unusable_results_file_is_set_aside_and_recording_continues(tmp_path, damaged):
+    path = tmp_path / control_module.RESULTS_FILENAME
+    aside = tmp_path / control_module.SET_ASIDE_FILENAME
+    aside.write_text('an earlier set-aside copy')
+    path.write_text(damaged)
     results = DriveDtcResults(tmp_path)
     try:
-        assert results.failed.wait(2)
-        assert not results.enqueue(read_event())
+        assert results.enqueue(read_event())
     finally:
         results.close(2)
+    assert not results.failed.is_set()
+    assert aside.read_text() == damaged  # one fixed sibling, replaced, so one copy at most
+    assert [row['pass'] for row in json.loads(path.read_text())['passes']] == [0]
+    assert sorted(entry.name for entry in tmp_path.iterdir()) == sorted([path.name, aside.name])
 
 
 def test_results_remove_only_own_crash_orphans_before_new_temp(tmp_path):
