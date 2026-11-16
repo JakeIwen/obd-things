@@ -50,9 +50,26 @@ def names_a_note(text, note_names):
     return Path(text).name in note_names
 
 
+def snapshot_files(*paths):
+    """Every file under ``paths`` in a checkout copy that has no Git data.
+
+    A van-compute source snapshot holds the checkout's files without ``.git`` (and without
+    the names it always leaves out), so its files stand in for Git's listing there.
+    """
+    skipped = {"tmp", "__pycache__", ".pytest_cache", "node_modules"}
+    return sorted(
+        path.relative_to(REPO).as_posix()
+        for top in paths
+        for path in (REPO / top).rglob("*")
+        if path.is_file() and not skipped & set(path.relative_to(REPO).parts)
+    )
+
+
 class NotesGateTests(unittest.TestCase):
     def tracked(self, *paths, untracked=False):
         """Tracked files under ``paths``; with ``untracked`` also new files Git does not ignore."""
+        if not (REPO / ".git").exists():
+            return snapshot_files(*paths)
         flags = ["-co", "--exclude-standard"] if untracked else []
         listed = subprocess.run(
             ["git", "ls-files", "-z", *flags, "--", *paths],
