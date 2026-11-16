@@ -123,11 +123,8 @@ Dashboard rendering is shared by both lazy Drive pages through
 `dashboard/src/styles/lighting.css`. `metric_types.py` owns the metric/source
 dataclasses; `metrics.py` re-exports them and remains the public registry.
 
-`projects/vehicle_data/broker_cli.py` owns broker arguments and defaults;
-`broker.py` re-exports its public parser and defaults for existing callers.
-Its `_configure_drive_helpers` keeps supervisor enablement together;
-`_reading_stores` preserves the constructor order and history-adjacent paths
-of maintenance, radar alignment and last-reading stores.
+`projects/vehicle_data/broker_cli.py` owns the broker's arguments and defaults
+(`broker.py` re-exports `build_parser` and the default paths).
 
 Broker pure internals are split into `projects/vehicle_data/status_view.py`
 (snapshot-only status builders), `vehicle_state.py` (passive evidence conclusions),
@@ -164,9 +161,9 @@ broker without the hold control and the rolling-deploy hazard are in the vehicle
 section "Restarting the broker".
 
 `projects/vehicle_data/helper_startup_grant.py` owns the private startup pipe
-contract shared by the supervisor and both drive helpers. Ready events retain
-legacy keys unless explicitly requested capabilities are supplied; the optional
-capability list is validated without changing the grant/restoration protocol. The helper waits
+contract shared by the supervisor and both drive helpers. A `ready` event carries an
+optional `capabilities` list only when the launch arguments asked for one (an older
+supervisor accepts only the legacy keys). The helper waits
 inside its protected session before any CAN ownership or interface effects;
 the supervisor records every grant attempt before writing it. Only a reaped,
 explicitly cancelled child that was never granted permission can omit its final
@@ -190,15 +187,15 @@ and permits for every radar send); `radar_service_control.py` (broker side:
 helper flag and command pipe, run record, event validation, run log under
 `tmp/radar/service_alignment/`); the web relay in `web.py`; and
 `dashboard/src/dialogs/RadarCalibration{.jsx,.helpers.js}`. The run state is
-not in `/v1/status`. `vehicle_speed.speed_mph` owns the shared finite, bounded speed reader;
-it selects an already-decoded observation, never duplicates broadcast scaling.
-`radar_service_alignment._speed_mph` remains a compatibility alias.
-`ServiceAlignment.run_attempted` retains any created run for the helper epoch,
-and `CommandReader.pending()` observes partial lines, readability and EOF
-without consuming commands. `tests/radar_service_support.py` holds the scripted radar.
+not in `/v1/status`. `vehicle_speed.speed_mph` reads the already-decoded, bounded
+vehicle-speed observation for service alignment and the drive DTC read
+(`radar_service_alignment._speed_mph` is an alias of it).
+`ServiceAlignment.run_attempted` is true once any run was created in the helper epoch;
+`CommandReader.pending()` sees a queued command without consuming it.
+`tests/radar_service_support.py` holds the scripted radar.
 `RadarAlignmentPoller.receive_reply` skips up to four identifiable late DTC
-SingleFrames/FirstFrames under the original deadline for the first reply of
-0845 and service-alignment exchanges; it never sends or extends a deadline.
+answers in the first reply of 0845 and service-alignment exchanges, within the
+original deadline; it never sends.
 
 Shared pieces added with it (2026-10-11): `active_session_gates.py` holds the
 C-CAN active-drive session's gates and the `SessionOutcome` both drive helpers
@@ -225,8 +222,9 @@ format; `dashboard/src/dialogs/useController.js` creates a dialog's controller
 once per mount; `dashboard/src/jsonReply.js` reads a fetch reply that must be one
 JSON object.
 
-`projects/vehicle_data/oil_life_drive_step.py` owns the optional oil-life cadence
-and failed-epoch isolation; the active session owns its gates, permits and cleanup.
+`projects/vehicle_data/oil_life_drive_step.py` is the oil-life part of a helper
+cycle (cadence, one failed read ends it for the epoch); the active session owns
+its gates, permits and cleanup.
 
 Oil-life telemetry is enabled (owner activation 2026-10-03):
 `engine.oil_life_remaining` is PCM DID `2185`, unsigned percent, polled at
@@ -473,35 +471,22 @@ The repo-owned checker has no `layout` baseline and is advisory.
 selected pure imports, declared launch targets and compute entry packaging.
 Never rebaseline as part of a feature or to pass the suite.
 
-`projects/vehicle_data/van_scan_cache.py` owns validation of harvested scan
-caches; `dtc_cache_validation.py` holds what it shares with the parked-cache
-validator in `insights.py` (`DtcCacheValidationError`, `HEX_BYTE`,
-`timestamp_or_none`). Dashboard diagnostic source
-merging lives in `dashboard/src/views/dtcSources.helpers.js`, re-exported
-through `health.helpers.js`.
+`projects/vehicle_data/van_scan_cache.py` validates the harvested van-scan cache;
+`dtc_cache_validation.py` holds what it shares with the parked-cache validator in
+`insights.py` (`DtcCacheValidationError`, `HEX_BYTE`, `timestamp_or_none`). The
+dashboard's three-source diagnostic-code merge is `dashboard/src/views/dtcSources.helpers.js`.
 
-The opt-in drive DTC library shares frames, purposes, schedule and event vocabulary
-in `projects/vehicle_data/drive_dtc.json` / `drive_dtc_contract.py`.
-`drive_dtc_transport.py` sends only one fixed `19 02 8F` request to each of
-`radar_acc` and `bcm_ccan`, never flow control; `drive_dtc_watch.py` owns the
-bounded receive-only foreign-tester watch. An optional in-memory radar send
-marker runs after permit consumption and before socket send. A pass's
-`started_monotonic` is recorded before any permit is acquired, so event delivery
-cannot age a permit or be confused with actual-start timing. These library
-components do not enable the broker capability. `drive_dtc_steps.py` owns the
-opt-in helper schedule and per-cycle step; `active_drive.py` composes it inside
-the unchanged ownership/restoration interval. `FreshAuthority.last_snapshot`
-retains the actual acquisition evidence for DTC event reporting. Flag-off helper
-runs construct no watch or BCM socket and emit no DTC events.
-`drive_dtc_budget.py` serializes crash-durable launch reservations with a
-bounded two-second caller wait and a never-decreasing same-boot pass bound
-(including synthetic uncertain-recovery bounds); `drive_dtc_control.py` owns opt-in arguments,
-capability cancellation, cadence-violation stops and the separate bounded
-results writer. `drive_reads.py` validates/reparses saved results for insights
-and the dashboard's three-source merge. Filenames, timing and event outcomes
-are shared through `drive_dtc.json`; parked DTC storage is unchanged. The
-broker flag `--enable-drive-dtc-reads` defaults off and is absent from the unit;
-activation and the first-drive checks remain separately reviewed work.
+The hourly drive DTC read (radar and BCM, one `19 02 8F` frame each, no flow control) is
+off by default behind the broker flag `--enable-drive-dtc-reads`, which is not in the unit.
+Its contract, gates, cadence, storage, dashboard rule, activation and rollback are in
+[`projects/vehicle_data/docs/drive-dtc-read.md`](projects/vehicle_data/docs/drive-dtc-read.md).
+Where things live: `drive_dtc.json` / `drive_dtc_contract.py` (vocabulary, timing, schedule,
+frame parser, event validator); `drive_dtc_transport.py` (the only code that builds or sends
+the two frames); `drive_dtc_watch.py` (receive-only foreign-tester watch);
+`drive_dtc_steps.py` (the helper's per-cycle step and both hours, composed by
+`active_drive.py`); `drive_dtc_budget.py` (the broker's durable launch budget);
+`drive_dtc_control.py` (broker capability, cadence check, results writer); `drive_reads.py`
+(validated `drive_reads` block of the DTC response).
 
 ## Backend ownership and dependency direction
 
@@ -529,23 +514,10 @@ caller has retired, with owner/callers/retirement stated in the wrapper header.
 
 | Path | Caller | Owner |
 | --- | --- | --- |
-| `projects/vehicle_data/van_scan_cache.py` | TelemetryInsights | Harvested scan cache validation |
-| `projects/vehicle_data/dashboard/src/views/dtcSources.helpers.js` | health.helpers.js | Diagnostic source merge |
-| `projects/vehicle_data/drive_dtc_contract.py` | Drive DTC helper, broker and tests | Fixed frames, timing, parser and standalone event contract |
-| `projects/vehicle_data/drive_dtc.json` | drive_dtc_contract and dashboard | Shared DTC vocabulary and bounds |
-| `projects/vehicle_data/drive_dtc_budget.py` | DriveDtcControl | Serialized durable launch budget, two queued operations and two-second wait |
-| `projects/vehicle_data/drive_dtc_control.py` | TelemetryBroker and ActiveDriveSupervisor | Disabled-by-default capability, cadence checks and bounded results writer |
-| `projects/vehicle_data/drive_reads.py` | TelemetryInsights | Read-only validated drive result projection |
-| `projects/vehicle_data/vehicle_speed.py` | Radar service alignment and DriveDtcSteps | Pure bounded reader of decoded speed observations |
-| `projects/vehicle_data/drive_dtc_steps.py` | active_drive.run_active_session | Opt-in reservation schedule, per-cycle DTC checks and event emission |
-| `projects/vehicle_data/drive_dtc_transport.py` | Drive DTC step | Fixed single-request-frame exchanges, no flow control |
-| `projects/vehicle_data/drive_dtc_watch.py` | Drive DTC step | Bounded receive-only tester watch |
-| `projects/vehicle_data/broker_cli.py` | broker.main and offline parser callers | Broker command-line parser and defaults |
 | `projects/vehicle_data/broker.py` | van-telemetry.service | Telemetry runtime and ordered CAN lifecycle |
 | `projects/vehicle_data/web_v2.py` | Both van-telemetry-web listeners | Dashboard static serving and web.py /v1 API |
 | `projects/vehicle_data/restart_broker.py` | Owner/agent CLI (`s restart_broker`) | Guarded `van-telemetry.service` restart: parked by default, `--while-running` through the helper hold |
 | `projects/vehicle_data/drive_recorder.py` | van-drive-recorder.service | Receive-only broker drive recording |
-| `projects/vehicle_data/oil_life_drive_step.py` | active_drive.run_active_session | Optional oil-life cycle step |
 | `projects/vehicle_data/active_drive.py` | Broker drive_helper_launch | C-CAN active-drive helper |
 | `projects/vehicle_data/bcan_auxiliary.py` | Broker drive_helper_launch | B-CAN auxiliary helper |
 | `projects/vehicle_data/cop_can_wake.py` | van-cop-can-wake.service | Fixed wake supervisor |

@@ -1100,21 +1100,13 @@ Those are the only other CAN frames it can construct:
 18DAC7F1#032231D300000000
 ```
 
-The optional stage-1a drive-DTC capability adds only these two fixed request
-frames, at most once each per pass (no flow control, retries after an attempted
-send, session changes, or other module addresses):
+The hourly drive DTC read (off by default; [contract](docs/drive-dtc-read.md)) adds two fixed
+frames, never a flow control:
 
 ```text
 18DA2AF1#0319028F00000000
 18DA40F1#0319028F00000000
 ```
-
-Each needs fresh running evidence and its own one-use permit. The internal
-`--enable-drive-dtc` argument requires a complete broker reservation schedule;
-without it there are no DTC events, watch socket, BCM socket or DTC sends.
-The `drive_dtc_steps.py` step runs after radar work, at most one module per cycle,
-with two seconds between module attempts and five seconds before the next
-0845 poll. This staged helper support does not authorize vehicle activation.
 
 The fixed radar `0845` read and, only after an owner request relayed by the
 broker, the radar service-alignment requests are the helper's other frames;
@@ -1203,77 +1195,6 @@ inherited session. A clean post-ignition experiment is still useful if the
 research goal is to prove the minimal/default session label; it is not
 required to add `10 92`, and an NRC requiring another session must remain a
 reported blocker until a separate design and owner authorization exist.
-
-### Hourly drive DTC reads (stage 1a, disabled by default)
-
-The broker flag `--enable-drive-dtc-reads` is off by default and is not in the
-tracked service unit. Building this feature is not approval to activate it.
-Only `radar_acc` (DASM) and `bcm_ccan` participate; PCM and all other modules
-remain outside this stage. Each pass permits one physical `19 02 8F` request
-per module, no flow control or other new frame. A SingleFrame is a complete
-zero/one-code result. A FirstFrame reports the count and first code without
-status: **the list was not retrieved**. NRCs, malformed replies and timeouts
-are observations, never a reason to change a session or request mask.
-
-The helper waits at least five minutes into its ownership interval. The broker
-reserves a durable same-boot monotonic schedule before granting the capability:
-one ten-minute window each hour, plus a full-hour wait after reboot or uncertain
-budget recovery. Uncertain recovery records a synthetic pass bound at the
-reservation time; short sessions cannot erase that wait. Within one boot the
-durable bound may rise or stay, never decrease or clear. A pass records its
-actual monotonic start before acquiring
-any permit and consumes the hour even when nothing can be sent. The helper
-also enforces 3600 seconds between actual starts; missed windows are skipped.
-This is elapsed time, not accumulated driving hours; running while parked
-counts. The last harvested van sweep is consulted **at launch only**, so a
-mid-session import does not strictly suppress an already scheduled pass.
-
-The receive-only tester watch drains each cycle and immediately before every
-DTC send. A foreign frame, receive error, truncation, overflow or drain limit
-blocks reads for 120 seconds. Local attribution identifies the host, not the
-process: a manual sender using exactly a helper frame is indistinguishable.
-A tester can still start after the final check. Any pending radar-service
-command or attempted service-alignment run blocks DTC work for the remainder
-of that helper epoch, including refused, failed and completed runs.
-
-Budget/result files live beside the configured DTC cache (normally
-`tmp/vehicle_data/`), separately from unchanged parked DTC history:
-
-- `drive-dtc-budget.json`: at most 1 KiB, one serialized writer, queue of two;
-  file fsync, atomic replacement and directory fsync precede capability launch.
-  The entire reservation wait is at most two seconds; any failure launches the
-  ordinary helper without DTC capability. Late session-end updates are identity
-  checked. Rollback keeps this file.
-- `drive-dtc-results.json`: newest 200 passes, at most two module reads per pass,
-  capped at 256 KiB by dropping oldest passes, plus one temporary copy. A separate
-  writer has a 64-item queue. Overflow/write failure drops results and disables
-  DTC capability on future launches; the current helper's budgeted schedule
-  continues. Neither writer blocks the polling thread or holds the broker lock.
-
-The dashboard merges parked reads, the latest successful van `0D` read and the
-latest complete drive `8F` read chronologically, using each record's own date
-and the returned availability mask. Filtered evidence never establishes global
-absence, replaces parked failures, or refreshes uncovered codes. Newer failures
-and truncated results appear separately with source, coverage and Mountain time;
-truncated counts cannot establish that the unseen BCM codes are unchanged.
-
-Activation remains a separate reviewed change: add the broker flag to the
-tracked unit, install it through the documented parked deployment, and perform
-the guarded broker restart. First-drive acceptance requires exact request-frame
-counts with no DTC flow control, continued 0845/ordinary metric cadence, correct
-capability/start/read/finish events, verified restoration and durable session-end
-budget updates. Check hour spacing both within a long drive and across a short
-stop. The nominal added delay per read is about 2.9 seconds, **not a hard bound**
-on active-gate, filesystem-independent host scheduling or output latency.
-
-Unanswered FirstFrames are an experiment: their transport timeout is expected,
-but radar/BCM diagnostic logging is unknown. Before broader rollout, require
-at least five passes across three drives and a later owner-triggered complete
-parked `19 02 FF` comparison. Count plus first code alone cannot prove no new
-BCM code. If `MSG_DONTROUTE` is absent on this kernel the watch stays dirty and
-reads are suppressed. Rollback order is flag removal and guarded restart first,
-then code reversion and another guarded restart; never run old code with the
-new flag still installed.
 
 ### Broker-coordinated raw drive recording
 
