@@ -12,7 +12,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from lib import can_handoff, diagnostic_safety
+from lib import can_handoff, can_operation_state, diagnostic_safety
 from projects.vehicle_data import ccan_powertrain as cp, display_receiver as dr
 from projects.vehicle_data.broker import TelemetryBroker, ACTIVE_DRIVE_SOURCES
 from tests.test_display_frames import ACC_OFF, ACC_SET_66, raw_frame
@@ -145,7 +145,7 @@ class OwnershipTests(unittest.TestCase):
         self.status = ready_status()
         self.worker = dr.DisplayReceiver(self.manager, status_reader=lambda: self.status,
                                         publish=mock.Mock())
-        self.inhibits = mock.patch.object(dr.can_operation_state, "active_inhibits", return_value=[])
+        self.inhibits = mock.patch.object(can_operation_state, "active_inhibits", return_value=[])
         self.inhibits.start()
         self.addCleanup(self.inhibits.stop)
 
@@ -172,7 +172,7 @@ class OwnershipTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.worker._check_route("can7", "serial-a", 0, passive=False)
         self.status = ready_status()
-        with mock.patch.object(dr.can_operation_state, "active_inhibits", return_value=["blocked"]):
+        with mock.patch.object(can_operation_state, "active_inhibits", return_value=["blocked"]):
             with self.assertRaises(RuntimeError):
                 self.worker._check_route("can7", "serial-a", 0, passive=False)
 

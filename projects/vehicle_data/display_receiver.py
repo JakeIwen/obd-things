@@ -14,9 +14,10 @@ import struct
 import threading
 import time
 
-from lib import can_handoff, can_operation_state
+from lib import can_handoff
 from projects.vehicle_data import ccan_powertrain as cp
 from projects.vehicle_data.can_interfaces import C_CAN_ROLE
+from projects.vehicle_data.display_route import check_display_route, passive_display_route
 from projects.vehicle_data.drive_recorder import broker_c_can_route
 from projects.vehicle_data import lighting
 from projects.vehicle_data.display_contract import DISPLAY_SOURCES, DISPLAY_FRAME_DLCS, DISPLAY_FRAME_IDS
@@ -163,28 +164,16 @@ class DisplayReceiver:
         self._pause.clear()
 
     def _check_route(self, channel, serial, dev_id, *, passive):
-        resolution = self.manager.topology().resolution(C_CAN_ROLE)
-        if (resolution.require_channel(), resolution.spec.usb_serial,
-                resolution.spec.dev_id) != (channel, serial, dev_id):
-            raise RuntimeError("C-CAN USB role changed")
-        state = self.manager.interface_state_reader(channel)
-        if not (state.channel == channel and state.present and state.up
-                and state.bitrate == 500000 and state.fd_enabled is False
-                and state.one_shot is False and state.restart_ms == 0
-                and state.controller_state == "ERROR-ACTIVE"
-                and state.listen_only is passive):
-            raise RuntimeError("C-CAN display route is no longer healthy")
-        if can_operation_state.active_inhibits(channel):
-            raise RuntimeError("C-CAN operation inhibit is active")
-        if not passive and broker_c_can_route(self.status_reader()) != (channel, serial, dev_id):
+        route = (channel, serial, dev_id)
+        check_display_route(self.manager, C_CAN_ROLE, "C-CAN", 500000, route, listen_only=passive)
+        if not passive and broker_c_can_route(self.status_reader()) != route:
             raise RuntimeError("broker active-drive owner changed")
 
     @contextmanager
     def _route(self, passive):
         if passive:
-            with can_handoff.passive_turn(C_CAN_ROLE):
-                with self.manager.observe(C_CAN_ROLE) as lease:
-                    yield lease.channel, lease.usb_serial, lease.dev_id
+            with passive_display_route(self.manager, C_CAN_ROLE) as route:
+                yield route
         else:
             # Same narrow exception as drive_recorder: the verified helper
             # retains exclusive ownership. This companion only receives.
