@@ -123,9 +123,14 @@ class RadarAlignmentPoller:
             self.sock.close()
             self.sock = None
 
-    def send_fixed(self, data, permit, purpose):
+    def send_fixed(self, data, permit, purpose, *, before_send=None):
         frame = struct.pack(FRAME, EFF | MODULE.txid, 8, data)
         transmit_permit.consume(permit, purpose=purpose, channel=self.channel)
+        # Consume, mark, send: expiry is not an attempt, but an ambiguous
+        # send failure is. The optional marker must only update memory. A
+        # marker failure propagates without sending; existing callers omit it.
+        if before_send is not None:
+            before_send()
         if self.sock.send(frame) != 16:
             raise OSError("radar fixed send was incomplete")
 
