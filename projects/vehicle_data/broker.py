@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import math
 import os
@@ -18,6 +17,9 @@ from datetime import datetime, timezone
 
 from lib import can_operation_state, diagnostic_safety
 from lib.vehicle_can_roles import B_CAN_ROLE, CAN_BUS_ROLES, C_CAN_ROLE
+from projects.vehicle_data.broker_cli import (
+    DEFAULT_DTC_CACHE, DEFAULT_HISTORY_DB, DEFAULT_SOCKET, build_parser,
+)
 from projects.vehicle_data.armed_at_startup import ArmedRole, assess_startup_roles
 from projects.vehicle_data.drive_helper_launch import HELPER_CWD, helper_command
 from projects.vehicle_data.engine_off_voltage import EngineOffVoltageCapture
@@ -62,9 +64,6 @@ from projects.vehicle_data.models import (
 )
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-DEFAULT_SOCKET = "/run/van-telemetry/api.sock"
-DEFAULT_HISTORY_DB = REPO / "tmp" / "vehicle_data" / "history.sqlite3"
-DEFAULT_DTC_CACHE = REPO / "tmp" / "vehicle_data" / "dtc-cache.json"
 ACTIVE_DRIVE_HELPER = "projects.vehicle_data.active_drive"
 BCAN_AUXILIARY_HELPER = "projects.vehicle_data.bcan_auxiliary"
 MAX_ACTIVE_EVENT_BYTES = 64 * 1024
@@ -3398,81 +3397,6 @@ class TelemetryBroker:
         self.maintenance.flush()
         self._radar_history.flush()
         self.last_readings.flush()
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Serve allowlisted cached vehicle telemetry over a Unix socket."
-    )
-    parser.add_argument("command", choices=("serve",))
-    parser.add_argument("--socket", default=DEFAULT_SOCKET)
-    parser.add_argument("--socket-mode", default="0660")
-    parser.add_argument(
-        "--can-interface-mode",
-        choices=("dual-usbcanfd",),
-        required=True,
-        help=(
-            "required safety gate: select independent serial/dev_id role "
-            "routing for the two installed dual-channel adapters; each healthy "
-            "bus remains usable when another role is unavailable, and "
-            "fixed-channel mode is retired"
-        ),
-    )
-    parser.add_argument("--collector-interval", type=float, default=1.0)
-    parser.add_argument(
-        "--history-db",
-        default=str(DEFAULT_HISTORY_DB),
-        help="SQLite telemetry history (offline/cache-only)",
-    )
-    parser.add_argument(
-        "--history-interval",
-        type=float,
-        default=5.0,
-        help="seconds between cache snapshots stored in SQLite (default: 5)",
-    )
-    parser.add_argument(
-        "--engine-off-voltage-state",
-        help=(
-            "atomic engine-off passive-voltage sample; defaults beside the "
-            "history database"
-        ),
-    )
-    parser.add_argument(
-        "--dtc-cache",
-        default=str(DEFAULT_DTC_CACHE),
-        help="atomic saved-DTC JSON cache exposed read-only to the dashboard",
-    )
-    parser.add_argument(
-        "--no-history",
-        action="store_true",
-        help="disable SQLite history and early-warning evaluation",
-    )
-    parser.add_argument(
-        "--enable-advisory-notifications",
-        action="store_true",
-        help=(
-            "deliver persisted warning episodes through the queue-aware "
-            "host ntfy helper (requires --advisory-ntfy-topic)"
-        ),
-    )
-    parser.add_argument(
-        "--advisory-ntfy-topic",
-        help="fixed ntfy topic used only when advisory delivery is enabled",
-    )
-    parser.add_argument("--probe-seconds", type=float, default=0.75)
-    parser.add_argument("--read-timeout", type=float, default=2.0)
-    parser.add_argument("--no-collector", action="store_true")
-    parser.add_argument(
-        "--no-active-drive",
-        action="store_true",
-        help="disable the coordinated engine-running diagnostic collector",
-    )
-    parser.add_argument(
-        "--no-auxiliary-drive",
-        action="store_true",
-        help="disable the fixed engine-running B-CAN ICS odometer candidate",
-    )
-    return parser
 
 
 def main(argv=None) -> int:

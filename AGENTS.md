@@ -123,6 +123,9 @@ Dashboard rendering is shared by both lazy Drive pages through
 `dashboard/src/styles/lighting.css`. `metric_types.py` owns the metric/source
 dataclasses; `metrics.py` re-exports them and remains the public registry.
 
+`projects/vehicle_data/broker_cli.py` owns broker arguments and defaults;
+`broker.py` re-exports its public parser and defaults for existing callers.
+
 Broker pure internals are split into `projects/vehicle_data/status_view.py`
 (snapshot-only status builders), `vehicle_state.py` (passive evidence conclusions),
 `wake_state.py` (pure parked-wake admission), and `helper_events.py`
@@ -483,6 +486,7 @@ caller has retired, with owner/callers/retirement stated in the wrapper header.
 
 | Path | Caller | Owner |
 | --- | --- | --- |
+| `projects/vehicle_data/broker_cli.py` | broker.main and offline parser callers | Broker command-line parser and defaults |
 | `projects/vehicle_data/broker.py` | van-telemetry.service | Telemetry runtime and ordered CAN lifecycle |
 | `projects/vehicle_data/web_v2.py` | Both van-telemetry-web listeners | Dashboard static serving and web.py /v1 API |
 | `projects/vehicle_data/restart_broker.py` | Owner/agent CLI (`s restart_broker`) | Guarded `van-telemetry.service` restart: parked by default, `--while-running` through the helper hold |
