@@ -286,16 +286,29 @@ The dashboard's caveats page ("Three sources on one card") says the same for the
 
 ## Differences with the flag off
 
-The flag-off behaviour is unchanged except in two deliberate places:
+With the flag off, the helper's polling and protocol behaviour is unchanged: it sends no DTC
+frame, opens no watch or BCM socket, emits no DTC event, and its other frames, order and timing
+are as before (eight scripted helper sessions compare byte-identical, and so does the broker's
+pure oracle). Other parts of this work do act with the flag off:
 
 - **Late-reply filter.** `receive_reply` runs with the flag off too: the first reply of an 0845
   read or service-alignment exchange skips up to four `59 02` / `7F 19` frames. Before, such a
   frame (for example the van's own `19 02 0D` sweep answered on `18DAF12A`) was malformed and
   ended 0845 polling for the epoch. Those bytes can never answer `22 0845` or a service request,
   so skipping them only keeps polling alive; deadlines and sends are unchanged.
+- **Retained drive results.** When `drive-dtc-results.json` exists (from a time the flag was on),
+  the broker still serves it as the `drive_reads` block of the DTC response and the dashboard
+  still merges it; the response size fallback (`dtc_response_fit.py`) applies to it. With no
+  results file the DTC response is byte-identical to its earlier form.
+- **The codes card's wording**, with or without drive results: the parked conclusion is labelled
+  "parked" with its date, "Last read" is the newest successful read, an empty van read without
+  full returned coverage says "zero codes reported", hidden parked counts stay a separate figure,
+  and "not sent" outcomes read as such (rules above).
 - **DTC-typed events.** A flag-off broker never asks for them. If a helper emits one anyway, the
   broker writes one line to its journal per helper session and ignores the events; they never
   become a protocol error, a stop or an inhibit.
+- **The harvester** recognizes the two DTC requests (and the oil-life and service-alignment
+  requests) as Pi traffic, so they are never taken for a van sweep.
 
 ## Known unknowns for the first drives
 
