@@ -119,8 +119,16 @@ class StartupGrant:
 
 def ready_event_problem(event: dict[str, object], child_pid: object) -> str | None:
     """Why ``event`` is not the one valid ready event of this child, or None."""
-    if set(event) != _READY_KEYS:
+    if set(event) not in (_READY_KEYS, _READY_KEYS | {"capabilities"}):
         return "active-drive helper ready event has unexpected fields"
+    if "capabilities" in event:
+        capabilities = event["capabilities"]
+        if (not isinstance(capabilities, list) or len(capabilities) > 16
+                or any(not isinstance(value, str) or not 1 <= len(value) <= 64
+                       or not value.isascii() or not value.replace("_", "").isalnum()
+                       for value in capabilities)
+                or len(set(capabilities)) != len(capabilities)):
+            return "active-drive helper ready capabilities are invalid"
     protocol = event["protocol"]
     if type(protocol) is not int or protocol != PROTOCOL_VERSION:
         return "active-drive helper ready event has an unsupported protocol"
@@ -174,10 +182,12 @@ class ChildStartupGate:
         expected_parent_pid: int,
         *,
         getppid: Callable[[], int] = os.getppid,
+        capabilities: tuple[str, ...] = (),
     ) -> None:
         self.fd = fd
         self.expected_parent_pid = expected_parent_pid
         self._getppid = getppid
+        self.capabilities = capabilities
 
     def _fd_problem(self) -> str | None:
         if type(self.fd) is not int or self.fd < 3:
@@ -196,9 +206,10 @@ class ChildStartupGate:
         if problem is not None:
             return problem
         try:
-            sink.emit(
-                READY_EVENT_TYPE, protocol=PROTOCOL_VERSION, pid=os.getpid()
-            )
+            # An old supervisor accepts only legacy keys. Advertise only when
+            # its explicit launch arguments requested a negotiated capability.
+            extra = {"capabilities": list(self.capabilities)} if self.capabilities else {}
+            sink.emit(READY_EVENT_TYPE, protocol=PROTOCOL_VERSION, pid=os.getpid(), **extra)
             token = os.read(self.fd, 1)
         finally:
             try:
@@ -215,10 +226,12 @@ class ChildStartupGate:
 
 
 def child_gate_from_arguments(
-    fd: int | None, expected_parent_pid: int
+    fd: int | None, expected_parent_pid: int, *, capabilities: tuple[str, ...] = ()
 ) -> ChildStartupGate | None:
     """The gate for ``--startup-grant-fd``; None keeps the legacy ungated start."""
-    return None if fd is None else ChildStartupGate(fd, expected_parent_pid)
+    return None if fd is None else ChildStartupGate(
+        fd, expected_parent_pid, capabilities=capabilities,
+    )
 
 
 __all__ = (

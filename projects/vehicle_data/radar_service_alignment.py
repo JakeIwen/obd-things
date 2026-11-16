@@ -21,6 +21,7 @@ import enum
 import json
 import math
 import os
+import select
 from pathlib import Path
 import re
 import sys
@@ -109,6 +110,19 @@ class CommandReader:
         self.descriptor = descriptor
         self.buffer = b""
         self.closed = False
+
+    def pending(self) -> bool:
+        """Observe command activity without consuming or delaying its intake.
+
+        EOF also blocks drive DTC reads: no future command can prove the
+        owner's service channel is quiet after its writer disappears.
+        """
+        if self.buffer or self.closed:
+            return True
+        try:
+            return bool(select.select([self.descriptor], [], [], 0)[0])
+        except (OSError, ValueError):
+            return True
 
     def poll(self) -> list[dict[str, str]]:
         if self.closed:
@@ -200,6 +214,11 @@ class ServiceAlignment:
             Phase.SESSION: self._enter_session, Phase.START: self._start_routine,
             Phase.HOLD: self._hold, Phase.STOP: self._stop_routine,
         }
+
+    @property
+    def run_attempted(self) -> bool:
+        """A refused or failed start may still leave a different ECU session."""
+        return self.run is not None
 
     # -- events ----------------------------------------------------------
 
