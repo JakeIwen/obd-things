@@ -134,7 +134,10 @@ class ResearchManager:
         self.window.record()
         # Only an admitted launch makes room: a refused start never costs an existing report.
         for old in self.store.evictable():
-            self._evict(old)
+            try:
+                self._evict(old)
+            except OSError:  # the launch is already sent; the next start evicts again
+                log("dtc_research_evict_failed", run_id=old)
         return {"available": True, "run": records.full(record)}
 
     def ask(self, fields):
