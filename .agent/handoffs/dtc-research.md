@@ -1,8 +1,8 @@
 ---
 workstream: dtc-research
 tier: T3
-status: built on branch worktree-agent-aed1bfada57923057 (Claude-only partial milestone); awaiting implementation review; nothing installed
-last reviewed commit: 31ed98b (plan, Astra re-check verdict ship); implementation not yet reviewed
+status: built on branch integration-research (Claude-only partial milestone); implementation review (verdict hold) findings fixed on worktree-agent-a280bc2eada0f0541, awaiting the reviewer's re-check; nothing installed
+last reviewed commit: 31ed98b (plan, Astra re-check verdict ship); implementation reviewed at fef26e3 (verdict hold, seven findings, fixed below)
 ---
 
 # DTC research with an LLM (advisor backend)
@@ -31,10 +31,51 @@ Codex launch and verification paths; their pure parts are built and tested).
 ## Build status (2026-11-17)
 
 Plan reviewed `ship` by Astra (four rounds; its lows are folded in). Implementation is built, its
-tests pass, and the whole suite is green on the Mac compute worker (job ids below); **the
-implementation review has not been done** and nothing is installed. The standing contract is
-`projects/vehicle_data/docs/dtc-research.md`; the deploy runbook is section 7. This is a Claude-only
-milestone: Codex research stays `provider_unavailable` until follow-up F3.
+tests pass, and the whole suite is green on the Mac compute worker (job ids below). The
+cross-family implementation review of `fef26e3` returned `hold` with seven findings; all seven are
+fixed (next subsection) and wait for the same reviewer's re-check. Nothing is installed. The
+standing contract is `projects/vehicle_data/docs/dtc-research.md`; the deploy runbook is section 7.
+This is a Claude-only milestone: Codex research stays `provider_unavailable` until follow-up F3.
+
+### Implementation review fixes (2026-11-17, on top of `fef26e3`)
+
+Each has a regression test through a public entry point that failed on `fef26e3` and passes now.
+
+1. (high) VIN masking of every prompt part: the three builders in `dtc_research_prompt` mask their
+   whole output, the follow-up question on resume and every replayed question and answer included.
+   Records keep the owner's text as typed (parent's preference); only what leaves the Pi is masked.
+   The mask moved from `dtc_research_context` into `dtc_research_prompt`.
+   `test_follow_up_questions_never_leave_the_pi_with_a_vin`.
+2. (high) A refused start never deletes research: eviction runs only after the new run's launch was
+   admitted. `test_a_refused_start_at_the_run_cap_keeps_every_record`.
+3. (medium) Concurrent starts: a start reserves its request id and code before gathering
+   (`ResearchManager.starting`; a second start for either is `run_busy`), reserved starts count in
+   the 10-a-minute window, and the reconciliation state is rechecked after gathering.
+   `test_concurrent_starts_with_one_request_id_launch_once_and_keep_the_cap`.
+4. (medium) Record-write failures: progress saves are caught; `_finish` saves a copy and changes the
+   live record only once it is on disk (`_settle`), returning `False` otherwise, so the follow
+   thread and the reconciler never acknowledge an unsaved outcome and retry; a follow thread that
+   fails anyway hands its turn back to reconciliation (`reconciling`, state `unknown`); the
+   reconciler loop survives errors; a save failure before a launch is `storage_error`.
+   `test_a_failed_record_write_keeps_following_and_saves_before_acknowledging`,
+   `test_reconciliation_does_not_acknowledge_an_outcome_it_could_not_save`,
+   `test_a_failed_follow_thread_hands_its_turn_back_to_reconciliation`.
+5. (medium) One guarded launch: `Runner.guarded_run` starts every research CLI process (turns,
+   discovery, the installer's `--help`, read as bounded plain lines) with the launch floor checked
+   just before each spawn (`cli_process.run(before_spawn=...)`), the memory and space watchdogs,
+   cancel, deadline, bounded output and process-group reaping; every maintenance step, verify
+   included, checks the floor on admission. A spawn refused for memory fails the turn
+   `memory_exhausted` but keeps the run's session. `MaintenanceGuardTests` (three tests).
+6. (medium) Fencing: `POST /attempts/<id>/fence` (section 2) and fencing on cancel of an unknown id;
+   the advisor declares `interrupted` for a `known: false` from the addressed instance only after the
+   fence is confirmed (section 4, "Reconciliation").
+   `test_an_unknown_attempt_is_fenced_before_it_is_called_interrupted`,
+   `test_fencing_an_unknown_attempt_refuses_its_later_launch`.
+7. (low) `cli_process.run` returns `cancelled` without spawning when the attempt is already
+   cancelled. `test_an_accepted_attempt_cancelled_before_its_spawn_never_spawns`.
+
+The fake CLI (`tests/fake_research_cli.py`) also logs each turn's prompt (`prompts.jsonl`,
+`WorkerRig.prompts()`) and can write a file at the end of a turn (`write_at_end`).
 
 
 ### Per file (all under `projects/vehicle_data/` unless a path is given)
@@ -519,7 +560,12 @@ whose tombstone then says `dropped`.
 - `POST /turns/<attempt_id>/ack` → the advisor has saved the outcome; the worker discards it
   (tombstone `acknowledged`).
 - `POST /turns/<attempt_id>/cancel` (also for discovery) → idempotent; cancels an attempt still
-  in `accepted`, which then never spawns.
+  in `accepted`, which then never spawns. Cancelling an id the worker has never seen fences it.
+- `POST /attempts/<attempt_id>/fence` → resolve-or-fence, under the same lock as admission: a known
+  attempt answers with its `GET` state; an unknown one gets a tombstone (`state: finished`,
+  `outcome_state: dropped`), so a later launch with that id is refused `duplicate_attempt`, and the
+  reply is `{instance_id, known: false, fenced: true}`. A full table answers 409 `busy` (the
+  advisor keeps asking).
 - `POST /discover` `{"attempt_id", "expected_instance_id", "provider": "claude"}` → 202, then
   `GET /discover/<attempt_id>` returns the models once the child is reaped (at most 30 s).
   `GET /discover/codex` reads files only and takes no slot.
@@ -781,18 +827,25 @@ research state is one of `unknown`, `idle`, `holding <attempt>`.
   - `job` is any other turn or a discovery: **cancel** it and stay `unknown` until a later status
     shows `job: null`. A maintenance job is not cancelled; the advisor waits for it.
   - `job: null`: every remaining `reconciling` turn is asked about with `GET /turns/<its attempt>`:
-    a held outcome is saved and acknowledged; `known: false` from any instance, or
-    `outcome_state: dropped`, makes the turn `failed` with reason `interrupted` (it is never
-    relaunched under the same id; the owner may ask again, which is a new attempt and a new
-    ledger admission). Then `/sweep` with the kept run ids, and the state becomes `idle`.
+    a held outcome is saved and then acknowledged (a failed save leaves it held and the pass is
+    retried); `known: false` (fenced first when it comes from the instance now running, see the
+    last bullet), or `outcome_state: dropped`, makes the turn `failed` with reason `interrupted`
+    (it is never relaunched under the same id; the owner may ask again, which is a new attempt and
+    a new ledger admission). Then `/sweep` with the kept run ids, and the state becomes `idle`.
 - Lost contact while `holding`: the advisor keeps the turn `running` and keeps asking about the
   same `attempt_id`, launching nothing, until the worker answers. An answer from a new
   `instance_id` with `known: false` means the attempt died with the old process (its child was
   killed by the control-group stop), and the turn becomes `interrupted`.
 - A launch request whose reply was lost is never repeated: the advisor asks about the attempt.
-  `known: true` → adopt; `known: false` from the expected instance → the request never arrived,
-  the turn is `interrupted`; a new instance → `interrupted`. An attempt cancelled while
-  `accepted` never spawns.
+  `known: true` → adopt; `known: false` from the expected instance → the request may still be in
+  transit, so the advisor fences the attempt (`POST /attempts/<id>/fence`) and the turn becomes
+  `interrupted` only once the fence is confirmed (`fenced: true`); if the fence finds the attempt
+  known after all, the advisor follows it. `known: false` from a new instance → `interrupted`
+  with no fence (a late request names the old instance and is refused `stale_instance`). An
+  attempt cancelled while `accepted` never spawns.
+- An outcome is acknowledged only after the record holding it is saved; a failed write keeps it
+  held on the worker and the follow thread (or the reconciler) retries. A follow thread that fails
+  for any other reason hands its turn back to `reconciling` and the state to `unknown`.
 
 Liveness: the worker is `Type=notify` with `WatchdogSec=30`, pinged from the request-handling
 loop itself, with `KillMode=control-group`. A worker whose server stalls is killed by systemd with
@@ -814,7 +867,10 @@ the owner's open decision (O1).** Everything below is best-effort protection, no
   worker unit, inherited by its CLI child, so if the Pi runs out of memory the kernel kills a
   research CLI before the broker, the web listeners or the warning chat. It sets no limit.
 - **Launch admission** (worker, under its slot): refused with 409 `low_memory` when
-  `MemAvailable` is below the launch floor.
+  `MemAvailable` is below the launch floor, for every launching request and maintenance step; then
+  checked again just before each spawn (`Runner.guarded_run`, also for a maintenance step's second
+  spawn and the installer's `--help`), where a failure ends the attempt `memory_exhausted` without
+  spawning.
 - **Run-time watchdog** (worker, every 500 ms during an attempt): sums the RSS of the attempt's
   process tree (the child and its descendants, from `/proc/<pid>/task/*/children`). If the tree
   exceeds its cap, or `MemAvailable` falls below the critical threshold, the worker sends
@@ -919,7 +975,8 @@ home out; the owner's own sign-ins are unaffected.
 - *Read*: Claude is offered only `WebSearch` and `WebFetch` (flag-gated, init-checked); Codex is
   disabled this round. The prompt holds the broker record, the module and description entries,
   the hand-reviewed facts file, the owner's ignore note for the code if any, and his follow-up
-  questions. VIN-shaped strings are masked in all of it. The owner's own text is passed as he
+  questions. VIN-shaped strings are masked in all of it, in every prompt as it is built (records on
+  the Pi keep the owner's text as typed). Apart from that mask the owner's own text is passed as he
   wrote it: a location he types goes to the provider and possibly into a search query. That
   residual is documented in the dialog text and `docs/dtc-research.md`; nothing else is promised.
 - *Fetch local services*: Claude's WebFetch runs on the Pi; the worker's `IPAddressDeny` (cgroup
@@ -964,8 +1021,9 @@ duration_s, activity, diagnostics}`). Written atomically before any reply that d
 and a turn's `attempt_id` before its launch request. Files over 420 KiB or symlinks are skipped
 at load with a log line.
 
-Bounds: at most 60 runs (run 61 evicts the oldest finished run by `created_at`; a busy or
-reconciling run is never evicted); a record at most 416 KiB; all records at most 25 MiB.
+Bounds: at most 60 runs (run 61 evicts the oldest finished run by `created_at`, only once run 61's
+launch has been admitted, so a refused start never costs a report; a busy or reconciling run is
+never evicted); a record at most 416 KiB; all records at most 25 MiB.
 Eviction deletes the record and calls the worker's `POST /runs/<run_id>/delete`; a later sweep
 catches misses.
 
