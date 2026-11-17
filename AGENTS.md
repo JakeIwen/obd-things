@@ -480,6 +480,29 @@ Never rebaseline as part of a feature or to pass the suite.
 `insights.py` (`DtcCacheValidationError`, `HEX_BYTE`, `timestamp_or_none`). The
 dashboard's three-source diagnostic-code merge is `dashboard/src/views/dtcSources.helpers.js`.
 
+Ignored diagnostic codes (owner request 2026-11-16) are an owner record, display bookkeeping
+that never clears a code or changes `/v1/diagnostics/dtcs`: `dtc_ignore.py` with `dtc_ignore.json`
+(route, actions, the 500-code limit, note limits in characters and bytes, the audit-log bound;
+shared with the dashboard), file `dtc-ignores.json` beside `maintenance.json`, served by the
+broker and carried in `web_v2.build_summary` as `dtc_ignores`. A code's identity is
+`(module_key, fca_display)`. The vehicle-data README section "Ignored diagnostic codes" is the
+contract; `tests/test_dtc_ignore.py` covers it. Dashboard side: `src/dtcIgnore.js` and
+`dtcIgnore.helpers.js` (the request and wording), `src/views/dtcCodes.helpers.js` (the Modules
+filter and the Ignored group), `src/components/CodesCard.jsx` and `CodeList.jsx` (the card and
+its accordion rows; `CodeList` takes `slots` for extra row actions and an extra row line).
+`src/components/MultiSelect.jsx`, `Popover.jsx`, `Listbox.jsx` and `multiSelect.helpers.js` are
+the reusable picker primitives (an empty selection means no filter; the popover opens in the
+page flow because `.card` clips overlays).
+
+Drive pages (2026-11-16): `src/sparkline.helpers.js` holds the per-metric "red above N" table
+(`SPARK_RED_ABOVE`, alternator field above 80 %) that `components/Sparkline.jsx` and
+`components/Tile.jsx` both read; it is a display rule, not a warning. `styles/drive-page1.css`
+has page 1's RPM-over-Power stack and `styles/drive-radar.css` page 2's radar tile note.
+`radar_alignment.py` records `parked` beside `drive` on each radar row (first value of a new
+drive minus the last value before the park, absent when there is no earlier reading);
+`src/radarAim.js` holds the shared parked-change text and tooltip. `src/fuelLevel.js` formats
+page 2's Fuel tank tile.
+
 The hourly drive DTC read (radar and BCM, one `19 02 8F` frame each, no flow control) is
 off by default behind the broker flag `--enable-drive-dtc-reads`, which is not in the unit.
 Its contract, gates, cadence, storage, dashboard rule, activation and rollback are in
