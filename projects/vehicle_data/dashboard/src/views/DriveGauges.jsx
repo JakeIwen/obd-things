@@ -94,7 +94,7 @@ export default function DriveGauges({ page, onPageChange }) {
         {show("oilt") && <Tile name="engine.vvt_oil_temperature" label="Oil temp (VVT)" area="oilt" band spark />}
         {show("trans") && <Tile name="transmission.oil_temperature" label="Trans oil" area="trans" band spark />}
         {show("volt") && <Tile name="battery.voltage" label="Voltage" area="volt" band spark decimals={1} />}
-        {show("alt") && <Tile name="generator.field_duty" label="Alt field" area="alt" spark />}
+        {show("alt") && <Tile name="generator.field_duty" label="Alternator field" area="alt" spark />}
         {show("oilp") && <Tile name="engine.oil_pressure" label="Oil pressure" area="oilp" band spark />}
         {show("tires") && <TireGrid area="tires" />}
         {show("trip") && <TripTile />}

@@ -26,7 +26,7 @@ test("demo validation rejects a missing tile or values that contradict each othe
   assert.throws(() => validateDemoScene({ ...scene, sparklines: trace }), /sparkline for engine\.rpm must end/);
 });
 
-test("the demo Alt field trace crosses the red line and ends below it", () => {
+test("the demo Alternator field trace crosses the red line and ends below it", () => {
   const knots = buildDemoScene(NOW).sparklines["generator.field_duty"];
   assert.ok(Math.max(...knots) > SPARK_RED_ABOVE["generator.field_duty"]);
   assert.ok(knots[knots.length - 1] <= SPARK_RED_ABOVE["generator.field_duty"]);

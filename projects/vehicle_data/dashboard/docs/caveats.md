@@ -210,7 +210,7 @@ what they meant and where that information lives now.
   red only when the charging-failure warning is open. Parked (settled): 12.2 V or more is normal,
   11.8–12.2 V amber, under 11.8 V red, and under 11.5 V critical. Cranking dips to 11.1 V have been
   recorded and are normal.
-- **Alternator** (`generator.field_duty`, the Alt field tile on page 1; a dash when the field is not live; the line and numeral turn red above 80 %, a display rule that raises no warning): PCM identifier `01A1`, the
+- **Alternator** (`generator.field_duty`, the Alternator field tile on page 1; a dash when the field is not live; the line and numeral turn red above 80 %, a display rule that raises no warning): PCM identifier `01A1`, the
   generator field command duty in percent.
   - It is a command, not alternator current or temperature. Sustained high duty means the engine
     computer is asking for a lot of charging effort; the dashboard does not infer any thermal
@@ -218,9 +218,9 @@ what they meant and where that information lives now.
   - The house-battery DC-DC charger is a normal, substantial load, so 100 % occurs routinely and is
     not by itself a fault.
   - The dashboard uses it only to back up a low running voltage.
-  - Drive page 2 gives it its own tile, with a 15-minute trend and the live battery voltage
-    underneath, so you can see charging effort and the voltage it produces together. It is read only
-    while the Pi's engine-running reads are active; otherwise it shows `—`.
+  - Drive page 1 shows it on the Alternator field tile, with a 15-minute trend beside the battery
+    voltage tile, so you can see charging effort and the voltage it produces together. It is read
+    only while the Pi's engine-running reads are active; otherwise it shows `—`.
 - **Parked battery reading.** The line under the number says when the reading was taken and how long
   after the engine stopped, for example `read 4:25 pm · 2 h after engine off`. After a stop, the Pi
   takes a settled reading once the battery has rested; the card says when that is due.

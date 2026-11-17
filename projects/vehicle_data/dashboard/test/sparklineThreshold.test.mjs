@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SPARK_RED_ABOVE, isAboveRed, redAboveFor, splitByThreshold } from "../src/sparkline.helpers.js";
+import { SPARK_METRICS } from "../src/app/rings.js";
 
 const pts = (...vs) => vs.map((v, x) => ({ x, v }));
 const shape = (runs) => runs.map((r) => (r.red ? "red:" : "ok:") + r.points.map((p) => p.x + "/" + p.v).join(","));
@@ -36,4 +37,8 @@ test("a run that stays on one side keeps one colour, touching the threshold is n
   assert.deepEqual(shape(splitByThreshold(pts(90, 95, 85), 80)), ["red:0/90,1/95,2/85"]);
   assert.deepEqual(shape(splitByThreshold(pts(80, 90), 80)), ["red:0/80,1/90"]);
   assert.deepEqual(shape(splitByThreshold(pts(95), 80)), ["red:0/95"]);
+});
+
+test("the alternator field keeps a sparkline ring, so its tile can draw the red-above trace", () => {
+  assert.ok(SPARK_METRICS.includes("generator.field_duty"));
 });

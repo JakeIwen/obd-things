@@ -376,12 +376,12 @@ tab bar, with 16 px gutters and 12 px gaps.
 |---|---|
 | A | **SPEED** (2 cols, hero numerals, `mph`; under the numeral an estimated economy row `now 19.4 mpg`, which has no text at all (the row keeps its height) without a figure; beside the numeral a `SPEED LIMIT 55` sign while the limit is live, then a right-edge column with the ACC text (`ACC 66` over `engaged`) stacked above the four-bar gap readout; regular cruise uses `Cruise`; current off/ready/standby/override states are explicit) · **RPM over POWER** (1 col split into two half-height tiles: RPM on top, its footer `gear 6` once a live gear metric exists and empty until then; Power below, `hp`, sub-line `165 lb-ft`; both at the standard `--value` numeral, no sparklines, because a sparkline would leave the numeral under 40 px) |
 | B | **COOLANT** · **OIL TEMP (VVT)** · **TRANS OIL**: value, unit, band bar, 15-min sparkline |
-| C | **VOLTAGE** (battery voltage alone, to 1 decimal, band bar, sparkline) · **ALT FIELD** (`generator.field_duty` percent and a 15-min sparkline; the line is drawn red wherever the plotted value is above 80 % and the numeral reads red while the live value is above 80 %, display only: no warning card, chime or `derive.js` colour) · **OIL PRESSURE** |
+| C | **VOLTAGE** (battery voltage alone, to 1 decimal, band bar, sparkline) · **ALTERNATOR FIELD** (`generator.field_duty` percent and a 15-min sparkline; the line is drawn red wherever the plotted value is above 80 % and the numeral reads red while the live value is above 80 %, display only: no warning card, chime or `derive.js` colour) · **OIL PRESSURE** |
 | D | **TIRES** (2 cols: 2×2 grid FL FR / RL RR) · **THIS DRIVE** (Time, Distance `12.3 mi`, MPG `16.4 mpg`, Coolant max, Avg power at 19 px, 25 % above the earlier 15 px; the heading keeps its size; info icon on the heading) |
 
 The portrait gate is no scrolling within ≤ 1,096 visible px (the browser toolbar stays; see the
 manifest note). In landscape (`min-aspect-ratio: 1/1` and width ≥ 900 px), there are 4 columns:
-SPEED (2) · RPM over POWER · TIRES spanning the rows, then COOLANT · OIL TEMP · TRANS, then VOLTAGE · ALT FIELD ·
+SPEED (2) · RPM over POWER · TIRES spanning the rows, then COOLANT · OIL TEMP · TRANS, then VOLTAGE · ALTERNATOR FIELD ·
 OIL PRESSURE · THIS DRIVE. Landscape may scroll in v2.0. At ≤ 640 px (phone) Drive becomes two columns and
 scrolls. Type sizes are `clamp()`ed against the viewport height (`--hero: clamp(64px, 11vh, 128px)`,
 with `--large`, `--value` and `--tire` in proportion). Because the rows are fractions of the same
@@ -447,7 +447,7 @@ Rules for Drive tiles:
 - Sparklines may carry a per-metric "red above N" threshold (`SPARK_RED_ABOVE` in
   `src/sparkline.helpers.js`, read by both `Sparkline.jsx` and `Tile.jsx`): the line switches to the
   palette's `--red` exactly where it crosses N, and the tile numeral reads red while the live value
-  is above N (`tile--hot`). Only `generator.field_duty` (80 %) has one, on page 1's Alt field tile
+  is above N (`tile--hot`). Only `generator.field_duty` (80 %) has one, on page 1's Alternator field tile
   (page 2 no longer shows that metric; its field tile is Fuel tank). It is a display rule, distinct from warnings, which come from the broker.
 - Sparklines show the last 15 minutes from the client ring, with no axis and no labels. They start
   empty and fill live; they are not seeded from 900 s buckets. Each scales to its own range with a
@@ -529,7 +529,7 @@ content. Page 2 ("Sensors") uses the same frame and the same no-scrolling gate.
   `vehicle ahead` comes first in the sub-line, which ends in an ellipsis on a narrow tile. The
   other page-2 tiles use the
   normal `Tile` rules (live, held with its time, or `—`). `generator.field_duty` stays in
-  `SPARK_METRICS` (minimum span 20 %) for page 1's Alt field tile (Voltage is its own tile beside it). No new timers were added.
+  `SPARK_METRICS` (minimum span 20 %) for page 1's Alternator field tile (Voltage is its own tile beside it). No new timers were added.
 - **Customisation.** The page-2 tiles are in `DRIVE_TILES` with ids `limit`, `acc`, `field`,
   `fuel`, `gear`, `radar`, `turbine`, `output`, `power2`, `torque`, `target` and `odometer`, each labelled
   `… (page 2)`. They

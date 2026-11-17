@@ -170,6 +170,9 @@ test("Drive registry lists page-2 tiles with unique ids and every id is rendered
     assert.ok(gauges.includes('show("' + id + '")'), id + " rendered through isHidden");
   }
   assert.ok(!ids.includes("Voltage / Alt field") && !block.includes("Voltage / Alt field"), "voltage no longer carries the field");
+  // The owner asked for the full name (2026-11-16); the registry and the page-1 tile must agree.
+  assert.match(block, /\{ id: "alt", label: "Alternator field" \}/, "the customiser lists the alternator tile by its full name");
+  assert.match(gauges, /label="Alternator field" area="alt" spark/, "page 1 draws the alternator tile with its sparkline");
   // Page 2 is a lazy chunk: Drive.jsx must not import it statically.
   assert.doesNotMatch(drive, /^import .*DriveMore/m);
   assert.match(drive, /import\("\.\/DriveMore\.jsx"\)/);
