@@ -74,9 +74,11 @@ The browser supplies only the code's key. The advisor gathers: the code's record
 cached `/v1/diagnostics/dtcs` (Pi scan, in-vehicle scan or drive read), the owner's ignore note for
 the code, the module registry entry, the description-table entry, and the hand-reviewed
 `dtc_research_facts.json` (vehicle facts; per-code owner notes, seeded with the LED-lamp codes).
-VIN-shaped strings are masked everywhere. Residual: the owner's own text (his follow-up questions,
-his ignore note) is passed as he wrote it, so a location he types reaches the model provider and
-possibly a search query. Nothing else is promised. The system text tells the model web pages are
+VIN-shaped strings are masked in every prompt as it is built (`dtc_research_prompt`): the context,
+each follow-up question on resume, and every replayed question and answer. The records on the Pi
+keep the owner's text as he typed it; only what leaves the Pi is masked. Residual: apart from that
+mask the owner's own text (his follow-up questions, his ignore note) is passed as he wrote it, so a
+location he types reaches the model provider and possibly a search query. Nothing else is promised. The system text tells the model web pages are
 untrusted and asks for the report format (`SUMMARY:` line, then What it means / Likely causes on
 this van / What to check / Sources).
 

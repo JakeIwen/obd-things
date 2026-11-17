@@ -3,7 +3,9 @@
 The system text is the same for both providers (Claude ``--system-prompt``, Codex
 ``developer_instructions``). The first turn sends the frozen context the advisor gathered; a
 resumed follow-up sends only the question; a replay sends the context, the transcript so far and
-the question to a fresh session.
+the question to a fresh session. Every prompt is VIN-masked as it is built, so nothing VIN-shaped
+leaves the Pi in any part of it (the owner's questions included); the records on the Pi keep his
+text as he typed it.
 """
 
 import json
@@ -40,14 +42,25 @@ REQUEST = "Research this code for this van and write the report."
 OMITTED = "(Earlier follow-ups were omitted to keep this conversation within its size limit.)"
 _SUMMARY_LINE = re.compile(r"summary:\s*(.*)", re.IGNORECASE)
 _EMPHASIS = re.compile(r"[*_`]+")
+VIN_RE = re.compile(r"\b[A-HJ-NPR-Z0-9]{17}\b")
+VIN_MASK = "[vehicle identifier omitted]"
+
+
+def mask_vin_text(text):
+    return VIN_RE.sub(VIN_MASK, text)
+
+
+def mask_vin(value):
+    """``value`` with every VIN-shaped string replaced, through any JSON structure."""
+    return json.loads(mask_vin_text(json.dumps(value, ensure_ascii=False)))
 
 
 def first_prompt(context):
-    return "CONTEXT\n" + json.dumps(context, ensure_ascii=False, indent=1) + "\n\n" + REQUEST
+    return mask_vin_text("CONTEXT\n" + json.dumps(context, ensure_ascii=False, indent=1) + "\n\n" + REQUEST)
 
 
 def follow_up_prompt(question):
-    return question
+    return mask_vin_text(question)
 
 
 def replay_prompt(context, report, exchanges, question):
@@ -60,7 +73,7 @@ def replay_prompt(context, report, exchanges, question):
         for asked, answered in kept:
             parts.append(f"\n\nOWNER ASKED\n{asked}\n\nYOU ANSWERED\n{answered}")
         parts.append("\n\nOWNER ASKS NOW (answer this follow-up)\n" + question)
-        prompt = "".join(parts)
+        prompt = mask_vin_text("".join(parts))
         if len(prompt.encode()) <= SIZES["replayPromptBytes"] or not kept:
             return prompt
         kept.pop(0)

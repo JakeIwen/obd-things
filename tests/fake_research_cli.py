@@ -2,7 +2,8 @@
 
 ``install(directory, scenario)`` writes an executable ``claude`` that follows ``scenario`` (a dict,
 saved beside it as ``scenario.json``, since the worker passes the child only an allowlisted
-environment). The fake records its argv, cwd and environment to ``calls.jsonl`` beside itself.
+environment). The fake records its argv, cwd and environment to ``calls.jsonl`` and each turn's
+prompt to ``prompts.jsonl`` in its state directory.
 """
 
 import json
@@ -39,6 +40,8 @@ if opt("--input-format") == "stream-json":
     sys.stdin.read()
     sys.exit(0)
 prompt = sys.stdin.read()
+with open(HERE / "prompts.jsonl", "a") as log:
+    log.write(json.dumps({"argv": argv, "prompt": prompt}) + "\n")
 session = opt("--session-id") or opt("--resume")
 slug = os.getcwd().replace("/", "-")
 store = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / slug
@@ -114,3 +117,9 @@ def set_scenario(directory, scenario):
 def calls(directory):
     path = Path(directory) / "calls.jsonl"
     return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
+def prompts(directory):
+    """The prompt each model turn read from stdin (model checks and ``--help`` read none)."""
+    path = Path(directory) / "prompts.jsonl"
+    return [json.loads(line)["prompt"] for line in path.read_text().splitlines()] if path.exists() else []

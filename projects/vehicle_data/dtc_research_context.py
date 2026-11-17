@@ -9,29 +9,22 @@ he wrote it apart from that mask: docs/dtc-research.md names that residual.
 
 import json
 from pathlib import Path
-import re
 
 from lib.modules import MODULES
 from projects.vehicle_data.assistant_common import now
 from projects.vehicle_data.dtc_descriptions import describe_dtc
 from projects.vehicle_data.dtc_ignore import API_PATH as DTC_IGNORE_PATH
 from projects.vehicle_data.dtc_research_contract import SIZES, encoded_len
+from projects.vehicle_data.dtc_research_prompt import mask_vin
 
 FACTS = json.loads(Path(__file__).with_name("dtc_research_facts.json").read_text())
 DTC_PATH = "/v1/diagnostics/dtcs"
-VIN_RE = re.compile(r"\b[A-HJ-NPR-Z0-9]{17}\b")
-VIN_MASK = "[vehicle identifier omitted]"
 RECORD_FIELDS = (
     "display_group", "status", "status_flags", "confirmed", "pending", "current", "present",
     "warning_indicator_requested", "first_seen_at", "last_seen_at", "observation_count",
     "episode_count", "recurrence_count", "logical_bus", "module_name", "observed_at",
 )
 SOURCES = (("pi_scan", "groups"), ("in_vehicle_scan", "in_vehicle_scan"), ("drive_read", "drive_reads"))
-
-
-def mask_vin(value):
-    """``value`` with every VIN-shaped string replaced, through any JSON structure."""
-    return json.loads(VIN_RE.sub(VIN_MASK, json.dumps(value, ensure_ascii=False)))
 
 
 def find_record(response, module_key, fca_display):

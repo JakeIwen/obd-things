@@ -271,5 +271,26 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual((run["state"], run["reason"]), ("failed", "interrupted"))
 
 
+    def test_follow_up_questions_never_leave_the_pi_with_a_vin(self):
+        vin = "1ABCDEFGH2JKLMN34"  # synthetic, VIN-shaped
+        run = self.settle(self.start()["run_id"])
+        self.rig.scenario({"mode": "ok", "answer": f"Recalls for {vin} are listed by the dealer."})
+        asked = f"My VIN is {vin}; which recalls apply?"
+        self.ask(run["run_id"], asked)
+        self.assertEqual(self.settle(run["run_id"])["turns"][-1]["mode"], "resumed")
+        self.rig.volume.drop_session(run["run_id"])
+        self.ask(run["run_id"], f"And is {vin} covered by the radar TSB?")
+        run = self.settle(run["run_id"])
+        self.assertEqual(run["turns"][-1]["mode"], "replayed")
+        prompts = self.rig.prompts()
+        self.assertEqual(len(prompts), 3)
+        for prompt in prompts:
+            self.assertNotIn(vin, prompt)
+        self.assertIn("[vehicle identifier omitted]", prompts[1])  # the resumed question
+        self.assertIn("OWNER ASKED\nMy VIN is [vehicle identifier omitted]", prompts[2])  # replayed question
+        self.assertIn("Recalls for [vehicle identifier omitted]", prompts[2])  # replayed answer
+        # On the Pi the owner's text is kept as he typed it; only what leaves the Pi is masked.
+        self.assertEqual(run["turns"][1]["text"], asked)
+
 if __name__ == "__main__":
     unittest.main()

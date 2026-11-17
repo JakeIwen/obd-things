@@ -59,6 +59,9 @@ class WorkerRig:
     def calls(self):
         return fake_research_cli.calls(self.state)
 
+    def prompts(self):
+        return fake_research_cli.prompts(self.state)
+
     def turn_body(self, run_id=None, kind="initial", session_id=None, turn_kind="report", attempt_id=None):
         body = {"attempt_id": attempt_id or uuid.uuid4().hex, "expected_instance_id": self.worker.table.instance_id,
                 "run_id": run_id or uuid.uuid4().hex, "provider": "claude", "model": "sonnet", "effort": "medium",
