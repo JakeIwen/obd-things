@@ -494,6 +494,25 @@ its accordion rows; `CodeList` takes `slots` for extra row actions and an extra 
 the reusable picker primitives (an empty selection means no filter; the popover opens in the
 page flow because `.card` clips overlays).
 
+DTC research ("research with AI" on every code, owner request 2026-11-16) is a Claude-only
+partial milestone: Codex stays unavailable until its CLI's tool list can be verified web-only.
+Start with `projects/vehicle_data/docs/dtc-research.md` (contract, deploy and activation runbook,
+rollback) and the workstream note `.agent/handoffs/dtc-research.md` (decisions, threat model,
+what is unverified). The advisor process owns the routes under `/v1/assistant/` (same
+access-code gate as the warning chat), the records, the durable admission ledger and
+reconciliation (`dtc_research*.py`, `research_worker_client.py`); the web-capable CLI runs only
+in `van-telemetry-research.service` (`dtc_research_worker.py`, `research_runner.py`,
+`research_cli*.py`, `research_attempts.py`, `research_memory.py`, `research_volume.py`), from
+research-owned pinned CLI copies, on a fixed-size volume, with no home directory, LAN, broker
+or CAN access. `research_runner.Runner.guarded_run` is the only launch path;
+`dtc_research_prompt.py` owns the VIN mask applied to every outgoing prompt; `model_cli_lock.py`
+and `assistant_slot.py` keep a warning-chat CLI and a research CLI from running together.
+`dtc_research.json` is the vocabulary shared with the dashboard (`src/dtcResearch.helpers.js`,
+`dialogs/DtcResearch{.jsx,.helpers.js}`, `components/ModelPicker.jsx`, `src/markdownLite.js`
+with `components/MarkdownView.jsx` for model text, `src/assistantAccess.js` for the access code
+both dialogs share). Research stays unavailable on the dashboard until the owner's research
+sign-in exists and measured memory peaks are recorded in `research_cli_policy.json`.
+
 Drive pages (2026-11-16): `src/sparkline.helpers.js` holds the per-metric "red above N" table
 (`SPARK_RED_ABOVE`, alternator field above 80 %) that `components/Sparkline.jsx` and
 `components/Tile.jsx` both read; it is a display rule, not a warning. `styles/drive-page1.css`
