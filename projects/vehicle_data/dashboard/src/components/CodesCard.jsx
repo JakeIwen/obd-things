@@ -6,6 +6,7 @@
  */
 
 import { computed, signal } from "@preact/signals";
+import { useEffect } from "preact/hooks";
 import * as store from "../store.js";
 import { dayClock } from "../app/derive.js";
 import { Card, Empty } from "./Card.jsx";
@@ -13,6 +14,8 @@ import LazyDisclosure from "./LazyDisclosure.jsx";
 import MultiSelect from "./MultiSelect.jsx";
 import CodeList from "./CodeList.jsx";
 import DtcScan from "./DtcScan.jsx";
+import { RESEARCH_SLOTS } from "./researchSlots.jsx";
+import { refreshResearchList } from "../dtcResearch.js";
 import * as H from "../views/health.helpers.js";
 
 /** Chosen module keys for the session (in memory only); none means every module. */
@@ -27,8 +30,8 @@ const codesVm = computed(() => {
   });
 });
 
-/** More row actions and a secondary line under a row's meaning (research controls plug in here). */
-const SLOTS = {};
+/** More row actions and a secondary line under a row's meaning: the code research. */
+const SLOTS = RESEARCH_SLOTS;
 
 function ModuleList({ rows }) {
   return (
@@ -103,6 +106,7 @@ function Toolbar({ filter }) {
 }
 
 export default function CodesCard() {
+  useEffect(() => { void refreshResearchList(); }, []);
   const vm = codesVm.value;
   const web = store.web.value;
   const badge = vm.badge;

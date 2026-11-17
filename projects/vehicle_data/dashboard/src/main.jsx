@@ -16,6 +16,7 @@ import "./styles/drive-radar.css";
 import "./styles/compass.css";
 import "./styles/multi-select.css";
 import "./styles/dtc-codes.css";
+import "./styles/dtc-research.css";
 import "./styles/light.css";
 import "./styles/night.css";
 import "./styles/topbar-controls.css";

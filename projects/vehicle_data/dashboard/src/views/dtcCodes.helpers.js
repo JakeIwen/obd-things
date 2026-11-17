@@ -97,13 +97,14 @@ export function ignoredGroup(entries, found, keys, nowMs, rowFor) {
     const base = record
       ? rowFor(record, nowMs)
       : { key: "", code: entry.code, meaning: "not in the saved list now", reviewed: false, meta: null, moduleKey: entry.moduleKey,
-        fca: entry.code, id, details: [], extra: null };
+        fca: entry.code, id, details: [], extra: null, moduleName: null };
     const moduleName = record ? str(record.module_name) || entry.moduleKey : entry.moduleKey;
     rows.push({
       ...base,
       key: "ignored:" + entry.moduleKey + ":" + entry.code,
       id,
       moduleKey: entry.moduleKey,
+      moduleName,
       fca: entry.code,
       ignored: true,
       note: entry.note,

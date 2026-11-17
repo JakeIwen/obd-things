@@ -1,0 +1,38 @@
+/* Code research: the AI line on a Codes-card row, the model picker and the research dialog
+   (components/ModelPicker.jsx, dialogs/DtcResearch.jsx). Tap targets are 40 px or more. */
+.dtc-ai-info {
+  display: inline-block; width: 16px; height: 16px; border: 1px solid var(--dim); border-radius: 50%;
+  color: var(--dim); font-size: 12px; font-weight: 700; line-height: 14px; text-align: center; cursor: help;
+}
+
+.model-picker { margin: 4px 0 8px; }
+.model-picker__bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.model-picker__trigger::after { content: "▾"; color: var(--dim); font-size: 14px; }
+.model-picker__trigger[aria-expanded="true"]::after { content: "▴"; }
+.model-picker__note { margin: 6px 0 0; font-size: 14px; color: var(--amber); overflow-wrap: anywhere; }
+.segmented { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }
+.segmented__option {
+  min-height: 44px; min-width: 52px; padding: 0 12px; border: 0; border-left: 1px solid var(--line-strong);
+  background: var(--card-2); color: var(--text-2); font-size: 15px; font-weight: 600; cursor: pointer;
+}
+.segmented__option:first-child { border-left: 0; }
+.segmented__option--on { background: var(--green); color: var(--on-green); }
+.segmented__option:disabled { opacity: .45; cursor: default; }
+
+.research-dialog .dialog__body { overflow-y: auto; }
+.research-sent { font-size: 14px; }
+.research-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 8px; }
+.research-runs { flex: none; }
+.research-thread { display: flex; flex-direction: column; gap: 10px; }
+.research-turn { flex: none; }
+.research-turn__note { margin: 6px 0 0; font-size: 13px; }
+.research-progress { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.research-stop { margin-left: auto; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p, .md ul, .md ol { margin: 0 0 8px; line-height: 1.45; overflow-wrap: anywhere; }
+.md ul, .md ol { padding-left: 22px; }
+.md__heading { margin: 12px 0 4px; font-size: 16px; color: var(--green); }
+.md code { padding: 1px 5px; border-radius: 4px; background: var(--bg); font-size: 14px; }
+.md__pre { margin: 0 0 8px; padding: 8px 10px; border-radius: 6px; background: var(--bg); font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.md a { color: var(--blue); overflow-wrap: anywhere; }

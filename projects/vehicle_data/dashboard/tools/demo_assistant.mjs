@@ -111,3 +111,107 @@ export function demoAssistantRoutes(nowMs, scene = "explain") {
     {method: "GET", pathname: "/v1/assistant/", prefix: true, status: 404, json: unknown},
   ];
 }
+
+/* ---------- code research (dialogs/DtcResearch.jsx) ----------
+   Illustrative payloads in the research backend's API shapes. Nothing here was said by a model. */
+
+const hex = (n) => n.repeat(32).slice(0, 32);
+const RUN_DONE = hex("a1");
+const RUN_BUSY = hex("b2");
+const RUN_NEW = hex("c3");
+const RUN_OLD = hex("d4");
+
+const REPORT = [
+  "## What it means",
+  "B162E-15 is the body computer's fault for the **right low-beam lamp circuit**: it saw a short to battery, or an open circuit, on the output that drives that lamp. It does not say which, and with an open circuit the bulb is often fine.",
+  "## Likely causes on this van",
+  "- **Owner-fitted LED low beams.** An LED draws a fraction of a halogen's current, and the body computer reads that as an open circuit. This is the most likely cause here, and it is why the left low beam and the daytime lights report the same way.",
+  "- A loose or corroded lamp connector, or a pin that has backed out of it.",
+  "- A chafed wire in the harness near the headlamp that touches the body or a power feed.",
+  "## What to check",
+  "1. Confirm both low beams work. If the lamp lights and only the code is stored, the circuit is being misread, not broken.",
+  "2. Unplug the right lamp connector and look for green corrosion, bent pins or a loose terminal.",
+  "3. With the lamp unplugged and the lights off, check the lamp feed wire for continuity to ground with a multimeter; it should read open.",
+  "4. If the LED kit has a `CAN-bus` or load-resistor variant, that variant is the usual fix. You can do this yourself at the van.",
+  "## Sources",
+  "- [Ram Trucks owner resources](https://www.ramtrucks.com/)",
+  "- [NHTSA vehicle safety information](https://www.nhtsa.gov/)",
+  "- [ProMaster Forum](https://www.promasterforum.com/)",
+].join("\n");
+
+const ANSWER = [
+  "A load resistor can work, but it is the second choice. **First try the CAN-bus-ready (\"canceller\") version of the same LED bulb**, which has the resistance built in.",
+  "- Resistors get hot, so mount them on bare metal, away from wiring.\n- Fit one per lamp, in parallel with the bulb.",
+  "Because the code does not turn the lamp off, it is safe to drive with while you sort it out. This is general guidance; check it against your kit's instructions.",
+].join("\n\n");
+
+const SUMMARY = "Body computer sees the right low-beam circuit as open, most likely because the LED bulbs draw too little current.";
+
+function runBase(id, code, over) {
+  return {
+    run_id: id, module_key: "bcm_ccan", fca_display: code, created_at: null, updated_at: null, provider: "claude", model: "opus",
+    effort: "high", state: "done", busy: false, summary: SUMMARY, summary_note: null, duration_s: 214, error: null, reason: null,
+    turn_count: 1, can_continue: true, continue_mode: "resume", phase: null, progress: null, activity: {searches: 0, pages: 0},
+    elapsed_s: null, format_warnings: [], turns: [], ...over,
+  };
+}
+
+/** The research routes: models, the list, three codes with runs and one with none. */
+export function demoResearchRoutes(nowMs) {
+  const at = (minutes) => iso(nowMs - minutes * MINUTE_MS);
+  const done = runBase(RUN_DONE, "B162E-15", {
+    created_at: at(46), updated_at: at(40), turn_count: 3,
+    turns: [
+      {role: "assistant", kind: "report", text: REPORT, at: at(42), state: "complete", error: null, reason: null, mode: "initial", duration_s: 214},
+      {role: "user", kind: "question", text: "Would a load resistor fix it?", at: at(41)},
+      {role: "assistant", kind: "answer", text: ANSWER, at: at(40), state: "complete", error: null, reason: null, mode: "resumed", duration_s: 38},
+    ],
+  });
+  const busy = runBase(RUN_BUSY, "B104E-15", {
+    created_at: at(2), updated_at: at(0), state: "running", busy: true, summary: null, duration_s: null, can_continue: false,
+    continue_mode: "none", phase: "searching", progress: "Searching the web · 3 searches, 1 page", activity: {searches: 3, pages: 1},
+    elapsed_s: 47, provider: "codex", model: "gpt-6-astra", effort: "high",
+    turns: [{role: "assistant", kind: "report", text: null, at: at(2), state: "running", error: null, reason: null, mode: "initial", duration_s: null}],
+  });
+  const newer = runBase(RUN_NEW, "B104D-15", {
+    created_at: at(25), updated_at: at(22), provider: "codex", model: "gpt-6-astra", effort: "high",
+    summary: "Left daytime running light circuit reads open; check the LED lamp and its connector.",
+    turns: [{role: "assistant", kind: "report", text: REPORT.replace("right low-beam", "left daytime running light"), at: at(22), state: "complete",
+      error: null, reason: null, mode: "initial", duration_s: 171}],
+  });
+  const older = runBase(RUN_OLD, "B104D-15", {
+    created_at: at(1500), updated_at: at(1497), summary: "Left daytime lamp circuit short or open.",
+    turns: [{role: "assistant", kind: "report", text: "## What it means\nThe left daytime running light circuit reports a short to battery or an open.",
+      at: at(1497), state: "complete", error: null, reason: null, mode: "initial", duration_s: 190}],
+  });
+  const summary = (run) => {
+    const {phase, progress, activity, elapsed_s, format_warnings, turns, ...rest} = run;
+    return rest;
+  };
+  const item = (run, runs) => ({module_key: run.module_key, fca_display: run.fca_display, run_id: run.run_id, state: run.state, busy: run.busy,
+    summary: run.summary, summary_note: run.summary_note, provider: run.provider, model: run.model, effort: run.effort, updated_at: run.updated_at, runs});
+  const code = (c, runs, selected) => ({method: "GET", pathname: "/v1/assistant/dtc-research/code/bcm_ccan/" + c, prefix: false, status: 200,
+    json: {available: true, module_key: "bcm_ccan", fca_display: c, runs: runs.map(summary), selected}});
+  const catalog = {available: true, refreshing: false, default: {provider: "claude", model: "opus", effort: "high"}, groups: [
+    {provider: "claude", label: "Claude", available: true, reason: null, source: "discovered", checked_at: at(3), models: [
+      {id: "opus", label: "Opus", efforts: ["low", "medium", "high"], default_effort: "high"},
+      {id: "sonnet", label: "Sonnet", efforts: ["low", "medium", "high"], default_effort: "medium"},
+      {id: "haiku", label: "Haiku", efforts: [], default_effort: null}]},
+    {provider: "codex", label: "GPT (Codex)", available: true, reason: null, source: "discovered", checked_at: at(3), models: [
+      {id: "gpt-6-astra", label: "GPT-6-Astra", efforts: ["low", "medium", "high", "xhigh"], default_effort: "high"},
+      {id: "gpt-6.1-terra", label: "GPT-6.1-Terra", efforts: ["low", "medium", "high"], default_effort: "medium"}]},
+    {provider: "local", label: "Local models", available: false, reason: "No local model is set up on this Pi", source: "fallback", checked_at: null, models: []}]};
+  return [
+    {method: "GET", pathname: "/v1/assistant/models", prefix: false, status: 200, json: catalog},
+    {method: "GET", pathname: "/v1/assistant/dtc-research", prefix: false, status: 200,
+      json: {available: true, items: [item(busy, 1), item(newer, 2), item(done, 1)]}},
+    code("B162E-15", [done], done), code("B104E-15", [busy], busy), code("B104D-15", [newer, older], newer),
+    {method: "GET", pathname: "/v1/assistant/dtc-research/code/telematics/U1934-87", prefix: false, status: 200,
+      json: {available: true, module_key: "telematics", fca_display: "U1934-87", runs: [], selected: null}},
+    {method: "GET", pathname: "/v1/assistant/dtc-research/run/" + RUN_OLD, prefix: false, status: 200, json: {available: true, run: older}},
+    {method: "GET", pathname: "/v1/assistant/dtc-research/run/" + RUN_NEW, prefix: false, status: 200, json: {available: true, run: newer}},
+    {method: "GET", pathname: "/v1/assistant/dtc-research/run/" + RUN_BUSY + "/progress", prefix: false, status: 200,
+      json: {available: true, progress: {run_id: RUN_BUSY, state: "running", busy: true, phase: busy.phase, progress: busy.progress,
+        activity: busy.activity, elapsed_s: busy.elapsed_s, turn_count: 1, updated_at: busy.updated_at}}},
+  ];
+}

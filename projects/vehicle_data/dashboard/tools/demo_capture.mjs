@@ -33,9 +33,9 @@ export const CAPTURE_LOCALE = "en-US";
 async function extraRoutes(nowMs) {
   const {demoEventRoutes} = await import("./demo_events.mjs");
   // 12 explains event 614 and 13 drafts a new warning; the scene decides which chat opens.
-  const {DEMO_ASSISTANT_SCENES, demoAssistantRoutes, demoAssistantStorage} = await import("./demo_assistant.mjs");
+  const {DEMO_ASSISTANT_SCENES, demoAssistantRoutes, demoAssistantStorage, demoResearchRoutes} = await import("./demo_assistant.mjs");
   const chats = DEMO_ASSISTANT_SCENES.flatMap((chatScene) => demoAssistantRoutes(nowMs, chatScene).map((r) => ({...r, chatScene})));
-  return {routes: [...demoEventRoutes(nowMs), ...chats], storage: demoAssistantStorage()};
+  return {routes: [...demoEventRoutes(nowMs), ...demoResearchRoutes(nowMs), ...chats], storage: demoAssistantStorage()};
 }
 
 /**

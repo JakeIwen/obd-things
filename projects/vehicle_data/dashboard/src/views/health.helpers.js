@@ -381,6 +381,7 @@ export function codeRow(entry, nowMs) {
     meaning: meaning || "meaning not reviewed",
     reviewed: Boolean(meaning) && e.description_reviewed !== false,
     moduleKey: str(e.module_key),
+    moduleName: module || null,
     fca: str(e.fca_display),
     id: recordIdentity(e),
     details: rowDetails(e, module, nowMs),

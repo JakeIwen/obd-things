@@ -633,6 +633,39 @@ checks when stopped:
     the date ignored, and their panel offers `Restore`. A card whose codes are all ignored reads
     `No codes besides the ignored ones.`. Ignoring is display bookkeeping on the Pi; nothing is
     cleared in the van.
+  - **Research with AI** (`dialogs/DtcResearch.jsx`, `DtcResearch.helpers.js`, `src/dtcResearch*.js`;
+    API: the research backend's `/v1/assistant/models` and `/v1/assistant/dtc-research...`). The
+    panel button reads `Research with AI`, or `Open research` when the code has a run. A row with a
+    run shows `AI: <summary>` under the meaning (`AI: researching…` while a turn runs) with an info
+    icon saying it is AI research, not a reviewed meaning; the reviewed wording of the meaning is
+    unchanged. The list of newest runs (`summary`) is fetched when the card mounts, after a dialog
+    closes and when a run finishes; with no assistant access code in this browser nothing is
+    fetched, and a 404 on the routes (a Pi without research) hides the controls.
+  - The dialog (lazy chunk, `modalDialog.js` + `useController.js`): header code, module and
+    meaning. Without an access code it shows the warning chat's pairing form
+    (`components/AssistantPairing.jsx`, `assistantAccess.js`). No run yet (or `New research`): the
+    **model picker**, a line saying what is sent (code, module, the van's model facts; never the VIN
+    or a location; the model searches the web), and `Start research`, disabled while the catalog
+    says it is refreshing (re-fetched every 2 s, at most 15 times). A running turn shows the
+    service's progress text and elapsed time, a `Stop` button (`cancel`), and is polled every
+    second through `/progress`, fetching the run only when its turn count, state or busy flag
+    changes; polling pauses while the page is hidden and stops when the dialog closes. The state
+    lives on the Pi, so the dialog can be closed and reopened. A finished run shows the report and
+    its follow-up thread rendered through `markdownLite.js` (headings, paragraphs, lists, bold,
+    italic, inline code, fenced code as text, http/https links only; never HTML), `Runs`
+    (earlier runs of the code, shown when there is more than one), `New research`, and an
+    `Ask a follow-up...` box. An answer from a replayed session says so under it. The footer reads
+    model, effort, time and duration; a missing or shortened summary and missing report headings
+    are quiet footer notes. Every error `reason` maps to one sentence in `REASON_TEXT`. Times use
+    the Codes card's own formatter.
+  - **Model picker** (`components/ModelPicker.jsx`, `modelPicker.helpers.js`): the same `Popover`
+    and `Listbox` as the Modules filter, as a single select with models grouped by provider; effort
+    is a row of segmented buttons that follows the model (hidden for a model with no efforts, which
+    starts with `effort: null`); a provider that cannot run shows its reason sentence and no
+    models. The last choice is remembered per browser in `localStorage` (guarded, validated against
+    the catalog, else the catalog's default). The warning chat keeps its two native selects: its
+    controller exposes one provider's models and the current model's efforts only, so the swap
+    would change its snapshot and settings contract.
 - **Guarded scan**, inside the codes card, only when `web.dtc_jobs_enabled` (the Tailscale
   listener):
   - A parked-confirmation checkbox gates `Scan`.
