@@ -116,6 +116,8 @@ export function demoAssistantRoutes(nowMs, scene = "explain") {
    Illustrative payloads in the research backend's API shapes. Nothing here was said by a model. */
 
 const hex = (n) => n.repeat(32).slice(0, 32);
+/** `page.__demo.chat(RESEARCH_OFF_SCENE)` makes the models route answer with every provider unavailable. */
+export const RESEARCH_OFF_SCENE = "research-off";
 const RUN_DONE = hex("a1");
 const RUN_BUSY = hex("b2");
 const RUN_NEW = hex("c3");
@@ -197,11 +199,13 @@ export function demoResearchRoutes(nowMs) {
       {id: "opus", label: "Opus", efforts: ["low", "medium", "high"], default_effort: "high"},
       {id: "sonnet", label: "Sonnet", efforts: ["low", "medium", "high"], default_effort: "medium"},
       {id: "haiku", label: "Haiku", efforts: [], default_effort: null}]},
-    {provider: "codex", label: "GPT (Codex)", available: true, reason: null, source: "discovered", checked_at: at(3), models: [
-      {id: "gpt-6-astra", label: "GPT-6-Astra", efforts: ["low", "medium", "high", "xhigh"], default_effort: "high"},
-      {id: "gpt-6.1-terra", label: "GPT-6.1-Terra", efforts: ["low", "medium", "high"], default_effort: "medium"}]},
-    {provider: "local", label: "Local models", available: false, reason: "No local model is set up on this Pi", source: "fallback", checked_at: null, models: []}]};
+    {provider: "codex", label: "GPT (Codex)", available: false, reason: "Codex is not yet verified for research on this CLI version", source: "fallback", checked_at: null, models: []}]};
+  // Before sign-in and the memory measurement every group is unavailable; the dialog must read well.
+  const off = {available: true, refreshing: false, default: null, groups: [
+    {provider: "claude", label: "Claude", available: false, reason: "Claude is not signed in for research yet", source: "fallback", checked_at: null, models: []},
+    {provider: "codex", label: "GPT (Codex)", available: false, reason: "Codex is not yet verified for research on this CLI version", source: "fallback", checked_at: null, models: []}]};
   return [
+    {method: "GET", pathname: "/v1/assistant/models", prefix: false, status: 200, json: off, chatScene: RESEARCH_OFF_SCENE},
     {method: "GET", pathname: "/v1/assistant/models", prefix: false, status: 200, json: catalog},
     {method: "GET", pathname: "/v1/assistant/dtc-research", prefix: false, status: 200,
       json: {available: true, items: [item(busy, 1), item(newer, 2), item(done, 1)]}},

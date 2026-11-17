@@ -98,7 +98,7 @@ export const REASON_TEXT = Object.freeze({
   record_full: "This conversation is full. Start new research to continue.",
   cannot_continue: "The report did not finish, so there is nothing to follow up on. Start new research.",
   busy: "The assistant is busy with another job. Try again in a few seconds.",
-  rate_limited: "Too many requests in the last minute. Wait a moment and try again.",
+  rate_limited: "Too many research starts in the last minute. Wait a moment and try again.",
   daily_limit: "The daily research limit has been reached. Try again tomorrow.",
   provider_unavailable: "That model provider is not available right now.",
   worker_unavailable: "The research service on the Pi is not running.",
@@ -113,6 +113,7 @@ export const REASON_TEXT = Object.freeze({
   policy_violation: "The model tried something research does not allow, so the turn was stopped.",
   protocol_error: "The model's answer could not be read.",
   space_exhausted: "The research storage on the Pi is full.",
+  memory_exhausted: "The Pi ran short of memory and the run was stopped.",
 });
 
 export const TEXT = Object.freeze({
@@ -120,19 +121,23 @@ export const TEXT = Object.freeze({
   unavailable: "Code research is not available on this Pi.",
   unreachable: "Could not reach the Pi. Nothing changed; try again.",
   setupLead: "Pick a model to research this code. It searches the web for what the code means on this van.",
-  sentLine: "Sent to the model: the code, its module and the van's model facts. Never the VIN or a location. The model searches the web; web pages are untrusted.",
+  sentLine: "Sent to the model: the code, its module, the van's model facts and anything you type. The VIN is never sent. The model searches the web; web pages are untrusted.",
   working: "Working…",
   replayNote: "The original session could not be resumed; this answer came from a replay of the conversation.",
   askLabel: "Ask a follow-up",
   askPlaceholder: "Ask a follow-up...",
   refreshing: "Checking which models are available…",
-  noModels: "No model is available. Sign in to a provider on the Pi first.",
+  noModels: "Research is not set up on this Pi yet. The reason for each provider is shown above; Start stays off until one is ready.",
   summaryMissing: "The report had no one-line summary.",
   summaryTruncated: "The one-line summary was shortened.",
 });
 
-/** `REASON_TEXT[reason]`, else the service's own `detail`, else `fallback`. */
+/** Reasons whose `detail` says which of several causes it was, so the service's sentence is shown as it is. */
+const DETAIL_FIRST = new Set(["busy", "provider_unavailable"]);
+
+/** `REASON_TEXT[reason]` (the service's `detail` first for the reasons that have several causes), else `detail`, else `fallback`. */
 export function errorText(reason, detail, fallback = TEXT.unreachable) {
+  if (DETAIL_FIRST.has(reason) && str(detail)) return detail;
   return REASON_TEXT[reason] || str(detail) || fallback;
 }
 

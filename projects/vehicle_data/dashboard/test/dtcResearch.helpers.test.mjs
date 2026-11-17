@@ -46,9 +46,12 @@ test("question limits", () => {
 test("every API reason has an owner-facing sentence; unknown ones fall back to the detail", () => {
   const reasons = ["invalid_request", "not_found", "run_busy", "turn_limit", "record_full", "cannot_continue", "busy", "rate_limited",
     "daily_limit", "provider_unavailable", "worker_unavailable", "storage_error", "timeout", "cancelled", "interrupted", "provider_error",
-    "auth", "upstream_rate_limit", "budget_exceeded", "policy_violation", "protocol_error", "space_exhausted"];
+    "auth", "upstream_rate_limit", "budget_exceeded", "policy_violation", "protocol_error", "space_exhausted", "memory_exhausted"];
   for (const r of reasons) assert.ok(REASON_TEXT[r] && REASON_TEXT[r].length < 120, r);
-  assert.equal(errorText("busy", "detail words"), REASON_TEXT.busy);
+  assert.equal(errorText("busy", "A warning chat is answering a question."), "A warning chat is answering a question.", "busy shows its detail");
+  assert.equal(errorText("provider_unavailable", "Claude is not signed in for research yet"), "Claude is not signed in for research yet");
+  assert.equal(errorText("busy", ""), REASON_TEXT.busy);
+  assert.equal(errorText("timeout", "detail words"), REASON_TEXT.timeout, "a turn reason uses the table");
   assert.equal(errorText("brand_new_reason", "The Pi says so."), "The Pi says so.");
   assert.equal(errorText(undefined, undefined), TEXT.unreachable);
 });

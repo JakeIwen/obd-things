@@ -125,7 +125,7 @@ export default function DtcResearch({ open, target, onClose }) {
               onChange={(choice) => ctrl.setChoice(choice)} />
             <p class="muted research-sent">{TEXT.sentLine}</p>
             {snap.refreshing ? <p class="status-line" role="status">{TEXT.refreshing}</p> : null}
-            {snap.noModels ? <p class="status-line status-line--error">{TEXT.noModels}</p> : null}
+            {snap.noModels ? <p class="status-line" role="status">{TEXT.noModels}</p> : null}
             <div class="btn-row">
               <button type="button" class="btn btn--primary" disabled={!snap.canStart} onClick={() => void ctrl.start()}>
                 {snap.requesting ? "Starting…" : "Start research"}
