@@ -1748,6 +1748,22 @@ class ApiTests(unittest.TestCase):
         self.broker.health_response.assert_not_called()
         self.broker.dtc_response.assert_not_called()
 
+    def test_history_recent_is_served_from_memory_on_the_unix_api(self):
+        status, payload = self.client.request("GET", "/v1/history/recent")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["reason"], "history_disabled")
+
+        self.broker._history_recent_cache = {
+            "queried_at": datetime.now(timezone.utc).isoformat(),
+            "metrics": {},
+        }
+        self.broker.insights = mock.Mock()
+        status, payload = self.client.request("GET", "/v1/history/recent")
+        self.assertEqual(status, 200)
+        self.assertIs(payload["available"], True)
+        self.assertEqual(payload["bucket_seconds"], 60)
+        self.broker.insights.historian.metric_series.assert_not_called()
+
     def test_unix_api_accepts_bounded_battery_wake_mode(self):
         self.broker._collector_state = "running"
         self.broker._vehicle_state = {

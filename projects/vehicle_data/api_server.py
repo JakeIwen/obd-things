@@ -20,7 +20,7 @@ import types
 from dataclasses import dataclass, field
 from typing import Any
 
-from projects.vehicle_data import dtc_ignore, helper_hold, radar_service_control
+from projects.vehicle_data import dtc_ignore, helper_hold, history_recent, radar_service_control
 from projects.vehicle_data.http_common import (
     MAX_REQUEST_BYTES,
     MAX_OBSERVATION_QUEUE_SECONDS,
@@ -97,6 +97,7 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
         "/v1/status": "status_response",
         "/v1/snapshot": "snapshot_response",
         "/v1/history": "cached_history_response",
+        history_recent.API_PATH: "cached_history_recent_response",
         "/v1/health": "cached_health_response",
         "/v1/diagnostics/dtcs": "cached_dtc_response",
         "/v1/maintenance": "maintenance_response",

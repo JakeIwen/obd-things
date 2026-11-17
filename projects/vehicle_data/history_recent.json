@@ -1,0 +1,17 @@
+{
+  "path": "/v1/history/recent",
+  "window_seconds": 900,
+  "bucket_seconds": 60,
+  "at_basis": "bucket_start",
+  "metrics": [
+    "engine.coolant_temperature",
+    "transmission.oil_temperature",
+    "engine.oil_pressure",
+    "battery.voltage",
+    "engine.crankshaft_power",
+    "engine.vvt_oil_temperature",
+    "vehicle.speed",
+    "engine.rpm",
+    "generator.field_duty"
+  ]
+}

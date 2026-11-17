@@ -40,6 +40,7 @@ from projects.vehicle_data.helper_startup_grant import (
     pregrant_event_problem,
     ready_event_problem,
 )
+from projects.vehicle_data import history_recent
 from projects.vehicle_data.dtc_ignore import FILE_NAME as DTC_IGNORE_FILE, DtcIgnoreStore
 from projects.vehicle_data.maintenance import MaintenanceStore
 from projects.vehicle_data.last_readings import LastReadings
@@ -819,6 +820,9 @@ class TelemetryBroker:
             "health": self._initial_supplemental_payload("health"),
             "dtcs": self._initial_supplemental_payload("dtcs"),
         }
+        # Memory-only product of history_recent.query, refreshed with the supplemental cache but
+        # kept out of its status so a failure here never marks history/health/dtcs degraded.
+        self._history_recent_cache: dict[str, object] | None = None
         self._supplemental_cache_status: dict[str, object] = {
             "enabled": insights is not None,
             "state": "starting" if insights is not None else "disabled",
@@ -1062,6 +1066,19 @@ class TelemetryBroker:
     def cached_history_response(self) -> dict[str, object]:
         return self._cached_supplemental_response("history")
 
+    def cached_history_recent_response(self) -> dict[str, object]:
+        """The Drive sparklines' last 15 minutes, from memory (``history_recent.py``)."""
+
+        with self._lock:
+            cached = self._history_recent_cache
+        if cached is None and self.insights is None:
+            return {
+                "available": False,
+                "reason": "history_disabled",
+                "detail": "telemetry history is disabled by broker configuration",
+            }
+        return history_recent.fresh_response(cached)
+
     def _event_related_context(self):
         health = self.cached_health_response()
         return {"dtcs":self.cached_dtc_response(), "maintenance":self.maintenance.snapshot(),
@@ -1100,8 +1117,14 @@ class TelemetryBroker:
                 refreshed[kind] = json.loads(json.dumps(payload))
             except Exception as exc:
                 errors[kind] = f"{type(exc).__name__}: {exc}"
+        try:
+            recent = json.loads(json.dumps(history_recent.query(self.insights.historian)))
+        except Exception:
+            recent = None  # the previous product ages out through fresh_response
         duration_ms = max(0.0, self.monotonic() - started) * 1000.0
         with self._lock:
+            if recent is not None:
+                self._history_recent_cache = recent
             self._supplemental_cache.update(refreshed)
             self._supplemental_last_refresh_monotonic = self.monotonic()
             self._supplemental_cache_status.update(

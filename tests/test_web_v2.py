@@ -292,12 +292,13 @@ class CannedBrokerHandler(http.server.BaseHTTPRequestHandler):
             "/v1/status": STATUS,
             "/v1/snapshot": {"status": STATUS, "catalog": CATALOG, "metrics": METRICS},
             "/v1/history": {"available": True, "schema_version": 1, "recent_trips": []},
+            "/v1/history/recent": {"available": True, "bucket_seconds": 60, "metrics": {}},
             "/v1/health": HEALTH,
             "/v1/diagnostics/dtcs": DTCS,
             "/v1/maintenance": {"available": True, "oil_changes": []},
             "/v1/metrics": {"metrics": CATALOG},
         }
-        if path in routes:
+        if path in routes and path not in getattr(type(self), "routes_without", ()):
             payload = json.loads(json.dumps(routes[path]))
             status = 200
         else:
@@ -392,6 +393,22 @@ class WebV2Tests(unittest.TestCase):
 
         status, head, _ = self.request("GET", "/manifest.webmanifest")
         self.assertEqual(head["content-type"], "application/manifest+json")
+
+    def test_history_recent_is_relayed_as_a_read_and_an_old_broker_404_passes_through(self):
+        status, _, raw = self.request("GET", "/v1/history/recent")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw)["bucket_seconds"], 60)
+        status, _, _ = self.request("GET", "/v1/history/recent?window=1")  # no parameters exist
+        self.assertEqual(status, 200)
+        status, _, raw = self.request("GET", "/v1/history/other")
+        self.assertEqual(status, 404)
+        self.api.RequestHandlerClass.routes_without = {"/v1/history/recent"}
+        try:
+            status, _, raw = self.request("GET", "/v1/history/recent")
+        finally:
+            del self.api.RequestHandlerClass.routes_without
+        self.assertEqual(status, 404)
+        self.assertEqual(json.loads(raw)["reason"], "not_found")
 
     def test_gzip_is_used_only_when_accepted_and_worthwhile(self):
         status, head, raw = self.request("GET", "/assets/app.deadbeef01.js", {"Accept-Encoding": "gzip, deflate"})

@@ -1592,6 +1592,7 @@ GET  /v1/snapshot
 GET  /v1/metrics
 GET  /v1/metrics/battery.voltage
 GET  /v1/history
+GET  /v1/history/recent
 GET  /v1/health
 GET  /v1/diagnostics/dtcs
 POST /v1/acquisitions/battery.voltage
@@ -1607,7 +1608,17 @@ POST /v1/radar/alignment-reference
      {"action":"stop"}
 ```
 
-GETs are cache-only. Observation POSTs exist only on the Unix API and are not
+GETs are cache-only. `GET /v1/history/recent` (no parameters; contract in `history_recent.json`,
+code in `history_recent.py`) is the Drive sparklines' page-load seed: `{available, generated_at,
+window_seconds: 900, bucket_seconds: 60, at_basis: "bucket_start", metrics: {name: [{at, value}]}}`
+for the nine sparkline metrics, one mean per minute, oldest first. `at` is the start of the
+minute-long bucket, aligned to the broker's query time rather than the wall-clock minute; a minute
+with no samples is absent; `generated_at` is the Pi's clock when the reply was served, so
+`generated_at - at` is a point's age with no dependence on the reader's clock. The broker queries
+the historian (existing 1-minute rollups, no new writer) inside its 60-second supplemental refresh
+and serves memory; a bucket that ended before the window opened is dropped when served, so a
+parked van answers empty lists. An older broker without the route answers 404 through the web
+relay. Observation POSTs exist only on the Unix API and are not
 proxied by `web.py`, even when web acquisition is deliberately enabled. The
 body must contain exactly the five shown fields. Metric, source, unit, bus,
 quality, scalar type, and numeric bounds are validated together; publisher

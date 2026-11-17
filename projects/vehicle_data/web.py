@@ -31,6 +31,7 @@ from projects.vehicle_data.warning_chat import (
 )
 from projects.vehicle_data.broker import DEFAULT_SOCKET
 from projects.vehicle_data.dtc_ignore import API_PATH as DTC_IGNORE_PATH
+from projects.vehicle_data.history_recent import API_PATH as HISTORY_RECENT_PATH
 from projects.vehicle_data.dtc_research_contract import relay_allowed as dtc_research_relay_allowed
 from projects.vehicle_data.radar_reference import API_PATH as RADAR_REFERENCE_PATH
 from projects.vehicle_data.radar_service_alignment import (
@@ -130,6 +131,7 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
         (r"/v1/assistant/.*", "_assistant_get"),
         (r"/v1/events(?:/.*)?", "_event_get"),
         (r"/v1/(?:status|snapshot|history|health|diagnostics/dtcs|maintenance)", "_proxy_get"),
+        (HISTORY_RECENT_PATH, "_proxy_get"),
         (r"/v1/metrics(?:/[^/]+)?", "_proxy_get"),
         (r"/v1/stream", "_stream_get"),
         (r"/v1/diagnostics/dtc-jobs/current", "_dtc_current"),
