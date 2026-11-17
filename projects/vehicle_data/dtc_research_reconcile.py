@@ -5,9 +5,12 @@ still runs is adopted by its ``attempt_id``; any other job is cancelled (an inst
 reservation is waited for); every turn left ``reconciling`` is asked about once, and an attempt the
 worker does not know, or whose outcome it dropped, becomes ``interrupted``. Nothing is ever
 relaunched here, and nothing is inferred from a timeout: an unreachable worker keeps the state
-``unknown`` and research answers ``worker_unavailable``.
+``unknown`` and research answers ``worker_unavailable``. An outcome is acknowledged only after its
+record was saved; a failed write keeps the state ``unknown`` and the pass is retried.
 """
 
+import json
+import sys
 import threading
 
 from projects.vehicle_data.research_worker_client import WorkerUnreachable
@@ -28,12 +31,18 @@ class Reconciler:
     def _loop(self):
         manager = self.manager
         while not manager.closed.is_set():
-            if manager.state == "idle":
-                self.wake.wait(IDLE_CHECK_SECONDS)
-                self.wake.clear()
-                self._notice_restart()
-                continue
-            if not self.reconcile_once():
+            try:
+                if manager.state == "idle":
+                    self.wake.wait(IDLE_CHECK_SECONDS)
+                    self.wake.clear()
+                    self._notice_restart()
+                    continue
+                settled = self.reconcile_once()
+            except Exception as exc:  # the only thread that can reopen admission must not die
+                print(json.dumps({"event": "dtc_research_reconcile_failed", "error": repr(exc)[:300]}),
+                      file=sys.stderr, flush=True)
+                settled = False
+            if not settled:
                 manager.closed.wait(self.retry)
 
     def _notice_restart(self):
@@ -60,10 +69,10 @@ class Reconciler:
                        for turn in record["turns"][-1:] if turn["state"] == "reconciling" and turn["attempt_ids"]}
             for record in manager.store.records.values():  # reconciling without any attempt: never launched
                 last = record["turns"][-1] if record["turns"] else None
-                if last and last["state"] == "reconciling" and not last["attempt_ids"]:
-                    manager._apply(record, last, {"status": "failed", "reason": "interrupted",
-                                                  "detail": "Interrupted by a restart before it started"})
-                    manager.store.save(record)
+                if last and last["state"] == "reconciling" and not last["attempt_ids"] \
+                        and not manager._settle(record, {"status": "failed", "reason": "interrupted",
+                                                         "detail": "Interrupted by a restart before it started"}):
+                    return False
             job = status.get("job")
             if job and job.get("attempt_id") in pending and job.get("kind") == "turn":
                 run_id = pending.pop(job["attempt_id"])
@@ -82,16 +91,17 @@ class Reconciler:
             except WorkerUnreachable:
                 return False
             if state.get("known") and state.get("outcome_state") == "held":
-                manager._finish(run_id, attempt_id, state["outcome"])
+                if not manager._finish(run_id, attempt_id, state["outcome"]):
+                    return False  # not saved: keep it on the worker and try again
                 try:
                     manager.worker.acknowledge(attempt_id)
                 except WorkerUnreachable:
                     pass
             elif state.get("known") and state.get("state") != "finished":
                 return False  # the worker took it on after all; the next pass adopts it
-            else:
-                manager._finish(run_id, attempt_id, {"status": "failed", "reason": "interrupted",
-                                                     "detail": "Interrupted by a restart of the research service"})
+            elif not manager._finish(run_id, attempt_id, {"status": "failed", "reason": "interrupted",
+                                                          "detail": "Interrupted by a restart of the research service"}):
+                return False
         with manager.lock:
             try:
                 manager.worker.sweep(set(manager.store.records))

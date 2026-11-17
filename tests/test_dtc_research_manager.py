@@ -41,6 +41,7 @@ class RigClient:
     def __init__(self, rig):
         self.rig, self.down, self.lose_reply, self.drop_request = rig, False, False, False
         self.launches, self.deleted = [], []
+        self.garbled_replies = 0  # attempt replies that break the follow thread (an unforeseen bug)
 
     def _call(self, method, path, payload=None):
         if self.down:
@@ -63,6 +64,9 @@ class RigClient:
         return reply
 
     def attempt(self, attempt_id):
+        if self.garbled_replies:
+            self.garbled_replies -= 1
+            return {"known": True, "outcome_state": "held"}  # no outcome: the follow thread raises
         return self._call("GET", f"/attempts/{attempt_id}")[1]
 
     def acknowledge(self, attempt_id):
@@ -99,6 +103,17 @@ class GatedBroker(Broker):
         return super().request(method, path)
 
 
+class FlakyStore(Store):
+    """A store whose writes fail while ``failing`` is set (a full or read-only disk)."""
+
+    failing = False
+
+    def save(self, record):
+        if self.failing:
+            raise OSError(28, "No space left on device")
+        super().save(record)
+
+
 class ManagerTests(unittest.TestCase):
     def setUp(self):
         self.rig = WorkerRig({"mode": "ok", "answer": REPORT})
@@ -106,9 +121,9 @@ class ManagerTests(unittest.TestCase):
         self.client = RigClient(self.rig)
         self.manager = self.build()
 
-    def build(self, ledger_limit=60, refresh=True, broker=None):
+    def build(self, ledger_limit=60, refresh=True, broker=None, store_class=Store):
         base = Path(self.state.name)
-        store = Store(base / "runs")
+        store = store_class(base / "runs")
         store.load(log=lambda line: None)
         catalog = Catalog(self.client, poll=.05)
         manager = ResearchManager(store, Ledger(base / "admissions.json", limit=ledger_limit), catalog,
@@ -386,6 +401,64 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(len(mine), 1)
         self.assertLessEqual(len(self.manager.store.records), MAX_RUNS)
         self.assertTrue(all(r == mine[0]["run_id"] or r == "run_busy" for r in results), results)
+
+    def test_a_failed_record_write_keeps_following_and_saves_before_acknowledging(self):
+        self.manager.close()
+        self.manager = self.build(store_class=FlakyStore)
+        self.rig.scenario({"mode": "ok", "answer": REPORT, "delay": 1})
+        run = self.start()
+        attempt = self.manager.store.records[run["run_id"]]["turns"][0]["attempt_ids"][0]
+        self.manager.store.failing = True  # the session id and the outcome cannot be written
+        self.rig.wait(attempt)
+        time.sleep(.5)
+        self.assertEqual(self.rig.worker.table.get(attempt)["outcome_state"], "held")  # not acknowledged
+        self.assertIn(attempt, self.manager.following)
+        path = f"/v1/assistant/dtc-research/run/{run['run_id']}"
+        self.assertTrue(self.manager.handle("GET", path, None)["run"]["busy"])
+        self.manager.store.failing = False
+        self.assertEqual(self.settle(run["run_id"])["state"], "done")
+        deadline = time.monotonic() + 5
+        while self.rig.worker.table.get(attempt)["outcome_state"] != "acknowledged" and time.monotonic() < deadline:
+            time.sleep(.05)
+        self.assertEqual(self.rig.worker.table.get(attempt)["outcome_state"], "acknowledged")
+        saved = Store(Path(self.state.name) / "runs")
+        saved.load(log=lambda line: None)
+        self.assertEqual(saved.records[run["run_id"]]["turns"][0]["state"], "complete")
+        self.assertEqual(saved.records[run["run_id"]]["session"]["state"], "present")
+
+    def test_a_failed_follow_thread_hands_its_turn_back_to_reconciliation(self):
+        self.rig.scenario({"mode": "ok", "answer": REPORT, "delay": 1})
+        self.client.garbled_replies = 1
+        run = self.start()
+        deadline = time.monotonic() + 5
+        while self.manager.state != "unknown" and time.monotonic() < deadline:
+            time.sleep(.02)
+        self.assertEqual(self.manager.state, "unknown")  # research admission closes until it is settled
+        self.assertEqual(self.manager.store.records[run["run_id"]]["turns"][0]["state"], "reconciling")
+        self.assertTrue(Reconciler(self.manager, retry=.05).reconcile_once())  # adopted or settled, never relaunched
+        self.assertEqual(self.manager.state, "idle")
+        self.assertEqual(self.settle(run["run_id"])["state"], "done")
+        self.assertEqual(len(self.rig.prompts()), 1)
+
+    def test_reconciliation_does_not_acknowledge_an_outcome_it_could_not_save(self):
+        self.rig.scenario({"mode": "ok", "answer": REPORT, "delay": .5})
+        run = self.start()
+        attempt = self.manager.store.records[run["run_id"]]["turns"][0]["attempt_ids"][0]
+        self.manager.closed.set()  # the advisor stops before the answer arrives
+        self.rig.wait(attempt)
+        store = FlakyStore(Path(self.state.name) / "runs")
+        store.load(log=lambda line: None)
+        store.failing = True
+        restarted = ResearchManager(store, self.manager.ledger, self.manager.catalog, self.client, Broker(), poll=.05)
+        reconciler = Reconciler(restarted, retry=.05)
+        self.assertFalse(reconciler.reconcile_once())
+        self.assertEqual(self.rig.worker.table.get(attempt)["outcome_state"], "held")
+        self.assertEqual(restarted.state, "unknown")
+        store.failing = False
+        self.assertTrue(reconciler.reconcile_once())
+        self.assertEqual(self.rig.worker.table.get(attempt)["outcome_state"], "acknowledged")
+        self.assertEqual(store.records[run["run_id"]]["turns"][0]["state"], "complete")
+        self.manager = restarted
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,9 +5,12 @@ context from the broker, admits the launch in the durable ledger, and sends the 
 one launch request per ``attempt_id``, ever (the send-once rule). After that it only asks about the
 attempt: an adopted outcome is saved and acknowledged; an attempt the worker does not know, or
 whose outcome was dropped, makes the turn ``interrupted``. It never infers that research is idle
-from a timeout. See docs/dtc-research.md.
+from a timeout, and it acknowledges an outcome only once the record holding it is on disk: a failed
+write keeps the follow thread asking (and, if a follow thread itself fails, the turn goes back to
+reconciliation). See docs/dtc-research.md.
 """
 
+import copy
 from datetime import datetime
 import json
 import sys
@@ -122,7 +125,7 @@ class ResearchManager:
         record["turns"].append(records.new_turn("report"))
         self.store.records[run_id] = record
         try:
-            self.store.save(record)
+            self._save(record)
             self._launch(record, "initial", first_prompt(context))
         except Exception:
             self.store.delete(run_id)
@@ -154,7 +157,7 @@ class ResearchManager:
             record["turns"].append(turn)
             record["request_ids"].append(fields["request_id"])
             try:
-                self.store.save(record)
+                self._save(record)
                 if record["session"]["state"] == "present":
                     refusal = self._launch(record, "resume", follow_up_prompt(fields["question"]), quiet={"session_missing"})
                     if refusal == "session_missing":
@@ -165,7 +168,10 @@ class ResearchManager:
             except Exception:
                 record["turns"].pop()
                 record["request_ids"].pop()
-                self.store.save(record)
+                try:
+                    self.store.save(record)
+                except OSError:  # the file keeps the unsent turn; it is reconciled as never launched
+                    log("dtc_research_save_failed", run_id=record["run_id"], during="ask_rollback")
                 raise
             self.window.record()
             return {"available": True, "run": records.full(record)}
@@ -196,7 +202,12 @@ class ResearchManager:
         self.ledger.admit(record["run_id"], attempt_id, kind)
         turn["attempt_ids"].append(attempt_id)
         turn["mode"] = {"initial": "initial", "resume": "resumed", "replay": "replayed"}[kind]
-        self.store.save(record)
+        try:
+            self._save(record)  # the attempt id is on disk before the request can arrive
+        except ResearchError:
+            self.ledger.refused(attempt_id)
+            turn["attempt_ids"].pop()
+            raise
         body = {"attempt_id": attempt_id, "expected_instance_id": self.instance_id, "run_id": record["run_id"],
                 "provider": record["provider"], "model": record["model"], "effort": record["effort"],
                 "kind": "resume" if kind == "resume" else "initial",
@@ -235,8 +246,22 @@ class ResearchManager:
     def _follow_loop(self, run_id, attempt_id):
         try:
             self._watch(run_id, attempt_id)
+            return
+        except Exception as exc:  # never leave a running turn unwatched
+            log("dtc_research_follow_failed", run_id=run_id, attempt_id=attempt_id, error=repr(exc)[:300])
         finally:
             self.following.discard(attempt_id)
+        self._return_to_reconciliation(run_id, attempt_id)
+
+    def _return_to_reconciliation(self, run_id, attempt_id):
+        """Hand a turn whose follow thread failed back to the reconciler, which adopts it or asks about it."""
+        with self.lock:
+            record = self.store.records.get(run_id)
+            turn = record["turns"][-1] if record and record["turns"] else None
+            if turn and attempt_id in turn["attempt_ids"] and turn["state"] in records.BUSY_STATES:
+                turn["state"] = "reconciling"
+                self.state = "unknown"
+        self.wake_reconciler()
 
     def _watch(self, run_id, attempt_id):
         expected = self.instance_id
@@ -248,17 +273,18 @@ class ResearchManager:
                 continue
             if not state.get("known") or state.get("outcome_state") == "dropped":
                 why = "it was never accepted" if state.get("instance_id") == expected else "the research service restarted"
-                self._finish(run_id, attempt_id, {"status": "failed", "reason": "interrupted",
-                                                  "detail": f"The answer was lost ({why})"})
-                return
-            if state.get("outcome_state") == "held":
-                self._finish(run_id, attempt_id, state["outcome"])
-                try:
-                    self.worker.acknowledge(attempt_id)
-                except WorkerUnreachable:
-                    pass
-                return
-            self._progress(run_id, attempt_id, state)
+                if self._finish(run_id, attempt_id, {"status": "failed", "reason": "interrupted",
+                                                     "detail": f"The answer was lost ({why})"}):
+                    return
+            elif state.get("outcome_state") == "held":
+                if self._finish(run_id, attempt_id, state["outcome"]):
+                    try:
+                        self.worker.acknowledge(attempt_id)
+                    except WorkerUnreachable:
+                        pass
+                    return
+            else:
+                self._progress(run_id, attempt_id, state)
             time.sleep(self.poll)
 
     def _progress(self, run_id, attempt_id, state):
@@ -273,25 +299,44 @@ class ResearchManager:
                 turn["state"] = "running"
             if state.get("session_id") and record["session"]["id"] != state["session_id"]:
                 record["session"] = {"id": state["session_id"], "state": "present"}
-                self.store.save(record)
+                try:
+                    self.store.save(record)
+                except OSError:  # kept in memory; the outcome's save writes it with the rest
+                    log("dtc_research_save_failed", run_id=run_id, during="progress")
 
     def _finish(self, run_id, attempt_id, outcome):
+        """Settle an attempt's outcome in its record. ``True`` once that is saved, or when the record
+        no longer waits on this attempt; ``False`` when the save failed, so the caller keeps the
+        outcome unacknowledged on the worker and tries again."""
         with self.lock:
             record = self.store.records.get(run_id)
             if record is None:
-                return
+                return True
             turn = record["turns"][-1]
             if attempt_id not in turn["attempt_ids"] or turn["state"] not in records.BUSY_STATES:
-                return
+                return True
             if outcome.get("reason") == "resume_unverified" and turn["mode"] == "resumed":
                 record["session"] = {"id": None, "state": "absent"}
                 try:
                     self._launch(record, "replay", self._replay_prompt(record))
-                    return
+                    return True
                 except ChatError as exc:
                     outcome = {"status": "failed", "reason": "provider_error", "detail": f"Could not continue: {exc}"}
-            self._apply(record, turn, outcome)
-            self.store.save(record)
+            return self._settle(record, outcome)
+
+    def _settle(self, record, outcome):
+        """Apply ``outcome`` to the record's last turn and save it; the live record changes only once
+        the result is on disk. ``False`` when the save failed (the turn stays as it was)."""
+        settled = copy.deepcopy(record)
+        self._apply(settled, settled["turns"][-1], outcome)
+        try:
+            self.store.save(settled)
+        except OSError:
+            log("dtc_research_save_failed", run_id=record["run_id"], during="outcome")
+            return False
+        record.clear()
+        record.update(settled)
+        return True
 
     def _apply(self, record, turn, outcome):
         turn["completed_at"] = now()
@@ -317,6 +362,12 @@ class ResearchManager:
             return
         turn.update(state="failed", reason=reason if reason in TURN_REASONS else "provider_error",
                     error=str(outcome.get("detail") or "The research turn failed")[:300])
+
+    def _save(self, record):
+        try:
+            self.store.save(record)
+        except OSError:
+            raise ResearchError("storage_error", "The Pi could not save the research record; nothing was started") from None
 
     def _evict(self, run_id):
         self.store.delete(run_id)
