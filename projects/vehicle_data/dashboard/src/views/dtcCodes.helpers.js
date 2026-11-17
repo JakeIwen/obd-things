@@ -4,7 +4,8 @@
  * Node-testable: no Preact, no store, no DOM. `health.helpers.js` composes them in `codesView`.
  */
 
-import { DTC_GROUPS, obj, arr, num, str, moduleList, filteredTime } from "./dtcSources.helpers.js";
+import { DTC_GROUPS, obj, arr, num, str, moduleList } from "./dtcSources.helpers.js";
+import { fmtTime } from "../format.js";
 import { identity, ignoredLabel } from "../dtcIgnore.helpers.js";
 
 /**
@@ -106,7 +107,7 @@ export function ignoredGroup(entries, found, keys, nowMs, rowFor) {
       fca: entry.code,
       ignored: true,
       note: entry.note,
-      meta: [moduleName, ignoredLabel(entry, filteredTime)].filter(Boolean).join(" · "),
+      meta: [moduleName, ignoredLabel(entry, (iso) => fmtTime(iso, new Date(nowMs)))].filter(Boolean).join(" · "),
     });
   }
   return {

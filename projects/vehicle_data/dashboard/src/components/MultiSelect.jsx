@@ -28,9 +28,9 @@ export default function MultiSelect({ id, label, options, selected, onChange, no
           {triggerText(keys, options, noun)}
         </button>
         {chips.map((chip) => (
-          <button key={chip.key} type="button" class="chip" aria-label={"Remove " + chip.label}
+          <button key={chip.key} type="button" class="chip" title={chip.label} aria-label={"Remove " + chip.label}
             onClick={() => onChange(toggleKey(keys, chip.key, options))}>
-            <span class="chip__text">{chip.label}</span>
+            <span class="chip__text">{chip.text}</span>
             <span class="chip__x" aria-hidden="true">×</span>
           </button>
         ))}

@@ -340,10 +340,11 @@ function statusLabels(e) {
   ].filter(Boolean);
 }
 
-/** Label/value pairs the open row shows: module, bus, first and last seen (Mountain), status flags. */
-function rowDetails(e, module) {
-  const first = str(e.first_seen_at) && parseDate(e.first_seen_at) ? filteredTime(e.first_seen_at) : null;
-  const last = str(e.last_seen_at) && parseDate(e.last_seen_at) ? filteredTime(e.last_seen_at) : null;
+/** Label/value pairs the open row shows: module, bus, first and last seen (as the row shows them), status flags. */
+function rowDetails(e, module, nowMs) {
+  // Same formatter and zone as the closed row's "last seen", so the two never disagree.
+  const first = when(e.first_seen_at, nowMs);
+  const last = when(e.last_seen_at, nowMs);
   const labels = statusLabels(e);
   return [
     ["Module", [module, busName(e.logical_bus)].filter(Boolean).join(" · ") || null],
@@ -379,7 +380,7 @@ export function codeRow(entry, nowMs) {
     moduleKey: str(e.module_key),
     fca: str(e.fca_display),
     id: recordIdentity(e),
-    details: rowDetails(e, module),
+    details: rowDetails(e, module, nowMs),
     extra: null,
     meta:
       [

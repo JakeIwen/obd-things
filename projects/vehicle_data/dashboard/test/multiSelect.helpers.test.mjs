@@ -34,7 +34,7 @@ test("the button text says all, the one name or the number", () => {
 });
 
 test("chips show the chosen options only while the filter narrows", () => {
-  assert.deepEqual(chipsOf(["c", "a"], OPTIONS), [{ key: "a", label: "Alpha" }, { key: "c", label: "Charlie" }]);
+  assert.deepEqual(chipsOf(["c", "a"], OPTIONS), [{ key: "a", label: "Alpha", text: "Alpha" }, { key: "c", label: "Charlie", text: "Charlie" }]);
   assert.deepEqual(chipsOf([], OPTIONS), []);
   assert.deepEqual(chipsOf(["a", "b", "c"], OPTIONS), []);
 });
@@ -71,4 +71,20 @@ test("a group heading starts where the group does", () => {
     { key: "4", label: "Four" },
   ];
   assert.deepEqual(grouped.map((_, i) => startsGroup(grouped, i)), [true, false, true, false]);
+});
+
+test("chips drop a trailing parenthetical, unless two chosen names would read alike", () => {
+  const options = [
+    { key: "a", label: "Body Control Module (C-CAN diagnostic endpoint)" },
+    { key: "b", label: "Marelli Instrument Panel Cluster (IPC)" },
+    { key: "c", label: "Radio (RFH)" },
+    { key: "d", label: "Radio (RFH2)" },
+    { key: "e", label: "(only parenthetical)" },
+  ];
+  const chips = chipsOf(["a", "b", "c"], options);
+  assert.deepEqual(chips.map((c) => c.text), ["Body Control Module", "Marelli Instrument Panel Cluster", "Radio"]);
+  assert.equal(chips[0].label, options[0].label, "the full name stays for the title and aria-label");
+  const same = chipsOf(["c", "d"], options);
+  assert.deepEqual(same.map((c) => c.text), ["Radio (RFH)", "Radio (RFH2)"]);
+  assert.equal(chipsOf(["e", "a"], options)[1].text, "(only parenthetical)");
 });

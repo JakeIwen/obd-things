@@ -70,7 +70,7 @@ test("ignored codes leave their group, the counts and the badge, and fill the Ig
   const row = vm.ignored.rows.find((r) => r.code === "B162A-15");
   assert.equal(row.note, "LED headlights");
   assert.match(row.meaning, /Left low-beam circuit/);
-  assert.match(row.meta, /^Body Control Module .* · Ignored Nov 16, 2026/);
+  assert.match(row.meta, /^Body Control Module .* · Ignored (Nov 16, )?\d{1,2}:\d{2} [ap]m$/);
   assert.equal(row.ignored, true);
   assert.equal(row.fca, "B162A-15");
   assert.equal(row.moduleKey, "bcm_ccan");
@@ -133,8 +133,8 @@ test("the row model carries what the open panel needs", () => {
   assert.equal(row.extra, null, "the secondary line is empty until something supplies one");
   const labels = Object.fromEntries(row.details);
   assert.match(labels.Module, /^Body Control Module/);
-  assert.match(labels["First seen"], /M[SD]T$/, "times are Mountain");
-  assert.match(labels["Last seen"], /M[SD]T$/);
+  assert.match(labels["Last seen"], /\d{1,2}:\d{2} [ap]m$/, "the same clock format as the closed row");
+  assert.equal(row.meta.includes("last seen " + labels["Last seen"]), true, "the row and the panel show one instant the same way");
   assert.match(labels.Status, /Current/);
   const bare = codesView({ ...DTCS, groups: { ...DTCS.groups, current: [{ module_key: "x", description: "d" }] }, group_counts: { ...DTCS.group_counts, current: 1 } }, NOW, false);
   assert.equal(bare.current.rows[0].id, null, "a record without an FCA code cannot be ignored");

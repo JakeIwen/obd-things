@@ -41,7 +41,12 @@ export function chipsOf(selected, options) {
   const keys = validKeys(selected, options);
   if (keys.length === 0 || keys.length === options.length) return [];
   const on = new Set(keys);
-  return options.filter((o) => on.has(o.key)).map((o) => ({ key: o.key, label: o.label }));
+  const chosen = options.filter((o) => on.has(o.key));
+  const short = (label) => label.replace(/\s*\([^()]*\)\s*$/, "") || label;
+  const counts = new Map();
+  for (const o of chosen) counts.set(short(o.label), (counts.get(short(o.label)) || 0) + 1);
+  // Chips drop a trailing parenthetical; two that would read alike keep their full names.
+  return chosen.map((o) => ({ key: o.key, label: o.label, text: counts.get(short(o.label)) > 1 ? o.label : short(o.label) }));
 }
 
 /** What a key press means in a listbox, or null when it is not the listbox's. */

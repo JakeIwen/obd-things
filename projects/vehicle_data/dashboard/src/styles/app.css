@@ -208,7 +208,7 @@ a { color: var(--blue); }
 .drive2-radar__axis { display: flex; flex-direction: column; justify-content: space-evenly; min-width: 0; height: 100%; }
 .drive2-radar__name { font-size: 14px; font-weight: 700; letter-spacing: .04em; color: var(--dim); white-space: nowrap; }
 .drive2-radar__value { font-size: var(--value); font-weight: 600; line-height: 1.1; letter-spacing: -.02em; white-space: nowrap; }
-.drive2-radar__aim { min-height: 1.3em; font-size: 14px; color: var(--text-2); white-space: nowrap; }
+.drive2-radar__aim { height: 1.4em; line-height: 1.4em; overflow: hidden; font-size: 14px; color: var(--text-2); white-space: nowrap; }
 .drive2-radar__row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 15px; color: var(--text-2); white-space: nowrap; }
 .drive2-radar__row b { color: var(--text); font-weight: 600; }
 .drive2-radar--held .drive2-radar__value, .drive2-radar--held .drive2-radar__row b { opacity: .55; }
