@@ -5,11 +5,15 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import json
 import unittest
+import tempfile
+from pathlib import Path
 from unittest import mock
 
 from projects.vehicle_data import history_recent
 from projects.vehicle_data.broker import TelemetryBroker
+from projects.vehicle_data.historian import TelemetryHistorian
 from tests.test_vehicle_data import FakeAcquirer
+from tests.test_vehicle_historian import available, definition, snapshot
 
 NOW = datetime(2026, 11, 17, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -49,6 +53,40 @@ class QueryTests(unittest.TestCase):
             self.assertEqual(kwargs["end"], NOW)
         self.assertEqual(product["metrics"]["vehicle.speed"], [{"at": at(120), "value": 55.5}])
         self.assertEqual(product["metrics"]["engine.rpm"], [])
+
+
+class RealHistorianLabelTests(unittest.TestCase):
+    """The reply's ``at`` must be the true wall-clock minute start, whatever second the query runs."""
+
+    def test_labels_are_the_minute_each_value_was_recorded_in(self):
+        speed = definition("vehicle.speed", "mph")
+        start = datetime(2026, 11, 17, 11, 40, 0, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as tmp:
+            with TelemetryHistorian(Path(tmp) / "h.sqlite3") as historian:
+                # One sample every 10 s; the value is the minute-of-hour, so a point's value names
+                # the minute it covers.
+                for index in range(0, 25 * 6):
+                    when = start + timedelta(seconds=10 * index)
+                    historian.ingest_snapshot(
+                        snapshot(when, [speed], {"vehicle.speed": available(speed, float(when.minute), when)}),
+                        captured_at=when,
+                    )
+                for now in (
+                    datetime(2026, 11, 17, 11, 56, 1, tzinfo=timezone.utc),
+                    datetime(2026, 11, 17, 11, 57, 30, 500000, tzinfo=timezone.utc),
+                    datetime(2026, 11, 17, 11, 59, 59, tzinfo=timezone.utc),
+                    datetime(2026, 11, 17, 12, 0, 0, tzinfo=timezone.utc),
+                    datetime(2026, 11, 17, 12, 1, 1, tzinfo=timezone.utc),
+                    datetime(2026, 11, 17, 12, 4, 12, tzinfo=timezone.utc),
+                ):
+                    with self.subTest(now=now.isoformat()):
+                        points = history_recent.query(historian, now)["metrics"]["vehicle.speed"]
+                        self.assertTrue(points)
+                        for point in points:
+                            label = datetime.fromisoformat(point["at"])
+                            self.assertEqual((label.second, label.microsecond), (0, 0))
+                            self.assertEqual(float(label.minute), point["value"])
+                            self.assertLessEqual(label + timedelta(minutes=1), now)
 
 
 class FreshResponseTests(unittest.TestCase):

@@ -6,9 +6,13 @@ and bucket come from ``history_recent.json``, which the dashboard reads too, so 
 drift. The broker queries on its existing 60-second supplemental refresh and serves the result
 from memory (``fresh_response``), so no request touches SQLite.
 
-``at`` is the start of its bucket (``TelemetryHistorian.metric_series`` labels a bucket by its
-start); ``value`` is the mean of that bucket's samples. Buckets are aligned to the end of the
-query window, not to wall-clock minutes. A minute with no samples is simply absent.
+``at`` is the start of a wall-clock minute and ``value`` the mean of that minute's samples. The
+query ends at the last whole minute boundary, so ``metric_series``'s query-relative buckets
+coincide with the historian's minute rollups and its bucket-start label is the true minute start
+(an unaligned end would label a rollup up to 59 s early). The minute in progress is therefore not
+included, and a minute with no samples is simply absent. The end is never moved past ``now``:
+``metric_series`` rolls up every minute before its ``end``, so a later end would freeze the
+minute in progress before its samples had arrived.
 """
 
 from __future__ import annotations
@@ -24,12 +28,16 @@ WINDOW_SECONDS = VOCABULARY["window_seconds"]
 BUCKET_SECONDS = VOCABULARY["bucket_seconds"]
 AT_BASIS = VOCABULARY["at_basis"]
 METRICS = tuple(VOCABULARY["metrics"])
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 def query(historian, now: datetime | None = None) -> dict[str, object]:
     """Run the bounded series queries (one per metric) and return the cacheable product."""
 
-    end = now or datetime.now(timezone.utc)
+    now = now or datetime.now(timezone.utc)
+    bucket_us = BUCKET_SECONDS * 1_000_000
+    now_us = (now - _EPOCH) // timedelta(microseconds=1)
+    end = _EPOCH + timedelta(microseconds=now_us - now_us % bucket_us)
     metrics: dict[str, list[dict[str, object]]] = {}
     for name in METRICS:
         series = historian.metric_series(
@@ -42,9 +50,16 @@ def query(historian, now: datetime | None = None) -> dict[str, object]:
         metrics[name] = [
             {"at": point["at"], "value": point["value"]}
             for point in series.get("points", [])
-            if isinstance(point.get("value"), (int, float))
+            if isinstance(point.get("value"), (int, float)) and _is_complete_minute(point["at"], end)
         ]
-    return {"queried_at": end.isoformat(), "metrics": metrics}
+    return {"queried_at": now.isoformat(), "metrics": metrics}
+
+
+def _is_complete_minute(at: object, end: datetime) -> bool:
+    """A point labelled at or after ``end`` is raw samples exactly on the boundary: a partial minute."""
+
+    start = _parse(at)
+    return start is not None and start < end
 
 
 def _parse(at: object) -> datetime | None:
