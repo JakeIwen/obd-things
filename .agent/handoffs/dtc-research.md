@@ -1400,8 +1400,13 @@ the broker is untouched. Stop at the first failed check and roll back (end of th
      `curl -sS -m 5 --unix-socket $W http://worker/status | jq '{checks_current, checked_at, providers, memory_policy, dns_ok, dns, job}'`
      → answers within the 5 s (no answer, or curl's "Operation timed out", is a stop). Right after a
      start the providers may read `checking` with `checks_current` false: ask again until
-     `checks_current` is true. Then expect `providers.claude.identity` `missing` ("no claude copy is
-     installed for research"), `providers.codex.identity` `disabled`, `memory_policy.activated`
+     `checks_current` is true. Then expect `providers.claude.identity`: on a first install, before the
+     CLI step, `missing` ("no claude copy is installed for research"); on a retry after the
+     2026-11-17 attempt, the verified 2.1.325 copy under `/opt/van-research-cli` is still on disk
+     (the rollback kept it, with the 224 MiB volume image, `identity.json` and the unit files; the
+     two units are only disabled and inactive), so expect `checking` until the first background
+     hash finishes (about 3 s idle, much longer under CPUQuota), then `ok` with `signed_in` false.
+     Either way `providers.codex.identity` `disabled`, `memory_policy.activated`
      false, `dns_ok` true with `dns.result` `ok`. `dns_ok` false: read `dns.reason` and
      `dns.checked_at`, ask again after a minute; `dns.result` `pending` only means the first lookup
      has not finished. A lasting failure with a resolver error means public DNS is blocked on this
@@ -1425,8 +1430,12 @@ the broker is untouched. Stop at the first failed check and roll back (end of th
    Checks: `sudo python3 -c "import json;d=json.load(open('/opt/van-research-cli/identity.json'));e=d['providers']['claude'];print(e['version'],e['verification']['result'],e['verification']['digest']==e['digest'])"`
    → `<version> passed True`; worker status (the bounded command in step 2) → the restarted worker
    reads `checking` until it has hashed the new 348 MiB copy (record how long: `checked_at` minus
-   the restart time); poll it, at most every 5 s for 3 minutes:
-   `for i in $(seq 36); do curl -sS -m 5 --unix-socket $W http://worker/status | jq -e '.checks_current and .providers.claude.identity != "checking"' && break; sleep 5; done`,
+   the restart time); poll it, a request of at most 5 s then a 5 s pause, 24 rounds (at most
+   4 minutes). The loop stops only on a status body that is exactly one JSON object with
+   `checks_current` true and Claude not `checking`; a curl failure or an empty body counts as not
+   ready (jq 1.6's `-e` exits 0 on empty input, so it is not trusted alone). It prints `ready=yes`
+   or `ready=no`; `ready=no` is a stop:
+   `ready=no; for i in $(seq 24); do b=$(curl -sS -m 5 --unix-socket $W http://worker/status) && printf %s "$b" | jq -es 'length==1 and (.[0].checks_current==true and .[0].providers.claude.identity!="checking")' >/dev/null && { ready=yes; break; }; sleep 5; done; echo ready=$ready`,
    then the bounded command → `providers.claude.identity` `ok`, `signed_in` false, `dns_ok` true.
    Each call must answer within its 5 s whatever else the Pi is doing.
    Stop: `stopped: …` printed (the reason says why; nothing was promoted).
