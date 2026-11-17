@@ -3,16 +3,19 @@
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 import threading
 import time
 import unittest
 import uuid
 
+from projects.vehicle_data import cli_process
 from projects.vehicle_data.dtc_research_worker import dispatch
 from projects.vehicle_data.model_cli_lock import ACQUIRED, CliLock
-from projects.vehicle_data.research_attempts import OUTCOMES_KEPT, Refused
+from projects.vehicle_data.research_attempts import OUTCOMES_KEPT, Attempt, Refused
 from projects.vehicle_data.research_memory import Thresholds, Watchdog
+from projects.vehicle_data.research_runner import TurnRequest
 from tests.research_support import GIB, WorkerRig, proc_entry
 
 
@@ -219,6 +222,19 @@ class WorkerTests(unittest.TestCase):
         self.worker.expire_maintenance()
         self.assertFalse(self.worker.maintenance_view(body["attempt_id"])["open"])
         self.run_turn()
+
+    def test_an_accepted_attempt_cancelled_before_its_spawn_never_spawns(self):
+        spawned, cancelled = [], threading.Event()
+        cancelled.set()
+        result = cli_process.run([sys.executable, "-c", "pass"], cwd=self.rig.tmp.name, env={}, stdin_bytes=b"",
+                                 deadline=time.monotonic() + 30, cancelled=cancelled, on_line=lambda event: None,
+                                 on_spawn=spawned.append)
+        self.assertEqual((result.stop_reason, result.returncode, spawned), ("cancelled", None, []))
+        attempt = Attempt(uuid.uuid4().hex, "turn", uuid.uuid4().hex)  # the same through a turn
+        attempt.cancelled.set()
+        outcome = self.worker.runner.run_turn(attempt, TurnRequest(
+            attempt.run_id, "claude", "sonnet", "medium", "initial", "report", "CONTEXT {}", 30, budget_usd=1))
+        self.assertEqual((outcome["status"], outcome["reason"], attempt.state), ("cancelled", "cancelled", "accepted"))
 
     def test_routes_and_sweep(self):
         status, payload = dispatch(self.worker, "GET", "/status", None)

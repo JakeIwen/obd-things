@@ -43,9 +43,13 @@ def run(argv, *, cwd, env, stdin_bytes, deadline, cancelled, on_line, on_tick=No
         max_line=4 * 1024 * 1024, max_total=16 * 1024 * 1024, tick_seconds=TICK_SECONDS, keep_stdin_open=False):
     """Run ``argv`` until it exits, a callback raises ``StopRun``, ``cancelled`` is set or ``deadline``
     (a ``time.monotonic()`` value) passes. ``keep_stdin_open`` leaves stdin open after the prompt (a
-    control-protocol exchange); the caller then ends the run from ``on_line``."""
+    control-protocol exchange); the caller then ends the run from ``on_line``. An attempt already
+    cancelled when this is called never spawns (``returncode`` stays ``None``)."""
     started = time.monotonic()
     result = RunResult(returncode=None)
+    if cancelled.is_set():
+        result.stop_reason = "cancelled"
+        return result
     proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, start_new_session=True, close_fds=True)
     if on_spawn:
