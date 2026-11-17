@@ -74,3 +74,15 @@ test("the remembered choice survives a missing or broken storage", () => {
   assert.doesNotThrow(() => saveChoice({ provider: "a", model: "b", effort: null }, broken));
   assert.equal(loadChoice(null), null);
 });
+
+test("a storage getter that throws means no remembered choice and a silent no-op save", () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, get() { throw new Error("denied"); } });
+  try {
+    assert.equal(loadChoice(), null);
+    assert.doesNotThrow(() => saveChoice({ provider: "claude", model: "opus", effort: null }));
+  } finally {
+    if (original) Object.defineProperty(globalThis, "localStorage", original);
+    else delete globalThis.localStorage;
+  }
+});

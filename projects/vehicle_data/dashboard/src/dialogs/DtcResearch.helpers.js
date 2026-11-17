@@ -36,6 +36,7 @@ export function createResearchController(deps) {
     clearTimeout: clearT = globalThis.clearTimeout,
     isVisible = () => true,
     now = () => Date.now(),
+    AbortController: Abort = globalThis.AbortController,
     onChange = () => {},
     onFinished = () => {},
   } = deps;
@@ -59,6 +60,7 @@ export function createResearchController(deps) {
     error: null,
     pairingError: null,
     pending: null,
+    draft: "",
     pollTimer: null,
     generation: 0,
   };
@@ -98,6 +100,7 @@ export function createResearchController(deps) {
       footer: showingRun ? runFooter(run, model ? model.label : null, nowMs) : { line: "", notes: [] },
       runError: showingRun && !busy() && (phase === "failed" || phase === "cancelled")
         ? errorText(phase === "cancelled" ? "cancelled" : run.reason, run.error, TEXT.working) : null,
+      draft: s.draft,
       error: s.error,
       pairingError: s.pairingError,
       choiceText: choiceLabel(s.catalog, s.choice),
@@ -112,14 +115,32 @@ export function createResearchController(deps) {
 
   async function call(method, path, payload) {
     const { url, init } = buildRequest(method, path, payload, { key: s.key, client });
+    // One deadline covers the headers and the body; racing it means a fetch that ignores the
+    // abort signal still ends the wait.
+    const abort = Abort ? new Abort() : null;
+    if (abort) init.signal = abort.signal;
+    let timer = null;
+    const deadline = new Promise((_, reject) => {
+      timer = setT(() => {
+        if (abort) abort.abort();
+        reject(new ResearchError(0, "timeout", method === "GET" ? TEXT.timedOut : TEXT.timedOutPost));
+      }, RESEARCH.requestTimeoutMs);
+    });
     let response;
-    try {
-      response = await doFetch(url, init);
-    } catch {
-      throw new ResearchError(0, "network", TEXT.unreachable);
-    }
     let body = null;
-    try { body = await response.json(); } catch { body = null; }
+    try {
+      const exchange = (async () => {
+        response = await doFetch(url, init);
+        try { body = await response.json(); } catch { body = null; }
+      })();
+      exchange.catch(() => {});
+      await Promise.race([exchange, deadline]);
+    } catch (error) {
+      if (error instanceof ResearchError) throw error;
+      throw new ResearchError(0, "network", TEXT.unreachable);
+    } finally {
+      if (timer !== null) clearT(timer);
+    }
     if (response.status === 401) {
       s.key = "";
       storage.remove("access");
@@ -245,7 +266,7 @@ export function createResearchController(deps) {
     stopPolling();
     stopModelsTimer();
     Object.assign(s, { opened: true, target, run: null, runs: [], progress: null, error: null, forceNew: false, pending: null,
-      requesting: false, pairing: false, pairingError: null, available: null });
+      requesting: false, pairing: false, pairingError: null, available: null, draft: "" });
     if (!s.key) {
       s.pairing = true;
       emit();
@@ -333,7 +354,18 @@ export function createResearchController(deps) {
       return false;
     }
     if (!snapshot().canAsk) return false;
-    return submit(() => askBody(s.run.run_id, text, ""));
+    // The draft stays in place until the server accepted the question, so a refusal can be retried.
+    const ok = await submit(() => askBody(s.run.run_id, text, ""));
+    if (ok) {
+      s.draft = "";
+      emit();
+    }
+    return ok;
+  }
+
+  function setDraft(text) {
+    s.draft = String(text ?? "");
+    emit();
   }
 
   async function cancel() {
@@ -385,6 +417,6 @@ export function createResearchController(deps) {
   }
 
   return {
-    snapshot, open, close, pair, start, ask, cancel, selectRun, newResearch, back, pickModel, pickEffort, setChoice, visibilityChanged,
+    snapshot, open, close, pair, start, ask, setDraft, cancel, selectRun, newResearch, back, pickModel, pickEffort, setChoice, visibilityChanged,
   };
 }

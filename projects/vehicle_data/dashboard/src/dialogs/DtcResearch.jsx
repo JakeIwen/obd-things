@@ -58,7 +58,6 @@ function Turn({ row }) {
 export default function DtcResearch({ open, target, onClose }) {
   const closeRef = useRef(null);
   const codeRef = useRef(null);
-  const inputRef = useRef(null);
   const [ctrl, snap] = useController(createController, (c) => c.snapshot());
 
   const { dialogRef, close } = useModalDialog({
@@ -66,10 +65,7 @@ export default function DtcResearch({ open, target, onClose }) {
     onClose,
     focusRef: closeRef,
     deps: [target && target.module_key, target && target.fca_display],
-    onOpen: () => {
-      if (inputRef.current) inputRef.current.value = "";
-      ctrl.open(target);
-    },
+    onOpen: () => ctrl.open(target),
     onNativeClose: () => ctrl.close(),
   });
 
@@ -92,8 +88,7 @@ export default function DtcResearch({ open, target, onClose }) {
   };
   const submitQuestion = async (ev) => {
     if (ev) ev.preventDefault();
-    const el = inputRef.current;
-    if (await ctrl.ask(el ? el.value : "") && el) el.value = "";
+    await ctrl.ask(snap.draft);
   };
   const onInputKey = (ev) => {
     if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); void submitQuestion(); }
@@ -155,7 +150,7 @@ export default function DtcResearch({ open, target, onClose }) {
               <form class="chat-form" onSubmit={submitQuestion}>
                 <label class="field">{TEXT.askLabel}
                   <textarea class="textarea chat-input" rows={2} maxLength={RESEARCH.questionMax + 200} placeholder={TEXT.askPlaceholder}
-                    ref={inputRef} onKeyDown={onInputKey} />
+                    value={snap.draft} onInput={(ev) => ctrl.setDraft(ev.currentTarget.value)} onKeyDown={onInputKey} />
                 </label>
                 <div class="btn-row"><button type="submit" class="btn btn--primary" disabled={snap.requesting}>Send</button></div>
               </form>

@@ -138,6 +138,8 @@ export const TEXT = Object.freeze({
   title: "Research with AI",
   unavailable: "Code research is not available on this Pi.",
   unreachable: "Could not reach the Pi. Nothing changed; try again.",
+  timedOut: "The Pi did not answer in time. Nothing changed; try again.",
+  timedOutPost: "The request timed out, so it is not known whether the Pi received it. The run's state will show on the next refresh.",
   setupLead: "Pick a model to research this code. It searches the web for what the code means on this van.",
   sentLine: "Sent to the model: the code, its module, the van's model facts and anything you type. The VIN is never sent. The model searches the web; web pages are untrusted.",
   working: "Working…",

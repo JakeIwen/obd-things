@@ -105,9 +105,12 @@ export function choiceLabel(catalog, choice) {
 
 /* ---- the remembered choice (a per-browser convenience, never owner data) ---- */
 
-export function loadChoice(backend = globalThis.localStorage) {
+/* The default backend is read inside the guard: a storage getter can itself throw (private mode,
+   blocked site data). */
+export function loadChoice(backend) {
   try {
-    const parsed = JSON.parse(backend?.getItem(CHOICE_STORAGE_KEY) || "null");
+    const store = backend === undefined ? globalThis.localStorage : backend;
+    const parsed = JSON.parse(store?.getItem(CHOICE_STORAGE_KEY) || "null");
     const c = obj(parsed);
     return c && typeof c.provider === "string" && typeof c.model === "string"
       ? { provider: c.provider, model: c.model, effort: typeof c.effort === "string" ? c.effort : null }
@@ -117,9 +120,10 @@ export function loadChoice(backend = globalThis.localStorage) {
   }
 }
 
-export function saveChoice(choice, backend = globalThis.localStorage) {
+export function saveChoice(choice, backend) {
   try {
-    backend?.setItem(CHOICE_STORAGE_KEY, JSON.stringify(choice));
+    const store = backend === undefined ? globalThis.localStorage : backend;
+    store?.setItem(CHOICE_STORAGE_KEY, JSON.stringify(choice));
   } catch {
     /* private mode or storage denied: the choice just is not remembered */
   }

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createResearchController } from "../src/dialogs/DtcResearch.helpers.js";
 import { createStorage } from "../src/assistantAccess.js";
-import { REASON_TEXT, TEXT } from "../src/dtcResearch.helpers.js";
+import { REASON_TEXT, RESEARCH, TEXT } from "../src/dtcResearch.helpers.js";
 
 const KEY = "k".repeat(40);
 const RUN = "a".repeat(32);
@@ -300,4 +300,92 @@ test("footer carries the model label, notes and the replay note shows under a re
   assert.match(snap.footer.line, /^Opus · high · /);
   assert.deepEqual(snap.footer.notes, [TEXT.summaryMissing, "The report is missing: Sources."]);
   assert.equal(snap.turns[2].note, TEXT.replayNote);
+});
+
+/* ---- review fixes: request deadline, kept draft, reasonless replies ---- */
+
+const CODE_PATH = "GET /v1/assistant/dtc-research/code/bcm_ccan/B162E-15";
+const PROGRESS = "GET /v1/assistant/dtc-research/runs/" + RUN + "/progress";
+const busyRun = () => run({ state: "running", busy: true, can_continue: false });
+
+/** A controller whose fetch can be switched to never answering; timers are recorded, not run. */
+function stallable(handlers) {
+  const server = pi(handlers);
+  const timers = [];
+  const store = { "van-warning-chat.access": KEY };
+  const backend = { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = v; }, removeItem: (k) => { delete store[k]; } };
+  const h = { stall: false, signals: [], timers };
+  h.ctrl = createResearchController({
+    fetch: (url, init) => { h.signals.push(init.signal); return h.stall ? new Promise(() => {}) : server.fetch(url, init); },
+    storage: createStorage(backend), choiceBackend: backend, random: (n) => "ab".repeat(n),
+    setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
+    clearTimeout: (id) => { if (timers[id - 1]) timers[id - 1].fn = null; },
+    now: () => Date.parse("2026-10-28T20:30:00Z"),
+  });
+  h.fire = (ms) => timers.filter((x) => x.fn && x.ms === ms).pop().fn();
+  return h;
+}
+
+test("a request that never answers times out at the contract's deadline; polling carries on", async () => {
+  const h = stallable(routes({
+    [CODE_PATH]: () => [200, { available: true, runs: [busyRun()], selected: busyRun() }],
+    [PROGRESS]: () => [200, { available: true, progress: { run_id: RUN, state: "running" } }],
+  }));
+  h.ctrl.open(TARGET);
+  await settle();
+  assert.equal(h.ctrl.snapshot().phase, "running");
+  h.stall = true;
+  h.fire(RESEARCH.progressPollMs);
+  await settle();
+  h.fire(RESEARCH.requestTimeoutMs);
+  await settle();
+  assert.equal(h.signals.at(-1).aborted, true);
+  assert.equal(h.ctrl.snapshot().error, TEXT.timedOut);
+  assert.ok(h.timers.some((x) => x.fn && x.ms === RESEARCH.progressPollMs), "the next poll is scheduled");
+});
+
+test("a stalled POST says the outcome is unknown and frees the dialog", async () => {
+  const h = stallable(routes());
+  h.ctrl.open(TARGET);
+  await settle();
+  h.stall = true;
+  const started = h.ctrl.start();
+  await settle();
+  h.fire(RESEARCH.requestTimeoutMs);
+  assert.equal(await started, false);
+  const snap = h.ctrl.snapshot();
+  assert.equal(snap.error, TEXT.timedOutPost);
+  assert.equal(snap.requesting, false);
+});
+
+test("a refused follow-up keeps the draft; an accepted one clears it", async () => {
+  let refuse = true;
+  const t = setup(routes({
+    [CODE_PATH]: () => [200, { available: true, runs: [run()], selected: run() }],
+    "POST /v1/assistant/dtc-research": () => (refuse
+      ? [503, { available: false, reason: "provider_unavailable", detail: "Provider is down" }]
+      : [200, { available: true, run: busyRun() }]),
+  }));
+  t.ctrl.open(TARGET);
+  await settle();
+  t.ctrl.setDraft("Why is it intermittent?");
+  assert.equal(await t.ctrl.ask(t.ctrl.snapshot().draft), false);
+  assert.equal(t.ctrl.snapshot().draft, "Why is it intermittent?");
+  refuse = false;
+  assert.equal(await t.ctrl.ask(t.ctrl.snapshot().draft), true);
+  assert.equal(t.ctrl.snapshot().draft, "");
+});
+
+test("replies with no reason still read as a sentence, never undefined", async () => {
+  let n = 0;
+  const t = setup(routes({
+    [CODE_PATH]: () => [200, { available: true, runs: [run()], selected: run() }],
+    "POST /v1/assistant/dtc-research": () => (++n === 1 ? [503, { available: false, detail: "Local assistant unavailable" }] : [400, {}]),
+  }));
+  t.ctrl.open(TARGET);
+  await settle();
+  assert.equal(await t.ctrl.ask("Why?"), false);
+  assert.equal(t.ctrl.snapshot().error, "Local assistant unavailable");
+  assert.equal(await t.ctrl.ask("Why?"), false);
+  assert.equal(t.ctrl.snapshot().error, TEXT.unreachable);
 });
