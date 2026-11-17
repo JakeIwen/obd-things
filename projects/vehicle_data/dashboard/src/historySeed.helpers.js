@@ -59,7 +59,7 @@ export function joinBuckets(buckets, nowEpochMs) {
 
 /**
  * What to seed from one reply, or null when the reply is not a usable current-contract answer
- * (any other shape, `available` false, a different window or bucket): the caller then seeds nothing.
+ * (any other shape, `available` false, a different window, bucket or `at_basis`): the caller then seeds nothing.
  * @param {unknown} reply parsed JSON
  * @param {{sentMono: number, receivedMono: number}} receipt `performance.now()` around the fetch
  * @returns {{mapping: {nowMono: number, nowEpochMs: number}, metrics: Record<string, {t: number, value: number}[]>}|null}
@@ -67,6 +67,8 @@ export function joinBuckets(buckets, nowEpochMs) {
 export function seedPlan(reply, receipt) {
   if (!reply || typeof reply !== "object" || reply.available !== true) return null;
   if (reply.window_seconds !== vocabulary.window_seconds || reply.bucket_seconds !== vocabulary.bucket_seconds) return null;
+  // `joinBuckets` places a point from its bucket start; any other basis would be plotted wrongly.
+  if (reply.at_basis !== vocabulary.at_basis) return null;
   if (!reply.metrics || typeof reply.metrics !== "object") return null;
   const generated = parseEpochMs(reply.generated_at);
   const roundTrip = receipt.receivedMono - receipt.sentMono;

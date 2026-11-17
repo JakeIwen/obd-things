@@ -92,6 +92,10 @@ test("a reply that is not the current contract seeds nothing", () => {
   assert.equal(seedPlan(reply({ bucket_seconds: 300 }), receipt), null);
   assert.equal(seedPlan(reply({ window_seconds: 3600 }), receipt), null);
   assert.equal(seedPlan(reply({ metrics: null }), receipt), null);
+  assert.equal(seedPlan(reply({ at_basis: "bucket_end" }), receipt), null);
+  const noBasis = reply();
+  delete noBasis.at_basis;
+  assert.equal(seedPlan(noBasis, receipt), null);
   assert.equal(seedPlan(reply({ generated_at: "soon" }), receipt), null);
 });
 
@@ -166,6 +170,19 @@ test("a 404 from an older broker, a bad body and a refusal are all silent no-see
   assert.equal(await run({ ok: false, status: 403, json: async () => ({}) }), "unavailable");
   assert.equal(await run({ ok: false, status: 503, json: async () => ({}) }), "retry");
   assert.equal(await loadHistorySeed({ fetchImpl: async () => { throw new TypeError("network"); }, now: () => 0, seed: () => {} }), "retry");
+});
+
+test("a body that stalls after the headers is aborted at the timeout and retried, not left pending", async () => {
+  const stalled = (signal) => new Promise((_resolve, reject) => {
+    signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+  });
+  const outcome = await loadHistorySeed({
+    timeoutMs: 20,
+    now: () => 0,
+    seed: () => assert.fail("seeded"),
+    fetchImpl: async (_path, { signal }) => ({ ok: true, status: 200, json: () => stalled(signal) }),
+  });
+  assert.equal(outcome, "retry");
 });
 
 test("the page fetches once when the link first goes live and not again, and cancel stops it", async () => {

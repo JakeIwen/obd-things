@@ -18,28 +18,32 @@ const TIMEOUT_MS = 8000;
  * @param {{fetchImpl: Function, now: () => number, seed: Function}} deps
  * @returns {Promise<"seeded"|"empty"|"unavailable"|"retry">}
  */
-export async function loadHistorySeed({ fetchImpl, now, seed }) {
+export async function loadHistorySeed({ fetchImpl, now, seed, timeoutMs = TIMEOUT_MS }) {
   const sentMono = now();
   let response;
+  let receivedMono;
+  let reply;
+  // The timer stays armed until the body is read: a server that sends headers and then stalls must
+  // not leave seeding pending forever.
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
   try {
-    const controller = typeof AbortController === "function" ? new AbortController() : null;
-    const timer = controller ? setTimeout(() => controller.abort(), TIMEOUT_MS) : null;
     try {
       response = await fetchImpl(RECENT_PATH, { cache: "no-store", signal: controller && controller.signal });
-    } finally {
-      if (timer) clearTimeout(timer);
+    } catch (_error) {
+      return "retry";
     }
-  } catch (_error) {
-    return "retry";
-  }
-  const receivedMono = now();
-  if (!response || response.status === 404) return "unavailable";
-  if (!response.ok) return response.status >= 500 ? "retry" : "unavailable";
-  let reply;
-  try {
-    reply = await response.json();
-  } catch (_error) {
-    return "unavailable";
+    receivedMono = now();
+    if (!response || response.status === 404) return "unavailable";
+    if (!response.ok) return response.status >= 500 ? "retry" : "unavailable";
+    try {
+      reply = await response.json();
+    } catch (error) {
+      // A malformed body is a contract problem; an abort or a body cut short is network-class.
+      return error instanceof SyntaxError ? "unavailable" : "retry";
+    }
+  } finally {
+    if (timer) clearTimeout(timer);
   }
   const plan = seedPlan(reply, { sentMono, receivedMono });
   if (!plan) return "unavailable";
