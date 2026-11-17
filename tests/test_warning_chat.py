@@ -318,9 +318,9 @@ for event in [
         self.finish()
         rows = opened["catalog"]
         self.assertEqual({row["metric"] for row in rows}, set(catalog()))
-        self.assertEqual([row["label"] for row in rows], sorted(row["label"] for row in rows))
-        self.assertTrue(all(set(row) == {"metric", "label", "unit"} for row in rows))
-        self.assertIn({"metric": "generator.field_duty", "label": "generator.field_duty", "unit": "%"}, rows)
+        self.assertEqual([row["metric"] for row in rows], sorted(row["metric"] for row in rows))
+        self.assertTrue(all(set(row) == {"metric", "unit"} for row in rows))
+        self.assertIn({"metric": "generator.field_duty", "unit": "%"}, rows)
         record = self.manager.get(opened["id"], self.owner)
         record["context"].pop("catalog")
         self.assertEqual(self.manager.public(record)["catalog"], [])

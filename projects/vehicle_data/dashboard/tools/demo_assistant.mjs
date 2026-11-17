@@ -77,7 +77,7 @@ export function demoExplainChat(nowMs) {
 const SETUP_CATALOG = Object.freeze([
   ["battery.voltage", "V"], ["engine.coolant_temp", "°F"], ["engine.rpm", "rpm"],
   ["generator.field_duty", "%"], ["vehicle.speed", "mph"],
-].map(([metric, unit]) => Object.freeze({metric, label: metric, unit})));
+].map(([metric, unit]) => Object.freeze({metric, unit})));
 
 /** The Add Early Warning chat: one request, one drafted proposal that is not installed. */
 export function demoSetupChat(nowMs) {

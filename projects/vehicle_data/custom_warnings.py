@@ -20,15 +20,15 @@ def catalog():
 
 
 def catalog_summary(entries):
-    """The few fields the setup dialog shows for a chat's captured catalog (label, unit).
+    """The few fields the setup dialog needs from a chat's captured catalog (metric key, unit).
 
-    Public metric definitions carry no human label, so the metric key is the label.
+    The dashboard names each metric itself (its ``metricLabel``); definitions carry no label.
     """
     if not isinstance(entries, dict):
         return []
-    rows = [{"metric": name, "label": name, "unit": str(entry.get("unit", ""))}
+    rows = [{"metric": name, "unit": str(entry.get("unit", ""))}
             for name, entry in entries.items() if isinstance(entry, dict)]
-    return sorted(rows, key=lambda row: row["label"])
+    return sorted(rows, key=lambda row: row["metric"])
 
 
 def validate_rule(rule):

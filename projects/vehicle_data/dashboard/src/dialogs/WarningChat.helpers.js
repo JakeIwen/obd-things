@@ -19,6 +19,7 @@
  * listener" means the capability is off for this web listener.
  */
 import { fmtTime } from "../format.js";
+import { metricLabel } from "../warningContext.js";
 import {
   ACCESS_CODE_RE, ACCESS_TEXT, CLIENT_ID_RE, STORAGE_PREFIX, buildRequest, createStorage, ensureClientId, isValidAccessCode,
   randomId, requestHeaders,
@@ -88,7 +89,8 @@ export function monitorView(chat) {
   const rows = chat?.event?.kind === SETUP_EVENT.kind && Array.isArray(chat.catalog) ? chat.catalog : [];
   const items = rows
     .filter((row) => row && typeof row.metric === "string")
-    .map((row) => ({key: row.metric, text: row.unit ? `${row.label || row.metric} (${row.unit})` : String(row.label || row.metric)}));
+    .map((row) => ({key: row.metric, text: row.unit ? `${metricLabel(row.metric)} (${row.unit})` : metricLabel(row.metric)}))
+    .sort((a, b) => a.text.localeCompare(b.text));
   return {
     visible: items.length > 0,
     summary: `${TEXT.monitorTitle} (${items.length})`,
