@@ -13,6 +13,9 @@
   --amber-bg: #2a2214;
   --red: #ff5d4d;
   --red-bg: #2c1a18;
+  /* Drive sparkline strokes (canvas, so read once per palette change by Sparkline.jsx). */
+  --spark-line: var(--text-2);
+  --spark-red: var(--red);
   --green: #5fd39a;
   --blue: #6fb7ff;
   --overspeed: #ff958a;

@@ -35,9 +35,9 @@ function readColours() {
   const style = getComputedStyle(document.documentElement);
   const get = (name) => style.getPropertyValue(name).trim();
   colours = {
-    line: get("--text-2"),
+    line: get("--spark-line"),
     band: get("--line-strong"),
-    red: get("--red"),
+    red: get("--spark-red"),
   };
   return colours;
 }

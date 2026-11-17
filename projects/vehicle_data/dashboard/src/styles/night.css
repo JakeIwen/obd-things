@@ -13,6 +13,10 @@
   --amber-bg: #171107;
   --red: #ad4236;
   --red-bg: #190b08;
+  /* Brighter than --text-2 so a flat line stays readable on the dark tile: 5.97:1 (line) and
+     5.33:1 (red) on --card; test/sparklineContrast.test.mjs holds the 4.5:1 floor. */
+  --spark-line: #80928a;
+  --spark-red: #d8604f;
   --green: #397f5c;
   --blue: #456f99;
   --overspeed: #a25d55;
