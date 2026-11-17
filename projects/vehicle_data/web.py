@@ -30,6 +30,7 @@ from projects.vehicle_data.warning_chat import (
     DEFAULT_SOCKET as DEFAULT_WARNING_CHAT_SOCKET, MAX_BODY as MAX_WARNING_CHAT_BYTES,
 )
 from projects.vehicle_data.broker import DEFAULT_SOCKET
+from projects.vehicle_data.dtc_ignore import API_PATH as DTC_IGNORE_PATH
 from projects.vehicle_data.radar_reference import API_PATH as RADAR_REFERENCE_PATH
 from projects.vehicle_data.radar_service_alignment import (
     API_PATH as RADAR_SERVICE_PATH, LISTENER_DISABLED as RADAR_SERVICE_DISABLED,
@@ -133,6 +134,7 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
         (r"/v1/diagnostics/dtc-jobs/current", "_dtc_current"),
         (RADAR_SERVICE_PATH, "_radar_service_get"),
         (RADAR_REFERENCE_PATH, "_proxy_get"),
+        (DTC_IGNORE_PATH, "_proxy_get"),
     )
     POST_ROUTES = (
         (r"/v1/assistant/.*", "_assistant_post"),
@@ -142,6 +144,7 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
         (r"/v1/acquisitions/battery\.voltage", "_acquisition_post"),
         (RADAR_SERVICE_PATH, "_radar_service_post"),
         (RADAR_REFERENCE_PATH, "_radar_reference_post"),
+        (DTC_IGNORE_PATH, "_dtc_ignore_post"),
     )
 
     def _not_found(self, path: str) -> None:
@@ -308,6 +311,16 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
     def _radar_reference_post(self, path: str) -> None:
         # Display bookkeeping only: a reference point never reaches the vehicle.
         if self._owner_record_refused("Radar references"):
+            return None
+        try:
+            payload = self._read_json(MAX_REQUEST_BYTES)
+        except (ValueError, UnicodeDecodeError) as exc:
+            return self._json(400, {"available": False, "reason": "invalid_request", "detail": str(exc)})
+        return self._broker_request("POST", path, payload)
+
+    def _dtc_ignore_post(self, path: str) -> None:
+        # Display bookkeeping only: ignoring a code never clears it.
+        if self._owner_record_refused("Ignored codes"):
             return None
         try:
             payload = self._read_json(MAX_REQUEST_BYTES)

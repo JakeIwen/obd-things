@@ -1,0 +1,11 @@
+{
+  "path": "/v1/diagnostics/dtc-ignores",
+  "summary_key": "dtc_ignores",
+  "actions": {
+    "ignore": "ignore",
+    "restore": "restore"
+  },
+  "note_max_chars": 200,
+  "max_ignored": 500,
+  "log_limit": 200
+}

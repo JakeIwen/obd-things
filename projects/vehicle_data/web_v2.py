@@ -41,6 +41,7 @@ import time
 from typing import Any
 
 from projects.vehicle_data import web as base
+from projects.vehicle_data.dtc_ignore import API_PATH as DTC_IGNORE_PATH, SUMMARY_KEY as DTC_IGNORE_KEY
 from projects.vehicle_data.http_common import broker_unavailable, route_name, stream_snapshots, web_flags
 
 DEFAULT_STATIC_ROOT = pathlib.Path(__file__).with_name("dashboard") / "dist"
@@ -443,7 +444,25 @@ def build_summary(fetch, web_status: dict[str, Any]) -> tuple[int, dict[str, Any
             continue
         payload.setdefault("status_code", status_code)
         summary[key] = transform(payload)
+    summary[DTC_IGNORE_KEY] = _dtc_ignores_slice(fetch)
     return 200, summary
+
+
+def _dtc_ignores_slice(fetch) -> dict[str, Any]:
+    """The ignored-code list, or ``{"available": False}``.
+
+    A broker older than the route answers 404 (rolling deploys), and an
+    unreachable one raises; neither may fail the rest of the summary, and the
+    dashboard hides its ignore controls when this is unavailable.
+    """
+
+    try:
+        status_code, payload = fetch(DTC_IGNORE_PATH)
+    except (OSError, RuntimeError, json.JSONDecodeError):
+        return {"available": False}
+    if status_code != 200 or not isinstance(payload, dict) or not isinstance(payload.get("ignored"), list):
+        return {"available": False}
+    return payload
 
 
 class DashboardHandler(base.TelemetryWebHandler):

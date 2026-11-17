@@ -20,7 +20,7 @@ import types
 from dataclasses import dataclass, field
 from typing import Any
 
-from projects.vehicle_data import helper_hold, radar_service_control
+from projects.vehicle_data import dtc_ignore, helper_hold, radar_service_control
 from projects.vehicle_data.http_common import (
     MAX_REQUEST_BYTES,
     MAX_OBSERVATION_QUEUE_SECONDS,
@@ -100,6 +100,7 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
         "/v1/health": "cached_health_response",
         "/v1/diagnostics/dtcs": "cached_dtc_response",
         "/v1/maintenance": "maintenance_response",
+        dtc_ignore.API_PATH: "dtc_ignores_response",
         "/v1/metrics": "list_metrics",
         helper_hold.API_PATH: "helper_hold_response",
     }
@@ -114,6 +115,7 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
         (r"/v1/acquisitions/[^/]+", "_acquisition_post"),
         (r"/v1/observations/[^/]+", "_observation_post"),
         (r"/v1/maintenance/oil-changes", "_oil_change_post"),
+        (re.escape(dtc_ignore.API_PATH), "_dtc_ignore_post"),
         (radar_service_control.API_ROUTE, "_radar_service_post"),
         # Broker socket only: web.py has no route for it (helper_hold.py).
         (re.escape(helper_hold.API_PATH), "_helper_hold_post"),
@@ -195,6 +197,9 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
 
     def _event_post(self, path: str, payload: Any) -> None:
         return self._json(*self.broker.event_request("POST", self.path, payload))
+
+    def _dtc_ignore_post(self, path: str, payload: Any) -> None:
+        return self._json(*self.broker.dtc_ignores_request(payload))
 
     def _oil_change_post(self, path: str, payload: Any) -> None:
         try:

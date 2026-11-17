@@ -2054,6 +2054,38 @@ Tests: `tests/test_radar_reference.py`, the reference cases in
 `tests/test_radar_service_control.py` (completion hand-off, the relay and its
 gate) and `dashboard/test/RadarReference.helpers.test.mjs`.
 
+### Ignored diagnostic codes (2026-11-16)
+
+The Health view's Codes card lets the owner permanently hide a code (for example the
+ones his LED headlights cause). This is display bookkeeping: ignoring never clears a
+code, never changes what is read from the van, and never touches the broker's DTC
+cache or `GET /v1/diagnostics/dtcs`. A code is identified by
+`(module_key, fca_display)`.
+
+- **Storage.** `dtc-ignores.json` beside `maintenance.json` (`/var/lib/van-telemetry/`
+  on vanpi), written atomically before a request is acknowledged. An unreadable file
+  is reported (`storage_error`) and never overwritten. Bounds: at most 500 ignored
+  codes (a 501st is refused with `409 limit_reached`), notes of at most 200
+  characters, and an audit log of the last 200 actions kept in the file and not
+  served. The log also backs the `request_id` rule: a replay of a logged request is
+  a no-op success, reuse of the id for a different change is `400`.
+- **API.** `GET /v1/diagnostics/dtc-ignores` returns `available`, `persistent`,
+  `storage_error`, `limit` and `ignored` (newest first: `module_key`, `fca_display`,
+  `note`, `ignored_at`). `POST` accepts exactly
+  `{"action":"ignore","module_key","fca_display","note","request_id"}` or
+  `{"action":"restore","module_key","fca_display","request_id"}` and answers with
+  the same shape after the change. Ignoring an ignored code and restoring a code
+  that is not ignored both succeed and change nothing. Errors carry `reason` and
+  `detail`: `400 invalid_request`, `409 limit_reached`, `503 storage_unavailable`.
+  Both web listeners relay it without a flag; a POST must be same-origin JSON, like
+  the oil-change route.
+- **Summary.** `/v2/summary` carries the same shape as `dtc_ignores` beside `dtcs`,
+  or `{"available": false}` when the broker predates the route or is unreachable
+  (the dashboard then hides its ignore controls).
+- **Code.** `dtc_ignore.py` (validation, the store, bounds) with `dtc_ignore.json`
+  (path, actions and limits, shared with the dashboard); the broker and
+  `api_server.py` only route to it. Tests: `tests/test_dtc_ignore.py`.
+
 ### Last-recorded display policy (September 20 audit)
 
 Open early-warning episodes stay visible as unresolved advisories even when

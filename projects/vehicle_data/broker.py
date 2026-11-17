@@ -40,6 +40,7 @@ from projects.vehicle_data.helper_startup_grant import (
     pregrant_event_problem,
     ready_event_problem,
 )
+from projects.vehicle_data.dtc_ignore import FILE_NAME as DTC_IGNORE_FILE, DtcIgnoreStore
 from projects.vehicle_data.maintenance import MaintenanceStore
 from projects.vehicle_data.last_readings import LastReadings
 from projects.vehicle_data.radar_alignment import (
@@ -734,6 +735,7 @@ class TelemetryBroker:
         usb_can_monitor=None,
         engine_off_voltage_capture=None,
         maintenance_store=None,
+        dtc_ignore_store=None,
         radar_history=None,
         last_readings=None,
         drive_dtc=None,
@@ -744,6 +746,7 @@ class TelemetryBroker:
             )
         self.acquirer = acquirer
         self.maintenance = maintenance_store or MaintenanceStore()
+        self.dtc_ignores = dtc_ignore_store or DtcIgnoreStore()
         self.definitions = definitions or METRICS
         self.last_readings = last_readings or LastReadings(self.definitions)
         self.monotonic = monotonic
@@ -975,6 +978,12 @@ class TelemetryBroker:
 
     def record_oil_change(self, payload):
         return self.maintenance.add_oil_change(payload)
+
+    def dtc_ignores_response(self) -> dict[str, object]:
+        return self.dtc_ignores.snapshot()
+
+    def dtc_ignores_request(self, payload):
+        return self.dtc_ignores.request(payload)
 
     def health_response(self) -> dict[str, object]:
         """Return explainable, history-relative advisory assessments only."""
@@ -3569,6 +3578,7 @@ def main(argv=None) -> int:
         )
 
     maintenance_store, radar_history, last_readings = _reading_stores(args.history_db)
+    dtc_ignore_store = DtcIgnoreStore(pathlib.Path(args.history_db).with_name(DTC_IGNORE_FILE))
     insights = None
     if not args.no_history:
         historian = TelemetryHistorian(args.history_db)
@@ -3604,6 +3614,7 @@ def main(argv=None) -> int:
         usb_can_monitor=usb_can_monitor,
         engine_off_voltage_capture=engine_off_voltage_capture,
         maintenance_store=maintenance_store,
+        dtc_ignore_store=dtc_ignore_store,
         radar_history=radar_history,
         last_readings=last_readings,
         drive_dtc=DriveDtcControl.from_args(args),
