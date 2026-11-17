@@ -6,6 +6,7 @@
     "restore": "restore"
   },
   "note_max_chars": 200,
+  "note_max_bytes": 400,
   "max_ignored": 500,
   "log_limit": 200
 }

@@ -1,6 +1,6 @@
 /**
  * Multi-select filter: a button that reads `All modules` or `3 modules`, a popover list of the
- * options (check mark, name, count) with `All` and `Clear`, and the chosen options as removable
+ * options (check mark, name, count) with `All` (no filter), and the chosen options as removable
  * chips beside the button. No chosen option means no filter. The selection is the caller's state
  * (`selected` and `onChange`), so it can live wherever the view wants it.
  *
@@ -13,7 +13,7 @@
 import { useRef, useState } from "preact/hooks";
 import Popover from "./Popover.jsx";
 import Listbox from "./Listbox.jsx";
-import { allKeys, chipsOf, clearKeys, toggleKey, triggerText, validKeys } from "./multiSelect.helpers.js";
+import { chipsOf, clearKeys, toggleKey, triggerText, validKeys } from "./multiSelect.helpers.js";
 
 export default function MultiSelect({ id, label, options, selected, onChange, noun = "module" }) {
   const [open, setOpen] = useState(false);
@@ -37,8 +37,7 @@ export default function MultiSelect({ id, label, options, selected, onChange, no
       </div>
       <Popover open={open} onClose={() => setOpen(false)} hostRef={host} label={label} class="multiselect__popover">
         <div id={id + "-popover"} class="multiselect__actions">
-          <button type="button" class="btn btn--small btn--ghost" onClick={() => onChange(allKeys(options))}>All</button>
-          <button type="button" class="btn btn--small btn--ghost" onClick={() => onChange(clearKeys())}>Clear</button>
+          <button type="button" class="btn btn--small btn--ghost" onClick={() => onChange(clearKeys())}>All</button>
           <button type="button" class="btn btn--small btn--ghost multiselect__done" onClick={() => setOpen(false)}>Done</button>
         </div>
         <Listbox id={id + "-list"} label={label} options={options} selected={keys} multiple

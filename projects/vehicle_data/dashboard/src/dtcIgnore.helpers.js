@@ -45,7 +45,11 @@ export function isState(payload) {
  *   index: Map<string, object>}}
  */
 export function ignoreState(slice) {
-  if (!isState(slice)) return EMPTY_STATE;
+  if (!isState(slice)) {
+    // An unreadable list keeps its reason, so the card can say why ignored codes are showing again.
+    const reason = obj(slice) ? str(slice.storage_error) : null;
+    return reason ? { ...EMPTY_STATE, storageError: reason } : EMPTY_STATE;
+  }
   const entries = [];
   const index = new Map();
   for (const item of slice.ignored) {
@@ -137,8 +141,12 @@ export function restoreBody(moduleKey, code) {
 
 /** Why a note cannot be sent, or null. The Pi refuses a longer one. */
 export function noteProblem(note) {
-  const n = String(note || "").trim().length;
-  return n > DTC_IGNORE.note_max_chars ? "Keep the note to " + DTC_IGNORE.note_max_chars + " characters (now " + n + ")." : null;
+  const text = String(note || "").trim();
+  const n = text.length;
+  if (n > DTC_IGNORE.note_max_chars) return "Keep the note to " + DTC_IGNORE.note_max_chars + " characters (now " + n + ").";
+  // Emoji and other wide characters count more than one byte each toward the Pi's bound.
+  const bytes = new TextEncoder().encode(text).length;
+  return bytes > DTC_IGNORE.note_max_bytes ? "That note is too long once saved (" + bytes + " of " + DTC_IGNORE.note_max_bytes + " bytes); shorten it." : null;
 }
 
 /**
@@ -165,7 +173,15 @@ export function classifyReply(status, ok, payload) {
 }
 
 /** Text for a request that never got an answer. */
-export const NETWORK_ERROR_TEXT = "Could not reach the Pi. Nothing changed; try again.";
+export const NETWORK_ERROR_TEXT =
+  "No answer from the Pi, so the outcome is unknown: the change may or may not have been saved. The list shows the truth at its next refresh.";
+
+/** The line the Codes card shows when the Pi could not read the ignored-codes list, else null. */
+export function ignoreUnavailableText(state) {
+  return state && !state.available && state.storageError
+    ? "The ignored-codes list could not be read on the Pi, so ignored codes are shown again."
+    : null;
+}
 
 /** `Ignored Oct 28, 2026, 2:30 PM MDT`, or `Ignored` when the date is missing. */
 export function ignoredLabel(entry, formatTime) {

@@ -47,7 +47,15 @@ function ModuleList({ rows }) {
 }
 
 function CodeGroup({ group, canIgnore }) {
-  if (group.total <= 0) return <div class="health-none">{group.title + " · none"}</div>;
+  if (group.total <= 0) {
+    if (!group.moreText) return <div class="health-none">{group.title + " · none"}</div>;
+    return (
+      <div class="health-none">
+        {group.title + " · none returned"}
+        <p class="health-note">{group.moreText}</p>
+      </div>
+    );
+  }
   return (
     <LazyDisclosure
       summary={group.summary}
@@ -114,12 +122,13 @@ export default function CodesCard() {
     >
       {vm.lastRead ? <p class="health-lead">{vm.lastRead}</p> : null}
       {vm.source ? <p class="status-line">{vm.source}</p> : null}
+      {vm.ignoreNote ? <p class="health-note">{vm.ignoreNote}</p> : null}
       {vm.filter ? <Toolbar filter={vm.filter} /> : null}
       {vm.emptyText ? <Empty>{vm.emptyText}</Empty> : null}
       {current ? (
         <>
           <h3 class="section-title">{current.summary}</h3>
-          {current.rows.length ? <CodeList rows={current.rows} canIgnore={canIgnore} slots={SLOTS} /> : <Empty>No current codes.</Empty>}
+          {current.rows.length ? <CodeList rows={current.rows} canIgnore={canIgnore} slots={SLOTS} /> : <Empty>{current.moreText ? "None returned." : "No current codes."}</Empty>}
           {current.moreText ? <p class="health-note">{current.moreText}</p> : null}
         </>
       ) : null}

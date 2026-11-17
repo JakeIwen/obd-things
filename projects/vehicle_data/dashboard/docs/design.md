@@ -447,8 +447,8 @@ Rules for Drive tiles:
 - Sparklines may carry a per-metric "red above N" threshold (`SPARK_RED_ABOVE` in
   `src/sparkline.helpers.js`, read by both `Sparkline.jsx` and `Tile.jsx`): the line switches to the
   palette's `--red` exactly where it crosses N, and the tile numeral reads red while the live value
-  is above N (`tile--hot`). Only `generator.field_duty` (80 %) has one; page 2's Alternator field
-  tile follows the same rule. It is a display rule, distinct from warnings, which come from the broker.
+  is above N (`tile--hot`). Only `generator.field_duty` (80 %) has one, on page 1's Alt field tile
+  (page 2 no longer shows that metric; its field tile is Fuel tank). It is a display rule, distinct from warnings, which come from the broker.
 - Sparklines show the last 15 minutes from the client ring, with no axis and no labels. They start
   empty and fill live; they are not seeded from 900 s buckets. Each scales to its own range with a
   per-metric minimum span (10 psi, 20 °F, 0.5 V) and draws only the nearest band edge.
@@ -529,7 +529,7 @@ content. Page 2 ("Sensors") uses the same frame and the same no-scrolling gate.
   `vehicle ahead` comes first in the sub-line, which ends in an ellipsis on a narrow tile. The
   other page-2 tiles use the
   normal `Tile` rules (live, held with its time, or `—`). `generator.field_duty` stays in
-  `SPARK_METRICS` (minimum span 20 %) for page 1's Voltage / Alt field tile. No new timers were added.
+  `SPARK_METRICS` (minimum span 20 %) for page 1's Alt field tile (Voltage is its own tile beside it). No new timers were added.
 - **Customisation.** The page-2 tiles are in `DRIVE_TILES` with ids `limit`, `acc`, `field`,
   `fuel`, `gear`, `radar`, `turbine`, `output`, `power2`, `torque`, `target` and `odometer`, each labelled
   `… (page 2)`. They
@@ -601,9 +601,9 @@ checks when stopped:
     or `3 modules`, with the chosen modules as removable chips beside it. It opens a panel in the
     page flow (the cards clip overflow, so an overlay would be cut off; in the flow it also spans
     the card and stays inside the viewport at any width) listing the modules that have codes, each
-    with a check box, its name and its count, plus `All`, `Clear` and `Done`. Focus moves into the
+    with a check box, its name and its count, plus `All` (no filter) and `Done`. Focus moves into the
     list; arrow keys, Home and End move, Space or Enter toggles, Escape, a tap outside or tabbing
-    out closes. Choosing every module is the same as none. The choice is in memory for the session
+    out closes. `All` stores no keys, and choosing every module one by one collapses to the same, so a module that gains codes later is never left out of an "all" the owner did not narrow; a chosen subset keeps excluding modules that appear later. The choice is in memory for the session
     (`moduleFilter` in `components/CodesCard.jsx`), applies to every group including Ignored and
     narrows the group counts, but not the badge. A group the broker cut at 25 (or whose parked
     records a filtered read did not return) is filtered from the codes returned only and says how
@@ -617,12 +617,16 @@ checks when stopped:
     through `slots.actions(row)` and `slots.extra(row)`.
   - **Ignore permanently** (`src/dtcIgnore.js`, `dtcIgnore.helpers.js`, contract
     `projects/vehicle_data/dtc_ignore.json`): no modal. The button reveals an optional note field
-    (`Why? e.g. LED headlights`, at most 200 characters) with `Ignore` and `Cancel`. The POST to
+    (`Why? e.g. LED headlights`, at most 200 characters and 400 UTF-8 bytes, both from the contract) with `Ignore` and `Cancel`. The POST to
     `/v1/diagnostics/dtc-ignores` carries `request_id` (reused when the same change is retried after
     a lost answer); the list changes only from the reply, which the store publishes as the
     `dtc_ignores` slice. A refusal shows its `detail` in the panel. The slice arrives in the
     summary beside `dtcs`; when it is missing or `available` is false the ignore controls and the
-    Ignored group are hidden and nothing is left out.
+    Ignored group are hidden and nothing is left out; when the slice carries a `storage_error`, one
+    line says the list could not be read on the Pi and ignored codes are shown again. A request that
+    got no answer reads as outcome unknown (the Pi may have saved it); the next summary shows the truth.
+    Under a module filter a group with no returned matches reads `none returned` and keeps its
+    unreturned-records note whenever the broker cut records the filter could not classify.
   - An ignored code leaves its group and every count: the card badge, the group totals, the
     Parked Codes summary. The headline stays what the van reports besides the ignored codes.
     `Ignored (n)` is the last group, collapsed; its rows show code, module, meaning, the note and

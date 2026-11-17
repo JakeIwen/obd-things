@@ -15,7 +15,7 @@ import {
   DTC_GROUPS, VAN_SOURCE, obj, arr, num, str, moduleList, mergeVanScan,
   filteredSourceLine, filteredReadText, driveReadLines, filteredTime, newestSuccess, unlistedReports,
 } from "./dtcSources.helpers.js";
-import { excludeIgnored, ignoreState, recordIdentity } from "../dtcIgnore.helpers.js";
+import { excludeIgnored, ignoreState, ignoreUnavailableText, recordIdentity } from "../dtcIgnore.helpers.js";
 import { moduleOptions, activeModules, filterByModules, unreturnedNote, ignoredGroup } from "./dtcCodes.helpers.js";
 export { DTC_GROUPS, VAN_SOURCE, VAN_STATUS_MASK, mergeVanScan } from "./dtcSources.helpers.js";
 
@@ -343,8 +343,11 @@ function statusLabels(e) {
 /** Label/value pairs the open row shows: module, bus, first and last seen (as the row shows them), status flags. */
 function rowDetails(e, module, nowMs) {
   // Same formatter and zone as the closed row's "last seen", so the two never disagree.
-  const first = when(e.first_seen_at, nowMs);
-  const last = when(e.last_seen_at, nowMs);
+  // Filtered evidence keeps its explicit date and Mountain zone in the row, so the panel uses it too.
+  const filtered = e.source === VAN_SOURCE || e.source === "drive";
+  const clock = (iso) => (filtered ? (parseDate(iso) ? filteredTime(iso) : null) : when(iso, nowMs));
+  const first = clock(e.first_seen_at);
+  const last = clock(e.last_seen_at);
   const labels = statusLabels(e);
   return [
     ["Module", [module, busName(e.logical_bus)].filter(Boolean).join(" · ") || null],
@@ -501,7 +504,9 @@ function codeGroups(d, nowMs) {
     const hidden = hiddenCounts ? num(hiddenCounts[key]) || 0 : 0;
     const total = (num(counts[key]) !== null ? counts[key] : entries.length) + hidden;
     const returned = Math.min(entries.length, num(returnedCounts[key]) !== null ? returnedCounts[key] : entries.length);
-    if ((key === "other" || key === "not_reported") && total <= 0) continue;
+    const unreturned = unreturnedNote(num(d.filter_unreturned?.[key]) || 0);
+    // An empty filtered group with unreturned records is not proven empty, so it stays listed.
+    if ((key === "other" || key === "not_reported") && total <= 0 && !unreturned) continue;
     const recent = [];
     const older = [];
     for (let i = 0; i < returned; i += 1) {
@@ -516,7 +521,6 @@ function codeGroups(d, nowMs) {
     const summary = hidden > 0
       ? title + " · " + fmtInt(returned) + " shown · +" + fmtInt(hidden) + " more in the parked read"
       : title + " · " + fmtInt(total) + (cut ? " · showing " + returned + " of " + fmtInt(total) : "");
-    const unreturned = unreturnedNote(num(d.filter_unreturned?.[key]) || 0);
     const moreText = unreturned ? unreturned : hidden > 0
       ? "The parked read counted " + fmtInt(hidden) + " more it did not return; some may be codes shown here."
       : cut && d.drive_reads?.available === true ? "+" + fmtInt(total - returned) + " more from the parked read (not returned in this list)" : null;
@@ -549,7 +553,7 @@ function codeGroups(d, nowMs) {
  */
 export function codesView(dtcs, nowMs, scanEnabled, view = {}) {
   const base = { status: "ok", badge: null, lastRead: null, source: null, emptyText: null, current: null, groups: [], modules: null,
-    filter: null, ignored: null, ignoreAvailable: false };
+    filter: null, ignored: null, ignoreAvailable: false, ignoreNote: null };
   if (dtcs === null || dtcs === undefined) return { ...base, status: "loading", emptyText: "Waiting for the saved code list…" };
   let d = obj(dtcs) || {};
   if (d.available === false) {
@@ -573,6 +577,9 @@ export function codesView(dtcs, nowMs, scanEnabled, view = {}) {
   const unlisted = unlistedReports(d);
   const records = keptGroups.reduce((n, g) => n + g.total, 0);
   const shownRecords = groupModels.reduce((n, g) => n + g.total, 0);
+  // Unreturned records may belong to the chosen modules, so their qualification outlives an empty view.
+  const qualified = groupModels.some((g) => g.moreText);
+  const showGroups = shownRecords > 0 || qualified;
   const modules = modulesView(d, nowMs);
   const moduleRows = moduleList(d);
   const authoritativeZero =
@@ -600,7 +607,8 @@ export function codesView(dtcs, nowMs, scanEnabled, view = {}) {
       emptyText = "No saved codes, but some modules did not answer fully, so a clean result is not proven.";
     }
   } else if (shownRecords === 0) {
-    emptyText = "No saved codes in the chosen modules.";
+    emptyText = qualified ? "No saved codes returned for the chosen modules; some records were not returned, so none is not proven."
+      : "No saved codes in the chosen modules.";
   }
   const current = groupModels.find((g) => g.key === "current") || null;
   const keptCurrent = keptGroups.find((g) => g.key === "current") || null;
@@ -619,11 +627,12 @@ export function codesView(dtcs, nowMs, scanEnabled, view = {}) {
       ? plural(van.modules, "module", "modules") + " " + vanSourceLine(van.scanAt || van.lastAt, nowMs)
       : null,
     emptyText,
-    current: shownRecords > 0 ? current : null,
-    groups: shownRecords > 0 ? groupModels.filter((g) => g.key !== "current") : [],
+    current: showGroups ? current : null,
+    groups: showGroups ? groupModels.filter((g) => g.key !== "current") : [],
     modules,
     filter: options.length ? { options, chosen } : null,
     ignoreAvailable: ignores.available,
+    ignoreNote: ignoreUnavailableText(ignores),
     ignored: ignores.available && ignores.entries.length ? ignoredGroup(ignores.entries, found, chosen, nowMs, codeRow) : null,
   };
 }

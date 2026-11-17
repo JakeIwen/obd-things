@@ -69,6 +69,8 @@ test("note limit and request ids", () => {
   assert.equal(noteProblem("a".repeat(200)), null);
   assert.match(noteProblem("a".repeat(201)), /200 characters \(now 201\)/);
   assert.equal(noteProblem("  " + "a".repeat(200) + "  "), null, "the trimmed note is what counts");
+  assert.match(noteProblem("\u20AC".repeat(134)), /402 of 400 bytes/, "the Pi bounds the encoded size too");
+  assert.equal(noteProblem("\u20AC".repeat(133)), null);
   const id = makeRequestId();
   assert.ok(isValidRequestId(id));
   assert.notEqual(makeRequestId(), id);
@@ -106,7 +108,7 @@ test("postIgnore sends one same-origin JSON POST and never rejects", async () =>
   assert.equal(calls[0].init.headers["Content-Type"], "application/json");
   assert.deepEqual(JSON.parse(calls[0].init.body), payload);
   assert.equal((await postIgnore(reply(400, { detail: "bad note" }), payload)).message, "bad note");
-  assert.match((await postIgnore(async () => { throw new Error("offline"); }, payload)).message, /Could not reach the Pi/);
+  assert.match((await postIgnore(async () => { throw new Error("offline"); }, payload)).message, /outcome is unknown.*next refresh/);
   assert.match((await postIgnore(async () => ({ ok: false, status: 502, json: async () => { throw new Error("x"); } }), payload)).message, /HTTP 502/);
 });
 

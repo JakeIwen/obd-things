@@ -4,12 +4,17 @@
  * `{key, label, count?, detail?, group?}`; options sharing a `group` are listed together.
  */
 
-/** Selection after toggling `key`, in option order (stable for display and equality). */
+/**
+ * Selection after toggling `key`, in option order (stable for display and equality). A result that
+ * names every option is the no-filter state `[]`, never a snapshot of today's keys: a module that
+ * gains codes later must not be left out of an "all" the owner never narrowed.
+ */
 export function toggleKey(selected, key, options) {
   const on = new Set(selected);
   if (on.has(key)) on.delete(key);
   else on.add(key);
-  return options.filter((o) => on.has(o.key)).map((o) => o.key);
+  const keys = options.filter((o) => on.has(o.key)).map((o) => o.key);
+  return keys.length === options.length ? [] : keys;
 }
 
 /** Every option's key. */
@@ -17,7 +22,7 @@ export function allKeys(options) {
   return options.map((o) => o.key);
 }
 
-/** The selection that means "no filter". */
+/** The selection that means "no filter" (all modules, including ones that appear later). */
 export function clearKeys() {
   return [];
 }
