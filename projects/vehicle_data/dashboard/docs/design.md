@@ -656,7 +656,11 @@ checks when stopped:
     (earlier runs of the code, shown when there is more than one), `New research`, and an
     `Ask a follow-up...` box. An answer from a replayed session says so under it. The footer reads
     model, effort, time and duration; a missing or shortened summary and missing report headings
-    are quiet footer notes. Every error `reason` maps to one sentence in `REASON_TEXT`. Times use
+    are quiet footer notes. Every error and turn `reason` in `dtc_research.json` maps to one sentence
+    in `REASON_TEXT`. A follow-up is refused in the dialog when it is over 2,000 characters or over
+    12,288 bytes as the service encodes it (`encodedLength`, the same count as `json.dumps`), the
+    limits the service enforces. The contract (routes, states, limits, poll intervals) is read from
+    `projects/vehicle_data/dtc_research.json`, the file the service loads too. Times use
     the Codes card's own formatter.
   - **Model picker** (`components/ModelPicker.jsx`, `modelPicker.helpers.js`): the same `Popover`
     and `Listbox` as the Modules filter, as a single select with models grouped by provider; effort

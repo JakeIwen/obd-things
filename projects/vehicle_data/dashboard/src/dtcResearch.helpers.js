@@ -6,34 +6,34 @@
  */
 
 import { fmtDuration, fmtTime, parseDate } from "./format.js";
+import vocabulary from "../../dtc_research.json" with { type: "json" };
 
 /*
- * The contract in one block. The backend keeps the same vocabulary in
- * projects/vehicle_data/dtc_research.json; a later pass can replace this block with an import
- * of that file.
+ * The contract, read from the vocabulary the service also loads (projects/vehicle_data/
+ * dtc_research.json), so the dashboard and the Pi cannot drift apart.
  */
+const frozen = (section) => Object.freeze({ ...section });
+
 export const RESEARCH = Object.freeze({
-  routes: Object.freeze({
-    models: "/v1/assistant/models",
-    list: "/v1/assistant/dtc-research",
-    codePrefix: "/v1/assistant/dtc-research/code/",
-    runPrefix: "/v1/assistant/dtc-research/run/",
-    post: "/v1/assistant/dtc-research",
-  }),
-  actions: Object.freeze({ start: "start", ask: "ask", cancel: "cancel" }),
-  states: Object.freeze({ running: "running", done: "done", failed: "failed", cancelled: "cancelled" }),
-  modes: Object.freeze({ initial: "initial", resumed: "resumed", replayed: "replayed" }),
-  summaryNotes: Object.freeze({ missing: "missing", truncated: "truncated" }),
-  progressPollMs: 1000,
-  modelsPollMs: 2000,
-  modelsPollMax: 15,
+  routes: frozen(vocabulary.routes),
+  actions: frozen(vocabulary.actions),
+  states: frozen(vocabulary.states),
+  turnStates: frozen(vocabulary.turnStates),
+  modes: frozen(vocabulary.modes),
+  summaryNotes: frozen(vocabulary.summaryNotes),
+  progressPollMs: vocabulary.progressPollMs,
+  modelsPollMs: vocabulary.modelsPollMs,
+  modelsPollMax: vocabulary.modelsPollMax,
+  // Not in the contract: how long one browser request may wait, which the service's own timeouts do not cover.
   requestTimeoutMs: 20000,
-  questionMax: 2000,
-  summaryMax: 140,
-  moduleKeyRe: /^[a-z][a-z0-9_]{0,39}$/,
-  codeRe: /^[PBCU][0-9A-F]{4}(-[0-9A-F]{2})?$/,
-  runIdRe: /^[a-f0-9]{32}$/,
-  requestIdRe: /^[a-f0-9]{32}$/,
+  questionMax: vocabulary.questionMax,
+  questionEncodedBytes: vocabulary.sizes.questionEncodedBytes,
+  summaryMax: vocabulary.summaryMax,
+  maxTurns: vocabulary.maxTurns,
+  moduleKeyRe: new RegExp(vocabulary.patterns.moduleKey),
+  codeRe: new RegExp(vocabulary.patterns.code),
+  runIdRe: new RegExp(vocabulary.patterns.runId),
+  requestIdRe: new RegExp(vocabulary.patterns.requestId),
 });
 
 const obj = (v) => (v && typeof v === "object" && !Array.isArray(v) ? v : null);
@@ -59,15 +59,33 @@ export function runPath(runId, tail = "") {
   return RESEARCH.routes.runPrefix + runId + tail;
 }
 
-export const progressPath = (runId) => runPath(runId, "/progress");
+export const progressPath = (runId) => runPath(runId, RESEARCH.routes.progressSuffix);
 
 /* ---------- request bodies ---------- */
 
-/** Why a follow-up cannot be sent, or null. */
+/**
+ * Bytes a string takes in the service's reply encoding: `json.dumps` with its default `ensure_ascii`,
+ * so each non-ASCII UTF-16 unit costs six bytes (`\uXXXX`; a non-BMP character is two units, 12 bytes)
+ * and the quotes count. The UTF-8 length would under-measure what the server refuses.
+ */
+export function encodedLength(text) {
+  let bytes = 2;
+  for (let i = 0; i < text.length; i++) {
+    const unit = text.charCodeAt(i);
+    if (unit === 0x22 || unit === 0x5c || unit === 0x08 || unit === 0x09 || unit === 0x0a || unit === 0x0c || unit === 0x0d) bytes += 2;
+    else if (unit < 0x20 || unit > 0x7e) bytes += 6;
+    else bytes += 1;
+  }
+  return bytes;
+}
+
+/** Why a follow-up cannot be sent, or null. Both limits are the service's: code points, then encoded bytes. */
 export function questionProblem(text) {
-  const n = String(text || "").trim().length;
+  const trimmed = String(text || "").trim();
+  const n = Array.from(trimmed).length;
   if (n === 0) return "Type a question first.";
-  return n > RESEARCH.questionMax ? "Keep the question to " + RESEARCH.questionMax + " characters (now " + n + ")." : null;
+  if (n > RESEARCH.questionMax) return "Keep the question to " + RESEARCH.questionMax + " characters (now " + n + ").";
+  return encodedLength(trimmed) > RESEARCH.questionEncodedBytes ? "That question is too large to send; shorten it." : null;
 }
 
 export function startBody(target, choice, requestId) {
@@ -94,7 +112,7 @@ export const REASON_TEXT = Object.freeze({
   invalid_request: "That request was not accepted. Reopen this code and try again.",
   not_found: "That research is no longer on the Pi.",
   run_busy: "A turn is already running for this code. Wait for it to finish or stop it.",
-  turn_limit: "This conversation has reached its limit of 24 turns. Start new research to continue.",
+  turn_limit: "This conversation has reached its limit of " + RESEARCH.maxTurns + " turns. Start new research to continue.",
   record_full: "This conversation is full. Start new research to continue.",
   cannot_continue: "The report did not finish, so there is nothing to follow up on. Start new research.",
   busy: "The assistant is busy with another job. Try again in a few seconds.",
@@ -201,10 +219,10 @@ const clock = (iso, nowMs) => (parseDate(iso) ? fmtTime(iso, new Date(nowMs)) : 
 
 /** The conversation rows: the report first, then questions and answers. A turn still running has no row (the progress line stands for it). */
 export function turnRows(run, nowMs) {
-  return arr(obj(run)?.turns).filter(obj).map((turn, i) => ({ turn, i })).filter(({ turn }) => !(turn.role !== "user" && turn.state === "running")).map(({ turn, i }) => {
+  return arr(obj(run)?.turns).filter(obj).map((turn, i) => ({ turn, i })).filter(({ turn }) => !(turn.role !== "user" && turn.state === RESEARCH.turnStates.running)).map(({ turn, i }) => {
     const at = clock(turn.at, nowMs);
     if (turn.role === "user") return { key: "t" + i, role: "user", heading: "You", text: String(turn.text || ""), markdown: false, at, note: null, error: null };
-    const failed = turn.state === "failed" || turn.state === "cancelled";
+    const failed = turn.state === RESEARCH.turnStates.failed || turn.state === RESEARCH.turnStates.cancelled;
     return {
       key: "t" + i,
       role: "assistant",
@@ -213,7 +231,7 @@ export function turnRows(run, nowMs) {
       markdown: true,
       at,
       note: turn.mode === RESEARCH.modes.replayed ? TEXT.replayNote : null,
-      error: failed ? errorText(turn.reason, turn.error, turn.state === "cancelled" ? REASON_TEXT.cancelled : TEXT.working) : null,
+      error: failed ? errorText(turn.reason, turn.error, turn.state === RESEARCH.turnStates.cancelled ? REASON_TEXT.cancelled : TEXT.working) : null,
     };
   });
 }

@@ -1,15 +1,36 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  AI_LINE_TITLE, REASON_TEXT, RESEARCH, TEXT, askBody, cancelBody, codePath, errorText, itemKey, needsRunFetch, newRequestId,
+  AI_LINE_TITLE, REASON_TEXT, RESEARCH, TEXT, askBody, cancelBody, codePath, encodedLength, errorText, itemKey, needsRunFetch, newRequestId,
   progressLine, progressPath, questionProblem, researchButtonText, researchIndex, researchable, rowExtraLine, runFooter, runOption,
   runPath, runPhase, shouldPoll, startBody, turnRows,
 } from "../src/dtcResearch.helpers.js";
 import { refreshResearchList, researchItems, researchStatus } from "../src/dtcResearch.js";
 import { createStorage } from "../src/assistantAccess.js";
+import vocabulary from "../../dtc_research.json" with { type: "json" };
 
 const NOW = Date.parse("2026-10-28T20:30:00Z");
 const RUN = "a".repeat(32);
+
+test("the contract is the shared vocabulary file, not a copy", () => {
+  assert.deepEqual({ ...RESEARCH.routes }, vocabulary.routes);
+  assert.deepEqual({ ...RESEARCH.states }, vocabulary.states);
+  assert.deepEqual({ ...RESEARCH.turnStates }, vocabulary.turnStates);
+  assert.deepEqual({ ...RESEARCH.modes }, vocabulary.modes);
+  assert.deepEqual({ ...RESEARCH.summaryNotes }, vocabulary.summaryNotes);
+  assert.equal(RESEARCH.progressPollMs, vocabulary.progressPollMs);
+  assert.equal(RESEARCH.modelsPollMs, vocabulary.modelsPollMs);
+  assert.equal(RESEARCH.modelsPollMax, vocabulary.modelsPollMax);
+  assert.equal(RESEARCH.questionMax, vocabulary.questionMax);
+  assert.equal(RESEARCH.questionEncodedBytes, vocabulary.sizes.questionEncodedBytes);
+  assert.equal(RESEARCH.summaryMax, vocabulary.summaryMax);
+  assert.equal(RESEARCH.maxTurns, vocabulary.maxTurns);
+  assert.equal(RESEARCH.moduleKeyRe.source, vocabulary.patterns.moduleKey);
+  assert.equal(RESEARCH.codeRe.source, vocabulary.patterns.code);
+  assert.equal(RESEARCH.runIdRe.source, vocabulary.patterns.runId);
+  assert.equal(RESEARCH.requestIdRe.source, vocabulary.patterns.requestId);
+  assert.equal(progressPath(RUN), RESEARCH.routes.runPrefix + RUN + vocabulary.routes.progressSuffix);
+});
 
 test("identity and routes only accept what the service accepts", () => {
   assert.equal(researchable("bcm_ccan", "B162E-15"), true);
@@ -36,18 +57,32 @@ test("request bodies are exactly the contract's fields", () => {
   assert.match(newRequestId((n) => "ab".repeat(n)), RESEARCH.requestIdRe);
 });
 
-test("question limits", () => {
+test("question limits: characters, then the service's encoded bytes", () => {
   assert.equal(questionProblem("ok"), null);
   assert.match(questionProblem("   "), /Type a question/);
-  assert.equal(questionProblem("a".repeat(2000)), null);
+  assert.equal(questionProblem("a".repeat(2000)), null, "2000 ASCII characters are under both limits");
   assert.match(questionProblem("a".repeat(2001)), /2000 characters \(now 2001\)/);
+  // Under the character limit but over the 12288-byte limit: 1024 emoji are 1024 characters and 12290 encoded bytes.
+  assert.equal(questionProblem("\u{1F600}".repeat(1023)), null, "1023 emoji are 12278 encoded bytes, under the limit");
+  assert.equal(questionProblem("\u{1F600}".repeat(1024)), "That question is too large to send; shorten it.");
+  assert.equal(questionProblem("\u{1F600}".repeat(2000)), "That question is too large to send; shorten it.", "over the bytes, not the characters");
+  // Over the character limit: the count is characters (code points), not UTF-16 units, so 2001 emoji are refused on count.
+  assert.match(questionProblem("\u{1F600}".repeat(2001)), /2000 characters \(now 2001\)/);
 });
 
-test("every API reason has an owner-facing sentence; unknown ones fall back to the detail", () => {
-  const reasons = ["invalid_request", "not_found", "run_busy", "turn_limit", "record_full", "cannot_continue", "busy", "rate_limited",
-    "daily_limit", "provider_unavailable", "worker_unavailable", "storage_error", "timeout", "cancelled", "interrupted", "provider_error",
-    "auth", "upstream_rate_limit", "budget_exceeded", "policy_violation", "protocol_error", "space_exhausted", "memory_exhausted"];
+test("encoded length matches the service's json.dumps count", () => {
+  assert.equal(encodedLength("a"), 3, "two quotes and one byte");
+  assert.equal(encodedLength("é"), 8, "one non-ASCII character is six bytes");
+  assert.equal(encodedLength("\u{1F600}"), 14, "a non-BMP character is 12 bytes");
+  assert.equal(encodedLength("line\n\"q\"\\"), 15, "four letters, then \\n, two quotes, q, and a backslash: 4 + 2 + 2 + 1 + 2 + 2 plus the outer quotes");
+  assert.equal(encodedLength("\x7f"), 8, "DEL is escaped by the service");
+});
+
+test("every reason in the contract has an owner-facing sentence; unknown ones fall back to the detail", () => {
+  const reasons = [...Object.keys(vocabulary.errorReasons), ...vocabulary.turnReasons];
+  assert.ok(reasons.length > 20, "the walk covers the contract's reason lists");
   for (const r of reasons) assert.ok(REASON_TEXT[r] && REASON_TEXT[r].length < 120, r);
+  assert.match(REASON_TEXT.turn_limit, new RegExp(`limit of ${vocabulary.maxTurns} turns`));
   assert.equal(errorText("busy", "A warning chat is answering a question."), "A warning chat is answering a question.", "busy shows its detail");
   assert.equal(errorText("provider_unavailable", "Claude is not signed in for research yet"), "Claude is not signed in for research yet");
   assert.equal(errorText("busy", ""), REASON_TEXT.busy);
