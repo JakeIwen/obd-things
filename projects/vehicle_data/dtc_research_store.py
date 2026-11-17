@@ -2,7 +2,9 @@
 
 Records live in ``<advisor state>/dtc-research/runs/<run_id>.json``, written atomically and only by
 the advisor, so their bounds hold in code: at most ``MAX_RUNS`` runs (the oldest finished run is
-evicted first, a busy one never), and every reply about a run stays under the sizes in
+evicted first, a busy one never; only once a new run's launch has been admitted, so a refused start
+never costs a report and one extra record exists only during a launch request), and every reply
+about a run stays under the sizes in
 ``dtc_research.json`` (a follow-up is refused when its worst case would not fit).
 """
 
@@ -161,9 +163,9 @@ class Store:
         self.records.pop(run_id, None)
 
     def evictable(self):
-        """Run ids to evict so one more run fits ``MAX_RUNS`` (oldest finished first, never a busy one)."""
+        """Run ids to evict so the runs fit ``MAX_RUNS`` (oldest finished first, never a busy one)."""
         finished = sorted((r for r in self.records.values() if not busy(r)), key=lambda r: r["created_at"])
-        excess = len(self.records) + 1 - MAX_RUNS
+        excess = len(self.records) - MAX_RUNS
         return [r["run_id"] for r in finished[:max(0, excess)]]
 
     def for_code(self, module_key, fca_display):

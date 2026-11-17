@@ -49,6 +49,7 @@ class ResearchManager:
         self.state = "unknown"  # unknown -> idle (reconciliation); see dtc_research_reconcile
         self.instance_id = None
         self.following = set()  # attempt ids a follow thread is watching
+        self.starting = {}  # request_id -> (module_key, fca_display) of starts still gathering their context
         self.closed = threading.Event()
 
     # --- routes ----------------------------------------------------------------------------------
@@ -79,43 +80,58 @@ class ResearchManager:
             raise ResearchError("not_found", "That research is no longer on the Pi")
         return record
 
-    def _admission(self):
+    def _require_idle(self):
         if self.state != "idle":
             try:
                 self.worker.status()
             except WorkerUnreachable:
                 raise ResearchError("worker_unavailable", "The research service on the Pi is not running") from None
             raise ResearchError("busy", "The assistant is checking on a research job after a restart; try again shortly")
-        if self.window.full():
+
+    def _admission(self):
+        self._require_idle()
+        # Starts still gathering their context count too, so concurrent starts cannot pass the window together.
+        if self.window.full() or len(self.window.recent) + len(self.starting) >= self.window.limit:
             raise ResearchError("rate_limited", "Too many research starts in the last minute")
 
     def start(self, fields):
+        request_id, code = fields["request_id"], (fields["module_key"], fields["fca_display"])
         with self.lock:
-            duplicate = next((r for r in self.store.records.values() if fields["request_id"] in r["request_ids"]), None)
+            duplicate = next((r for r in self.store.records.values() if request_id in r["request_ids"]), None)
             if duplicate:
                 return {"available": True, "run": records.full(duplicate)}
-            if any(records.busy(r) for r in self.store.for_code(fields["module_key"], fields["fca_display"])):
+            if request_id in self.starting or code in self.starting.values() \
+                    or any(records.busy(r) for r in self.store.for_code(*code)):
                 raise ResearchError("run_busy", "Research is already running for this code")
             self._admission()
             self.catalog.validate(fields["provider"], fields["model"], fields["effort"])
-            for run_id in self.store.evictable():
-                self._evict(run_id)
-        context = dtc_research_context.gather(self.broker, fields["module_key"], fields["fca_display"])
+            # Reserved until this start ends: no second start for this request or this code meanwhile.
+            self.starting[request_id] = code
+        try:
+            context = dtc_research_context.gather(self.broker, *code)  # outside the lock: broker reads take seconds
+            with self.lock:
+                self._require_idle()  # a worker restart may have been noticed while gathering
+                return self._create_and_launch(fields, context)
+        finally:
+            with self.lock:
+                self.starting.pop(request_id, None)
+
+    def _create_and_launch(self, fields, context):
         run_id = uuid.uuid4().hex
         record = records.new_record(run_id, fields, context, fields["request_id"])
         record["turns"].append(records.new_turn("report"))
-        with self.lock:
-            if any(records.busy(r) for r in self.store.for_code(fields["module_key"], fields["fca_display"])):
-                raise ResearchError("run_busy", "Research is already running for this code")
-            self.store.records[run_id] = record
-            try:
-                self.store.save(record)
-                self._launch(record, "initial", first_prompt(context))
-            except Exception:
-                self.store.delete(run_id)
-                raise
-            self.window.record()
-            return {"available": True, "run": records.full(record)}
+        self.store.records[run_id] = record
+        try:
+            self.store.save(record)
+            self._launch(record, "initial", first_prompt(context))
+        except Exception:
+            self.store.delete(run_id)
+            raise
+        self.window.record()
+        # Only an admitted launch makes room: a refused start never costs an existing report.
+        for old in self.store.evictable():
+            self._evict(old)
+        return {"available": True, "run": records.full(record)}
 
     def ask(self, fields):
         with self.lock:

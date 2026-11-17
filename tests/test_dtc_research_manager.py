@@ -2,15 +2,18 @@
 
 from pathlib import Path
 import tempfile
+import threading
 import time
 import unittest
 import uuid
 
 from projects.vehicle_data.assistant_common import ChatError
 from projects.vehicle_data.assistant_models import Catalog
+from projects.vehicle_data import dtc_research_store as records
 from projects.vehicle_data.dtc_research import ResearchManager
 from projects.vehicle_data.dtc_research_ledger import Ledger
 from projects.vehicle_data.dtc_research_reconcile import Reconciler
+from projects.vehicle_data.dtc_research_contract import MAX_RUNS
 from projects.vehicle_data.dtc_research_store import Store
 from projects.vehicle_data.dtc_research_worker import dispatch
 from projects.vehicle_data.research_attempts import Refused
@@ -37,7 +40,7 @@ class RigClient:
 
     def __init__(self, rig):
         self.rig, self.down, self.lose_reply, self.drop_request = rig, False, False, False
-        self.launches = []
+        self.launches, self.deleted = [], []
 
     def _call(self, method, path, payload=None):
         if self.down:
@@ -72,7 +75,28 @@ class RigClient:
         return self._call("POST", "/sweep", {"keep": sorted(keep)})
 
     def delete_run(self, run_id):
+        self.deleted.append(run_id)
         return self._call("POST", f"/runs/{run_id}/delete")
+
+
+class GatedBroker(Broker):
+    """Every DTC read waits at a two-party barrier (so two starts are both past their first check),
+    and the second read also waits for ``release``."""
+
+    def __init__(self):
+        self.barrier, self.release, self.reads = threading.Barrier(2), threading.Event(), 0
+
+    def request(self, method, path):
+        if path == "/v1/diagnostics/dtcs":
+            self.reads += 1
+            second = self.reads == 2
+            try:
+                self.barrier.wait(timeout=3)
+            except threading.BrokenBarrierError:
+                pass
+            if second:
+                self.release.wait(timeout=20)
+        return super().request(method, path)
 
 
 class ManagerTests(unittest.TestCase):
@@ -82,13 +106,13 @@ class ManagerTests(unittest.TestCase):
         self.client = RigClient(self.rig)
         self.manager = self.build()
 
-    def build(self, ledger_limit=60, refresh=True):
+    def build(self, ledger_limit=60, refresh=True, broker=None):
         base = Path(self.state.name)
         store = Store(base / "runs")
         store.load(log=lambda line: None)
         catalog = Catalog(self.client, poll=.05)
         manager = ResearchManager(store, Ledger(base / "admissions.json", limit=ledger_limit), catalog,
-                                  self.client, Broker(), poll=.05)
+                                  self.client, broker or Broker(), poll=.05)
         reconciler = Reconciler(manager, retry=.05)
         self.assertTrue(reconciler.reconcile_once())
         if refresh:
@@ -113,6 +137,22 @@ class ManagerTests(unittest.TestCase):
     def ask(self, run_id, question="And then?"):
         body = {"action": "ask", "run_id": run_id, "question": question, "request_id": uuid.uuid4().hex}
         return self.manager.handle("POST", "/v1/assistant/dtc-research", body)["run"]
+
+    def seed_finished_runs(self, count):
+        """``count`` finished runs on disk, oldest first, as earlier research would have left them."""
+        store = Store(Path(self.state.name) / "runs")
+        ids = []
+        for n in range(count):
+            fields = {**CODE, "fca_display": f"C{1000 + n:04X}-00", "provider": "claude", "model": "opus",
+                      "effort": "high"}
+            record = records.new_record(uuid.uuid4().hex, fields, {"code": {}}, uuid.uuid4().hex)
+            record["created_at"] = f"2026-11-01T00:{n // 60:02d}:{n % 60:02d}+00:00"
+            turn = records.new_turn("report")
+            turn.update(state="complete", answer="ok", phase=None, completed_at=record["created_at"], duration_s=1)
+            record["turns"].append(turn)
+            store.save(record)
+            ids.append(record["run_id"])
+        return ids
 
     def settle(self, run_id, timeout=30):
         deadline = time.monotonic() + timeout
@@ -291,6 +331,61 @@ class ManagerTests(unittest.TestCase):
         self.assertIn("Recalls for [vehicle identifier omitted]", prompts[2])  # replayed answer
         # On the Pi the owner's text is kept as he typed it; only what leaves the Pi is masked.
         self.assertEqual(run["turns"][1]["text"], asked)
+
+    def test_a_refused_start_at_the_run_cap_keeps_every_record(self):
+        self.manager.close()
+        oldest = self.seed_finished_runs(MAX_RUNS)[0]
+        self.manager = self.build(ledger_limit=0)
+        with self.assertRaises(ChatError) as limit:
+            self.start()
+        self.assertEqual(limit.exception.reason, "daily_limit")
+        self.manager.close()
+        self.manager = self.build()
+        self.rig.set_available(1024)
+        with self.assertRaises(ChatError) as low:
+            self.start()
+        self.assertEqual(low.exception.reason, "busy")
+        self.client.down = True
+        with self.assertRaises(ChatError) as down:
+            self.start()
+        self.assertEqual(down.exception.reason, "worker_unavailable")
+        self.client.down = False
+        self.assertEqual((len(self.manager.store.records), self.client.deleted), (MAX_RUNS, []))
+        self.assertEqual(len(list(Path(self.state.name, "runs").glob("*.json"))), MAX_RUNS)
+        self.rig.set_available(4 * 1024 ** 3)
+        run = self.settle(self.start()["run_id"])  # admitted: only now does the oldest make room
+        self.assertEqual(self.client.deleted, [oldest])
+        self.assertEqual(len(self.manager.store.records), MAX_RUNS)
+        self.assertIn(run["run_id"], self.manager.store.records)
+
+    def test_concurrent_starts_with_one_request_id_launch_once_and_keep_the_cap(self):
+        self.manager.close()
+        self.seed_finished_runs(MAX_RUNS)
+        broker = GatedBroker()
+        self.manager = self.build(broker=broker)
+        request_id, results = uuid.uuid4().hex, []
+
+        def start():
+            try:
+                results.append(self.start(request_id=request_id)["run_id"])
+            except ChatError as exc:
+                results.append(exc.reason)
+
+        threads = [threading.Thread(target=start) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        deadline = time.monotonic() + 20
+        while not any(len(r) == 32 for r in results) and time.monotonic() < deadline:
+            time.sleep(.05)
+        self.settle(next(r for r in results if len(r) == 32))
+        broker.release.set()  # a second start still gathering now meets a finished run for this code
+        for thread in threads:
+            thread.join(20)
+        self.assertEqual(len(self.rig.prompts()), 1, results)  # one model turn
+        mine = [r for r in self.manager.store.records.values() if request_id in r["request_ids"]]
+        self.assertEqual(len(mine), 1)
+        self.assertLessEqual(len(self.manager.store.records), MAX_RUNS)
+        self.assertTrue(all(r == mine[0]["run_id"] or r == "run_busy" for r in results), results)
 
 if __name__ == "__main__":
     unittest.main()
