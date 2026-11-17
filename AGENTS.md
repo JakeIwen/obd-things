@@ -81,7 +81,7 @@ applies it before shooting each view. Extend the scene when a feature it doesn't
 The tracked README set comes from a Playwright pair instead: `tools/demo_capture.mjs` writes the
 setup (every non-GET request aborted, every data route answered from `demo_views.mjs`,
 `demo_events.mjs` and `demo_assistant.mjs`, clock pinned) and `tools/readme_shots.playwright.js`
-takes all 18 images. vanpi takes them with no Mac session: `node tools/readme_shots.mjs
+takes all 19 images. vanpi takes them with no Mac session: `node tools/readme_shots.mjs
 [--only 01,05]` (from `dashboard/`; needs `npm ci`, the broker socket and internet for Roboto)
 runs the pair in the system Chromium against a scratch build of the checkout, in the time zone and
 locale the committed set shows. It refuses the capture if the listener saw a write or any data
@@ -91,10 +91,10 @@ loaded, so run it again when `uptime` is calm. Otherwise the shots and `capture.
 `tmp/readme_screens/`. Look
 at every image, then `--promote` copies them into `screenshots/` and refreshes their manifest
 entries (`tools/screenshot_manifest.mjs`; the set's `captured_on` and `build` move only with all
-18). Captions and `capture_method` stay hand-written. A Mac session can still run the pair in
-browser_clean, in the Mac's own time zone and locale (their headers give the order). Retake all 18
+19). Captions and `capture_method` stay hand-written. A Mac session can still run the pair in
+browser_clean, in the Mac's own time zone and locale (their headers give the order). Retake all 19
 when the capture host or browser changes, so the gallery isn't mixed. Both harnesses seed the
-Drive sparklines with `tools/demo_sparklines.mjs`.
+Drive sparklines with `tools/demo_sparklines.mjs`. `--only` replaces the whole `tmp/readme_screens/` folder, so run a full retake last, never before an `--only` run.
 Caption every such image as illustrative demo data, and list tracked ones in
 `dashboard/screenshots/manifest.json` (`tests/test_dashboard_screenshot_manifest.py` checks each
 entry against its image). They are never drive evidence, and never show the full VIN or a real
