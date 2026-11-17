@@ -3,7 +3,9 @@
 The attempt already holds the worker's slot and the shared CLI lock (``dtc_research_worker``
 admits it). This module builds the launch from the pinned CLI copy and the tracked policy, runs it
 under ``cli_process`` with the space and memory watchdogs, applies the verified-resume rule, keeps
-the volume within its targets and returns a bounded outcome. Nothing here talks HTTP.
+the volume within its targets and returns a bounded outcome. Every research CLI process, including
+an installer's ``--help`` check, starts through ``Runner.guarded_run``: the launch floor is checked
+again just before each spawn, and a cancelled attempt never spawns. Nothing here talks HTTP.
 """
 
 from dataclasses import dataclass
@@ -13,11 +15,12 @@ import uuid
 
 from projects.vehicle_data import cli_process, research_cli
 from projects.vehicle_data.dtc_research_contract import SIZES, TIMEOUTS, truncate_encoded
-from projects.vehicle_data.research_memory import MIB, Watchdog
+from projects.vehicle_data.research_memory import MIB, Watchdog, launch_refusal
 from projects.vehicle_data.research_volume import FREE_FLOOR_MIB, RUN_CAP_MIB
 
 # Stop reasons that are not turn reasons: the advisor reacts to them itself.
 INTERNAL_REASONS = ("resume_unverified",)
+HELP_MAX_BYTES = 1024 * 1024  # a CLI's --help text is a few KiB
 
 
 @dataclass
@@ -61,14 +64,15 @@ class Runner:
                                              session_id=session_id, resume=request.kind == "resume",
                                              budget_usd=request.budget_usd)
             env = research_cli.claude_env(home, tmpdir, token)
-            stream, result, watchdog = self._launch(attempt, request, argv, env, run / "work",
-                                                    research_cli.ClaudeStream(session_id))
+            stream = research_cli.ClaudeStream(session_id)
+            result, watchdog = self._launch(attempt, request, argv, env, run / "work", stream)
             outcome = self._outcome(request, stream, result, watchdog)
             if outcome["status"] == "complete" and request.kind == "resume":
                 after = research_cli.session_size(research_cli.claude_session_files(home, session_id))
                 if after <= before:
                     outcome = _failed("resume_unverified", "the session file did not grow")
-            if outcome.get("reason") in ("resume_unverified", "space_exhausted", "memory_exhausted"):
+            spawned = result.returncode is not None  # a launch refused before its spawn left the session alone
+            if spawned and outcome.get("reason") in ("resume_unverified", "space_exhausted", "memory_exhausted"):
                 self.volume.drop_session(request.run_id)
             outcome["session_present"] = bool(research_cli.claude_session_files(home, session_id))
             outcome["session_id"] = session_id if outcome["session_present"] else None
@@ -78,30 +82,42 @@ class Runner:
             self.volume.enforce_targets(busy_run=None)
 
     def _launch(self, attempt, request, argv, env, workdir, stream):
-        watchdog = Watchdog(self.thresholds_for(), meminfo=self.meminfo)
-
         def on_line(event):
             stream(event)
             attempt.phase, attempt.searches, attempt.pages = stream.phase, stream.searches, stream.pages
-            if attempt.state == "accepted":
-                attempt.state = "running"
+
+        return self.guarded_run(attempt, argv, cwd=workdir, env=env, stdin_bytes=request.prompt.encode(),
+                                timeout_s=request.timeout_s, on_line=on_line, run_id=request.run_id)
+
+    def guarded_run(self, attempt, argv, *, cwd, env, stdin_bytes, timeout_s, on_line, run_id=None, **options):
+        """``(result, watchdog)`` for one research CLI process under every protection: the launch
+        floor just before the spawn, the memory watchdog (immediate SIGKILL), the volume's space
+        limits, the attempt's cancel and deadline, bounded output and process-group cleanup.
+        ``options`` pass through to ``cli_process.run`` (``keep_stdin_open``, ``json_lines``, sizes)."""
+        thresholds = self.thresholds_for()
+        watchdog = Watchdog(thresholds, meminfo=self.meminfo)
+
+        def before_spawn():
+            refusal = launch_refusal(thresholds, self.meminfo)
+            if refusal:
+                raise cli_process.StopRun("memory_exhausted", refusal)
 
         def on_tick():
             reason = watchdog.check()
             if reason:
                 raise cli_process.StopRun("memory_exhausted", reason, immediate=True)
             if self.volume.free_bytes() < FREE_FLOOR_MIB * MIB \
-                    or self.volume.run_footprint(request.run_id) > RUN_CAP_MIB * MIB:
+                    or (run_id and self.volume.run_footprint(run_id) > RUN_CAP_MIB * MIB):
                 raise cli_process.StopRun("space_exhausted", "the research storage reached its limit")
 
         def on_spawn(pid):
             watchdog.pid = pid
             attempt.state = "running"
 
-        result = cli_process.run(argv, cwd=workdir, env=env, stdin_bytes=request.prompt.encode(),
-                                 deadline=self.clock() + request.timeout_s, cancelled=attempt.cancelled,
-                                 on_line=on_line, on_tick=on_tick, on_spawn=on_spawn)
-        return stream, result, watchdog
+        result = cli_process.run(argv, cwd=cwd, env=env, stdin_bytes=stdin_bytes,
+                                 deadline=self.clock() + timeout_s, cancelled=attempt.cancelled, on_line=on_line,
+                                 on_tick=on_tick, on_spawn=on_spawn, before_spawn=before_spawn, **options)
+        return result, watchdog
 
     def _outcome(self, request, stream, result, watchdog):
         diagnostics = {"exit_code": result.returncode, "stdout_bytes": result.stdout_bytes, "lines": result.lines,
@@ -145,16 +161,38 @@ class Runner:
             env = research_cli.claude_env(home, home, token or "")
             if problem:
                 env.pop("CLAUDE_CODE_OAUTH_TOKEN")
-            cli_process.run(research_cli.claude_discovery_argv(executable), cwd=home, env=env,
-                            stdin_bytes=research_cli.INITIALIZE_REQUEST.encode(),
-                            deadline=self.clock() + TIMEOUTS["discoverySeconds"], cancelled=attempt.cancelled,
-                            on_line=on_line, keep_stdin_open=True)
+            result, _ = self.guarded_run(attempt, research_cli.claude_discovery_argv(executable), cwd=home, env=env,
+                                         stdin_bytes=research_cli.INITIALIZE_REQUEST.encode(),
+                                         timeout_s=TIMEOUTS["discoverySeconds"], on_line=on_line,
+                                         keep_stdin_open=True)
         finally:
             self.volume.clear(home)
         if "models" not in found:
-            raise RuntimeError("Claude did not answer the model check")
+            raise RuntimeError(_stopped(result) or "Claude did not answer the model check")
         return found["models"], found["signed_in"] and not problem
+
+    def help_text(self, attempt, executable, timeout_s):
+        """A CLI's ``--help`` text, with no credentials, under the same guarded launch as a turn."""
+        home = self.volume.tmpdir(attempt.attempt_id)
+        lines = []
+        try:
+            result, _ = self.guarded_run(attempt, [str(executable), "--help"], cwd=home,
+                                         env={"HOME": str(home), "PATH": "/usr/bin:/bin"}, stdin_bytes=b"",
+                                         timeout_s=timeout_s, on_line=lines.append, json_lines=False,
+                                         max_line=HELP_MAX_BYTES, max_total=HELP_MAX_BYTES)
+        finally:
+            self.volume.clear(home)
+        if result.stop_reason:
+            raise RuntimeError(_stopped(result))
+        return "\n".join(lines)
 
 
 def _failed(reason, detail):
     return {"status": "failed", "answer": None, "reason": reason, "detail": detail}
+
+
+def _stopped(result):
+    """Why a run was stopped, as a sentence, or ``None`` when it was not."""
+    if result.stop_reason in (None, "discovered"):
+        return None
+    return f"{result.stop_reason}: {result.stop_detail}" if result.stop_detail else result.stop_reason

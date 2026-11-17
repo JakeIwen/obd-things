@@ -16,6 +16,7 @@ from projects.vehicle_data.model_cli_lock import ACQUIRED, CliLock
 from projects.vehicle_data.research_attempts import OUTCOMES_KEPT, Attempt, Refused
 from projects.vehicle_data.research_memory import Thresholds, Watchdog
 from projects.vehicle_data.research_runner import TurnRequest
+from tests import fake_research_cli
 from tests.research_support import GIB, WorkerRig, proc_entry
 
 
@@ -248,6 +249,57 @@ class WorkerTests(unittest.TestCase):
             dispatch(self.worker, "POST", "/turns", lambda: {"attempt_id": "bad"})
         self.assertEqual(dispatch(self.worker, "GET", "/nope", None)[0], 404)
 
+
+
+class MaintenanceGuardTests(unittest.TestCase):
+    """Every CLI a maintenance step spawns goes through the same guarded launch as a turn."""
+
+    def setUp(self):
+        self.rig = WorkerRig()
+        self.worker = self.rig.worker
+        self.staged = fake_research_cli.install(self.rig.cli_root / "staging", {"mode": "ok"}, state=self.rig.state)
+        self.attempt_id = uuid.uuid4().hex
+        self.worker.admit_maintenance({"attempt_id": self.attempt_id, "purpose": "install",
+                                       "expected_instance_id": self.worker.table.instance_id})
+
+    def tearDown(self):
+        self.worker.end_maintenance(self.attempt_id)
+        self.rig.close()
+
+    def step(self, step, **extra):
+        self.worker.maintenance_step(self.attempt_id, {"step": step, **extra})
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            view = self.worker.maintenance_view(self.attempt_id)
+            if step in view["steps"]:
+                return view["steps"][step]
+            time.sleep(.05)
+        raise AssertionError(f"step {step} did not finish")
+
+    def test_verification_checks_the_launch_floor_before_it_spawns(self):
+        self.rig.set_available(32 * 1024 * 1024)
+        with self.assertRaises(Refused) as low:
+            self.worker.maintenance_step(self.attempt_id, {"step": "verify", "executable": str(self.staged)})
+        self.assertEqual(low.exception.reason, "low_memory")
+        self.assertEqual(self.rig.calls(), [])
+
+    def test_verification_help_output_is_bounded(self):
+        flags = "--print --input-format --output-format --verbose --session-id --resume --model --effort " \
+                "--system-prompt --tools --allowed-tools --permission-mode --permission-prompts " \
+                "--setting-sources --strict-mcp-config --restricted --disable-slash-commands --max-budget-usd"
+        self.rig.scenario({"mode": "ok", "help": flags + "\n" + "x" * (3 * 1024 * 1024)})
+        result = self.step("verify", executable=str(self.staged))
+        self.assertEqual(result["result"], "failed")
+        self.assertIn("output limit", result["reason"])
+
+    def test_each_spawn_of_a_measurement_checks_the_launch_floor(self):
+        low = "MemTotal: 3706880 kB\nMemAvailable: 32768 kB\n"  # under the floor, over the critical level
+        self.rig.scenario({"mode": "ok", "write_at_end": [str(self.rig.meminfo), low]})
+        result = self.step("measure")
+        self.assertEqual(result["figures"]["report"]["status"], "complete")
+        self.assertEqual((result["figures"]["follow_up"]["status"], result["figures"]["follow_up"]["reason"]),
+                         ("failed", "memory_exhausted"))
+        self.assertEqual(len([c for c in self.rig.calls() if "--print" in c["argv"]]), 1)
 
 if __name__ == "__main__":
     unittest.main()

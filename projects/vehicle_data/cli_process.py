@@ -2,8 +2,9 @@
 
 Used by the research worker for every research CLI launch. The child gets its own session (so its
 whole process group can be signalled), its prompt on stdin, and nothing else from this process.
-Stdout must be JSON objects, one per line: anything else, a line over ``max_line`` bytes or more
-than ``max_total`` bytes in all fails closed (``protocol_error``). Stderr is kept only as a short
+Stdout must be JSON objects, one per line (a ``--help`` text is read as plain lines instead): anything
+else, a line over ``max_line`` bytes or more than ``max_total`` bytes in all fails closed
+(``protocol_error``). Stderr is kept only as a short
 rolling buffer for classification. Every exit path ends with the process group gone and reaped.
 """
 
@@ -40,15 +41,23 @@ class RunResult:
 
 
 def run(argv, *, cwd, env, stdin_bytes, deadline, cancelled, on_line, on_tick=None, on_spawn=None,
-        max_line=4 * 1024 * 1024, max_total=16 * 1024 * 1024, tick_seconds=TICK_SECONDS, keep_stdin_open=False):
+        before_spawn=None, max_line=4 * 1024 * 1024, max_total=16 * 1024 * 1024, tick_seconds=TICK_SECONDS,
+        keep_stdin_open=False, json_lines=True):
     """Run ``argv`` until it exits, a callback raises ``StopRun``, ``cancelled`` is set or ``deadline``
     (a ``time.monotonic()`` value) passes. ``keep_stdin_open`` leaves stdin open after the prompt (a
-    control-protocol exchange); the caller then ends the run from ``on_line``. An attempt already
-    cancelled when this is called never spawns (``returncode`` stays ``None``)."""
+    control-protocol exchange); the caller then ends the run from ``on_line``. ``before_spawn`` is
+    the last admission check: a ``StopRun`` from it, or an attempt already cancelled, means the child
+    never spawns (``returncode`` stays ``None``). With ``json_lines=False`` (a ``--help`` text) each
+    line reaches ``on_line`` as text, within the same size bounds."""
     started = time.monotonic()
     result = RunResult(returncode=None)
-    if cancelled.is_set():
-        result.stop_reason = "cancelled"
+    try:
+        if cancelled.is_set():
+            raise StopRun("cancelled")
+        if before_spawn:
+            before_spawn()
+    except StopRun as stop:
+        result.stop_reason, result.stop_detail = stop.reason, stop.detail
         return result
     proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, start_new_session=True, close_fds=True)
@@ -56,7 +65,8 @@ def run(argv, *, cwd, env, stdin_bytes, deadline, cancelled, on_line, on_tick=No
         on_spawn(proc.pid)
     selector = selectors.DefaultSelector()
     try:
-        _pump(proc, selector, result, stdin_bytes, deadline, cancelled, on_line, on_tick,
+        _pump(proc, selector, result, stdin_bytes, deadline, cancelled,
+              _json_line if json_lines else _text_line, on_line, on_tick,
               max_line, max_total, tick_seconds, keep_stdin_open)
         result.returncode = proc.returncode
     except StopRun as stop:
@@ -76,7 +86,7 @@ def run(argv, *, cwd, env, stdin_bytes, deadline, cancelled, on_line, on_tick=No
     return result
 
 
-def _pump(proc, selector, result, stdin_bytes, deadline, cancelled, on_line, on_tick,
+def _pump(proc, selector, result, stdin_bytes, deadline, cancelled, deliver, on_line, on_tick,
           max_line, max_total, tick_seconds, keep_stdin_open):
     for stream, tag in ((proc.stdout, "out"), (proc.stderr, "err")):
         os.set_blocking(stream.fileno(), False)
@@ -113,11 +123,11 @@ def _pump(proc, selector, result, stdin_bytes, deadline, cancelled, on_line, on_
             buffer += chunk
             while b"\n" in buffer:
                 line, buffer = buffer.split(b"\n", 1)
-                _line(line, result, on_line)
+                deliver(line, result, on_line)
             if len(buffer) > max_line:
                 raise StopRun("protocol_error", "the CLI printed an over-long line")
     if buffer.strip():
-        _line(buffer, result, on_line)
+        deliver(buffer, result, on_line)
 
 
 def _feed(key, selector, pending, keep_open):
@@ -133,7 +143,7 @@ def _feed(key, selector, pending, keep_open):
     return pending
 
 
-def _line(raw, result, on_line):
+def _json_line(raw, result, on_line):
     if not raw.strip():
         return
     try:
@@ -144,6 +154,11 @@ def _line(raw, result, on_line):
         raise StopRun("protocol_error", "the CLI printed a JSON value that is not an object")
     result.lines += 1
     on_line(event)
+
+
+def _text_line(raw, result, on_line):
+    result.lines += 1
+    on_line(raw.decode(errors="replace"))
 
 
 def _signal_group(pgid, sig):

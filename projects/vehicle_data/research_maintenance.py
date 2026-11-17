@@ -3,10 +3,10 @@
 The installer (root, ``research_cli_install``) never launches a CLI itself: it reserves the
 worker's slot, asks for one of these steps, and only then promotes files or restarts the worker.
 ``verify_claude`` spends nothing; ``measure`` and ``budget_check`` run real Claude turns and are
-started only by the parent's runbook.
+started only by the parent's runbook. Every CLI process a step starts goes through the runner's
+guarded launch (``Runner.guarded_run``), so each spawn is checked against the launch floor.
 """
 
-import subprocess
 import uuid
 
 from projects.vehicle_data.dtc_research_contract import TIMEOUTS
@@ -23,10 +23,11 @@ HELP_TIMEOUT = 60
 def verify_claude(runner, attempt, executable):
     """Flags the runner relies on are documented, and the model check answers (no model turn)."""
     try:
-        shown = subprocess.run([str(executable), "--help"], capture_output=True, text=True, timeout=HELP_TIMEOUT,
-                               env={"HOME": str(runner.volume.tmp), "PATH": "/usr/bin:/bin"}, check=False).stdout
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        shown = runner.help_text(attempt, executable, HELP_TIMEOUT)
+    except OSError as exc:
         return {"result": "failed", "reason": f"--help could not run ({exc.__class__.__name__})"}
+    except RuntimeError as exc:
+        return {"result": "failed", "reason": f"--help was stopped ({exc})"}
     missing = [flag for flag in POLICY["claude"]["required_flags"] if flag not in shown]
     if missing:
         return {"result": "failed", "reason": "the CLI lacks flags research relies on: " + ", ".join(missing)}

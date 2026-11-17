@@ -79,6 +79,8 @@ if mode == "forbidden_tool":
 emit({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "WebSearch", "input": {}}]}})
 emit({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "WebFetch", "input": {}}]}})
 time.sleep(S.get("delay", 0))
+if S.get("write_at_end"):  # e.g. a lower MemAvailable for the next spawn to see
+    Path(S["write_at_end"][0]).write_text(S["write_at_end"][1])
 if mode == "budget":
     emit({"type": "result", "subtype": "error_max_budget_usd", "is_error": True, "total_cost_usd": 0.02})
     sys.exit(1)

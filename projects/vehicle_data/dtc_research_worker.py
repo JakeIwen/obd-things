@@ -216,10 +216,9 @@ class Worker:
             if step not in ("verify", "measure", "budget_check"):
                 raise Refused("invalid", "unknown maintenance step")
             executable = self._staged_executable(body.get("executable")) if step == "verify" else None
-            if step != "verify":
-                refusal = research_memory.launch_refusal(self.thresholds(), self.meminfo)
-                if refusal:
-                    raise Refused("low_memory", refusal)
+            refusal = research_memory.launch_refusal(self.thresholds(), self.meminfo)
+            if refusal:
+                raise Refused("low_memory", refusal)
             self._take_cli_lock()
             attempt.detail["step_running"] = step
             attempt.state = "running"
