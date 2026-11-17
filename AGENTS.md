@@ -502,11 +502,15 @@ what is unverified). The advisor process owns the routes under `/v1/assistant/` 
 access-code gate as the warning chat), the records, the durable admission ledger and
 reconciliation (`dtc_research*.py`, `research_worker_client.py`); the web-capable CLI runs only
 in `van-telemetry-research.service` (`dtc_research_worker.py`, `research_runner.py`,
-`research_cli*.py`, `research_attempts.py`, `research_memory.py`, `research_volume.py`), from
+`research_cli*.py`, `research_attempts.py`, `research_memory.py`, `research_volume.py`,
+`research_worker_facts.py`: the background CLI-identity hash and DNS lookups that keep the
+worker's `/status` within about a second and hold the 300 s DNS freshness rule), from
 research-owned pinned CLI copies, on a fixed-size volume, with no home directory, LAN, broker
 or CAN access. `research_runner.Runner.guarded_run` is the only launch path;
 `dtc_research_prompt.py` owns the VIN mask applied to every outgoing prompt; `model_cli_lock.py`
 and `assistant_slot.py` keep a warning-chat CLI and a research CLI from running together.
+`assistant_http.py` is both services' JSON reply on their Unix sockets (a caller that leaves is
+one log line, never a traceback).
 `dtc_research.json` is the vocabulary shared with the dashboard (`src/dtcResearch.helpers.js`,
 `dialogs/DtcResearch{.jsx,.helpers.js}`, `components/ModelPicker.jsx`, `src/markdownLite.js`
 with `components/MarkdownView.jsx` for model text, `src/assistantAccess.js` for the access code

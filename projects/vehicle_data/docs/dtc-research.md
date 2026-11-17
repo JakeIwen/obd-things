@@ -3,8 +3,9 @@
 Each code on the dashboard's Codes card can be researched by a model the owner picks. The model
 searches the web for what that code means on this van and writes a report; the report is kept on
 the Pi, its one-line summary shows on the code's row, and the owner can ask follow-ups in the same
-model session. Status (2026-11-16): built and reviewed in plan; not yet deployed. This is a partial
-milestone: **Claude only**. Codex research is blocked (below) until a pinned Codex version passes
+model session. Status (2026-11-17): merged; the first install stopped at its post-install status
+check and was rolled back (research unit and mount disabled); the worker-status fix described under
+"Worker status" awaits review and a re-install. This is a partial milestone: **Claude only**. Codex research is blocked (below) until a pinned Codex version passes
 the tool-inventory check.
 
 The workstream's handoff note (`.agent/handoffs/dtc-research.md`) holds the deploy runbook while
@@ -15,11 +16,12 @@ the work is open; this file is the standing contract.
 | Part | Process | Owns |
 | --- | --- | --- |
 | Routes, records, ledger, catalog | advisor (`warning_chat.py`, `van-telemetry-advisor.service`) | `dtc_research.py` (routes and following each attempt), `dtc_research_store.py`, `dtc_research_ledger.py`, `dtc_research_reconcile.py`, `dtc_research_context.py`, `dtc_research_prompt.py`, `assistant_models.py`, `dtc_research_service.py` (wiring) |
-| Launching research CLIs | research worker (`dtc_research_worker.py`, `van-telemetry-research.service`) | `research_attempts.py` (the slot), `research_runner.py`, `research_cli.py`, `research_cli_policy.py`, `research_memory.py`, `research_volume.py`, `research_maintenance.py`, `cli_process.py` |
+| Launching research CLIs | research worker (`dtc_research_worker.py`, `van-telemetry-research.service`) | `research_attempts.py` (the slot), `research_runner.py`, `research_cli.py`, `research_cli_policy.py`, `research_memory.py`, `research_volume.py`, `research_maintenance.py`, `research_worker_facts.py` (background identity and DNS checks behind `/status`), `cli_process.py` |
 | Installing the CLI copy | root, by the runbook | `research_cli_install.py` (`systemd/install_research_cli.sh`) |
 | Owner sign-in | owner shell | `dtc_research_signin.py` (`s dtc_research_signin claude`) |
 | Shared vocabulary | advisor, worker, dashboard | `dtc_research.json` (+ `dtc_research_contract.py`) |
 | Warning-chat / research exclusion | both services | `model_cli_lock.py`, `assistant_slot.py`, `systemd/van-assistant.tmpfiles.conf` |
+| JSON replies on the Unix sockets | both services | `assistant_http.py` (a caller that leaves is one log line, never a traceback) |
 
 The advisor never launches a research CLI; the worker never talks to the broker. The model gets
 only web search and web fetch.
@@ -134,6 +136,45 @@ Codex launch path in `research_runner.py` (the argv builder, stream reader and t
 - After an advisor restart research admission stays closed until the worker has said what it
   holds; nothing is inferred from a timeout or a missing path.
 
+## Worker status (`GET /status`)
+
+The advisor's worker client gives up after 5 s and the web relay after 12 s, so the worker's status
+must answer fast on a loaded Pi. Its slow facts are kept off the request path:
+
+- **CLI identity and sign-in.** A copy is checked by hashing its whole file set again whenever any
+  file's inode, size or mtime changed (Claude 2.1.325 is 348 MiB: 2.5 s of CPU on an idle Pi 4, so
+  at least 8 s under the unit's `CPUQuota=30%`, `Nice=15` and idle I/O class, and much longer while
+  another job loads the Pi). One background thread (`research_worker_facts.Facts`) does that hash
+  and reads the token, at start, when asked and at least once a minute. A status call asks for a
+  fresh check and waits at most 1 s for it (`STATUS_WAIT_SECONDS`); otherwise it answers from the
+  last one. Only one hash runs at a time. Request paths never hash: a copy whose files changed since
+  the last hash reads `identity: checking` (launches refused as `provider_unavailable`, "try again
+  in a minute") until the background hash has finished.
+- **Public DNS.** `DnsProbe` resolves `api.anthropic.com` (IPv4 only: this Pi boots with
+  `ipv6.disable=1`) on its own thread, at most one lookup at a time and at most one per 30 s, through
+  the unit's resolvers (`systemd/research-resolv.conf`: 1.1.1.1 and 9.9.9.9, `timeout:2
+  attempts:2`, so one lookup can legitimately take about 8 s). **Freshness rule:** public DNS counts
+  as usable while a lookup succeeded within the last 300 s, whatever later lookups did; one slow or
+  failed lookup on a phone hotspot neither hides research nor refuses a launch. The status display
+  and the launch gate use the same rule. A refused launch says DNS, gives the last error and says
+  to try again, and starts a new lookup so the retry has a fresh answer.
+
+Reply shape: `{instance_id, pid, job, providers: {claude|codex: {identity:
+ok|changed|missing|unverified|disabled|checking, signed_in, reason}}, memory_policy: {activated,
+reason}, checked_at, checks_current, dns_ok, dns: {ok, result: ok|failed|pending, reason,
+checked_at, seconds, last_ok_at, fresh_seconds}, volume: {free_bytes}, mem_available_bytes}`.
+`checked_at` is when the identity facts were taken (`null` before the first check finishes, and the
+providers then read `checking`); `checks_current` is false when the reply could not wait for a fresh
+check. `dns.reason` is the last lookup's error, or "no answer within 10 s" while one is still
+waiting. Times are UTC ISO strings.
+
+Nothing else on the request path can wait: the HTTP server is threaded (one thread per request; a
+caller that stalls mid-request is dropped after 15 s), the attempt table's lock is held only for
+reads of small local files during an admission check, the maintenance reservation holds the slot
+but no lock, and status never touches the shared CLI `flock`. A caller that leaves while a reply is
+written, or while its request is read, costs one `assistant_http_client_gone` log line on either
+service, never a traceback.
+
 ## Memory: best-effort protection, not isolation
 
 This Pi boots with `cgroup_disable=memory`, so no unit's `MemoryMax` is enforced; a hard bound on a
@@ -171,7 +212,17 @@ restart). The owner signs in (`claude setup-token`, then `s dtc_research_signin 
 `install_research_cli.sh claude --measure` and `measure_assistant_peak` give the peaks that a
 reviewed commit records in `research_cli_policy.json`; deploying it activates research.
 `--budget-check` shows whether the subscription CLI enforces the cost cap. The exact runbook with
-checks and stop conditions is in the workstream note.
+checks and stop conditions is in the workstream note. Every worker status check there is bounded:
+
+```sh
+curl -sS -m 5 --unix-socket /run/van-telemetry-research/worker.sock http://worker/status \
+  | jq '{checks_current, checked_at, providers, memory_policy, dns_ok, dns, job}'
+```
+
+It must answer within the 5 s; Pi load from other jobs no longer matters for that. Right after a
+worker (re)start the providers read `checking` until the copy's first hash finishes (tens of seconds
+on a busy Pi): ask again until `checks_current` is true and no provider reads `checking`, then
+judge the fields.
 
 Rollback: disable `van-telemetry-research.service` and `var-lib-vanresearch.mount`, reinstall the
 previous advisor unit and code, restart the advisor and the web listeners (research routes then
@@ -179,6 +230,7 @@ previous advisor unit and code, restart the advisor and the web listeners (resea
 (claude.ai account settings), deleting `/var/lib/vanresearch.img`, `/opt/van-research-cli` and
 `/var/lib/van-telemetry-advisor/dtc-research`.
 
-Tests: `tests/test_research_worker.py`, `test_dtc_research_manager.py`, `test_dtc_research_relay.py`,
+Tests: `tests/test_research_worker.py`, `test_research_worker_status.py` (status bounds, DNS
+evidence and freshness, callers that leave), `test_dtc_research_manager.py`, `test_dtc_research_relay.py`,
 `test_dtc_research_pure.py`, `test_assistant_slot.py`, `test_research_cli_install.py`,
 `test_dtc_research_units.py`, with the scripted fake CLI in `tests/fake_research_cli.py`.

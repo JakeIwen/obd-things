@@ -1,8 +1,8 @@
 ---
 workstream: dtc-research
 tier: T3
-status: built on branch integration-research (Claude-only partial milestone); implementation review (verdict hold) findings fixed on worktree-agent-a280bc2eada0f0541, awaiting the reviewer's re-check; nothing installed
-last reviewed commit: 31ed98b (plan, Astra re-check verdict ship); implementation reviewed at fef26e3 (verdict hold, seven findings, fixed below)
+status: merged; install attempted 2026-11-17, stopped on post-install status/journal check; research service and mount disabled, prior advisor unit restored; runtime rollback incomplete because another session owns checkout/frontend deployment; worker-status fix built on branch worktree-agent-af864ffa0846cdc53, awaiting cross-family review, then a re-install
+last reviewed commit: 7df1eae (implementation, Astra verdict ship); plan 31ed98b (Astra verdict ship)
 ---
 
 # DTC research with an LLM (advisor backend)
@@ -30,12 +30,148 @@ Codex launch and verification paths; their pure parts are built and tested).
 
 ## Build status (2026-11-17)
 
-Plan reviewed `ship` by Astra (four rounds; its lows are folded in). Implementation is built, its
-tests pass, and the whole suite is green on the Mac compute worker (job ids below). The
-cross-family implementation review of `fef26e3` returned `hold` with seven findings; all seven are
-fixed (next subsection) and wait for the same reviewer's re-check. Nothing is installed. The
-standing contract is `projects/vehicle_data/docs/dtc-research.md`; the deploy runbook is section 7.
-This is a Claude-only milestone: Codex research stays `provider_unavailable` until follow-up F3.
+The plan (four rounds) and implementation (three rounds) both finished cross-family Astra review
+with `Verdict: ship`, and the feature was merged by `75577ee`. The historical review-fix sections
+below describe closed findings, not pending reviews. The standing contract is
+`projects/vehicle_data/docs/dtc-research.md`; the deploy runbook is section 7. This remains a
+Claude-only milestone; Codex research stays unavailable until F3.
+
+### Pi installation attempt, 2026-11-17 (all times MST)
+
+The pre-activation installation stopped at its post-CLI-install status/journal check. **Do not
+start owner sign-in or the activation prompt yet.** The research service and mount are disabled
+and inactive; the previous advisor unit is restored and the advisor was restarted. Runtime
+rollback is incomplete: the pre-merge code and old frontend were not restored, because another
+session advanced master and owns the live dashboard deployment. No research credentials or real
+model turns were created. No broker restart or CAN operation was performed by this install session.
+
+- Preconditions: clean `master == origin/master == 111d950`; vehicle asleep, running false;
+  27 GiB available on `/`; step-zero root budgets and all backup exclusions deployed. Debian
+  `bpftool` 7.1.0+6.1.192-2 installed and held, unchanged. Full suite on `111d950` passed on Mac
+  worker `m4mac.04`, job `20261117T104911Z-74270f0c`: 2,983 passed, 13 skipped, 3,610 subtests,
+  layout and scratch build passed. At 04:00:10 load was 3.24 / 2.93 / 3.64 and `MemAvailable`
+  1,359 MiB. No memory measurement was run.
+- Both installer dry runs matched the documented paths. Installed mount/worker/tmpfiles/advisor
+  at 04:00:23–26. Mount was `/dev/loop0`, ext4, `nosuid,nodev,noexec,noatime`; volume root pi:pi
+  0700, image root:root 0600, lock pi:pi 0640. Worker active, NRestarts=0, OOMScoreAdjust=800;
+  bpftool confirmed ingress and egress programs, before and after the CLI install. Its BTF warning
+  did not prevent the attachment check. Initial `/status`: Claude missing, Codex disabled,
+  memory not activated, `dns_ok: true`.
+- Built dashboard `4eec25b5e3f6` (previous served build `e471a1d1daea`) and restarted both web
+  units at 04:01:02. An immediate connection-refused probe preceded listener readiness; the
+  bounded readiness retry reached the expected 401. The documented warning status route
+  `/v1/assistant/status` also returned 401. A mistaken GET of the POST-only `/assistant/chats`
+  returned 404 and was replaced with that documented status check. Jacob's addendum accepts
+  unauthenticated 401 plus clean advisor logs for this stage; he will ask a real warning-chat
+  question at sign-in. The access code was never read.
+- Claude 2.1.325 installed and promoted successfully at about 04:02:42; identity verification
+  `passed`, evidence digest equals installed digest. New worker started 04:02:43, NRestarts=0.
+  The first post-install `/status` probe timed out at exactly its local 10-second curl deadline
+  with no bytes. A subsequent probe with a 30-second bound returned 200: identity `ok`,
+  `signed_in: false`, reason `Claude is not signed in for research yet`; Codex disabled with
+  its not-yet-verified reason; memory not activated; `dns_ok: false`.
+- The journal showed two `BrokenPipeError` tracebacks, request headers being written by
+  `WorkerHandler.reply` at `dtc_research_worker.py:309` (`end_headers`, outside its body-write
+  exception guard). The first began printing at 04:03:05 ("Exception occurred during processing
+  of request from" with an empty Unix-socket address), but its traceback lines only reached the
+  journal at 04:03:17, interleaved with the second's: formatting a traceback (reading three source
+  files) took the worker about 12 s, so the whole process was starved at that moment.
+- Cause analysis and fix: next subsection.
+- Per the brief's failed-check rollback rule, stopped and disabled the research worker and
+  mount, restored the saved pre-install advisor unit, daemon-reloaded, and restarted the advisor.
+  Did not delete installed files or data. Warning/advisor and web units remained active with
+  NRestarts=0; both listeners returned 200 for `/`, `/v1/snapshot`, and
+  `/v1/diagnostics/dtc-ignores`; 401 without credentials for warning status, research models and
+  research list; cross-origin research POST returned 403. Research routes are still registered
+  (not 404), because the current merged advisor/web code remains installed.
+- Coordination: `Drive dashboard tiles and DTC research` confirmed it advanced master to
+  `4d231f3` around 04:01 and owns frontend build, web restarts and guarded broker restart for
+  the sparkline work. Its range `111d950..4d231f3` changes no research/advisor code or units,
+  and its full suite passed (`20261117T104856Z-12016fb2`, Astra review ship). Its deploy may
+  have overlapped this attempt; overlap is a possible pressure source, not a proven cause.
+  Do not overwrite its checkout/dist or revert its work to complete this rollback.
+- Retained footprint: image logical size 224 MiB, allocated about 4.5 MiB after mkfs; CLI tree
+  348 MiB; advisor state 5.8 MiB; root still 27 GiB available. The image, CLI, disabled unit
+  files, tmpfiles entry and lock remain for diagnosis/retry. The image is not mounted.
+- Bounded evidence/rollback snapshot: `/tmp/research-install-20261117-0353/` contains
+  `install.log`, `research-advisor-journal.txt`, `advisor-before.service`, `build-before.json`,
+  `dist-before.tgz`, `disk-before.txt`, and `disk-after.txt`. The prior advisor file matches the
+  saved copy under `Documents/agent-shared/from-agents/dash-20261116/research-deploy/before/`.
+  No credentials or raw snapshot data were saved. The namespace visibility probes were not run
+  before stopping, so filesystem isolation is not yet live-verified.
+
+### Worker status fix (2026-11-17, after the install stopped)
+
+Built in worktree branch `worktree-agent-af864ffa0846cdc53` (tier T3); it needs the cross-family
+review before merge, then the re-install below. No sandbox setting changed.
+
+What caused each failure (times MST):
+
+1. **Status past its 10 s deadline: established mechanism, exact duration not measured.**
+   `status()` called `IdentityChecker.check("claude")` inline, and the first check after the CLI
+   install (a fresh worker, empty cache) hashed the whole 348 MiB copy. Measured afterwards on this
+   Pi: 2.46 s of CPU for that hash at load 2 (5.2 s wall at `nice 15`), so at least 8.2 s inside the
+   unit's `CPUQuota=30%`, before `Nice=15` and the idle I/O class meet another job's `npm ci` and
+   esbuild. Concurrent status calls each hashed (the cache had no lock), sharing the same 30 %
+   quota, and the attempt table's lock could be held through such a hash too (admission and the
+   maintenance step called the identity check under it; a launch or step right after a copy change
+   would also have stalled the serving loop's watchdog pings, which take that lock).
+2. **The second disconnected caller: probable, not established.** The socket is pi-only; the other
+   callers are the advisor's (5 s client timeout): the reconciler's 30 s restart check and the
+   model catalog's 60 s retry, both of which call `/status`. No advisor log names the request.
+3. **`dns_ok` false: probable, not established.** No resolver error was kept. The old probe gave
+   `getaddrinfo` 2 s, less than one resolver timeout (`timeout:2`, two servers, two attempts), on a
+   thread competing for the same starved 30 % quota while hashes ran, and cached a false for 60 s.
+   At 04:10–04:12, host-side A and AAAA queries to 1.1.1.1 and 9.9.9.9 answered in 41–60 ms. The
+   unit's sandbox has no time-dependent DNS factor: neither resolver address is in
+   `IPAddressDeny`, there is no `IPAddressAllow`, the filter is address-only (TCP fallback to port
+   53 is allowed), the resolver file is a read-only bind of a tracked file, and `ipv6.disable=1`
+   only means AAAA answers are unusable (queries go over IPv4). Not tested: whether this uplink's NAT
+   drops one reply of glibc's parallel A/AAAA pair (the probe now asks for A only; the CLI's own
+   lookups are unchanged; `options single-request-reopen` in the resolver file is the candidate if
+   real turns show DNS stalls).
+4. **Tracebacks: established.** `end_headers()` sat outside the reply's `BrokenPipeError` guard. The
+   advisor's `ChatHandler.reply` had the same defect; `web.py`'s `_json` was already guarded.
+
+What changed (see `docs/dtc-research.md` "Worker status" for the contract):
+
+- `research_worker_facts.py` (new): `Facts`, one background thread that hashes and reads the token;
+  a status call waits at most 1 s for a fresh check, else answers from the last one with
+  `checked_at` and `checks_current: false` (`identity: checking` before the first). `DnsProbe`: one
+  lookup at a time, at most one per 30 s, IPv4 only, keeps `result`, `reason`, `checked_at`,
+  `seconds`, `last_ok_at`; "no answer within 10 s" while a lookup is still waiting.
+- DNS freshness rule (the one launch condition that is looser than before): DNS is usable while a
+  lookup succeeded within the last 300 s, whatever later lookups did. Before, a success was cached
+  for 60 s and then a fresh 2 s probe decided. Status and the launch gate use the same rule; a
+  refusal names DNS, its last error and "try again", and starts a new lookup.
+- `research_cli_policy.IdentityChecker`: a lock on its cache, one hash at a time, and
+  `check(..., rehash=False)` for request paths, which returns the new state `checking` instead of
+  hashing. Admission, discovery, the maintenance step and activation use it, so a changed copy is
+  refused (retryable) until the background hash has run; the runner's own in-thread check before a
+  spawn still hashes. Nothing launches where it was refused before, apart from the DNS rule.
+- `assistant_http.py` (new): `send_json` guards the whole reply and `QuietDisconnects` the request
+  read; a caller that leaves is one `assistant_http_client_gone` line (server, stage, error, path).
+  Used by both the worker and the advisor. The worker's handler drops a caller stalled mid-request
+  after 15 s.
+- `assistant_models.provider_available`: the picker says "still checking public DNS" or "has not
+  answered in the last 5 minutes" from the worker's `dns` evidence.
+- Tests: `tests/test_research_worker_status.py` (status within its bound while a hash, a DNS lookup,
+  a maintenance reservation, the CLI lock and other in-flight requests all hold; callers gone before
+  the headers, mid-body and mid-request on the worker and before the advisor's reply; DNS success,
+  failure, timeout, gap and freshness; the launch gate with a fresh and a stale success).
+
+What a re-install must verify live (tests cannot): every `/status` answers within the bounded
+command's 5 s, including the first one after the CLI install's worker restart, which reads
+`checking` until the first hash finishes; record how long that took (`checked_at` minus the
+restart). `dns.result` `ok` with `dns.seconds`; if not, `dns.reason`, then ask again after a
+minute. The journal has no traceback; an `assistant_http_client_gone` line must be explained by a
+caller that gave up. Load from another job no longer has to be avoided for status checks; still
+check `uptime` before the memory measurement.
+
+Next: review of this fix, merge, then retry the installation (runbook section 7) and finish all
+sandbox checks, including the namespace visibility probes. Only then: owner Claude sign-in and
+warning-chat question; memory measurement; reviewed activation commit; budget check and real-turn
+acceptance. O1 and F1–F3 remain open.
 
 ### Implementation review fixes (2026-11-17, on top of `fef26e3`)
 
@@ -207,9 +343,9 @@ Not started: Codex launch path in `research_runner.py` and the per-model Codex v
 
 ### Remaining steps, in order
 
-1. Implementation review (cross-family, Astra) of the feature commits; fix findings; merge.
-2. Deploy runbook section 7 (parent; Mac hand-off, owner sign-in and the reviewed memory-policy
-   commit are part of it), then the live acceptance check in section 8.
+1. Review and merge the worker status fix (Build status), then re-install.
+2. Retry and complete deploy runbook section 7 (root budgets/exclusions are deployed; owner
+   sign-in and the reviewed memory-policy commit remain), then section 8's live acceptance check.
 3. F3: pin a Codex version that passes the production tool-inventory check, then wire its launch and
    verification paths.
 
@@ -573,10 +709,12 @@ whose tombstone then says `dropped`.
 
 - `GET /status` → `{instance_id, pid, job: null | {attempt_id, run_id, kind:
   turn|discovery|maintenance, state: accepted|running|finished, started_at},
-  providers: {claude|codex: {identity: ok|changed|missing|unverified, signed_in, reason}},
-  memory_policy: {activated, reason}, dns_ok, volume: {free_bytes, used_bytes},
-  mem_available_bytes, cli_lock: {held_by_other: bool}}`. `accepted` covers the moment between
-  acknowledgement and spawn.
+  providers: {claude|codex: {identity: ok|changed|missing|unverified|disabled|checking, signed_in,
+  reason}}, memory_policy: {activated, reason}, checked_at, checks_current, dns_ok, dns: {ok,
+  result, reason, checked_at, seconds, last_ok_at, fresh_seconds}, volume: {free_bytes},
+  mem_available_bytes}` as built (the plan's `used_bytes` and `cli_lock` were not built).
+  `accepted` covers the moment between acknowledgement and spawn. It answers within about 1 s: the
+  identity facts and DNS come from background checks (`docs/dtc-research.md` "Worker status").
 - `POST /turns` `{"attempt_id", "expected_instance_id", "run_id", "provider", "model", "effort",
   "kind": "initial|resume", "session_id" (resume only), "prompt", "timeout_s", "budget_usd"
   (Claude)}` → 202 or 409 as above.
@@ -965,8 +1103,9 @@ What the acceptance sequence must record before activation (section 7, step 9):
 - Codex: unavailable unless its identity is `ok` (verified). When verified, discovery reads
   `V/codex-home/models_cache.json` through the worker (no child, no gate), entries with
   `visibility == "list"` and `supports_search_tool`, sorted by `priority`.
-- Both providers are unavailable, with that reason, when the worker's DNS check (resolving the
-  two API hostnames with a 2 s timeout through the bound resolvers) fails.
+- Both providers are unavailable, with that reason, when the worker's DNS check fails its
+  freshness rule (no successful lookup of `api.anthropic.com` through the bound resolvers in the
+  last 300 s; lookups run in the background, one at a time, at most one per 30 s).
 - Validation of `start`: provider available; model id matches
   `[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,119}` and is in the current list; effort is one of the model's
   efforts, or `null` exactly when it has none.
@@ -1257,14 +1396,22 @@ the broker is untouched. Stop at the first failed check and roll back (end of th
      use the reported value below, never a hand-built path), `800`.
    - `sudo bpftool cgroup show /sys/fs/cgroup$(systemctl show -p ControlGroup --value van-telemetry-research.service)`
      → lists `cgroup_inet_ingress` and `cgroup_inet_egress` programs (the IP filter is attached).
-   - `curl -s --unix-socket /run/van-telemetry-research/worker.sock http://worker/status` (as pi)
-     → JSON with `providers.claude.identity` `missing` ("no claude copy is installed for research"),
-     `providers.codex.identity` `disabled`, `memory_policy.activated` false, `dns_ok` true.
-     `dns_ok` false means public DNS is blocked on this network: research stays unavailable; that
-     is expected behaviour, not a deploy failure, but note it.
+   - Worker status, bounded (as pi; `W=/run/van-telemetry-research/worker.sock`):
+     `curl -sS -m 5 --unix-socket $W http://worker/status | jq '{checks_current, checked_at, providers, memory_policy, dns_ok, dns, job}'`
+     → answers within the 5 s (no answer, or curl's "Operation timed out", is a stop). Right after a
+     start the providers may read `checking` with `checks_current` false: ask again until
+     `checks_current` is true. Then expect `providers.claude.identity` `missing` ("no claude copy is
+     installed for research"), `providers.codex.identity` `disabled`, `memory_policy.activated`
+     false, `dns_ok` true with `dns.result` `ok`. `dns_ok` false: read `dns.reason` and
+     `dns.checked_at`, ask again after a minute; `dns.result` `pending` only means the first lookup
+     has not finished. A lasting failure with a resolver error means public DNS is blocked on this
+     network: research stays unavailable, which is expected behaviour, not a deploy failure, but
+     note it.
    - `journalctl -u van-telemetry-research.service -u van-telemetry-advisor.service -b --since -5min --no-pager`
-     → no traceback.
-   Stop: the mount or the worker not active, or the IP filter not attached.
+     → no traceback. An `assistant_http_client_gone` line means a caller left before its reply;
+     it is not a failure when a timed-out check of yours explains it.
+   Stop: the mount or the worker not active, the IP filter not attached, or a status call that did
+   not answer within its 5 s.
 3. **Web listeners.** `sudo systemctl restart van-telemetry-web.service van-telemetry-web-tailscale.service`.
    Check: `curl -s -o /dev/null -w '%{http_code}\n' -H 'Origin: http://192.168.6.103:8765' http://192.168.6.103:8765/v1/assistant/models`
    → `401` (route relayed, key missing). `404` means the old web code is running: stop.
@@ -1276,12 +1423,17 @@ the broker is untouched. Stop at the first failed check and roll back (end of th
    `sudo $R/install_research_cli.sh claude`. Expect `maintenance reservation … open`, then
    `promoted /opt/van-research-cli/claude/<version>; restarting van-telemetry-research.service`.
    Checks: `sudo python3 -c "import json;d=json.load(open('/opt/van-research-cli/identity.json'));e=d['providers']['claude'];print(e['version'],e['verification']['result'],e['verification']['digest']==e['digest'])"`
-   → `<version> passed True`; worker `/status` → `providers.claude.identity` `ok`, `signed_in` false.
+   → `<version> passed True`; worker status (the bounded command in step 2) → the restarted worker
+   reads `checking` until it has hashed the new 348 MiB copy (record how long: `checked_at` minus
+   the restart time); poll it, at most every 5 s for 3 minutes:
+   `for i in $(seq 36); do curl -sS -m 5 --unix-socket $W http://worker/status | jq -e '.checks_current and .providers.claude.identity != "checking"' && break; sleep 5; done`,
+   then the bounded command → `providers.claude.identity` `ok`, `signed_in` false, `dns_ok` true.
+   Each call must answer within its 5 s whatever else the Pi is doing.
    Stop: `stopped: …` printed (the reason says why; nothing was promoted).
 6. **Owner sign-in** (the owner, as pi, each command under 80 characters):
    `claude setup-token`, then `s dtc_research_signin claude` (paste the token; it is not echoed).
-   Check: `s dtc_research_signin status` → `Claude: signed in`; worker `/status` →
-   `providers.claude.signed_in` true. The dashboard still shows research as not activated.
+   Check: `s dtc_research_signin status` → `Claude: signed in`; worker status (bounded command,
+   `checks_current` true) → `providers.claude.signed_in` true. The dashboard still shows research as not activated.
 7. **Memory measurement.** In one shell: `cd /home/pi/dev/obd-things && python3 -m projects.vehicle_data.measure_assistant_peak`;
    ask one warning-chat question; it prints `peak_tree_rss_mib`, `peak_tree_hwm_mib`,
    `lowest_available_mib` (exit 1 means no Codex child was seen: ask again). Then
@@ -1291,8 +1443,8 @@ the broker is untouched. Stop at the first failed check and roll back (end of th
    Stop: `incomplete` (read the turn reasons; do not activate).
 8. **Activation.** Paste the printed `memory` block into `research_cli_policy.json` in a reviewed
    commit (its `cli_digest` is the installed copy's digest), merge, then
-   `sudo systemctl restart van-telemetry-research.service`. Checks: worker `/status` →
-   `memory_policy.activated` true; `GET /v1/assistant/models` (dashboard or curl with the access
+   `sudo systemctl restart van-telemetry-research.service`. Checks: worker status (the step 5 poll,
+   then the bounded command) → `memory_policy.activated` true; `GET /v1/assistant/models` (dashboard or curl with the access
    code) → the Claude group `available: true`, `source: discovered` within about a minute.
 9. **Budget check.** `sudo $R/install_research_cli.sh claude --budget-check` (one real Opus turn
    capped at $0.01). Record `result`: `enforced`, `not_enforced` (tell the owner the caps are not
@@ -1459,9 +1611,11 @@ Codex has no live check this round; it is unavailable by design.
 
 ## Work remaining
 
-Built and tested offline (see "Build status"). Remaining, in order: the implementation's
-cross-family review; merge into master; the deploy runbook (section 7) steps 0–10, of which the
-Mac hand-off (rootfs budgets, backup exclusions), the owner's Claude sign-in and the reviewed
-policy commit after the memory measurement are not the parent's alone; the dashboard's own merge
-and deploy by `dtc-frontend`. Afterwards promote durable facts to AGENTS.md (the map lines the
-build report lists) and delete this note; promote the runbook into `docs/dtc-research.md` first.
+The implementation is reviewed and merged. Build status above is the authoritative installation
+record: the first live installation reached a verified CLI copy but stopped on the status/journal
+check, and the research worker and mount are disabled. Finish the coordinated rollback/diagnosis
+and retry before owner sign-in, measurement, activation and real-turn acceptance. The Mac rootfs
+budget and exclusions are deployed. The dashboard is merged; its current live deployment belongs
+to the dashboard-round session and must not be reverted by research rollback. Preserve O1 and
+F1–F3. When the workstream closes, promote durable facts and the completed runbook into the
+standing docs before deleting this note.
