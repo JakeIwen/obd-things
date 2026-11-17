@@ -299,6 +299,9 @@ describe("formatting", () => {
     assert.equal(rows[5].kind, "error");
     assert.equal(rows[5].text, "Codex took too long. You can retry this question");
     assert.deepEqual(H.transcriptRows(null), []);
+    const setupRows = H.transcriptRows(chat([turn({ user: "Help me set up a new early warning." })], { event: H.SETUP_EVENT }));
+    assert.equal(setupRows[1].text, H.TEXT.setupWaiting);
+    assert.equal(H.TEXT.setupWaiting, "Working on the warning setup…");
   });
 
   test("proposal text and applied text", () => {

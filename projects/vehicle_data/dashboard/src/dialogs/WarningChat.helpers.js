@@ -52,6 +52,7 @@ export const TEXT = Object.freeze({
   ready: "Ready for a follow-up",
   working: "Codex is working… (up to 5 minutes)",
   reviewing: "Reviewing the event…",
+  setupWaiting: "Working on the warning setup…",
   unavailable: "The local assistant is unavailable",
   timedOut: "The assistant connection timed out. Reopen this event to check its answer",
   stillLoading: "The assistant is still preparing that request. Use Reconnect to check again",
@@ -262,11 +263,12 @@ export function transcriptSignature(chat) {
 /** Rows to render: one "You" row and one "Codex" row per turn. */
 export function transcriptRows(chat) {
   const rows = [];
+  const waiting = chat?.event?.kind === SETUP_EVENT.kind ? TEXT.setupWaiting : TEXT.reviewing;
   (chat?.turns || []).forEach((turn, index) => {
     rows.push({key: `${index}-you`, role: "you", kind: "user", heading: "You", text: String(turn.user || "")});
     const kind = turn.assistant ? "answer" : turn.error ? "error" : "progress";
     const heading = turn.settings ? `Codex · ${turn.settings.resolved_model} / ${turn.settings.effort}` : "Codex";
-    rows.push({key: `${index}-codex`, role: "codex", kind, heading, text: turn.assistant || turn.error || TEXT.reviewing});
+    rows.push({key: `${index}-codex`, role: "codex", kind, heading, text: turn.assistant || turn.error || waiting});
   });
   return rows;
 }
