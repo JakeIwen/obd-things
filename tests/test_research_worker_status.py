@@ -369,6 +369,20 @@ class DnsProbeTests(unittest.TestCase):
         self.assertEqual((view["result"], view["checked_at"]), ("failed", "t1100"))
         self.assertEqual(view["reason"], "OSError: [Errno -3] Temporary failure in name resolution")
 
+    def test_a_failed_thread_start_releases_the_reservation_and_the_next_probe_runs(self):
+        calls = []
+        probe = self.probe(lambda *_args: calls.append(1) or [()])
+        with mock.patch.object(threading.Thread, "start", side_effect=RuntimeError("can't start new thread")):
+            self.assertIsNone(probe.start())
+        view = probe.view()
+        self.assertFalse(view["ok"])
+        self.assertIn("can't start new thread", view["reason"])
+        thread = probe.start()  # same instant: a failed start must not count against the gap either
+        self.assertIsNotNone(thread)
+        thread.join(5)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(probe.view()["ok"])
+
     def test_one_failure_after_a_recent_success_keeps_dns_usable_until_the_success_is_stale(self):
         outcomes = [None, OSError(-3, "Temporary failure in name resolution")]
 
@@ -480,6 +494,16 @@ class FactsTests(unittest.TestCase):
         self.assertEqual((value, current), ({"n": 1}, False))
         release.set()
         self.assertTrue(wait_until(lambda: facts.value == {"n": 2}))
+
+    def test_a_failed_thread_start_is_retried_by_the_next_call(self):
+        facts = Facts(lambda: {"n": 1}, wall=lambda: "now")
+        self.addCleanup(facts.stop)
+        with contextlib.redirect_stderr(io.StringIO()), \
+                mock.patch.object(threading.Thread, "start", side_effect=RuntimeError("can't start new thread")):
+            began = time.monotonic()
+            self.assertEqual(facts.current(5), (None, None, False))
+            self.assertLess(time.monotonic() - began, 1)
+        self.assertEqual(facts.current(5), ({"n": 1}, "now", True))
 
     def test_a_failed_refresh_keeps_the_previous_value(self):
         results = iter([{"n": 1}, RuntimeError("boom"), {"n": 3}])

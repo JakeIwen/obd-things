@@ -55,8 +55,14 @@ class Facts:
     def start(self):
         with self.cond:
             if self.thread is None:
-                self.thread = threading.Thread(target=self._loop, daemon=True, name="research-facts")
-                self.thread.start()
+                thread = threading.Thread(target=self._loop, daemon=True, name="research-facts")
+                try:
+                    thread.start()
+                except RuntimeError as exc:  # e.g. TasksMax reached; stay unstarted so the next call retries
+                    log("dtc_research_facts_thread_failed", error=repr(exc)[:300])
+                    return False
+                self.thread = thread
+            return True
 
     def stop(self):
         with self.cond:
@@ -74,9 +80,10 @@ class Facts:
         """``(value, taken_at, current)``; ``current`` is false when the refresh did not finish in
         time or failed."""
         ticket = self.request()
-        self.start()
+        running = self.start()
         with self.cond:
-            self.cond.wait_for(lambda: self.served >= ticket, wait)
+            if running:  # with no thread, waiting would only burn the bound
+                self.cond.wait_for(lambda: self.served >= ticket, wait)
             return self.value, self.taken_at, self.good >= ticket
 
     def _loop(self):
@@ -127,9 +134,18 @@ class DnsProbe:
                 return None
             if not force and self.last_started is not None and moment - self.last_started < self.gap:
                 return None
+            previous_start = self.last_started
             self.in_flight_since = self.last_started = moment
         thread = threading.Thread(target=self._lookup, args=(moment,), daemon=True, name="research-dns")
-        thread.start()
+        try:
+            thread.start()
+        except RuntimeError as exc:  # e.g. TasksMax reached: release the reservation or no lookup ever runs again
+            with self.lock:
+                self.in_flight_since = None
+                self.last_started = previous_start  # the gap measures lookups, not failed starts
+                self.last = {"result": "failed", "reason": f"could not start a lookup thread: {exc}"[:200],
+                             "at": self.wall(), "seconds": None}
+            return None
         return thread
 
     def _lookup(self, began):
