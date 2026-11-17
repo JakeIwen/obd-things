@@ -25,17 +25,16 @@ class StartWindow:
     def __init__(self, limit=STARTS_PER_WINDOW, seconds=WINDOW_SECONDS, clock=time.monotonic):
         self.limit, self.seconds, self.clock = limit, seconds, clock
         self.recent = deque()
-        self._checked_at = None
 
     def full(self):
-        stamp = self._checked_at = self.clock()
+        stamp = self.clock()
         while self.recent and stamp - self.recent[0] > self.seconds:
             self.recent.popleft()
         return len(self.recent) >= self.limit
 
     def record(self):
-        """Count the start checked by the last ``full()`` call, at that check's time."""
-        self.recent.append(self._checked_at if self._checked_at is not None else self.clock())
+        """Count one start at its own time; a concurrent request's ``full()`` check never lends it one."""
+        self.recent.append(self.clock())
 
 
 class ModelSlot:

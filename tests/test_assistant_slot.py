@@ -106,6 +106,18 @@ class CliLockTests(unittest.TestCase):
             slot.try_acquire()  # one job at a time
         slot.release()
 
+    def test_each_recorded_start_carries_its_own_time_not_another_requests_check(self):
+        clock = [0.0]
+        window = StartWindow(limit=10, seconds=60, clock=lambda: clock[0])
+        window.full()  # request A checks at 0 and starts later
+        clock[0] = 50
+        window.full()  # request B's check lands in between
+        clock[0] = 55
+        window.record()  # A's start
+        clock[0] = 56
+        window.record()  # B's start
+        self.assertEqual(list(window.recent), [55, 56])
+
 
 if __name__ == "__main__":
     unittest.main()
