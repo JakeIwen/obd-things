@@ -25,11 +25,22 @@
     ]
   },
   "memory": {
-    "measured": false,
-    "cli_digest": null,
-    "measured_at": null,
-    "provisional": {"launch_floor_mib": 900, "tree_cap_mib": 700, "critical_mib": 300},
-    "measured_values": null,
+    "measured": true,
+    "cli_digest": "76d6e870353a13698f3a6e4757079fde4d928e62292db167247790e1e530d60f",
+    "measured_at": "2026-11-17",
+    "provisional": {
+      "launch_floor_mib": 900,
+      "tree_cap_mib": 700,
+      "critical_mib": 300
+    },
+    "measured_values": {
+      "launch_floor_mib": 640,
+      "tree_cap_mib": 384,
+      "critical_mib": 300
+    },
+    "research_peak_mib": 233.7,
+    "warning_chat_peak_mib": 141.9,
+    "cli_version": "2.1.325",
     "reserve_mib": 384
   }
 }

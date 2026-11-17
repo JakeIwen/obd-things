@@ -1,9 +1,9 @@
-"""Best-effort memory protection for research CLIs, not isolation.
+"""The worker's own memory guard for research CLIs.
 
-This Pi's kernel runs with ``cgroup_disable=memory``, so no unit's ``MemoryMax`` is enforced and a
-hard bound on a runaway CLI needs the memory controller (an owner decision). What the worker can do
-is refuse to launch when ``MemAvailable`` is low, and SIGKILL the attempt's process group at once
-when the tree grows past its cap or the Pi falls to critical. Thresholds come from the tracked
+The unit's ``MemoryMax`` is enforced by the kernel's memory controller (on since 2026-11-17) and
+bounds the whole cgroup, tmpfs and page cache included. This guard is the finer, earlier bound: it
+refuses to launch when ``MemAvailable`` is low, and SIGKILLs the attempt's process group at once
+when the tree's summed RSS grows past its cap or the Pi falls to critical. Thresholds come from the tracked
 policy; until real peaks have been measured for the installed Claude copy, research turns are not
 activated (``activation``).
 """

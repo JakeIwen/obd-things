@@ -35,7 +35,7 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 Nice=15
 IOSchedulingClass=idle
 CPUQuota=30%
-# Not enforced while the kernel runs with cgroup_disable=memory; see docs/dtc-research.md.
+# Kernel-enforced backstop for the whole cgroup; the worker's own cap is tighter. See docs/dtc-research.md.
 MemoryMax=768M
 OOMScoreAdjust=800
 TasksMax=96

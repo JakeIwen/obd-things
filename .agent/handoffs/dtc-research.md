@@ -1,7 +1,7 @@
 ---
 workstream: dtc-research
 tier: T3
-status: merged; worker-status fix merged (232361e); installed on vanpi 2026-11-17 05:02-05:06 MST up to but not including activation, every pre-sign-in check passed; next is the owner's research sign-in, then measurement and the activation commit
+status: installed on vanpi; memory measured 2026-11-17 15:16-16:09 MST and the activation commit (this branch, research-activate) recorded the measured policy; next is the reviewed merge, the worker restart and the live acceptance check (section 8)
 last reviewed commit: 7df1eae (implementation, Astra verdict ship); plan 31ed98b (Astra verdict ship)
 ---
 
@@ -35,6 +35,31 @@ with `Verdict: ship`, and the feature was merged by `75577ee`. The historical re
 below describe closed findings, not pending reviews. The standing contract is
 `projects/vehicle_data/docs/dtc-research.md`; the deploy runbook is section 7. This remains a
 Claude-only milestone; Codex research stays unavailable until F3.
+
+### Measurement and activation commit, 2026-11-17 15:13-16:09 MST (after the memory-controller reboot)
+
+The Pi was rebooted at 15:10:50 with the kernel memory controller on (O1 closed), so the research
+and advisor units' `MemoryMax=768M` are enforced; `~/.agent/handoffs/memory-controller.md` holds that
+verification. Preconditions at 15:15: worker status Claude `ok`, `signed_in` true, Codex `disabled`,
+memory not activated, `dns_ok` true, `job` null; volume mounted (`/dev/loop0`,
+`nosuid,nodev,noexec`); van asleep; `MemAvailable` 1,529 MiB.
+
+- `install_research_cli.sh claude --measure` (15:15:58-15:16:59, Claude 2.1.325, digest
+  `76d6e870…d60f`): `result` `measured`, both turns `complete`. Report: peak tree RSS 223.6 MiB,
+  `VmHWM` 233.7 MiB, lowest `MemAvailable` 1,344.7 MiB. Follow-up: 208.1 / 208.1 / 1,386.3 MiB.
+  The unit's cgroup, sampled every 0.5 s: `memory.current` peak 276 MiB, `memory.peak` 284 MiB
+  (set by the worker's first CLI hash at boot), `memory.events` all 0.
+- `--budget-check` (15:17:28-15:17:49, run before activation while research was idle; it does not
+  depend on activation): `result` `enforced`, `reason` `budget_exceeded`, cap $0.01, prompt 3,782
+  words, **`total_cost_usd` 0.084156**. The cap stops a turn only after a model call has pushed it
+  over, so one call can overshoot it (here 8x); with the 5 and 2 USD caps the overshoot is bounded
+  by one call's cost.
+- Warning-chat peak (`measure_assistant_peak`, the owner's question answered 16:08:36-16:08:51):
+  `child_seen` true, peak tree RSS and `VmHWM` 141.9 MiB, lowest `MemAvailable` 790.2 MiB; advisor
+  cgroup `memory.peak` 190 MiB, `memory.events` all 0; the turn completed (exit 0).
+- Policy block from `research_cli_install.memory_block(measurement, 141.9)`: research peak 233.7,
+  tree cap 384, launch floor 640, critical 300, reserve 384 (the warning-chat peak is below the
+  research peak, so it does not grow), `measured: true`, `measured_at` 2026-11-17.
 
 ### Pi installation retry, 2026-11-17 05:02-05:07 MST: installed and verified (not activated)
 
@@ -101,7 +126,7 @@ Remaining, in order: the owner's research sign-in (`claude setup-token`, then
 `s dtc_research_signin claude`; check `s dtc_research_signin status`) and one real warning-chat
 question; memory measurement (runbook step 7, `uptime` calm); the reviewed activation commit
 (step 8); the budget check (step 9); the live acceptance check with real Claude turns (section 8).
-O1 and F1-F3 stay open.
+F1-F3 stay open; O1 is closed.
 
 ### Pi installation attempt, 2026-11-17 03:53-04:12 (all times MST; superseded by the retry above)
 
@@ -236,8 +261,8 @@ check `uptime` before the memory measurement.
 
 The retry above verified each of these live (status bounds, first-hash time, DNS evidence, clean
 journals, namespace probes). Next: owner Claude sign-in and warning-chat question; memory
-measurement; reviewed activation commit; budget check and real-turn acceptance. O1 and F1–F3
-remain open.
+measurement; reviewed activation commit; budget check and real-turn acceptance. F1–F3
+remain open (O1 closed 2026-11-17).
 
 ### Implementation review fixes (2026-11-17, on top of `fef26e3`)
 
@@ -383,7 +408,8 @@ Not started: Codex launch path in `research_runner.py` and the per-model Codex v
   and the collaboration tools in its rollout `additional_tools` record; `sleep_tool=false` removes
   `clock.sleep`; there is no generic `disabled_tools` key (strict config refuses it). Disabling
   `code_mode_host` makes Codex emit an `item.completed` of type `error` at turn start.
-- The Pi kernel has `cgroup_disable=memory`: no `MemoryMax` is enforced for any unit.
+- Until the 2026-11-17 reboot the Pi kernel had `cgroup_disable=memory` and no `MemoryMax` was
+  enforced; since then the memory controller is on (O1 closed, section 9).
 - `api_server` imports radar service code; the worker must not import `projects.vehicle_data.api`
   (it has its own `prepare_socket`); `api_client.TelemetryClient` is light and fine.
 - The fake CLI's scenario and call log must live outside the release directory, or the identity
@@ -447,7 +473,8 @@ Not started: Codex launch path in `research_runner.py` and the per-model Codex v
 - Rootfs budgets (`ROOTFS_PATH_BUDGETS_MIB`, MacBook-managed `backup_conf.sh`, measured with
   `du -skx <path>` per entry): `/var/lib/van-telemetry:2560` exists; nothing covers
   `/var/lib/van-telemetry-advisor`, `/opt` or a new image file.
-- **The kernel's memory cgroup controller is disabled on this Pi**: `/proc/cmdline` contains
+- **The kernel's memory cgroup controller was disabled on this Pi** (true on 2026-11-16; enabled
+  2026-11-17, see O1): `/proc/cmdline` contains
   `cgroup_disable=memory`, `/sys/fs/cgroup/cgroup.controllers` lists only `cpuset cpu io pids`,
   and no unit has a `memory.current` file. So `MemoryMax=` is accepted by systemd but enforced for
   no unit, including the advisor's existing `MemoryMax=768M` and `van-compute-broker`'s 1G.
@@ -1090,9 +1117,10 @@ warning chat answers `busy` until systemd clears the worker.
 
 ### Memory: best-effort protection, not isolation
 
-This Pi's kernel runs with `cgroup_disable=memory`, so no `MemoryMax` is enforced for any unit.
-**A hard bound on a runaway CLI's memory is only possible with the memory controller, which is
-the owner's open decision (O1).** Everything below is best-effort protection, not isolation.
+The memory controller is on since the 2026-11-17 reboot (owner decision, O1 closed), so the
+unit's `MemoryMax=768M` is a kernel-enforced bound on the whole cgroup (worker, CLI children,
+tmpfs, charged page cache). Everything below is the worker's own, finer guard; its watchdog sums
+process-tree RSS, which is not the whole cgroup charge, so the unit limit stays the backstop.
 
 - **One assistant CLI at a time** on the Pi (the shared CLI lock above), so the warning chat and
   research never add up.
@@ -1399,7 +1427,7 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 Nice=15
 IOSchedulingClass=idle
 CPUQuota=30%
-# Not enforced while the kernel runs with cgroup_disable=memory; see docs/dtc-research.md.
+# Kernel-enforced backstop for the whole cgroup; the worker's own cap is tighter. See docs/dtc-research.md.
 MemoryMax=768M
 OOMScoreAdjust=800
 TasksMax=96
@@ -1675,12 +1703,11 @@ Codex has no live check this round; it is unavailable by design.
   host can execute anything), or a later Codex version whose production rollout record passes the
   allowlist. Then the owner's Codex sign-in and `install_research_cli.sh codex` enable it with no
   code change.
-- **O1. The memory controller is off Pi-wide** (`cgroup_disable=memory` on the kernel command
-  line). Every unit's `MemoryMax` on this Pi, the advisor's and van-compute-broker's included, is
-  unenforced today. Enabling it (`cgroup_enable=memory cgroup_memory=1` in the boot command line
-  and a reboot) would make research's and every other unit's ceiling real, and would start
-  enforcing limits other units were written with but never ran under. An owner decision for the
-  whole Pi, not part of this round; the parent reports it.
+- **O1 (closed 2026-11-17). The memory controller.** The owner chose to enable it:
+  `cgroup_enable=memory` ends `/boot/firmware/cmdline.txt` and took effect at the 15:10 Mountain
+  reboot, verified from `/proc/cmdline`, dmesg and `cgroup.controllers`. Every unit's `MemoryMax`,
+  research's and the advisor's 768M included, is now enforced. Workstream record and the one-week
+  check: `~/.agent/handoffs/memory-controller.md` (outside this repo).
 - Optional hardening not adopted now because of unknown CLI breakage: `RestrictNamespaces=`,
   `SystemCallFilter=@system-service` on the worker.
 
@@ -1688,9 +1715,10 @@ Codex has no live check this round; it is unavailable by design.
 
 The implementation is reviewed and merged. Build status above is the authoritative installation
 record: the 05:02 retry installed everything up to activation and passed every check; the
-research worker and mount are enabled and active, research is not activated. Next: owner sign-in,
-measurement, activation and real-turn acceptance. The Mac rootfs
+research worker and mount are enabled and active. The owner signed in and the memory measurement
+is recorded (the measurement section at the top of Build status). Next: the reviewed merge, the
+worker restart that activates research, and real-turn acceptance (section 8). The Mac rootfs
 budget and exclusions are deployed. The dashboard is merged; its current live deployment belongs
-to the dashboard-round session and must not be reverted by research rollback. Preserve O1 and
+to the dashboard-round session and must not be reverted by research rollback. Preserve
 F1–F3. When the workstream closes, promote durable facts and the completed runbook into the
 standing docs before deleting this note.

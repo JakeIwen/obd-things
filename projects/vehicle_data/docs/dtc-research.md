@@ -3,9 +3,9 @@
 Each code on the dashboard's Codes card can be researched by a model the owner picks. The model
 searches the web for what that code means on this van and writes a report; the report is kept on
 the Pi, its one-line summary shows on the code's row, and the owner can ask follow-ups in the same
-model session. Status (2026-11-17): merged; the first install stopped at its post-install status
-check and was rolled back (research unit and mount disabled); the worker-status fix described under
-"Worker status" awaits review and a re-install. This is a partial milestone: **Claude only**. Codex research is blocked (below) until a pinned Codex version passes
+model session. Status (2026-11-17): merged, installed on vanpi with the worker-status fix
+described under "Worker status", and activated for Claude 2.1.325 by the measured memory policy
+(see "Memory: two bounds"). This is a partial milestone: **Claude only**. Codex research is blocked (below) until a pinned Codex version passes
 the tool-inventory check.
 
 The workstream's handoff note (`.agent/handoffs/dtc-research.md`) holds the deploy runbook while
@@ -175,16 +175,31 @@ but no lock, and status never touches the shared CLI `flock`. A caller that leav
 written, or while its request is read, costs one `assistant_http_client_gone` log line on either
 service, never a traceback.
 
-## Memory: best-effort protection, not isolation
+## Memory: two bounds
 
-This Pi boots with `cgroup_disable=memory`, so no unit's `MemoryMax` is enforced; a hard bound on a
-runaway CLI needs the memory controller (an owner decision for the whole Pi). The worker refuses to
-launch below a free-memory floor and SIGKILLs the attempt's process group at once (no grace) when
-the tree passes its cap or free memory falls to critical. The thresholds come from
-`research_cli_policy.json`; until real peaks have been measured **for the installed Claude copy**
-(`memory.cli_digest`), research turns are refused (`not_activated`). Installing a different copy
-requires measuring again. Provisional values for the measurement itself: floor 900 MiB, cap
-700 MiB, critical 300 MiB.
+The kernel memory controller is on (owner decision 2026-11-17: `cgroup_enable=memory` ends the
+boot command line, after the device tree's `cgroup_disable=memory`), so the unit's
+`MemoryMax=768M` is a hard bound enforced by the kernel on the whole cgroup: the worker, its CLI
+children, their tmpfs `/tmp` and charged page cache. With `OOMPolicy=stop` and
+`KillMode=control-group`, a cgroup OOM kill stops the whole unit; `Restart=` brings it back and the
+attempt ends `interrupted`. Evidence of that bound is in the cgroup's `memory.events` (`max`,
+`oom_kill`); this kernel has PSI off, so there is no `memory.pressure` file.
+
+The worker's own guard stays first and is the finer one. It refuses to launch below a free-memory
+floor and SIGKILLs the attempt's process group at once (no grace) when the tree passes its cap or
+free memory falls to critical. Its watchdog sums the RSS of the attempt's process tree, which is
+not the whole cgroup charge (tmpfs and page cache are not counted), so the unit's `MemoryMax` is
+the backstop, not a replacement. The thresholds come from `research_cli_policy.json`; until real
+peaks have been measured **for the installed Claude copy** (`memory.cli_digest`), research turns
+are refused (`not_activated`). Installing a different copy requires measuring again. Provisional
+values for the measurement itself: floor 900 MiB, cap 700 MiB, critical 300 MiB.
+
+Measured 2026-11-17 on Claude 2.1.325 (`sonnet`/`medium` report and a resumed follow-up): peak
+tree `VmHWM` 233.7 MiB (report) and 208.1 MiB (follow-up), lowest `MemAvailable` 1,345 MiB; the
+unit's cgroup `memory.current` peaked at 276 MiB with no `memory.events` counter raised. A
+warning-chat Codex turn peaked at 141.9 MiB (advisor cgroup 190 MiB), below the research peak, so
+the reserve stays 384 MiB. Active thresholds: tree cap 384 MiB (peak x 1.5, rounded up to 64),
+launch floor 640 MiB (peak + reserve, rounded up to 64), critical 300 MiB.
 
 ## Storage and its bounds
 

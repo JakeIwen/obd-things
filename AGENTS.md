@@ -514,8 +514,9 @@ one log line, never a traceback).
 `dtc_research.json` is the vocabulary shared with the dashboard (`src/dtcResearch.helpers.js`,
 `dialogs/DtcResearch{.jsx,.helpers.js}`, `components/ModelPicker.jsx`, `src/markdownLite.js`
 with `components/MarkdownView.jsx` for model text, `src/assistantAccess.js` for the access code
-both dialogs share). Research stays unavailable on the dashboard until the owner's research
-sign-in exists and measured memory peaks are recorded in `research_cli_policy.json`.
+both dialogs share). Research is offered on the dashboard only while the owner's research sign-in exists and
+`research_cli_policy.json` records measured memory peaks for the installed Claude copy (measured
+and activated for 2.1.325 on 2026-11-17; a different copy needs measuring again).
 
 Drive pages (2026-11-16): `src/sparkline.helpers.js` holds the per-metric "red above N" table
 (`SPARK_RED_ABOVE`, alternator field above 80 %) that `components/Sparkline.jsx` and
