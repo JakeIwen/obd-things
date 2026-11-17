@@ -4,7 +4,8 @@ The signed microdegree interpretation is inferred in the radar project's DID
 map. The 1 degree reference is a monitoring aid, not an ECU trip guarantee.
 Each axis publishes 1-minute, 5-minute and 30-minute windows ending at its
 latest read (see WINDOW_SECONDS for how gaps are treated) and the signed change
-since the first reading of the current drive (see DRIVE_GAP_SECONDS).
+since the first reading of the current drive (see DRIVE_GAP_SECONDS), plus the
+change across the park before it (see parked_change).
 """
 
 from collections import deque
@@ -222,6 +223,25 @@ def _contiguous_run_start(samples):
     return start
 
 
+def parked_change(previous, value, observed_at):
+    """Change across the park that ended where a new drive starts, or None.
+
+    ``previous`` is the metric's last stored row (its latest reading before the
+    gap, in this process or retained from a saved file); ``value`` and
+    ``observed_at`` are the new drive's first reading. None when there is no
+    previous reading or it is not older than the new one. Additive: rows
+    without the figure stay valid.
+    """
+    if not previous or "latest_value" not in previous or "observed_at" not in previous:
+        return None
+    if datetime.fromisoformat(previous["observed_at"]) >= datetime.fromisoformat(observed_at):
+        return None
+    return {"change": value - previous["latest_value"],
+            "previous_value": previous["latest_value"],
+            "previous_observed_at": previous["observed_at"],
+            "observed_at": observed_at}
+
+
 class AlignmentHistory:
     """Windows ending at the latest observation, retained through parked time.
 
@@ -282,6 +302,17 @@ class AlignmentHistory:
         if datetime.fromisoformat(drive["started_at"]).tzinfo is None:
             raise ValueError("saved radar drive start is not timezone-aware")
 
+    @staticmethod
+    def _validate_parked(parked):
+        for name, low, high in (("change", -40, 40), ("previous_value", -20, 20)):
+            value = parked[name]
+            if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                    or not math.isfinite(value) or not low <= value <= high:
+                raise ValueError("invalid retained radar parked change")
+        for name in ("previous_observed_at", "observed_at"):
+            if datetime.fromisoformat(parked[name]).tzinfo is None:
+                raise ValueError("saved radar parked timestamp is not timezone-aware")
+
     @classmethod
     def _validate_retained(cls, row):
         stamp = datetime.fromisoformat(row["observed_at"])
@@ -305,6 +336,8 @@ class AlignmentHistory:
                     raise ValueError("invalid retained radar window")
         if "drive" in row:
             cls._validate_drive(row["drive"])
+        if "parked" in row:
+            cls._validate_parked(row["parked"])
 
     def add(self, metric, value, observed_monotonic, observed_at=None):
         if metric not in self.samples or not math.isfinite(value) or abs(value) > 20:
@@ -320,6 +353,9 @@ class AlignmentHistory:
             row = {"latest_value": value,
                    "observed_at": observed_at or datetime.now(timezone.utc).isoformat()}
             row["drive"] = self._advance_drive(metric, value, observed_monotonic, row["observed_at"])
+            parked = self._drives[metric]["parked"]
+            if parked is not None:
+                row["parked"] = parked
             for seconds in WINDOW_SECONDS:
                 earliest = observed_monotonic - seconds
                 if seconds in RUN_WINDOW_SECONDS:
@@ -349,7 +385,8 @@ class AlignmentHistory:
         if drive is None:
             drive = self._resume_retained_drive(metric, mono, observed_at)
         if drive is None:
-            drive = {"start_value": value, "started_at": observed_at, "start_mono": mono, "count": 0}
+            drive = {"start_value": value, "started_at": observed_at, "start_mono": mono, "count": 0,
+                     "parked": parked_change(self.last[metric], value, observed_at)}
         drive["count"] += 1
         drive["last_mono"] = mono
         self._drives[metric] = drive
@@ -369,7 +406,8 @@ class AlignmentHistory:
         if not 0 < wall_gap <= DRIVE_GAP_SECONDS:
             return None
         return {"start_value": retained["start_value"], "started_at": retained["started_at"],
-                "start_mono": mono - retained["span_seconds"] - wall_gap, "count": retained["count"]}
+                "start_mono": mono - retained["span_seconds"] - wall_gap, "count": retained["count"],
+                "parked": saved.get("parked")}
 
     def observe(self, result):
         """Count one stored broker observation; other metrics are ignored."""
@@ -448,6 +486,9 @@ class AlignmentHistory:
             if restored.last[metric]:
                 if extended is not None and extended.last[metric] is not saved:
                     restored.last[metric]["drive"] = extended.last[metric]["drive"]
+                    restored.last[metric].pop("parked", None)
+                    if "parked" in extended.last[metric]:
+                        restored.last[metric]["parked"] = extended.last[metric]["parked"]
                 self.last[metric] = restored.last[metric]
                 self.dirty = True
         # Recovered wall timestamps never enter the new process's live windows.

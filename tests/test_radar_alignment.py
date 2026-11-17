@@ -172,6 +172,72 @@ class RadarAlignmentTests(unittest.TestCase):
             early.add(metric, .7, 1, "2026-09-20T09:59:00+00:00")
             self.assertEqual(early.summary(0)[metric]["drive"]["count"], 1)
 
+    def test_new_drive_records_the_change_across_the_park(self):
+        history = radar.AlignmentHistory()
+        metric = radar.METRICS[0]
+        history.add(metric, .10, 0, "2026-09-20T10:00:00+00:00")
+        self.assertNotIn("parked", history.summary(0)[metric])
+        history.add(metric, .20, 10, "2026-09-20T10:00:10+00:00")
+        history.add(metric, .35, 4000, "2026-09-20T11:06:40+00:00")
+        parked = history.summary(0)[metric]["parked"]
+        self.assertAlmostEqual(parked["change"], .15)
+        self.assertEqual(parked["previous_value"], .20)
+        self.assertEqual(parked["previous_observed_at"], "2026-09-20T10:00:10+00:00")
+        self.assertEqual(parked["observed_at"], "2026-09-20T11:06:40+00:00")
+        history.add(metric, .60, 4010, "2026-09-20T11:06:50+00:00")
+        self.assertEqual(history.summary(0)[metric]["parked"], parked)
+
+    def test_gap_under_five_minutes_leaves_the_parked_figure_alone(self):
+        history = radar.AlignmentHistory()
+        metric = radar.METRICS[0]
+        history.add(metric, .1, 0, "2026-09-20T10:00:00+00:00")
+        history.add(metric, .2, 4000, "2026-09-20T11:06:40+00:00")
+        before = history.summary(0)[metric]["parked"]
+        history.add(metric, .9, 4290, "2026-09-20T11:11:30+00:00")
+        self.assertEqual(history.summary(0)[metric]["parked"], before)
+
+    def test_parked_change_survives_a_restart_during_the_park(self):
+        metric = radar.METRICS[0]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "radar.json"
+            history = radar.AlignmentHistory(path)
+            history.add(metric, .2, 10, "2026-09-20T10:00:00+00:00")
+            history.flush()
+            resumed = radar.AlignmentHistory(path)
+            resumed.add(metric, .5, 1, "2026-09-20T12:00:00+00:00")
+            parked = resumed.summary(0)[metric]["parked"]
+            self.assertAlmostEqual(parked["change"], .3)
+            self.assertEqual(parked["previous_observed_at"], "2026-09-20T10:00:00+00:00")
+            resumed.flush()
+            # A restart inside the drive keeps the figure.
+            again = radar.AlignmentHistory(path)
+            again.add(metric, .6, 1, "2026-09-20T12:00:20+00:00")
+            self.assertEqual(again.summary(0)[metric]["parked"], parked)
+
+    def test_no_previous_reading_means_no_parked_figure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "radar.json"
+            history = radar.AlignmentHistory(path)
+            history.add(radar.METRICS[0], .5, 1, "2026-09-20T12:00:00+00:00")
+            self.assertNotIn("parked", history.summary(0)[radar.METRICS[0]])
+        self.assertIsNone(radar.parked_change({}, .1, "2026-09-20T12:00:00+00:00"))
+        self.assertIsNone(radar.parked_change(
+            {"latest_value": .1, "observed_at": "2026-09-20T12:00:00+00:00"}, .2, "2026-09-20T11:00:00+00:00"))
+
+    def test_invalid_retained_parked_change_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "radar.json"
+            window = {"count": 2, "mean": .3, "peak_abs": .4, "span_seconds": 10}
+            parked = {"change": .1, "previous_value": .3, "previous_observed_at": "2026-09-20T09:00:00+00:00",
+                      "observed_at": "2026-09-20T10:00:00+00:00"}
+            for bad in ({"change": 41}, {"previous_value": True}, {"observed_at": "2026-09-20T10:00:00"}):
+                row = {"latest_value": .4, "observed_at": "2026-09-20T10:00:10+00:00",
+                       "60": window, "300": window, "parked": {**parked, **bad}}
+                path.write_text(json.dumps({"version": 1, "source": radar.SOURCE,
+                                            "last": {m: dict(row) for m in radar.METRICS}}))
+                with self.subTest(bad=bad):
+                    self.assertIsNotNone(radar.AlignmentHistory(path).storage_error)
+
     def test_saved_file_drops_retired_window_and_loads_without_drive(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "radar.json"
