@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "_review": "Hand-reviewed text sent to web-capable research models. Never add a VIN, a location, an address or anything private; tests/test_dtc_research_context.py checks the shape and rejects VIN-shaped strings.",
+  "vehicle": {
+    "model": "2022 Ram ProMaster 2500",
+    "engine": "3.6 L gasoline",
+    "wheelbase": "159-inch wheelbase",
+    "body": "campervan conversion",
+    "modifications": [
+      "owner-fitted LED low beam, high beam and daytime running lamps"
+    ],
+    "owner": "lives in the van full time and prefers checks he can do in place to a shop visit"
+  },
+  "code_notes": {
+    "bcm_ccan:B104D": "Expected with the owner's LED lamps (owner fact, 2026-09-24): the BCM reads the low-power LED load as a lamp fault. Not a fault to chase unless a lamp is actually out.",
+    "bcm_ccan:B104E": "Expected with the owner's LED lamps (owner fact, 2026-09-24): the BCM reads the low-power LED load as a lamp fault. Not a fault to chase unless a lamp is actually out.",
+    "bcm_ccan:B162A": "Expected with the owner's LED lamps (owner fact, 2026-09-24): the BCM reads the low-power LED load as a lamp fault. Not a fault to chase unless a lamp is actually out.",
+    "bcm_ccan:B162E": "Expected with the owner's LED lamps (owner fact, 2026-09-24): the BCM reads the low-power LED load as a lamp fault. Not a fault to chase unless a lamp is actually out.",
+    "bcm_ccan:B1632": "Expected with the owner's LED lamps (owner fact, 2026-09-24): the BCM reads the low-power LED load as a lamp fault. Not a fault to chase unless a lamp is actually out.",
+    "bcm_ccan:B1636": "Expected with the owner's LED lamps (owner fact, 2026-09-24): the BCM reads the low-power LED load as a lamp fault. Not a fault to chase unless a lamp is actually out."
+  }
+}

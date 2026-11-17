@@ -29,6 +29,7 @@ import uuid
 from projects.vehicle_data.api import TelemetryClient, _prepare_socket_path
 from projects.vehicle_data.assistant_common import ChatError, ID_RE, TOKEN_RE, now, require_keys
 from projects.vehicle_data.assistant_slot import ModelSlot
+from projects.vehicle_data import dtc_research_service
 from projects.vehicle_data.engine_off_voltage import _atomic_json
 from projects.vehicle_data.event_history import GUIDE as EVENT_SYSTEM_GUIDE
 from projects.vehicle_data.custom_warnings import catalog, validate_rule, load_rules, MAX_RULES
@@ -811,6 +812,10 @@ class ChatHandler(http.server.BaseHTTPRequestHandler):
                     payload = json.loads(self.rfile.read(length))
                 except (ValueError, UnicodeDecodeError):
                     raise ChatError(400, "Invalid request body")
+            research = getattr(self.server, "research", None)
+            if research is not None and dtc_research_service.is_research_path(path):
+                # Outside manager.lock: research has its own lock and never blocks the warning chat.
+                return self.reply(200, research.handle(method, path, payload))
             with manager.lock:
                 if method == "GET" and path == "/v1/assistant/status":
                     result = {"available": True, "read_only": False, "vehicle_read_only": True,
@@ -848,7 +853,8 @@ class ChatHandler(http.server.BaseHTTPRequestHandler):
                         raise ChatError(404, "Unknown assistant request")
             self.reply(200, result)
         except ChatError as exc:
-            self.reply(exc.status, {"available": False, "detail": str(exc)})
+            self.reply(exc.status, {"available": False, "detail": str(exc),
+                                    **({"reason": exc.reason} if getattr(exc, "reason", None) else {})})
         except Exception:
             self.reply(503, {"available": False, "detail": "Local assistant unavailable; check its service on the Pi"})
 
@@ -869,13 +875,16 @@ def main():
     parser.add_argument("--broker-socket", default="/run/van-telemetry/api.sock")
     parser.add_argument("--state-dir", default=DEFAULT_STATE)
     parser.add_argument("--codex", default="/home/pi/.local/bin/codex")
+    dtc_research_service.add_arguments(parser)
     args = parser.parse_args()
     runner = CodexRunner(args.codex, Path(args.state_dir) / "runtime")
     manager = WarningChatManager(args.state_dir, TelemetryClient(args.broker_socket, timeout=3), runner)
+    research = dtc_research_service.build(args, Path(args.state_dir))
     path = Path(args.socket)
     _prepare_socket_path(path)
     server = ChatServer(str(path), ChatHandler)
     server.manager = manager
+    server.research = research
     os.chmod(path, 0o600)
     def stop(_signum, _frame):
         threading.Thread(target=server.shutdown, daemon=True).start()
@@ -885,6 +894,8 @@ def main():
         server.serve_forever(poll_interval=.2)
     finally:
         manager.close()
+        if research is not None:
+            research.close()
         server.server_close()
         path.unlink(missing_ok=True)
 

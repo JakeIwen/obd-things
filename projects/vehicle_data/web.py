@@ -31,6 +31,7 @@ from projects.vehicle_data.warning_chat import (
 )
 from projects.vehicle_data.broker import DEFAULT_SOCKET
 from projects.vehicle_data.dtc_ignore import API_PATH as DTC_IGNORE_PATH
+from projects.vehicle_data.dtc_research_contract import relay_allowed as dtc_research_relay_allowed
 from projects.vehicle_data.radar_reference import API_PATH as RADAR_REFERENCE_PATH
 from projects.vehicle_data.radar_service_alignment import (
     API_PATH as RADAR_SERVICE_PATH, LISTENER_DISABLED as RADAR_SERVICE_DISABLED,
@@ -252,7 +253,8 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
                    re.fullmatch(r"/v1/assistant/chats/[0-9a-f]{32}", path))) or (
                    method == "POST" and (path == "/v1/assistant/chats" or
                    re.fullmatch(r"/v1/assistant/chats/[0-9a-f]{32}/(messages|cancel|apply-warning|remove-warning)", path) or
-                   re.fullmatch(r"/v1/assistant/warnings/[0-9a-f]{64}/remove", path)))
+                   re.fullmatch(r"/v1/assistant/warnings/[0-9a-f]{64}/remove", path))) or (
+                   dtc_research_relay_allowed(method, path))
         if not allowed:
             return self._json(404, {"available": False, "detail": "Unknown assistant request"})
         host = self.headers.get("Host", "")

@@ -1,0 +1,16 @@
+{
+  "_note": "Shown when the CLI cannot list its models. A fallback list never makes an unavailable provider available.",
+  "default": {"provider": "codex", "model": "gpt-6-astra", "effort": "high"},
+  "providers": {
+    "claude": [
+      {"id": "opus", "label": "Opus", "efforts": ["low", "medium", "high", "xhigh", "max"], "default_effort": "high"},
+      {"id": "sonnet", "label": "Sonnet", "efforts": ["low", "medium", "high", "xhigh", "max"], "default_effort": "high"},
+      {"id": "haiku", "label": "Haiku", "efforts": ["low", "medium", "high", "xhigh", "max"], "default_effort": "high"}
+    ],
+    "codex": [
+      {"id": "gpt-6-astra", "label": "GPT-6-Astra", "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"], "default_effort": "high"},
+      {"id": "gpt-6.1-sol", "label": "GPT-6.1-Sol", "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"], "default_effort": "high"},
+      {"id": "gpt-6.1-terra", "label": "GPT-6.1 Terra", "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"], "default_effort": "high"}
+    ]
+  }
+}
