@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fuelRateText, instantFigure, instantText, mpgFigure, mpgText, windowsText } from "../src/fuelEconomy.helpers.js";
+import { fuelRateText, hasFigure, instantFigure, instantText, mpgFigure, mpgText, windowsText } from "../src/fuelEconomy.helpers.js";
 import { tripsModel } from "../src/views/history.helpers.js";
 
 const NOW = Date.parse("2026-09-22T19:00:00Z");
@@ -74,4 +74,14 @@ test("trips card carries each trip's economy and the window line", () => {
   assert.match(t.rows[0].meta, /360 samples · 16\.1 mpg$/);
   assert.doesNotMatch(t.rows[1].meta, /mpg/);
   assert.equal(t.fuel, "Fuel economy 15.5 mpg over 7 days");
+});
+
+test("the Speed tile's economy line has no figure when parked, stale or stopped", () => {
+  assert.equal(hasFigure(instantFigure(60, live(3))), true);
+  assert.equal(hasFigure(instantFigure(0, live(0.4))), false, "stopped");
+  assert.equal(hasFigure(instantFigure(null, live(2))), false, "no speed");
+  assert.equal(hasFigure(instantFigure(60, { ...live(2), stale: true })), false, "stale fuel rate");
+  assert.equal(hasFigure(instantFigure(60, null)), false, "no fuel record");
+  assert.equal(hasFigure(mpgFigure({ available: true, mpg: 16.4 })), true);
+  assert.equal(hasFigure(mpgFigure(undefined)), false);
 });

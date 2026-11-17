@@ -9,30 +9,12 @@ import { DriveFooter } from "./DriveFooter.jsx";
 import { SpeedEconomy } from "./SpeedEconomy.jsx";
 import { SpeedLimitSign } from "./SpeedLimitSign.jsx";
 import { SpeedAcc } from "./SpeedAcc.jsx";
-import { liveValue, tileModel, isHidden, minuteClock, engineRunning } from "../app/derive.js";
+import { liveValue, isHidden, minuteClock, engineRunning } from "../app/derive.js";
 import { tripDistanceMiles } from "../app/rings.js";
 import * as store from "../store.js";
 import { fmtValue } from "../format.js";
-import { voltageFieldParts } from "./driveGauges.helpers.js";
 
 // Sub-lines computed once at module scope (shared by every mount).
-// Battery voltage (as its tile model shows it) beside the alternator field duty; see voltageFieldParts.
-const voltageModel = tileModel("battery.voltage", { decimals: 1 });
-const voltageFieldValue = computed(() =>
-  voltageFieldParts(voltageModel.valueText.value, voltageModel.unitText.value, voltageModel.kind.value, liveValue("generator.field_duty").value),
-);
-const vf = (key) => computed(() => voltageFieldValue.value[key]);
-const VF = { volts: vf("volts"), voltUnit: vf("voltUnit"), sep: vf("sep"), field: vf("field"), fieldUnit: vf("fieldUnit") };
-// Each part is its own bound text node; the units use the tile's smaller grey unit style.
-function VoltageField() {
-  return (
-    <span class="volt-field">
-      {VF.volts}<span class="tile__unit">{VF.voltUnit}</span>
-      {VF.sep}
-      {VF.field}<span class="tile__unit">{VF.fieldUnit}</span>
-    </span>
-  );
-}
 const torqueSub = computed(() => {
   const t = liveValue("engine.crankshaft_torque").value;
   return t === null ? "" : fmtValue("engine.crankshaft_torque", t) + " lb-ft";
@@ -102,13 +84,18 @@ export default function DriveGauges({ page, onPageChange }) {
     <>
       <div class="drive">
         {show("speed") && <Tile name="vehicle.speed" label="Speed" area="speed" size="hero" extra={<><SpeedLimitSign /><SpeedAcc /></>} detail={<SpeedEconomy />} overspeed={overspeed} />}
-        {show("rpm") && <Tile name="engine.rpm" label="RPM" area="rpm" size="large" sub={rpmSub} spark showUnit={false} />}
+        {(show("rpm") || show("power")) && (
+          <div class="drive__stack area-rpm">
+            {show("rpm") && <Tile name="engine.rpm" label="RPM" sub={rpmSub} showUnit={false} />}
+            {show("power") && <Tile name="engine.crankshaft_power" label="Power" sub={torqueSub} />}
+          </div>
+        )}
         {show("coolant") && <Tile name="engine.coolant_temperature" label="Coolant" area="coolant" band spark />}
-        {show("trans") && <Tile name="transmission.oil_temperature" label="Trans oil" area="trans" band spark />}
-        {show("oilp") && <Tile name="engine.oil_pressure" label="Oil pressure" area="oilp" band spark />}
-        {show("volt") && <Tile name="battery.voltage" label="Voltage / Alt field" area="volt" band spark decimals={1} value={<VoltageField />} showUnit={false} />}
-        {show("power") && <Tile name="engine.crankshaft_power" label="Power" area="power" spark sub={torqueSub} />}
         {show("oilt") && <Tile name="engine.vvt_oil_temperature" label="Oil temp (VVT)" area="oilt" band spark />}
+        {show("trans") && <Tile name="transmission.oil_temperature" label="Trans oil" area="trans" band spark />}
+        {show("volt") && <Tile name="battery.voltage" label="Voltage" area="volt" band spark decimals={1} />}
+        {show("alt") && <Tile name="generator.field_duty" label="Alt field" area="alt" spark />}
+        {show("oilp") && <Tile name="engine.oil_pressure" label="Oil pressure" area="oilp" band spark />}
         {show("tires") && <TireGrid area="tires" />}
         {show("trip") && <TripTile />}
       </div>

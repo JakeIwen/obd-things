@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { SPARK_RED_ABOVE } from "../src/sparkline.helpers.js";
 import { buildDemoScene, validateDemoScene } from "../tools/demo_data.mjs";
 
 const NOW = Date.UTC(2026, 9, 21, 19, 30);
@@ -21,4 +22,12 @@ test("demo validation rejects a missing tile or values that contradict each othe
   assert.throws(() => validateDemoScene(withMetric(scene, "engine.fuel_rate", 12)), /instant economy/);
   assert.throws(() => validateDemoScene(withMetric(scene, "engine.crankshaft_power", 120)), /power must agree/);
   assert.throws(() => validateDemoScene(withMetric(scene, "acc.set_speed", 55)), /ACC set speed/);
+  const trace = { ...scene.sparklines, "engine.rpm": [2200, 2250, 3100] };
+  assert.throws(() => validateDemoScene({ ...scene, sparklines: trace }), /sparkline for engine\.rpm must end/);
+});
+
+test("the demo Alt field trace crosses the red line and ends below it", () => {
+  const knots = buildDemoScene(NOW).sparklines["generator.field_duty"];
+  assert.ok(Math.max(...knots) > SPARK_RED_ABOVE["generator.field_duty"]);
+  assert.ok(knots[knots.length - 1] <= SPARK_RED_ABOVE["generator.field_duty"]);
 });

@@ -10,6 +10,7 @@ import "./styles/lighting.css";
 import "./styles/acc-distance.css";
 import "./styles/speed-acc.css";
 import "./styles/speed-economy.css";
+import "./styles/drive-page1.css";
 import "./styles/speed-limit-sign.css";
 import "./styles/drive-radar.css";
 import "./styles/compass.css";

@@ -374,15 +374,15 @@ tab bar, with 16 px gutters and 12 px gaps.
 
 | row | content |
 |---|---|
-| A | **SPEED** (2 cols, hero numerals, `mph`; under the numeral an estimated economy row `now 19.4 mpg`; beside the numeral a `SPEED LIMIT 55` sign while the limit is live, then a right-edge column with the ACC text (`ACC 66` over `engaged`) stacked above the four-bar gap readout; regular cruise uses `Cruise`; current off/ready/standby/override states are explicit) · **RPM** (1 col; the unit is in the label; the footer reads `gear 6` once a live gear metric exists and is empty until then; 15-min sparkline) |
-| B | **COOLANT** · **TRANS OIL** · **OIL PRESSURE**: value, unit, band bar, 15-min sparkline |
-| C | **VOLTAGE / ALT FIELD** (`13.6V/42%`, the `V` and `%` in the smaller grey unit style and a dash half without its unit: battery voltage to 1 decimal, then live `generator.field_duty`; the field half is `—` when not live or when the voltage is held (old), `—/42%` with no voltage but a live field, the whole value `—` with neither; value font at most 0.7 × the standard, capped by column width so `13.6V/100%` fits one line) · **POWER** (`hp`; sub-line `165 lb-ft`) · **OIL TEMP (VVT)** |
-| D | **TIRES** (2 cols: 2×2 grid FL FR / RL RR) · **THIS DRIVE** (Time, Distance `12.3 mi`, MPG `16.4 mpg`, Coolant max, Avg power; info icon on the heading) |
+| A | **SPEED** (2 cols, hero numerals, `mph`; under the numeral an estimated economy row `now 19.4 mpg`, which has no text at all (the row keeps its height) without a figure; beside the numeral a `SPEED LIMIT 55` sign while the limit is live, then a right-edge column with the ACC text (`ACC 66` over `engaged`) stacked above the four-bar gap readout; regular cruise uses `Cruise`; current off/ready/standby/override states are explicit) · **RPM over POWER** (1 col split into two half-height tiles: RPM on top, its footer `gear 6` once a live gear metric exists and empty until then; Power below, `hp`, sub-line `165 lb-ft`; both at the standard `--value` numeral, no sparklines, because a sparkline would leave the numeral under 40 px) |
+| B | **COOLANT** · **OIL TEMP (VVT)** · **TRANS OIL**: value, unit, band bar, 15-min sparkline |
+| C | **VOLTAGE** (battery voltage alone, to 1 decimal, band bar, sparkline) · **ALT FIELD** (`generator.field_duty` percent and a 15-min sparkline; the line is drawn red wherever the plotted value is above 80 % and the numeral reads red while the live value is above 80 %, display only: no warning card, chime or `derive.js` colour) · **OIL PRESSURE** |
+| D | **TIRES** (2 cols: 2×2 grid FL FR / RL RR) · **THIS DRIVE** (Time, Distance `12.3 mi`, MPG `16.4 mpg`, Coolant max, Avg power at 19 px, 25 % above the earlier 15 px; the heading keeps its size; info icon on the heading) |
 
 The portrait gate is no scrolling within ≤ 1,096 visible px (the browser toolbar stays; see the
 manifest note). In landscape (`min-aspect-ratio: 1/1` and width ≥ 900 px), there are 4 columns:
-SPEED (2) · RPM · TIRES spanning the rows, then COOLANT · TRANS · OIL PRESSURE, then VOLTAGE / ALT FIELD · POWER ·
-OIL TEMP · THIS DRIVE. Landscape may scroll in v2.0. At ≤ 640 px (phone) Drive becomes two columns and
+SPEED (2) · RPM over POWER · TIRES spanning the rows, then COOLANT · OIL TEMP · TRANS, then VOLTAGE · ALT FIELD ·
+OIL PRESSURE · THIS DRIVE. Landscape may scroll in v2.0. At ≤ 640 px (phone) Drive becomes two columns and
 scrolls. Type sizes are `clamp()`ed against the viewport height (`--hero: clamp(64px, 11vh, 128px)`,
 with `--large`, `--value` and `--tire` in proportion). Because the rows are fractions of the same
 height, type and rows scale together.
@@ -444,6 +444,11 @@ Rules for Drive tiles:
   only "live/on" UI (the connection dot, active toggles and the current tab).
 - Ignition is not a tile; its value is in the System catalog. Odometer is not a page-1 tile; it is in
   Service and on page 2 (3.1.1), and trip distance comes from the speed integral.
+- Sparklines may carry a per-metric "red above N" threshold (`SPARK_RED_ABOVE` in
+  `src/sparkline.helpers.js`, read by both `Sparkline.jsx` and `Tile.jsx`): the line switches to the
+  palette's `--red` exactly where it crosses N, and the tile numeral reads red while the live value
+  is above N (`tile--hot`). Only `generator.field_duty` (80 %) has one; page 2's Alternator field
+  tile follows the same rule. It is a display rule, distinct from warnings, which come from the broker.
 - Sparklines show the last 15 minutes from the client ring, with no axis and no labels. They start
   empty and fill live; they are not seeded from 900 s buckets. Each scales to its own range with a
   per-metric minimum span (10 psi, 20 °F, 0.5 V) and draws only the nearest band edge.
@@ -460,8 +465,9 @@ Rules for Drive tiles:
   MPG uses `mpgFigure(history.current_trip.fuel_economy)` (`16.4 mpg`, or `—` until available).
   Five equal rows share the old tile's height; `styles/speed-economy.css` owns the row/heading rules.
 - Only instant economy sits under the Speed numeral, above its footer (no ACC text remains there): `now 19.4 mpg` is live
-  speed ÷ live fuel rate at ≥ 5 mph (`99+` from 99 up and during the fuel cut, `—` when stopped
-  or either record is stale). The single instant rule in `src/fuelEconomy.helpers.js` is shared
+  speed ÷ live fuel rate at ≥ 5 mph (`99+` from 99 up and during the fuel cut, the line
+  renders no text when stopped or when either record is stale; the row keeps its height so the
+  numeral and the ACC column never move). The single instant rule in `src/fuelEconomy.helpers.js` is shared
   with page 2's Fuel rate sub-line. Its numeral scales with the viewport
   (`clamp(18px, 11.5vh − 103px, 44px)`, 44 px on the 1,280 px tablet) so it fits above the
   footer at the 1,096 px gate and in landscape; the scrolling phone grid gives Speed its natural

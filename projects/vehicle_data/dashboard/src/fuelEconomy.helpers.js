@@ -18,6 +18,9 @@ export const INSTANT_CAP_MPG = 99;
 const NO_FIGURE = Object.freeze({ value: DASH, unit: "" });
 const figure = (text) => ({ value: text, unit: "mpg" });
 
+/** True when a figure from `mpgFigure`/`instantFigure` holds a number, not the `—` placeholder. */
+export const hasFigure = (fig) => fig.unit !== "";
+
 /**
  * One history `fuel_economy` object as a Speed-tile figure, `{value: "14.1", unit: "mpg"}`, or
  * `—` with no unit when it holds none (too few running samples, a trip from before fuel was

@@ -93,7 +93,8 @@ export const DEMO_SCENE = Object.freeze({
     "engine.oil_pressure": Object.freeze([41, 42, 42, 43, 42, 43, 43, 43]),
     "engine.rpm": Object.freeze([2200, 2250, 2230, 2300, 2340, 2260, 2310, 2280]),
     "engine.vvt_oil_temperature": Object.freeze([201, 202, 202, 203, 203, 204, 204, 205]),
-    "generator.field_duty": Object.freeze([35, 36, 38, 37, 40, 38, 41, 39]),
+    // A short heavy electrical load pushes the field past the 80 % red line, then it settles at 39 %.
+    "generator.field_duty": Object.freeze([36, 38, 41, 86, 92, 84, 52, 39]),
     "battery.voltage": Object.freeze([14.0, 14.1, 14.1, 14.0, 14.1, 14.1, 14.0, 14.1]),
     "transmission.oil_temperature": Object.freeze([176, 177, 178, 179, 180, 180, 181, 182]),
     "vehicle.speed": Object.freeze([61, 62, 62, 63, 64, 63, 62, 63]),
@@ -224,5 +225,11 @@ export function validateDemoScene(scene) {
   }
   const volts = value("battery.voltage");
   if (!(volts >= 13.6 && volts <= 14.8)) throw new Error("demo running voltage must be in the charging range");
+  for (const [name, knots] of Object.entries(scene.sparklines)) {
+    const now = scene.metrics[name]?.value;
+    if (typeof now === "number" && Math.abs(knots[knots.length - 1] - now) > Math.max(3, Math.abs(now) * 0.05)) {
+      throw new Error("demo sparkline for " + name + " must end at its current value");
+    }
+  }
   return true;
 }

@@ -9,6 +9,7 @@
 import { useEffect, useRef } from "preact/hooks";
 import { ringFor, ringVersion } from "../app/rings.js";
 import { band } from "../app/derive.js";
+import { redAboveFor, splitByThreshold } from "../sparkline.helpers.js";
 
 const REDRAW_MS = 10000;
 /** Minimum vertical span per metric, in its display unit. */
@@ -36,6 +37,7 @@ function readColours() {
   colours = {
     line: get("--text-2"),
     band: get("--line-strong"),
+    red: get("--red"),
   };
   return colours;
 }
@@ -79,23 +81,28 @@ function draw(entry, now) {
     ctx.fillRect(0, top, w, Math.max(1, y(Math.max(b.lo, lo)) - top));
   }
   const colW = w / n;
-  ctx.strokeStyle = c.line;
+  const limit = redAboveFor(name);
   ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  let pen = false;
+  // One unbroken run of columns at a time; a gap lifts the pen.
+  const stroke = (run) => {
+    for (const part of splitByThreshold(run, limit)) {
+      ctx.strokeStyle = part.red ? c.red : c.line;
+      ctx.beginPath();
+      part.points.forEach((p, k) => (k ? ctx.lineTo(p.x, y(p.v)) : ctx.moveTo(p.x, y(p.v))));
+      ctx.stroke();
+    }
+  };
+  let run = [];
   for (let i = 0; i < cols.length; i += 1) {
     const col = cols[i];
     if (!col) {
-      pen = false;
+      if (run.length) stroke(run);
+      run = [];
       continue;
     }
-    const x = (i + 0.5) * colW;
-    const yy = y(col.mean);
-    if (pen) ctx.lineTo(x, yy);
-    else ctx.moveTo(x, yy);
-    pen = true;
+    run.push({ x: (i + 0.5) * colW, v: col.mean });
   }
-  ctx.stroke();
+  if (run.length) stroke(run);
 }
 
 function measure(entry) {

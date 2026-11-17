@@ -6,18 +6,19 @@
 .speed-economy {
   display: flex; align-items: baseline; gap: 0 28px; flex-shrink: 0;
   margin-top: 2px; min-width: 0; white-space: nowrap; overflow: hidden;
-}
-.speed-economy__item {
-  display: inline-flex; align-items: baseline; gap: 6px; min-width: 0;
   font-size: clamp(18px, calc(11.5vh - 103px), 44px);
+  /* Keeps the row's height with no figure, so the numeral and the ACC column do not move. */
+  min-height: 1.1em;
 }
+.speed-economy__item { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
+.speed-economy__item[hidden] { display: none; }
 .speed-economy__name, .speed-economy__unit { font-size: max(14px, .4em); color: var(--text-2); }
 .speed-economy__value { font-weight: 600; line-height: 1.1; letter-spacing: -.02em; }
 
 /* Phones scroll: let the hero, ACC graphic and footer keep their natural height instead of
    squeezing the numeral's box into the instant-economy row. */
 @media (max-width: 640px) {
-  .drive { grid-template-rows: max-content; }
+  .drive { grid-template-rows: max-content 204px; } /* Speed, then the stacked RPM and Power */
 }
 
 /* Five rows share the old tile's height; the info hit target uses the heading's spare padding. */

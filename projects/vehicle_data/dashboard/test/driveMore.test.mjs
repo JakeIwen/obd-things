@@ -164,6 +164,12 @@ test("Drive registry lists page-2 tiles with unique ids and every id is rendered
     assert.ok(ids.includes(id), id + " registered");
     assert.ok(more.includes('show("' + id + '")'), id + " rendered through isHidden");
   }
+  const gauges = readFileSync(here("../src/views/DriveGauges.jsx"), "utf8");
+  for (const id of ["speed", "rpm", "coolant", "trans", "oilp", "volt", "alt", "power", "oilt", "tires", "trip"]) {
+    assert.ok(ids.includes(id), id + " registered");
+    assert.ok(gauges.includes('show("' + id + '")'), id + " rendered through isHidden");
+  }
+  assert.ok(!ids.includes("Voltage / Alt field") && !block.includes("Voltage / Alt field"), "voltage no longer carries the field");
   // Page 2 is a lazy chunk: Drive.jsx must not import it statically.
   assert.doesNotMatch(drive, /^import .*DriveMore/m);
   assert.match(drive, /import\("\.\/DriveMore\.jsx"\)/);

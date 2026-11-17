@@ -5,7 +5,8 @@
  */
 
 import { useComputed } from "@preact/signals";
-import { tileModel } from "../app/derive.js";
+import { liveValue, tileModel } from "../app/derive.js";
+import { isAboveRed, redAboveFor } from "../sparkline.helpers.js";
 import { Sparkline } from "./Sparkline.jsx";
 
 /**
@@ -51,12 +52,15 @@ export function BandBar({ name }) {
  */
 export function Tile({ name, label, area, size = "value", band = false, spark = false, sub, extra, detail, onClick, decimals, showUnit = true, overspeed, value }) {
   const m = tileModel(name, decimals === undefined ? undefined : { decimals });
+  // Metrics with a red-above threshold (sparkline.helpers.js) read red while live and above it.
+  const hasLimit = redAboveFor(name) !== null;
   const cls = useComputed(() => {
     let c = "tile tile--" + size + " tile--" + m.kind.value;
     if (area) c += " area-" + area;
     const colour = m.colour.value;
     if (colour) c += " tile--" + colour;
     if (overspeed && overspeed.value) c += " tile--overspeed";
+    if (hasLimit && isAboveRed(name, liveValue(name).value)) c += " tile--hot";
     return c;
   });
   const subText = useComputed(() => {
