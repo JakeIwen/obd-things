@@ -5,8 +5,6 @@ This process has no CAN transport. Its only telemetry operations are cached
 GETs. The web tier cannot provide a command, path or Codex thread ID.
 """
 
-from collections import deque
-from datetime import datetime, timezone
 import argparse
 import hashlib
 import hmac
@@ -29,6 +27,8 @@ import tomllib
 import uuid
 
 from projects.vehicle_data.api import TelemetryClient, _prepare_socket_path
+from projects.vehicle_data.assistant_common import ChatError, ID_RE, TOKEN_RE, now, require_keys
+from projects.vehicle_data.assistant_slot import ModelSlot
 from projects.vehicle_data.engine_off_voltage import _atomic_json
 from projects.vehicle_data.event_history import GUIDE as EVENT_SYSTEM_GUIDE
 from projects.vehicle_data.custom_warnings import catalog, validate_rule, load_rules, MAX_RULES
@@ -39,8 +39,6 @@ MAX_BODY = 32 * 1024
 MAX_CHATS = 200
 MAX_TURNS = 24
 MAX_ANSWER = 12000
-TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{32,128}\Z")
-ID_RE = re.compile(r"[0-9a-f]{32}\Z")
 INSTRUCTIONS = """You explain cached vehicle telemetry events for the owner of a 2022 Ram ProMaster.
 This is a conversation for explanation, not a coding or vehicle-operation task.
 Use only the supplied evidence and conversation. Do not use tools, read files,
@@ -134,21 +132,6 @@ def resolve_settings(settings=None):
     if resolved not in options["models"] or effort not in options["models"][resolved]:
         raise ChatError(400, "Choose an available model and supported reasoning effort")
     return {"model": model, "effort": effort, "resolved_model": resolved}
-
-
-def now():
-    return datetime.now(timezone.utc).isoformat()
-
-
-class ChatError(Exception):
-    def __init__(self, status, message):
-        self.status = status
-        super().__init__(message)
-
-
-def require_keys(payload, required, optional=()):
-    if not isinstance(payload, dict) or not set(required) <= set(payload) or set(payload) - set(required) - set(optional):
-        raise ChatError(400, "Unexpected or missing request fields")
 
 
 def event_context(client, event):
@@ -556,8 +539,7 @@ class WarningChatManager:
         self.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.client, self.runner = client, runner
         self.lock = threading.RLock()
-        self.slot = threading.Lock()
-        self.recent = deque()
+        self.slot = ModelSlot()
         self.cancelled = threading.Event()
         self.worker = None
         self.chats = {}
@@ -664,11 +646,7 @@ class WarningChatManager:
             raise ChatError(409, "Codex is already answering in this conversation")
         if retry and (not chat["turns"] or chat["turns"][-1]["state"] not in ("error", "cancelled")):
             raise ChatError(409, "Only a failed or stopped answer can be retried")
-        stamp = time.monotonic()
-        while self.recent and stamp - self.recent[0] > 60:
-            self.recent.popleft()
-        if len(self.recent) >= 10 or not self.slot.acquire(blocking=False):
-            raise ChatError(429, "Codex is busy or the short-term limit was reached. Try again shortly")
+        self.slot.try_acquire()
         previous = json.loads(json.dumps(chat))
         try:
             if retry:
@@ -678,7 +656,7 @@ class WarningChatManager:
                                   "state": "running", "error": None, "started_at": now(), "settings": selected,
                                   "event_revision": chat["context"].get("event_revision"), "evidence_at": chat["evidence_at"]})
             self.save(chat)
-            self.recent.append(stamp)
+            self.slot.started()
             self.cancelled = threading.Event()
             self.worker = threading.Thread(target=self._run, args=(chat["id"], self.cancelled), daemon=True)
             self.worker.start()
@@ -836,7 +814,7 @@ class ChatHandler(http.server.BaseHTTPRequestHandler):
             with manager.lock:
                 if method == "GET" and path == "/v1/assistant/status":
                     result = {"available": True, "read_only": False, "vehicle_read_only": True,
-                              "explanations_read_only": True, "busy": manager.slot.locked(),
+                              "explanations_read_only": True, "busy": manager.slot.busy,
                               "settings": model_options(), "custom_warnings_enabled": True,
                               **manager.warning_status(owner)}
                 elif method == "POST" and path == "/v1/assistant/chats":
