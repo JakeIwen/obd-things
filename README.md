@@ -11,7 +11,7 @@ with each investigation living under `projects/<name>/`.
 ## Telemetry dashboard
 
 <p align="center">
-  <img src="projects/vehicle_data/dashboard/screenshots/01-drive-gauges.png" width="380" alt="Drive gauges view with illustrative demo data: 63 mph with a speed limit 65 sign and the adaptive cruise gap beside it and instant fuel economy under the speed, RPM, temperatures, oil pressure, charging voltage, power, tire pressures, This drive time, distance and fuel economy, light indicators and compass heading">
+  <img src="projects/vehicle_data/dashboard/screenshots/01-drive-gauges.png" width="380" alt="Drive gauges view with illustrative demo data: 63 mph with a speed limit 65 sign and the adaptive cruise gap beside it and instant fuel economy under the speed, RPM over power, temperatures, oil pressure, charging voltage, the alternator field, power, tire pressures, This drive time, distance and fuel economy, light indicators and compass heading">
   <img src="projects/vehicle_data/dashboard/screenshots/17-drive-live-fuel-economy.png" width="380" alt="Drive sensors view with illustrative demo data: speed limit sign, adaptive cruise with its following gap, an estimated fuel rate of 3.3 gallons per hour and instant economy of 19 mpg, estimated gear, radar aim, transmission speeds, torque and odometer">
 </p>
 
@@ -32,6 +32,10 @@ performed no CAN or service actions.
 | Health and diagnostics | Custom early warning |
 | <img src="projects/vehicle_data/dashboard/screenshots/04-health-warnings-and-diagnostics.png" width="300" alt="Health view with an open rear-right tire pressure warning, its Details and Ask Codex actions, and diagnostic trouble codes"> | <img src="projects/vehicle_data/dashboard/screenshots/13-create-custom-early-warning.png" width="300" alt="Natural-language custom early-warning proposal and approval review"> |
 | An open early warning, diagnostic codes, and module coverage. | Natural-language warning setup with a simulated proposal and approval review. |
+| Diagnostic code research |  |
+|---|---|
+| <img src="projects/vehicle_data/dashboard/screenshots/19-code-research-report.png" width="300" alt="Research with AI dialog for a body-computer low-beam code, showing a finished simulated report with likely causes, what to check and sources, and a follow-up answer"> | |
+| A finished simulated AI research report for a stored code, with a follow-up answer. | |
 
 All gallery images use illustrative demo data; simulated conversations and actions are identified in
 the [capture manifest](projects/vehicle_data/dashboard/screenshots/manifest.json).
