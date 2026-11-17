@@ -520,7 +520,14 @@ has page 1's RPM-over-Power stack and `styles/drive-radar.css` page 2's radar ti
 `radar_alignment.py` records `parked` beside `drive` on each radar row (first value of a new
 drive minus the last value before the park, absent when there is no earlier reading);
 `src/radarAim.js` holds the shared parked-change text and tooltip. `src/fuelLevel.js` formats
-page 2's Fuel tank tile.
+page 2's Fuel tank tile. The sparklines are seeded once per page load (2026-11-17) from
+`GET /v1/history/recent`: `history_recent.py` with `history_recent.json` (path, 15-minute window,
+60-second buckets and the sparkline metric list, shared with the dashboard; `SPARK_METRICS` in
+`src/app/rings.js` is derived from it) builds the product inside the broker's supplemental refresh
+and serves it from memory. Its query ends at the last whole minute, never later: `metric_series`
+rolls up every minute before its `end`. `src/historySeed.helpers.js` places the points by their age
+on the Pi's clock and joins adjacent minutes; `src/app/historySeed.js` is the one-shot fetch. The
+strokes use the `--spark-line` and `--spark-red` tokens.
 
 The hourly drive DTC read (radar and BCM, one `19 02 8F` frame each, no flow control) is
 off by default behind the broker flag `--enable-drive-dtc-reads`, which is not in the unit.
