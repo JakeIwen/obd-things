@@ -19,6 +19,18 @@ def catalog():
             and any(s.quality in ("verified", "observed_alfa_scale") for s in definition.sources)}
 
 
+def catalog_summary(entries):
+    """The few fields the setup dialog shows for a chat's captured catalog (label, unit).
+
+    Public metric definitions carry no human label, so the metric key is the label.
+    """
+    if not isinstance(entries, dict):
+        return []
+    rows = [{"metric": name, "label": name, "unit": str(entry.get("unit", ""))}
+            for name, entry in entries.items() if isinstance(entry, dict)]
+    return sorted(rows, key=lambda row: row["label"])
+
+
 def validate_rule(rule):
     if not isinstance(rule, dict) or set(rule) != FIELDS:
         raise ValueError("A warning must contain exactly the supported threshold-rule fields")

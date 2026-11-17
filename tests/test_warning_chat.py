@@ -310,6 +310,23 @@ for event in [
         self.assertEqual(diagnostics["cgroup_throttled_ms"], 10)
         self.assertEqual(diagnostics["cgroup_throttled_periods"], 2)
 
+    def test_setup_chat_reply_lists_the_catalog_the_model_received(self):
+        from projects.vehicle_data.custom_warnings import catalog
+        self.runner.run = lambda *_: json.dumps({"explanation": "What would you like to monitor?", "proposal": None})
+        with self.manager.lock:
+            opened = self.manager.open_chat(self.owner, {"event": {"kind": "setup", "id": "new-warning"}, "request_id": "d" * 32})
+        self.finish()
+        rows = opened["catalog"]
+        self.assertEqual({row["metric"] for row in rows}, set(catalog()))
+        self.assertEqual([row["label"] for row in rows], sorted(row["label"] for row in rows))
+        self.assertTrue(all(set(row) == {"metric", "label", "unit"} for row in rows))
+        self.assertIn({"metric": "generator.field_duty", "label": "generator.field_duty", "unit": "%"}, rows)
+        record = self.manager.get(opened["id"], self.owner)
+        record["context"].pop("catalog")
+        self.assertEqual(self.manager.public(record)["catalog"], [])
+        record["event"] = {"kind": "episode", "id": "1"}
+        self.assertNotIn("catalog", self.manager.public(record))
+
     def test_setup_proposal_requires_exact_explicit_approval_and_can_be_removed(self):
         from tests.test_custom_warnings import RULE
         self.runner.run = lambda *_: json.dumps({"explanation": "Proposed only, in volts", "proposal": RULE})

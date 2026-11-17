@@ -453,6 +453,10 @@ a { color: var(--blue); }
 .msg--error .chat-msg__who { color: var(--red); }
 .chat-msg__text { margin: 0; line-height: 1.45; }
 .chat-msg--progress .chat-msg__text { color: var(--text-2); }
+.chat-monitor { flex: none; }
+.chat-monitor .disc__body { max-height: 32vh; overflow-y: auto; overscroll-behavior: contain; }
+.chat-monitor__list { margin: 0 0 8px; padding-left: 20px; columns: 2 240px; font-size: 14px; overflow-wrap: anywhere; }
+.chat-monitor__rule { margin: 0; font-size: 14px; }
 .chat-saved { flex: none; margin-top: 8px; }
 .chat-saved__row { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 4px 0; border-top: 1px solid var(--line); }
 .chat-saved__row:first-child { border-top: 0; }

@@ -33,7 +33,7 @@ from projects.vehicle_data.assistant_slot import ModelSlot
 from projects.vehicle_data import dtc_research_service
 from projects.vehicle_data.engine_off_voltage import _atomic_json
 from projects.vehicle_data.event_history import GUIDE as EVENT_SYSTEM_GUIDE
-from projects.vehicle_data.custom_warnings import catalog, validate_rule, load_rules, MAX_RULES
+from projects.vehicle_data.custom_warnings import catalog, catalog_summary, validate_rule, load_rules, MAX_RULES
 
 DEFAULT_SOCKET = "/run/van-telemetry-advisor/api.sock"
 DEFAULT_STATE = "/var/lib/van-telemetry-advisor"
@@ -590,8 +590,10 @@ class WarningChatManager:
 
     @staticmethod
     def public(chat):
-        return json.loads(json.dumps({key: chat[key] for key in
-            ("id", "event", "title", "created_at", "evidence_at", "turns")}))
+        reply = {key: chat[key] for key in ("id", "event", "title", "created_at", "evidence_at", "turns")}
+        if chat["event"] == {"kind": "setup", "id": "new-warning"}:
+            reply["catalog"] = catalog_summary((chat.get("context") or {}).get("catalog"))
+        return json.loads(json.dumps(reply))
 
     def open_chat(self, owner, payload):
         require_keys(payload, {"event", "request_id"}, {"new_chat", "settings"})

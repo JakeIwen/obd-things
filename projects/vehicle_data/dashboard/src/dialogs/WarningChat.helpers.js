@@ -71,9 +71,31 @@ export const TEXT = Object.freeze({
   confirmApply: "Add this exact monitoring rule? It will use recorded telemetry only.",
   confirmRemove: "Remove this custom warning?",
   confirmNewChat: "Refresh the event evidence and start a new explanation? This conversation and its original evidence remain saved on the Pi.",
+  monitorTitle: "What you can monitor",
+  monitorRule: (min, max) => `A rule fires when a value stays above or below your number for ${min} to ${max} readings in a row. Anything else needs a development task.`,
   askLabel: "Ask a follow-up",
   askPlaceholder: "What does this mean for the van?",
 });
+
+// Persistence limits of a custom rule: custom_warnings.validate_rule (persistence_observations).
+export const RULE_READINGS = Object.freeze({min: 2, max: 60});
+
+/**
+ * The setup dialog's "What you can monitor" disclosure. Only a setup chat whose reply carries a
+ * non-empty `catalog` (an older advisor sends none) shows it.
+ */
+export function monitorView(chat) {
+  const rows = chat?.event?.kind === SETUP_EVENT.kind && Array.isArray(chat.catalog) ? chat.catalog : [];
+  const items = rows
+    .filter((row) => row && typeof row.metric === "string")
+    .map((row) => ({key: row.metric, text: row.unit ? `${row.label || row.metric} (${row.unit})` : String(row.label || row.metric)}));
+  return {
+    visible: items.length > 0,
+    summary: `${TEXT.monitorTitle} (${items.length})`,
+    rows: items,
+    rule: TEXT.monitorRule(RULE_READINGS.min, RULE_READINGS.max),
+  };
+}
 
 export const confirmRemoveSaved = (title) => `Remove “${title}”?`;
 
@@ -428,6 +450,7 @@ export function createChatController(deps) {
       effort: s.effort,
       saved: {...s.saved, rows: s.saved.rows.map((row) => ({...row, removing: s.removing.has(row.id)}))},
       transcript: s.transcript,
+      monitor: monitorView(s.chat),
       timing: {visible: Boolean(last?.diagnostics), text: timingText(last?.diagnostics), open: s.timingOpen},
       proposal: proposal
         ? {visible: true, text: proposalText(last), applied: last.applied === true, appliedText: appliedText(last.applied === true), open: s.proposalOpen}

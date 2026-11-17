@@ -304,6 +304,21 @@ describe("formatting", () => {
     assert.equal(H.TEXT.setupWaiting, "Working on the warning setup…");
   });
 
+  test("monitor view lists a setup chat's catalog and hides otherwise", () => {
+    const setup = chat([turn()], { event: H.SETUP_EVENT, catalog: [
+      { metric: "battery.voltage", label: "battery.voltage", unit: "V" },
+      { metric: "engine.rpm", label: "engine.rpm", unit: "" }] });
+    const v = H.monitorView(setup);
+    assert.equal(v.visible, true);
+    assert.equal(v.summary, "What you can monitor (2)");
+    assert.deepEqual(v.rows, [{ key: "battery.voltage", text: "battery.voltage (V)" }, { key: "engine.rpm", text: "engine.rpm" }]);
+    assert.equal(v.rule, "A rule fires when a value stays above or below your number for 2 to 60 readings in a row. Anything else needs a development task.");
+    assert.equal(H.monitorView(chat([turn()], { catalog: setup.catalog })).visible, false);
+    assert.equal(H.monitorView(chat([turn()], { event: H.SETUP_EVENT })).visible, false);
+    assert.equal(H.monitorView(chat([turn()], { event: H.SETUP_EVENT, catalog: [] })).visible, false);
+    assert.equal(H.monitorView(null).visible, false);
+  });
+
   test("proposal text and applied text", () => {
     const t = turn({ state: "complete", proposal_id: "p1", proposal_unit: "°F", proposal: {
       title: "Coolant above 230", metric: "engine.coolant_temperature", operator: "above", threshold: 230,

@@ -73,11 +73,18 @@ export function demoExplainChat(nowMs) {
   };
 }
 
+/** A small illustrative slice of the advisor's catalog summary (the real one lists every metric). */
+const SETUP_CATALOG = Object.freeze([
+  ["battery.voltage", "V"], ["engine.coolant_temp", "°F"], ["engine.rpm", "rpm"],
+  ["generator.field_duty", "%"], ["vehicle.speed", "mph"],
+].map(([metric, unit]) => Object.freeze({metric, label: metric, unit})));
+
 /** The Add Early Warning chat: one request, one drafted proposal that is not installed. */
 export function demoSetupChat(nowMs) {
   return {
     id: SETUP_CHAT_ID, title: "Add Early Warning", event: {kind: "setup", id: "new-warning"},
     created_at: iso(nowMs - 2 * MINUTE_MS), evidence_at: iso(nowMs - 2 * MINUTE_MS),
+    catalog: SETUP_CATALOG,
     turns: [completeTurn(nowMs, SETUP_QUESTION, {
       assistant: SETUP_ANSWER, proposal: SETUP_PROPOSAL, proposal_unit: "°F", proposal_id: PROPOSAL_ID, applied: false,
     })],

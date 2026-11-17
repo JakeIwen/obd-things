@@ -10,6 +10,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import * as H from "./WarningChat.helpers.js";
 import { useModalDialog } from "./modalDialog.js";
+import { Disclosure } from "../components/Card.jsx";
 import AssistantPairing from "../components/AssistantPairing.jsx";
 
 /** The controller is created once per mounted dialog; every state change re-renders from its snapshot. */
@@ -178,6 +179,16 @@ export default function WarningChat({ open, mode, context, onClose, onWarningsCh
           </label>
         </div>
         {snap.pairing ? <AssistantPairing codeRef={codeRef} onSubmit={submitCode} /> : null}
+        {snap.monitor.visible ? (
+          <div class="chat-monitor">
+            <Disclosure summary={snap.monitor.summary}>
+              <ul class="chat-monitor__list">
+                {snap.monitor.rows.map(row => <li key={row.key}>{row.text}</li>)}
+              </ul>
+              <p class="muted chat-monitor__rule">{snap.monitor.rule}</p>
+            </Disclosure>
+          </div>
+        ) : null}
         <div class="msgs chat-log" role="log" aria-label="Warning conversation" ref={logRef} onScroll={onLogScroll}>
           {snap.transcript.rows.map(row => (
             <article key={row.key} class={rowClass(row)}>
