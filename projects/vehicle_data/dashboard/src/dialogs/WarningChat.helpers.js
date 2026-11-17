@@ -19,8 +19,15 @@
  * listener" means the capability is off for this web listener.
  */
 import { fmtTime } from "../format.js";
+import {
+  ACCESS_CODE_RE, ACCESS_TEXT, CLIENT_ID_RE, STORAGE_PREFIX, buildRequest, createStorage, ensureClientId, isValidAccessCode,
+  randomId, requestHeaders,
+} from "../assistantAccess.js";
 
-export const STORAGE_PREFIX = "van-warning-chat.";
+export {
+  ACCESS_CODE_RE, CLIENT_ID_RE, STORAGE_PREFIX, buildRequest, createStorage, ensureClientId, isValidAccessCode, randomId, requestHeaders,
+};
+
 export const STATUS_PATH = "/v1/assistant/status";
 export const CHATS_PATH = "/v1/assistant/chats";
 export const REQUEST_TIMEOUT_MS = 20000;
@@ -28,25 +35,18 @@ export const PENDING_RETRY_MS = 200;
 export const PENDING_MAX_TRIES = 35;
 export const POLL_MS = 1000;
 export const MAX_QUESTION_CHARS = 2000;
-export const ACCESS_CODE_RE = /^[A-Za-z0-9_-]{32,128}$/;
-export const CLIENT_ID_RE = /^[a-f0-9]{64}$/;
 export const CHAT_ID_RE = /^[a-f0-9]{32}$/;
 export const WARNING_ID_RE = /^[a-f0-9]{64}$/;
 export const SETUP_EVENT = Object.freeze({kind: "setup", id: "new-warning"});
 
 /** Every user-visible string, kept identical to the old dialog where it had one. */
 export const TEXT = Object.freeze({
+  ...ACCESS_TEXT,
   eyebrow: "ASK CODEX",
   defaultTitle: "Warning explanation",
   setupTitle: "Add Early Warning",
   intro: "Local Codex · Uses your ChatGPT sign-in and requires internet access",
   setupEvidence: "Propose a trigger, review its settings, then approve it. No vehicle actions.",
-  pairingLabel: "Assistant access code",
-  pairingHintBefore: "On the Pi, read ",
-  pairingHintPath: "/var/lib/van-telemetry-advisor/access-code",
-  pairingHintAfter: " and paste the code here. This is not an OpenAI API key.",
-  pairingPrompt: "Connect this browser once using the assistant access code from the Pi",
-  incompleteCode: "Enter the complete assistant access code",
   disabled: "This dashboard server needs the local warning-chat backend enabled",
   opening: "Opening the event conversation…",
   ready: "Ready for a follow-up",
@@ -75,49 +75,6 @@ export const TEXT = Object.freeze({
 });
 
 export const confirmRemoveSaved = (title) => `Remove “${title}”?`;
-
-/* ---------- storage and identity ---------- */
-
-/** Per-origin localStorage wrapper; every access is guarded (private mode, denied, missing). */
-export function createStorage(backend) {
-  const store = () => (backend === undefined ? globalThis.localStorage : backend);
-  return {
-    get(key) {
-      try {
-        const value = store()?.getItem(STORAGE_PREFIX + key);
-        return value === undefined ? null : value;
-      } catch (_error) {
-        return null;
-      }
-    },
-    set(key, value) {
-      try { store()?.setItem(STORAGE_PREFIX + key, value); } catch (_error) { /* ignore */ }
-    },
-    remove(key) {
-      try { store()?.removeItem(STORAGE_PREFIX + key); } catch (_error) { /* ignore */ }
-    },
-  };
-}
-
-/** Lower-case hex string of `bytes` random bytes. */
-export function randomId(bytes, cryptoLike = globalThis.crypto) {
-  const values = new Uint8Array(bytes);
-  if (cryptoLike && typeof cryptoLike.getRandomValues === "function") cryptoLike.getRandomValues(values);
-  else for (let index = 0; index < bytes; index += 1) values[index] = Math.floor(Math.random() * 256);
-  return Array.from(values, (value) => value.toString(16).padStart(2, "0")).join("");
-}
-
-/** The browser's random chat-client id (64 hex), created once and kept per origin. */
-export function ensureClientId(storage, random = randomId) {
-  let client = storage.get("client");
-  if (!CLIENT_ID_RE.test(client || "")) {
-    client = random(32);
-    storage.set("client", client);
-  }
-  return client;
-}
-
-export const isValidAccessCode = (code) => ACCESS_CODE_RE.test(String(code || ""));
 
 /* ---------- event selection and titles ---------- */
 
@@ -152,20 +109,6 @@ export function dialogTitle(mode, context) {
 export const contextKey = (mode, context) => JSON.stringify([mode === "add-warning" ? "add-warning" : "explain", eventSelector(mode, context), dialogTitle(mode, context)]);
 
 /* ---------- requests ---------- */
-
-export function requestHeaders(key, client) {
-  return {
-    "Content-Type": "application/json",
-    "X-Van-Assistant-Key": key || "",
-    "X-Van-Chat-Client": client || "",
-  };
-}
-
-export function buildRequest(method, path, payload, identity) {
-  const init = {method, cache: "no-store", headers: requestHeaders(identity?.key, identity?.client)};
-  if (payload !== undefined && payload !== null) init.body = JSON.stringify(payload);
-  return {url: path, init};
-}
 
 export function chatPath(chatId, action) {
   if (!CHAT_ID_RE.test(String(chatId || ""))) throw new Error("Invalid conversation id");

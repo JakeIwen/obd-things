@@ -10,6 +10,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import * as H from "./WarningChat.helpers.js";
 import { useModalDialog } from "./modalDialog.js";
+import AssistantPairing from "../components/AssistantPairing.jsx";
 
 /** The controller is created once per mounted dialog; every state change re-renders from its snapshot. */
 function useController(onWarningsChangedRef) {
@@ -35,17 +36,6 @@ function rowClass(row) {
 
 function Options({ choices }) {
   return choices.map(choice => <option key={choice.value} value={choice.value}>{choice.label}</option>);
-}
-
-function PairingForm({ codeRef, onSubmit }) {
-  return (
-    <form class="chat-pair" onSubmit={onSubmit}>
-      <label class="field" for="chat-code">{H.TEXT.pairingLabel}</label>
-      <p class="muted chat-hint">{H.TEXT.pairingHintBefore}<code>{H.TEXT.pairingHintPath}</code>{H.TEXT.pairingHintAfter}</p>
-      <input id="chat-code" class="input" type="password" autocomplete="off" maxLength={128} required ref={codeRef} />
-      <div class="btn-row"><button type="submit" class="btn btn--primary">Connect</button></div>
-    </form>
-  );
 }
 
 function SavedWarnings({ saved, onRemove }) {
@@ -187,7 +177,7 @@ export default function WarningChat({ open, mode, context, onClose, onWarningsCh
             </select>
           </label>
         </div>
-        {snap.pairing ? <PairingForm codeRef={codeRef} onSubmit={submitCode} /> : null}
+        {snap.pairing ? <AssistantPairing codeRef={codeRef} onSubmit={submitCode} /> : null}
         <div class="msgs chat-log" role="log" aria-label="Warning conversation" ref={logRef} onScroll={onLogScroll}>
           {snap.transcript.rows.map(row => (
             <article key={row.key} class={rowClass(row)}>
