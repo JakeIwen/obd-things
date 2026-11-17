@@ -100,6 +100,7 @@ async function applyDemoScene(scene) {
     const van = window.__van;
     if (!van || !van.store || !van.link) throw new Error("window.__van is unavailable");
     van.link.stop();
+    if (van.historySeed) van.historySeed.cancel();
     // Let any already-queued stream callback retire before the fixture becomes authoritative.
     await new Promise((resolve) => setTimeout(resolve, 250));
     const store = van.store;

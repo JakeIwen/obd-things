@@ -6,6 +6,7 @@ import {DAY_MS, HOUR_MS, MINUTE_MS, buildDemoScene, iso} from "./demo_data.mjs";
 import {DEMO_OPEN_EVENT_ID, DEMO_OPEN_EVENT_RULE, DEMO_RR_BASELINE, OPENED_MINUTES_AGO} from "./demo_events.mjs";
 import radarService from "../../radar_service_alignment.json" with {type: "json"};
 import dtcIgnore from "../../dtc_ignore.json" with {type: "json"};
+import historyRecent from "../../history_recent.json" with {type: "json"};
 const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 
 /** Minutes after the demo drive ends at which the parked captures are taken. */
@@ -301,6 +302,11 @@ const get = (pathname, json, status = 200) => ({method: "GET", pathname, prefix:
 function listenerRoutes(scene, summary, web) {
   return [
     get("/v2/summary", summary),
+    // Every capture loads parked, so the page's own history seed finds nothing recent; each variant
+    // then seeds its scene through __demo.apply, which also cancels that seed.
+    get(historyRecent.path, {available: true, generated_at: iso(scene.nowMs), window_seconds: historyRecent.window_seconds,
+      bucket_seconds: historyRecent.bucket_seconds, at_basis: historyRecent.at_basis,
+      metrics: Object.fromEntries(historyRecent.metrics.map((name) => [name, []]))}),
     get("/v1/maintenance", summary.maintenance),
     get(dtcIgnore.path, summary.dtc_ignores),
     get("/v1/radar/alignment-reference", demoRadarReference(scene)),

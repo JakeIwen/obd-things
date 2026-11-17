@@ -12,18 +12,10 @@ import { effect, signal } from "@preact/signals";
 import * as store from "../store.js";
 import { createRing } from "../ring.js";
 import { DRIVER_QUALITIES } from "../store.js";
+import { RECENT_METRICS } from "../historySeed.helpers.js";
 
-export const SPARK_METRICS = [
-  "engine.coolant_temperature",
-  "transmission.oil_temperature",
-  "engine.oil_pressure",
-  "battery.voltage",
-  "engine.crankshaft_power",
-  "engine.vvt_oil_temperature",
-  "vehicle.speed",
-  "engine.rpm",
-  "generator.field_duty", // Drive page 2
-];
+/** The Drive sparkline metrics: the list the history route serves (history_recent.json). */
+export const SPARK_METRICS = RECENT_METRICS;
 
 const rings = new Map();
 
@@ -52,6 +44,19 @@ export function ringFor(name) {
     rings.set(name, r);
   }
   return r;
+}
+
+/**
+ * Seed one metric's ring from history (see `ring.seed`: live points win, a re-seed replaces the
+ * earlier seed) and ask the sparklines to redraw. Never called with an empty list: that would
+ * erase an earlier seed, such as the demo scene's.
+ * @param {string} name
+ * @param {{t: number, value: number}[]} points epoch-ms points
+ * @param {{nowMono: number, nowEpochMs: number}} mapping
+ */
+export function seedRing(name, points, mapping) {
+  if (!points.length) return;
+  if (ringFor(name).seed(points, mapping) > 0) bump();
 }
 
 // Trip distance: integrate live speed samples while the engine runs. The

@@ -48,6 +48,7 @@ async function applyDemoInPage(seedDemoSparklines, demo, name) {
   const variant = demo.variants[name];
   const scene = demo.scene;
   van.link.stop();
+  if (van.historySeed) van.historySeed.cancel();
   // Let any queued stream callback retire before the demo state becomes authoritative.
   await new Promise((resolve) => setTimeout(resolve, 250));
   const store = van.store;

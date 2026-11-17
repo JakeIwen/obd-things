@@ -22,7 +22,8 @@ import "./styles/night.css";
 import "./styles/topbar-controls.css";
 import * as store from "./store.js";
 import { createLink } from "./link.js";
-import { startRings, ringFor } from "./app/rings.js";
+import { startRings, ringFor, seedRing } from "./app/rings.js";
+import { startHistorySeed } from "./app/historySeed.js";
 import { App } from "./app/App.jsx";
 import { runtime } from "./app/runtime.js";
 import { startOverspeedChime } from "./overspeed.js";
@@ -39,6 +40,7 @@ const link = createLink({
 
 runtime.link = link;
 startRings();
+const historySeed = startHistorySeed({ store, fetchImpl: (url, init) => fetch(url, init), seed: seedRing });
 startOverspeedChime();
 
 const root = document.getElementById("app");
@@ -47,4 +49,4 @@ render(<App />, root);
 link.start();
 
 // Stable hooks for tools/measure.mjs and manual debugging; no behaviour depends on them.
-window.__van = { link, store, ringFor };
+window.__van = { link, store, ringFor, historySeed };
