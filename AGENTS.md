@@ -551,6 +551,7 @@ caller has retired, with owner/callers/retirement stated in the wrapper header.
 | `projects/vehicle_data/bcan_auxiliary.py` | Broker drive_helper_launch | B-CAN auxiliary helper |
 | `projects/vehicle_data/cop_can_wake.py` | van-cop-can-wake.service | Fixed wake supervisor |
 | `projects/vehicle_data/warning_chat.py` | van-telemetry-advisor.service | Advisory chat worker |
+| `projects/vehicle_data/dtc_research_worker.py` | van-telemetry-research.service | DTC research worker: the only launcher of research CLIs |
 | `projects/vehicle_data/van_scan_harvest.py` | van-scan-harvest.service | Completed-capture DTC harvest |
 | `projects/vehicle_data/cruise_harvest.py` | van-cruise-harvest.service | Completed-capture cruise harvest |
 | `projects/vehicle_data/cruise_summary.py` | cruise-summary-reduce compute task | Offline cruise summary |

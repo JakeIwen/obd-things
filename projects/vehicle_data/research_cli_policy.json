@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "claude": {
+    "enabled": true,
+    "required_flags": [
+      "--print", "--input-format", "--output-format", "--verbose", "--session-id", "--resume",
+      "--model", "--effort", "--system-prompt", "--tools", "--allowed-tools", "--permission-mode",
+      "--permission-prompts", "--setting-sources", "--strict-mcp-config", "--restricted",
+      "--disable-slash-commands", "--max-budget-usd"
+    ],
+    "allowed_tools": ["WebSearch", "WebFetch"],
+    "models": ["opus", "fable", "sonnet", "haiku"],
+    "budget_usd": {"report": 5, "follow_up": 2}
+  },
+  "codex": {
+    "enabled": false,
+    "reason": "Codex is not yet verified for research on this CLI version",
+    "allowed_local_tools": [],
+    "allowed_items": ["agent_message", "reasoning", "web_search", "error"],
+    "features_disabled": [
+      "shell_tool", "unified_exec", "code_mode", "code_mode_host", "apps", "plugins", "remote_plugin",
+      "hooks", "multi_agent", "multi_agent_v2", "collaboration_modes", "browser_use",
+      "browser_use_external", "in_app_browser", "computer_use", "view_image", "image_generation",
+      "goals", "memories", "shell_snapshot", "skill_search", "tool_suggest", "sleep_tool"
+    ]
+  },
+  "memory": {
+    "measured": false,
+    "cli_digest": null,
+    "measured_at": null,
+    "provisional": {"launch_floor_mib": 900, "tree_cap_mib": 700, "critical_mib": 300},
+    "measured_values": null,
+    "reserve_mib": 384
+  }
+}

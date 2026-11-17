@@ -1,0 +1,45 @@
+[Unit]
+Description=Web research runner for diagnostic codes (Claude CLI; no LAN, no owner home)
+Requires=var-lib-vanresearch.mount
+After=var-lib-vanresearch.mount network-online.target systemd-tmpfiles-setup.service
+Wants=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+WatchdogSec=30
+KillMode=control-group
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/dev/obd-things
+ExecStart=/usr/bin/python3 -m projects.vehicle_data.dtc_research_worker
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=van-telemetry-research
+RuntimeDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateDevices=true
+ProtectSystem=strict
+# Home is an empty read-only tmpfs: only the checkout is visible, never the owner's files.
+ProtectHome=tmpfs
+BindReadOnlyPaths=/home/pi/dev/obd-things
+BindReadOnlyPaths=/home/pi/dev/obd-things/projects/vehicle_data/systemd/research-resolv.conf:/etc/resolv.conf
+InaccessiblePaths=-/home/pi/dev/obd-things/tmp -/home/pi/dev/obd-things/.git -/home/pi/dev/obd-things/AGENTS.secret.md
+InaccessiblePaths=-/run/van-telemetry -/run/van-telemetry-advisor -/run/dbus -/run/user -/run/tailscale -/var/lib/van-telemetry -/var/lib/van-telemetry-advisor
+ReadWritePaths=/var/lib/vanresearch
+TemporaryFileSystem=/tmp:size=32M,mode=1777
+# Research models fetch web pages: no LAN, Tailscale, link-local or loopback addresses.
+IPAddressDeny=localhost link-local multicast 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 172.16.0.0/12 192.168.0.0/16 fc00::/7
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+Nice=15
+IOSchedulingClass=idle
+CPUQuota=30%
+# Not enforced while the kernel runs with cgroup_disable=memory; see docs/dtc-research.md.
+MemoryMax=768M
+OOMScoreAdjust=800
+TasksMax=96
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

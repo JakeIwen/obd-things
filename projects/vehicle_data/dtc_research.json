@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "routes": {
+    "models": "/v1/assistant/models",
+    "list": "/v1/assistant/dtc-research",
+    "codePrefix": "/v1/assistant/dtc-research/code/",
+    "runPrefix": "/v1/assistant/dtc-research/run/",
+    "progressSuffix": "/progress",
+    "post": "/v1/assistant/dtc-research"
+  },
+  "actions": {"start": "start", "ask": "ask", "cancel": "cancel"},
+  "states": {"running": "running", "done": "done", "failed": "failed", "cancelled": "cancelled"},
+  "turnStates": {"running": "running", "complete": "complete", "failed": "failed", "cancelled": "cancelled"},
+  "modes": {"initial": "initial", "resumed": "resumed", "replayed": "replayed"},
+  "summaryNotes": {"missing": "missing", "truncated": "truncated"},
+  "continueModes": {"resume": "resume", "replay": "replay", "none": "none"},
+  "phases": {
+    "preparing": "Gathering what the Pi knows about this code",
+    "starting": "Starting the model",
+    "searching": "Searching the web",
+    "reading": "Reading sources",
+    "writing": "Writing the answer",
+    "finishing": "Finishing"
+  },
+  "progressPollMs": 1000,
+  "modelsPollMs": 2000,
+  "modelsPollMax": 15,
+  "questionMax": 2000,
+  "summaryMax": 140,
+  "maxTurns": 24,
+  "maxRuns": 60,
+  "patterns": {
+    "moduleKey": "^[a-z][a-z0-9_]{0,39}$",
+    "code": "^[PBCU][0-9A-F]{4}(-[0-9A-F]{2})?$",
+    "runId": "^[a-f0-9]{32}$",
+    "requestId": "^[a-f0-9]{32}$",
+    "modelId": "^[A-Za-z0-9][A-Za-z0-9._:\\[\\]-]{0,119}$"
+  },
+  "providers": {
+    "claude": {"label": "Claude"},
+    "codex": {"label": "GPT (Codex)"}
+  },
+  "effortOrder": ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
+  "errorReasons": {
+    "invalid_request": 400,
+    "not_found": 404,
+    "run_busy": 409,
+    "turn_limit": 409,
+    "record_full": 409,
+    "cannot_continue": 409,
+    "busy": 429,
+    "rate_limited": 429,
+    "daily_limit": 429,
+    "provider_unavailable": 503,
+    "worker_unavailable": 503,
+    "storage_error": 503
+  },
+  "turnReasons": [
+    "timeout", "cancelled", "interrupted", "worker_unavailable", "provider_error", "auth",
+    "upstream_rate_limit", "budget_exceeded", "policy_violation", "protocol_error",
+    "space_exhausted", "memory_exhausted", "daily_limit"
+  ],
+  "sizes": {
+    "reportEncodedBytes": 98304,
+    "answerEncodedBytes": 49152,
+    "questionEncodedBytes": 12288,
+    "runEncodedBytes": 393216,
+    "followUpReserveBytes": 63488,
+    "contextEncodedBytes": 16384,
+    "recordBytes": 430080,
+    "replayPromptBytes": 163840
+  },
+  "limits": {
+    "startsPerWindow": 10,
+    "windowSeconds": 60,
+    "dailyLaunches": 60,
+    "dailyWindowSeconds": 86400,
+    "requestIdsPerRun": 48
+  },
+  "timeouts": {
+    "reportSeconds": 600,
+    "followUpSeconds": 300,
+    "discoverySeconds": 30,
+    "maintenanceSeconds": 1200
+  },
+  "worker": {
+    "socket": "/run/van-telemetry-research/worker.sock",
+    "volume": "/var/lib/vanresearch",
+    "cliRoot": "/opt/van-research-cli",
+    "outcomesKept": 16,
+    "tombstonesKept": 4096
+  }
+}

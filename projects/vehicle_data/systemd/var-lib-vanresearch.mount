@@ -1,0 +1,12 @@
+[Unit]
+Description=Fixed-size volume for DTC research CLI state (hard SD bound)
+ConditionPathExists=/var/lib/vanresearch.img
+
+[Mount]
+What=/var/lib/vanresearch.img
+Where=/var/lib/vanresearch
+Type=ext4
+Options=loop,nodev,nosuid,noexec,noatime
+
+[Install]
+WantedBy=multi-user.target

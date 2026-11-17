@@ -23,6 +23,8 @@ ProtectSystem=strict
 ProtectHome=read-only
 # Codex owns its existing ChatGPT sign-in and may need to refresh it.
 ReadWritePaths=/home/pi/.codex
+# The research volume holds the research service's credentials; the warning chat never needs it.
+InaccessiblePaths=-/var/lib/vanresearch
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 Nice=15
 IOSchedulingClass=idle
