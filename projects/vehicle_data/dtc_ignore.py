@@ -24,6 +24,7 @@ API_PATH = VOCABULARY["path"]
 SUMMARY_KEY = VOCABULARY["summary_key"]
 IGNORE, RESTORE = (VOCABULARY["actions"][name] for name in ("ignore", "restore"))
 NOTE_MAX_CHARS = VOCABULARY["note_max_chars"]
+NOTE_MAX_BYTES = VOCABULARY["note_max_bytes"]
 MAX_IGNORED = VOCABULARY["max_ignored"]
 LOG_LIMIT = VOCABULARY["log_limit"]
 FILE_NAME = "dtc-ignores.json"
@@ -50,9 +51,20 @@ def _validate_identity(payload: dict) -> None:
         raise ValueError("Invalid diagnostic code")
 
 
+def _note_bytes(note: str) -> int:
+    try:
+        return len(note.encode("utf-8"))
+    except UnicodeEncodeError:  # a lone surrogate from a JSON escape
+        return NOTE_MAX_BYTES + 1
+
+
 def _validate_note(note: object) -> None:
-    if not isinstance(note, str) or len(note) > NOTE_MAX_CHARS or _CONTROL.search(note):
-        raise ValueError(f"Note must be text of at most {NOTE_MAX_CHARS} characters")
+    # The byte bound keeps the worst accepted list (500 entries plus the audit log, all with
+    # maximal notes) under MAX_FILE_BYTES and the API reply limit.
+    if (not isinstance(note, str) or len(note) > NOTE_MAX_CHARS or _note_bytes(note) > NOTE_MAX_BYTES
+            or _CONTROL.search(note)):
+        raise ValueError(f"Note must be text of at most {NOTE_MAX_CHARS} characters "
+                         f"and {NOTE_MAX_BYTES} bytes")
 
 
 def validate_request(payload: object) -> dict:
@@ -188,6 +200,10 @@ class DtcIgnoreStore:
         entry = {"action": body["action"], "module_key": key[0], "fca_display": key[1],
                  "note": note, "request_id": body["request_id"], "at": stamp}
         updated = {**self.data, "ignored": ignored, "log": [*self.data["log"], entry][-LOG_LIMIT:]}
+        # A file the next start would refuse (or a reply the relay would cut) is never accepted.
+        serialized = len(json.dumps(updated, sort_keys=True, separators=(",", ":"))) + 1
+        if serialized > MAX_FILE_BYTES:
+            raise LimitReached("The ignored-code list is too large to save; restore some codes first")
         # Commit to disk before acknowledging; a failed write leaves memory unchanged.
         if self.path is not None:
             _atomic_json(self.path, updated)

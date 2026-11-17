@@ -92,6 +92,38 @@ class StoreTests(unittest.TestCase):
         self.assertNotIn("log", self.store.snapshot())
         self.assertEqual(DtcIgnoreStore(self.path).error, None)
 
+    def test_the_largest_accepted_state_reloads_and_fits_the_reply_limit(self):
+        # Supplementary-plane characters are the widest per byte once JSON escapes them.
+        note = "\U0001F600" * (dtc_ignore.NOTE_MAX_BYTES // 4)
+        for index in range(dtc_ignore.MAX_IGNORED):
+            code, _ = self.store.request(ignore(f"B{index:04d}-00", note, f"ign_test_{index:06d}"))
+            self.assertEqual(code, 200)
+        self.assertLessEqual(self.path.stat().st_size, dtc_ignore.MAX_FILE_BYTES)
+        reloaded = DtcIgnoreStore(self.path)
+        self.assertIsNone(reloaded.error)
+        reply = json.dumps(self.store.snapshot(), sort_keys=True, separators=(",", ":"))
+        self.assertLessEqual(len(reply.encode()), 1_048_576)
+
+    def test_a_note_over_the_byte_bound_is_refused_even_within_the_character_bound(self):
+        note = "\U0001F600" * (dtc_ignore.NOTE_MAX_BYTES // 4 + 1)
+        self.assertLessEqual(len(note), dtc_ignore.NOTE_MAX_CHARS)
+        code, reply = self.store.request(ignore("B0001-00", note))
+        self.assertEqual((code, reply["reason"]), (400, "invalid_request"))
+        self.assertEqual(self.store.snapshot()["ignored"], [])
+
+    def test_a_write_the_next_start_would_refuse_is_refused_before_the_commit(self):
+        with mock.patch.object(dtc_ignore, "MAX_FILE_BYTES", 2000):
+            self.assertEqual(self.store.request(ignore("B0001-00", "x" * 150, "ign_test_000001"))[0], 200)
+            code, reply = None, None
+            for index in range(2, 30):
+                code, reply = self.store.request(ignore(f"B{index:04d}-00", "x" * 150, f"ign_test_{index:06d}"))
+                if code != 200:
+                    break
+            self.assertEqual((code, reply["reason"]), (409, "limit_reached"))
+            saved_before = self.path.read_text()
+        self.assertLessEqual(len(saved_before.encode()), 2000)
+        self.assertIsNone(DtcIgnoreStore(self.path).error)
+
     def test_bad_requests_are_refused_and_change_nothing(self):
         bad = [
             ignore(module="not_a_module"), ignore(module=7), ignore(code=""), ignore(code="B1632 15"),
