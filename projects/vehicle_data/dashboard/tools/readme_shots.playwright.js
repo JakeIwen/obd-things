@@ -112,6 +112,13 @@ async (page) => {
       await page.locator("dialog[open] input[type=checkbox]").check();
       await page.waitForTimeout(400);
     },
+    // A finished simulated research report on the right low-beam code; nothing is sent to a model.
+    "19-code-research-report.png": async () => {
+      await demo.open("running", {view: "health"});
+      await click(".dtc-row__head", "B162E-15");
+      await click(".view button", "Open research");
+      await dialogReady("Research with AI");
+    },
   };
   const taken = [];
   for (const [file, prepare] of Object.entries(shots)) {
