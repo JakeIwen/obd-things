@@ -23,6 +23,7 @@ import {
   TEXT as OIL_TEXT,
 } from "../dialogs/OilChange.helpers.js";
 import { isUnavailableCanState } from "../canAvailability.js";
+import { excludeIgnored } from "../dtcIgnore.helpers.js";
 
 // ---------------------------------------------------------------------------
 // constants
@@ -736,11 +737,12 @@ function dtcGroup(dtcs, name) {
 /**
  * Codes summary: current count (from `group_counts`, since groups are
  * truncated) with the first two current titles and the last scan time.
+ * Codes the owner ignored (`ignored`, `ignoreState().index`) are left out of every figure.
  * @returns {{available:boolean, line:string, sub:string, badge:{text:string, tone:string}|null,
  *   items:Array<{key:string, code:string, title:string}>, more:string}}
  */
-export function codesSummary(dtcs, now) {
-  const d = obj(dtcs);
+export function codesSummary(dtcs, now, ignored) {
+  const d = obj(excludeIgnored(dtcs, ignored).dtcs);
   if (!d) return { available: false, line: TEXT.codesLoading, sub: "", badge: null, items: [], more: "" };
   if (d.available === false) return { available: false, line: TEXT.codesUnavailable, sub: "", badge: null, items: [], more: "" };
   const counts = obj(d.group_counts) || {};

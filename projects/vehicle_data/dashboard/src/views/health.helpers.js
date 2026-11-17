@@ -15,6 +15,8 @@ import {
   DTC_GROUPS, VAN_SOURCE, obj, arr, num, str, moduleList, mergeVanScan,
   filteredSourceLine, filteredReadText, driveReadLines, filteredTime, newestSuccess, unlistedReports,
 } from "./dtcSources.helpers.js";
+import { excludeIgnored, ignoreState, recordIdentity } from "../dtcIgnore.helpers.js";
+import { moduleOptions, activeModules, filterByModules, unreturnedNote, ignoredGroup } from "./dtcCodes.helpers.js";
 export { DTC_GROUPS, VAN_SOURCE, VAN_STATUS_MASK, mergeVanScan } from "./dtcSources.helpers.js";
 
 /** Health cards in default order; ids are what the customiser stores. */
@@ -326,7 +328,36 @@ export function warningLightRequested(entry) {
   return e.warning_indicator_requested === true || arr(e.status_flags).indexOf("warning_indicator_requested") >= 0;
 }
 
-/** Row for one saved code: code, meaning, module, warning light, read note and when it was last seen. */
+/** Plain labels of a record's own status flags, for the row's detail panel. */
+function statusLabels(e) {
+  return [
+    e.current === true ? "Current" : null,
+    e.pending === true ? "Pending" : null,
+    e.confirmed === true ? "Confirmed" : null,
+    e.incomplete_only === true ? "Test not completed" : null,
+    warningLightRequested(e) ? "Warning light requested" : null,
+    str(e.status) ? "status byte " + e.status : null,
+  ].filter(Boolean);
+}
+
+/** Label/value pairs the open row shows: module, bus, first and last seen (Mountain), status flags. */
+function rowDetails(e, module) {
+  const first = str(e.first_seen_at) && parseDate(e.first_seen_at) ? filteredTime(e.first_seen_at) : null;
+  const last = str(e.last_seen_at) && parseDate(e.last_seen_at) ? filteredTime(e.last_seen_at) : null;
+  const labels = statusLabels(e);
+  return [
+    ["Module", [module, busName(e.logical_bus)].filter(Boolean).join(" · ") || null],
+    ["First seen", first],
+    ["Last seen", last],
+    ["Status", labels.length ? labels.join(" · ") : null],
+  ].filter((pair) => pair[1] !== null);
+}
+
+/**
+ * Row for one saved code: code, meaning, module, warning light, read note and when it was last seen.
+ * `id` is the code's identity (module and code; null when the record has no FCA code, so it cannot
+ * be ignored), `details` fill the open row's panel and `extra` is an optional secondary line.
+ */
 export function codeRow(entry, nowMs) {
   const e = obj(entry) || {};
   let meaning = str(e.label) || str(e.description);
@@ -345,6 +376,11 @@ export function codeRow(entry, nowMs) {
     code: codeOf(e),
     meaning: meaning || "meaning not reviewed",
     reviewed: Boolean(meaning) && e.description_reviewed !== false,
+    moduleKey: str(e.module_key),
+    fca: str(e.fca_display),
+    id: recordIdentity(e),
+    details: rowDetails(e, module),
+    extra: null,
     meta:
       [
         module,
@@ -479,7 +515,8 @@ function codeGroups(d, nowMs) {
     const summary = hidden > 0
       ? title + " · " + fmtInt(returned) + " shown · +" + fmtInt(hidden) + " more in the parked read"
       : title + " · " + fmtInt(total) + (cut ? " · showing " + returned + " of " + fmtInt(total) : "");
-    const moreText = hidden > 0
+    const unreturned = unreturnedNote(num(d.filter_unreturned?.[key]) || 0);
+    const moreText = unreturned ? unreturned : hidden > 0
       ? "The parked read counted " + fmtInt(hidden) + " more it did not return; some may be codes shown here."
       : cut && d.drive_reads?.available === true ? "+" + fmtInt(total - returned) + " more from the parked read (not returned in this list)" : null;
     groupModels.push({
@@ -501,13 +538,17 @@ function codeGroups(d, nowMs) {
 
 /**
  * Diagnostic-codes card model. Totals come from `group_counts` (the broker truncates each group at
- * `per_group_limit`, 25 today); `showing n of m` appears when a group was cut.
+ * `per_group_limit`, 25 today); `showing n of m` appears when a group was cut. Ignored codes leave
+ * their group and every count and the badge; the module filter narrows the groups but not the badge.
  * @param {object|null} dtcs `summary.dtcs` slice
  * @param {number} nowMs wall clock for labels and the one-month cut-off
  * @param {boolean} scanEnabled this listener can queue the guarded scan
+ * @param {{ignores?: object|null, modules?: string[]}} [view] `summary.dtc_ignores` slice and the
+ *   chosen module keys (none: every module)
  */
-export function codesView(dtcs, nowMs, scanEnabled) {
-  const base = { status: "ok", badge: null, lastRead: null, source: null, emptyText: null, current: null, groups: [], modules: null };
+export function codesView(dtcs, nowMs, scanEnabled, view = {}) {
+  const base = { status: "ok", badge: null, lastRead: null, source: null, emptyText: null, current: null, groups: [], modules: null,
+    filter: null, ignored: null, ignoreAvailable: false };
   if (dtcs === null || dtcs === undefined) return { ...base, status: "loading", emptyText: "Waiting for the saved code list…" };
   let d = obj(dtcs) || {};
   if (d.available === false) {
@@ -519,19 +560,24 @@ export function codesView(dtcs, nowMs, scanEnabled) {
     d = { in_vehicle_scan: van, drive_reads: d.drive_reads, groups: {}, group_counts: {}, group_returned_counts: {}, coverage: {}, modules: [] };
   }
   d = mergeVanScan(d);
-  const counts = obj(d.group_counts) || {};
-  const coverage = obj(d.coverage) || {};
+  const ignores = ignoreState(view.ignores);
+  const { dtcs: kept, found } = excludeIgnored(d, ignores.index);
+  const options = moduleOptions(kept, ignores.entries);
+  const chosen = activeModules(arr(view.modules), options);
+  const keptGroups = codeGroups(kept, nowMs);
+  const groupModels = chosen.length ? codeGroups(filterByModules(kept, chosen), nowMs) : keptGroups;
   const newest = newestSuccess(d);
+  const coverage = obj(d.coverage) || {};
   const anyRead = newest || str(coverage.last_attempt_at);
   const unlisted = unlistedReports(d);
-  const groupModels = codeGroups(d, nowMs);
-  const records = (Object.keys(counts).length ? sumCounts(counts) : groupModels.reduce((n, g) => n + g.total, 0)) +
-    sumCounts(obj(d.group_hidden_counts) || {});
+  const records = keptGroups.reduce((n, g) => n + g.total, 0);
+  const shownRecords = groupModels.reduce((n, g) => n + g.total, 0);
   const modules = modulesView(d, nowMs);
   const moduleRows = moduleList(d);
   const authoritativeZero =
     moduleRows.length > 0 &&
     records === 0 &&
+    found.size === 0 &&
     modules.gaps === 0 &&
     moduleRows.every((m) => m.result_state === "no_dtcs" && m.absence_authoritative === true);
 
@@ -541,6 +587,8 @@ export function codesView(dtcs, nowMs, scanEnabled) {
       emptyText =
         "No saved code read yet. " +
         (scanEnabled ? "The parked scan below can read the modules." : "This screen cannot start a scan.");
+    } else if (found.size > 0) {
+      emptyText = "No codes besides the ignored ones.";
     } else if (unlisted.length) {
       emptyText = "No codes listed, but " + unlisted.map((u) => u.name + " reported " +
         plural(u.count, "code", "codes") + " " + filteredTime(u.at)).join("; ") + " (list not retrieved).";
@@ -550,11 +598,14 @@ export function codesView(dtcs, nowMs, scanEnabled) {
     } else {
       emptyText = "No saved codes, but some modules did not answer fully, so a clean result is not proven.";
     }
+  } else if (shownRecords === 0) {
+    emptyText = "No saved codes in the chosen modules.";
   }
   const current = groupModels.find((g) => g.key === "current") || null;
-  const currentCount = current ? current.total : 0;
+  const keptCurrent = keptGroups.find((g) => g.key === "current") || null;
+  const currentCount = keptCurrent ? keptCurrent.total : 0;
   let badge = null;
-  if (currentCount > 0) badge = { text: countRange(current) + " current", tone: "amber" };
+  if (currentCount > 0) badge = { text: countRange(keptCurrent) + " current", tone: "amber" };
   else if (anyRead) badge = { text: moduleList(d).some((m) => m.van_read || m.drive_read || m.drive_truncated)
     ? "None shown current" : "None current", tone: "" };
   const van = obj(d.van);
@@ -567,8 +618,11 @@ export function codesView(dtcs, nowMs, scanEnabled) {
       ? plural(van.modules, "module", "modules") + " " + vanSourceLine(van.scanAt || van.lastAt, nowMs)
       : null,
     emptyText,
-    current: records > 0 ? current : null,
-    groups: records > 0 ? groupModels.filter((g) => g.key !== "current") : [],
+    current: shownRecords > 0 ? current : null,
+    groups: shownRecords > 0 ? groupModels.filter((g) => g.key !== "current") : [],
     modules,
+    filter: options.length ? { options, chosen } : null,
+    ignoreAvailable: ignores.available,
+    ignored: ignores.available && ignores.entries.length ? ignoredGroup(ignores.entries, found, chosen, nowMs, codeRow) : null,
   };
 }

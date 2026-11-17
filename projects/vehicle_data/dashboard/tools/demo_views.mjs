@@ -5,6 +5,7 @@
 import {DAY_MS, HOUR_MS, MINUTE_MS, buildDemoScene, iso} from "./demo_data.mjs";
 import {DEMO_OPEN_EVENT_ID, DEMO_OPEN_EVENT_RULE, DEMO_RR_BASELINE, OPENED_MINUTES_AGO} from "./demo_events.mjs";
 import radarService from "../../radar_service_alignment.json" with {type: "json"};
+import dtcIgnore from "../../dtc_ignore.json" with {type: "json"};
 const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 
 /** Minutes after the demo drive ends at which the parked captures are taken. */
@@ -301,6 +302,7 @@ function listenerRoutes(scene, summary, web) {
   return [
     get("/v2/summary", summary),
     get("/v1/maintenance", summary.maintenance),
+    get(dtcIgnore.path, summary.dtc_ignores),
     get("/v1/radar/alignment-reference", demoRadarReference(scene)),
     web.radar_service_enabled
       ? get(radarService.path, demoServiceAlignment())
@@ -310,6 +312,18 @@ function listenerRoutes(scene, summary, web) {
       ? get("/v1/diagnostics/dtc-jobs/current", DTC_JOB_IDLE)
       : get("/v1/diagnostics/dtc-jobs/current", {available: false, reason: "dtc_jobs_disabled", detail: "this listener is cache-only"}, 403),
   ];
+}
+
+/**
+ * The ignored-codes list as the summary carries it: the owner's real case, the LED headlight lamp
+ * codes the body module reports, ignored a couple of days before the capture.
+ */
+function demoDtcIgnores(nowMs) {
+  const note = "LED headlights";
+  return {available: true, persistent: true, storage_error: null, limit: dtcIgnore.max_ignored, ignored: [
+    {module_key: "bcm_ccan", fca_display: "B1632-15", note, ignored_at: iso(nowMs - 2 * DAY_MS)},
+    {module_key: "bcm_ccan", fca_display: "B162A-15", note, ignored_at: iso(nowMs - 2 * DAY_MS - 4 * MINUTE_MS)},
+  ]};
 }
 
 /** Parked metric records: last readings from the end of the demo drive, as the broker retains them. */
@@ -365,7 +379,7 @@ export function buildDemoViews({nowMs = Date.now(), build, summaryFixture}) {
     const web = demoWeb(build, flags);
     // Parked captures come after the drive ends, so the same opening is that much further back.
     const openedMs = nowMs - (OPENED_MINUTES_AGO + (parked ? PARKED_MINUTES_AFTER_DRIVE : 0)) * MINUTE_MS;
-    const summary = {...base, generated_at_ms: nowMs, web, maintenance: demoMaintenance(scene),
+    const summary = {...base, generated_at_ms: nowMs, web, maintenance: demoMaintenance(scene), dtc_ignores: demoDtcIgnores(nowMs),
       health: health || demoHealth(base.health, scene, parked, openedMs),
       history: demoHistory(base.history, scene, parked), status_full: demoStatus(base.status_full, scene, parked, web)};
     return {web, parked, summary, metrics: parked ? parkedMetrics(scene) : runningMetrics(scene, stationary),

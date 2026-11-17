@@ -1,0 +1,29 @@
+/* Diagnostic codes card rows (components/CodeList.jsx): a compact tappable line that opens into a
+   panel. The head is one button so the whole line is the touch target (>= 48 px). */
+.dtc-toolbar { margin: 0 0 4px; }
+.dtc-list { margin: 0; }
+.dtc-row { border-top: 1px solid var(--line); }
+.dtc-row:first-child { border-top: 0; }
+.dtc-row__head {
+  position: relative; display: block; width: 100%; min-height: 48px; padding: 10px 26px 10px 0; border: 0; background: none;
+  color: inherit; text-align: left; cursor: pointer;
+}
+.dtc-row__head::after { content: "▸"; position: absolute; top: 14px; right: 4px; color: var(--dim); font-size: 14px; }
+.dtc-row--open > .dtc-row__head::after { content: "▾"; }
+/* Two lines when closed so a long meaning does not stretch the list; the panel shows all of it. */
+.dtc-row__line {
+  display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  font-size: 16px; overflow-wrap: anywhere;
+}
+.dtc-row--open .dtc-row__line { display: block; }
+.dtc-row__extra { display: block; margin-top: 2px; font-size: 14px; color: var(--text-2); }
+.dtc-row__meta { display: block; }
+.dtc-panel { padding: 0 0 12px 8px; border-left: 3px solid var(--line-strong); margin-left: 2px; padding-left: 12px; }
+.dtc-panel__meaning { margin: 0 0 8px; font-size: 16px; overflow-wrap: anywhere; }
+.dtc-panel__note { margin: 0 0 8px; font-size: 15px; color: var(--amber); overflow-wrap: anywhere; }
+.dtc-panel__kv { margin-bottom: 10px; }
+.dtc-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; }
+.dtc-ignore { flex: 1 1 260px; min-width: 0; }
+.dtc-ignore__field { margin: 0 0 6px; }
+.dtc-ignore__hint { margin-bottom: 6px; }
+.dtc-ignored > .disc__summary { color: var(--dim); }

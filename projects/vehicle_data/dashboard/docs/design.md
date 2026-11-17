@@ -568,7 +568,7 @@ checks when stopped:
     persistent, and `storage_error` is shown.
   - A history disclosure of saved records.
 - **WARNINGS** summary: the open count, or `Nothing open · last drive 4:25 pm`. **CODES** summary: the
-  number of current codes with the first two titles. Both open Health.
+  number of current codes with the first two titles (codes the owner ignored are left out). Both open Health.
 
 ### 3.3 Health
 
@@ -591,6 +591,38 @@ checks when stopped:
   - `Pending`, `Confirmed history`, `Test not completed`, `Other status combinations` (only when
     `group_counts.other > 0`) and `Modules · n of m answered` are collapsed.
   - A group longer than the cache says how many of how many are shown.
+  - **Modules filter** (`components/MultiSelect.jsx`): a button reading `All modules`, the one name
+    or `3 modules`, with the chosen modules as removable chips beside it. It opens a panel in the
+    page flow (the cards clip overflow, so an overlay would be cut off; in the flow it also spans
+    the card and stays inside the viewport at any width) listing the modules that have codes, each
+    with a check box, its name and its count, plus `All`, `Clear` and `Done`. Focus moves into the
+    list; arrow keys, Home and End move, Space or Enter toggles, Escape, a tap outside or tabbing
+    out closes. Choosing every module is the same as none. The choice is in memory for the session
+    (`moduleFilter` in `components/CodesCard.jsx`), applies to every group including Ignored and
+    narrows the group counts, but not the badge. A group the broker cut at 25 (or whose parked
+    records a filtered read did not return) is filtered from the codes returned only and says how
+    many it left out, because an unreturned record's module is unknown.
+  - **Rows** are accordions (`components/CodeList.jsx`): a compact line (code, meaning clamped to two
+    lines, module and last seen) whose whole width is the 48 px touch target. One row is open at a
+    time (`openRow`). Its panel shows the full meaning, module and bus, first and last seen (Mountain
+    time) and the record's status flags, then an actions area. `codeRow` carries `id` (the code's
+    identity, `module_key` plus `fca_display`; null for a record with no FCA code, which cannot be
+    ignored), `details` and `extra`. More actions and a secondary line under the meaning plug in
+    through `slots.actions(row)` and `slots.extra(row)`.
+  - **Ignore permanently** (`src/dtcIgnore.js`, `dtcIgnore.helpers.js`, contract
+    `projects/vehicle_data/dtc_ignore.json`): no modal. The button reveals an optional note field
+    (`Why? e.g. LED headlights`, at most 200 characters) with `Ignore` and `Cancel`. The POST to
+    `/v1/diagnostics/dtc-ignores` carries `request_id` (reused when the same change is retried after
+    a lost answer); the list changes only from the reply, which the store publishes as the
+    `dtc_ignores` slice. A refusal shows its `detail` in the panel. The slice arrives in the
+    summary beside `dtcs`; when it is missing or `available` is false the ignore controls and the
+    Ignored group are hidden and nothing is left out.
+  - An ignored code leaves its group and every count: the card badge, the group totals, the
+    Parked Codes summary. The headline stays what the van reports besides the ignored codes.
+    `Ignored (n)` is the last group, collapsed; its rows show code, module, meaning, the note and
+    the date ignored, and their panel offers `Restore`. A card whose codes are all ignored reads
+    `No codes besides the ignored ones.`. Ignoring is display bookkeeping on the Pi; nothing is
+    cleared in the van.
 - **Guarded scan**, inside the codes card, only when `web.dtc_jobs_enabled` (the Tailscale
   listener):
   - A parked-confirmation checkbox gates `Scan`.

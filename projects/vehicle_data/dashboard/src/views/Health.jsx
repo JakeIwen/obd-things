@@ -9,14 +9,14 @@
  */
 
 import { computed } from "@preact/signals";
-import { useState } from "preact/hooks";
 import * as store from "../store.js";
 import { isHidden, orderedIds, dayClock } from "../app/derive.js";
 import { warningCards } from "../app/warningCards.js";
 import { openEvent, openChat } from "../app/dialogs.js";
 import { Card, Empty } from "../components/Card.jsx";
 import ServiceCard from "../components/ServiceCard.jsx";
-import DtcScan from "../components/DtcScan.jsx";
+import LazyDisclosure from "../components/LazyDisclosure.jsx";
+import CodesCard from "../components/CodesCard.jsx";
 import * as H from "./health.helpers.js";
 
 export const HEALTH_CARDS = H.HEALTH_CARDS;
@@ -28,26 +28,8 @@ const notesVm = computed(() => {
   void dayClock.value;
   return H.systemNotesView(warningCards.value, store.summary.health.value, Date.now());
 });
-const scanEnabled = computed(() => store.web.value.dtc_jobs_enabled === true);
-const chatEnabled = computed(() => store.web.value.warning_chat_enabled === true);
-const codesVm = computed(() => {
-  void dayClock.value;
-  return H.codesView(store.summary.dtcs.value, Date.now(), scanEnabled.value);
-});
 
-/** Disclosure whose body is built on first open (and kept afterwards). `render` returns the body. */
-function LazyDisclosure({ summary, render, cls }) {
-  const [seen, setSeen] = useState(false);
-  const onToggle = (e) => {
-    if (e.currentTarget.open && !seen) setSeen(true);
-  };
-  return (
-    <details class={"disc" + (cls ? " " + cls : "")} onToggle={onToggle}>
-      <summary class="disc__summary">{summary}</summary>
-      <div class="disc__body">{seen ? render() : null}</div>
-    </details>
-  );
-}
+const chatEnabled = computed(() => store.web.value.warning_chat_enabled === true);
 
 function ItemRow({ row, chat }) {
   const showChat = chat && row.chat !== null;
@@ -155,97 +137,6 @@ function NotesCard() {
   return (
     <Card title="System notes" badge={vm.count > 0 ? String(vm.count) : null}>
       {body}
-    </Card>
-  );
-}
-
-function CodeList({ rows }) {
-  return (
-    <ul class="list">
-      {rows.map((row) => (
-        <li key={row.key} class="list__item">
-          <div class="list__main">
-            <div>
-              <span class="health-dtc__code num">{row.code}</span>{" "}
-              <span class={row.reviewed ? undefined : "health-dtc__unreviewed"}>{row.meaning}</span>
-            </div>
-            {row.meta ? <div class="list__meta">{row.meta}</div> : null}
-          </div>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function CodeGroup({ group }) {
-  if (group.total <= 0) return <div class="health-none">{group.title + " · none"}</div>;
-  return (
-    <LazyDisclosure
-      summary={group.summary}
-      render={() => (
-        <>
-          {group.note ? <p class="health-note">{group.note}</p> : null}
-          {group.rows.length ? <CodeList rows={group.rows} /> : null}
-          {group.moreText ? <p class="health-note">{group.moreText}</p> : null}
-          {group.older.length ? (
-            <LazyDisclosure cls="health-sub" summary={group.olderSummary} render={() => <CodeList rows={group.older} />} />
-          ) : null}
-        </>
-      )}
-    />
-  );
-}
-
-function ModuleList({ rows }) {
-  return (
-    <ul class="list">
-      {rows.map((row) => (
-        <li key={row.key} class="list__item">
-          <span class={"list__mark" + (row.tone ? " list__mark--" + row.tone : "")} aria-hidden="true" />
-          <div class="list__main">
-            <div>{row.name}</div>
-            <div class="list__meta">{row.meta}</div>
-          </div>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function CodesCard() {
-  const vm = codesVm.value;
-  const web = store.web.value;
-  const badge = vm.badge;
-  const current = vm.current;
-  return (
-    <Card
-      title="Diagnostic codes"
-      wide
-      badge={badge ? badge.text : null}
-      badgeTone={badge ? badge.tone : ""}
-      foot={
-        <a class="health-link" href={H.DOCS.caveats}>
-          What “current” and “pending” mean
-        </a>
-      }
-    >
-      {vm.lastRead ? <p class="health-lead">{vm.lastRead}</p> : null}
-      {vm.source ? <p class="status-line">{vm.source}</p> : null}
-      {vm.emptyText ? <Empty>{vm.emptyText}</Empty> : null}
-      {current ? (
-        <>
-          <h3 class="section-title">{current.summary}</h3>
-          {current.rows.length ? <CodeList rows={current.rows} /> : <Empty>No current codes.</Empty>}
-          {current.moreText ? <p class="health-note">{current.moreText}</p> : null}
-        </>
-      ) : null}
-      {vm.groups.map((group) => (
-        <CodeGroup key={group.key} group={group} />
-      ))}
-      {vm.modules && vm.modules.rows.length ? (
-        <LazyDisclosure key="modules" summary={vm.modules.summary} render={() => <ModuleList rows={vm.modules.rows} />} />
-      ) : null}
-      {web.dtc_jobs_enabled === true ? <DtcScan key="scan" web={web} /> : null}
     </Card>
   );
 }

@@ -1,0 +1,38 @@
+/* Popover, listbox, chips and the multi-select built from them (components/MultiSelect.jsx).
+   Tap targets are 44 px; the panel spans its container, so it never leaves the viewport. */
+.multiselect { margin: 4px 0 8px; }
+.multiselect__bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.multiselect__trigger::after { content: "▾"; color: var(--dim); font-size: 14px; }
+.multiselect__trigger[aria-expanded="true"]::after { content: "▴"; }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-height: 40px; padding: 0 12px;
+  border: 1px solid var(--line-strong); border-radius: 20px; background: var(--card-2); color: var(--text);
+  font-size: 14px; cursor: pointer;
+}
+.chip__text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip__x { flex: none; color: var(--text-2); font-size: 18px; line-height: 1; }
+
+.popover {
+  margin-top: 8px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--card-2);
+  overflow: hidden;
+}
+.popover:focus { outline: none; }
+.multiselect__actions { display: flex; align-items: center; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--line); }
+.multiselect__done { margin-left: auto; }
+
+.listbox { list-style: none; margin: 0; padding: 4px 0; max-height: min(46vh, 340px); overflow-y: auto; overscroll-behavior: contain; }
+.listbox:focus { outline: none; }
+.listbox:focus-visible .listbox__option--active { outline: 2px solid var(--blue); outline-offset: -2px; }
+.listbox__group { padding: 8px 12px 2px; font-size: 13px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--dim); }
+.listbox__option { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 6px 12px; font-size: 16px; cursor: pointer; }
+.listbox__option--on { background: var(--card); }
+.listbox__mark {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px;
+  border: 1px solid var(--line-strong); border-radius: 50%; color: var(--on-green); font-size: 14px; font-weight: 700;
+}
+.listbox__mark--box { border-radius: 5px; }
+.listbox__option--on .listbox__mark { background: var(--green); border-color: var(--green); }
+.listbox__label { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.listbox__detail { flex: none; font-size: 13px; color: var(--dim); }
+.listbox__count { flex: none; min-width: 24px; text-align: right; color: var(--text-2); font-size: 15px; }

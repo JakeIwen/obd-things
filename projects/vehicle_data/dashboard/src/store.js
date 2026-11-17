@@ -128,6 +128,7 @@ export const summary = {
   history: signal(null),
   health: signal(null),
   dtcs: signal(null),
+  dtcIgnores: signal(null),
   maintenance: signal(null),
   statusFull: signal(null),
   fetchedMono: signal(0),
@@ -145,6 +146,7 @@ const lastJson = {
   history: null,
   health: null,
   dtcs: null,
+  dtcIgnores: null,
   maintenance: null,
   statusFull: null,
   error: null,
@@ -154,6 +156,7 @@ const SUMMARY_SLICES = [
   ["history", "history"],
   ["health", "health"],
   ["dtcs", "dtcs"],
+  ["dtc_ignores", "dtcIgnores"],
   ["maintenance", "maintenance"],
   ["status_full", "statusFull"],
 ];
@@ -205,6 +208,17 @@ export function applyStream(event, deliveryAgeMs, nowMono) {
   batch(() => {
     applyDelivery(body, deliveryAgeMs, nowMono);
   });
+}
+
+/**
+ * Publish the ignored-codes list a POST answered with, so the card changes from the Pi's reply and
+ * a later summary carrying the same list does not publish it twice.
+ * @param {object} state the `dtc_ignores` shape
+ */
+export function applyDtcIgnores(state) {
+  const json = JSON.stringify(state);
+  lastJson.dtcIgnores = json;
+  summary.dtcIgnores.value = state;
 }
 
 /**

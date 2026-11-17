@@ -38,6 +38,7 @@ import { Card } from "../components/Card.jsx";
 import { TireGrid } from "../components/TireGrid.jsx";
 import { ServiceCard } from "../components/ServiceCard.jsx";
 import { isUnavailableCanState } from "../canAvailability.js";
+import { ignoreState } from "../dtcIgnore.helpers.js";
 import * as H from "./parked.helpers.js";
 
 export const PARKED_CARDS = H.PARKED_CARDS;
@@ -274,7 +275,7 @@ function WarningsCard() {
 const codesGate = H.createStableGate();
 const codes = computed(() => {
   void minuteClock.value;
-  return codesGate(H.codesSummary(store.summary.dtcs.value, Date.now()));
+  return codesGate(H.codesSummary(store.summary.dtcs.value, Date.now(), ignoreState(store.summary.dtcIgnores.value).index));
 });
 
 function CodesCard() {
