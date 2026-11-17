@@ -493,16 +493,17 @@ content. Page 2 ("Sensors") uses the same frame and the same no-scrolling gate.
   | row | content |
   |---|---|
   | 0 | **SPEED LIMIT** (`vehicle.speed_limit` in a sign outline with `MPH` under it; `—` in a dim outline when the cluster shows none) · **ACC** (2 cols: `acc.set_speed` `66 mph`, four-bar gap graphic beside it; sub-line `engaged · vehicle ahead`, `standby · saved speed`, or `engaged · fixed cruise`; fixed mode labels the tile `Cruise`; standby dims only the saved number; `Off` when off; `—` and `ready · no set speed` before SET) |
-  | A | **ALTERNATOR FIELD** (`generator.field_duty` %, 15-min sparkline, sub-line `battery 14.0 V`; 2 cols until 2026-10-20) · **FUEL RATE** (`1.2` gal/h from `engine.fuel_rate` while its record is current, else `—`; sub-line `now 20.0 mpg` = speed ÷ rate at ≥ 5 mph, or `coasting, no fuel` at zero) · **GEAR** (`~7` from `transmission.gear_estimate` while its record is current, else `—`; sub-line `ratio 0.70` = turbine ÷ output when the output shaft turns ≥ 100 rpm) |
-  | B | **RADAR AIM** (3 cols): Horizontal and Vertical side by side. Each shows its latest angle (`+0.15°`), under it the physical reading of the elevation sign from `src/radarAim.js` (`aimed high · tilt down`, `aimed low · tilt up`, `level`; blank for azimuth), and then `1-min avg` / `5-min avg` / `30-min avg` from `status.radar_alignment` windows `"60"`/`"300"`/`"1800"`, then `Δ drive` (signed change since the first reading of this drive, from the `drive` object, 5-minute gap rule); a window or drive change the broker has not published yet reads `—`. |
+  | A | **FUEL TANK** (`fuel.tank_level` as `~49` `%`, the `~` marking candidate quality; sub-line `126 mi to empty` from `fuel.range`; a retained level dims the value and the sub-line ends `(last)`; `—` with no figure; id `field`, which held the Alternator field tile until 2026-11-16) · **FUEL RATE** (`1.2` gal/h from `engine.fuel_rate` while its record is current, else `—`; sub-line `now 20.0 mpg` = speed ÷ rate at ≥ 5 mph, or `coasting, no fuel` at zero) · **GEAR** (`~7` from `transmission.gear_estimate` while its record is current, else `—`; sub-line `ratio 0.70` = turbine ÷ output when the output shaft turns ≥ 100 rpm) |
+  | B | **RADAR AIM** (3 cols): Horizontal and Vertical side by side. Each shows its latest angle (`+0.15°`), under it the physical reading of the elevation sign from `src/radarAim.js` (`aimed high · tilt down`, `aimed low · tilt up`, `level`; blank for azimuth), and then `1-min avg` / `5-min avg` / `30-min avg` from `status.radar_alignment` windows `"60"`/`"300"`/`"1800"`, then `Δ drive` (signed change since the first reading of this drive, from the `drive` object, 5-minute gap rule) and `Δ parked` (change across the park before this drive: the first reading after this start-up minus the last reading before the previous shut-down, from the `parked` object; its tooltip says so); a window, drive or parked change the broker has not published yet (an older broker, or no earlier reading) reads `—`. The tile label line carries the status note on its right; the tile has no sub-line. |
   | C | **TURBINE** (rpm) · **OUTPUT SHAFT** (rpm) · **POWER** (hp, sparkline) |
   | D | **TORQUE** (`engine.crankshaft_torque`, lb-ft) · **TARGET TORQUE** (`engine.target_crankshaft_torque`, lb-ft) · **ODOMETER** (held value with its time; smaller `--tire` numerals so six digits fit a third of the width) |
 
-- **Landscape** (4 columns × 4 rows): `limit acc acc gear` / `field fuel power odo` /
+- **Landscape** (4 columns × 4 rows): `limit acc acc gear` / `tank fuel power odo` /
   `radar radar turbine output` / `radar radar torque target`. On a phone (≤ 640 px) it has 2
   columns (`limit acc` first, fuel last across both) and scrolls, like page 1.
-- **Radar aim footer** (said once):
-  - live: `within ±1°`, `near the ±1° limit` (≥ 0.8°) or `outside ±1°`;
+- **Radar aim note** (top right, on the tile label's line, truncating with an ellipsis):
+  - live: no note. The ±1° wording was dropped because the repo's findings treat ±1° as an
+    inferred reference the raw replies contradict as a cutoff, so the tile does not judge the angle;
   - otherwise: `Not reading · last 3:10 pm` with the values dimmed, or `Not reading` when there is
     nothing to show or the reads are not commissioned.
   - The numerals never change colour; the System card keeps the badge, peak and margin.
@@ -521,8 +522,8 @@ content. Page 2 ("Sensors") uses the same frame and the same no-scrolling gate.
   while engaged or in override, and nothing beside the state shows without a current state.
   `vehicle ahead` comes first in the sub-line, which ends in an ellipsis on a narrow tile. The
   other page-2 tiles use the
-  normal `Tile` rules (live, held with its time, or `—`). `generator.field_duty` joins
-  `SPARK_METRICS` (minimum span 20 %). No new timers were added.
+  normal `Tile` rules (live, held with its time, or `—`). `generator.field_duty` stays in
+  `SPARK_METRICS` (minimum span 20 %) for page 1's Voltage / Alt field tile. No new timers were added.
 - **Customisation.** The page-2 tiles are in `DRIVE_TILES` with ids `limit`, `acc`, `field`,
   `fuel`, `gear`, `radar`, `turbine`, `output`, `power2`, `torque`, `target` and `odometer`, each labelled
   `… (page 2)`. They
@@ -646,7 +647,7 @@ checks when stopped:
 - **Radar alignment**:
   - The badge is one of three reference states: within ±1°, approaching, outside.
   - Per axis: the latest estimate, then in a disclosure the 1-min, 5-min, 30-min and 2-h means (n),
-    the 5-min peak |angle|, the margin to ±1.00°, an `Aim` row (elevation: the `radarAim.js` reading;
+    the change this drive and the change while parked (tooltip: last reading before the previous shut-down compared with the first reading after this start-up), the 5-min peak |angle|, the margin to ±1.00°, an `Aim` row (elevation: the `radarAim.js` reading;
     azimuth: `left/right direction not known`), and the not-commissioned detail.
   - A held value carries its time.
   - **Zero / references…** button. It opens the lazy `dialogs/RadarReference.jsx` sheet: the

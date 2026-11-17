@@ -336,9 +336,9 @@ and when your phone is notified is on the [warnings page](/docs/warnings.html). 
 Two angles come from the ACC radar identifier `0845`, at candidate quality, read during
 engine-running intervals. The ±1° reference is a monitoring convention for this project, not an OEM
 alignment result. The System view shows the latest angle per axis, and on tap the 1-minute, 5-minute,
-30-minute averages (with sample counts), the change this drive, the 5-minute peak, and the margin to ±1.00°.
+30-minute averages (with sample counts), the change this drive, the change while parked, the 5-minute peak, and the margin to ±1.00°.
 Drive page 2's **Radar aim** tile shows the same angles at a glance: the latest value per axis and
-the three averages and **Δ drive**, the signed change since the first reading of this drive (a drive splits at a gap of more than 5 minutes). The 1- and 5-minute averages cover one unbroken run of reads and start over after
+the three averages, **Δ drive**, the signed change since the first reading of this drive (a drive splits at a gap of more than 5 minutes), and **Δ parked**, how far the angle moved across the park before this drive (first reading after this start-up minus the last reading before the previous shut-down; `—` when the broker has no earlier reading). The 1- and 5-minute averages cover one unbroken run of reads and start over after
 a gap of more than 30 seconds, such as an engine stop. The 30-minute average is a plain
 time window ending at the latest read, so it keeps averaging across a fuel stop; its sample
 count shows how much of the window has readings. The 2-hour average was removed 2026-11-13. The values are what the ACC radar module reports
@@ -349,9 +349,9 @@ for the mount's pivot axis; owner correction 2026-11-16) and the stored elevatio
 up through zero. It is an owner-reported direction, relative
 to the radar's own calibration, not a measured bracket angle. The horizontal (azimuth) sign has no
 known left/right mapping, so the System view says so instead of guessing. They are not
-a measurement of the van, and no alignment result or calibration is implied. Its footer reads
-`within ±1°`, `near the ±1° limit` (0.8° or more) or `outside ±1°` while readings arrive. When they
-stop, it reads `Not reading · last 3:10 pm` and the last values are dimmed; the averages then cover
+a measurement of the van, and no alignment result or calibration is implied. The tile makes no judgement
+while readings arrive. When they
+stop, its top right reads `Not reading · last 3:10 pm` and the last values are dimmed; the averages then cover
 the last minutes of that reading run, not the current minute. "Awaiting
 readings" means no angle has been read during the current drive yet. If the radar reads are ever
 switched off on the Pi, the System view says so in one sentence.

@@ -25,6 +25,16 @@ export function fmtAngle(value) {
   return typeof value === "number" && isFinite(value) ? fmtDelta(value, 2) + "°" : DASH;
 }
 
+/** Tooltip for the change across the park (`radar_alignment[metric].parked`), tile and System card. */
+export const PARKED_CHANGE_TITLE =
+  "Last reading before the previous shut-down compared with the first reading after this start-up.";
+
+/** Change across the park as a signed angle, or `—` when the broker sent none (older broker, no earlier reading). */
+export function parkedChangeText(parked) {
+  const ok = parked !== null && typeof parked === "object" && typeof parked.change === "number";
+  return ok ? fmtAngle(parked.change) : DASH;
+}
+
 /** Below this the two-decimal display reads 0.00°, so the aim is called level. */
 const LEVEL_BELOW_DEGREES = 0.005;
 

@@ -3,7 +3,7 @@
  * estimate and the shaft-speed ratio. No DOM, no signals; node-testable.
  */
 
-import { aimText } from "../radarAim.js";
+import { aimText, parkedChangeText } from "../radarAim.js";
 import { DASH, fmtFixed, fmtDelta, fmtTime } from "../format.js";
 
 /** Radar axes in tile order (horizontal first, as the owner reads "az … el"). */
@@ -11,10 +11,6 @@ export const RADAR_TILE_AXES = Object.freeze([
   Object.freeze({ id: "azimuth", name: "radar.alignment.azimuth", label: "Horizontal" }),
   Object.freeze({ id: "elevation", name: "radar.alignment.elevation", label: "Vertical" }),
 ]);
-
-/** Reference limit (degrees) and where "near" starts; the same numbers as the System card. */
-export const RADAR_TILE_LIMIT = 1;
-export const RADAR_TILE_NEAR = 0.8;
 
 const isNum = (v) => typeof v === "number" && isFinite(v);
 const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -42,10 +38,12 @@ export function driveChange(d) {
  *   polling?: object|null, nowMs?: number}} input
  *   `axes[id]`: `fresh` is a current record, `value` its number, `held` the dated last reading;
  *   `windows` is `status.radar_alignment` (per metric name: `latest_value`, `observed_at` and the
- *   `"60"`/`"300"`/`"1800"` second windows and `drive`, the change since this drive's first reading); `polling` is `status.radar_alignment_polling`.
- * @returns {{live: boolean, sub: string, axes: Object<string, {latest: string, aim: string, m1: string,
- *   m5: string, m30: string, drive: string}>}}
+ *   `"60"`/`"300"`/`"1800"` second windows, `drive`, the change since this drive's first reading, and
+ *   `parked`, the change across the park before it); `polling` is `status.radar_alignment_polling`.
+ * @returns {{live: boolean, note: string, axes: Object<string, {latest: string, aim: string, m1: string,
+ *   m5: string, m30: string, drive: string, parked: string}>}}
  *   `aim` is the physical reading of the sign (`aimed high · tilt down`), elevation only.
+ *   `note` is "" while live, else why the tile is not reading (shown beside the tile label).
  */
 export function radarTileModel(input) {
   const i = isObj(input) ? input : {};
@@ -56,7 +54,7 @@ export function radarTileModel(input) {
   const off = polling !== null && polling.commissioned === false;
   const axes = {};
   let live = false;
-  let maxAbs = null;
+  let hasValue = false;
   let newest = NaN;
   for (let a = 0; a < RADAR_TILE_AXES.length; a += 1) {
     const axis = RADAR_TILE_AXES[a];
@@ -74,7 +72,7 @@ export function radarTileModel(input) {
       value = w.latest_value;
       at = w.observed_at;
     }
-    if (value !== null) maxAbs = maxAbs === null ? Math.abs(value) : Math.max(maxAbs, Math.abs(value));
+    if (value !== null) hasValue = true;
     const atMs = typeof at === "string" ? Date.parse(at) : NaN;
     if (isFinite(atMs) && !(atMs <= newest)) newest = atMs;
     axes[axis.id] = {
@@ -84,17 +82,12 @@ export function radarTileModel(input) {
       m5: windowMean(w["300"]),
       m30: windowMean(w["1800"]),
       drive: driveChange(w.drive),
+      parked: parkedChangeText(w.parked),
     };
   }
-  let sub;
-  if (live) {
-    sub = maxAbs >= RADAR_TILE_LIMIT ? "outside ±1°" : maxAbs >= RADAR_TILE_NEAR ? "near the ±1° limit" : "within ±1°";
-  } else if (maxAbs !== null && isFinite(newest)) {
-    sub = "Not reading · last " + fmtTime(newest, new Date(nowMs));
-  } else {
-    sub = "Not reading";
-  }
-  return { live, sub, axes };
+  let note = "";
+  if (!live) note = hasValue && isFinite(newest) ? "Not reading · last " + fmtTime(newest, new Date(nowMs)) : "Not reading";
+  return { live, note, axes };
 }
 
 /**

@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import * as H from "../src/views/historySystem.helpers.js";
+import { PARKED_CHANGE_TITLE } from "../src/radarAim.js";
 import { RETAIN_LAST_READING } from "../src/store.js";
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
@@ -494,6 +495,7 @@ test("radar: not live → retained values, neutral badge, last-read time once", 
       ...FULL.radar_alignment["radar.alignment.elevation"],
       1800: { count: 150, mean: -0.0251, peak_abs: 0.031, span_seconds: 1790 },
       drive: { change: -0.0348, start_value: 0.0097, started_at: "2026-09-24T20:30:00+00:00", count: 610, span_seconds: 7190 },
+      parked: { change: 0.012, previous_value: -0.0023, previous_observed_at: "2026-09-23T22:00:00+00:00", observed_at: "2026-09-24T20:30:00+00:00" },
     },
   };
   const r = H.radarModel({
@@ -515,13 +517,16 @@ test("radar: not live → retained values, neutral badge, last-read time once", 
     ["5-min average", "−0.02° (16)"],
     ["30-min average", "−0.03° (150)"],
     ["Change this drive", "−0.03° (610)"],
+    ["Change while parked", "+0.01°", PARKED_CHANGE_TITLE],
     ["5-min peak", "0.02°"],
     ["Margin to ±1.00°", "0.98° to spare"],
     ["Aim", "aimed low · tilt up"],
   ]);
-  assert.deepEqual(az.rows.slice(2, 4), [["30-min average", "—"], ["Change this drive", "—"]]);
-  assert.equal(az.rows[5][1], "0.84° to spare");
-  assert.deepEqual(az.rows[6], ["Aim", "left/right direction not known"]);
+  assert.deepEqual(az.rows.slice(2, 5),
+    [["30-min average", "—"], ["Change this drive", "—"], ["Change while parked", "—", PARKED_CHANGE_TITLE]]);
+  assert.match(PARKED_CHANGE_TITLE, /before the previous shut-down.*after this start-up/);
+  assert.equal(az.rows[6][1], "0.84° to spare");
+  assert.deepEqual(az.rows[7], ["Aim", "left/right direction not known"]);
   assert.doesNotMatch(shownText(r), JARGON);
 });
 
@@ -543,7 +548,7 @@ test("radar: a selected reference adds the change since it and leaves the angles
   assert.equal(r.axes[0].latest, "−0.38°");
   assert.deepEqual(r.axes[0].rows[0], ["Since reference", "+0.12°"]);
   assert.deepEqual(r.axes[1].rows[0], ["Since reference", "0.00°"]);
-  assert.equal(r.axes[0].rows[6][1], "0.62° to spare");
+  assert.equal(r.axes[0].rows[7][1], "0.62° to spare");
   assert.deepEqual(r.badge, { text: "Within ±1°", tone: "green" });
   assert.equal(r.reference, "Change shown since: Zeroed here · 12:40 pm (vertical −0.50° · horizontal +0.10°)");
   assert.doesNotMatch(shownText(r), JARGON);
@@ -568,8 +573,8 @@ test("radar: live values colour the badge; outside the reference shows the overs
   const out = live(1.2, 0);
   assert.deepEqual(out.badge, { text: "Outside ±1°", tone: "red" });
   assert.equal(out.note, null);
-  assert.equal(out.axes[0].rows[5][1], "0.20° beyond");
-  assert.equal(out.axes[0].rows[6][1], "aimed high · tilt down");
+  assert.equal(out.axes[0].rows[6][1], "0.20° beyond");
+  assert.equal(out.axes[0].rows[7][1], "aimed high · tilt down");
   assert.equal(out.axes[0].rows[0][1], "—");
 });
 
@@ -591,7 +596,7 @@ test("radar: held reading beats the window latest; not set up and no data explai
   const none = H.radarModel({ axes: {}, windows: {}, polling: { commissioned: true }, nowMs: NOW });
   assert.equal(none.badge.text, "No readings yet");
   assert.equal(none.axes[0].latest, "—");
-  assert.equal(none.axes[0].rows[6][1], "—");
+  assert.equal(none.axes[0].rows[7][1], "—");
   const err = H.radarModel({ axes: {}, windows: {}, polling: { commissioned: true, retained_storage_error: "read-only" }, nowMs: NOW });
   assert.match(err.problem, /not being saved: read-only/);
 });

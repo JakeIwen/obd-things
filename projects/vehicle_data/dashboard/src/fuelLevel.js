@@ -14,29 +14,25 @@ function figure(contract, rec, observation) {
   return { value, live };
 }
 
-/**
- * Tank-level text for the fuel tile's sub-line: `tank ~49%`, or `tank ~49% (last)` when the
- * figure is a retained earlier reading. The `~` marks candidate quality, as the gear does.
- * @param {{available?: boolean, stale?: boolean, value?: *}|null} rec `fuel.tank_level` record
- * @param {{kind?: string, value?: *}|null} observation store `observationState` of the metric
- */
-export function fuelLevelText(rec, observation) {
-  const f = figure(level, rec, observation);
-  return f ? `tank ~${f.value}%` + (f.live ? "" : " (last)") : "";
+/** Tank percent for the Fuel tank tile's value: `~49` (the tile adds the `%` unit); the `~` marks candidate quality. "" with no figure. */
+export function tankValueText(levelRec, levelObservation) {
+  const f = figure(level, levelRec, levelObservation);
+  return f ? `~${f.value}` : "";
 }
 
 /**
- * Tank level and distance to empty on one short line: `tank ~49% · 126 mi`. Either part may be
- * missing. A single `(last)` closes the line when any shown part is a retained reading, which
- * keeps the retained form (`tank ~49% · 126 mi (last)`) short enough for the tile at 800 px.
+ * Distance to empty for the Fuel tank tile's sub-line: `126 mi to empty`, with ` (last)` when the
+ * tank figure or this one is a retained reading (`held`). "" with no figure.
  */
-export function fuelGaugeText(levelRec, levelObservation, rangeRec, rangeObservation) {
-  const tank = figure(level, levelRec, levelObservation);
+export function tankRangeText(levelRec, levelObservation, rangeRec, rangeObservation) {
   const miles = figure(range, rangeRec, rangeObservation);
-  const parts = [];
-  if (tank) parts.push(`tank ~${tank.value}%`);
-  if (miles) parts.push(`${miles.value} mi`);
-  if (!parts.length) return "";
-  const retained = (tank && !tank.live) || (miles && !miles.live);
-  return parts.join(" · ") + (retained ? " (last)" : "");
+  if (!miles) return "";
+  const tank = figure(level, levelRec, levelObservation);
+  return `${miles.value} mi to empty` + (!miles.live || (tank && !tank.live) ? " (last)" : "");
+}
+
+/** Whether the tank percent shown is a live reading (false: retained, or none). */
+export function tankIsLive(levelRec, levelObservation) {
+  const f = figure(level, levelRec, levelObservation);
+  return Boolean(f && f.live);
 }

@@ -28,7 +28,7 @@ export const DRIVE_TILES = [
   ...[
     ["limit", "Speed limit"],
     ["acc", "ACC"],
-    ["field", "Alternator field"],
+    ["field", "Fuel tank"], // id "field" is kept: saved hide/order entries keep their slot
     ["fuel", "Fuel rate"],
     ["gear", "Gear"],
     ["radar", "Radar aim"],

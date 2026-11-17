@@ -1,6 +1,6 @@
 /**
- * Drive page 2, "Sensors" (design 3.1.1): the cluster's speed limit and ACC set speed, alternator
- * field duty, the estimated fuel rate, the gear estimate, radar aim, transmission shaft speeds,
+ * Drive page 2, "Sensors" (design 3.1.1): the cluster's speed limit and ACC set speed, the
+ * fuel tank level and range, the estimated fuel rate, the gear estimate, radar aim, transmission shaft speeds,
  * power, torque and target torque, and the odometer. One screen, no
  * scrolling, at 800×1280 portrait and 1280×800 landscape. Loaded lazily the first time page 2
  * is shown; while page 1 is on screen none of this is mounted.
@@ -18,15 +18,16 @@ import { accTileModel } from "../accDisplay.helpers.js";
 import { DriveFooter } from "./DriveFooter.jsx";
 import { liveValue, obs, isHidden, dayClock } from "../app/derive.js";
 import * as store from "../store.js";
-import { DASH, fmtFixed } from "../format.js";
+import { DASH } from "../format.js";
 import { fuelRateText, instantText } from "../fuelEconomy.helpers.js";
-import { FUEL_LEVEL, FUEL_RANGE, fuelGaugeText } from "../fuelLevel.js";
+import { FUEL_LEVEL, FUEL_RANGE, tankValueText, tankRangeText, tankIsLive } from "../fuelLevel.js";
 import {
   RADAR_TILE_AXES,
   radarTileModel,
   gearText,
   ratioText,
 } from "./driveMore.helpers.js";
+import { PARKED_CHANGE_TITLE } from "../radarAim.js";
 import { speedLimitText } from "./driveSpeed.helpers.js";
 
 // Speed limit: the number the cluster's traffic-sign display shows, in a sign outline; `—` when
@@ -75,25 +76,11 @@ function AccTile() {
   );
 }
 
-// Alternator field duty pairs with the battery voltage it is regulating.
-const batterySub = computed(() => {
-  const v = liveValue("battery.voltage").value;
-  return v === null ? "" : "battery " + fmtFixed(v, 1) + " V";
-});
-
 // Fuel rate: read from the record like the gear (candidate quality, so derive.obs would never
 // call it live). The sub-line is the instant economy while moving.
 const fuel = computed(() => fuelRateText(store.metricSignal("engine.fuel_rate").value));
 const fuelCls = computed(() => "tile tile--value area-d2fuel " + (fuel.value === DASH ? "tile--off" : "tile--live"));
 const fuelUnit = computed(() => (fuel.value === DASH ? "" : "gal/h"));
-// The tank level and distance to empty get a second sub-line under the economy (candidate quality,
-// read from the record like the rate): one line is too narrow for both in a third-width tile.
-const tankLevel = computed(() =>
-  fuelGaugeText(
-    store.metricSignal(FUEL_LEVEL.metric).value, obs(FUEL_LEVEL.metric).value,
-    store.metricSignal(FUEL_RANGE.metric).value, obs(FUEL_RANGE.metric).value,
-  ),
-);
 const fuelSub = computed(() =>
   instantText(liveValue("vehicle.speed").value, store.metricSignal("engine.fuel_rate").value),
 );
@@ -107,7 +94,31 @@ function FuelTile() {
         <span class="tile__unit">{fuelUnit}</span>
       </div>
       <div class="tile__sub">{fuelSub}</div>
-      <div class="tile__sub">{tankLevel}</div>
+    </section>
+  );
+}
+
+// Fuel tank: level percent with the distance to empty beneath it (both candidate quality, read from
+// the record like the rate). Dims like the held tiles when the level is a retained reading.
+const tankRec = computed(() => store.metricSignal(FUEL_LEVEL.metric).value);
+const tankObs = computed(() => obs(FUEL_LEVEL.metric).value);
+const tank = computed(() => tankValueText(tankRec.value, tankObs.value));
+const tankUnit = computed(() => (tank.value ? "%" : ""));
+const tankCls = computed(() => "tile tile--value area-d2tank " +
+  (!tank.value ? "tile--off" : tankIsLive(tankRec.value, tankObs.value) ? "tile--live" : "tile--held"));
+const tankSub = computed(() =>
+  tankRangeText(tankRec.value, tankObs.value, store.metricSignal(FUEL_RANGE.metric).value, obs(FUEL_RANGE.metric).value),
+);
+
+function TankTile() {
+  return (
+    <section class={tankCls} aria-label="Fuel tank">
+      <div class="tile__label">Fuel tank</div>
+      <div class="tile__value num">
+        <span>{tank}</span>
+        <span class="tile__unit">{tankUnit}</span>
+      </div>
+      <div class="tile__sub">{tankSub}</div>
     </section>
   );
 }
@@ -133,7 +144,8 @@ function GearTile() {
 }
 
 // Radar aim: latest angle per axis (current record, else the dated last reading), plus the
-// broker's 1-minute, 5-minute and 30-minute means and the signed change over the current drive.
+// broker's 1-minute, 5-minute and 30-minute means, the signed change over the current drive and
+// the change across the park before it.
 // They ride on status-lite, which republishes only when its stable projection (these included)
 // changes; status_full is the fallback.
 const radar = computed(() => {
@@ -160,7 +172,7 @@ const radar = computed(() => {
   });
 });
 const radarCls = computed(() => "tile area-d2radar drive2-radar" + (radar.value.live ? "" : " drive2-radar--held"));
-const radarSub = computed(() => radar.value.sub);
+const radarNote = computed(() => radar.value.note);
 const radarText = RADAR_TILE_AXES.map((axis) => ({
   id: axis.id,
   label: axis.label,
@@ -170,12 +182,16 @@ const radarText = RADAR_TILE_AXES.map((axis) => ({
   m5: computed(() => radar.value.axes[axis.id].m5),
   m30: computed(() => radar.value.axes[axis.id].m30),
   drive: computed(() => radar.value.axes[axis.id].drive),
+  parked: computed(() => radar.value.axes[axis.id].parked),
 }));
 
 function RadarTile() {
   return (
     <section class={radarCls} aria-label="Radar aim">
-      <div class="tile__label">Radar aim</div>
+      <div class="drive2-radar__head">
+        <div class="tile__label">Radar aim</div>
+        <div class="drive2-radar__note">{radarNote}</div>
+      </div>
       <div class="drive2-radar__axes">
         {radarText.map((t) => (
           <div class="drive2-radar__axis" key={t.id}>
@@ -198,10 +214,13 @@ function RadarTile() {
               <span>Δ drive</span>
               <b class="num">{t.drive}</b>
             </div>
+            <div class="drive2-radar__row" title={PARKED_CHANGE_TITLE}>
+              <span>Δ parked</span>
+              <b class="num">{t.parked}</b>
+            </div>
           </div>
         ))}
       </div>
-      <div class="tile__sub">{radarSub}</div>
     </section>
   );
 }
@@ -213,7 +232,7 @@ export default function DriveMore({ page, onPageChange }) {
       <div class="drive2">
         {show("limit") && <LimitTile />}
         {show("acc") && <AccTile />}
-        {show("field") && <Tile name="generator.field_duty" label="Alternator field" area="d2field" spark sub={batterySub} />}
+        {show("field") && <TankTile />}
         {show("fuel") && <FuelTile />}
         {show("gear") && <GearTile />}
         {show("radar") && <RadarTile />}

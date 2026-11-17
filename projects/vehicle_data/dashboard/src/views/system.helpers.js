@@ -12,7 +12,7 @@
 
 import { DASH, fmtValue, fmtFixed, fmtUnit, fmtTime, fmtAgeCoarse, fmtInt } from "../format.js";
 import { metricLabel } from "../warningContext.js";
-import { aimText, AZIMUTH_AIM_UNMAPPED, RADAR_AXES, fmtAngle } from "../radarAim.js";
+import { aimText, AZIMUTH_AIM_UNMAPPED, RADAR_AXES, fmtAngle, parkedChangeText, PARKED_CHANGE_TITLE } from "../radarAim.js";
 import { anglesText, pointText, sinceReference } from "../radarReference.js";
 import { fmtAngleSigned } from "./driveMore.helpers.js";
 import { DOCS, obj, arr, num, str, wallMs, when, humanize, capital, plural, clip, createStableGate, agoText } from "./view.helpers.js";
@@ -436,6 +436,7 @@ export function radarModel(input) {
         ["5-min average", windowText(w300)],
         ["30-min average", windowText(w["1800"])],
         ["Change this drive", driveText(w.drive)],
+        ["Change while parked", parkedChangeText(w.parked), PARKED_CHANGE_TITLE],
         ["5-min peak", w300 && num(w300.peak_abs) !== null ? fmtFixed(w300.peak_abs, 2) + "°" : DASH],
         ["Margin to ±1.00°", margin],
         ["Aim", axis.id === "azimuth" ? AZIMUTH_AIM_UNMAPPED : aimText(axis.id, value) || DASH],

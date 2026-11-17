@@ -1,0 +1,5 @@
+/* Radar aim tile header (Drive page 2): the tile label on the left, the not-reading note on the
+   right, truncating before it can wrap or push the label. */
+.drive2-radar__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; min-width: 0; }
+.drive2-radar__head .tile__label { flex: 0 0 auto; }
+.drive2-radar__note { flex: 0 1 auto; min-width: 0; font-size: 14px; color: var(--dim); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

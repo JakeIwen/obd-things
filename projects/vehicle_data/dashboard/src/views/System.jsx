@@ -259,7 +259,7 @@ function RadarCard() {
             <div class="system-radar__label">{axis.label}</div>
             <div class={"system-radar__value num" + (axis.live ? "" : " system-radar__value--held")}>{axis.latest}</div>
             <dl class="kv system-kv num">
-              {axis.rows.map(([k, v]) => [<dt key={"k" + k}>{k}</dt>, <dd key={"v" + k}>{v}</dd>])}
+              {axis.rows.map(([k, v, title]) => [<dt key={"k" + k} title={title}>{k}</dt>, <dd key={"v" + k} title={title}>{v}</dd>])}
             </dl>
           </div>
         ))}

@@ -1904,7 +1904,16 @@ activity, so a radar outage mid-drive can split it where a History trip continue
 is kept in memory, independent of the 30-minute samples, so a long drive keeps it.
 After a broker restart the saved row's drive continues if the first new reading's
 wall time is after the saved reading and within 300 s of it; otherwise a new drive
-starts. The startup historian recovery extends a saved drive with the readings it
+starts. When a new drive starts and a previous reading exists (in memory, or the
+retained row after a restart during the park), the row also carries `parked`: the
+change across the park, `{change, previous_value, previous_observed_at, observed_at}`
+(`change` is the new drive's first value minus the previous reading's; the key is
+absent, never zero, with no earlier reading, and the same figure rides on every row
+of the drive, including after a restart inside it). It is served wherever the row is
+(`status.radar_alignment`, lite and full). An older broker ignores the key when it
+loads `radar-alignment.json` and drops it with the first new reading. The dashboard
+shows it as **Δ parked** on the Radar aim tile and **Change while parked** on the
+System card. The startup historian recovery extends a saved drive with the readings it
 missed instead of rebuilding it, so its start survives the bounded query. Live freshness gates
 remain unchanged, and retained values never enter the live metric cache.
 The small `radar-alignment.json` file beside the history database retains these
