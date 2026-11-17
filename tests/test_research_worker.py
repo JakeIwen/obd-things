@@ -184,7 +184,7 @@ class WorkerTests(unittest.TestCase):
 
     def test_simultaneous_research_start_and_maintenance_admit_exactly_one(self):
         self.rig.scenario({"mode": "ok", "delay": 1})
-        barrier, results = threading.Barrier(2), []
+        barrier, results = threading.Barrier(2, timeout=20), []
 
         def start():
             barrier.wait()
@@ -202,11 +202,12 @@ class WorkerTests(unittest.TestCase):
             except Refused as exc:
                 results.append(("maintenance", exc.reason))
 
-        threads = [threading.Thread(target=start), threading.Thread(target=maintain)]
+        threads = [threading.Thread(target=start, daemon=True), threading.Thread(target=maintain, daemon=True)]
         for thread in threads:
             thread.start()
         for thread in threads:
-            thread.join()
+            thread.join(20)
+            self.assertFalse(thread.is_alive(), "a simultaneous admission did not finish within 20 s")
         refusals = [value for _, value in results if value == "busy"]
         self.assertEqual(len(refusals), 1, results)
         self.assertLessEqual(len(self.rig.calls()), 1)

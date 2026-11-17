@@ -3,7 +3,8 @@
 Records live in ``<advisor state>/dtc-research/runs/<run_id>.json``, written atomically and only by
 the advisor, so their bounds hold in code: at most ``MAX_RUNS`` runs (the oldest finished run is
 evicted first, a busy one never; only once a new run's launch has been admitted, so a refused start
-never costs a report and one extra record exists only during a launch request), and every reply
+never costs a report, and the one extra record exists only during a launch request; a record file
+that cannot be removed is retried by the next start and each reconciliation pass), and every reply
 about a run stays under the sizes in
 ``dtc_research.json`` (a follow-up is refused when its worst case would not fit).
 """
@@ -136,6 +137,7 @@ class Store:
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.lock = threading.RLock()
         self.records = {}
+        self.undeleted = set()  # run ids whose file could not be removed yet; ``retry_deletes`` tries again
 
     def load(self, log=print):
         """Read every record; a turn that was running becomes ``reconciling`` (decided with the worker)."""
@@ -159,8 +161,19 @@ class Store:
         _atomic_json(self.directory / f"{record['run_id']}.json", record)
 
     def delete(self, run_id):
-        (self.directory / f"{run_id}.json").unlink(missing_ok=True)
+        """Forget the run now, even when its file cannot be removed: a run that is gone from memory can
+        never be left looking busy, and the file is removed by a later ``retry_deletes``."""
         self.records.pop(run_id, None)
+        self.undeleted.add(run_id)
+        self.retry_deletes()
+
+    def retry_deletes(self):
+        for run_id in sorted(self.undeleted):
+            try:
+                (self.directory / f"{run_id}.json").unlink(missing_ok=True)
+            except OSError:
+                continue
+            self.undeleted.discard(run_id)
 
     def evictable(self):
         """Run ids to evict so the runs fit ``MAX_RUNS`` (oldest finished first, never a busy one)."""

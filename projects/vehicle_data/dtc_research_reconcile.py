@@ -55,6 +55,7 @@ class Reconciler:
         with manager.lock:
             if status["instance_id"] != manager.instance_id:
                 manager.state = "unknown"
+            manager.store.retry_deletes()
 
     def reconcile_once(self):
         """One pass; ``True`` once admission can reopen."""
@@ -104,6 +105,7 @@ class Reconciler:
                                                           "detail": "Interrupted by a restart of the research service"}):
                 return False
         with manager.lock:
+            manager.trim()  # an eviction that failed earlier, or more records than the cap after a restart
             try:
                 manager.worker.sweep(set(manager.store.records))
             except WorkerUnreachable:

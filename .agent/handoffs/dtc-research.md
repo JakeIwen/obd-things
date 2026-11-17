@@ -74,6 +74,35 @@ Each has a regression test through a public entry point that failed on `fef26e3`
 7. (low) `cli_process.run` returns `cancelled` without spawning when the attempt is already
    cancelled. `test_an_accepted_attempt_cancelled_before_its_spawn_never_spawns`.
 
+### Re-check fixes (2026-11-17, on top of `57ae766`)
+
+Each has a regression test that failed before its fix.
+
+1. (medium) A failed start can never strand a running record: `Store.delete` removes the record from
+   memory first and never raises; a file it cannot unlink is retried by the next start, the idle
+   reconciler and every reconciliation pass. The caller sees the original `storage_error`. A leftover
+   file with a running turn and no attempt id loads `reconciling` and the first pass settles it
+   `failed`/`interrupted` (already the behaviour; now tested).
+   `test_a_failed_start_whose_rollback_cannot_delete_leaves_no_running_record`,
+   `test_a_leftover_running_record_with_no_attempt_loads_as_interrupted`.
+2. (medium) VIN masking is case-insensitive (lower or mixed case needs a digit, so long words are not
+   masked) and also masks `OBD_VIN` itself in any case with spaces or hyphens between its characters.
+   A spaced VIN the service does not know is deliberately not masked: any 17 letters and digits in
+   groups would match prose and DTC lists. `VinMaskTests`.
+3. (low) `_launch` restores `turn["mode"]` when it withdraws a refused launch, so a refused replay
+   leaves `resumed` and a retry replays again. `test_a_refused_replay_after_an_unverified_resume_keeps_the_resumed_mode`.
+4. (low) `StartWindow.record()` stamps the start with its own clock reading.
+   `test_each_recorded_start_carries_its_own_time_not_another_requests_check`.
+5. (low, docs) `ResearchManager.trim()` (after each admitted launch and in every reconciliation pass)
+   keeps the 60-record cap and retries unremoved files, so "a 61st record exists only during a launch
+   request" holds. `test_an_eviction_that_cannot_remove_its_file_is_retried_by_the_next_start_and_the_reconciler`.
+
+Hang guards: the concurrency tests in `test_dtc_research_manager.py` and `test_research_worker.py` use
+daemon threads with 20 s joins and barrier timeouts, so a deadlock is a named failure.
+
+Accepted limitation: a cancel that lands between the worker's pre-spawn check and `Popen` can still
+create a child, which the first pump step stops before any prompt is fed.
+
 The fake CLI (`tests/fake_research_cli.py`) also logs each turn's prompt (`prompts.jsonl`,
 `WorkerRig.prompts()`) and can write a file at the end of a turn (`write_at_end`).
 

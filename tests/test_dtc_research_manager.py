@@ -1,10 +1,12 @@
 """The advisor's research routes over a real research worker (fake Claude CLI), in process."""
 
+import contextlib
 from pathlib import Path
 import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 import uuid
 
 from projects.vehicle_data.assistant_common import ChatError
@@ -127,6 +129,33 @@ class FlakyStore(Store):
         if self.failing:
             raise OSError(28, "No space left on device")
         super().save(record)
+
+
+class FailingSaveStore(Store):
+    """A store that allows ``saves_left`` more writes, then fails every one (``None``: never fails)."""
+
+    saves_left = None
+
+    def save(self, record):
+        if self.saves_left is not None:
+            if self.saves_left <= 0:
+                raise OSError(28, "No space left on device")
+            self.saves_left -= 1
+        super().save(record)
+
+
+@contextlib.contextmanager
+def undeletable_records(directory):
+    """Removing a run's record file fails inside the block (the filesystem went read-only)."""
+    real = Path.unlink
+
+    def unlink(path, *args, **kwargs):
+        if path.parent == Path(directory) and path.suffix == ".json":
+            raise OSError(30, "Read-only file system")
+        return real(path, *args, **kwargs)
+
+    with mock.patch.object(Path, "unlink", unlink):
+        yield
 
 
 class ManagerTests(unittest.TestCase):
@@ -401,16 +430,19 @@ class ManagerTests(unittest.TestCase):
             except ChatError as exc:
                 results.append(exc.reason)
 
-        threads = [threading.Thread(target=start) for _ in range(2)]
+        threads = [threading.Thread(target=start, daemon=True) for _ in range(2)]
         for thread in threads:
             thread.start()
         deadline = time.monotonic() + 20
         while not any(len(r) == 32 for r in results) and time.monotonic() < deadline:
             time.sleep(.05)
-        self.settle(next(r for r in results if len(r) == 32))
+        first = [r for r in results if len(r) == 32]
+        self.assertTrue(first, f"no start finished within 20 s: {results}")
+        self.settle(first[0])
         broker.release.set()  # a second start still gathering now meets a finished run for this code
         for thread in threads:
             thread.join(20)
+            self.assertFalse(thread.is_alive(), f"a concurrent start did not finish within 20 s: {results}")
         self.assertEqual(len(self.rig.prompts()), 1, results)  # one model turn
         mine = [r for r in self.manager.store.records.values() if request_id in r["request_ids"]]
         self.assertEqual(len(mine), 1)
@@ -484,6 +516,68 @@ class ManagerTests(unittest.TestCase):
         [(status, reply)] = self.client.deliver_held()  # the original request finally arrives
         self.assertEqual((status, reply["reason"]), (409, "duplicate_attempt"))
         self.assertEqual(self.rig.prompts(), [])  # nothing was launched behind the dashboard's back
+
+    def failed_start_with_undeletable_record(self):
+        """A start whose second record write fails while the rollback cannot delete the first."""
+        self.manager.close()
+        self.manager = self.build(store_class=FailingSaveStore)
+        store = self.manager.store
+        store.saves_left = 1
+        with undeletable_records(store.directory):
+            with self.assertRaises(ChatError) as failed:
+                self.start()
+        store.saves_left = None
+        return failed.exception
+
+    def test_a_failed_start_whose_rollback_cannot_delete_leaves_no_running_record(self):
+        failed = self.failed_start_with_undeletable_record()
+        self.assertEqual(failed.reason, "storage_error")  # the caller sees the original error
+        store = self.manager.store
+        self.assertFalse(any(records.busy(r) for r in store.records.values()))
+        self.assertEqual(len(list(store.directory.glob("*.json"))), 1)  # the file is still to be removed
+        run = self.settle(self.start()["run_id"])  # the code is startable at once
+        self.assertEqual(run["state"], "done")
+        self.assertEqual([p.stem for p in store.directory.glob("*.json")], [run["run_id"]])  # and the leftover went
+
+    def test_a_leftover_running_record_with_no_attempt_loads_as_interrupted(self):
+        self.failed_start_with_undeletable_record()
+        self.manager.close()
+        self.manager = self.build()  # the advisor restarts with that file still on disk
+        [record] = self.manager.store.records.values()
+        self.assertFalse(records.busy(record))
+        self.assertEqual((record["turns"][0]["state"], record["turns"][0]["reason"]), ("failed", "interrupted"))
+        self.assertEqual(self.manager.state, "idle")
+
+    def test_a_refused_replay_after_an_unverified_resume_keeps_the_resumed_mode(self):
+        run = self.settle(self.start()["run_id"])
+        self.rig.scenario({"mode": "no_growth", "answer": REPORT})  # the resumed session never grows
+        launch = self.client.launch
+
+        def refuse_replay(route, body):
+            if body["kind"] == "initial":
+                return 409, {"reason": "busy", "detail": "busy"}
+            return launch(route, body)
+
+        self.client.launch = refuse_replay
+        self.ask(run["run_id"])
+        turn = self.settle(run["run_id"])["turns"][-1]
+        self.assertEqual((turn["state"], turn["reason"]), ("failed", "provider_error"))
+        self.assertEqual(turn["mode"], "resumed")  # a replay was refused, so none ran
+
+    def test_an_eviction_that_cannot_remove_its_file_is_retried_by_the_next_start_and_the_reconciler(self):
+        self.manager.close()
+        ids = self.seed_finished_runs(MAX_RUNS)
+        self.manager = self.build()
+        directory = self.manager.store.directory
+        with undeletable_records(directory):
+            run = self.settle(self.start()["run_id"])
+        self.assertEqual(len(self.manager.store.records), MAX_RUNS)
+        self.assertTrue((directory / f"{ids[0]}.json").exists())  # the unremoved file
+        self.assertTrue(Reconciler(self.manager, retry=.05).reconcile_once())
+        self.assertFalse((directory / f"{ids[0]}.json").exists())
+        self.assertTrue((directory / f"{run['run_id']}.json").exists())
+        self.assertEqual(len(list(directory.glob("*.json"))), MAX_RUNS)
+
 
 if __name__ == "__main__":
     unittest.main()

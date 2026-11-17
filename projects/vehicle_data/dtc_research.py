@@ -101,6 +101,7 @@ class ResearchManager:
     def start(self, fields):
         request_id, code = fields["request_id"], (fields["module_key"], fields["fca_display"])
         with self.lock:
+            self.store.retry_deletes()
             duplicate = next((r for r in self.store.records.values() if request_id in r["request_ids"]), None)
             if duplicate:
                 return {"available": True, "run": records.full(duplicate)}
@@ -129,16 +130,21 @@ class ResearchManager:
             self._save(record)
             self._launch(record, "initial", first_prompt(context))
         except Exception:
-            self.store.delete(run_id)
+            self.store.delete(run_id)  # never raises: the record leaves memory even if its file stays
             raise
         self.window.record()
-        # Only an admitted launch makes room: a refused start never costs an existing report.
-        for old in self.store.evictable():
-            try:
-                self._evict(old)
-            except OSError:  # the launch is already sent; the next start evicts again
-                log("dtc_research_evict_failed", run_id=old)
+        self.trim()  # only an admitted launch makes room: a refused start never costs an existing report
         return {"available": True, "run": records.full(record)}
+
+    def trim(self):
+        """Evict finished runs beyond the cap and retry record files that could not be removed."""
+        with self.lock:
+            for old in self.store.evictable():
+                try:
+                    self._evict(old)
+                except OSError:  # never fail a launch that was already sent; the next pass evicts again
+                    log("dtc_research_evict_failed", run_id=old)
+            self.store.retry_deletes()
 
     def ask(self, fields):
         with self.lock:
@@ -205,12 +211,18 @@ class ResearchManager:
         attempt_id = uuid.uuid4().hex
         self.ledger.admit(record["run_id"], attempt_id, kind)
         turn["attempt_ids"].append(attempt_id)
+        mode_before = turn["mode"]  # restored when the launch is refused: the mode says what actually ran
         turn["mode"] = {"initial": "initial", "resume": "resumed", "replay": "replayed"}[kind]
+
+        def withdraw():
+            self.ledger.refused(attempt_id)
+            turn["attempt_ids"].pop()
+            turn["mode"] = mode_before
+
         try:
             self._save(record)  # the attempt id is on disk before the request can arrive
         except ResearchError:
-            self.ledger.refused(attempt_id)
-            turn["attempt_ids"].pop()
+            withdraw()
             raise
         body = {"attempt_id": attempt_id, "expected_instance_id": self.instance_id, "run_id": record["run_id"],
                 "provider": record["provider"], "model": record["model"], "effort": record["effort"],
@@ -222,13 +234,11 @@ class ResearchManager:
             code, reply = self.worker.launch("/turns", body)
         except WorkerUnreachable as exc:
             if not exc.sent:  # certainly never arrived: nothing was launched
-                self.ledger.refused(attempt_id)
-                turn["attempt_ids"].pop()
+                withdraw()
                 raise ResearchError("worker_unavailable", "The research service on the Pi is not running") from None
             code, reply = None, None  # it may or may not have arrived: from now on only ask about it
         if code == 409:
-            self.ledger.refused(attempt_id)
-            turn["attempt_ids"].pop()
+            withdraw()
             reason = reply.get("reason")
             if reason == "stale_instance":
                 self.state = "unknown"  # the reconciler learns the new instance

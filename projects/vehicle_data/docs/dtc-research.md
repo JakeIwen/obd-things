@@ -74,11 +74,11 @@ The browser supplies only the code's key. The advisor gathers: the code's record
 cached `/v1/diagnostics/dtcs` (Pi scan, in-vehicle scan or drive read), the owner's ignore note for
 the code, the module registry entry, the description-table entry, and the hand-reviewed
 `dtc_research_facts.json` (vehicle facts; per-code owner notes, seeded with the LED-lamp codes).
-VIN-shaped strings are masked in every prompt as it is built (`dtc_research_prompt`): the context,
+VIN-shaped strings (17 characters from the VIN alphabet, any case; a lower- or mixed-case token needs a digit) and, when the advisor's environment has `OBD_VIN`, that exact VIN in any case with spaces or hyphens between its characters, are masked in every prompt as it is built (`dtc_research_prompt`): the context,
 each follow-up question on resume, and every replayed question and answer. The records on the Pi
 keep the owner's text as he typed it; only what leaves the Pi is masked. Residual: apart from that
 mask the owner's own text (his follow-up questions, his ignore note) is passed as he wrote it, so a
-location he types reaches the model provider and possibly a search query. Nothing else is promised. The system text tells the model web pages are
+location he types reaches the model provider and possibly a search query. An unknown VIN typed with spaces or hyphens between groups is not recognised: any 17 letters and digits in groups would also match prose. Nothing else is promised. The system text tells the model web pages are
 untrusted and asks for the report format (`SUMMARY:` line, then What it means / Likely causes on
 this van / What to check / Sources).
 
@@ -149,8 +149,10 @@ requires measuring again. Provisional values for the measurement itself: floor 9
 
 - Advisor: `/var/lib/van-telemetry-advisor/dtc-research/runs/*.json` (at most 60 records of at most
   420 KiB, about 25 MiB; the oldest finished run is evicted only once a new run's launch has been
-  admitted, so a refused start never costs a report, and a 61st file exists only during that
-  launch request) and `admissions.json` (the rolling 24-hour launch ledger: at most 60
+  admitted, so a refused start never costs a report, and a 61st record exists only during that
+  launch request; an eviction whose file cannot be removed drops the record from memory at once and the
+  file is retried by the next start and every reconciliation pass, and any excess loaded at startup is
+  trimmed by the first pass) and `admissions.json` (the rolling 24-hour launch ledger: at most 60
   entries, about 9 KiB at its largest; refused launches are removed at once and never counted).
 - Worker: everything research CLIs write is on `/var/lib/vanresearch`, a 224 MiB preallocated
   ext4 image (`/var/lib/vanresearch.img`) loop-mounted `nodev,nosuid,noexec`: the token, the
