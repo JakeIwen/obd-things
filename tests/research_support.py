@@ -12,6 +12,7 @@ from projects.vehicle_data.dtc_research_worker import Worker
 from projects.vehicle_data.model_cli_lock import CliLock
 from projects.vehicle_data.research_cli_policy import POLICY, IdentityChecker, digest_of, file_list
 from projects.vehicle_data.research_volume import Volume
+from projects.vehicle_data.research_worker_facts import DnsProbe
 from tests import fake_research_cli
 
 GIB = 1024 * 1024 * 1024
@@ -21,7 +22,7 @@ class WorkerRig:
     """Temp CLI root with a verified fake Claude copy, a volume with a token, a lock file and a
     ``/proc/meminfo`` stand-in; ``worker`` is a real ``Worker`` over them."""
 
-    def __init__(self, scenario=None, activated=True, available_bytes=4 * GIB):
+    def __init__(self, scenario=None, activated=True, available_bytes=4 * GIB, dns=None, settle=True):
         self.tmp = tempfile.TemporaryDirectory()
         root = Path(self.tmp.name)
         self.cli_root = root / "opt"
@@ -46,9 +47,21 @@ class WorkerRig:
         if activated:
             self.policy["memory"].update(measured=True, cli_digest=self.digest, measured_values={
                 "launch_floor_mib": 64, "tree_cap_mib": 4096, "critical_mib": 16})
+        self.resolved = []
+        given_dns = dns is not None
+        dns = dns or DnsProbe(resolve=lambda *args: self.resolved.append(args) or [()])
         self.worker = Worker(self.volume, IdentityChecker(self.cli_root, self.policy), CliLock(self.lock_path),
-                             meminfo=self.meminfo, policy=self.policy)
-        self.worker.dns_ok = lambda: True
+                             meminfo=self.meminfo, policy=self.policy, dns=dns)
+        if not given_dns:
+            self.worker.dns.start(force=True).join(5)  # one successful lookup: public DNS is usable
+        if settle:
+            self.worker.start()
+            self.settle()
+
+    def settle(self, timeout=10):
+        """Wait for a background check that began now: the copy is hashed, as on a worker past its start."""
+        _value, _at, current = self.worker.facts.current(timeout)
+        assert current, "the worker's background check did not finish"
 
     def set_available(self, available_bytes):
         self.meminfo.write_text(f"MemTotal: 3706880 kB\nMemAvailable: {available_bytes // 1024} kB\n")
@@ -80,6 +93,7 @@ class WorkerRig:
         raise AssertionError(f"attempt {attempt_id} did not finish")
 
     def close(self):
+        self.worker.close()
         for attempt in list(self.worker.table.tombstones.values()):
             attempt.cancelled.set()
         deadline = time.monotonic() + 10

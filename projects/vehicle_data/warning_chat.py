@@ -28,6 +28,7 @@ import uuid
 
 from projects.vehicle_data.api import TelemetryClient, _prepare_socket_path
 from projects.vehicle_data.assistant_common import ChatError, ID_RE, TOKEN_RE, now, require_keys
+from projects.vehicle_data.assistant_http import QuietDisconnects, send_json
 from projects.vehicle_data.assistant_slot import ModelSlot
 from projects.vehicle_data import dtc_research_service
 from projects.vehicle_data.engine_off_voltage import _atomic_json
@@ -786,16 +787,7 @@ class ChatHandler(http.server.BaseHTTPRequestHandler):
         pass
 
     def reply(self, status, payload):
-        body = json.dumps(payload, separators=(",", ":")).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        try:
-            self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):
-            pass
+        send_json(self, status, payload, headers=(("Cache-Control", "no-store"),))
 
     def handle_request(self, method):
         manager = self.server.manager
@@ -865,8 +857,9 @@ class ChatHandler(http.server.BaseHTTPRequestHandler):
         self.handle_request("POST")
 
 
-class ChatServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+class ChatServer(QuietDisconnects, socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
+    log_name = "advisor"
 
 
 def main():

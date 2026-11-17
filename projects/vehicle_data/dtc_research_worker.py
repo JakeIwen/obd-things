@@ -5,6 +5,11 @@ socket, no LAN, a fixed-size volume). It listens on a Unix socket for the adviso
 installer, admits one attempt at a time (``research_attempts``), takes the shared CLI lock so a
 warning-chat Codex never runs beside it, and runs the attempt (``research_runner``). It pings the
 systemd watchdog from its serving loop, so a stalled worker is killed with its whole cgroup.
+
+``GET /status`` answers within ``STATUS_WAIT_SECONDS`` plus a few reads of ``/proc`` and the
+volume: the slow facts (CLI identity, sign-in, public DNS) come from ``research_worker_facts``, and
+no request hashes the CLI copy or resolves a name, least of all while holding the attempt table's
+lock.
 """
 
 import argparse
@@ -21,6 +26,7 @@ import sys
 import threading
 import time
 
+from projects.vehicle_data.assistant_http import QuietDisconnects, send_json
 from projects.vehicle_data.dtc_research_contract import (
     MODEL_ID_RE, RUN_ID_RE, TIMEOUTS, WORKER, EFFORT_ORDER,
 )
@@ -31,11 +37,18 @@ from projects.vehicle_data.research_cli import read_token
 from projects.vehicle_data.research_cli_policy import IdentityChecker, POLICY
 from projects.vehicle_data.research_runner import Runner, TurnRequest
 from projects.vehicle_data.research_volume import Volume
+from projects.vehicle_data.research_worker_facts import DnsProbe, Facts, refusal_detail
 
 MAX_BODY = 512 * 1024
 ATTEMPT_RE = re.compile(r"[0-9a-f]{32}\Z")
 WATCHDOG_EVERY = 10
-DNS_HOSTS = ("api.anthropic.com",)
+PROVIDER_NAMES = ("claude", "codex")
+# The advisor's worker client gives up after 5 s and an install check's curl after 10 s: a status
+# reply waits at most this long for a fresh check, then answers from the last one.
+STATUS_WAIT_SECONDS = 1.0
+# A caller that stops sending or reading mid-request frees its handler thread after this long.
+REQUEST_IO_SECONDS = 15
+CHECKING = "the research service is still checking its CLI copies; try again in a minute"
 
 
 def prepare_socket(path):
@@ -65,50 +78,59 @@ def systemd_notify(message):
 
 
 class Worker:
-    def __init__(self, volume, identity, cli_lock, meminfo=Path("/proc/meminfo"), policy=POLICY):
+    def __init__(self, volume, identity, cli_lock, meminfo=Path("/proc/meminfo"), policy=POLICY, dns=None):
         self.volume, self.identity, self.cli_lock, self.meminfo, self.policy = volume, identity, cli_lock, meminfo, policy
         self.table = AttemptTable()
         self.runner = Runner(volume, identity, self.thresholds, meminfo=meminfo)
-        self._dns = (0.0, None)
+        self.dns = dns or DnsProbe()
+        self.facts = Facts(self._slow_facts, before=self.dns.start)
+
+    def start(self):
+        """Begin the background checks (the CLI copy's hash, the first DNS lookup) before anyone asks."""
+        self.facts.start()
+        self.facts.request()
+
+    def close(self):
+        self.facts.stop()
 
     # --- policy state ------------------------------------------------------------------------
+    # Request paths pass ``rehash=False``: a copy that changed since its last hash reads as
+    # ``checking`` (refused, retryable) until the background check has hashed it, so no request
+    # waits on a hash and none holds the attempt table's lock through one.
     def activation(self):
-        return research_memory.activation(self.policy["memory"], self.identity.check("claude").digest)
+        identity = self.identity.check("claude", rehash=False)
+        if identity.state == "checking":
+            return False, identity.reason
+        return research_memory.activation(self.policy["memory"], identity.digest)
 
     def thresholds(self):
         activated, _ = self.activation()
         return research_memory.thresholds(self.policy["memory"], measured=activated)
 
     def dns_ok(self):
-        checked, ok = self._dns
-        if time.monotonic() - checked < 60 and ok is not None:
-            return ok
-        results = []
+        return self.dns.usable()
 
-        def probe():
-            try:
-                socket.getaddrinfo(DNS_HOSTS[0], 443)
-                results.append(True)
-            except OSError:
-                results.append(False)
-
-        thread = threading.Thread(target=probe, daemon=True)
-        thread.start()
-        thread.join(2)
-        ok = bool(results and results[0])
-        self._dns = (time.monotonic(), ok)
-        return ok
-
-    def provider_status(self, provider):
-        identity = self.identity.check(provider)
+    def provider_status(self, provider, rehash=False):
+        identity = self.identity.check(provider, rehash=rehash)
         signed_in, reason = False, identity.reason
         if provider == "claude" and identity.state == "ok":
             token, problem = read_token(self.volume.token)
             signed_in, reason = token is not None, problem
         return {"identity": identity.state, "signed_in": signed_in, "reason": reason}
 
-    def status(self):
+    def _slow_facts(self):
+        """Run by ``self.facts`` on its own thread: the one caller that may hash a changed copy."""
+        providers = {name: self.provider_status(name, rehash=True) for name in PROVIDER_NAMES}
         activated, reason = self.activation()
+        return {"providers": providers, "memory_policy": {"activated": activated, "reason": reason}}
+
+    def status(self):
+        facts, checked_at, current = self.facts.current(STATUS_WAIT_SECONDS)
+        if facts is None:  # the first background check has not finished (a fresh start hashes the copy)
+            facts = {"providers": {name: {"identity": "checking", "signed_in": False, "reason": CHECKING}
+                                   for name in PROVIDER_NAMES},
+                     "memory_policy": {"activated": False, "reason": CHECKING}}
+        dns = self.dns.view()
         try:
             available = research_memory.mem_available_bytes(self.meminfo)
         except (OSError, ValueError):
@@ -118,8 +140,8 @@ class Worker:
         except OSError:
             free = None
         return {"instance_id": self.table.instance_id, "pid": os.getpid(), "job": self.table.job(),
-                "providers": {name: self.provider_status(name) for name in ("claude", "codex")},
-                "memory_policy": {"activated": activated, "reason": reason}, "dns_ok": self.dns_ok(),
+                "providers": facts["providers"], "memory_policy": facts["memory_policy"],
+                "checked_at": checked_at, "checks_current": current, "dns_ok": dns["ok"], "dns": dns,
                 "volume": {"free_bytes": free}, "mem_available_bytes": available}
 
     # --- admission ---------------------------------------------------------------------------
@@ -134,8 +156,10 @@ class Worker:
         status = self.provider_status(provider)
         if status["identity"] != "ok" or not status["signed_in"]:
             raise Refused("provider_unavailable", status["reason"] or f"{provider} is not available for research")
-        if not self.dns_ok():
-            raise Refused("provider_unavailable", "public DNS is unreachable from the research service")
+        dns = self.dns.view()
+        if not dns["ok"]:
+            self.dns.start()  # never waits; a retry a minute later sees its answer
+            raise Refused("provider_unavailable", refusal_detail(dns))
         if turn:
             activated, reason = self.activation()
             if not activated:
@@ -166,8 +190,9 @@ class Worker:
             raise Refused("invalid", "only Claude has a model check")
 
         def check():
-            if self.identity.check("claude").state != "ok":
-                raise Refused("provider_unavailable", self.identity.check("claude").reason)
+            identity = self.identity.check("claude", rehash=False)
+            if identity.state != "ok":
+                raise Refused("provider_unavailable", identity.reason)
             refusal = research_memory.launch_refusal(self.thresholds(), self.meminfo)
             if refusal:
                 raise Refused("low_memory", refusal)
@@ -298,19 +323,13 @@ def _turn_request(body):
 
 
 class WorkerHandler(http.server.BaseHTTPRequestHandler):
+    timeout = REQUEST_IO_SECONDS
+
     def log_message(self, *_args):
         pass
 
     def reply(self, status, payload):
-        body = json.dumps(payload, separators=(",", ":")).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        try:
-            self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):
-            pass
+        send_json(self, status, payload)
 
     def body(self):
         length = int(self.headers.get("Content-Length", "0"))
@@ -392,8 +411,9 @@ def dispatch(worker, method, path, read):
     return 404, {"reason": "not_found", "detail": "unknown worker route"}
 
 
-class WorkerServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+class WorkerServer(QuietDisconnects, socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
+    log_name = "research-worker"
     _last_ping = 0.0
 
     def service_actions(self):
@@ -418,12 +438,14 @@ def main():
     prepare_socket(path)
     server = WorkerServer(str(path), WorkerHandler)
     server.worker = worker
+    worker.start()
     os.chmod(path, 0o600)
     signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=server.shutdown, daemon=True).start())
     systemd_notify("READY=1")
     try:
         server.serve_forever(poll_interval=.5)
     finally:
+        worker.close()
         for attempt in list(worker.table.tombstones.values()):
             attempt.cancelled.set()
         server.server_close()

@@ -136,7 +136,7 @@ class Catalog:
 
 def provider_available(status, provider):
     if not status.get("dns_ok"):
-        return False, "Public DNS is unreachable from the Pi's research service; research is unavailable on this network"
+        return False, dns_reason(status.get("dns"))
     state = (status.get("providers") or {}).get(provider) or {}
     if state.get("identity") != "ok":
         return False, state.get("reason") or f"{PROVIDERS[provider]['label']} is not available for research"
@@ -146,6 +146,17 @@ def provider_available(status, provider):
     if not memory.get("activated"):
         return False, memory.get("reason") or "Research is not activated on this Pi yet"
     return True, None
+
+
+def dns_reason(dns):
+    """The picker's reason when the worker reports public DNS unusable (its freshness rule failed).
+    ``dns`` is the worker's evidence; a worker older than it sends none."""
+    dns = dns if isinstance(dns, dict) else {}
+    if dns.get("result") == "pending" and not dns.get("reason"):
+        return "The research service is still checking public DNS; try again in a minute"
+    minutes = int(dns.get("fresh_seconds") or 300) // 60
+    return (f"Public DNS has not answered the Pi's research service in the last {minutes} minutes; "
+            "research is unavailable on this network for now")
 
 
 def _clean_models(models):
