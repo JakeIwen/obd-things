@@ -40,7 +40,8 @@ class RigClient:
 
     def __init__(self, rig):
         self.rig, self.down, self.lose_reply, self.drop_request = rig, False, False, False
-        self.launches, self.deleted = [], []
+        self.hold_request = False  # the launch request is delayed in transit; ``deliver_held`` sends it
+        self.launches, self.deleted, self.held = [], [], []
         self.garbled_replies = 0  # attempt replies that break the follow thread (an unforeseen bug)
 
     def _call(self, method, path, payload=None):
@@ -58,6 +59,9 @@ class RigClient:
         self.launches.append(body["attempt_id"])
         if self.drop_request:
             raise WorkerUnreachable("lost before arrival")
+        if self.hold_request:
+            self.held.append((route, body))
+            raise WorkerUnreachable("no reply yet; the request is still in transit")
         reply = self._call("POST", route, body)
         if self.lose_reply:
             raise WorkerUnreachable("lost after arrival")
@@ -74,6 +78,17 @@ class RigClient:
 
     def cancel(self, attempt_id):
         self._call("POST", f"/attempts/{attempt_id}/cancel")
+
+    def fence(self, attempt_id):
+        status, body = self._call("POST", f"/attempts/{attempt_id}/fence")
+        if status != 200:
+            raise WorkerUnreachable(f"fence answered {status}")
+        return body
+
+    def deliver_held(self):
+        """The delayed launch requests finally reach the worker: ``[(status, reply), ...]``."""
+        held, self.held = self.held, []
+        return [self._call("POST", route, body) for route, body in held]
 
     def sweep(self, keep):
         return self._call("POST", "/sweep", {"keep": sorted(keep)})
@@ -459,6 +474,16 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(self.rig.worker.table.get(attempt)["outcome_state"], "acknowledged")
         self.assertEqual(store.records[run["run_id"]]["turns"][0]["state"], "complete")
         self.manager = restarted
+
+    def test_an_unknown_attempt_is_fenced_before_it_is_called_interrupted(self):
+        self.client.hold_request = True  # the POST is still in transit when the advisor asks about it
+        run = self.start()
+        self.client.hold_request = False
+        run = self.settle(run["run_id"])
+        self.assertEqual((run["state"], run["reason"]), ("failed", "interrupted"))
+        [(status, reply)] = self.client.deliver_held()  # the original request finally arrives
+        self.assertEqual((status, reply["reason"]), (409, "duplicate_attempt"))
+        self.assertEqual(self.rig.prompts(), [])  # nothing was launched behind the dashboard's back
 
 if __name__ == "__main__":
     unittest.main()

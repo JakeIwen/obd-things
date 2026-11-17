@@ -363,7 +363,7 @@ def dispatch(worker, method, path, read):
         job = worker.table.job()
         busy = {job["run_id"]} if job and job.get("run_id") else set()
         return 200, {"removed": worker.volume.sweep(set(keep) | busy)}
-    match = re.fullmatch(r"/attempts/([0-9a-f]{32})(/ack|/cancel)?", path)
+    match = re.fullmatch(r"/attempts/([0-9a-f]{32})(/ack|/cancel|/fence)?", path)
     if match:
         if method == "GET" and not match[2]:
             return 200, worker.table.get(match[1])
@@ -371,6 +371,8 @@ def dispatch(worker, method, path, read):
             return 200, {"known": worker.table.acknowledge(match[1])}
         if method == "POST" and match[2] == "/cancel":
             return 200, {"known": worker.table.cancel(match[1])}
+        if method == "POST" and match[2] == "/fence":
+            return 200, worker.table.fence(match[1])
     match = re.fullmatch(r"/maintenance/([0-9a-f]{32})(/step|/end)?", path)
     if match:
         if method == "GET" and not match[2]:

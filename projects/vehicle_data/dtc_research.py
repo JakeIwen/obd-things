@@ -3,8 +3,9 @@
 The advisor never launches a research CLI itself. It validates a request, gathers the code's
 context from the broker, admits the launch in the durable ledger, and sends the research worker
 one launch request per ``attempt_id``, ever (the send-once rule). After that it only asks about the
-attempt: an adopted outcome is saved and acknowledged; an attempt the worker does not know, or
-whose outcome was dropped, makes the turn ``interrupted``. It never infers that research is idle
+attempt: an adopted outcome is saved and acknowledged; an attempt whose outcome was dropped, or
+that the worker does not know and has fenced (so the launch can no longer arrive late), makes the
+turn ``interrupted``. It never infers that research is idle
 from a timeout, and it acknowledges an outcome only once the record holding it is on disk: a failed
 write keeps the follow thread asking (and, if a follow thread itself fails, the turn goes back to
 reconciliation). See docs/dtc-research.md.
@@ -267,7 +268,7 @@ class ResearchManager:
         expected = self.instance_id
         while not self.closed.is_set():
             try:
-                state = self.worker.attempt(attempt_id)
+                state = self.fence_unknown(attempt_id, self.worker.attempt(attempt_id), expected)
             except WorkerUnreachable:
                 time.sleep(LOST_POLL_SECONDS)
                 continue
@@ -286,6 +287,16 @@ class ResearchManager:
             else:
                 self._progress(run_id, attempt_id, state)
             time.sleep(self.poll)
+
+    def fence_unknown(self, attempt_id, state, expected):
+        """The worker's final word on an attempt. ``known: false`` from the instance the launch was
+        addressed to may only mean the request is still in transit, so the attempt is fenced and the
+        fence's reply is the answer: still unknown means it can never launch, known means the request
+        arrived after all. From another instance the answer stands: a late request names the old
+        instance and is refused as ``stale_instance``."""
+        if state.get("known") or state.get("instance_id") != expected:
+            return state
+        return self.worker.fence(attempt_id)
 
     def _progress(self, run_id, attempt_id, state):
         with self.lock:

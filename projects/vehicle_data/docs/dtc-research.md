@@ -116,7 +116,15 @@ Codex launch path in `research_runner.py` (the argv builder, stream reader and t
   process group is reaped. Each attempt has an `attempt_id`; the worker remembers every one it
   admitted (4,096 tombstones) and never launches one twice. The advisor sends a launch for an
   attempt at most once and afterwards only asks about it; a launch carries the worker instance it
-  expects. An attempt the worker does not know, or whose outcome it dropped, becomes `interrupted`.
+  expects. An attempt whose outcome the worker dropped becomes `interrupted`. One the worker says
+  it does not know may only have a launch request still in transit, so the advisor first fences it
+  (`POST /attempts/<id>/fence`, atomic with admission: the worker records a tombstone, so a late
+  request with that id is refused as `duplicate_attempt`) and calls it `interrupted` only once the
+  fence is confirmed; a `known: false` from a newer worker instance needs no fence, since a late
+  request names the old instance and is refused as `stale_instance`. Cancelling an unknown id
+  fences it too. Every research CLI process (turns, the model check, an installer's `--help`)
+  starts through the runner's one guarded launch: the launch floor is checked just before each
+  spawn, the memory and space watchdogs run, and an already-cancelled attempt never spawns.
 - The warning chat and research exclude each other with a `flock` on
   `/run/van-assistant/model-cli.lock`, held by the launching process from just before spawning
   until the child is reaped. If a holder dies, the kernel releases the lock and systemd kills the
@@ -140,7 +148,9 @@ requires measuring again. Provisional values for the measurement itself: floor 9
 ## Storage and its bounds
 
 - Advisor: `/var/lib/van-telemetry-advisor/dtc-research/runs/*.json` (at most 60 records of at most
-  420 KiB, about 25 MiB) and `admissions.json` (the rolling 24-hour launch ledger: at most 60
+  420 KiB, about 25 MiB; the oldest finished run is evicted only once a new run's launch has been
+  admitted, so a refused start never costs a report, and a 61st file exists only during that
+  launch request) and `admissions.json` (the rolling 24-hour launch ledger: at most 60
   entries, about 9 KiB at its largest; refused launches are removed at once and never counted).
 - Worker: everything research CLIs write is on `/var/lib/vanresearch`, a 224 MiB preallocated
   ext4 image (`/var/lib/vanresearch.img`) loop-mounted `nodev,nosuid,noexec`: the token, the

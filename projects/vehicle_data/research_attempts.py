@@ -4,7 +4,9 @@ One attempt at a time. An attempt is admitted under one lock: the caller's expec
 must match, its ``attempt_id`` must be new to this instance, and the slot must be free; then the
 attempt holds the slot until its process group is reaped. Every admitted attempt leaves a
 tombstone for this instance's lifetime (bounded by count), so a repeated id is always recognised
-and never launched twice. Finished outcomes are kept until the advisor acknowledges them.
+and never launched twice. Finished outcomes are kept until the advisor acknowledges them. An id
+the worker has never seen can be fenced (``fence``, also done by ``cancel``): it gets a tombstone
+at once, so a launch request still in transit for it is refused as ``duplicate_attempt``.
 """
 
 from collections import OrderedDict
@@ -17,7 +19,7 @@ from projects.vehicle_data.dtc_research_contract import WORKER
 
 TOMBSTONES_KEPT = WORKER["tombstonesKept"]
 OUTCOMES_KEPT = WORKER["outcomesKept"]
-KINDS = ("turn", "discovery", "maintenance")
+KINDS = ("turn", "discovery", "maintenance", "fenced")
 
 
 class Refused(Exception):
@@ -113,11 +115,29 @@ class AttemptTable:
             return attempt is not None
 
     def cancel(self, attempt_id):
+        """Cancel an attempt (one still ``accepted`` then never spawns); an unknown id is fenced."""
         with self.lock:
             attempt = self.tombstones.get(attempt_id)
-            if attempt and attempt.state != "finished":
+            if attempt is None:
+                self.fence(attempt_id)
+                return False
+            if attempt.state != "finished":
                 attempt.cancelled.set()
-            return attempt is not None
+            return True
+
+    def fence(self, attempt_id):
+        """Resolve or fence, atomically with admission: a known attempt's state, or else a new
+        tombstone (``state`` finished, ``outcome_state`` dropped) so a later launch with this id is
+        refused, and ``{known: false, fenced: true}``. Raises ``Refused`` when the table is full."""
+        with self.lock:
+            attempt = self.tombstones.get(attempt_id)
+            if attempt is not None:
+                return attempt.public(self.instance_id)
+            if len(self.tombstones) >= TOMBSTONES_KEPT and not self._evict_one():
+                raise Refused("busy", "the research worker's attempt table is full of unacknowledged results")
+            self.tombstones[attempt_id] = Attempt(attempt_id, "fenced", state="finished", phase=None,
+                                                  outcome_state="dropped")
+            return {"instance_id": self.instance_id, "known": False, "fenced": True}
 
     def job(self):
         with self.lock:

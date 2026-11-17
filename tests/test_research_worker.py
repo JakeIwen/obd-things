@@ -237,6 +237,26 @@ class WorkerTests(unittest.TestCase):
             attempt.run_id, "claude", "sonnet", "medium", "initial", "report", "CONTEXT {}", 30, budget_usd=1))
         self.assertEqual((outcome["status"], outcome["reason"], attempt.state), ("cancelled", "cancelled", "accepted"))
 
+    def test_fencing_an_unknown_attempt_refuses_its_later_launch(self):
+        body = self.rig.turn_body()
+        status, reply = dispatch(self.worker, "POST", f"/attempts/{body['attempt_id']}/fence", lambda: {})
+        self.assertEqual((status, reply["known"], reply["fenced"]), (200, False, True))
+        self.assertEqual(reply["instance_id"], self.worker.table.instance_id)
+        with self.assertRaises(Refused) as late:
+            self.worker.admit_turn(body)  # the delayed original request
+        self.assertEqual(late.exception.reason, "duplicate_attempt")
+        self.assertEqual(self.worker.table.get(body["attempt_id"])["outcome_state"], "dropped")
+        cancelled = self.rig.turn_body()  # cancelling an id the worker never saw fences it too
+        dispatch(self.worker, "POST", f"/attempts/{cancelled['attempt_id']}/cancel", lambda: {})
+        with self.assertRaises(Refused) as after_cancel:
+            self.worker.admit_turn(cancelled)
+        self.assertEqual(after_cancel.exception.reason, "duplicate_attempt")
+        known, _ = self.run_turn()  # fencing a known attempt resolves it and changes nothing
+        _, reply = dispatch(self.worker, "POST", f"/attempts/{known['attempt_id']}/fence", lambda: {})
+        self.assertEqual((reply["known"], reply["outcome_state"]), (True, "held"))
+        self.assertNotIn("fenced", reply)
+        self.assertEqual(len(self.rig.calls()), 1)
+
     def test_routes_and_sweep(self):
         status, payload = dispatch(self.worker, "GET", "/status", None)
         self.assertEqual(status, 200)

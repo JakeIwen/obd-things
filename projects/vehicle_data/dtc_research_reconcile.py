@@ -3,7 +3,8 @@
 Research admission stays closed (``state == "unknown"``) until the worker has answered: a turn it
 still runs is adopted by its ``attempt_id``; any other job is cancelled (an installer's maintenance
 reservation is waited for); every turn left ``reconciling`` is asked about once, and an attempt the
-worker does not know, or whose outcome it dropped, becomes ``interrupted``. Nothing is ever
+worker does not know (and has fenced against a late launch), or whose outcome it dropped, becomes
+``interrupted``. Nothing is ever
 relaunched here, and nothing is inferred from a timeout: an unreachable worker keeps the state
 ``unknown`` and research answers ``worker_unavailable``. An outcome is acknowledged only after its
 record was saved; a failed write keeps the state ``unknown`` and the pass is retried.
@@ -87,7 +88,7 @@ class Reconciler:
                 return False
         for attempt_id, run_id in pending.items():
             try:
-                state = manager.worker.attempt(attempt_id)
+                state = manager.fence_unknown(attempt_id, manager.worker.attempt(attempt_id), manager.instance_id)
             except WorkerUnreachable:
                 return False
             if state.get("known") and state.get("outcome_state") == "held":

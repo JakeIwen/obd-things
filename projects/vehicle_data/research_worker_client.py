@@ -54,6 +54,14 @@ class WorkerClient:
     def cancel(self, attempt_id):
         self._call("POST", f"/attempts/{attempt_id}/cancel", {})
 
+    def fence(self, attempt_id):
+        """The attempt's state if the worker knows it, else ``{known: false, fenced: true}`` once the
+        worker has recorded that a later launch with this id is refused."""
+        status, body = self._call("POST", f"/attempts/{attempt_id}/fence", {})
+        if status != 200:
+            raise WorkerUnreachable(f"worker fence answered {status}")
+        return body
+
     def sweep(self, keep):
         return self._call("POST", "/sweep", {"keep": sorted(keep)})
 
