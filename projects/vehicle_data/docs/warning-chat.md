@@ -168,7 +168,12 @@ metrics and native units, above/below/absolute-magnitude-above comparisons,
 distinct-observation persistence, maximum sample age/gap, a bounded window,
 and optional fresh RPM >400 gating at each observation. Unsupported compound
 logic or unmapped metrics requires a separate development task; Codex must not
-silently approximate it.
+silently approximate it. The catalog includes `generator.field_duty` (the PCM's
+commanded alternator field duty, not current or temperature); built-in warnings
+still never use it as primary evidence, but a rule the owner defines himself may,
+and the setup prompt tells the model to say what it is. The advisor and the
+broker both read the catalog, so both services need a restart before a rule on
+it can be proposed and then loaded.
 
 Only the latest completed, validated proposal can be installed: the full rule
 and units are shown, and its exact proposal ID plus explicit owner approval are

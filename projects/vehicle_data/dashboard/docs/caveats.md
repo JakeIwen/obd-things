@@ -217,7 +217,9 @@ what they meant and where that information lives now.
     danger from it.
   - The house-battery DC-DC charger is a normal, substantial load, so 100 % occurs routinely and is
     not by itself a fault.
-  - The dashboard uses it only to back up a low running voltage.
+  - The dashboard uses it only to back up a low running voltage. No built-in warning uses it as
+    primary evidence; an owner-defined custom rule may (Add Early Warning lists it, and the chat
+    says it is a command).
   - Drive page 1 shows it on the Alternator field tile, with a 15-minute trend beside the battery
     voltage tile, so you can see charging effort and the voltage it produces together. It is read
     only while the Pi's engine-running reads are active; otherwise it shows `—`.

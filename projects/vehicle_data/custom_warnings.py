@@ -15,7 +15,7 @@ FIELDS = {"title", "metric", "operator", "threshold", "persistence_observations"
 
 def catalog():
     return {name: definition.public_dict() for name, definition in METRICS.items()
-            if definition.value_type == "number" and name != "generator.field_duty"
+            if definition.value_type == "number"
             and any(s.quality in ("verified", "observed_alfa_scale") for s in definition.sources)}
 
 

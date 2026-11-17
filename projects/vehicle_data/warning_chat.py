@@ -96,7 +96,9 @@ absolute magnitude. Conditions outside this schema require a separate implementa
 silently simplified rule. Do not claim a warning was applied. Fields in proposal, all required:
 title, metric, operator, threshold, persistence_observations, window_seconds, max_age_seconds,
 engine_running. Normally suggest 3 observations, 60 seconds, and a max age within the catalog limit.
-Explain persistence and any chosen defaults before approval. For an initial setup request ask
+Explain persistence and any chosen defaults before approval. generator.field_duty is the
+engine computer's commanded alternator field duty, not output current or temperature: say so
+when you propose a rule on it. For an initial setup request ask
 what the owner wants to monitor. User follow-ups revise the proposal, not the active rule.
 """
 

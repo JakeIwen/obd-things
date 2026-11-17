@@ -462,6 +462,9 @@ thermal-danger threshold. The routinely used house-battery DC-DC charger is a
 normal substantial alternator load and may drive this metric high. No default
 warning uses generator duty as its primary signal; it is only optional,
 explanatory corroboration for a separately persistent low-voltage deviation.
+Owner-defined custom threshold rules may use it (it is in the Add Early Warning
+catalog): the owner chooses the number, the chat says it is a command, and such a
+rule is an owner monitoring reference, not evidence of alternator health.
 
 `engine.crankshaft_torque` is the PCM's diagnostic current-engine-torque
 value from DID `06DA`, decoded as signed `i16be x 0.04 Nm` and converted to

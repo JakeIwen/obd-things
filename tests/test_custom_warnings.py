@@ -4,7 +4,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from projects.vehicle_data.custom_warnings import validate_rule, load_rules, evaluate_rule
+from projects.vehicle_data.custom_warnings import catalog, validate_rule, load_rules, evaluate_rule
+from projects.vehicle_data.metrics import METRICS
 from projects.vehicle_data.early_warning import EarlyWarningEvaluator
 
 
@@ -90,6 +91,19 @@ class CustomWarningTests(unittest.TestCase):
         self.history.latest = sample(value=-13)
         self.history.points = [sample(value=-13, seconds=n) for n in (0, 3, 6)]
         self.assertEqual(self.evaluate()["state"], "warning")
+
+    def test_alternator_field_duty_is_an_owner_rule_metric(self):
+        entries = catalog()
+        self.assertIn("generator.field_duty", entries)
+        rule = dict(RULE, title="Field duty high", metric="generator.field_duty",
+                    operator="above", threshold=95, max_age_seconds=4)
+        self.assertEqual(validate_rule(rule)["metric"], "generator.field_duty")
+        with self.assertRaises(ValueError):
+            validate_rule(dict(rule, max_age_seconds=5))  # the metric goes stale after 4 s
+        # The rest of the filter is unchanged: numeric metrics with an established source.
+        for name, definition in METRICS.items():
+            established = any(s.quality in ("verified", "observed_alfa_scale") for s in definition.sources)
+            self.assertEqual(name in entries, definition.value_type == "number" and established, name)
 
     def test_schema_and_limits_reject_unsafe_or_ambiguous_rules(self):
         for change in ({"command": "anything"}, {"metric": "generator.field_duty"},
