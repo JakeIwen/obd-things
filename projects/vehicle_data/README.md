@@ -116,7 +116,9 @@ data. The advisor writes `/var/lib/van-telemetry-advisor/early-warnings.json`;
 the production evaluator reloads it in existing background evaluations. Tests
 opt in with a temporary path. Built-ins are unaffected by configuration errors.
 The frontend distinguishes saved from broker-loaded rules and supports removal.
-See [warning chat](docs/warning-chat.md) for boundaries and activation.
+See [warning chat](docs/warning-chat.md) for boundaries and activation. The same advisor
+serves the diagnostic-code research routes ([DTC research](docs/dtc-research.md)); a
+warning-chat Codex and a research CLI never run at the same time.
 Source is updated; advisor/web restarts and one safe parked broker restart are
 needed. No live warning was installed during tests.
 
@@ -2094,6 +2096,17 @@ cache or `GET /v1/diagnostics/dtcs`. A code is identified by
 - **Code.** `dtc_ignore.py` (validation, the store, bounds) with `dtc_ignore.json`
   (path, actions and limits, shared with the dashboard); the broker and
   `api_server.py` only route to it. Tests: `tests/test_dtc_ignore.py`.
+
+### Code research with AI (2026-11-16; built, not yet deployed)
+
+Each code on the Codes card can be researched by a model the owner picks: it searches the web
+for what the code means on this van, the report is kept on the Pi, its one-line summary shows on
+the row, and the owner can ask follow-ups in the same model session. This round is a partial
+milestone: Claude only; Codex is blocked until a CLI version passes the tool-inventory check.
+The contract (routes, sizes, the research worker and its sandbox, the shared CLI lock with the
+warning chat, memory policy, storage bounds, deploy, activation and rollback) is
+[DTC research](docs/dtc-research.md). The advisor serves the routes beside the warning chat;
+`van-telemetry-research.service` is the only process that launches a research CLI.
 
 ### Last-recorded display policy (September 20 audit)
 

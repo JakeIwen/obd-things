@@ -191,6 +191,14 @@ cannot remove built-in warnings, and Codex receives no shell, app-source,
 filesystem-write, CAN or service-control tools. Approved configuration is the
 bounded app-modification path.
 
+The same advisor also serves the diagnostic-code research routes (`/v1/assistant/models`,
+`/v1/assistant/dtc-research*`; contract in [DTC research](dtc-research.md)). A warning-chat
+Codex and a research CLI never run at the same time: the warning chat's slot
+(`assistant_slot.ModelSlot`) also takes the shared CLI lock `/run/van-assistant/model-cli.lock`,
+and while research holds it a new question gets `429` "A diagnostic-code research job is running;
+ask again when it finishes". When the lock file is absent (research not installed) the warning
+chat carries on without it.
+
 API surface (all require the local capability and browser key):
 
 - `GET /v1/assistant/status`
