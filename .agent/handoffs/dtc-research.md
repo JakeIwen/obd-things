@@ -1,7 +1,7 @@
 ---
 workstream: dtc-research
 tier: T3
-status: merged; install attempted 2026-11-17, stopped on post-install status/journal check; research service and mount disabled, prior advisor unit restored; runtime rollback incomplete because another session owns checkout/frontend deployment; worker-status fix built on branch worktree-agent-af864ffa0846cdc53, awaiting cross-family review, then a re-install
+status: merged; worker-status fix merged (232361e); installed on vanpi 2026-11-17 05:02-05:06 MST up to but not including activation, every pre-sign-in check passed; next is the owner's research sign-in, then measurement and the activation commit
 last reviewed commit: 7df1eae (implementation, Astra verdict ship); plan 31ed98b (Astra verdict ship)
 ---
 
@@ -36,10 +36,76 @@ below describe closed findings, not pending reviews. The standing contract is
 `projects/vehicle_data/docs/dtc-research.md`; the deploy runbook is section 7. This remains a
 Claude-only milestone; Codex research stays unavailable until F3.
 
-### Pi installation attempt, 2026-11-17 (all times MST)
+### Pi installation retry, 2026-11-17 05:02-05:07 MST: installed and verified (not activated)
 
-The pre-activation installation stopped at its post-CLI-install status/journal check. **Do not
-start owner sign-in or the activation prompt yet.** The research service and mount are disabled
+Master `232361e` (worker-status fix merged). Runbook section 7 steps 0-5 ran in order, each dry run
+first; every check passed. Not done, by design: owner sign-in, `--measure`, `--budget-check`, the
+activation commit, any model turn, anything for Codex. No broker restart (`van-telemetry.service`
+still from 04:06:21), nothing sent on CAN, no package change, no reboot. Evidence (survives a
+reboot): `/home/pi/Documents/agent-shared/from-agents/dash-20261116/research-deploy/retry-20261117/`.
+
+- Preconditions, verified read-only: clean `master == origin/master == 232361e`; step 0 budget
+  lines (`/var/lib/vanresearch.img:232`, `/var/lib/van-telemetry-advisor:160`,
+  `/opt/van-research-cli:1024`) and Borg exclusions present; van asleep, running false; 27 GiB free
+  on `/`; load 1.9; `MemAvailable` 1,555 MiB. Retained from the first attempt, as expected: image
+  (224 MiB, root 0600), the verified 2.1.325 copy (`identity.json` passed, digests equal), empty
+  staging, unit and tmpfiles files identical to master, research unit and mount disabled/inactive,
+  installed advisor unit equal to the saved pre-research copy.
+- Step 1-2 (05:02:29-05:02:35): dry run matched (image kept, the other 13 steps in order); install
+  enabled the mount (`/dev/loop0`, ext4, `nosuid,nodev,noexec,noatime`, root `pi 700`, 204 MiB
+  usable), the worker (NRestarts 0, OOMScoreAdjust 800, ControlGroup
+  `/system.slice/van-telemetry-research.service`; bpftool lists `sd_fw_ingress`/`sd_fw_egress`) and
+  restarted the advisor on the master unit. Lock `-rw-r----- pi pi`. Status at 05:02:40 answered in
+  1.02 s with `checking` (`checks_current` false); at 05:02:44 in 0.64 s with Claude `ok`, not
+  signed in; Codex `disabled` (not-yet-verified reason); memory not activated; DNS `ok` in 0.088 s.
+  First background hash after the worker start (05:02:34): about 11 s.
+- Step 3 (05:03:01): both web units restarted; `/v1/assistant/models` without key → 401 on the
+  second try (1 s).
+- Step 4 (owner decision for this stage): advisor active, NRestarts 0, `/v1/assistant/status`
+  without key → 401, advisor journal clean. The owner asks one real warning-chat question himself
+  later.
+- Step 5 (05:03:17-05:04:25): reservation opened, verification passed, 2.1.325 re-promoted,
+  `identity.json` `2.1.325 passed True` (verified 05:04:23), no `last_failed_install`. Worker
+  restarted active at 05:04:25.43; the runbook's poll printed `ready=yes` on round 3: rounds 1-2
+  answered in 1.03 s and 1.05 s with `checking`, round 3 in 0.03 s with Claude `ok`. **First hash
+  after the restart: 12.9 s** (`checked_at` 05:04:38.28). Final status: Claude `ok`,
+  `signed_in` false ("Claude is not signed in for research yet"), Codex `disabled`, memory not
+  activated, `dns.result` `ok`, `seconds` 0.1, `job` null. Journals of the worker, advisor and both
+  web units since 05:02: no traceback, no error, no `assistant_http_client_gone`.
+- Sandbox probes (namespace visibility, not reached in the first attempt): a probe joined the
+  worker's cgroup and mount namespace as pi. `/home/pi` holds only `dev`; `secrets`, `.claude`,
+  `.codex`, `.local/bin/claude` do not exist there; checkout `tmp`, `.git`, `AGENTS.secret.md`,
+  `/run/van-telemetry`, `/run/van-telemetry-advisor`, `/run/dbus`, `/run/user`, `/run/tailscale`,
+  `/var/lib/van-telemetry`, `/var/lib/van-telemetry-advisor` are mode-000 inaccessible; the
+  checkout is not writable; `/etc/resolv.conf` is the tracked public-resolver file. Connects to
+  127.0.0.1, 192.168.6.103:8765, 192.168.6.1:80, 169.254.1.1 and 100.100.100.100 all timed out
+  (dropped) while the same LAN targets connect from outside the cgroup; 1.1.1.1:53 connected and
+  `api.anthropic.com` resolved. In the advisor's namespace `/var/lib/vanresearch` is mode 000 and
+  the lock is visible 0640. Worker process `NoNewPrivs 1`, `Seccomp 2`. Not probed: the address
+  family filter and seccomp from inside (a probe process does not inherit them; the unit settings
+  and the process's seccomp mode were read instead).
+- HTTP, LAN and Tailscale listeners: `/`, `/v1/snapshot`, `/v1/diagnostics/dtc-ignores` 200;
+  `GET /v1/assistant/models`, `/dtc-research`, `/status` and a same-origin POST without key 401;
+  cross-origin POST 403.
+- Frontend (05:06:22-05:06:29, load 3.1 before): `npm ci` and `npm run build` rebuilt the same
+  bundle (build `4eec25b5e3f6`, identical outputs, `builtAt` 05:06:29); served
+  `assets/chunk.5WIUNV4V.js` contains `Research with AI`.
+- Disk: `/` 28 G used, 27 G available before and after. Image 224 MiB logical, 4.5 MiB allocated;
+  volume 16 KiB used of 204 MiB; `/opt/van-research-cli` 348 MiB; advisor state 5.8 MiB.
+- Units left: mount and research worker enabled and active; advisor active (master unit, with
+  `InaccessiblePaths=-/var/lib/vanresearch`); both web units active; all NRestarts 0. The memory
+  controller is still off until the next reboot (`cgroup_enable=memory` was added to the boot
+  command line today), so `MemoryMax` is not yet enforced.
+
+Remaining, in order: the owner's research sign-in (`claude setup-token`, then
+`s dtc_research_signin claude`; check `s dtc_research_signin status`) and one real warning-chat
+question; memory measurement (runbook step 7, `uptime` calm); the reviewed activation commit
+(step 8); the budget check (step 9); the live acceptance check with real Claude turns (section 8).
+O1 and F1-F3 stay open.
+
+### Pi installation attempt, 2026-11-17 03:53-04:12 (all times MST; superseded by the retry above)
+
+The pre-activation installation stopped at its post-CLI-install status/journal check. The research service and mount were left disabled
 and inactive; the previous advisor unit is restored and the advisor was restarted. Runtime
 rollback is incomplete: the pre-merge code and old frontend were not restored, because another
 session advanced master and owns the live dashboard deployment. No research credentials or real
@@ -102,8 +168,8 @@ model turns were created. No broker restart or CAN operation was performed by th
 
 ### Worker status fix (2026-11-17, after the install stopped)
 
-Built in worktree branch `worktree-agent-af864ffa0846cdc53` (tier T3); it needs the cross-family
-review before merge, then the re-install below. No sandbox setting changed.
+Reviewed and merged into master (`232361e`); installed by the 05:02 retry above. No sandbox
+setting changed.
 
 What caused each failure (times MST):
 
@@ -168,10 +234,10 @@ minute. The journal has no traceback; an `assistant_http_client_gone` line must 
 caller that gave up. Load from another job no longer has to be avoided for status checks; still
 check `uptime` before the memory measurement.
 
-Next: review of this fix, merge, then retry the installation (runbook section 7) and finish all
-sandbox checks, including the namespace visibility probes. Only then: owner Claude sign-in and
-warning-chat question; memory measurement; reviewed activation commit; budget check and real-turn
-acceptance. O1 and F1–F3 remain open.
+The retry above verified each of these live (status bounds, first-hash time, DNS evidence, clean
+journals, namespace probes). Next: owner Claude sign-in and warning-chat question; memory
+measurement; reviewed activation commit; budget check and real-turn acceptance. O1 and F1–F3
+remain open.
 
 ### Implementation review fixes (2026-11-17, on top of `fef26e3`)
 
@@ -343,9 +409,9 @@ Not started: Codex launch path in `research_runner.py` and the per-model Codex v
 
 ### Remaining steps, in order
 
-1. Review and merge the worker status fix (Build status), then re-install.
-2. Retry and complete deploy runbook section 7 (root budgets/exclusions are deployed; owner
-   sign-in and the reviewed memory-policy commit remain), then section 8's live acceptance check.
+1. Runbook section 7 steps 6-9: owner sign-in, memory measurement, the reviewed memory-policy
+   (activation) commit, budget check (steps 0-5 are done and verified, Build status).
+2. Section 8's live acceptance check with real Claude turns.
 3. F3: pin a Codex version that passes the production tool-inventory check, then wire its launch and
    verification paths.
 
@@ -1621,9 +1687,9 @@ Codex has no live check this round; it is unavailable by design.
 ## Work remaining
 
 The implementation is reviewed and merged. Build status above is the authoritative installation
-record: the first live installation reached a verified CLI copy but stopped on the status/journal
-check, and the research worker and mount are disabled. Finish the coordinated rollback/diagnosis
-and retry before owner sign-in, measurement, activation and real-turn acceptance. The Mac rootfs
+record: the 05:02 retry installed everything up to activation and passed every check; the
+research worker and mount are enabled and active, research is not activated. Next: owner sign-in,
+measurement, activation and real-turn acceptance. The Mac rootfs
 budget and exclusions are deployed. The dashboard is merged; its current live deployment belongs
 to the dashboard-round session and must not be reverted by research rollback. Preserve O1 and
 F1–F3. When the workstream closes, promote durable facts and the completed runbook into the
