@@ -1,4 +1,4 @@
-"""What the research model is told, and how its report is read back. Pure.
+"""What the research model is told, and how its report is read back. Pure apart from reading ``OBD_VIN``.
 
 The system text is the same for both providers (Claude ``--system-prompt``, Codex
 ``developer_instructions``). The first turn sends the frozen context the advisor gathered; a
@@ -8,7 +8,9 @@ leaves the Pi in any part of it (the owner's questions included); the records on
 text as he typed it.
 """
 
+import functools
 import json
+import os
 import re
 
 from projects.vehicle_data.dtc_research_contract import (
@@ -42,11 +44,28 @@ REQUEST = "Research this code for this van and write the report."
 OMITTED = "(Earlier follow-ups were omitted to keep this conversation within its size limit.)"
 _SUMMARY_LINE = re.compile(r"summary:\s*(.*)", re.IGNORECASE)
 _EMPHASIS = re.compile(r"[*_`]+")
-VIN_RE = re.compile(r"\b[A-HJ-NPR-Z0-9]{17}\b")
+# A VIN has no I, O or Q. Upper case alone is recognised as before; a token typed in lower or mixed case
+# must also hold a digit, since every real VIN does and a long lower-case word has none.
+VIN_RE = re.compile(r"\b(?:[A-HJ-NPR-Z0-9]{17}|(?=[A-Za-z0-9]*\d)(?i:[A-HJ-NPR-Z0-9]{17}))\b")
 VIN_MASK = "[vehicle identifier omitted]"
+_SEPARATOR = r"[\s\-\u2010-\u2015]*"
+
+
+@functools.lru_cache(maxsize=4)
+def _known_vin_re(vin):
+    """The van's own VIN in any case, with spaces or hyphens between any of its characters. Unlike an
+    unknown 17-character group, this exact value cannot mangle prose."""
+    if not re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", vin, re.IGNORECASE):
+        return None
+    return re.compile(r"(?<![A-Za-z0-9])" + _SEPARATOR.join(map(re.escape, vin)) + r"(?![A-Za-z0-9])",
+                      re.IGNORECASE)
 
 
 def mask_vin_text(text):
+    """``text`` with the van's VIN (``OBD_VIN``, when the service has it) and every VIN-shaped token masked."""
+    known = _known_vin_re(os.environ.get("OBD_VIN", "").strip())
+    if known:
+        text = known.sub(VIN_MASK, text)
     return VIN_RE.sub(VIN_MASK, text)
 
 

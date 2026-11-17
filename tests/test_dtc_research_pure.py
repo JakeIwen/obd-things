@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 import json
+import os
 from pathlib import Path
 import re
 import tempfile
@@ -13,7 +14,9 @@ from projects.vehicle_data.dtc_research_contract import (
     CONTRACT, ResearchError, encoded_len, relay_allowed, truncate_encoded, validate_post,
 )
 from projects.vehicle_data.dtc_research_ledger import Ledger
-from projects.vehicle_data.dtc_research_prompt import REPORT_SECTIONS, parse_report, replay_prompt
+from projects.vehicle_data.dtc_research_prompt import (
+    REPORT_SECTIONS, VIN_MASK, first_prompt, follow_up_prompt, mask_vin, parse_report, replay_prompt,
+)
 
 REQUEST_ID = "a" * 32
 VIN_LIKE = re.compile(r"\b[A-HJ-NPR-Z0-9]{17}\b")
@@ -121,6 +124,40 @@ class Broker:
         if path == "/v1/diagnostics/dtc-ignores" and self.ignores is not None:
             return 200, self.ignores
         raise OSError("down")
+
+
+class VinMaskTests(unittest.TestCase):
+    VIN = "1C6TRVDG0NE123456"  # synthetic
+
+    def prompts(self, vin):
+        context = {"owner_code_note": f"van {vin}"}
+        return [first_prompt(context), follow_up_prompt(f"is {vin} recalled?"),
+                replay_prompt(context, f"report {vin}", [(f"ask {vin}", f"answer {vin}")], f"now {vin}?")]
+
+    def test_a_vin_in_any_case_never_leaves_the_pi_in_any_prompt(self):
+        for vin in (self.VIN, self.VIN.lower(), "1c6TRVdg0nE123456"):
+            for prompt in self.prompts(vin):
+                self.assertNotIn(vin.lower(), prompt.lower())
+                self.assertIn(VIN_MASK, prompt)
+        self.assertNotIn(self.VIN.lower(), json.dumps(mask_vin({"a": [self.VIN.lower()]})))
+
+    def test_the_vans_own_vin_is_masked_with_separators_and_any_case(self):
+        with mock.patch.dict(os.environ, {"OBD_VIN": self.VIN}):
+            for typed in ("1c6 trvdg 0ne 123456", "1C6-TRVDG-0NE-123456", "1c6trvdg0ne123456", "1C6TRVDG0NE 123456"):
+                self.assertEqual(follow_up_prompt(f"my van is {typed}."), f"my van is {VIN_MASK}.")
+            self.assertEqual(follow_up_prompt("1C6TRVDG0NE1234567"), "1C6TRVDG0NE1234567")  # a longer token
+
+    def test_ordinary_text_is_left_alone(self):
+        with mock.patch.dict(os.environ, {"OBD_VIN": self.VIN}):
+            for text in ("part 1C6TRVDG0NE1234Q6 and 68XIO1234567890AB", "see https://example.com/tsb/radar-alignment-2021/18-045-21.pdf?x=1c6-trvdg-0ne",
+                         "C1418-78 and B1040-64 then C1512 88 with U0100 and nothing else",
+                         "abcdefghjklmnprst is a lower-case run without a digit"):
+                self.assertEqual(follow_up_prompt(text), text)
+
+    def test_a_spaced_vin_is_not_guessed_at_when_the_vans_vin_is_unknown(self):
+        text = "1C6 TRVDG 0NE 123456 typed with spaces"  # any 17 letters and digits in groups would match prose
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(follow_up_prompt(text), text)
 
 
 class ContextTests(unittest.TestCase):
