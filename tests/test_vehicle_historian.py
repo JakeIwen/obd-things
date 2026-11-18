@@ -1100,5 +1100,35 @@ class HistorianMaintenanceTests(unittest.TestCase):
             HistorianConfig(raw_retention_days=True)
 
 
+class RecordingReadingsTests(unittest.TestCase):
+    """The one-recording read behind owner custom early warnings."""
+
+    def test_recording_readings_returns_the_newest_snapshot_with_rpm_and_predecessor(self):
+        rpm, battery = definition("engine.rpm", "rpm"), definition("battery.voltage", "V", stale=30)
+        start = datetime(2026, 8, 20, 12, 0, tzinfo=UTC)
+        with tempfile.TemporaryDirectory() as tmp, TelemetryHistorian(Path(tmp) / "h.sqlite3") as historian:
+            self.assertIsNone(historian.recording_readings(["battery.voltage"], at=start))
+            ids = []
+            for offset, value in ((0, 12.1), (5, None), (10, 11.9)):
+                at = start + timedelta(seconds=offset)
+                values = {"engine.rpm": available(rpm, 800.0, at, age_ms=50),
+                          "battery.voltage": unavailable(battery) if value is None
+                          else available(battery, value, at - timedelta(seconds=2), age_ms=2000)}
+                ids.append(historian.ingest_snapshot(snapshot(at, [rpm, battery], values), captured_at=at).snapshot_id)
+            middle = historian.recording_readings(["battery.voltage", "vehicle.speed"], at=start + timedelta(seconds=9))
+            self.assertEqual((middle["snapshot_id"], middle["previous_snapshot_id"]), (ids[1], ids[0]))
+            self.assertIsNone(middle["readings"]["battery.voltage"])
+            self.assertIsNone(middle["readings"]["vehicle.speed"])
+            self.assertEqual(middle["rpm"]["value"], 800.0)
+            latest = historian.recording_readings(["battery.voltage"], at=start + timedelta(seconds=10))
+            reading = latest["readings"]["battery.voltage"]
+            self.assertEqual((latest["snapshot_id"], latest["previous_snapshot_id"]), (ids[2], ids[1]))
+            self.assertEqual((reading["value"], reading["source_age_ms"], reading["freshness"]), (11.9, 2000, "fresh"))
+            self.assertEqual(reading["captured_at"], (start + timedelta(seconds=10)).isoformat())
+            self.assertEqual(latest["trip_id"], reading["trip_id"])
+            first = historian.recording_readings(["battery.voltage"], at=start)
+            self.assertIsNone(first["previous_snapshot_id"])
+
+
 if __name__ == "__main__":
     unittest.main()

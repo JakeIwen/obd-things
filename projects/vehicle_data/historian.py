@@ -76,6 +76,7 @@ from .history.validation import (
 )
 
 from .history.advisories import AdvisoryMixin as _AdvisoryMixin
+from .history.custom_rule_queries import CustomRuleQueryMixin as _CustomRuleQueryMixin
 from .history.ingest import IngestMixin as _IngestMixin
 from .history.queries import QueryMixin as _QueryMixin
 from .history.rollups import RollupMixin as _RollupMixin
@@ -88,6 +89,7 @@ class TelemetryHistorian(
     _IngestMixin,
     _RollupMixin,
     _QueryMixin,
+    _CustomRuleQueryMixin,
     _RunningTotalsMixin,
     _AdvisoryMixin,
 ):
