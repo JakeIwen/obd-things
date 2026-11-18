@@ -10,7 +10,8 @@
     ],
     "allowed_tools": ["WebSearch", "WebFetch"],
     "models": ["opus", "fable", "sonnet", "haiku"],
-    "budget_usd": {"report": 5, "follow_up": 2}
+    "budget_usd": {"report": 5, "follow_up": 2},
+    "api_credits": {"enabled": true}
   },
   "codex": {
     "enabled": false,

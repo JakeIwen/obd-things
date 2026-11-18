@@ -26,6 +26,14 @@ def require_distinct_output(
         raise ValueError("report output must differ from every evidence input")
 
 
+def _fsync_directory(directory: Path) -> None:
+    descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def atomic_json(
     path: str | os.PathLike[str],
     payload: object,
@@ -38,6 +46,7 @@ def atomic_json(
     sort_keys: bool = False,
     ensure_ascii: bool = True,
     fsync: bool = False,
+    fsync_dir: bool = False,
     cleanup: Literal["failure", "always-best-effort", "none"] = "failure",
 ) -> None:
     """Write JSON plus one newline, then replace the destination.
@@ -53,7 +62,9 @@ def atomic_json(
       OSError from either that check or unlink;
     * none: leave a failed temporary write in place.
 
-    No directory fsync, directory creation, or overwrite refusal is added here.
+    ``fsync_dir`` (default off) also fsyncs the destination's directory after the replace, so a
+    crash cannot lose the rename; ``fsync`` alone makes only the file's bytes durable.
+    No directory creation or overwrite refusal is added here.
     """
     handle = None
     if temporary is None:
@@ -77,6 +88,8 @@ def atomic_json(
                 os.fsync(handle.fileno())
         os.replace(temporary, path)
         completed = True
+        if fsync_dir:
+            _fsync_directory(Path(path).parent)
     finally:
         if cleanup == "always-best-effort":
             try:

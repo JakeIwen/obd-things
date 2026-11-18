@@ -11,6 +11,9 @@ import json
 import os
 from pathlib import Path
 
+from projects.vehicle_data.api_credits import (
+    API_KEY_SOURCE, NO_KEY_SOURCE, PRE_INIT_RESULT, TYPED_ERRORS, UsageTally,
+)
 from projects.vehicle_data.cli_process import StopRun
 from projects.vehicle_data.dtc_research_prompt import SYSTEM
 from projects.vehicle_data.research_cli_policy import POLICY
@@ -45,6 +48,15 @@ def claude_env(home, tmpdir, token):
     env = _base_env(home, tmpdir)
     env.update(CLAUDE_CONFIG_DIR=str(Path(home) / ".claude"), CLAUDE_CODE_OAUTH_TOKEN=token,
                DISABLE_AUTOUPDATER="1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1")
+    return env
+
+
+def claude_credit_env(home, tmpdir, key):
+    """A credit launch's environment: the subscription one without the OAuth token, plus the API key
+    and the public API endpoint (never a locally set base URL). Only this one child ever gets the key."""
+    env = claude_env(home, tmpdir, "")
+    del env["CLAUDE_CODE_OAUTH_TOKEN"]
+    env.update(ANTHROPIC_API_KEY=key, ANTHROPIC_BASE_URL="https://api.anthropic.com")
     return env
 
 
@@ -92,10 +104,18 @@ def parse_discovery(event):
 
 
 class ClaudeStream:
-    """Reads ``--output-format stream-json`` events; raises ``StopRun`` on anything outside policy."""
+    """Reads ``--output-format stream-json`` events; raises ``StopRun`` on anything outside policy.
 
-    def __init__(self, expected_session):
+    ``credit`` marks a launch billed to the API key: init must then report that key as its source
+    (else the worker stops it as ``key_ignored``), a subscription launch must report none, and a
+    credit launch's result events feed ``tally``."""
+
+    def __init__(self, expected_session, *, credit=False):
         self.expected_session = expected_session
+        self.credit = credit
+        self.tally = UsageTally()
+        self.typed_error = None
+        self.api_key_source = None
         self.allowed = set(POLICY["claude"]["allowed_tools"])
         self.session_id = None
         self.searches = self.pages = 0
@@ -106,6 +126,11 @@ class ClaudeStream:
     def __call__(self, event):
         kind = event.get("type")
         if self.session_id is None:
+            if self.credit and kind == "result" and self._is_failed_result(event):
+                # Diagnostic evidence only: it authorizes nothing and ends the run.
+                self.result = event
+                self.tally.add(event)
+                raise StopRun(PRE_INIT_RESULT, "Claude ended before it started", immediate=True)
             if kind != "system" or event.get("subtype") != "init":
                 raise StopRun("protocol_error", "Claude did not start with its init event")
             tools = event.get("tools")
@@ -114,8 +139,11 @@ class ClaudeStream:
             self.session_id = event.get("session_id")
             if self.session_id != self.expected_session:
                 raise StopRun("resume_unverified", "Claude started a different session", immediate=True)
+            self._check_key_source(event)
             return
         if kind == "assistant":
+            if isinstance(event.get("error"), str):
+                self.typed_error = event["error"] if event["error"] in TYPED_ERRORS else None
             for block in (event.get("message") or {}).get("content") or []:
                 if isinstance(block, dict) and block.get("type") == "tool_use":
                     self._tool(block.get("name"))
@@ -123,9 +151,22 @@ class ClaudeStream:
                     self.phase = "writing"
         elif kind == "result":
             self.result = event
+            if self.credit:
+                self.tally.add(event)
             if event.get("subtype") == "success" and not event.get("is_error") and isinstance(event.get("result"), str):
                 self.answer = event["result"]
             self.phase = "finishing"
+
+    @staticmethod
+    def _is_failed_result(event):
+        return bool(event.get("is_error")) or event.get("subtype") != "success"
+
+    def _check_key_source(self, event):
+        self.api_key_source = event.get("apiKeySource")
+        if self.credit and self.api_key_source != API_KEY_SOURCE:
+            raise StopRun("key_ignored", "Claude did not use the API key for this credit launch", immediate=True)
+        if not self.credit and self.api_key_source != NO_KEY_SOURCE:
+            raise StopRun("policy_violation", "Claude reported an API key on a subscription launch", immediate=True)
 
     def _tool(self, name):
         if name not in self.allowed:

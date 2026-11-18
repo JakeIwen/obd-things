@@ -273,6 +273,28 @@ class ReportsTests(unittest.TestCase):
                     reports.atomic_json(path, {}, fsync=durable)
                 self.assertEqual(events, ["fsync", "replace"] if durable else ["replace"])
 
+    def test_directory_fsync_follows_the_replace_and_is_optional(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            for wanted in (False, True):
+                events = []
+                real_replace = os.replace
+
+                def replace(src, dst):
+                    events.append("replace")
+                    real_replace(src, dst)
+
+                with mock.patch.object(reports, "_fsync_directory", side_effect=lambda d: events.append(("dir", d))), \
+                     mock.patch.object(os, "replace", side_effect=replace):
+                    reports.atomic_json(path, {}, fsync=True, fsync_dir=wanted)
+                self.assertEqual(events, ["replace", ("dir", path.parent)] if wanted else ["replace"])
+
+    def test_directory_fsync_opens_the_directory_read_only_and_closes_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.object(os, "fsync") as synced:
+                reports.atomic_json(Path(directory) / "report.json", {}, fsync_dir=True)
+            synced.assert_called_once()  # the temp file was not fsynced (fsync=False): only the directory was
+
     def test_temporary_naming_and_open_encoding(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "report.json"
