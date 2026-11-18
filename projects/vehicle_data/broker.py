@@ -2653,6 +2653,8 @@ class TelemetryBroker:
         try:
             while not self._history_stop.is_set():
                 captured_at = datetime.now(timezone.utc)
+                # Owner custom-rule holds are timed on this clock, never stepped by NTP.
+                recording_clock = self.monotonic()
                 with self._lock:
                     self._history_sequence += 1
                     sequence = self._history_sequence
@@ -2666,6 +2668,7 @@ class TelemetryBroker:
                         history_snapshot,
                         captured_at=captured_at,
                         ingest_key=f"broker:{self._started_at}:{sequence}",
+                        recording_clock=recording_clock,
                     )
                 except Exception as exc:
                     with self._lock:

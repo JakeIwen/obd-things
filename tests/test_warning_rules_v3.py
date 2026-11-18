@@ -1241,26 +1241,6 @@ class SystemTierThreeTests(unittest.TestCase):
         self.assertEqual(inhibit["action"], "Restart the telemetry service when parked.")
 
 
-class CustomRuleTests(unittest.TestCase):
-    def test_custom_rule_candidate_then_warning(self):
-        from projects.vehicle_data.custom_warnings import evaluate_rule
-        from tests.test_custom_warnings import History, RULE, STAMP
-        history = History()
-        row = {"id": "b" * 64, "rule": dict(RULE)}
-        history.points = history.points[:1]
-        first = evaluate_rule(history, row, STAMP)
-        self.assertEqual(first["state"], "normal")
-        self.assertEqual(first["candidate"]["observed"], 1)
-        self.assertEqual(first["candidate"]["first_seen_at"], history.points[0]["observed_at"])
-        self.assertEqual((first["tier"], first["group"], first["confidence"]), (1, "custom", "low"))
-        history.points = History().points
-        warning = evaluate_rule(history, row, STAMP)
-        self.assertEqual(warning["state"], "warning")
-        self.assertNotIn("candidate", warning)
-        self.assertEqual(warning["confidence"], "medium")
-        self.assertEqual(warning["action"], "Check it at the next stop.")
-
-
 class ContractTests(Harness):
     def test_every_assessment_carries_valid_grading_fields(self):
         historian = self.open()

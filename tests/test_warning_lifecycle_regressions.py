@@ -10,9 +10,8 @@ from __future__ import annotations
 from datetime import timedelta
 import unittest
 
-from projects.vehicle_data.custom_warnings import evaluate_rule as custom_evaluate
 from projects.vehicle_data.early_warning import AbsoluteOilPressureRule, EarlyWarningEvaluator
-from tests.test_custom_warnings import RULE, STAMP, History, sample
+from tests.custom_rule_history import CustomRuleHistory, battery, battery_rule
 from tests import test_warning_delivery as delivery
 from tests import test_warning_rules_v3 as rules_v3
 
@@ -52,32 +51,36 @@ class TimedRecoverySurvivesInconclusiveTicks(delivery.TieredDeliveryBase):
         self.assertEqual(self.episode("tire_pressure_relative_low")["status"], "open")
 
 
-class CustomWarningHoldsWhileOutside(delivery.TieredDeliveryBase):
-    def test_short_run_after_a_regime_change_keeps_the_event_open(self):
-        history = History()
-        history.list_advisory_episodes = self.historian.list_advisory_episodes
-        row = {"id": "a" * 64, "rule": dict(RULE)}
-        warning = custom_evaluate(history, row, STAMP)
-        self.assertEqual(warning["state"], "warning")
-        self.record(warning, at=STAMP)
-        history.latest = sample(seconds=-5, regime="running:urban:low:warm")
-        history.points = [history.latest]
-        later = STAMP + timedelta(seconds=5)
-        held = custom_evaluate(history, row, later)
-        self.assertEqual(held["state"], "warning")
-        self.record(held, at=later)
-        self.assertEqual(self.episode(warning["rule"])["status"], "open")
-        self.assertEqual(len(self.rows()), 1)  # no second push for the same event
-        inside = STAMP + timedelta(seconds=10)
-        history.latest = sample(value=12.4, seconds=-10)
-        self.record(custom_evaluate(history, row, inside), at=inside)
-        self.assertEqual(self.episode(warning["rule"])["status"], "resolved")
+class CustomWarningHoldsWhileOutside(unittest.TestCase):
+    """An open owner warning stays open through a short run and closes at a normal reading."""
+
+    def setUp(self):
+        self.h = CustomRuleHistory([battery_rule(window_seconds=10, max_age_seconds=10)])
+        self.addCleanup(self.h.close)
+        self.key = "custom_" + self.h.rows[0]["id"]
+
+    def episode(self):
+        return self.h.historian._conn.execute(
+            "SELECT * FROM advisory_episodes WHERE rule_key=? ORDER BY id DESC LIMIT 1", (self.key,)).fetchone()
+
+    def pushes(self):
+        return self.h.historian._conn.execute("SELECT * FROM advisory_notification_outbox").fetchall()
+
+    def test_short_run_after_a_gap_keeps_the_event_open(self):
+        states = [self.h.record(t, [battery()])["state"] for t in (0, 5, 10)]
+        self.assertEqual(states[-1], "warning")
+        self.assertEqual(self.episode()["status"], "open")
+        pushed = len(self.pushes())
+        # 20 s without a recording exceeds the 10 s gap: the hold starts again, the event holds.
+        held = self.h.record(30, [battery()])
+        self.assertEqual((held["state"], held["persistence"]["held_seconds"]), ("warning", 0.0))
+        self.assertEqual(self.episode()["status"], "open")
+        self.assertEqual(len(self.pushes()), pushed)  # no second push for the same event
+        self.h.record(35, [battery(12.4)])
+        self.assertEqual(self.episode()["status"], "resolved")
 
     def test_without_an_open_event_a_short_run_is_only_a_candidate(self):
-        history = History()
-        history.list_advisory_episodes = self.historian.list_advisory_episodes
-        history.points = history.points[:1]
-        result = custom_evaluate(history, {"id": "b" * 64, "rule": dict(RULE)}, STAMP)
+        result = self.h.record(0, [battery()])
         self.assertEqual(result["state"], "normal")
         self.assertIn("candidate", result)
 

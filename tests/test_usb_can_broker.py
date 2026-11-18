@@ -79,7 +79,7 @@ class FakeInsights:
         self.snapshots = []
         self.closed = 0
 
-    def ingest_snapshot(self, snapshot, *, captured_at, ingest_key):
+    def ingest_snapshot(self, snapshot, *, captured_at, ingest_key, recording_clock=None):
         self.snapshots.append((snapshot, captured_at, ingest_key))
         self.broker._history_stop.set()
         return SimpleNamespace(
@@ -95,14 +95,14 @@ class FakeInsights:
 
 
 class FailingInsights(FakeInsights):
-    def ingest_snapshot(self, snapshot, *, captured_at, ingest_key):
+    def ingest_snapshot(self, snapshot, *, captured_at, ingest_key, recording_clock=None):
         self.snapshots.append((snapshot, captured_at, ingest_key))
         self.broker._history_stop.set()
         raise RuntimeError("fixture historian failure")
 
 
 class IncompleteAdvisoryInsights(FakeInsights):
-    def ingest_snapshot(self, snapshot, *, captured_at, ingest_key):
+    def ingest_snapshot(self, snapshot, *, captured_at, ingest_key, recording_clock=None):
         self.snapshots.append((snapshot, captured_at, ingest_key))
         self.broker._history_stop.set()
         return SimpleNamespace(

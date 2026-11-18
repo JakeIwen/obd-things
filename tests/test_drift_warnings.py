@@ -882,7 +882,7 @@ class LifecycleTests(DriftCase):
 
 
 class StaticVehicleEvaluator:
-    def evaluate(self, at=None):
+    def evaluate(self, at=None, recording=None):
         return {"schema_version": 1, "assessments": [], "active": []}
 
 

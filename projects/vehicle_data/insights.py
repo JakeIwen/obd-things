@@ -887,7 +887,14 @@ class TelemetryInsights:
         *,
         captured_at: datetime,
         ingest_key: str,
+        recording_clock: float | None = None,
     ):
+        """Store one snapshot and evaluate warnings at its capture time.
+
+        ``recording_clock`` is the broker's monotonic clock read beside ``captured_at``; owner
+        custom-rule holds are timed on it. Offline callers may omit it: capture time then stands
+        in, which gives the live result whenever the wall clock did not step.
+        """
         result = self.historian.ingest_snapshot(
             snapshot,
             captured_at=captured_at,
@@ -916,6 +923,7 @@ class TelemetryInsights:
                 result.snapshot_id,
                 captured_at=captured_at,
                 monitor_removal_event_ids=monitor_removal_event_ids,
+                recording_clock=recording_clock,
             )
         self._maybe_run_maintenance(captured_at=captured_at)
         try:
@@ -940,10 +948,12 @@ class TelemetryInsights:
         *,
         captured_at: datetime,
         monitor_removal_event_ids: tuple[str, ...] = (),
+        recording_clock: float | None = None,
     ) -> tuple[bool, tuple[str, ...], str | None]:
         evaluated_at = captured_at.astimezone(timezone.utc).isoformat()
+        recording = (snapshot_id, captured_at.timestamp() if recording_clock is None else recording_clock)
         try:
-            vehicle = self.warning_evaluator.evaluate(at=captured_at)
+            vehicle = self.warning_evaluator.evaluate(at=captured_at, recording=recording)
             infrastructure = self.infrastructure_evaluator.evaluate(
                 snapshot_id,
                 at=captured_at,
