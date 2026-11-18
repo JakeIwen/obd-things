@@ -12,6 +12,7 @@ which cached readings were observed cannot lengthen or shorten it.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import functools
 import math
 from pathlib import Path
 import threading
@@ -197,17 +198,49 @@ def _qualified(reading, metric, at_us, max_age):
     return age if age is not None and age <= max_age else None
 
 
-def _open_warning(historian, rule_key):
-    """Whether the rule has an open episode whose current state is warning."""
+def _open_warning_rules(historian):
+    """The rule keys that have an open episode whose current state is warning."""
     lister = getattr(historian, "list_advisory_episodes", None)
     if lister is None:
-        return False
+        return frozenset()
     try:
         episodes = lister(active_only=True, limit=200)
     except (AttributeError, TypeError, ValueError, RuntimeError):
-        return False
-    return any(isinstance(item, dict) and item.get("rule") == rule_key
-               and item.get("state") == "warning" for item in episodes or ())
+        return frozenset()
+    return frozenset(item["rule"] for item in episodes or ()
+                     if isinstance(item, dict) and isinstance(item.get("rule"), str)
+                     and item.get("state") == "warning")
+
+
+class OpenWarnings:
+    """Open warning episodes, read at most once per evaluation and only when a rule asks.
+
+    Nothing writes episodes while one evaluation assesses its rules (the lifecycle stores the
+    assessments afterwards), so one read answers every rule as a read per rule would.
+    """
+
+    def __init__(self, historian):
+        self._historian = historian
+        self._rules = None
+
+    def __contains__(self, rule_key):
+        if self._rules is None:
+            self._rules = _open_warning_rules(self._historian)
+        return rule_key in self._rules
+
+
+@functools.lru_cache(maxsize=4 * MAX_RULES)
+def _revision_of(typed_items):
+    from projects.vehicle_data.event_history import digest
+    return digest({key: value for key, _, value in typed_items})
+
+
+def _revision(rule):
+    """``digest(rule)`` of a validated rule, computed once per distinct rule.
+
+    The key carries each value's type: 1, 1.0 and True compare equal but encode differently.
+    """
+    return _revision_of(tuple(sorted((key, type(value), value) for key, value in rule.items())))
 
 
 def _beyond(rule, value):
@@ -216,16 +249,16 @@ def _beyond(rule, value):
     return (abs(value) if rule["operator"] == "absolute_above" else value) > rule["threshold"]
 
 
-def evaluate_rule(historian, row, at, *, holds, snapshot, recording=None):
+def evaluate_rule(historian, row, at, *, holds, snapshot, recording=None, open_warnings=None):
     """Assess one rule at ``at`` from ``snapshot`` (``recording_readings`` at ``at``).
 
     ``recording`` is ``(snapshot_id, recording_clock_seconds)`` when ``at`` is the evaluation of
-    that newly stored snapshot; only then does the rule's hold change.
+    that newly stored snapshot; only then does the rule's hold change. ``open_warnings`` is the
+    evaluation's shared ``OpenWarnings`` (one episode read for every rule).
     """
-    from projects.vehicle_data.event_history import digest
     rule = validate_rule(row["rule"])
     metric = rule["metric"]
-    revision = digest(rule)
+    revision = _revision(rule)
     rule_key = "custom_" + row["id"]
     result = {"rule_snapshot": rule, "rule_revision": revision, "evaluator_revision": EVALUATOR_REVISION,
               "rule": rule_key, "title": rule["title"], "metric": metric,
@@ -273,7 +306,7 @@ def evaluate_rule(historian, row, at, *, holds, snapshot, recording=None):
         result.update(state="warning", notification_eligible=True, confidence="medium",
                       reason="Outside the owner-approved reference persistently")
         return result
-    if _open_warning(historian, rule_key):
+    if rule_key in (open_warnings if open_warnings is not None else OpenWarnings(historian)):
         # A confirmed owner warning holds while the reading stays outside the
         # reference; a restarted hold (gap, missed recording, broker restart) is
         # not recovery. "normal" here would close the event and reopen it later.
@@ -292,7 +325,9 @@ def evaluate_rule(historian, row, at, *, holds, snapshot, recording=None):
 
 
 def evaluate_rules(historian, rows, at, *, holds, recording=None, failed=None):
-    """Assess every loaded rule with one readings query; a recording advances their holds.
+    """Assess every loaded rule with one readings query and at most one episode read.
+
+    A recording advances their holds.
 
     A rule whose own assessment raises is left out and its id appended to ``failed``, so it
     stops alone (its open episode retires as a rejected rule's does) and the others continue.
@@ -302,11 +337,12 @@ def evaluate_rules(historian, rows, at, *, holds, recording=None, failed=None):
     if not rows:
         return []
     snapshot = historian.recording_readings({row["rule"]["metric"] for row in rows}, at=at)
+    open_warnings = OpenWarnings(historian)
     assessments = []
     for row in rows:
         try:
             assessments.append(evaluate_rule(historian, row, at, holds=holds, snapshot=snapshot,
-                                             recording=recording))
+                                             recording=recording, open_warnings=open_warnings))
         except (ArithmeticError, KeyError, TypeError, ValueError):
             if failed is not None:
                 failed.append(row["id"])

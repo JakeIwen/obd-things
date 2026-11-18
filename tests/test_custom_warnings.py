@@ -284,6 +284,33 @@ class QueryCostTests(unittest.TestCase):
         finally:
             history.close()
 
+    def test_one_episode_read_per_evaluation_for_all_waiting_custom_rules(self):
+        # Every rule is beyond its limit and waiting to confirm, so each one asks whether it
+        # already has an open warning; the evaluation answers them all from one episode read.
+        rules = [battery_rule(title=f"Rule {index}", operator="above", threshold=-1000 + index,
+                              window_seconds=600, engine_running=index % 2 == 0)
+                 for index in range(contract.MAX_RULES)]
+        history = CustomRuleHistory(rules, episodes=False)
+        try:
+            calls = []
+            real = history.historian.list_advisory_episodes
+
+            def counted(*args, **kwargs):
+                calls.append(kwargs)
+                return real(*args, **kwargs)
+
+            with mock.patch.object(history.historian, "list_advisory_episodes", side_effect=counted):
+                for t in (0, 5):
+                    history.record(t, [battery(), rpm()])
+            custom = [a for a in history.evaluator.last["assessments"] if a["rule"].startswith("custom_")]
+            self.assertEqual([a["reason"] for a in custom],
+                             ["Outside the owner-approved reference; waiting to confirm"] * contract.MAX_RULES)
+            self.assertEqual(len(calls), 2)
+            from projects.vehicle_data.event_history import digest
+            self.assertEqual([a["rule_revision"] for a in custom], [digest(a["rule_snapshot"]) for a in custom])
+        finally:
+            history.close()
+
     def test_built_in_rules_ignore_the_recording_argument(self):
         history = CustomRuleHistory()
         try:
