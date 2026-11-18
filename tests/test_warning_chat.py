@@ -363,6 +363,16 @@ for event in [
         self.assertEqual(json.loads(path.read_text())["rules"], [])
         self.assertFalse(turn["applied"])
 
+    def test_apply_over_the_file_size_cap_answers_409_not_unavailable(self):
+        record, turn = self.proposed()
+        with mock.patch("projects.vehicle_data.custom_warning_file.write",
+                        side_effect=ValueError("The saved warnings file would be too large; remove a warning first")):
+            with self.assertRaises(ChatError) as caught:
+                self.manager.apply_warning(record, self.approval(turn))
+        self.assertEqual(caught.exception.status, 409)
+        self.assertIn("too large", str(caught.exception))
+        self.assertFalse(turn.get("applied"))
+
     def test_apply_without_semantics_answers_reload_required(self):
         record, turn = self.proposed()
         for payload in ({"confirmed": True, "proposal_id": turn["rule_proposal_id"]},

@@ -787,6 +787,9 @@ class WarningChatManager:
                                                "approved_at": now(), "chat_id": chat["id"], "owner": chat["owner"]})
         except (custom_warning_file.RemovedRule, custom_warning_file.RulesFull) as exc:
             raise ChatError(409, str(exc))
+        except ValueError as exc:
+            # Over the file's size cap or an unreadable file: a refusal, not an outage.
+            raise ChatError(409, f"The saved warnings could not be updated: {exc}")
         turn["applied"] = not remove
         self.save(chat)
         return self.public(chat)
