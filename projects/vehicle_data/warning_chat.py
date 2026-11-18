@@ -34,7 +34,8 @@ from projects.vehicle_data.assistant_slot import ModelSlot
 from projects.vehicle_data import dtc_research_service
 from projects.vehicle_data.engine_off_voltage import _atomic_json
 from projects.vehicle_data.event_history import GUIDE as EVENT_SYSTEM_GUIDE
-from projects.vehicle_data.custom_warnings import catalog, catalog_summary, validate_rule, load_rules, MAX_RULES
+from projects.vehicle_data.custom_warnings import catalog, catalog_summary, validate_rule, EVALUATOR_REVISION
+from projects.vehicle_data import custom_warning_file
 
 DEFAULT_SOCKET = "/run/van-telemetry-advisor/api.sock"
 DEFAULT_STATE = "/var/lib/van-telemetry-advisor"
@@ -89,15 +90,21 @@ with keys explanation (plain text) and proposal (null or the exact supported rul
 Ask concise follow-ups if metric, threshold or operating condition is ambiguous. Never invent
 OEM limits, unknown metrics or sensor scaling. Explain thresholds as owner monitoring references.
 A proposal does not install anything: a separate explicit approval is required in the app.
-Only propose absolute numeric above/below/absolute_above triggers, with 2-60 distinct persistent
-observations, window_seconds 5-600, max_age_seconds 1-60 and no greater than the metric's stale
-limit or the persistence window. engine_running true requires fresh RPM >400 at each observation.
+Only propose absolute numeric above/below/absolute_above triggers. A rule is defined in time:
+window_seconds (5-600) is the hold time, for which every one of the Pi's recordings of the metric
+must be beyond the limit; max_age_seconds (1-60, no more than window_seconds; normally 15) is the
+longest time between two recordings; persistence_observations (2-60, normally 2) is the least
+number of separate readings from the van in that time (a value the Pi repeats from its cache counts
+once). Recordings are usually 5-8 seconds apart but that is not guaranteed. A missing or stale
+reading, one within the limit, a longer gap or a restart of the telemetry service starts the time
+again; the latest reading's freshness is checked automatically. engine_running true requires every
+one of those recordings to show RPM above 400.
 Use the catalog's exact units (convert requested units explicitly); absolute_above compares
 absolute magnitude. Conditions outside this schema require a separate implementation, not a
 silently simplified rule. Do not claim a warning was applied. Fields in proposal, all required:
 title, metric, operator, threshold, persistence_observations, window_seconds, max_age_seconds,
-engine_running. Normally suggest 3 observations, 60 seconds, and a max age within the catalog limit.
-Explain persistence and any chosen defaults before approval. generator.field_duty is the
+engine_running. Normally suggest a 30-second hold, 15 seconds between recordings and 2 readings.
+Explain the hold time and any chosen defaults before approval. generator.field_duty is the
 engine computer's commanded alternator field duty, not output current or temperature: say so
 when you propose a rule on it. For an initial setup request ask
 what the owner wants to monitor. User follow-ups revise the proposal, not the active rule.
@@ -403,7 +410,7 @@ class CodexRunner:
             if turn["state"] == "complete":
                 conversation.extend([{"role": "user", "text": turn["user"]},
                                      {"role": "assistant", "text": json.dumps({"explanation": turn["assistant"],
-                                      "proposal": turn.get("proposal")}) if context.get("event_kind") == "setup" else turn["assistant"]}])
+                                      "proposal": turn.get("rule_proposal")}) if context.get("event_kind") == "setup" else turn["assistant"]}])
         conversation.append({"role": "user", "text": turns[-1]["user"]})
         prompt = json.dumps({"evidence": context, "conversation": conversation}, ensure_ascii=False)
         if len(prompt.encode()) > 160000:
@@ -705,10 +712,11 @@ class WarningChatManager:
                         proposal = validate_rule(parsed["proposal"]) if parsed["proposal"] is not None else None
                     except (ValueError, TypeError, ChatError):
                         raise ChatError(502, "Codex did not return a supported warning proposal. Retry or clarify the trigger")
-                    outcome.update(assistant=parsed["explanation"], proposal=proposal)
+                    # rule_proposal* keys: an advisor from before owner-threshold-v2 never installs them.
+                    outcome.update(assistant=parsed["explanation"], rule_proposal=proposal, semantics=EVALUATOR_REVISION)
                     if proposal:
-                        outcome["proposal_unit"] = catalog()[proposal["metric"]]["unit"]
-                        outcome["proposal_id"] = hashlib.sha256(json.dumps([chat_id, len(turns), proposal], sort_keys=True).encode()).hexdigest()
+                        outcome["rule_proposal_unit"] = catalog()[proposal["metric"]]["unit"]
+                        outcome["rule_proposal_id"] = hashlib.sha256(json.dumps([chat_id, len(turns), proposal], sort_keys=True).encode()).hexdigest()
             except Exception as exc:
                 outcome = {"state": "cancelled" if cancelled.is_set() else "error",
                            "error": str(exc) if isinstance(exc, ChatError) else "The local assistant failed; check the service on the Pi"}
@@ -725,7 +733,7 @@ class WarningChatManager:
 
     def warning_status(self, owner):
         try:
-            rows = load_rules(self.state_dir / "early-warnings.json")
+            rows = custom_warning_file.read(self.state_dir / "early-warnings.json").rows
         except (OSError, ValueError, TypeError, KeyError):
             return {"warnings": [], "warning_config_error": "Saved warning configuration could not be read"}
         try:
@@ -742,17 +750,14 @@ class WarningChatManager:
         require_keys(payload, {"confirmed"})
         if payload["confirmed"] is not True:
             raise ChatError(400, "Explicit removal confirmation is required")
-        path = self.state_dir / "early-warnings.json"
-        rows = load_rules(path)
         # Idempotent, owner-scoped removal; never touches built-in warnings.
-        rows = [row for row in rows if not (row["id"] == identifier and row.get("owner") == owner)]
-        _atomic_json(path, {"version": 1, "rules": rows})
+        custom_warning_file.remove(self.state_dir / "early-warnings.json", identifier, owner=owner)
         for chat in self.chats.values():
             if chat["owner"] != owner:
                 continue
             changed = False
             for turn in chat["turns"]:
-                if turn.get("proposal_id") == identifier and turn.get("applied"):
+                if identifier in (turn.get("rule_proposal_id"), turn.get("proposal_id")) and turn.get("applied"):
                     turn["applied"] = False
                     changed = True
             if changed:
@@ -760,23 +765,28 @@ class WarningChatManager:
         return self.warning_status(owner)
 
     def apply_warning(self, chat, payload, remove=False):
-        require_keys(payload, {"proposal_id", "confirmed"})
+        if not isinstance(payload, dict) or payload.get("semantics") != EVALUATOR_REVISION:
+            error = ChatError(409, "The dashboard was updated; reload the page.")
+            error.reason = "dashboard_reload_required"
+            raise error
+        require_keys(payload, {"proposal_id", "confirmed", "semantics"})
         if payload["confirmed"] is not True or chat["event"] != {"kind": "setup", "id": "new-warning"}:
             raise ChatError(400, "Explicit approval of a setup proposal is required")
         turn = chat["turns"][-1] if chat["turns"] else {}
-        if turn.get("state") != "complete" or not turn.get("proposal") or payload["proposal_id"] != turn.get("proposal_id"):
+        if turn.get("proposal") and "rule_proposal" not in turn:
+            raise ChatError(409, "This suggestion was made before an update; ask again.")
+        if turn.get("state") != "complete" or not turn.get("rule_proposal") or payload["proposal_id"] != turn.get("rule_proposal_id"):
             raise ChatError(409, "Review the latest completed proposal before applying it")
         path = self.state_dir / "early-warnings.json"
-        rows = load_rules(path)
-        identifier = turn["proposal_id"]
-        if remove:
-            rows = [row for row in rows if row["id"] != identifier]
-        elif not any(row["id"] == identifier for row in rows):
-            if len(rows) >= MAX_RULES:
-                raise ChatError(409, "Custom warning limit reached; remove an existing warning first")
-            rows.append({"id": identifier, "rule": validate_rule(turn["proposal"]),
-                         "approved_at": now(), "chat_id": chat["id"], "owner": chat["owner"]})
-        _atomic_json(path, {"version": 1, "rules": rows})
+        identifier = turn["rule_proposal_id"]
+        try:
+            if remove:
+                custom_warning_file.remove(path, identifier)
+            else:
+                custom_warning_file.add(path, {"id": identifier, "rule": validate_rule(turn["rule_proposal"]),
+                                               "approved_at": now(), "chat_id": chat["id"], "owner": chat["owner"]})
+        except (custom_warning_file.RemovedRule, custom_warning_file.RulesFull) as exc:
+            raise ChatError(409, str(exc))
         turn["applied"] = not remove
         self.save(chat)
         return self.public(chat)

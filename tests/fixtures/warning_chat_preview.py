@@ -54,7 +54,7 @@ class FixtureRunner:
         diagnostics.update(outcome="complete", phase="finishing", elapsed_ms=1000, child_cpu_ms=10)
         diagnostics["milestones_ms"].update(first_model_item_ms=500, turn_completed_ms=990, process_exit_ms=1000)
         if context.get("event_kind") == "setup":
-            from tests.test_custom_warnings import RULE
+            from tests.custom_rule_history import RULE
             return json.dumps({"explanation": "What would you like to monitor?" if len(turns) == 1 else "Proposed low-voltage warning in volts; review before approval.",
                                "proposal": None if len(turns) == 1 else RULE})
         if question == "trigger fixture error" and not self.failed:

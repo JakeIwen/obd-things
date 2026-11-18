@@ -329,31 +329,99 @@ for event in [
         record["event"] = {"kind": "episode", "id": "1"}
         self.assertNotIn("catalog", self.manager.public(record))
 
-    def test_setup_proposal_requires_exact_explicit_approval_and_can_be_removed(self):
-        from tests.test_custom_warnings import RULE
+    def proposed(self, request_id="c" * 32):
+        """A completed setup chat whose latest turn proposes tests.custom_rule_history.RULE."""
+        from tests.custom_rule_history import RULE
         self.runner.run = lambda *_: json.dumps({"explanation": "Proposed only, in volts", "proposal": RULE})
         with self.manager.lock:
-            opened = self.manager.open_chat(self.owner, {"event": {"kind": "setup", "id": "new-warning"}, "request_id": "c" * 32})
+            opened = self.manager.open_chat(self.owner, {"event": {"kind": "setup", "id": "new-warning"}, "request_id": request_id})
         self.finish()
         record = self.manager.get(opened["id"], self.owner)
-        turn = record["turns"][-1]
+        return record, record["turns"][-1]
+
+    @staticmethod
+    def approval(turn, **changes):
+        return {"confirmed": True, "proposal_id": turn["rule_proposal_id"], "semantics": "owner-threshold-v2", **changes}
+
+    def test_setup_proposal_requires_exact_explicit_approval_and_can_be_removed(self):
+        record, turn = self.proposed()
         path = Path(self.tmp.name) / "early-warnings.json"
         self.assertFalse(path.exists())
-        self.assertEqual(turn["proposal_unit"], "V")
-        for payload in ({"confirmed": False, "proposal_id": turn["proposal_id"]},
-                        {"confirmed": True, "proposal_id": "wrong"}):
+        self.assertEqual(turn["rule_proposal_unit"], "V")
+        for payload in (self.approval(turn, confirmed=False), self.approval(turn, proposal_id="wrong"),
+                        self.approval(turn, extra=True)):
             with self.assertRaises(ChatError):
                 self.manager.apply_warning(record, payload)
-        payload = {"confirmed": True, "proposal_id": turn["proposal_id"]}
+        payload = self.approval(turn)
         self.manager.apply_warning(record, payload)
         self.manager.apply_warning(record, payload)
         self.assertEqual(len(json.loads(path.read_text())["rules"]), 1)
         self.assertEqual(len(self.manager.warning_status(self.owner)["warnings"]), 1)
-        self.manager.remove_saved_warning("not-owner", turn["proposal_id"], {"confirmed": True})
+        self.manager.remove_saved_warning("not-owner", turn["rule_proposal_id"], {"confirmed": True})
         self.assertEqual(len(json.loads(path.read_text())["rules"]), 1)
-        self.manager.remove_saved_warning(self.owner, turn["proposal_id"], {"confirmed": True})
+        self.manager.remove_saved_warning(self.owner, turn["rule_proposal_id"], {"confirmed": True})
         self.assertEqual(json.loads(path.read_text())["rules"], [])
         self.assertFalse(turn["applied"])
+
+    def test_apply_without_semantics_answers_reload_required(self):
+        record, turn = self.proposed()
+        for payload in ({"confirmed": True, "proposal_id": turn["rule_proposal_id"]},
+                        self.approval(turn, semantics="owner-threshold-v1")):
+            with self.subTest(payload=payload), self.assertRaises(ChatError) as caught:
+                self.manager.apply_warning(record, payload)
+            self.assertEqual((caught.exception.status, caught.exception.reason), (409, "dashboard_reload_required"))
+            self.assertEqual(str(caught.exception), "The dashboard was updated; reload the page.")
+        self.assertFalse((Path(self.tmp.name) / "early-warnings.json").exists())
+
+    def test_proposal_made_before_the_update_is_refused(self):
+        record, turn = self.proposed()
+        old = {key: value for key, value in turn.items() if not key.startswith("rule_proposal") and key != "semantics"}
+        old.update(proposal=turn["rule_proposal"], proposal_id=turn["rule_proposal_id"], proposal_unit="V")
+        record["turns"][-1] = old
+        with self.assertRaises(ChatError) as caught:
+            self.manager.apply_warning(record, self.approval(turn))
+        self.assertEqual((caught.exception.status, str(caught.exception)),
+                         (409, "This suggestion was made before an update; ask again."))
+        self.assertFalse((Path(self.tmp.name) / "early-warnings.json").exists())
+
+    def test_chat_writes_keep_rejected_rows_other_keys_and_record_removed_ids(self):
+        from tests.custom_rule_history import RULE
+        path = Path(self.tmp.name) / "early-warnings.json"
+        bad = {"id": "e" * 64, "rule": dict(RULE, metric="engine.oil_life_remaining"), "owner": "x"}
+        path.write_text(json.dumps({"version": 1, "rules": [bad], "future": [1]}))
+        record, turn = self.proposed()
+        self.manager.apply_warning(record, self.approval(turn))
+        saved = json.loads(path.read_text())
+        self.assertEqual((saved["future"], len(saved["rules"])), ([1], 2))
+        self.assertIn(bad, saved["rules"])
+        self.manager.apply_warning(record, self.approval(turn), remove=True)
+        saved = json.loads(path.read_text())
+        self.assertEqual((saved["rules"], saved["removed"]), ([bad], [turn["rule_proposal_id"]]))
+
+    def test_chat_install_of_a_removed_id_is_refused(self):
+        record, turn = self.proposed()
+        self.manager.apply_warning(record, self.approval(turn))
+        self.manager.remove_saved_warning(self.owner, turn["rule_proposal_id"], {"confirmed": True})
+        with self.assertRaises(ChatError) as caught:
+            self.manager.apply_warning(record, self.approval(turn))
+        self.assertEqual(caught.exception.status, 409)
+        self.assertIn("since been removed", str(caught.exception))
+
+    def test_v2_proposal_turn_carries_no_key_the_pre_v2_advisor_installs(self):
+        from tests.custom_rule_history import RULE
+        record, turn = self.proposed()
+        self.assertEqual((turn["rule_proposal"], turn["semantics"]), (RULE, "owner-threshold-v2"))
+        self.assertTrue(turn["rule_proposal_id"])
+        saved = json.loads((Path(self.tmp.name) / f"chat-{record['id']}.json").read_text())["turns"][-1]
+        for key in ("proposal", "proposal_id", "proposal_unit"):
+            self.assertNotIn(key, saved)
+        # A follow-up replays the v2 proposal to the model under its reply key.
+        self.runner.run = lambda context, turns, *_: json.dumps({"explanation": json.dumps(turns[0].get("rule_proposal")),
+                                                                 "proposal": None})
+        with self.manager.lock:
+            self.manager.start_turn(record, "Make it 11.5 V", "f" * 32)
+        self.finish()
+        self.assertEqual(json.loads(record["turns"][-1]["assistant"]), RULE)
 
     def test_invalid_setup_output_never_creates_a_rule(self):
         self.runner.run = lambda *_: '{"explanation":"done", "proposal":{"command":"unsafe"}}'
