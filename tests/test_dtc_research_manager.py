@@ -57,6 +57,12 @@ class RigClient:
     def status(self):
         return self._call("GET", "/status")[1]
 
+    def credits(self):
+        status, body = self._call("GET", "/credits")
+        if status != 200:
+            raise WorkerUnreachable(f"worker credits answered {status}")
+        return body
+
     def launch(self, route, body):
         self.launches.append(body["attempt_id"])
         if self.drop_request:
