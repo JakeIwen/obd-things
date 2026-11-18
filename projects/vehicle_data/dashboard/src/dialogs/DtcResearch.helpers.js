@@ -81,6 +81,7 @@ export function createResearchController(deps) {
     const model = run ? findModel(s.catalog, run.provider, run.model) : null;
     return {
       phase,
+      paired: Boolean(s.key) && !["closed", "pairing", "loading"].includes(phase),
       busy: showingRun && busy(),
       target: s.target,
       catalog: s.catalog,

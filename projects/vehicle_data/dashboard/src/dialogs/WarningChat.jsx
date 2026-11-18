@@ -12,6 +12,7 @@ import * as H from "./WarningChat.helpers.js";
 import { useModalDialog } from "./modalDialog.js";
 import { Disclosure } from "../components/Card.jsx";
 import AssistantPairing from "../components/AssistantPairing.jsx";
+import PairAnotherDevice from "../components/PairAnotherDevice.jsx";
 
 /** The controller is created once per mounted dialog; every state change re-renders from its snapshot. */
 function useController(onWarningsChangedRef) {
@@ -77,6 +78,7 @@ function Proposal({ proposal, locked, onToggle, onApply, onRemove }) {
 export default function WarningChat({ open, mode, context, onClose, onWarningsChanged }) {
   const closeRef = useRef(null);
   const codeRef = useRef(null);
+  const pinRef = useRef(null);
   const inputRef = useRef(null);
   const logRef = useRef(null);
   const stickRef = useRef(true);
@@ -113,7 +115,7 @@ export default function WarningChat({ open, mode, context, onClose, onWarningsCh
   useEffect(() => () => ctrl.close(), [ctrl]);
 
   useEffect(() => {
-    if (snap.pairing && codeRef.current) codeRef.current.focus({ preventScroll: true });
+    if (snap.pairing && pinRef.current) pinRef.current.focus({ preventScroll: true });
   }, [snap.pairing]);
 
   // The only layout work on the poll path: one scrollTop write when the transcript gained a row
@@ -178,7 +180,7 @@ export default function WarningChat({ open, mode, context, onClose, onWarningsCh
             </select>
           </label>
         </div>
-        {snap.pairing ? <AssistantPairing codeRef={codeRef} onSubmit={submitCode} /> : null}
+        {snap.pairing ? <AssistantPairing codeRef={codeRef} pinRef={pinRef} onSubmit={submitCode} onCode={code => ctrl.pair(code)} /> : null}
         {snap.monitor.visible ? (
           <div class="chat-monitor">
             <Disclosure summary={snap.monitor.summary}>
@@ -224,6 +226,7 @@ export default function WarningChat({ open, mode, context, onClose, onWarningsCh
           </div>
         </form>
         <p class="muted chat-footnote">{H.TEXT.footnote}</p>
+        {snap.paired ? <PairAnotherDevice /> : null}
       </div>
     </dialog>
   );

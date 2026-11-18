@@ -663,6 +663,24 @@ describe("createChatController", () => {
     assert.equal(snap.reconnect, false);
     assert.equal(snap.status, "Connect this browser using the local assistant access code");
     assert.equal(t.storage.getItem("van-warning-chat.access"), null);
+    assert.equal(snap.paired, false);
+  });
+
+  test("paired: shown only while open with a code; a code received by PIN is stored and connects", async () => {
+    const t = makeController(okRoutes(doneChat()), { storage: {} });
+    assert.equal(t.ctrl.snapshot().paired, false, "closed");
+    t.ctrl.open("explain", { eventId: 12 });
+    await flush();
+    assert.equal(t.last().paired, false, "no code yet");
+    // The PIN form hands its redeemed code to pair(), exactly as a pasted one.
+    assert.equal(t.ctrl.pair(CODE), true);
+    await flush();
+    assert.equal(t.storage.getItem("van-warning-chat.access"), CODE);
+    assert.equal(t.server.calls.at(-1).headers["X-Van-Assistant-Key"], CODE);
+    assert.equal(t.last().hasChat, true);
+    assert.equal(t.last().paired, true);
+    t.ctrl.close();
+    assert.equal(t.last().paired, false, "the disclosure unmounts with the dialog");
   });
 
   test("a card without a saved event cannot open a chat", async () => {

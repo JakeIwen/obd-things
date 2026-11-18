@@ -1,0 +1,16 @@
+/* Pairing by PIN: the PIN field of the unpaired form and the "Pair another device" disclosure in
+   both assistant dialogs. Existing tokens only (palette.css, light.css, night.css). */
+
+.chat-pair .pair-paste-form { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.pair-or { margin: 0 0 6px; color: var(--text-2); font-size: 15px; }
+.pair-pin-row { display: flex; gap: 8px; align-items: stretch; }
+.chat-pair .pair-pin-row .input { flex: 1 1 auto; width: auto; min-width: 0; }
+.pair-pin-input { min-height: 48px; font-size: 24px; letter-spacing: .25em; text-align: center; }
+.pair-pin-row .btn { flex: none; min-width: 96px; }
+.pair-pin-form .status-line { margin: 8px 0 0; }
+
+.disc.pair-another { flex: none; margin-top: 12px; }
+.pair-another__pin { text-align: center; }
+.pair-another__digits { margin: 4px 0 0; font-size: 48px; font-weight: 700; line-height: 1.1; letter-spacing: .08em; color: var(--text); }
+.pair-another__countdown { margin: 4px 0 0; font-size: 20px; color: var(--text-2); }
+.pair-another__hint { margin: 6px 0 8px; font-size: 14px; }

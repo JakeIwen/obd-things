@@ -78,6 +78,23 @@ test("no access code: the dialog asks for it, and pairing then loads", async () 
   assert.equal(t.store["van-warning-chat.access"], KEY);
 });
 
+test("paired: not while closed, pairing or loading; a code received by PIN is stored and loads", async () => {
+  const t = setup(routes(), { key: "" });
+  assert.equal(t.ctrl.snapshot().paired, false);
+  t.ctrl.open(TARGET);
+  assert.equal(t.ctrl.snapshot().paired, false);
+  assert.equal(t.ctrl.pair(KEY), true); // what the PIN form hands over
+  assert.equal(t.ctrl.snapshot().phase, "loading");
+  assert.equal(t.ctrl.snapshot().paired, false);
+  await settle();
+  assert.equal(t.store["van-warning-chat.access"], KEY);
+  assert.equal(t.server.log[0].headers["X-Van-Assistant-Key"], KEY);
+  assert.equal(t.ctrl.snapshot().phase, "setup");
+  assert.equal(t.ctrl.snapshot().paired, true);
+  t.ctrl.close();
+  assert.equal(t.ctrl.snapshot().paired, false);
+});
+
 test("a 401 sends the browser back to pairing and forgets the code", async () => {
   const t = setup(routes({ "GET /v1/assistant/dtc-research/code/bcm_ccan/B162E-15": () => [401, { available: false, detail: "no" }] }));
   t.ctrl.open(TARGET);

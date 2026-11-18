@@ -435,6 +435,7 @@ export function createChatController(deps) {
       status: s.status,
       statusError: s.statusError,
       pairing: s.pairing,
+      paired: s.opened && Boolean(s.key) && !s.pairing,
       reconnect: s.reconnect,
       disabled: s.disabled,
       requesting: s.requesting,

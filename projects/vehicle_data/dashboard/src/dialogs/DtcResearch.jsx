@@ -13,6 +13,7 @@ import { refreshResearchList } from "../dtcResearch.js";
 import { useModalDialog } from "./modalDialog.js";
 import { useController } from "./useController.js";
 import AssistantPairing from "../components/AssistantPairing.jsx";
+import PairAnotherDevice from "../components/PairAnotherDevice.jsx";
 import MarkdownView from "../components/MarkdownView.jsx";
 import ModelPicker from "../components/ModelPicker.jsx";
 import Popover from "../components/Popover.jsx";
@@ -58,6 +59,7 @@ function Turn({ row }) {
 export default function DtcResearch({ open, target, onClose }) {
   const closeRef = useRef(null);
   const codeRef = useRef(null);
+  const pinRef = useRef(null);
   const [ctrl, snap] = useController(createController, (c) => c.snapshot());
 
   const { dialogRef, close } = useModalDialog({
@@ -78,7 +80,7 @@ export default function DtcResearch({ open, target, onClose }) {
   }, [open, ctrl]);
   useEffect(() => () => ctrl.close(), [ctrl]);
   useEffect(() => {
-    if (snap.phase === "pairing" && codeRef.current) codeRef.current.focus({ preventScroll: true });
+    if (snap.phase === "pairing" && pinRef.current) pinRef.current.focus({ preventScroll: true });
   }, [snap.phase]);
 
   const submitCode = (ev) => {
@@ -108,7 +110,7 @@ export default function DtcResearch({ open, target, onClose }) {
       </header>
       <div class="dialog__body chat-body">
         {t.meaning ? <p class="chat-evidence">{t.meaning}</p> : null}
-        {snap.phase === "pairing" ? <AssistantPairing codeRef={codeRef} onSubmit={submitCode} id="research-code" /> : null}
+        {snap.phase === "pairing" ? <AssistantPairing codeRef={codeRef} pinRef={pinRef} onSubmit={submitCode} onCode={(code) => ctrl.pair(code)} id="research-code" /> : null}
         {snap.pairingError ? <p class="status-line status-line--error">{snap.pairingError}</p> : null}
         {snap.phase === "loading" ? <p class="muted">{TEXT.working}</p> : null}
         {snap.phase === "unavailable" ? <p class="status-line status-line--error" role="status">{TEXT.unavailable}</p> : null}
@@ -160,6 +162,7 @@ export default function DtcResearch({ open, target, onClose }) {
           </>
         ) : null}
         {snap.error ? <p class="status-line status-line--error" role="alert">{snap.error}</p> : null}
+        {snap.paired ? <PairAnotherDevice /> : null}
       </div>
     </dialog>
   );
