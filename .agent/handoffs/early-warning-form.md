@@ -3,7 +3,7 @@
 tier: T3 (custom-rule evaluator semantics in the broker, a new historian query, a new advisor write
 route that installs monitoring rules without a model proposal, a change to the web relay
 allowlist, and a deploy precondition on the owner's rules file)
-last reviewed: plan revision 2 awaiting re-check (round 2 by gpt-6-astra on `56ef026`: hold)
+last reviewed: plan revision 3 awaiting re-check (round 3 by gpt-6-astra on `5296ab4`: hold)
 plan written against: commit `ce71087` (master `0393eee` plus four early-warning commits of
 2026-11-17). Master has since gained the same content, a small review fix and unrelated
 dashboard commits; none touches the evaluator, historian or advisor logic below (re-checked
@@ -103,8 +103,22 @@ Each was checked against `ce71087` and still holds on `9209c9e`.
   makes every custom rule stop and sets `custom_rules.error` (built-ins carry on).
 - Evaluation runs inside `insights.ingest_snapshot` right after each snapshot is stored, at
   `at = captured_at` (`broker.py` history loop; the loop waits `history_interval_seconds` after
-  the work). The configured interval is served at runtime in `/v1/status`
+  the work). It runs once per stored snapshot, in capture order, on the history thread; a
+  duplicate or a refused snapshot is not evaluated, and an exception in the evaluation is caught
+  in `_evaluate_and_persist_advisories`. `/v1/health` also calls `evaluate()` (at the current
+  time) from request threads. The configured interval is served at runtime in `/v1/status`
   `history_recorder.interval_seconds`.
+- Clocks: `captured_at` and every `observed_at` are wall-clock times; the broker also holds
+  `self.monotonic` (`time.monotonic`). The historian refuses a snapshot captured at or before its
+  newest one (`OutOfOrderSnapshotError`). The Pi has no battery clock: `fake-hwclock` restores
+  the last saved time at boot (saved hourly by cron and at shutdown) and `systemd-timesyncd`
+  (default `timesyncd.conf`) steps the clock when the network answers; the broker unit is
+  ordered only after `local-fs.target`, so it records before that step. timesyncd steps offsets
+  above about 0.4 s and slews smaller ones (systemd's `NTP_MAX_ADJUST`; from the source, not
+  measured here), so after an offline stretch of the hotspot a step of a few seconds either way
+  is a normal event. A backward step makes the historian refuse captures until the wall clock
+  passes its newest one. The dashboard stream already ages data on monotonic clocks for this
+  reason (vehicle-data README, "Telemetry dashboard").
 - History storage: `snapshots` (one row per capture, `captured_us` unique, `trip_id`, regime),
   `metric_samples` (at most one row per snapshot and metric, `UNIQUE(snapshot_id, metric)`, with
   `observed_us`, `source_age_ms`, `freshness` decided at capture from the broker's `age_ms` and
@@ -136,6 +150,11 @@ Each was checked against `ce71087` and still holds on `9209c9e`.
   metadata, JSON POSTs, and well-formed `X-Van-Assistant-Key` / `X-Van-Chat-Client` headers. The
   advisor (`ChatHandler.handle_request`) checks the access code in `manager.authorize` before any
   route, derives `owner = sha256(client id)`, and runs warning routes under `manager.lock`.
+- Chat records: the advisor loads every `chat-*.json` at start and keeps turn keys it does not
+  know; `open_chat` returns the browser's newest chat for the event. `apply_warning` (and
+  `remove-warning`) act only on the latest turn's `proposal` and `proposal_id`, otherwise 409
+  "Review the latest completed proposal before applying it"; the dashboard shows a proposal only
+  from `turn.proposal`.
 - Chat install (`WarningChatManager.apply_warning`): exact body `{proposal_id, confirmed}`
   (`assistant_common.require_keys` refuses extra keys), exact latest completed proposal,
   `confirmed: true`; strict `load_rules`; row id = `proposal_id` (a digest of chat id, turn count
@@ -153,8 +172,8 @@ Each was checked against `ce71087` and still holds on `9209c9e`.
 | Setup chat, proposal ID approval, `apply-warning`/`remove-warning`, rules file, 32 cap | `84d95f3` (2026-09-20), ported to Preact in `2fe75a4` | Only the latest completed, validated proposal can be installed, with its exact ID and explicit approval | Yes for chat-made rules; the form keeps it in a stronger form (the owner composes the exact fields; the model installs nothing) | Chat install goes through the common store in Phase 2; deleted in Phase 4 |
 | Rules listed and removable only by the creating browser | `84d95f3` | None for rules (the privacy reason is for transcripts) | No: every rule fires vehicle-wide but each browser sees a different list | Rules become vehicle-wide; transcripts stay per browser |
 | `max_age_seconds` ≤ the metric's stale limit | `84d95f3` | None stated | It does two jobs: keeps the latest reading current and bounds spacing. The second makes most rules unreachable | Phase 1: the latest reading is bound by the metric's stale limit (fixed); the field becomes the longest time between recordings |
-| Persistence as a count of readings | `84d95f3` | "N distinct observations" | No: a count promises no duration at an unenforced cadence | Phase 1: the hold is a time (`window_seconds`); the count is a floor |
-| Run built from `recent_numeric_samples` (regime-filtered) | `84d95f3` | Reused the tier-1 query, which conditions on regime by design | No for owner thresholds: a filtered-out normal reading vanishes | Phase 1: snapshot-ordered run, no regime filter |
+| Persistence as a count of readings | `84d95f3` | "N distinct observations" | No: a count promises no duration at an unenforced cadence | Phase 1: the hold is a time (`window_seconds`); the count is a floor of separate readings, settable in the form |
+| Run built from `recent_numeric_samples` (regime-filtered) | `84d95f3` | Reused the tier-1 query, which conditions on regime by design | No for owner thresholds: a filtered-out normal reading vanishes | Phase 1: per-recording run on the broker's steady clock, no regime filter |
 | RPM looked up at each reading's `observed_at` | `84d95f3` | "Engine running at every reading" | Intent yes, lookup no (filters by capture time) | Phase 1: RPM from the same snapshot |
 | Catalog limited to verified / `observed_alfa_scale` numeric metrics | `84d95f3` | Owner rules only on trusted decodes | Yes | Keep |
 | Field duty allowed | `43d5d37` | An owner-defined rule is an owner reference, not alternator evidence | Yes | Keep; the form shows the field-duty note |
@@ -165,88 +184,127 @@ Each was checked against `ce71087` and still holds on `9209c9e`.
 
 ## Custom rule semantics (Phase 1; the contract the form promises)
 
-The rule is defined in time, so its promise holds at any recording interval. Plain words, for
-the owner and the docs: *a warning confirms when every one of the Pi's recordings of the metric
-was beyond the limit, with no recording missing it and never more than G seconds between
-recordings, and the first and latest of those readings were measured at least T seconds apart;
-with "only while the engine is running", every one of those recordings also showed the engine
-above 400 rpm.* Nothing is claimed about moments between recordings.
+The rule is defined in time, kept on the broker's steady (monotonic) clock, so its promise holds
+at any recording interval and across wall-clock corrections. Plain words, for the owner and the
+docs: *a warning confirms when every one of the Pi's recordings of the metric for at least T
+seconds was beyond the limit, with no recording missing it and never more than G seconds between
+recordings, and those recordings carried at least N separate readings from the vehicle (N is 2
+unless changed); with "only while the engine is running", every one of those recordings also
+showed the engine above 400 rpm. The telemetry service keeps this time while it runs; a restart of
+the service starts it again.* Nothing is claimed about moments between recordings.
 
 Field meanings (names unchanged, they are the file contract):
 
-- `window_seconds` (5–600) = **T, the hold time**.
-- `max_age_seconds` (1–min(60, T)) = **G, the longest time between two recordings in the run**.
-- `persistence_observations` (2–60) = a floor on distinct readings in the run. The form always
-  writes 2, which a hold of at least 5 s already implies; a chat proposal may ask for more.
+- `window_seconds` (5–600) = **T, the hold time**: from the run's first recording to its latest.
+- `max_age_seconds` (1–min(60, T)) = **G, the longest time between two consecutive recordings in
+  the run**.
+- `persistence_observations` (2–60) = **N, the least number of separate readings in the run**. A
+  reading is (`source`, `observed_us`); a value the broker repeats from its cache across recordings
+  counts once and does not break the run. A hold can be carried by one cached reading (battery
+  from a quiet bus, up to 30 s), so N is a real requirement, not implied by T. Form default 2,
+  settable under Exact settings.
 - The latest reading's freshness is no longer a rule field: it is the metric's stale limit.
+- Both T and G are measured on the **recording clock**: the broker's `self.monotonic()` read
+  beside `captured_at` at the top of each history-loop iteration and passed with that snapshot to
+  the evaluator. Observation times are used only for each reading's own freshness.
 
-Precisely, evaluating rule R at time `at`:
+Precisely, for rule R:
 
-1. **Recording and reading.** A recording is one stored snapshot. The metric's reading in a
-   recording is its `metric_samples` row in that snapshot. A reading is *qualified* when it is
-   fresh at capture, numeric and finite, has the catalog unit, and comes from one of the
-   metric's catalog sources with a qualified quality. A change between qualified sources
-   (battery voltage has three) is allowed.
+1. **Recording and reading.** A recording is one stored snapshot with its recording-clock time.
+   The metric's reading in a recording is its `metric_samples` row in that snapshot. A reading is
+   *qualified* when it is fresh at capture, numeric and finite, has the catalog unit, and comes
+   from one of the metric's catalog sources with a qualified quality. A change between qualified
+   sources (battery voltage has three) is allowed.
 2. **Current reading.** S0 is the newest snapshot captured at or before `at`. Its reading must be
    qualified and current: effective age = recorded `age_ms`/1000 + (`at` − S0 capture) ≤ the
    metric's `stale_after_seconds`. Otherwise the state is `unavailable` ("No current reading").
    A snapshot in which the broker reported the metric unavailable has no reading, so an older
    value never stands in for it.
-3. **Engine running** (when `engine_running`): S0's `engine.rpm` reading must be qualified,
-   effective age ≤ 5 s, value > 400; otherwise `unavailable` ("Fresh engine-running evidence is
-   absent"). For an older recording, the `engine.rpm` reading of that same snapshot must be
-   qualified (fresh at that capture) and > 400. The RPM and the metric then each met their own
-   freshness bound at that recording (RPM within 5 s; the metric within its stale limit, up to
-   30 s for battery and tires and 15 s for VVT oil). No RPM from another snapshot, and nothing
-   captured after `at`, is used.
-4. **Run.** Walk snapshots from S0 back in capture order. A recording continues the run only
-   when: it is in the same trip as S0 (both without a trip counts as the same); the time from its
-   capture to the next newer recording's capture is at most G; its reading is qualified and
-   beyond the limit; and, with the engine option, its RPM passes step 3. The first recording that
-   fails ends the run; nothing is skipped. Driving condition (regime) is not considered.
-5. **Held time.** Distinct readings are keyed by (`source`, `observed_us`); a value the source
-   repeats from cache across recordings counts once and does not break the run. Held time =
-   newest minus oldest `observed_us` among the run's distinct readings. **Confirmed** when held
-   time ≥ T and distinct readings ≥ `persistence_observations`. The walk stops at confirmation, at
-   the first failing recording, or at the lookback bound below, whichever comes first; the floor
-   counts distinct readings inside that bound.
-6. Not beyond the limit at S0: `normal`. Beyond but not confirmed: `normal` with a low-confidence
-   candidate, or `warning` while an episode is already open (`_open_warning`, unchanged). The
-   candidate and `persistence` keep `observed`/`required` (distinct readings and the floor) and
-   add `held_seconds` and `hold_seconds`.
-7. `rule_revision` stays `digest(rule)`; `evaluator_revision` becomes `owner-threshold-v2`.
+3. **Engine running** (when `engine_running`): S0's `engine.rpm` reading, from the same snapshot,
+   must be qualified, effective age ≤ 5 s, value > 400; otherwise `unavailable` ("Fresh
+   engine-running evidence is absent"). The RPM and the metric each meet their own freshness bound
+   at that recording. No RPM from another snapshot, and nothing captured after `at`, is used.
+4. **Run, one recording at a time.** The evaluator keeps per rule, in memory: `since` and `last`
+   (recording-clock times of the run's first and latest recordings), `last_snapshot_id`,
+   `trip_id`, and the run's distinct readings (at most N kept). When `insights` evaluates a newly
+   stored snapshot, S0 *continues* the run only when all of these hold: S0 passes steps 2–3 and its
+   reading is beyond the limit; a run exists for the rule at its current `rule_revision`; the
+   snapshot stored just before S0 is `last_snapshot_id` (no stored recording went unevaluated); S0's
+   recording-clock time − `last` ≤ G; and S0 is in the run's trip (both without a trip count as
+   the same). If S0 passes steps 2–3 and is beyond but does not continue, a new run starts at S0
+   (`since` = S0's time). Otherwise the run is dropped. Driving condition (regime) is not
+   considered; nothing is skipped.
+5. **Held time and confirmation.** Held time = S0's recording-clock time − `since`. **Confirmed**
+   when held time ≥ T and distinct readings ≥ N.
+6. **What starts the time again:** a recording that misses the metric, is unqualified, not
+   current, within the limit or without engine evidence; more than G seconds on the recording
+   clock between two stored recordings, which also covers recordings the historian refused (after a
+   backward wall-clock step it refuses captures until the wall clock passes its newest one) and
+   loop iterations that stored nothing; a stored recording whose evaluation failed (the next
+   recording's predecessor is not `last_snapshot_id`); a trip change; a broker restart (the state
+   is in memory); a rule removed, rejected or with a changed `rule_revision` (its state is dropped
+   at the next recording).
+7. **Evaluations that are not a recording** (`/v1/health`, `insights.health_response` and any other
+   `evaluate()` call without a recording) compute steps 2–3 at their `at`, report the held time as
+   of S0 when S0 is the tracker's `last_snapshot_id` (0 otherwise), and never change the state. The
+   tracker is written only on the history thread and read under its own lock. Offline callers that
+   ingest without a broker (`tools/telemetry_history_profile.py`, tests) may pass no recording
+   clock; capture time then stands in, which gives the live result whenever the wall clock did not
+   step.
+8. Not beyond the limit at S0: `normal`. Beyond but not confirmed: `normal` with a low-confidence
+   candidate, or `warning` while an episode is already open (`_open_warning`, unchanged; it also
+   keeps an open warning open across a broker restart while the reading stays beyond). The
+   candidate and `persistence` keep `observed`/`required` (distinct readings and N) and add
+   `held_seconds` and `hold_seconds`.
+9. `rule_revision` stays `digest(rule)`; `evaluator_revision` becomes `owner-threshold-v2`.
 
-Bounded reads, with no assumption about cadence: every recording the walk visits before
-confirming has a reading observed later than obs(S0) − T, hence captured after `at` − stale − T;
-the confirming recording is at most G older than its newer neighbour. So with the form's floor of 2 (implied by any T ≥ 5 s) no recording captured before `at` − (T +
-G + stale limit) can change the outcome, at most 690 s; a floor above 2 is defined within that
-bound. The query reads snapshots newest
-first in that interval in keyset pages of 64, and the walk asks for the next page only while the
-run continues. Rows read per rule per evaluation ≤ the run's length + 1, never a fixed count
-that could cut a window short. At the van's 5 s interval a 30 s hold reads about 7 rows; a
-faster interval reads proportionally more, as every other part of the history loop already
-does per snapshot.
+Why the recording clock (round 3, findings 1 and 2). Measuring the hold from observation times let
+a cached reading from another source extend it backward over a normal recording; measuring it from
+capture times trusts the wall clock, which on this Pi steps forward and back (Current facts:
+`fake-hwclock`, `systemd-timesyncd`, broker started before time sync). The monotonic clock is never
+stepped; NTP slewing changes its rate by at most 500 ppm (the kernel's limit), so the one residual
+is that a hold can be shorter than T by at most 0.05 %: 0.3 s of a 10-minute hold, 0.015 s of 30 s.
+The considered alternative, a capture-time walk over history (replayable by
+`tools/warning_replay.py`), closes finding 1 but not 2: a forward step that fits inside G looks
+like a slow loop iteration (an iteration is the interval plus unbounded work), so it either leaves
+a residual of up to G minus the recording spacing per step (about 54 s at G 60) or needs a count of
+recordings derived from the runtime interval, which would hold a 30 s rule at the van's 8 s spacing
+until 7 recordings, 48 s; a backward step hides refused recordings behind a short capture gap and
+would need sequence numbers parsed from `ingest_key`; and it keeps the paged walk, whose cost grows
+with T and the recording rate. The recording clock costs replay from history and a restarted hold
+after a broker restart; both are conservative.
 
-What the form may promise: "at least T seconds" literally (the run's first and latest readings
-were measured ≥ T apart, every recording between them was beyond the limit, recordings ≤ G
-apart). Nothing is unreachable from the fields alone: any T and G within the limits can confirm
-at a cadence the broker accepts, so nothing is refused for reachability. How often a rule can
-confirm depends on the actual recording interval, so the form gives *advice* when G is under
-twice the broker's reported `history_recorder.interval_seconds` ("The Pi records about every
-5 s right now, more slowly when busy; a longest time between readings under 10 s may rarely be
-met."); with no reported interval it gives none. A recorder restart continues a run only when
-the historian keeps the same trip and the gap is ≤ G (probe: a 12 s restart gap continued a
-30 s hold; a 20 s gap broke it). A changed interval changes how many readings a hold takes,
-never the hold.
+Cost: per recording, one indexed query returns S0's readings for every metric the saved rules
+use, S0's `engine.rpm` and the id of the snapshot stored before S0; then constant work per rule.
+It does not depend on T, G or the recording interval. Benchmark gate in section 8.
 
-Prototype check (2026-11-17, real historian, field duty above 90, T 30 s, G 15 s, lags varying
-0.4–2.6 s): confirmed first at held 30.2 s with recordings 1 s apart (about 30 rows read), 31.2 s at
-5.2 s, 32.0 s at 8 s, 32.0 s at 5 s then 1 s; seven recordings 1 s apart gave `normal`
-(held 6 s).
+What the form may promise: "at least T seconds" of recordings on the Pi's steady clock, every one
+beyond the limit, recordings ≤ G apart, at least N separate readings; restarted by a telemetry
+service restart. Nothing is unreachable from the fields alone, so nothing is refused for
+reachability. How often a rule can confirm depends on the actual recording interval, so the form
+gives *advice* when G is under twice the broker's reported `history_recorder.interval_seconds`
+("The Pi records about every 5 s right now, more slowly when busy; a longest time between readings
+under 10 s may rarely be met."); with no reported interval it gives none. A changed interval
+changes how many recordings a hold takes, never the hold.
+
+Probe (2026-11-17, real `TelemetryHistorian` on a temporary file, snapshots ingested as the broker
+does, battery below 12 V, T 30 s, G 15 s, N 2; plan revision 2's observation-span walk beside the
+recording-clock tracker; the probe passes the real elapsed seconds as the recording clock):
+
+| Case | Revision 2 | Recording clock |
+| --- | --- | --- |
+| Reviewer's source switch: 0 s 13 V C-CAN; 5 s 11 V B-CAN observed −24 s; 10 s 11 V C-CAN | `warning`, held 34 s at 10 s | `normal`, held 5 s, 2 readings |
+| Forward wall step +10 s after 5 s, recordings every 5 s | `warning` at 20 s elapsed (held 30) | `warning` at 30 s elapsed (held 30) |
+| Backward wall step −12 s after 5 s, G 10 s | historian refused the 10 s and 15 s captures; run continued across 15 s with no recording (held 28 at 40 s) | restarted at 20 s (15 s gap > G) |
+| One cached B-CAN observation repeated 0–25 s, a new one at 30 s, T 25 s | `warning` at 30 s | held 25 s with 1 reading: `normal`; `warning` at 30 s |
 
 Built-in warnings do not change: no existing historian query, built-in rule, gate or lifecycle
 function is edited; the custom path stops calling `recent_numeric_samples` and
-`latest_sample`. Proof required before install: `tests/advisory_lifecycle_oracle.py` run against
+`latest_sample`. The recording clock is only passed through: the broker's history loop reads
+`self.monotonic()` beside `captured_at`, `insights.ingest_snapshot` and
+`_evaluate_and_persist_advisories` take it as an optional argument, and `evaluate()` takes an
+optional `recording`; built-in rules never read it. Proof required before install:
+`tests/advisory_lifecycle_oracle.py` run against
 the old and new checkouts with byte-identical `--output`; `tools/warning_replay.py replay`
 (`current` = the deployed ref, `new` = the worktree, no custom rules file) on the vanpi export
 `tmp/vehicle_data/warning_replay/export-20261003.sqlite3` with identical built-in transitions in
@@ -274,7 +332,7 @@ portrait 800×1280 tablet, top to bottom, with the Review/Add area pinned at the
    - **Warn when it goes** [`operator`]: two buttons, Above / Below. Default Above.
    - **Limit** [`threshold`]: `<input type="number" inputmode="decimal">` with the unit as a
      suffix. No default.
-   - **For at least** [`window_seconds`, `max_age_seconds`, `persistence_observations`]: a
+   - **For at least** [`window_seconds`, `max_age_seconds`]: a
      `<select>` of 15 s, 30 s, 1 min, 2 min, 5 min, 10 min. Default 30 s.
    - **Only while the engine is running** [`engine_running`]: a checkbox. Default on, except for
      metrics whose name starts with a prefix in `form_defaults.engine_running_off_prefixes`
@@ -282,19 +340,22 @@ portrait 800×1280 tablet, top to bottom, with the Review/Add area pinned at the
    - **Name on the warning card** [`title`]: prefilled ("Coolant temperature above 230 °F") and
      kept in step with the fields until the owner edits it.
    - **Exact settings** (collapsed): Hold for (seconds) [5–600], Longest time between readings
-     (seconds) [1–60, ≤ Hold for], and "Compare the size of the reading, ignoring its sign"
-     (turns Above into `absolute_above`; disabled with Below). Editing either number switches
-     For at least to "Custom". Hint: "The Pi records a reading about every X seconds right now,
+     (seconds) [1–60, ≤ Hold for], **Minimum separate readings** [`persistence_observations`,
+     2–60, default 2; hint: "Separate measurements from the van; a value the Pi repeats from its
+     cache counts once."], and "Compare the size of the reading, ignoring its sign" (turns Above
+     into `absolute_above`; disabled with Below). Editing Hold for or Longest time between
+     readings switches For at least to "Custom"; the readings floor is independent of it. Hint: "The Pi records a reading about every X seconds right now,
      more slowly when busy." (X from the list reply; the hint is omitted without it.)
 4. **Preview** (always visible): "Warn when Coolant temperature is above 230 °F at every reading
    for at least 30 seconds, only while the engine is running above 400 rpm." Variants: "below";
    absolute: "is more than 40 lb-ft from zero, in either direction"; engine off: no clause; a
-   saved rule with a floor above 2: "…, over at least 5 separate readings". Under it: "Readings
-   are the Pi's recordings; a reading that is missing or within the limit, or more than 15
-   seconds without a recording, starts the time again. Owner monitoring reference, not an OEM
-   limit."
+   floor above 2, from the control, a copied rule or a proposal: "…, over at least 5 separate
+   readings". Under it: "Readings are the Pi's recordings; a reading that is missing or within
+   the limit, more than 15 seconds without a recording, or a restart of the telemetry service
+   starts the time again. Owner monitoring reference, not an OEM limit."
 5. **Review** (replaces proposal approval): validates and turns the form read-only, showing the
-   preview and the exact values ("held at least 30 s, recordings at most 15 s apart"), with **Add
+   preview and the exact values ("held at least 30 s, recordings at most 15 s apart, at least 2
+   separate readings"), with **Add
    warning** and **Edit**. Only Add warning sends the install, with `confirmed: true`. After
    success the list opens with the new row, the form resets, and the Health card refreshes
    (`onWarningsChanged`, as today).
@@ -302,8 +363,11 @@ portrait 800×1280 tablet, top to bottom, with the Review/Add area pinned at the
    same place holds "Describe it to Codex instead", which opens the existing chat unchanged.
 
 Derived values for a For at least choice of H seconds (`form_defaults` in the contract):
-`window_seconds` = H; `max_age_seconds` = min(15, H); `persistence_observations` = 2. At the
-van's usual 6–8 s spacing a warning confirms about one recording after H seconds.
+`window_seconds` = H; `max_age_seconds` = min(15, H). A preset never changes
+`persistence_observations`: it starts at 2 in a new form and keeps whatever the control, a copied
+rule or a proposal set, so no requirement is dropped silently; the preview and the Review values
+always state a floor above 2. At the van's usual 6–8 s spacing a warning confirms about one
+recording after H seconds.
 
 Request ids: Review creates one 32-hex `request_id` for the reviewed draft. Add warning and any
 retry of it (a double tap, a timeout, a network error) reuse that id while the dialog stays on
@@ -318,13 +382,15 @@ Validation (client messages; the server is authoritative and its `detail` is sho
 - Ignoring the sign with a negative limit: "Use zero or more when ignoring the sign."
 - Name empty or over 120 characters: "Give the warning a name of up to 120 characters."
 - Exact settings out of range: "Hold for must be 5 to 600 seconds.", "Longest time between
-  readings must be 1 to 60 seconds and no more than Hold for."
+  readings must be 1 to 60 seconds and no more than Hold for.", "Minimum separate readings must
+  be a whole number from 2 to 60."
 - Advice only (Review stays enabled): G under twice the reported recording interval (above); a
   limit outside the catalog `minimum`..`maximum` ("… readings range from −40 to 419 °F, so this
   could never trigger."); an Above limit below the 30-day low or a Below limit above the 30-day
   high ("This would trigger on almost every reading.").
 
-A saved rule copied into the form (section 5) keeps every value, the floor included.
+A saved rule copied into the form (section 5), or a proposal used to fill it, sets every value,
+the floor included, and Exact settings opens when any value differs from a preset.
 
 ### 2. Recorded range in the form
 
@@ -380,40 +446,57 @@ Every crash a write can leave, and what a retry does (install and remove are eac
 
 #### Phase 1, broker, advisor wording and shared module
 
-- `custom_warnings.py`: `evaluate_rule` implements the semantics above over the new historian
-  query; `validate_rule` takes limits from the contract and caps `max_age_seconds` at min(60,
-  window) (no stale cap); `catalog_from(definitions)`; `advice(rule, interval_seconds) -> str |
-  None`.
+- `custom_warnings.py`: `evaluate_rule(historian, row, at, *, holds, recording=None)`
+  implements the semantics above; `RuleHolds` (the per-rule run state of step 4: `since`, `last`,
+  `last_snapshot_id`, `trip_id`, distinct readings capped at N; its own lock; `observe(...)` on a
+  recording, `peek(...)` otherwise, `retain(ids)` drops removed or rejected rules);
+  `validate_rule` takes limits from the contract and caps `max_age_seconds` at min(60, window)
+  (no stale cap); `catalog_from(definitions)`; `advice(rule, interval_seconds) -> str | None`.
 - `custom_warning_file.py` as above.
 - `history/custom_rule_queries.py` (new mixin added to `TelemetryHistorian`'s bases; `queries.py`
-  is already 1,609 lines): `snapshot_readings_page(metric, *, at, since, before_us=None,
-  include_rpm, limit=64)` returns, newest first, up to 64 snapshots captured in [`since`, `at`]
-  (and before `before_us` when given), each `{captured_us, captured_at, trip_id, reading, rpm}`;
-  `reading`/`rpm` are `None` or `{value, unit, source, quality, freshness, observed_us,
-  observed_at, source_age_ms}` with `observed_us` exposed as stored. One indexed query per page
-  (`snapshots` by `captured_us`, `LEFT JOIN metric_samples` on `(snapshot_id, metric)` for the
-  metric and for `engine.rpm`) under the historian lock. Read-only; no schema change.
-- `warning_engine/evaluator.py`: reads with `custom_warning_file.read`; `custom_rules` status
-  gains `rejected_ids` and `evaluator_revision: "owner-threshold-v2"`; `error` only for
+  is already 1,609 lines): `recording_readings(metrics, *, at)` returns, for the newest snapshot
+  captured at or before `at`, `{snapshot_id, captured_us, trip_id, previous_snapshot_id,
+  readings: {metric: reading | None}, rpm}`; a reading is `{value, unit, source, quality,
+  freshness, observed_us, observed_at, source_age_ms}`. One indexed query (`snapshots` by
+  `captured_us`, `LEFT JOIN metric_samples` on `(snapshot_id, metric)`, plus the previous
+  snapshot's id) under the historian lock. Read-only; no schema change.
+- `warning_engine/evaluator.py`: owns one `RuleHolds`; `evaluate(at=None, *, recording=None)`,
+  where `recording` is `(snapshot_id, clock_seconds)`, calls `recording_readings` once for all
+  custom rules and `evaluate_rule` per row; reads with `custom_warning_file.read`; `custom_rules`
+  status gains `rejected_ids` and `evaluator_revision: "owner-threshold-v2"`; `error` only for
   file-level failures. A rejected row is not assessed, so its open episode is retired by the
   existing lifecycle ("rule retired from authoritative evaluator catalog"), exactly as removing
   it does; documented, and shown on Health.
+- `insights.py`: `ingest_snapshot(..., recording_clock=None)` passes `(snapshot_id,
+  recording_clock if given, else the capture time in seconds)` to `evaluate` through
+  `_evaluate_and_persist_advisories`; `health_response` is unchanged (no recording).
+- `broker.py` history loop: `recording_clock = self.monotonic()` beside `captured_at`, passed to
+  `ingest_snapshot`.
 - `custom_warnings.json` and `custom_warning_contract.py` (section 6).
 - `warning_chat.py`: `SETUP_INSTRUCTIONS` describes the new field meanings (`window_seconds` is
   the hold time; `max_age_seconds` the longest time between recordings, default 15; the floor
   defaults to 2; recordings are usually 5–8 s apart but not guaranteed; latest-reading freshness
-  is automatic). Each proposal turn made by this advisor stores `semantics:
-  "owner-threshold-v2"`. `apply_warning` requires the body `{proposal_id, confirmed, semantics}`
-  with `semantics == "owner-threshold-v2"`: a body without it (an old bundle) gets 409 reason
-  `dashboard_reload_required`, detail "The dashboard was updated; reload the page."; a proposal
-  turn without the stored marker gets 409 "This suggestion was made before an update; ask
-  again." Apply and remove read and write through `custom_warning_file` (tolerant read, rejected
+  is automatic; a restart of the telemetry service restarts the time). Each proposal turn made
+  by this advisor stores the proposal under `rule_proposal`, its id under `rule_proposal_id`, its
+  unit under `rule_proposal_unit` and `semantics: "owner-threshold-v2"`, and never writes
+  `proposal` or `proposal_id`. A rolled-back advisor therefore has nothing to install from such a
+  turn: its loader keeps the unknown keys, `open_chat` returns the chat and the transcript shows,
+  its `apply_warning` finds no `proposal` and answers 409 "Review the latest completed proposal
+  before applying it", and its dashboard shows no Approve (Current facts, chat records). A new
+  question asked there gets an old-code proposal with old-code meaning, which is right for old
+  code. This advisor's `apply_warning` reads only `rule_proposal*` and requires the body
+  `{proposal_id, confirmed, semantics}` with `semantics == "owner-threshold-v2"`: a body without
+  it (an old bundle) gets 409 reason `dashboard_reload_required`, detail "The dashboard was
+  updated; reload the page."; a latest turn with only the pre-update `proposal` key gets 409 "This
+  suggestion was made before an update; ask again." Apply and remove read and write through `custom_warning_file` (tolerant read, rejected
   rows kept, other top-level keys kept, remove records the id in `removed`, install of an id in
   `removed` refused as in Phase 2).
-- Dashboard (Phase 1 build): `WarningChat.helpers.js` `proposalText` uses the new meaning ("held
-  at least W s, recordings at most G s apart, over at least N readings") and `applyBody` sends
-  `semantics`; `views/health.helpers.js` adds "N saved warnings could not be loaded" from
-  `rejected_ids` and shows `held_seconds` of `hold_seconds` on a custom candidate when present.
+- Dashboard (Phase 1 build): `WarningChat.helpers.js` reads `rule_proposal`,
+  `rule_proposal_id` and `rule_proposal_unit` (demo and test fixtures that carry a setup proposal
+  move to these keys), `proposalText` uses the new meaning ("held at least W s, recordings at most
+  G s apart, at least N separate readings") and `applyBody` sends `semantics`;
+  `views/health.helpers.js` adds "N saved warnings could not be loaded" from `rejected_ids` and
+  shows `held_seconds` of `hold_seconds` on a custom candidate when present.
 
 #### Phase 2, advisor store and routes
 
@@ -451,10 +534,12 @@ Routes, served by the advisor and relayed by both web listeners (same headers, s
   `removed` (also when the row is already gone, so a repeat is a no-op); every other row is kept
   verbatim; then clears `applied` on the chat turn that installed it.
 - Retry contract (stated, not claimed absolute): a retried install whose rule was removed is
-  refused while the id is among the newest 256 removals. The dashboard retries one id for at most
-  600 s; re-adding a removed rule by retry would need more than 256 removals in that window,
-  each of a rule that had first been reviewed and added. A retry after the id has aged out is a
-  new install of the reviewed rule, exactly as if the owner had tapped Add warning again.
+  refused while the id is among the newest 256 recorded removals. The dashboard retries one id
+  for at most 600 s. Every removal request records an id, also one that matches no row, so the
+  tombstone can be evicted within that window by 256 or more later removal requests from paired
+  browsers (authenticated; two devices today), with no additions needed. A retry after the id has
+  aged out is a new install of the reviewed rule, exactly as if the owner had tapped Add warning
+  again.
 - The chat's `apply-warning` keeps its exact-proposal and marker checks in `warning_chat.py`,
   then calls `install(..., source="chat", row_id=proposal_id)`; `remove-warning` calls the
   store's remove. Both thereby gain the readiness check and identical-trigger refusal.
@@ -560,7 +645,8 @@ New shared contract `projects/vehicle_data/custom_warnings.json`, read by Python
 `web.py` stays light.
 
 Phase 1 files: `custom_warnings.py`, `custom_warning_file.py`, `history/custom_rule_queries.py`,
-`historian.py` (mixin in the bases), `warning_engine/evaluator.py`, `custom_warnings.json`,
+`historian.py` (mixin in the bases), `warning_engine/evaluator.py`, `insights.py` and
+`broker.py` (the recording clock, passed through), `custom_warnings.json`,
 `custom_warning_contract.py`, `warning_chat.py`, dashboard `WarningChat.helpers.js` and
 `views/health.helpers.js`; docs: new `projects/vehicle_data/docs/custom-warnings.md` (semantics in
 plain words, fields, the file, crash states, deploy precondition and rollback),
@@ -569,8 +655,9 @@ plain words, fields, the file, crash states, deploy precondition and rollback),
 add a rule. `custom_warnings.json` with `custom_warning_contract.py` (fields, limits, cap, form
 defaults, routes; shared with the dashboard), `custom_warnings.py` (catalog, validation,
 evaluation semantics, advice), `custom_warning_file.py` (the rules file: tolerant read, one
-durable write per operation, removed ids), `history/custom_rule_queries.py` (the paged
-snapshot-ordered readings query), `custom_warning_store.py` (advisor list/install/remove);
+durable write per operation, removed ids), `history/custom_rule_queries.py` (the one-recording
+readings query; holds are timed in `custom_warnings.RuleHolds` on the broker's monotonic
+clock), `custom_warning_store.py` (advisor list/install/remove);
 contract `projects/vehicle_data/docs/custom-warnings.md`; dashboard
 `src/customWarningForm.helpers.js`, `dialogs/CustomWarnings{.jsx,.helpers.js}`,
 `styles/custom-warnings.css`."
@@ -605,9 +692,10 @@ each helpers file's `TEXT` table; no inline styles (CSP).
 
 Phase 1. A shared fixture `tests/custom_rule_history.py` builds a real `TelemetryHistorian` on a
 temporary file and ingests snapshots made from `METRICS[...].public_dict()` with explicit capture
-time, observation lag per metric, source instance and unavailable entries (the probe harness of
-2026-11-17). Tests in `tests/test_custom_warnings.py`, through `evaluate_rule` and
-`EarlyWarningEvaluator`:
+time, recording-clock time (independent of capture time, so wall-clock steps can be staged),
+observation lag per metric, source and unavailable entries (the probe harness of 2026-11-17), and
+evaluates each stored snapshot as `insights` does. Tests in `tests/test_custom_warnings.py`,
+through `EarlyWarningEvaluator.evaluate` with and without a recording:
 
 - Current reading: `test_unavailable_snapshot_after_fresh_readings_is_unavailable_not_warning`;
   `test_latest_reading_older_than_its_stale_limit_is_unavailable`;
@@ -621,16 +709,32 @@ time, observation lag per metric, source instance and unavailable entries (the p
   recordings 1 s apart, hold 30 s: `normal`, held 6 s);
   `test_hold_is_measured_in_time_at_any_recording_interval` (1 s, 5.2 s, 8 s, 5 s then 1 s:
   confirms at the first recording whose held time ≥ H, never before, for every form hold
-  choice); `test_restart_gap_within_the_rule_gap_continues_and_over_it_breaks` (new source
-  instance, 12 s and 20 s, G 15 s); `test_trip_change_breaks_the_run`;
+  choice); `test_gap_within_the_rule_gap_continues_and_over_it_breaks` (12 s and 20 s, G 15 s);
+  `test_broker_restart_starts_the_hold_again_and_an_open_warning_holds` (a fresh evaluator);
+  `test_trip_change_breaks_the_run`;
   `test_variable_source_lag_does_not_change_the_outcome`;
   `test_repeated_cached_observation_counts_once_and_does_not_break_the_run`;
   `test_distinct_reading_floor_above_two_is_enforced`;
+  `test_one_cached_reading_across_the_hold_waits_for_a_second_reading`;
   `test_source_change_with_qualified_sources_continues`.
-- Query bound: `test_no_snapshot_before_hold_plus_gap_plus_stale_is_read`;
-  `test_paged_walk_equals_an_unpaged_walk` (hold 600 s at 1 s spacing, crossing pages);
-  `tests/test_vehicle_historian.py::test_snapshot_readings_page_is_newest_first_with_observed_us_and_rpm`
-  (missing metric is `None`, `since`/`before_us` bounds, page size).
+- Source switch and clocks (round 3):
+  `test_source_switch_to_an_older_cached_observation_does_not_extend_the_hold` (the reviewer's
+  case: 0 s 13 V C-CAN, 5 s 11 V B-CAN observed −24 s, 10 s 11 V C-CAN, T 30, G 15: `normal`, held
+  5 s); `test_forward_wall_step_within_the_gap_does_not_shorten_the_hold` (+10 s step, recordings
+  5 s apart on the recording clock: confirms at 30 s of recording clock, not 20);
+  `test_forward_wall_step_never_lengthens_the_hold` (+120 s, G 15; a step that makes the historian
+  open a new trip restarts the hold, which is conservative);
+  `test_backward_wall_step_refused_recordings_restart_the_hold` (−12 s, G 10: the historian
+  refuses two captures and the hold restarts); `test_backward_wall_step_within_the_gap_continues`
+  (−3 s, one refused capture, recording-clock gap 10 s ≤ G 15);
+  `test_failed_evaluation_of_a_stored_recording_restarts_the_hold`;
+  `test_health_evaluation_reports_the_hold_and_changes_nothing`;
+  `test_removed_or_revised_rule_state_is_dropped`.
+- Query and cost: `tests/test_vehicle_historian.py::test_recording_readings_returns_the_newest_snapshot_with_rpm_and_predecessor`
+  (missing metric is `None`, nothing after `at`); `test_one_readings_query_per_recording_for_all_custom_rules`
+  (32 rules, query count by a counting historian wrapper);
+  `test_built_in_rules_ignore_the_recording_argument` (same built-in assessments with and without
+  it).
 - Validation and contract: `test_gap_may_exceed_the_stale_limit_but_not_the_hold`;
   `test_advice_uses_the_reported_interval_and_is_silent_without_one`;
   `test_contract_limits_are_the_validator_limits`;
@@ -648,7 +752,11 @@ time, observation lag per metric, source instance and unavailable entries (the p
 - Chat (`tests/test_warning_chat.py`): `test_apply_without_semantics_answers_reload_required`;
   `test_proposal_made_before_the_update_is_refused`;
   `test_chat_writes_keep_rejected_rows_other_keys_and_record_removed_ids`;
-  `test_chat_install_of_a_removed_id_is_refused`; existing setup tests updated to the new body.
+  `test_chat_install_of_a_removed_id_is_refused`;
+  `test_v2_proposal_turn_carries_no_key_the_pre_v2_advisor_installs` (a completed setup turn has
+  `rule_proposal`, `rule_proposal_id`, `semantics` and neither `proposal` nor `proposal_id`; the
+  saved chat file is the fixture for the rollback check in section 8); existing setup tests
+  updated to the new keys and body.
 - Built-in invariance: the oracle and replay comparison named in "Custom rule semantics".
 - Dashboard: `test/health.helpers.test.mjs` (rejected line, held time on a candidate);
   `WarningChat` helper tests for the new proposal text and apply body.
@@ -679,7 +787,10 @@ crash-state list), `test_row_and_tombstone_together_the_row_wins_and_the_next_wr
 removal.
 
 Phase 3: dashboard `test/customWarningForm.helpers.test.mjs` (derived fields for every hold
-choice pass the limits; preview for above, below, absolute, engine-off and a floor above 2;
+choice pass the limits; every hold preset keeps the readings floor (2, 5 and 60 survive a
+preset change); the floor control's range and message; preview and Review values for above,
+below, absolute, engine-off and a floor above 2, whether set by the control, a copied rule or a
+proposal;
 validation and advice messages, advice absent without an interval; range lines, 7-day fallback,
 no trend; default engine checkbox by prefix; auto title until edited; fill from a saved rule and
 from a proposal; statuses); `test/CustomWarnings.helpers.test.mjs` (401 shows pairing; status
@@ -717,6 +828,26 @@ is `F=/var/lib/van-telemetry-advisor/early-warnings.json`.
 would change meaning (the gap is measured between recordings, the window becomes a hold time),
 so Phase 1 activates only on a vehicle with no saved custom rules; it never reinterprets one.
 
+Before install (with the review; each result recorded in the review brief):
+
+- Built-in invariance proof ("Custom rule semantics").
+- Cost gate: `tools/telemetry_history_profile.py` (`telemetry-history-profile` compute task) on a
+  finalized backup, with a context whose saved `custom_rules` holds 32 valid rules (ten-minute
+  holds, every catalog metric represented) and once with none. The ingest phase (one stored
+  snapshot: ingest, warning evaluation, persistence) with 32 rules may exceed the run without
+  rules by at most 10 ms, against the 72.0 ms "Saved-snapshot ingest" figure in
+  `docs/broker-cpu.md`, and the custom block issues exactly one readings query. The cost does not
+  depend on hold length or recording rate (no history walk), so one interval suffices. Custom
+  rules reach the historian's cadence only through this ingest time (the loop waits the interval
+  after the work), so a 10 ms bound keeps the 5 s interval's spacing within 0.2 %; the unit's
+  `--history-interval` is unchanged.
+- Rollback check of the chat keys: in a scratch worktree at the deployed ref, with a temporary
+  state directory holding the v2 setup chat saved by
+  `test_v2_proposal_turn_carries_no_key_the_pre_v2_advisor_installs`, construct the old
+  `WarningChatManager` (stub client and runner), `open_chat` the setup event (returns that chat,
+  transcript intact) and `apply_warning` with its `rule_proposal_id`: 409, and no rules file is
+  created.
+
 1. `sudo systemctl stop van-telemetry-advisor.service` (the only rules writer; chat and research
    pause), so nothing is saved between the check and the broker restart.
 2. Precondition, both must print 0: `if sudo test -e $F; then sudo jq '.rules | length' $F; else
@@ -735,27 +866,46 @@ so Phase 1 activates only on a vehicle with no saved custom rules; it never rein
 6. Journals of the four units clean. Agents do not install live rules; the owner tries one when
    he chooses.
 
-During the rollout, a dashboard tab still open on the old bundle can still ask the chat for a
-proposal, but cannot install it: its apply body lacks `semantics`, so the Phase 1 advisor answers
-409 "The dashboard was updated; reload the page." A proposal made before the advisor restart is
-refused even from the new bundle ("ask again"). No rule with old meanings can be saved after
-step 1.
+During the rollout, a dashboard tab still open on the old bundle can still ask the chat, but
+gets no installable proposal: it shows proposals only from `proposal`, which this advisor never
+writes, and an apply body without `semantics` is answered 409 "The dashboard was updated; reload
+the page." A proposal made before the advisor restart is refused even from the new bundle ("ask
+again"). No rule with old meanings can be saved after step 1, and after a rollback no v2 proposal
+can be installed by the old advisor (section 3, `warning_chat.py`).
 
-Phase 1 rollback (writes quiesced throughout; every step is a rename, nothing is overwritten):
+Phase 1 rollback (writes quiesced throughout; every step is a rename, nothing is overwritten).
+The saved v2 configuration and any empty live file get different, never-reused name patterns,
+and the saved file's rule count is part of its name, so a later roll-forward needs no shell
+variable from this one:
 
 1. `sudo systemctl stop van-telemetry-advisor.service`.
-2. Set the complete file aside under a name never used before:
-   `A=$F.rollback-$(date +%Y%m%d%H%M%S); sudo test ! -e $A && sudo mv -n $F $A && sudo test ! -e $F
-   && sudo jq '.rules | length' $A`. With no `$F` there is nothing to set aside. A crash here
-   leaves the file either at `$F` (run it again) or at `$A`; a rerun never touches an earlier
-   `$A`.
+2. Set the complete file aside: `if sudo test -e $F; then N=$(sudo jq '.rules | length' $F) &&
+   SAVED=$F.v2-saved-$(date +%Y%m%d%H%M%S)-${N}rules && sudo test ! -e $SAVED && sudo mv -n $F
+   $SAVED && sudo test ! -e $F && echo "$SAVED"; fi` (an unreadable file stops at `jq`). With no
+   `$F` there is nothing to set aside. A crash here leaves the file at `$F` (run it again) or at
+   `$SAVED`; a rerun never touches an earlier saved file.
 3. Revert the code, `s restart_broker`; check `custom_rules` `count: 0`, `error: null`.
-4. `sudo systemctl start van-telemetry-advisor.service` and rebuild. Tell the owner the count
-   from step 2 and that those rules are kept in `$A`, inactive.
-5. Roll-forward: deploy Phase 1 again (its precondition stops if rules were saved under the old
-   code meanwhile). Then, with the advisor stopped, if `$F` exists (it holds zero rules) set it
-   aside as in step 2, `sudo mv -n $A $F`, check `custom_rules` count equals the step-2 count,
-   and start the advisor.
+4. `sudo systemctl start van-telemetry-advisor.service` and rebuild. Tell the owner N and that
+   those rules are kept in the saved file, inactive. Saved chats are left as they are: their v2
+   proposals are under keys the old advisor does not install, and their transcripts stay readable.
+5. Roll-forward (any time later; replaces Phase 1 steps 1–3):
+   1. `sudo systemctl stop van-telemetry-advisor.service`.
+   2. `sudo sh -c 'ls -1 $0.v2-saved-*' $F`. With none, deploy Phase 1 as above. With more than
+      one, stop and ask the owner which to restore. Set `SAVED` to that path and `N` to the
+      count in its name; `sudo jq '.rules | length' $SAVED` must print N, else stop.
+   3. Precondition on the live file, as Phase 1 step 2. If it holds rules (saved under the old
+      code meanwhile), stop for the owner's per-rule decision. If it exists with zero rules, set it
+      aside under the other pattern: `EMPTY=$F.v1-empty-$(date +%Y%m%d%H%M%S); sudo test ! -e
+      $EMPTY && sudo mv -n $F $EMPTY && sudo test ! -e $F`.
+   4. `sudo mv -n $SAVED $F && sudo test ! -e $SAVED`.
+   5. Deploy the Phase 1 code and `s restart_broker`; the health command must show `count` N,
+      `rejected_ids: []`, `error: null` and `evaluator_revision: "owner-threshold-v2"`. Otherwise
+      stop with the advisor stopped and report.
+   6. Phase 1 steps 4–6.
+   Tested once before install in a scratch directory standing in for `$F`'s folder: rollback
+   with 3 rules, then roll-forward with an empty live file and with none, ends with the 3-rule
+   file at `$F`, the empty file under `v1-empty-`, and no file overwritten; the runbook in
+   `docs/custom-warnings.md` carries these exact commands.
 
 **Phase 2, advisor store and routes** (advisor, web listeners). Prerequisite: Phase 1 deployed;
 the store also enforces it through `evaluator_revision`. Each intermediate state is safe: an old
@@ -804,10 +954,12 @@ the dashboard after Phase 4, because help chats are matched per focus metric.
 
 ### 10. Phasing
 
-1. **Phase 1, custom rules fire correctly** (broker, advisor, build): time-defined semantics,
-   paged query mixin, the rules-file module, tolerant load with `rejected_ids` and
-   `evaluator_revision`, contract, advice, chat wording and semantics marker, Health lines,
-   invariance proof, the zero-rules precondition. Plan re-check, then review before install.
+1. **Phase 1, custom rules fire correctly** (broker, advisor, build): time-defined semantics on
+   the recording clock (`RuleHolds`), the one-recording query mixin, the rules-file module,
+   tolerant load with `rejected_ids` and
+   `evaluator_revision`, contract, advice, chat wording, `rule_proposal` keys and semantics
+   marker, Health lines, invariance proof, cost gate, the zero-rules precondition. Plan
+   re-check, then review before install.
 2. **Phase 2, advisor store and routes** (advisor, web listeners): store, both installers through
    it, routes, relay, vehicle-wide list, docs, map. Review before install.
 3. **Phase 3, the form** (build only): dialog, list, screenshot 13. Review before install.
@@ -826,16 +978,25 @@ ledger file.
   2). Chosen over counting recordings because the van's spacing is a setting the code does not
   enforce, so only a time can make "for at least 30 seconds" true. Undo: restore the previous
   `evaluate_rule` (git), with the precondition and set-aside rollback in section 8.
-- Custom-rule walk: current reading bound by the metric's stale limit, RPM from the same
-  snapshot, no regime filter, any non-qualifying recording breaks the run, distinct observations
+- Custom-rule run: current reading bound by the metric's stale limit, RPM from the same
+  snapshot, no regime filter, any non-qualifying recording breaks the run, distinct readings
   count once. Undo: as above.
+- The hold is timed per recording on the broker's monotonic clock, in memory, not from wall-clock
+  or observation timestamps in history: immune to clock steps and source switches, short by at
+  most 0.05 % (NTP slewing); it restarts with the broker and is not replayed from history.
+  Chosen over a capture-time history walk, which could not bound forward clock steps without
+  delaying confirmation. Undo: restore a history walk (plan revision 2, `5296ab4`) with its
+  residual.
 - An intervening unavailable or stale recording restarts the hold rather than being bridged.
-  Undo: let the walk skip such recordings within G.
+  Undo: let a recording that misses the metric continue the run within G.
 - A change between qualified sources does not break a run. Undo: require S0's source.
 - No reachability refusals; advice below twice the reported recording interval.
 - Phase 1 activates only with zero saved custom rules, verified with the advisor stopped; a
   non-zero count stops the deploy for the owner's per-rule decision. Rollback sets the whole
-  file aside under a new timestamped name.
+  file aside as `v2-saved-<time>-<N>rules`; roll-forward sets an empty live file aside as
+  `v1-empty-<time>` and restores only after the count matches.
+- v2 chat proposals are stored under `rule_proposal*` keys, so a rolled-back advisor shows them
+  but cannot install them; chats are not touched on rollback. Undo: write `proposal` again.
 - Old-bundle installs during the rollout are refused with "reload the page"; proposals made
   before the update are refused.
 - Removed ids are kept in the rules file (newest 256), so every operation is one durable write;
@@ -845,6 +1006,8 @@ ledger file.
 - One bad row disables only itself; its open episode is retired as if removed.
 - Form defaults: 30 s, gap min(15, H), floor 2, engine-running on except battery and tire
   metrics, no default limit; hold choices up to 10 min. Undo: edit `form_defaults`.
+- The readings floor is a form control under Exact settings; hold presets keep it, and the
+  preview states any floor above 2. Undo: hide the control (presets still keep the value).
 - The advisor refuses installs unless the broker reports `owner-threshold-v2` and serves the
   metric with the same unit.
 - The agent never installs: its proposal fills the form (Phase 4); the automatic first turn goes.
@@ -900,9 +1063,38 @@ safeguard.
   the eleven-metric line corrected; the RPM and the metric each meet their own freshness bound
   (step 3); the query exposes `observed_us`; custom-rule test fixtures may change, built-in tests
   may not.
-- last reviewed: plan revision 2 awaiting re-check (round 3 goes to the same reviewer).
+- Round 3, gpt-6-astra on `5296ab4`: hold. Probes on 2026-11-17 used a real historian
+  (table under "Custom rule semantics").
+  1. High, observation-time hold confirmed across a normal recording after a source switch
+     (reproduced: held 34 s, warning, with five seconds of qualifying recordings): closed by
+     timing the hold per recording on the broker's monotonic clock, observation times used only
+     for freshness (semantics steps 4–6); the reviewer's case is a regression test (`normal`, held
+     5 s).
+  2. Medium, wall-clock steps inflate the hold (reproduced: +10 s step confirmed at 20 s
+     elapsed): closed by the same clock; backward steps (historian refusals) show as a gap over G;
+     residual at most 0.05 % (NTP slew); forward and backward step tests; built-ins only pass the
+     argument through.
+  3. Medium, rollback left v2 proposals installable by the old advisor (confirmed against the
+     current `apply_warning`, `open_chat` and the chat loader): closed by storing v2 proposals
+     under `rule_proposal*` keys the old advisor never installs; a structural test and a
+     pre-install check with the deployed ref (reopen and approve gives 409, no rules file).
+  4. Medium, roll-forward could restore the empty file (confirmed by tracing): closed by distinct
+     name patterns `v2-saved-<time>-<N>rules` and `v1-empty-<time>`, a count check before and
+     after the restore, and a scratch test of the branch before install.
+  5. Medium, no form control for a floor above two (confirmed in the plan text): closed by
+     Minimum separate readings under Exact settings (2–60, default 2); presets keep it; the preview
+     and Review values state any floor above 2.
+  Notes: the retry-guarantee text now says any 256 removal requests, absent ids included, can
+  evict a tombstone; the cost gate before install uses `telemetry-history-profile` with 32 rules
+  (no walk remains, so cost is independent of hold length and cadence).
+  Changed as a consequence: the paged walk, `snapshot_readings_page` and the query-bound tests
+  are replaced by a one-recording query, `RuleHolds` and clock tests; `insights.py` and
+  `broker.py` join Phase 1 to pass the recording clock; a broker restart restarts a hold (an
+  open warning still holds through `_open_warning`); with one cached reading able to span a hold,
+  the floor of 2 is enforced rather than implied.
+- last reviewed: plan revision 3 awaiting re-check (round 3 findings closed; same reviewer).
 
 ## Status
 
-Plan only. No code changed. Next step: round 3 plan re-check by gpt-6-astra; then a fresh builder
-starts Phase 1 from this note in a worktree.
+Plan only. No code changed. Next step: plan revision 3 re-check by gpt-6-astra; then a fresh
+builder starts Phase 1 from this note in a worktree.
