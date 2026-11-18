@@ -3,7 +3,8 @@
 The signed microdegree interpretation is inferred in the radar project's DID
 map. The 1 degree reference is a monitoring aid, not an ECU trip guarantee.
 Each axis publishes 1-minute, 5-minute and 30-minute windows ending at its
-latest read (see WINDOW_SECONDS for how gaps are treated) and the signed change
+latest read (see WINDOW_SECONDS for how gaps are treated), each with its mean,
+peak and signed change (newest read minus oldest), and the signed change
 since the first reading of the current drive (see DRIVE_GAP_SECONDS), plus the
 change across the park before it (see parked_change).
 """
@@ -330,7 +331,10 @@ class AlignmentHistory:
             count = window["count"]
             if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= MAX_SAMPLES:
                 raise ValueError("invalid retained radar sample count")
-            for name, low, high in (("mean", -20, 20), ("peak_abs", 0, 20), ("span_seconds", 0, seconds)):
+            for name, low, high in (("mean", -20, 20), ("peak_abs", 0, 20), ("span_seconds", 0, seconds),
+                                    ("change", -40, 40)):
+                if name == "change" and name not in window:
+                    continue  # saved before windows carried a change; restore rebuilds it
                 value = window[name]
                 if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not low <= value <= high:
                     raise ValueError("invalid retained radar window")
@@ -367,6 +371,8 @@ class AlignmentHistory:
                     "peak_abs": max(map(abs, values)),
                     "count": len(values),
                     "span_seconds": window[-1][0] - window[0][0],
+                    # Signed change across the window: its newest read minus its oldest.
+                    "change": values[-1] - values[0],
                 }
             self.last[metric] = row
             self.dirty = True
@@ -443,12 +449,25 @@ class AlignmentHistory:
                 self.storage_error = None
                 self.dirty = False
 
+    def _backfill_window_changes(self, metric, rebuilt):
+        saved = self.last[metric]
+        if not rebuilt or datetime.fromisoformat(rebuilt["observed_at"]) \
+                != datetime.fromisoformat(saved["observed_at"]):
+            return
+        for seconds in WINDOW_SECONDS:
+            window = saved[str(seconds)]
+            if "change" not in window:
+                window["change"] = rebuilt[str(seconds)]["change"]
+                self.dirty = True
+
     def restore_from_historian(self, historian):
         """Recover the final observed windows once at startup using bounded reads.
 
         A saved summary that is as new as the historian but predates a window or
-        the drive change (a legacy file) is rebuilt too, so everything is
-        published after a code upgrade. A saved drive is extended with the
+        the drive change (a legacy file) is rebuilt too. One that lacks only the
+        window changes keeps everything it has and gains the changes when the
+        historian's newest reading is its own (otherwise the next live read adds
+        them). A saved drive is extended with the
         newer readings (same gap rule), keeping its start. With no saved drive
         the query reaches back at most MAX_SAMPLES * POLL_INTERVAL_SECONDS
         (about 2.8 h; repeated cached rows count toward the limit), so a rebuilt
@@ -460,8 +479,9 @@ class AlignmentHistory:
                 continue
             stamp = datetime.fromisoformat(latest["observed_at"])
             saved = self.last[metric]
-            if saved and datetime.fromisoformat(saved["observed_at"]) >= stamp and \
-                    "drive" in saved and all(str(seconds) in saved for seconds in WINDOW_SECONDS):
+            current = bool(saved) and datetime.fromisoformat(saved["observed_at"]) >= stamp and \
+                "drive" in saved and all(str(seconds) in saved for seconds in WINDOW_SECONDS)
+            if current and all("change" in saved[str(seconds)] for seconds in WINDOW_SECONDS):
                 continue
             rows = historian.query_samples(
                 metric, start=stamp - timedelta(seconds=MAX_SAMPLES * POLL_INTERVAL_SECONDS), end=latest["captured_at"],
@@ -483,6 +503,13 @@ class AlignmentHistory:
                     restored.add(metric, row["value"], when.timestamp(), row["observed_at"])
                     if extended is not None and when > saved_at:
                         extended.add(metric, row["value"], when.timestamp(), row["observed_at"])
+            if current:
+                # A current summary saved before windows carried a change keeps every
+                # field it has (its drive may start beyond the bounded query); only
+                # the window changes are added, and only when the rebuilt windows end
+                # at the same reading as the saved ones.
+                self._backfill_window_changes(metric, restored.last[metric])
+                continue
             if restored.last[metric]:
                 if extended is not None and extended.last[metric] is not saved:
                     restored.last[metric]["drive"] = extended.last[metric]["drive"]

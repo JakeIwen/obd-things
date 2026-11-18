@@ -1868,8 +1868,9 @@ Asleep deployment added no CAN TX; all roles stayed passive/error-free.
 ### Radar alignment dashboard (2026-09-16)
 
 The dashboard shows radar alignment on a Drive page 2 tile and the System
-view's radar card. The broker provides latest elevation/azimuth, sample means
-over the trailing 60 and 300 seconds, sample count/time coverage, absolute five-minute peak, and
+view's radar card. The broker provides latest elevation/azimuth, per trailing
+window (60, 300 and 1,800 seconds) the sample mean and the signed `change` (newest
+read minus oldest), sample count/time coverage, absolute five-minute peak, and
 distance to the owner's +/-1 degree monitoring reference. At 0.8 degree it
 shows an approaching-reference indication; at 1 degree it shows outside the
 reference. These are display bands, not verified OEM fault thresholds or proof
@@ -1908,7 +1909,11 @@ after a gap over 30 seconds start new 1-minute and 5-minute windows; the
 30-minute window added on 2026-10-10 (`WINDOW_SECONDS` in
 `radar_alignment.py`) is a plain time window ending at the latest read and keeps
 averaging across such gaps. The 2-hour window was removed on 2026-11-13 at the
-owner's request; saved files drop it on load. In its place each axis publishes
+owner's request; saved files drop it on load. Since 2026-11-17 the dashboard shows
+each window's `change` (**Δ 1 min**, **Δ 5 min**, **Δ 30 min** on the tile, **Change
+over N min** on the System card; owner request) instead of its mean, which stays in the
+row; a window from an older broker without `change` reads `—`. In place of the
+2-hour window each axis also publishes
 `drive`: the signed change of the latest angle from the first reading of the
 current drive (`change`, `start_value`, `started_at`, `count`, `span_seconds`).
 A drive is a run of readings with no gap over `DRIVE_GAP_SECONDS` (300 s, the
@@ -1933,7 +1938,9 @@ The small `radar-alignment.json` file beside the history database retains these
 summaries across restarts; the history thread flushes changed summaries. A
 bounded indexed startup query can recover the final windows and drive from
 existing historian observations, deduplicating repeated cached samples, and
-rebuilds a saved summary that predates a window or the drive change. The query
+rebuilds a saved summary that predates a window or the drive change. A current
+summary that lacks only the window changes keeps every field and gains them when the
+historian's newest reading is its own; otherwise the next live read adds them. The query
 reaches back at most `MAX_SAMPLES * POLL_INTERVAL_SECONDS` (about 2.8 hours), so
 a restored drive older than that starts at the oldest reading found. Raw
 averaging history is bounded to 30 minutes/1,024 observations per axis.

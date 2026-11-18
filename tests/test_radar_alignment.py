@@ -95,6 +95,7 @@ class RadarAlignmentTests(unittest.TestCase):
         self.assertEqual(window["count"], 3)
         self.assertAlmostEqual(window["mean"], .2)
         self.assertEqual(window["peak_abs"], .9)
+        self.assertAlmostEqual(window["change"], 1.5, msg="newest read minus oldest, signed")
         history.add(metric, .1, 55)
         self.assertEqual(history.summary(55)[metric]["300"]["count"], 1)
         self.assertEqual(history.summary(356)[metric]["300"]["mean"], .1)
@@ -112,7 +113,59 @@ class RadarAlignmentTests(unittest.TestCase):
         self.assertEqual(row["1800"]["count"], 61)
         self.assertAlmostEqual(row["1800"]["mean"], 59 / 61)
         self.assertEqual(row["1800"]["span_seconds"], 650)
+        # The short windows' change starts over with them; the long one spans the gap.
+        self.assertEqual((row["60"]["change"], row["300"]["change"]), (0, 0))
+        self.assertAlmostEqual(row["1800"]["change"], -2.0)
         self.assertEqual(sorted(k for k in row if k.isdigit()), ["1800", "300", "60"])
+
+    def _pre_change_summary(self):
+        """A current-format summary saved before windows carried a change: a drive that
+        began three hours earlier (beyond the bounded query) and a parked figure."""
+        window = lambda: {"count": 2, "mean": .25, "peak_abs": .4, "span_seconds": 10}
+        return {"latest_value": .4, "observed_at": "2026-09-20T12:00:10+00:00",
+                "60": window(), "300": window(), "1800": window(),
+                "drive": {"change": .3, "start_value": .1, "started_at": "2026-09-20T09:00:00+00:00",
+                          "count": 1000, "span_seconds": 10810.0},
+                "parked": {"change": .05, "previous_value": .05,
+                           "previous_observed_at": "2026-09-19T20:00:00+00:00",
+                           "observed_at": "2026-09-20T09:00:00+00:00"}}
+
+    def _historian(self, metric, *rows):
+        historian = mock.Mock()
+        historian.latest_sample.side_effect = lambda name: rows[0] if name == metric else None
+        historian.query_samples.return_value = list(rows)
+        return historian
+
+    def test_saved_windows_without_a_change_load_and_gain_it_without_losing_anything(self):
+        metric = radar.METRICS[0]
+        saved = self._pre_change_summary()
+        radar.AlignmentHistory._validate_retained(saved)
+        with self.assertRaises(ValueError):
+            radar.AlignmentHistory._validate_retained({**saved, "60": {**saved["60"], "change": 41}})
+        latest = dict(metric=metric, source=radar.SOURCE, unit="deg", value=.4,
+                      observed_at="2026-09-20T12:00:10+00:00", captured_at="2026-09-20T12:00:15+00:00")
+        first = {**latest, "value": .1, "observed_at": "2026-09-20T12:00:00+00:00"}
+        expected = json.loads(json.dumps(saved))
+        history = radar.AlignmentHistory()
+        history.last[metric] = saved
+        history.restore_from_historian(self._historian(metric, latest, first))
+        row = history.summary(0)[metric]
+        for seconds in ("60", "300", "1800"):
+            self.assertAlmostEqual(row[seconds].pop("change"), .3)
+        self.assertEqual(row, expected, "the drive start, parked figure and windows are kept")
+
+    def test_saved_summary_newer_than_the_historian_waits_for_a_live_read(self):
+        metric = radar.METRICS[0]
+        saved = self._pre_change_summary()
+        expected = json.loads(json.dumps(saved))
+        behind = dict(metric=metric, source=radar.SOURCE, unit="deg", value=.3,
+                      observed_at="2026-09-20T12:00:00+00:00", captured_at="2026-09-20T12:00:05+00:00")
+        history = radar.AlignmentHistory()
+        history.last[metric] = saved
+        history.restore_from_historian(self._historian(metric, behind))
+        self.assertEqual(history.summary(0)[metric], expected, "older history never replaces it")
+        history.add(metric, .5, 100.0, "2026-09-20T12:00:20+00:00")
+        self.assertIn("change", history.summary(0)[metric]["60"])
 
     def test_drive_change_accumulates_across_a_gap_that_resets_the_windows(self):
         history = radar.AlignmentHistory()
