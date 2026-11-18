@@ -335,6 +335,9 @@ red if any is critical).
 - **Dim**: in manual Light/Dark, the persisted night toggle works as before. In Auto theme,
   a tap overrides the scheduled dim state until the next **dim** boundary; the stored
   `dimOverrideUntil` epoch keeps that override across reloads. Switching theme mode clears it.
+  A tap inverts what the screen shows, not the schedule beneath it: during the headlights-off
+  nudge (section 4) the first tap gives the dim night palette, and the nudge returns once the
+  override expires while the lights are still off.
   `styles/night.css` darkens text, surfaces, bands, accents and dialogs, even over forced Light.
   This changes app colours, not the tablet backlight.
 - **Theme**: the 44 px icon button at the right edge cycles **Auto → Light → Dark → Auto**
@@ -783,6 +786,8 @@ checks when stopped:
   reading, a disconnect, or a parked/asleep van returns to the sun schedule at once, so a parked
   van at night stays dark. The parking bit cannot be told from low beam and DRL sets neither, so
   parking lights alone count as on. Manual Light/Dark and an active owner Dim override win.
+  The 5 s hold timer rechecks the readings' freshness and the van state when it fires, so
+  readings that expired meanwhile never raise the nudge.
   Pure rule: `headlightReading`, `vanIsOn`, `applyHeadlightNudge` in `theme.helpers.js`.
 - **Light palette.** `styles/light.css` uses white cards, near-black ink and dark amber/red/green/blue
   accents; every SVG inherits the shared tokens. Canvas sparklines invalidate their cached

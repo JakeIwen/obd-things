@@ -33,11 +33,15 @@ export function themeSchedule(now, mode, { dim = false, dimOverrideUntil = null 
   };
 }
 
-export function dimToggleSettings(settings, now) {
+/**
+ * One DIM tap. `displayedDim` is what the screen shows now (the headlight nudge can differ from
+ * the schedule); the tap inverts that and, in Auto, holds it until the next dim boundary.
+ */
+export function dimToggleSettings(settings, now, displayedDim) {
   const current = themeSchedule(now, settings.themeMode, settings);
   return {
     ...settings,
-    dim: !current.dim,
+    dim: !(displayedDim ?? current.dim),
     dimOverrideUntil: settings.themeMode === "auto" ? current.nextDimBoundary : null,
   };
 }
