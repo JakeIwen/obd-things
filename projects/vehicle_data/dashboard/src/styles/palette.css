@@ -29,4 +29,6 @@
   --on-green: #082014;
   --backdrop: #000;
   --message-me: #1f2f2b;
+  --credits-info: var(--blue);
+  --credits-stale: var(--amber);
 }

@@ -34,6 +34,7 @@ import { obs, minuteClock, engineRunning, orderedIds, isHidden } from "../app/de
 import { openDialog } from "../app/dialogs.js";
 import { manualRefresh } from "../app/runtime.js";
 import { Card, Empty } from "../components/Card.jsx";
+import ApiCreditsCard from "../components/ApiCreditsCard.jsx";
 import { DRIVE_TILES } from "./Drive.jsx";
 import { PARKED_CARDS } from "./parked.helpers.js";
 import { HEALTH_CARDS } from "./health.helpers.js";
@@ -551,6 +552,7 @@ export default function System() {
           const Component = CARD_COMPONENTS[id];
           return <Component key={id} />;
         })}
+        <ApiCreditsCard key="api-credits" />
         <CustomiseCard key="customise" />
         <DeviceCard key="device" />
       </div>

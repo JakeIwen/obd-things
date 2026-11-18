@@ -170,6 +170,19 @@ function runBase(id, code, over) {
   };
 }
 
+/**
+ * The credits view (GET /v1/assistant/research/credits) as the System card shows it: credits billing,
+ * a balance known a few minutes ago whose total is the sum of its grants. Illustrative only.
+ */
+export function demoCreditsView(nowMs) {
+  const grants = [{label: "Nov 25", expires: "2026-11-25T00:00:00Z", remaining_usd: 6.4}, {label: "Dec 8", expires: "2026-12-08T00:00:00Z", remaining_usd: 8.1}];
+  const total = Math.round(grants.reduce((sum, g) => sum + g.remaining_usd, 0) * 100) / 100;
+  return {key_installed: true, enabled: true, until: "2026-12-08T00:00:00Z", expired: false,
+    new_research: {billing: "api_credits", reason: null, latched_models: []},
+    balance: {state: "known", total_usd: total, as_of: iso(nowMs - 4 * MINUTE_MS), stale: false, grants},
+    spent_since_snapshot_usd: 0.35, uncertain_count: 0, unknown_spend_count: 0, last_fallback: null};
+}
+
 /** The research routes: models, the list, three codes with runs and one with none. */
 export function demoResearchRoutes(nowMs) {
   const at = (minutes) => iso(nowMs - minutes * MINUTE_MS);
@@ -217,6 +230,7 @@ export function demoResearchRoutes(nowMs) {
     {provider: "claude", label: "Claude", available: false, reason: "Claude is not signed in for research yet", source: "fallback", checked_at: null, models: []},
     {provider: "codex", label: "GPT (Codex)", available: false, reason: "Codex is not yet verified for research on this CLI version", source: "fallback", checked_at: null, models: []}]};
   return [
+    {method: "GET", pathname: "/v1/assistant/research/credits", prefix: false, status: 200, json: demoCreditsView(nowMs)},
     {method: "GET", pathname: "/v1/assistant/models", prefix: false, status: 200, json: off, chatScene: RESEARCH_OFF_SCENE},
     {method: "GET", pathname: "/v1/assistant/models", prefix: false, status: 200, json: catalog},
     {method: "GET", pathname: "/v1/assistant/dtc-research", prefix: false, status: 200,

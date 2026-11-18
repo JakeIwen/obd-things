@@ -1,0 +1,16 @@
+.api-credits p { margin: 0 0 6px; }
+.api-credits__total { font-size: 28px; font-weight: 700; color: var(--text); }
+.api-credits__stale { color: var(--credits-stale); font-weight: 700; }
+.api-credits__grants { margin: 8px 0; }
+.api-credits__line { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; }
+.api-credits__text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.api-credits__line .popover { flex: 1 0 100%; margin: 4px 0; padding: 8px 12px; }
+.api-credits__i {
+  flex: none; width: 44px; height: 44px; margin: -10px -10px -10px 0; border: 0; background: none; cursor: pointer;
+  color: var(--credits-info); font-size: 0; display: inline-flex; align-items: center; justify-content: center;
+}
+.api-credits__i::before {
+  content: "i"; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px;
+  border: 1px solid var(--credits-info); border-radius: 50%; font: italic 700 14px/1 serif;
+}
+.api-credits__tip { margin: 0; font-size: 14px; color: var(--text-2); }
