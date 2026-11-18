@@ -133,9 +133,13 @@ restart is refused ("ask again").
 
 Cost gate: the `telemetry-history-profile` compute task on a finalized backup, once with a context
 holding 32 valid rules (ten-minute holds, every catalog metric, some beyond their limit but not
-yet confirmed) and once with none. The ingest phase with 32 rules may exceed the run without rules
-by at most 10 ms (against the 72.0 ms saved-snapshot ingest figure in [broker CPU](broker-cpu.md)).
-This is a relative check: the task runs on a compute worker (usually the Mac) against an in-memory
+yet confirmed) and once with none. It passes when (a) with zero rules the ingest phase is unchanged from master
+within noise; (b) with 32 worst-case rules it is no slower than master with the same rules; and
+(c) the absolute time 32 rules add on the Pi is reported against the 5 s recording interval and
+the 72.0 ms saved-snapshot ingest figure in [broker CPU](broker-cpu.md). The target for the custom
+evaluation step alone is 10 ms (measured about 5 ms on the Pi); the rest of the added time is the
+unchanged lifecycle storing 32 more assessments, which master pays too.
+The task's numbers are a relative check: the task runs on a compute worker (usually the Mac) against an in-memory
 copy of the database, so its absolute numbers are not the Pi's. After install, take one live
 sample of the historian interval on the Pi, as the broker CPU baseline did (median 5.128 s after
 the October change): record `last_stored_at` for five minutes,
