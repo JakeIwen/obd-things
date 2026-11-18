@@ -181,7 +181,7 @@ describe("requests", () => {
     assert.deepEqual(H.openChatBody({ kind: "setup", id: "new-warning" }, settings, "rid", true), { event: { kind: "setup", id: "new-warning" }, request_id: "rid", settings, new_chat: true });
     assert.deepEqual(H.messageBody(settings, "rid", { message: "hi" }), { request_id: "rid", settings, message: "hi" });
     assert.deepEqual(H.messageBody(settings, "rid", { retry: true }), { request_id: "rid", settings, retry: true });
-    assert.deepEqual(H.applyBody("p1"), { proposal_id: "p1", confirmed: true });
+    assert.deepEqual(H.applyBody("p1"), { proposal_id: "p1", confirmed: true, semantics: "owner-threshold-v2" });
     assert.deepEqual(H.removeSavedBody(), { confirmed: true });
   });
   test("responses classify as ok / pending / error", () => {
@@ -315,7 +315,7 @@ describe("formatting", () => {
     // Plain names in name order, never the raw metric key.
     assert.deepEqual(v.rows, [{ key: "generator.field_duty", text: "Alternator (%)" },
       { key: "battery.voltage", text: "Battery (V)" }, { key: "engine.rpm", text: "Engine speed" }]);
-    assert.equal(v.rule, "A rule fires after 2 to 60 qualifying readings in a row are above your number, below it, or beyond it in either direction, each one fresh and inside the rule's time window. Other conditions need a development task.");
+    assert.equal(v.rule, "A rule fires when every recording of the metric for the hold time (5 to 600 seconds) is above your number, below it, or beyond it in either direction, with no long gap between recordings. Other conditions need a development task.");
     assert.equal(H.monitorView(chat([turn()], { catalog: setup.catalog })).visible, false);
     assert.equal(H.monitorView(chat([turn()], { event: H.SETUP_EVENT })).visible, false);
     assert.equal(H.monitorView(chat([turn()], { event: H.SETUP_EVENT, catalog: [] })).visible, false);
@@ -323,15 +323,17 @@ describe("formatting", () => {
   });
 
   test("proposal text and applied text", () => {
-    const t = turn({ state: "complete", proposal_id: "p1", proposal_unit: "°F", proposal: {
+    const t = turn({ state: "complete", rule_proposal_id: "p1", rule_proposal_unit: "°F", rule_proposal: {
       title: "Coolant above 230", metric: "engine.coolant_temperature", operator: "above", threshold: 230,
       persistence_observations: 5, window_seconds: 60, max_age_seconds: 10, engine_running: true,
     } });
-    assert.equal(H.proposalText(t), "Coolant above 230\nengine.coolant_temperature: above 230 °F\n5 distinct observations within 60s; sample age/gap ≤ 10s.\nEngine running required (fresh RPM > 400).");
-    t.proposal.operator = "absolute_magnitude_above"; t.proposal.engine_running = false; delete t.proposal_unit;
+    assert.equal(H.proposalText(t), "Coolant above 230\nengine.coolant_temperature: above 230 °F\nHeld at least 60 s, recordings at most 10 s apart, at least 5 separate readings.\nEngine running at every recording (RPM above 400).");
+    t.rule_proposal.operator = "absolute_magnitude_above"; t.rule_proposal.engine_running = false; delete t.rule_proposal_unit;
     assert.match(H.proposalText(t), /absolute magnitude above 230\n/);
     assert.match(H.proposalText(t), /Any engine state\.$/);
     assert.equal(H.proposalText(turn()), "");
+    // A turn made before the update carries only the old keys: no proposal is shown or installable.
+    assert.equal(H.proposalText(turn({ state: "complete", proposal_id: "p0", proposal: { title: "Old" } })), "");
     assert.equal(H.appliedText(true), H.TEXT.applied);
     assert.equal(H.appliedText(false), H.TEXT.notInstalled);
   });
@@ -693,7 +695,7 @@ describe("createChatController", () => {
 
   test("proposal review: approve, remove, and saved-warning removal notify the parent", async () => {
     const proposal = { title: "Coolant above 230", metric: "engine.coolant_temperature", operator: "above", threshold: 230, persistence_observations: 5, window_seconds: 60, max_age_seconds: 10, engine_running: true };
-    const proposed = chat([turn({ user: "Warn when coolant is over 230", assistant: "Proposal ready", state: "complete", proposal_id: "p1", proposal_unit: "°F", proposal })], { event: { kind: "setup", id: "new-warning" }, title: "Add Early Warning" });
+    const proposed = chat([turn({ user: "Warn when coolant is over 230", assistant: "Proposal ready", state: "complete", rule_proposal_id: "p1", rule_proposal_unit: "°F", rule_proposal: proposal, semantics: "owner-threshold-v2" })], { event: { kind: "setup", id: "new-warning" }, title: "Add Early Warning" });
     const applied = chat([{ ...proposed.turns[0], applied: true }], { event: { kind: "setup", id: "new-warning" } });
     let statusCalls = 0;
     const t = makeController([
@@ -723,7 +725,7 @@ describe("createChatController", () => {
 
     assert.equal(await t.ctrl.applyWarning(), true);
     const apply = t.server.calls.find(c => c.url.endsWith("/apply-warning"));
-    assert.deepEqual(apply.body, { proposal_id: "p1", confirmed: true });
+    assert.deepEqual(apply.body, { proposal_id: "p1", confirmed: true, semantics: "owner-threshold-v2" });
     snap = t.last();
     assert.equal(snap.proposal.applied, true);
     assert.equal(snap.proposal.open, false, "an applied proposal collapses");
@@ -736,7 +738,7 @@ describe("createChatController", () => {
 
     assert.equal(await t.ctrl.removeWarning(), true);
     const remove = t.server.calls.find(c => c.url.endsWith("/remove-warning"));
-    assert.deepEqual(remove.body, { proposal_id: "p1", confirmed: true });
+    assert.deepEqual(remove.body, { proposal_id: "p1", confirmed: true, semantics: "owner-threshold-v2" });
     snap = t.last();
     assert.equal(snap.proposal.applied, false);
     assert.equal(snap.proposal.open, true, "an un-applied proposal re-expands");

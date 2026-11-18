@@ -11,13 +11,14 @@
  *   GET  /v1/assistant/chats/<32hex>
  *   POST /v1/assistant/chats/<32hex>/messages         {request_id, settings, message | retry:true}
  *   POST /v1/assistant/chats/<32hex>/cancel           {}
- *   POST /v1/assistant/chats/<32hex>/apply-warning    {proposal_id, confirmed:true}
- *   POST /v1/assistant/chats/<32hex>/remove-warning   {proposal_id, confirmed:true}
+ *   POST /v1/assistant/chats/<32hex>/apply-warning    {proposal_id, confirmed:true, semantics}
+ *   POST /v1/assistant/chats/<32hex>/remove-warning   {proposal_id, confirmed:true, semantics}
  *   POST /v1/assistant/warnings/<64hex>/remove        {confirmed:true}
  * Headers X-Van-Assistant-Key (access code) and X-Van-Chat-Client (random browser id),
  * both /[A-Za-z0-9_-]{32,128}/; 401 means "pair this browser", 503 with "disabled on this
  * listener" means the capability is off for this web listener.
  */
+import customWarnings from "../../../custom_warnings.json" with { type: "json" };
 import { fmtTime } from "../format.js";
 import { metricLabel } from "../warningContext.js";
 import {
@@ -73,13 +74,18 @@ export const TEXT = Object.freeze({
   confirmRemove: "Remove this custom warning?",
   confirmNewChat: "Refresh the event evidence and start a new explanation? This conversation and its original evidence remain saved on the Pi.",
   monitorTitle: "What you can monitor",
-  monitorRule: (min, max) => `A rule fires after ${min} to ${max} qualifying readings in a row are above your number, below it, or beyond it in either direction, each one fresh and inside the rule's time window. Other conditions need a development task.`,
+  monitorRule: (min, max) => `A rule fires when every recording of the metric for the hold time (${min} to ${max} seconds) is above your number, below it, or beyond it in either direction, with no long gap between recordings. Other conditions need a development task.`,
+  proposalTiming: (hold, gap, readings) => `Held at least ${hold} s, recordings at most ${gap} s apart, at least ${readings} separate readings.`,
+  proposalEngine: "Engine running at every recording (RPM above 400).",
+  proposalAnyEngine: "Any engine state.",
   askLabel: "Ask a follow-up",
   askPlaceholder: "What does this mean for the van?",
 });
 
-// Persistence limits of a custom rule: custom_warnings.validate_rule (persistence_observations).
-export const RULE_READINGS = Object.freeze({min: 2, max: 60});
+// Hold-time limits of a custom rule (window_seconds), from the shared contract custom_warnings.json.
+export const RULE_HOLD = Object.freeze({min: customWarnings.limits.window_seconds[0], max: customWarnings.limits.window_seconds[1]});
+// The rule meaning this dashboard approves; the advisor refuses an apply without it (reload required).
+export const RULE_SEMANTICS = customWarnings.evaluator_revision;
 
 /**
  * The setup dialog's "What you can monitor" disclosure. Only a setup chat whose reply carries a
@@ -95,7 +101,7 @@ export function monitorView(chat) {
     visible: items.length > 0,
     summary: `${TEXT.monitorTitle} (${items.length})`,
     rows: items,
-    rule: TEXT.monitorRule(RULE_READINGS.min, RULE_READINGS.max),
+    rule: TEXT.monitorRule(RULE_HOLD.min, RULE_HOLD.max),
   };
 }
 
@@ -161,7 +167,7 @@ export function messageBody(settings, requestId, input) {
   return body;
 }
 
-export const applyBody = (proposalId) => ({proposal_id: proposalId, confirmed: true});
+export const applyBody = (proposalId) => ({proposal_id: proposalId, confirmed: true, semantics: RULE_SEMANTICS});
 export const removeSavedBody = () => ({confirmed: true});
 
 /** "ok" (2xx result), "pending" (202 + pending:true → re-request identically) or "error". */
@@ -298,14 +304,14 @@ export function transcriptRows(chat) {
 }
 
 export function proposalText(turn) {
-  const proposal = turn?.proposal;
+  const proposal = turn?.rule_proposal;
   if (!proposal) return "";
-  const unit = turn.proposal_unit ? ` ${turn.proposal_unit}` : "";
+  const unit = turn.rule_proposal_unit ? ` ${turn.rule_proposal_unit}` : "";
   return [
     String(proposal.title || ""),
     `${proposal.metric}: ${String(proposal.operator || "").replace(/_/g, " ")} ${proposal.threshold}${unit}`,
-    `${proposal.persistence_observations} distinct observations within ${proposal.window_seconds}s; sample age/gap ≤ ${proposal.max_age_seconds}s.`,
-    proposal.engine_running ? "Engine running required (fresh RPM > 400)." : "Any engine state.",
+    TEXT.proposalTiming(proposal.window_seconds, proposal.max_age_seconds, proposal.persistence_observations),
+    proposal.engine_running ? TEXT.proposalEngine : TEXT.proposalAnyEngine,
   ].join("\n");
 }
 
@@ -426,7 +432,7 @@ export function createChatController(deps) {
     const busy = isBusy(s.chat);
     const last = lastTurn(s.chat);
     const locked = s.requesting || busy;
-    const proposal = last?.state === "complete" ? last.proposal : null;
+    const proposal = last?.state === "complete" ? last.rule_proposal : null;
     return {
       open: s.opened,
       mode: s.mode,
@@ -486,9 +492,9 @@ export function createChatController(deps) {
     }
     const last = lastTurn(result);
     if (last?.state === "error" && last.diagnostics) s.timingOpen = true;
-    const proposal = last?.state === "complete" ? last.proposal : null;
+    const proposal = last?.state === "complete" ? last.rule_proposal : null;
     if (proposal) {
-      const proposalSignature = JSON.stringify([last.proposal_id, last.applied === true]);
+      const proposalSignature = JSON.stringify([last.rule_proposal_id, last.applied === true]);
       if (proposalSignature !== s.proposalSignature) s.proposalOpen = !last.applied;
       s.proposalSignature = proposalSignature;
     }
@@ -680,12 +686,12 @@ export function createChatController(deps) {
 
   async function applyWarning(remove) {
     const turn = lastTurn(s.chat);
-    if (!turn?.proposal_id || s.requesting || isBusy(s.chat)) return false;
+    if (!turn?.rule_proposal_id || s.requesting || isBusy(s.chat)) return false;
     const current = s.generation;
     s.requesting = true;
     emit();
     try {
-      const result = await request("POST", chatPath(s.chat.id, remove ? "remove-warning" : "apply-warning"), applyBody(turn.proposal_id));
+      const result = await request("POST", chatPath(s.chat.id, remove ? "remove-warning" : "apply-warning"), applyBody(turn.rule_proposal_id));
       if (current !== s.generation) return false;
       render(result);
       onWarningsChanged();

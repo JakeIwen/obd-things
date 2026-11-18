@@ -138,8 +138,8 @@ test("Add Early Warning shows a drafted coolant rule that is not installed", asy
   assert.equal(snap.proposal.text, [
     "Sustained high coolant temperature",
     "engine.coolant_temperature: above 220 °F",
-    "3 distinct observations within 30s; sample age/gap ≤ 5s.",
-    "Engine running required (fresh RPM > 400).",
+    "Held at least 30 s, recordings at most 15 s apart, at least 2 separate readings.",
+    "Engine running at every recording (RPM above 400).",
   ].join("\n"));
   assert.equal(snap.saved.visible, false);
   assert.equal(snap.canSend, true);

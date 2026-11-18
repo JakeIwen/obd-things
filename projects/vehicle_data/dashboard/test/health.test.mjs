@@ -152,6 +152,30 @@ test("warnings: a broken owner rule file is reported", () => {
   assert.equal(vm.rulesError, "Your saved warnings could not be loaded: rules file unreadable");
 });
 
+test("warnings: rejected saved warnings are counted", () => {
+  const one = H.warningsView(model([]), { custom_rules: { count: 1, error: null, rejected_ids: ["a".repeat(64)] } });
+  assert.equal(one.rulesRejected, "1 saved warning could not be loaded.");
+  assert.equal(one.rulesError, null);
+  const two = H.warningsView(model([]), { custom_rules: { count: 0, error: null, rejected_ids: ["a".repeat(64), null] } });
+  assert.equal(two.rulesRejected, "2 saved warnings could not be loaded.");
+  assert.equal(H.warningsView(model([]), { custom_rules: { count: 1, error: null } }).rulesRejected, null);
+});
+
+test("warnings: a custom rule waiting to confirm shows its held time of the hold", () => {
+  const health = { assessments: [
+    { rule: "custom_a", group: "custom", state: "normal", title: "Coolant above 230 °F",
+      candidate: { observed: 2, required: 2, held_seconds: 12.6, hold_seconds: 30 } },
+    { rule: "custom_b", group: "custom", state: "normal", title: "Old broker", candidate: { observed: 1, required: 3 } },
+    { rule: "custom_c", group: "custom", state: "normal", title: "Inside" },
+    { rule: "battery_low", group: "battery", state: "normal", candidate: { held_seconds: 5, hold_seconds: 10 } },
+  ] };
+  const vm = H.warningsView(model([]), health);
+  assert.deepEqual(vm.customHolds, [
+    { id: "custom_a", text: "Coolant above 230 °F: beyond its limit for 12 of 30 s, waiting to confirm." },
+  ]);
+  assert.deepEqual(H.warningsView(model([]), {}).customHolds, []);
+});
+
 test("warnings: no provenance or evaluator jargon reaches the card", () => {
   const vm = H.warningsView(buildWarningCards(SUMMARY.health, NOW), SUMMARY.health);
   for (const t of textsOf(vm)) {

@@ -174,16 +174,50 @@ export function checksNote(health) {
   return parts.length ? parts.join(" · ") + "." : null;
 }
 
+/** Owner custom-warning wording on the Early warning card. */
+export const CUSTOM_TEXT = Object.freeze({
+  rejected: (n) => plural(n, "saved warning", "saved warnings") + " could not be loaded.",
+  holding: (title, held, hold) => `${title}: beyond its limit for ${held} of ${hold} s, waiting to confirm.`,
+});
+
+/** "N saved warnings could not be loaded." from the evaluator's `custom_rules.rejected_ids`. */
+export function customRejectedLine(health) {
+  const rules = obj(obj(health) && health.custom_rules);
+  const ids = rules ? arr(rules.rejected_ids) : [];
+  return ids.length ? CUSTOM_TEXT.rejected(ids.length) : null;
+}
+
+/**
+ * Custom rules beyond their limit but not yet confirmed: how much of the hold time is met.
+ * A candidate without `held_seconds`/`hold_seconds` (an older broker) shows nothing.
+ */
+export function customHoldLines(health) {
+  const list = obj(health) ? arr(health.assessments) : [];
+  const lines = [];
+  for (let i = 0; i < list.length; i += 1) {
+    const item = obj(list[i]);
+    const candidate = item && item.group === "custom" && item.state === "normal" ? obj(item.candidate) : null;
+    const held = candidate ? num(candidate.held_seconds) : null;
+    const hold = candidate ? num(candidate.hold_seconds) : null;
+    if (held === null || hold === null) continue;
+    const title = str(item.title) || metricLabel(item.metric);
+    lines.push({ id: str(item.rule) || String(i), text: CUSTOM_TEXT.holding(title, fmtInt(Math.floor(held)), fmtInt(hold)) });
+  }
+  return lines;
+}
+
 /**
  * Early-warning card model.
  * @param {object} model warnings.buildWarningCards output
  * @param {object|null} health `summary.health` slice (null until the first summary arrives)
  * @returns {{status: 'loading'|'unavailable'|'ok', emptyText: string|null, checks: string|null,
  *   badge: {text: string, tone: string}|null, open: Array, unconfirmed: Array,
- *   delivery: string|null, rulesError: string|null}}
+ *   delivery: string|null, rulesError: string|null, rulesRejected: string|null,
+ *   customHolds: Array<{id: string, text: string}>}}
  */
 export function warningsView(model, health) {
-  const base = { status: "ok", emptyText: null, checks: null, badge: null, open: [], unconfirmed: [], delivery: null, rulesError: null };
+  const base = { status: "ok", emptyText: null, checks: null, badge: null, open: [], unconfirmed: [], delivery: null,
+    rulesError: null, rulesRejected: null, customHolds: [] };
   if (health === null || health === undefined) {
     return { ...base, status: "loading", emptyText: "Waiting for warning status…" };
   }
@@ -221,6 +255,8 @@ export function warningsView(model, health) {
     unconfirmed,
     delivery: deliveryLine(m.delivery, Boolean(nd && nd.enabled === false)),
     rulesError: customRules && str(customRules.error) ? "Your saved warnings could not be loaded: " + customRules.error : null,
+    rulesRejected: customRejectedLine(health),
+    customHolds: customHoldLines(health),
   };
 }
 

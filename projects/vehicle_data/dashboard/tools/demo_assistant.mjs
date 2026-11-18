@@ -2,6 +2,7 @@
 // the Add Early Warning setup chat. Contract: src/dialogs/WarningChat.helpers.js and
 // docs/warning-chat.md. Nothing here was said by a model; it only fills the dialog.
 // Routes use the capture harness contract: {method, pathname, prefix, status, json}, first match wins.
+import customWarnings from "../../custom_warnings.json" with { type: "json" };
 import {DEMO_OPEN_EVENT_ID, DEMO_OPEN_EVENT_TITLE, DEMO_RR_BASELINE} from "./demo_events.mjs";
 import {MINUTE_MS, iso} from "./demo_data.mjs";
 
@@ -39,21 +40,24 @@ const EXPLAIN_ANSWER = [
 
 const SETUP_QUESTION = "Let me know if coolant stays above 220°F while the engine is running.";
 const SETUP_ANSWER = [
-  "I drafted a rule for that. It watches engine coolant temperature and warns when three distinct readings in a row are above 220 °F "
-    + "within a 30 second window, each no more than 5 seconds old.",
-  "It only counts readings while the engine is running (fresh RPM above 400), so a hot soak after shutdown will not trigger it. "
-    + "220 °F is your owner reference, not a manufacturer limit, and I chose three readings so one noisy sample cannot warn. "
+  "I drafted a rule for that. It watches engine coolant temperature and warns when every recording for at least 30 seconds "
+    + "is above 220 °F, with recordings no more than 15 seconds apart and at least two separate readings from the van.",
+  "It only counts recordings that show the engine running (RPM above 400), so a hot soak after shutdown will not trigger it. "
+    + "220 °F is your owner reference, not a manufacturer limit; a reading at or below it starts the time again. "
     + "Nothing is installed until you approve it below.",
 ].join("\n\n");
+
+// The rule meaning the demo proposal was made under (the advisor stores it on each proposal turn).
+const RULE_SEMANTICS = customWarnings.evaluator_revision;
 
 const SETUP_PROPOSAL = Object.freeze({
   title: "Sustained high coolant temperature",
   metric: "engine.coolant_temperature",
   operator: "above",
   threshold: 220,
-  persistence_observations: 3,
+  persistence_observations: 2,
   window_seconds: 30,
-  max_age_seconds: 5,
+  max_age_seconds: 15,
   engine_running: true,
 });
 
@@ -86,7 +90,8 @@ export function demoSetupChat(nowMs) {
     created_at: iso(nowMs - 2 * MINUTE_MS), evidence_at: iso(nowMs - 2 * MINUTE_MS),
     catalog: SETUP_CATALOG,
     turns: [completeTurn(nowMs, SETUP_QUESTION, {
-      assistant: SETUP_ANSWER, proposal: SETUP_PROPOSAL, proposal_unit: "°F", proposal_id: PROPOSAL_ID, applied: false,
+      assistant: SETUP_ANSWER, rule_proposal: SETUP_PROPOSAL, rule_proposal_unit: "°F", rule_proposal_id: PROPOSAL_ID,
+      semantics: RULE_SEMANTICS, applied: false,
     })],
   };
 }

@@ -98,7 +98,11 @@ function WarningsCard() {
         />
       ) : null}
       {vm.delivery ? <p class="status-line health-delivery">{vm.delivery}</p> : null}
+      {vm.customHolds.map((line) => (
+        <p key={line.id} class="status-line">{line.text}</p>
+      ))}
       {vm.rulesError ? <p class="status-line status-line--error">{vm.rulesError}</p> : null}
+      {vm.rulesRejected ? <p class="status-line status-line--error">{vm.rulesRejected}</p> : null}
       <div class="card__foot">
         <a class="health-link" href={H.DOCS.warnings}>
           How warnings work
