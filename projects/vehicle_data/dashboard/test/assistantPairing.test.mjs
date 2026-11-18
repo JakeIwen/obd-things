@@ -232,3 +232,39 @@ test("panel: closed while the PIN was being made cancels it when it arrives; New
   assert.equal(t.panel.snapshot().pin, "042 917");
   assert.equal(t.timers.pending(1000).length, 1, "one countdown, not two");
 });
+
+const never = () => new Promise(() => {});
+const DEADLINE_MS = 20000;
+
+test("a fetch that never settles ends in a retryable message after the deadline", async () => {
+  const timers = fakeTimers();
+  const entry = createPinEntry({ fetch: never, onCode: () => assert.fail("no code"), setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout });
+  const pending = entry.submit("042917");
+  await settle();
+  assert.equal(entry.snapshot().busy, true);
+  await timers.fire(DEADLINE_MS);
+  assert.equal(await pending, false);
+  assert.deepEqual(entry.snapshot(), { busy: false, message: ACCESS_TEXT.pinUnavailable, error: true });
+
+  const t = panelSetup({});
+  const stalled = createPairingPanel({ fetch: never, storage: createStorage(memory({ "van-warning-chat.access": CODE })),
+    setTimeout: t.timers.setTimeout, clearTimeout: t.timers.clearTimeout });
+  stalled.open();
+  await settle();
+  assert.equal(stalled.snapshot().message, ACCESS_TEXT.anotherCreating);
+  await t.timers.fire(DEADLINE_MS);
+  assert.deepEqual([stalled.snapshot().phase, stalled.snapshot().message, stalled.snapshot().canNew],
+    ["ended", ACCESS_TEXT.anotherFailed, true]);
+});
+
+test("panel: a redemption in the last second shows as paired, not expired", async () => {
+  let state = "active";
+  const t = panelSetup({ ["POST " + OWNER]: () => created(), ["GET " + OWNER]: () => status(state) });
+  t.panel.open();
+  await settle();
+  state = "redeemed";
+  t.clock.now += PAIRING.pinLifetimeSeconds * 1000;
+  await t.timers.fire(1000); // the countdown runs out before any poll has seen the redemption
+  assert.equal(t.panel.snapshot().message, ACCESS_TEXT.anotherPaired);
+  assert.equal(t.timers.pending().length, 0);
+});

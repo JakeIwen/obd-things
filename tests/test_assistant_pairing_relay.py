@@ -5,13 +5,13 @@ import http.client
 import io
 import json
 import os
+import socket
 from pathlib import Path
 import tempfile
 import threading
 import unittest
 from unittest import mock
 
-from projects.vehicle_data.api import TelemetryClient
 from projects.vehicle_data.assistant_models import Catalog
 from projects.vehicle_data.assistant_pairing import OWNER_PATH, REDEEM_PATH, PairingPins
 from projects.vehicle_data.dtc_research import ResearchManager
@@ -101,7 +101,22 @@ class PairingRelayTests(unittest.TestCase):
 
     def advisor_request(self, method, path, body=None, headers=None):
         """One request straight to the advisor socket, skipping the web relay's checks."""
-        return TelemetryClient(self.socket, timeout=10).request(method, path, body, headers=headers or {})
+        # Head and body leave in ONE write: the advisor rejects before reading a body, and can close
+        # between two writes, which made the client's second write a BrokenPipeError.
+        payload = b"" if body is None else json.dumps(body, separators=(",", ":")).encode()
+        lines = [f"{method} {path} HTTP/1.1", "Host: localhost", "Connection: close", f"Content-Length: {len(payload)}"]
+        if body is not None:
+            lines.append("Content-Type: application/json")
+        lines += [f"{name}: {value}" for name, value in (headers or {}).items()]
+        wire = ("\r\n".join(lines) + "\r\n\r\n").encode() + payload
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(10)
+            sock.connect(self.socket)
+            sock.sendall(wire)
+            response = http.client.HTTPResponse(sock, method=method)
+            response.begin()
+            raw = response.read()
+        return response.status, json.loads(raw) if raw else {}
 
     def output(self):
         return "".join(stream.getvalue() for stream in self.out)
