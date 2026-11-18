@@ -1,8 +1,8 @@
 ---
 workstream: dtc-research
 tier: T3
-status: installed on vanpi; memory measured 2026-11-17 15:16-16:09 MST and the activation commit (this branch, research-activate) recorded the measured policy; next is the reviewed merge, the worker restart and the live acceptance check (section 8)
-last reviewed commit: 7df1eae (implementation, Astra verdict ship); plan 31ed98b (Astra verdict ship)
+status: activated on vanpi 2026-11-17 16:40:50 MST (0393eee, Astra ship) and the live acceptance check passed (17:21-17:31 MST); open: F1-F3, the flaky manager test below, the live-peak note below, and closing the workstream (promote to AGENTS.md, delete this note)
+last reviewed commit: 0393eee (activation policy, Astra verdict ship); implementation 7df1eae; plan 31ed98b
 ---
 
 # DTC research with an LLM (advisor backend)
@@ -35,6 +35,39 @@ with `Verdict: ship`, and the feature was merged by `75577ee`. The historical re
 below describe closed findings, not pending reviews. The standing contract is
 `projects/vehicle_data/docs/dtc-research.md`; the deploy runbook is section 7. This remains a
 Claude-only milestone; Codex research stays unavailable until F3.
+
+### Activation and live acceptance check, 2026-11-17 16:40-17:31 MST
+
+`0393eee` (Astra `ship`, one low fixed; whole suite 3,028 passed, 1 skipped) fast-forwarded and
+pushed; the research unit file reinstalled (byte-identical to master; only its comment changed);
+worker restarted 16:40:50: `memory_policy.activated` true, Claude `ok`, signed in.
+
+- Owner in the browser (17:21-17:26): B162E-15 `sonnet`/`medium` report complete in 38 s, the four
+  headings, 5 http(s) sources, summary 138 characters shown on the row; session file under that
+  run's `home/.claude/projects/`. Follow-up with a synthetic VIN: `mode: resumed`, 23 s. The
+  outgoing prompt in the session file reads `VIN [vehicle identifier omitted]`; the synthetic VIN
+  appears nowhere on the research volume (the advisor record keeps the owner's text, by design).
+  A warning-chat question during the follow-up got the warning chat's 429. A report started on
+  `shifter`/P1C73-24 and stopped after 12 s ended `cancelled` (exit 143).
+- Headless, through the LAN listener's routes with the access code read by a root script and never
+  printed (owner approved headless testing): both units restarted 17:28:51/57; models available
+  again at 17:30:22 (85 s: the advisor's worker check and discovery); a follow-up on the B162E-15
+  run `resumed`, complete in 22 s. `radar_acc`/C1418-78 started; a second start 4 s later got 429
+  `busy` ("another research job is running"); the advisor alone was restarted mid-turn
+  (17:30:53) and the report was adopted and finished `done` in 43 s, summary 139 characters.
+- **Live peaks above the recorded one:** `dtc_research_timing` tree `VmHWM` 244.4 MiB (B162E-15
+  report) and 251.0 MiB (C1418-78 report) against the recorded `research_peak_mib` 233.7; other
+  turns 207.9-212.6, cancelled 172.4. Recomputed with 251.0 the thresholds are unchanged (cap
+  376.5 → 384, floor 635 → 640), 133 MiB under the cap, so research stays offered. The section 8
+  rule ("re-measure before the feature stays offered") was not followed literally; the next policy
+  change should record the larger observed peak.
+- Cgroups (sampled every 0.5 s, 16:41-17:31): research `memory.current` peak 359 MiB of 768
+  (it includes the 348 MiB CLI copy's page cache from the hash), advisor peak 17 MiB after its
+  restarts; `memory.events` all 0; lowest `MemAvailable` 809 MiB. Volume 197 KiB used of 204 MiB.
+  No traceback in either journal; both units NRestarts 0.
+- **Flaky test to fix:** `tests/test_dtc_research_manager.py::ManagerTests::test_a_refused_replay_after_an_unverified_resume_keeps_the_resumed_mode`
+  failed once ("run did not settle", line 223) in another session's Mac suite on a tip containing
+  `0393eee`, then passed on resubmission; it passed in this session's Pi suite. Timing-sensitive.
 
 ### Measurement and activation commit, 2026-11-17 15:13-16:09 MST (after the memory-controller reboot)
 
@@ -1715,9 +1748,9 @@ Codex has no live check this round; it is unavailable by design.
 
 The implementation is reviewed and merged. Build status above is the authoritative installation
 record: the 05:02 retry installed everything up to activation and passed every check; the
-research worker and mount are enabled and active. The owner signed in and the memory measurement
-is recorded (the measurement section at the top of Build status). Next: the reviewed merge, the
-worker restart that activates research, and real-turn acceptance (section 8). The Mac rootfs
+research worker and mount are enabled and active, research is activated and the live acceptance
+check passed (Build status). Next: fix the flaky manager test, record the larger live peak at the
+next policy change, then F1-F3. The Mac rootfs
 budget and exclusions are deployed. The dashboard is merged; its current live deployment belongs
 to the dashboard-round session and must not be reverted by research rollback. Preserve
 F1–F3. When the workstream closes, promote durable facts and the completed runbook into the
