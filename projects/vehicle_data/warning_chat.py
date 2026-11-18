@@ -28,7 +28,7 @@ import uuid
 
 from projects.vehicle_data.api import TelemetryClient, _prepare_socket_path
 from projects.vehicle_data.assistant_common import ChatError, ID_RE, TOKEN_RE, now, require_keys
-from projects.vehicle_data.assistant_http import QuietDisconnects, send_json
+from projects.vehicle_data.assistant_http import QuietDisconnects, read_json_body, send_json
 from projects.vehicle_data.assistant_slot import ModelSlot
 from projects.vehicle_data import dtc_research_service
 from projects.vehicle_data.engine_off_voltage import _atomic_json
@@ -799,15 +799,7 @@ class ChatHandler(http.server.BaseHTTPRequestHandler):
             token = self.headers.get("X-Van-Assistant-Key", "")
             owner = manager.authorize(token, self.headers.get("X-Van-Chat-Client", ""))
             path = self.path
-            payload = None
-            if method == "POST":
-                try:
-                    length = int(self.headers.get("Content-Length", "0"))
-                    if not 0 < length <= MAX_BODY:
-                        raise ValueError()
-                    payload = json.loads(self.rfile.read(length))
-                except (ValueError, UnicodeDecodeError):
-                    raise ChatError(400, "Invalid request body")
+            payload = read_json_body(self, MAX_BODY) if method == "POST" else None
             research = getattr(self.server, "research", None)
             if research is not None and dtc_research_service.is_research_path(path):
                 # Outside manager.lock: research has its own lock and never blocks the warning chat.

@@ -1,5 +1,5 @@
-"""JSON replies shared by the assistant's two Unix-socket servers: the advisor (``warning_chat``)
-and the research worker (``dtc_research_worker``).
+"""JSON replies (and the request body reader) shared by the assistant's two Unix-socket servers: the
+advisor (``warning_chat``) and the research worker (``dtc_research_worker``).
 
 A caller that gives up (a timed-out ``curl``, the advisor's five-second worker client) can leave at
 any point of a reply. The reply is then dropped with one log line, never a traceback: an install
@@ -9,6 +9,8 @@ that leaves while its request is being read, which the handler cannot catch itse
 
 import json
 import sys
+
+from projects.vehicle_data.assistant_common import ChatError
 
 # TimeoutError: a handler's socket timeout fired on a caller that stopped reading or sending.
 CLIENT_GONE = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError)
@@ -38,6 +40,17 @@ def send_json(handler, status, payload, headers=()):
         log_client_gone(getattr(handler.server, "log_name", "assistant"), "reply", exc, getattr(handler, "path", None))
         return False
     return True
+
+
+def read_json_body(handler, limit):
+    """The request body parsed as JSON; ``ChatError(400)`` unless its length is 1..``limit`` and it is JSON."""
+    try:
+        length = int(handler.headers.get("Content-Length", "0"))
+        if not 0 < length <= limit:
+            raise ValueError()
+        return json.loads(handler.rfile.read(length))
+    except (ValueError, UnicodeDecodeError):
+        raise ChatError(400, "Invalid request body") from None
 
 
 class QuietDisconnects:
