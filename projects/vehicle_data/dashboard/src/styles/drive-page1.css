@@ -9,6 +9,6 @@
 .drive__stack .tile { padding: 6px 14px; }
 .drive__stack .tile__value { align-items: center; }
 
-/* A metric above its red threshold (sparkline.helpers.js) reads red; no border or card tint, so it
-   cannot be mistaken for a warning card (those come from derive.js). */
-.tile--hot .tile__value { color: var(--red); }
+/* A metric with a heat range (tileHeat.helpers.js) gets its numeral colour from Tile.jsx (CSSOM),
+   mixed from the --heat-* tokens; no border or card tint, so it cannot be mistaken for a warning
+   card (those come from derive.js). */

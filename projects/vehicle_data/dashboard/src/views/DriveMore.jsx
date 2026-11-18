@@ -27,7 +27,7 @@ import {
   gearText,
   ratioText,
 } from "./driveMore.helpers.js";
-import { PARKED_CHANGE_TITLE } from "../radarAim.js";
+import { PARKED_CHANGE_TITLE, WINDOW_CHANGE_TITLES } from "../radarAim.js";
 import { speedLimitText } from "./driveSpeed.helpers.js";
 
 // Speed limit: the number the cluster's traffic-sign display shows, in a sign outline; `—` when
@@ -199,15 +199,15 @@ function RadarTile() {
             <div class="drive2-radar__value num">{t.latest}</div>
             <div class="drive2-radar__aim">{t.aim}</div>
             <div class="drive2-radar__row">
-              <span>1-min avg</span>
+              <span title={WINDOW_CHANGE_TITLES[60]}>Δ 1 min</span>
               <b class="num">{t.m1}</b>
             </div>
             <div class="drive2-radar__row">
-              <span>5-min avg</span>
+              <span title={WINDOW_CHANGE_TITLES[300]}>Δ 5 min</span>
               <b class="num">{t.m5}</b>
             </div>
             <div class="drive2-radar__row">
-              <span>30-min avg</span>
+              <span title={WINDOW_CHANGE_TITLES[1800]}>Δ 30 min</span>
               <b class="num">{t.m30}</b>
             </div>
             <div class="drive2-radar__row">

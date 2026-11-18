@@ -1,9 +1,10 @@
 /**
  * Pure rules for the Drive sparklines' "red above N" display. Display only: nothing here raises a
- * warning, chime or alert colour; the line and the tile numeral just turn red while a value is high.
+ * warning, chime or alert colour; the line just turns red while a value is high. The tile numeral's
+ * colour is a separate rule (tileHeat.helpers.js).
  */
 
-/** Metric → value above which its sparkline is drawn red and its tile numeral reads red. */
+/** Metric → value above which its sparkline is drawn red. */
 export const SPARK_RED_ABOVE = Object.freeze({
   // The alternator field's duty near 100 % means the alternator is at its limit.
   "generator.field_duty": 80,
@@ -12,12 +13,6 @@ export const SPARK_RED_ABOVE = Object.freeze({
 /** The red threshold for a metric, or null when it has none. */
 export function redAboveFor(name) {
   return Object.hasOwn(SPARK_RED_ABOVE, name) ? SPARK_RED_ABOVE[name] : null;
-}
-
-/** True while a live value is strictly above the metric's red threshold. */
-export function isAboveRed(name, value) {
-  const limit = redAboveFor(name);
-  return limit !== null && typeof value === "number" && Number.isFinite(value) && value > limit;
 }
 
 /**

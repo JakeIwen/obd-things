@@ -519,8 +519,11 @@ both dialogs share). Research is offered on the dashboard only while the owner's
 and activated for 2.1.325 on 2026-11-17; a different copy needs measuring again).
 
 Drive pages (2026-11-16): `src/sparkline.helpers.js` holds the per-metric "red above N" table
-(`SPARK_RED_ABOVE`, alternator field above 80 %) that `components/Sparkline.jsx` and
-`components/Tile.jsx` both read; it is a display rule, not a warning. `styles/drive-page1.css`
+(`SPARK_RED_ABOVE`, alternator field above 80 %) that `components/Sparkline.jsx` reads;
+`src/tileHeat.helpers.js` holds the numeral heat ranges (`TILE_HEAT`, alternator field yellow →
+orange → red from 60 to 100 %, `--heat-*` tokens) that `components/Tile.jsx` reads, and
+`src/paletteTokens.js` reads CSS tokens for code that mixes colours itself. All are display rules,
+not warnings. `styles/drive-page1.css`
 has page 1's RPM-over-Power stack and `styles/drive-radar.css` page 2's radar tile note.
 `radar_alignment.py` records `parked` beside `drive` on each radar row (first value of a new
 drive minus the last value before the park, absent when there is no earlier reading);

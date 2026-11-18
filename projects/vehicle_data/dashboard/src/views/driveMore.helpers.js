@@ -20,10 +20,13 @@ export function fmtAngleSigned(value) {
   return isNum(value) ? fmtDelta(value, 2) + "°" : DASH;
 }
 
-/** Mean of one broker window (`{count, mean}`) as a signed angle, or `—` with no samples. */
-export function windowMean(w) {
-  if (!isObj(w) || !isNum(w.mean) || !(isNum(w.count) && w.count > 0)) return DASH;
-  return fmtAngleSigned(w.mean);
+/**
+ * Change across one broker window (`{count, change}`: newest reading minus the oldest) as a signed
+ * angle, or `—` with no samples or from an older broker that publishes no `change`.
+ */
+export function windowChange(w) {
+  if (!isObj(w) || !isNum(w.change) || !(isNum(w.count) && w.count > 0)) return DASH;
+  return fmtAngleSigned(w.change);
 }
 
 /** Signed change over the current drive (`{change}`) as a signed angle, or `—` when absent. */
@@ -78,9 +81,9 @@ export function radarTileModel(input) {
     axes[axis.id] = {
       latest: fmtAngleSigned(value),
       aim: aimText(axis.id, value),
-      m1: windowMean(w["60"]),
-      m5: windowMean(w["300"]),
-      m30: windowMean(w["1800"]),
+      m1: windowChange(w["60"]),
+      m5: windowChange(w["300"]),
+      m30: windowChange(w["1800"]),
       drive: driveChange(w.drive),
       parked: parkedChangeText(w.parked),
     };

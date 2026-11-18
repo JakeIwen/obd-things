@@ -376,7 +376,7 @@ tab bar, with 16 px gutters and 12 px gaps.
 |---|---|
 | A | **SPEED** (2 cols, hero numerals, `mph`; under the numeral an estimated economy row `now 19.4 mpg`, which has no text at all (the row keeps its height) without a figure; beside the numeral a `SPEED LIMIT 55` sign while the limit is live, then a right-edge column with the ACC text (`ACC 66` over `engaged`) stacked above the four-bar gap readout; regular cruise uses `Cruise`; current off/ready/standby/override states are explicit) · **RPM over POWER** (1 col split into two half-height tiles: RPM on top, its footer `gear 6` once a live gear metric exists and empty until then; Power below, `hp`, sub-line `165 lb-ft`; both at the standard `--value` numeral, no sparklines, because a sparkline would leave the numeral under 40 px) |
 | B | **COOLANT** · **OIL TEMP (VVT)** · **TRANS OIL**: value, unit, band bar, 15-min sparkline |
-| C | **VOLTAGE** (battery voltage alone, to 1 decimal, band bar, sparkline) · **ALTERNATOR FIELD** (`generator.field_duty` percent and a 15-min sparkline; the line is drawn red wherever the plotted value is above 80 % and the numeral reads red while the live value is above 80 %, display only: no warning card, chime or `derive.js` colour) · **OIL PRESSURE** |
+| C | **VOLTAGE** (battery voltage alone, to 1 decimal, band bar, sparkline) · **ALTERNATOR FIELD** (`generator.field_duty` percent and a 15-min sparkline; the line is drawn red wherever the plotted value is above 80 % and the live numeral shades yellow at 60 % through orange at 80 % to red at 100 %, display only: no warning card, chime or `derive.js` colour) · **OIL PRESSURE** |
 | D | **TIRES** (2 cols: 2×2 grid FL FR / RL RR) · **THIS DRIVE** (Time, Distance `12.3 mi`, MPG `16.4 mpg`, Coolant max, Avg power at 19 px, 25 % above the earlier 15 px; the heading keeps its size; info icon on the heading) |
 
 The portrait gate is no scrolling within ≤ 1,096 visible px (the browser toolbar stays; see the
@@ -445,10 +445,14 @@ Rules for Drive tiles:
 - Ignition is not a tile; its value is in the System catalog. Odometer is not a page-1 tile; it is in
   Service and on page 2 (3.1.1), and trip distance comes from the speed integral.
 - Sparklines may carry a per-metric "red above N" threshold (`SPARK_RED_ABOVE` in
-  `src/sparkline.helpers.js`, read by both `Sparkline.jsx` and `Tile.jsx`): the line switches to the
-  palette's `--red` exactly where it crosses N, and the tile numeral reads red while the live value
-  is above N (`tile--hot`). Only `generator.field_duty` (80 %) has one, on page 1's Alternator field tile
-  (page 2 no longer shows that metric; its field tile is Fuel tank). It is a display rule, distinct from warnings, which come from the broker.
+  `src/sparkline.helpers.js`, read by `Sparkline.jsx`): the line switches to the palette's
+  `--spark-red` exactly where it crosses N. A tile numeral may carry a heat range (`TILE_HEAT` in
+  `src/tileHeat.helpers.js`, read by `Tile.jsx`): while the live value is in it, the numeral is
+  mixed from the `--heat-yellow`, `--heat-orange` and `--heat-red` tokens (yellow at the start,
+  orange midway, red at the top; `src/paletteTokens.js` re-reads them on a theme change). Only
+  `generator.field_duty` has either, on page 1's Alternator field tile: red line above 80 %, numeral
+  heat from 60 to 100 % (owner request 2026-11-17; page 2 no longer shows that metric; its field
+  tile is Fuel tank). Both are display rules, distinct from warnings, which come from the broker.
 - Sparklines show the last 15 minutes from the client ring, with no axis and no labels. They start
   empty and fill live; they are not seeded from 900 s buckets. Each scales to its own range with a
   per-metric minimum span (10 psi, 20 °F, 0.5 V) and draws only the nearest band edge.
@@ -500,7 +504,7 @@ content. Page 2 ("Sensors") uses the same frame and the same no-scrolling gate.
   |---|---|
   | 0 | **SPEED LIMIT** (`vehicle.speed_limit` in a sign outline with `MPH` under it; `—` in a dim outline when the cluster shows none) · **ACC** (2 cols: `acc.set_speed` `66 mph`, four-bar gap graphic beside it; sub-line `engaged · vehicle ahead`, `standby · saved speed`, or `engaged · fixed cruise`; fixed mode labels the tile `Cruise`; standby dims only the saved number; `Off` when off; `—` and `ready · no set speed` before SET) |
   | A | **FUEL TANK** (`fuel.tank_level` as `~49` `%`, the `~` marking candidate quality; sub-line `126 mi to empty` from `fuel.range`; a retained level dims the value and the sub-line ends `(last)`; `—` with no figure; id `field`, which held the Alternator field tile until 2026-11-16) · **FUEL RATE** (`1.2` gal/h from `engine.fuel_rate` while its record is current, else `—`; sub-line `now 20.0 mpg` = speed ÷ rate at ≥ 5 mph, or `coasting, no fuel` at zero) · **GEAR** (`~7` from `transmission.gear_estimate` while its record is current, else `—`; sub-line `ratio 0.70` = turbine ÷ output when the output shaft turns ≥ 100 rpm) |
-  | B | **RADAR AIM** (3 cols): Horizontal and Vertical side by side. Each shows its latest angle (`+0.15°`), under it the physical reading of the elevation sign from `src/radarAim.js` (`aimed high · tilt down`, `aimed low · tilt up`, `level`; blank for azimuth), and then `1-min avg` / `5-min avg` / `30-min avg` from `status.radar_alignment` windows `"60"`/`"300"`/`"1800"`, then `Δ drive` (signed change since the first reading of this drive, from the `drive` object, 5-minute gap rule) and `Δ parked` (change across the park before this drive: the first reading after this start-up minus the last reading before the previous shut-down, from the `parked` object; its tooltip says so); a window, drive or parked change the broker has not published yet (an older broker, or no earlier reading) reads `—`. The tile label line carries the status note on its right; the tile has no sub-line. |
+  | B | **RADAR AIM** (3 cols): Horizontal and Vertical side by side. Each shows its latest angle (`+0.15°`), under it the physical reading of the elevation sign from `src/radarAim.js` (`aimed high · tilt down`, `aimed low · tilt up`, `level`; blank for azimuth), and then `Δ 1 min` / `Δ 5 min` / `Δ 30 min` (each window's `change`: newest reading minus the oldest; hover tooltips from `WINDOW_CHANGE_TITLES` in `src/radarAim.js`) from `status.radar_alignment` windows `"60"`/`"300"`/`"1800"`, then `Δ drive` (signed change since the first reading of this drive, from the `drive` object, 5-minute gap rule) and `Δ parked` (change across the park before this drive: the first reading after this start-up minus the last reading before the previous shut-down, from the `parked` object; its tooltip says so); a window, drive or parked change (an older broker publishes no window `change`) the broker has not published yet (an older broker, or no earlier reading) reads `—`. The tile label line carries the status note on its right; the tile has no sub-line. |
   | C | **TURBINE** (rpm) · **OUTPUT SHAFT** (rpm) · **POWER** (hp, sparkline) |
   | D | **TORQUE** (`engine.crankshaft_torque`, lb-ft) · **TARGET TORQUE** (`engine.target_crankshaft_torque`, lb-ft) · **ODOMETER** (held value with its time; smaller `--tire` numerals so six digits fit a third of the width) |
 

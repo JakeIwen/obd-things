@@ -17,6 +17,9 @@
      5.33:1 (red) on --card; test/sparklineContrast.test.mjs holds the 4.5:1 floor. */
   --spark-line: #80928a;
   --spark-red: #d8604f;
+  --heat-yellow: #a8954a;
+  --heat-orange: #bf7444;
+  --heat-red: var(--spark-red);
   --green: #397f5c;
   --blue: #456f99;
   --overspeed: #a25d55;

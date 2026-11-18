@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import * as H from "../src/views/historySystem.helpers.js";
-import { PARKED_CHANGE_TITLE } from "../src/radarAim.js";
+import { PARKED_CHANGE_TITLE, WINDOW_CHANGE_TITLES } from "../src/radarAim.js";
 import { RETAIN_LAST_READING } from "../src/store.js";
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
@@ -493,7 +493,9 @@ test("radar: not live → retained values, neutral badge, last-read time once", 
     ...FULL.radar_alignment,
     "radar.alignment.elevation": {
       ...FULL.radar_alignment["radar.alignment.elevation"],
-      1800: { count: 150, mean: -0.0251, peak_abs: 0.031, span_seconds: 1790 },
+      60: { ...FULL.radar_alignment["radar.alignment.elevation"]["60"], change: -0.0051 },
+      300: { ...FULL.radar_alignment["radar.alignment.elevation"]["300"], change: 0.0262 },
+      1800: { count: 150, mean: -0.0251, change: -0.0305, peak_abs: 0.031, span_seconds: 1790 },
       drive: { change: -0.0348, start_value: 0.0097, started_at: "2026-09-24T20:30:00+00:00", count: 610, span_seconds: 7190 },
       parked: { change: 0.012, previous_value: -0.0023, previous_observed_at: "2026-09-23T22:00:00+00:00", observed_at: "2026-09-24T20:30:00+00:00" },
     },
@@ -513,9 +515,9 @@ test("radar: not live → retained values, neutral badge, last-read time once", 
   assert.equal(az.latest, "+0.16°");
   assert.equal(el.live, false);
   assert.deepEqual(el.rows, [
-    ["1-min average", "−0.02° (6)"],
-    ["5-min average", "−0.02° (16)"],
-    ["30-min average", "−0.03° (150)"],
+    ["Change over 1 min", "−0.01° (6)", WINDOW_CHANGE_TITLES[60]],
+    ["Change over 5 min", "+0.03° (16)", WINDOW_CHANGE_TITLES[300]],
+    ["Change over 30 min", "−0.03° (150)", WINDOW_CHANGE_TITLES[1800]],
     ["Change this drive", "−0.03° (610)"],
     ["Change while parked", "+0.01°", PARKED_CHANGE_TITLE],
     ["5-min peak", "0.02°"],
@@ -523,7 +525,7 @@ test("radar: not live → retained values, neutral badge, last-read time once", 
     ["Aim", "aimed low · tilt up"],
   ]);
   assert.deepEqual(az.rows.slice(2, 5),
-    [["30-min average", "—"], ["Change this drive", "—"], ["Change while parked", "—", PARKED_CHANGE_TITLE]]);
+    [["Change over 30 min", "—", WINDOW_CHANGE_TITLES[1800]], ["Change this drive", "—"], ["Change while parked", "—", PARKED_CHANGE_TITLE]]);
   assert.match(PARKED_CHANGE_TITLE, /before the previous shut-down.*after this start-up/);
   assert.equal(az.rows[6][1], "0.84° to spare");
   assert.deepEqual(az.rows[7], ["Aim", "left/right direction not known"]);
@@ -557,7 +559,7 @@ test("radar: a selected reference adds the change since it and leaves the angles
   assert.deepEqual(waiting.axes[0].rows[0], ["Since reference", "—"]);
   const raw = H.radarModel(input);
   assert.equal(raw.reference, null);
-  assert.equal(raw.axes[0].rows[0][0], "1-min average");
+  assert.equal(raw.axes[0].rows[0][0], "Change over 1 min");
 });
 
 test("radar: live values colour the badge; outside the reference shows the overshoot", () => {

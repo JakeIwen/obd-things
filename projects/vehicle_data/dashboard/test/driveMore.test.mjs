@@ -12,32 +12,33 @@ const MINUS = "−";
 
 const WINDOWS = {
   "radar.alignment.azimuth": {
-    60: { count: 6, mean: 0.150841, peak_abs: 0.150841, span_seconds: 54.9 },
-    300: { count: 20, mean: 0.15084, peak_abs: 0.150841, span_seconds: 208 },
-    1800: { count: 150, mean: 0.1612, peak_abs: 0.1702, span_seconds: 1790 },
+    60: { count: 6, mean: 0.150841, change: 0.0032, peak_abs: 0.150841, span_seconds: 54.9 },
+    300: { count: 20, mean: 0.15084, change: -0.0114, peak_abs: 0.150841, span_seconds: 208 },
+    1800: { count: 150, mean: 0.1612, change: 0.0421, peak_abs: 0.1702, span_seconds: 1790 },
     drive: { change: 0.0412, start_value: 0.1096, started_at: "2026-09-24T20:30:00+00:00", count: 250, span_seconds: 2438 },
     parked: { change: 0.0318, previous_value: 0.0778, previous_observed_at: "2026-09-23T22:00:00+00:00", observed_at: "2026-09-24T20:30:00+00:00" },
     latest_value: 0.150841,
     observed_at: "2026-09-24T21:10:38.001564+00:00",
   },
   "radar.alignment.elevation": {
-    60: { count: 6, mean: -0.0173, peak_abs: 0.0174, span_seconds: 54.9 },
-    300: { count: 20, mean: -0.0177, peak_abs: 0.0184, span_seconds: 208 },
+    60: { count: 6, mean: -0.0173, change: -0.0051, peak_abs: 0.0174, span_seconds: 54.9 },
+    300: { count: 20, mean: -0.0177, change: 0.0262, peak_abs: 0.0184, span_seconds: 208 },
     1800: { count: 150, mean: -0.0251, peak_abs: 0.031, span_seconds: 1790 },
     latest_value: -0.017161,
     observed_at: "2026-09-24T21:10:38.001188+00:00",
   },
 };
 
-test("fmtAngleSigned and windowMean", () => {
+test("fmtAngleSigned and windowChange", () => {
   assert.equal(H.fmtAngleSigned(0.150841), "+0.15°");
   assert.equal(H.fmtAngleSigned(-0.0173), MINUS + "0.02°");
   assert.equal(H.fmtAngleSigned(0.001), "0.00°");
   assert.equal(H.fmtAngleSigned(null), "—");
-  assert.equal(H.windowMean({ count: 3, mean: 0.5 }), "+0.50°");
-  assert.equal(H.windowMean({ count: 0, mean: 0.5 }), "—");
-  assert.equal(H.windowMean(null), "—");
-  assert.equal(H.windowMean({ count: 2 }), "—");
+  assert.equal(H.windowChange({ count: 3, change: -0.5, mean: 0.9 }), MINUS + "0.50°");
+  assert.equal(H.windowChange({ count: 3, change: 0.5 }), "+0.50°");
+  assert.equal(H.windowChange({ count: 0, change: 0.5 }), "—");
+  assert.equal(H.windowChange(null), "—");
+  assert.equal(H.windowChange({ count: 2, mean: 0.5 }), "—"); // older broker: no change field
 });
 
 test("driveChange: signed, and a dash without a finite change", () => {
@@ -47,7 +48,7 @@ test("driveChange: signed, and a dash without a finite change", () => {
   assert.equal(H.driveChange(null), "—");
 });
 
-test("radar tile: live readings show latest and means, and no status note", () => {
+test("radar tile: live readings show latest and window changes, and no status note", () => {
   const m = H.radarTileModel({
     axes: { azimuth: { fresh: true, value: 0.150841 }, elevation: { fresh: true, value: -0.017161 } },
     windows: WINDOWS,
@@ -55,11 +56,11 @@ test("radar tile: live readings show latest and means, and no status note", () =
   });
   assert.equal(m.live, true);
   assert.equal(m.note, "");
-  assert.deepEqual(m.axes.azimuth, { latest: "+0.15°", aim: "", m1: "+0.15°", m5: "+0.15°", m30: "+0.16°", drive: "+0.04°", parked: "+0.03°" });
+  assert.deepEqual(m.axes.azimuth, { latest: "+0.15°", aim: "", m1: "0.00°", m5: MINUS + "0.01°", m30: "+0.04°", drive: "+0.04°", parked: "+0.03°" });
   // The elevation fixture has no drive change yet (a summary saved before it existed).
   assert.deepEqual(m.axes.elevation, {
     latest: MINUS + "0.02°", aim: "aimed low · tilt up",
-    m1: MINUS + "0.02°", m5: MINUS + "0.02°", m30: MINUS + "0.03°", drive: "—", parked: "—",
+    m1: MINUS + "0.01°", m5: "+0.03°", m30: "—", drive: "—", parked: "—",
   });
   // Size of the angle never adds a note: the ±1° reference is not a cutoff.
   for (const value of [-0.85, 1.2]) {
@@ -84,7 +85,7 @@ test("radar tile: not reading shows the last reading once, with its time", () =>
   assert.equal(held.axes.azimuth.latest, "+0.15°");
   // Elevation falls back to the broker's latest window value.
   assert.equal(held.axes.elevation.latest, MINUS + "0.02°");
-  assert.equal(held.axes.elevation.m5, MINUS + "0.02°");
+  assert.equal(held.axes.elevation.m5, "+0.03°");
 });
 
 test("radar tile: nothing to show, or reads switched off, says Not reading", () => {

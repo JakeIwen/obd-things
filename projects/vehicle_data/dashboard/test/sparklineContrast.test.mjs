@@ -49,6 +49,16 @@ test("Dim red and normal sparkline strokes are different colours", () => {
   assert.notEqual(dim("--spark-line"), dim("--spark-red"));
 });
 
+test("heat numeral stops reach 4.5:1 on both tile backgrounds in every theme", () => {
+  for (const [theme, t] of [["dark", dark], ["light", light], ["dim", dim]]) {
+    for (const stop of ["--heat-yellow", "--heat-orange", "--heat-red"]) {
+      for (const bg of ["--card", "--card-2"]) {
+        assert.ok(contrast(t(stop), t(bg)) >= 4.5, `${theme} ${stop} on ${bg}`);
+      }
+    }
+  }
+});
+
 test("the default dark and light themes keep a normal line of at least 3:1", () => {
   assert.ok(contrast(dark("--spark-line"), dark("--card")) >= 3);
   assert.ok(contrast(light("--spark-line"), light("--card")) >= 3);

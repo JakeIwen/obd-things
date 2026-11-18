@@ -4,10 +4,15 @@
  * updates touch only the node whose text changed.
  */
 
-import { useComputed } from "@preact/signals";
+import { computed, useComputed, useSignalEffect } from "@preact/signals";
+import { useRef } from "preact/hooks";
 import { liveValue, tileModel } from "../app/derive.js";
-import { isAboveRed, redAboveFor } from "../sparkline.helpers.js";
+import { readTokens } from "../paletteTokens.js";
+import { HEAT_TOKENS, heatFraction, heatRangeFor, mixHeat } from "../tileHeat.helpers.js";
 import { Sparkline } from "./Sparkline.jsx";
+
+/** The heat stops' colours in the current palette, re-read on a theme change. */
+const heatStops = computed(() => readTokens(HEAT_TOKENS));
 
 /**
  * Horizontal band bar (SVG, attribute-bound). Hidden for metrics without a band.
@@ -52,16 +57,26 @@ export function BandBar({ name }) {
  */
 export function Tile({ name, label, area, size = "value", band = false, spark = false, sub, extra, detail, onClick, decimals, showUnit = true, overspeed, value }) {
   const m = tileModel(name, decimals === undefined ? undefined : { decimals });
-  // Metrics with a red-above threshold (sparkline.helpers.js) read red while live and above it.
-  const hasLimit = redAboveFor(name) !== null;
+  // Metrics with a heat range (tileHeat.helpers.js) shade their numeral yellow → orange → red while live.
+  const hasHeat = heatRangeFor(name) !== null;
   const cls = useComputed(() => {
     let c = "tile tile--" + size + " tile--" + m.kind.value;
     if (area) c += " area-" + area;
     const colour = m.colour.value;
     if (colour) c += " tile--" + colour;
     if (overspeed && overspeed.value) c += " tile--overspeed";
-    if (hasLimit && isAboveRed(name, liveValue(name).value)) c += " tile--hot";
     return c;
+  });
+  // Set through the CSSOM, which the CSP (style-src 'self') allows; a style attribute it blocks.
+  const valueRef = useRef(null);
+  useSignalEffect(() => {
+    if (!hasHeat) return;
+    const fraction = heatFraction(name, liveValue(name).value);
+    const colour = fraction === null ? "" : mixHeat(heatStops.value, fraction);
+    const el = valueRef.current;
+    if (!el) return;
+    if (colour) el.style.setProperty("color", colour);
+    else el.style.removeProperty("color");
   });
   const subText = useComputed(() => {
     const held = m.heldText.value;
@@ -71,7 +86,7 @@ export function Tile({ name, label, area, size = "value", band = false, spark = 
   return (
     <section class={cls} aria-label={label} onClick={onClick}>
       <div class="tile__label">{label}</div>
-      <div class="tile__value num">
+      <div class="tile__value num" ref={valueRef}>
         <span>{value || m.valueText}</span>
         {showUnit ? <span class="tile__unit">{m.unitText}</span> : null}
         {extra}

@@ -29,6 +29,13 @@ export function fmtAngle(value) {
 export const PARKED_CHANGE_TITLE =
   "Last reading before the previous shut-down compared with the first reading after this start-up.";
 
+/** Tooltips for the time-window changes (`radar_alignment[metric]["60"|"300"|"1800"].change`), tile and System card. */
+export const WINDOW_CHANGE_TITLES = Object.freeze({
+  60: "Newest reading minus the oldest in the last minute. Restarts after a gap in reads over 30 s.",
+  300: "Newest reading minus the oldest in the last 5 minutes. Restarts after a gap in reads over 30 s.",
+  1800: "Newest reading minus the oldest in the last 30 minutes. Spans gaps in reads.",
+});
+
 /** Change across the park as a signed angle, or `—` when the broker sent none (older broker, no earlier reading). */
 export function parkedChangeText(parked) {
   const ok = parked !== null && typeof parked === "object" && typeof parked.change === "number";

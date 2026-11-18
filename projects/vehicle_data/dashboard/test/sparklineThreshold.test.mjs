@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { SPARK_RED_ABOVE, isAboveRed, redAboveFor, splitByThreshold } from "../src/sparkline.helpers.js";
+import { SPARK_RED_ABOVE, redAboveFor, splitByThreshold } from "../src/sparkline.helpers.js";
 import { SPARK_METRICS } from "../src/app/rings.js";
 
 const pts = (...vs) => vs.map((v, x) => ({ x, v }));
@@ -11,15 +11,6 @@ test("the alternator field is red above 80 and nothing else has a threshold", ()
   assert.equal(redAboveFor("engine.rpm"), null);
   assert.equal(redAboveFor("toString"), null, "inherited keys are not metrics");
   assert.deepEqual(Object.keys(SPARK_RED_ABOVE), ["generator.field_duty"]);
-});
-
-test("the numeral rule is strictly above the threshold and only for numbers", () => {
-  assert.equal(isAboveRed("generator.field_duty", 80), false);
-  assert.equal(isAboveRed("generator.field_duty", 80.1), true);
-  assert.equal(isAboveRed("generator.field_duty", 100), true);
-  assert.equal(isAboveRed("generator.field_duty", null), false);
-  assert.equal(isAboveRed("generator.field_duty", NaN), false);
-  assert.equal(isAboveRed("engine.rpm", 9000), false);
 });
 
 test("without a threshold the line is one normal run", () => {

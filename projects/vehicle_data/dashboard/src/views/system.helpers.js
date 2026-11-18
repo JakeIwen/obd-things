@@ -12,7 +12,7 @@
 
 import { DASH, fmtValue, fmtFixed, fmtUnit, fmtTime, fmtAgeCoarse, fmtInt } from "../format.js";
 import { metricLabel } from "../warningContext.js";
-import { aimText, AZIMUTH_AIM_UNMAPPED, RADAR_AXES, fmtAngle, parkedChangeText, PARKED_CHANGE_TITLE } from "../radarAim.js";
+import { aimText, AZIMUTH_AIM_UNMAPPED, RADAR_AXES, fmtAngle, parkedChangeText, PARKED_CHANGE_TITLE, WINDOW_CHANGE_TITLES } from "../radarAim.js";
 import { anglesText, pointText, sinceReference } from "../radarReference.js";
 import { fmtAngleSigned } from "./driveMore.helpers.js";
 import { DOCS, obj, arr, num, str, wallMs, when, humanize, capital, plural, clip, createStableGate, agoText } from "./view.helpers.js";
@@ -368,8 +368,8 @@ export const RADAR_APPROACH = 0.8;
 
 function windowText(w) {
   const x = obj(w);
-  if (!x || num(x.mean) === null || !(num(x.count) > 0)) return DASH;
-  return fmtAngle(x.mean) + " (" + fmtInt(x.count) + ")";
+  if (!x || num(x.change) === null || !(num(x.count) > 0)) return DASH;
+  return fmtAngle(x.change) + " (" + fmtInt(x.count) + ")";
 }
 
 function driveText(d) {
@@ -432,9 +432,9 @@ export function radarModel(input) {
       live: fresh,
       rows: [
         ...(reference ? [["Since reference", fmtAngle(sinceReference(reference, axis.id, value))]] : []),
-        ["1-min average", windowText(w["60"])],
-        ["5-min average", windowText(w300)],
-        ["30-min average", windowText(w["1800"])],
+        ["Change over 1 min", windowText(w["60"]), WINDOW_CHANGE_TITLES[60]],
+        ["Change over 5 min", windowText(w300), WINDOW_CHANGE_TITLES[300]],
+        ["Change over 30 min", windowText(w["1800"]), WINDOW_CHANGE_TITLES[1800]],
         ["Change this drive", driveText(w.drive)],
         ["Change while parked", parkedChangeText(w.parked), PARKED_CHANGE_TITLE],
         ["5-min peak", w300 && num(w300.peak_abs) !== null ? fmtFixed(w300.peak_abs, 2) + "°" : DASH],

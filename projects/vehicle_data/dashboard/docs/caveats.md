@@ -210,7 +210,7 @@ what they meant and where that information lives now.
   red only when the charging-failure warning is open. Parked (settled): 12.2 V or more is normal,
   11.8–12.2 V amber, under 11.8 V red, and under 11.5 V critical. Cranking dips to 11.1 V have been
   recorded and are normal.
-- **Alternator** (`generator.field_duty`, the Alternator field tile on page 1; a dash when the field is not live; the line and numeral turn red above 80 %, a display rule that raises no warning): PCM identifier `01A1`, the
+- **Alternator** (`generator.field_duty`, the Alternator field tile on page 1; a dash when the field is not live; the line turns red above 80 % and the numeral shades yellow to orange to red from 60 to 100 %, display rules that raise no warning): PCM identifier `01A1`, the
   generator field command duty in percent.
   - It is a command, not alternator current or temperature. Sustained high duty means the engine
     computer is asking for a lot of charging effort; the dashboard does not infer any thermal
@@ -335,12 +335,12 @@ and when your phone is notified is on the [warnings page](/docs/warnings.html). 
 
 Two angles come from the ACC radar identifier `0845`, at candidate quality, read during
 engine-running intervals. The ±1° reference is a monitoring convention for this project, not an OEM
-alignment result. The System view shows the latest angle per axis, and on tap the 1-minute, 5-minute,
-30-minute averages (with sample counts), the change this drive, the change while parked, the 5-minute peak, and the margin to ±1.00°.
+alignment result. The System view shows the latest angle per axis, and on tap the change over the last 1, 5 and
+30 minutes (newest reading minus the oldest, with sample counts), the change this drive, the change while parked, the 5-minute peak, and the margin to ±1.00°.
 Drive page 2's **Radar aim** tile shows the same angles at a glance: the latest value per axis and
-the three averages, **Δ drive**, the signed change since the first reading of this drive (a drive splits at a gap of more than 5 minutes), and **Δ parked**, how far the angle moved across the park before this drive (first reading after this start-up minus the last reading before the previous shut-down; `—` when the broker has no earlier reading). The 1- and 5-minute averages cover one unbroken run of reads and start over after
-a gap of more than 30 seconds, such as an engine stop. The 30-minute average is a plain
-time window ending at the latest read, so it keeps averaging across a fuel stop; its sample
+the three window changes (**Δ 1 min**, **Δ 5 min**, **Δ 30 min**), **Δ drive**, the signed change since the first reading of this drive (a drive splits at a gap of more than 5 minutes), and **Δ parked**, how far the angle moved across the park before this drive (first reading after this start-up minus the last reading before the previous shut-down; `—` when the broker has no earlier reading). The 1- and 5-minute windows cover one unbroken run of reads and start over after
+a gap of more than 30 seconds, such as an engine stop. The 30-minute window is a plain
+time window ending at the latest read, so it spans a fuel stop; its sample
 count shows how much of the window has readings. The 2-hour average was removed 2026-11-13. The values are what the ACC radar module reports
 about its own aim. Under the elevation value both views print what the sign means physically:
 `aimed high · tilt down` for a positive angle, `aimed low · tilt up` for a negative one, `level` near
@@ -351,7 +351,7 @@ to the radar's own calibration, not a measured bracket angle. The horizontal (az
 known left/right mapping, so the System view says so instead of guessing. They are not
 a measurement of the van, and no alignment result or calibration is implied. The tile makes no judgement
 while readings arrive. When they
-stop, its top right reads `Not reading · last 3:10 pm` and the last values are dimmed; the averages then cover
+stop, its top right reads `Not reading · last 3:10 pm` and the last values are dimmed; the changes then cover
 the last minutes of that reading run, not the current minute. "Awaiting
 readings" means no angle has been read during the current drive yet. If the radar reads are ever
 switched off on the Pi, the System view says so in one sentence.
