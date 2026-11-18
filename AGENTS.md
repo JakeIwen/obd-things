@@ -530,6 +530,26 @@ both dialogs share). Research is offered on the dashboard only while the owner's
 `research_cli_policy.json` records measured memory peaks for the installed Claude copy (measured
 and activated for 2.1.325 on 2026-11-17; a different copy needs measuring again).
 
+Promotional API credits for research (2026-11-18): research turns bill an owner-installed Anthropic
+model API key first and fall back to the subscription; the contract (billing choice, ledger, balance
+view, off switch, expiry, rollback procedure) is `projects/vehicle_data/docs/dtc-research.md`
+section "Promotional API credits". Where things live: `api_credits.json` / `api_credits_contract.py`
+(the one copy of `until`, the verified grant table, reasons, codes, routes, paths and limits; the
+dashboard imports the JSON); worker side `api_credits.py` (pure: key reader, billing choice,
+failure classifier, spend tally), `api_credits_ledger.py` (the durable ledger and latches),
+`research_credits.py` (policy flag, key, ledger and the per-launch plan the runner settles; policy
+flag `claude.api_credits.enabled` in `research_cli_policy.json`); advisor side
+`dtc_research_fallback.py` (the counted subscription relaunch, cancel intent, pending fallback),
+`dtc_research_pause.py` (rollback pause file, `drained`, admin routes), `dtc_research_admin.py`
+(owner CLI for them), `api_credits_snapshot.py` (the Mac's balance snapshot, a disclosed copy of
+`~/config/shared/promo-api/credits.py` `validate()`), `api_credits_view.py` (the pure view behind
+`GET /v1/assistant/research/credits`), `dtc_research_log.py` (the advisor's one JSON log line);
+`dtc_research_signin.py api-key` installs the key and `research_volume.mount_problem` is the mount
+check both of its writers use; `lib.reports.atomic_json(fsync_dir=True)` makes a rename durable.
+Dashboard: `src/apiCredits.js` (poller), `apiCredits.helpers.js` (text and model),
+`components/ApiCreditsCard.jsx` and `styles/api-credits.css`. The admin routes are answered only on
+the advisor's own socket and are never relayed.
+
 Assistant pairing PIN (owner request 2026-11-17): a paired browser shows a one-time 6-digit PIN
 (5 min, single use) that a new device types to receive the access code. `assistant_pairing.py`
 with `assistant_pairing.json` (routes, limits, states shared with the dashboard) holds the PINs,
@@ -606,6 +626,7 @@ caller has retired, with owner/callers/retirement stated in the wrapper header.
 | `projects/vehicle_data/bcan_auxiliary.py` | Broker drive_helper_launch | B-CAN auxiliary helper |
 | `projects/vehicle_data/cop_can_wake.py` | van-cop-can-wake.service | Fixed wake supervisor |
 | `projects/vehicle_data/warning_chat.py` | van-telemetry-advisor.service | Advisory chat worker |
+| `projects/vehicle_data/dtc_research_admin.py` | Owner CLI (research rollback procedure) | Pause, resume and `drained` on the advisor's local admin routes |
 | `projects/vehicle_data/dtc_research_worker.py` | van-telemetry-research.service | DTC research worker: the only launcher of research CLIs |
 | `projects/vehicle_data/van_scan_harvest.py` | van-scan-harvest.service | Completed-capture DTC harvest |
 | `projects/vehicle_data/cruise_harvest.py` | van-cruise-harvest.service | Completed-capture cruise harvest |

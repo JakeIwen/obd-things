@@ -2137,6 +2137,13 @@ warning chat, memory policy, storage bounds, deploy, activation and rollback) is
 [DTC research](docs/dtc-research.md). The advisor serves the routes beside the warning chat;
 `van-telemetry-research.service` is the only process that launches a research CLI.
 
+While the owner holds promotional Anthropic API credits (hard stop 2026-12-08 00:00 UTC), research
+turns bill an API key installed with `python3 -m projects.vehicle_data.dtc_research_signin api-key`
+first and fall back to the subscription when the credits cannot be used; the System page shows a
+read-only "Claude API credits" card. Billing choice, fallback, ledger, balance view, off switch,
+expiry and the rollback procedure (`dtc_research_admin pause|drained|resume`) are in
+[DTC research](docs/dtc-research.md) section "Promotional API credits".
+
 ### Last-recorded display policy (September 20 audit)
 
 Open early-warning episodes stay visible as unresolved advisories even when

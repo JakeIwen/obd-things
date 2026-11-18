@@ -752,6 +752,15 @@ checks when stopped:
     polls every 2 s while open (5 s after an error) and never while the page is hidden. Closing the
     sheet does not stop a run, and a tap on the backdrop does not close it. The Pi enforces the
     start conditions; the sheet only explains them (engine running, van stopped, box ticked).
+- **Claude API credits**: a read-only card for a paired browser, shown only once the Pi has a
+  research API key (`GET /v1/assistant/research/credits`, polled every 60 s while the card is
+  mounted and the page visible; any refusal or failure hides it quietly). It shows the estimated
+  balance with its as-of time and a `stale` mark, one line per live grant, `uncertain` and
+  `unknown spend` counts with info popovers (tap or hover), what a new run bills and why, any model
+  switched to the subscription and the last fallback. After `until` it is one line, `API credits
+  expired · research uses the subscription`. The contract is `projects/vehicle_data/api_credits.json`
+  and `docs/dtc-research.md` "Promotional API credits"; code is `src/apiCredits{.js,.helpers.js}`,
+  `components/ApiCreditsCard.jsx` and `styles/api-credits.css`.
 - **Metric catalog**:
   - Every metric shows its value and unit, a dimmed held value with its time, or `—`, plus source,
     bus, quality, freshness limit and retention policy. This is where the provenance vocabulary
