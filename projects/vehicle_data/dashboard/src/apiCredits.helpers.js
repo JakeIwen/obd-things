@@ -22,8 +22,8 @@ export const REASON_TEXT = Object.freeze({
   disabled: "API credits are switched off",
   no_key: "no API key is installed",
   expired: "the credits have expired",
-  unavailable: "the credit service did not answer",
-  ledger_unavailable: "the spend record cannot be read",
+  unavailable: "credits are off after a key or balance failure, until the research service restarts",
+  ledger_unavailable: "the spend record could not be written",
   ledger_full: "the spend record is full",
 });
 
