@@ -1125,7 +1125,7 @@ safeguard.
 ## Status
 
 Phase 1 built in worktree `.claude/worktrees/agent-a67697fc393f05642` (branch
-`worktree-agent-a67697fc393f05642`), not reviewed, not merged, not deployed. Verification results
+`worktree-agent-a67697fc393f05642`), reviewed (ship), not merged, not deployed. Verification results
 are recorded below as they are run; the deploy (section 8, Phase 1) has not started.
 
 Builder decisions within the plan (each undoable):
@@ -1207,5 +1207,22 @@ Verification (Phase 1):
   `costgate/pi-results{,2,3}.jsonl` (the first, unordered three-run batch is superseded by the
   ABBA batches: its order effects exceeded the difference measured).
 
-Next step: the Phase 1 implementation review by gpt-6-astra (diff, this note, test output); then the
-parent merges and deploys by section 8.
+Review of the Phase 1 implementation: Reviewed-by: gpt-6.2-astra (ship). Fixes made after it:
+`custom-warnings.md` states the decided cost gate (zero-rule parity with master, no slower than
+master with the same rules, absolute Pi time reported, 10 ms target for the custom evaluation
+step); a `sqlite3.Error` from the readings query is a file-level custom failure and no longer
+drops the tick's built-in assessments; a rules file over its size cap answers 409 on apply and
+remove instead of 503. Each has a behaviour test.
+
+Accepted limitations from that review (low; none blocks Phase 1, revisit in Phase 2):
+
+- A transient exception in one rule's assessment retires that rule's open episode; the rule
+  fires again only after a full hold, which sends a second push.
+- Undo followed by Apply on the same proposal id dead-ends at 409 ("removed ids are kept");
+  Phase 2 hides Apply once the id is removed.
+- Health may show a reset hold for one refresh after a restart or a failed evaluation.
+- Rejected rows cannot be removed from the dashboard until Phase 2's saved-rules list.
+- `tools/warning_replay.py` passes no recording, so a replay cannot confirm v2 custom rules;
+  only built-in transitions are checked by it.
+
+Next step: the parent merges and deploys by section 8.
