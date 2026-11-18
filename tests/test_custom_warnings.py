@@ -242,6 +242,21 @@ class ClockTests(HistoryCase):
             self.assertIsNone(self.h.record(10, [battery()]))
         self.assertEqual(self.h.record(15, [battery()])["persistence"]["held_seconds"], 0.0)
 
+    def test_readings_database_error_is_a_file_level_failure_and_keeps_built_in_assessments(self):
+        history = CustomRuleHistory([battery_rule()], evaluator_rules=None, episodes=False)
+        try:
+            history.record(0, [battery()])
+            with mock.patch.object(history.historian, "recording_readings",
+                                   side_effect=sqlite3.OperationalError("busy")):
+                self.assertIsNone(history.record(5, [battery()]))
+            result = history.evaluator.last
+            names = [item["rule"] for item in result["assessments"]]
+            self.assertTrue(any(not name.startswith("custom_") for name in names))
+            self.assertFalse(any(name.startswith("custom_") for name in names))
+            self.assertEqual(result["custom_rules"]["error"], "Custom warning configuration could not be evaluated")
+        finally:
+            history.close()
+
     def test_health_evaluation_reports_the_hold_and_changes_nothing(self):
         recorded = self.series([0, 5, 10])[-1]
         health, result = self.h.health(11)

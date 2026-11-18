@@ -1,6 +1,7 @@
 """Warning evaluation orchestration, shared reads and candidate memory."""
 from __future__ import annotations
 
+import sqlite3
 import threading
 from datetime import datetime
 from typing import Callable, Mapping, Sequence
@@ -474,7 +475,7 @@ class EarlyWarningEvaluator(
             status["count"] = len(rules_file.rows) - len(failed)
             status["rule_ids"] = [row["id"] for row in rules_file.rows if row["id"] not in failed]
             status["rejected_ids"].extend(failed)
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
             # A file-level failure (unreadable or malformed file, readings query) stops every custom
             # rule; it must not suppress built-in warnings.
             status["error"] = "Custom warning configuration could not be evaluated"
