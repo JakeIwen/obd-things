@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 import re
 
+from projects.vehicle_data.api_credits_contract import ADMIN_ROUTES, ROUTES as API_CREDITS_ROUTES
 from projects.vehicle_data.assistant_common import ChatError, require_keys
 
 CONTRACT = json.loads((Path(__file__).with_name("dtc_research.json")).read_text())
@@ -55,14 +56,25 @@ class ResearchError(ChatError):
         super().__init__(ERROR_STATUS[reason], message)
 
 
+CREDITS_PATH = API_CREDITS_ROUTES["credits"]
+
+
 def is_research_path(path):
-    return path == ROUTES["models"] or path == ROUTES["list"] or path.startswith(ROUTES["list"] + "/")
+    return (path == ROUTES["models"] or path == CREDITS_PATH or path == ROUTES["list"]
+            or path.startswith(ROUTES["list"] + "/"))
+
+
+def is_admin_path(path):
+    """The rollback routes: answered only on the advisor's own socket, never relayed by a web listener."""
+    return path in ADMIN_ROUTES.values()
 
 
 def parse_path(method, path):
     """``(route, args)`` for a research route, or ``None``. Arguments are validated here."""
     if method == "GET" and path == ROUTES["models"]:
         return "models", ()
+    if method == "GET" and path == CREDITS_PATH:
+        return "credits", ()
     if path == ROUTES["list"]:
         return ("list", ()) if method == "GET" else ("post", ()) if method == "POST" else None
     if method != "GET":

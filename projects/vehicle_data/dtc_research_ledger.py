@@ -1,7 +1,7 @@
 """The durable rolling 24-hour count of research launches (the owner-facing daily limit).
 
 Written before every launch request, so neither a restart nor evicting runs lowers the count.
-Every entry counts. A launch the worker definitively refused (409; under the send-once rule that
+Every entry counts (a fallback relaunch after a credit failure included). A launch the worker definitively refused (409; under the send-once rule that
 attempt is never sent again) is removed at once, so the file never holds more than the limit and
 no counted entry is ever dropped to make room. An unreadable ledger is never overwritten.
 """
@@ -15,7 +15,7 @@ from projects.vehicle_data.dtc_research_contract import LIMITS, ResearchError
 from projects.vehicle_data.engine_off_voltage import _atomic_json
 
 FILE_NAME = "admissions.json"
-KINDS = ("initial", "resume", "replay")
+KINDS = ("initial", "resume", "replay", "fallback")
 
 
 class Ledger:

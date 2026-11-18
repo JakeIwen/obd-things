@@ -41,7 +41,11 @@ def new_turn(kind, question=None):
     return {"kind": kind, "question": question, "answer": None, "summary": None, "summary_note": None,
             "format_warnings": [], "state": "running", "error": None, "reason": None, "mode": "initial",
             "attempt_ids": [], "started_at": now(), "completed_at": None, "duration_s": None,
-            "phase": "preparing", "activity": {"searches": 0, "pages": 0}}
+            "phase": "preparing", "activity": {"searches": 0, "pages": 0},
+            # Billing and fallback bookkeeping (docs/dtc-research.md "Promotional API credits"):
+            # cancel intent and a pending fallback are durable so a restart cannot undo either.
+            "cancel_requested": False, "pending_fallback": None, "fallback_of": None,
+            "billing": None, "credit_code": None}
 
 
 def busy(record):

@@ -813,13 +813,19 @@ class ChatHandler(http.server.BaseHTTPRequestHandler):
             if method == "POST" and self.path == pairing.REDEEM_PATH:
                 # The one route answered without the access code; it reads no header.
                 return self.reply(*self.server.pairing.redeem(read_json_body(self, pairing.REDEEM_BODY_MAX)))
+            research = getattr(self.server, "research", None)
+            if research is not None and dtc_research_service.is_admin_path(self.path):
+                # Rollback controls: this socket is owner-only and no web listener relays these paths,
+                # so they need no assistant access code (the admin CLI has none).
+                if method == "POST":
+                    read_json_body(self, MAX_BODY)  # consumed; the routes take no fields
+                return self.reply(200, research.handle_admin(method, self.path))
             token = self.headers.get("X-Van-Assistant-Key", "")
             owner = manager.authorize(token, self.headers.get("X-Van-Chat-Client", ""))
             path = self.path
             payload = read_json_body(self, MAX_BODY) if method == "POST" else None
             if path == pairing.OWNER_PATH:
                 return self.reply(*self.server.pairing.handle(method, payload))
-            research = getattr(self.server, "research", None)
             if research is not None and dtc_research_service.is_research_path(path):
                 # Outside manager.lock: research has its own lock and never blocks the warning chat.
                 return self.reply(200, research.handle(method, path, payload))

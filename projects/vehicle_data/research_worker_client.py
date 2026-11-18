@@ -6,6 +6,7 @@ no retry.
 """
 
 from projects.vehicle_data.api_client import TelemetryClient
+from projects.vehicle_data.api_credits_contract import PROTOCOL
 from projects.vehicle_data.dtc_research_contract import WORKER
 
 TIMEOUT = 5
@@ -36,6 +37,13 @@ class WorkerClient:
         status, body = self._call("GET", "/status")
         if status != 200:
             raise WorkerUnreachable(f"worker status answered {status}")
+        return body
+
+    def credits(self):
+        """The worker's credit ledger view (never the key); an old worker's 404 reads as unreachable."""
+        status, body = self._call("GET", PROTOCOL["workerCreditsRoute"])
+        if status != 200:
+            raise WorkerUnreachable(f"worker credits answered {status}")
         return body
 
     def launch(self, route, body):

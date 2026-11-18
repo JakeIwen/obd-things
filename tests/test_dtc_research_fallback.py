@@ -1,0 +1,311 @@
+"""Credit-failure fallback, cancel intent and replay-required in the advisor, against a scripted worker."""
+
+import json
+from pathlib import Path
+import tempfile
+import time
+import unittest
+from unittest import mock
+import uuid
+
+from projects.vehicle_data.api_credits_contract import FALLBACK
+from projects.vehicle_data.assistant_common import ChatError
+from projects.vehicle_data.dtc_research import REFUSAL_DETAIL, ResearchManager
+from projects.vehicle_data.dtc_research_ledger import Ledger
+from projects.vehicle_data.dtc_research_reconcile import Reconciler
+from projects.vehicle_data.dtc_research_store import Store
+from tests.dtc_research_scripted_worker import (
+    ScriptedWorker, StubCatalog, complete, credit_failure, credit_leg_then_subscription,
+)
+from tests.test_dtc_research_manager import Broker, CODE
+
+FAST = {"retrySeconds": .05, "windowSeconds": 30}
+
+
+def wait_for(predicate, timeout=10):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(.02)
+    return False
+
+
+class FallbackBase(unittest.TestCase):
+    def setUp(self):
+        self.state = tempfile.TemporaryDirectory()
+        patch = mock.patch.dict(FALLBACK, FAST)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.managers = []
+        self.worker = ScriptedWorker(behavior=credit_leg_then_subscription())
+        self.manager = self.build()
+
+    def tearDown(self):
+        for manager in self.managers:
+            manager.close()
+        wait_for(lambda: not any(m.following or m.fallbacks for m in self.managers), 5)
+        self.state.cleanup()
+
+    def build(self, ledger_limit=60, worker=None):
+        base = Path(self.state.name)
+        store = Store(base / "runs")
+        store.load(log=lambda line: None)
+        manager = ResearchManager(store, Ledger(base / "admissions.json", limit=ledger_limit), StubCatalog(),
+                                  worker or self.worker, Broker(), poll=.02, pause_file=base / "paused")
+        self.assertTrue(Reconciler(manager, retry=.05).reconcile_once())
+        self.managers.append(manager)
+        return manager
+
+    def post(self, **body):
+        return self.manager.handle("POST", "/v1/assistant/dtc-research", {"request_id": uuid.uuid4().hex, **body})["run"]
+
+    def start(self):
+        return self.post(action="start", **CODE, provider="claude", model="opus", effort="high")
+
+    def ask(self, run_id, question="And then?"):
+        return self.post(action="ask", run_id=run_id, question=question)
+
+    def cancel(self, run_id):
+        return self.post(action="cancel", run_id=run_id)
+
+    def settle(self, run_id, timeout=15):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            run = self.manager.handle("GET", f"/v1/assistant/dtc-research/run/{run_id}", None)["run"]
+            if not run["busy"]:
+                return run
+            time.sleep(.02)
+        raise AssertionError("run did not settle")
+
+    def ledger_kinds(self):
+        launches = json.loads((Path(self.state.name) / "admissions.json").read_text())["launches"]
+        return [entry["kind"] for entry in launches]
+
+    def turn(self, run_id, index=-1):
+        return self.manager.store.records[run_id]["turns"][index]
+
+
+class FallbackTests(FallbackBase):
+    def test_an_exhausted_credit_leg_is_relaunched_on_the_subscription_as_one_turn(self):
+        run = self.settle(self.start()["run_id"])
+        self.assertEqual((run["state"], len(run["turns"])), ("done", 1))
+        first, second = self.worker.launches
+        self.assertTrue(first["billing_capable"])
+        self.assertNotIn("billing", first)
+        self.assertEqual((second["billing"], second["kind"], second["turn_kind"]), ("subscription", "initial", "report"))
+        self.assertEqual(second["prompt"], first["prompt"])  # the original masked first prompt
+        self.assertEqual(self.ledger_kinds(), ["initial", "fallback"])
+        turn = self.turn(run["run_id"])
+        self.assertEqual((turn["billing"], turn["credit_code"], turn["pending_fallback"]), ("subscription", "exhausted", None))
+        self.assertEqual(turn["fallback_of"], {"successor": second["attempt_id"], "predecessor": first["attempt_id"]})
+        self.assertEqual(turn["attempt_ids"], [first["attempt_id"], second["attempt_id"]])
+        self.assertIn(first["attempt_id"], self.worker.acked)  # the credit outcome was taken
+
+    def test_a_follow_up_fallback_is_a_replay_in_a_fresh_session(self):
+        self.worker.behavior = lambda body: credit_failure("model_unavailable") \
+            if body["turn_kind"] == "follow_up" and body.get("billing") != "subscription" else complete(body)
+        run = self.settle(self.start()["run_id"])
+        self.ask(run["run_id"], "Which bracket?")
+        run = self.settle(run["run_id"])
+        self.assertEqual((run["state"], run["turns"][-1]["mode"], run["turns"][-1]["state"]), ("done", "replayed", "complete"))
+        resume, replay = self.worker.launches[1:]
+        self.assertEqual((resume["kind"], replay["kind"], replay["billing"]), ("resume", "initial", "subscription"))
+        self.assertIn("Which bracket?", replay["prompt"])
+        self.assertIn("OWNER ASKS NOW", replay["prompt"])
+        self.assertEqual(self.ledger_kinds(), ["initial", "resume", "fallback"])
+        self.assertEqual(len(run["turns"]), 3)  # report, question, one answer
+
+    def test_a_credit_failure_without_the_capability_never_happens_and_the_body_stays_old(self):
+        worker = ScriptedWorker(capable=False)
+        self.manager = self.build(worker=worker)
+        self.assertEqual(self.settle(self.start()["run_id"])["state"], "done")
+        [body] = worker.launches
+        self.assertNotIn("billing_capable", body)
+        self.assertNotIn("billing", body)
+
+    def test_the_daily_cap_fails_the_fallback_as_daily_limit(self):
+        self.manager = self.build(ledger_limit=1)
+        run = self.settle(self.start()["run_id"])
+        self.assertEqual((run["state"], run["reason"]), ("failed", "daily_limit"))
+        self.assertEqual(run["error"], "The daily research limit (1 launches) has been reached")
+        self.assertEqual(len(self.worker.launches), 1)
+
+    def test_a_lost_fallback_reply_is_followed_never_resent(self):
+        self.worker.lose_reply_for = {2}
+        run = self.settle(self.start()["run_id"])
+        self.assertEqual(run["state"], "done")
+        ids = [b["attempt_id"] for b in self.worker.launches]
+        self.assertEqual((len(ids), len(set(ids))), (2, 2))
+
+
+class FallbackBusyTests(FallbackBase):
+    def refuse_fallbacks(self, count, reason="busy", detail="busy now"):
+        """Refuse the next ``count`` launches after the credit leg has been launched."""
+        original = self.worker.behavior
+
+        def behave(body):
+            if body.get("billing") != "subscription" and not self.worker.refusals:
+                self.worker.refusals = [(409, {"reason": reason, "detail": detail})] * count
+            return original(body)
+
+        self.worker.behavior = behave
+
+    def test_a_busy_refusal_is_retried_and_refusals_are_not_counted(self):
+        self.refuse_fallbacks(3)
+        run = self.settle(self.start()["run_id"])
+        self.assertEqual(run["state"], "done")
+        ids = [b["attempt_id"] for b in self.worker.launches]
+        self.assertEqual((len(ids), len(set(ids))), (5, 5))  # the credit leg, three refused tries, the accepted one
+        self.assertEqual(self.ledger_kinds(), ["initial", "fallback"])
+
+    def test_after_the_window_the_turn_fails_with_the_busy_wording(self):
+        FALLBACK["windowSeconds"] = .4
+        self.refuse_fallbacks(10 ** 4, reason="warning_chat", detail="ignored")
+        run = self.settle(self.start()["run_id"])
+        self.assertEqual((run["state"], run["reason"]), ("failed", "provider_error"))
+        self.assertEqual(run["error"], REFUSAL_DETAIL["warning_chat"])
+        self.assertEqual(self.ledger_kinds(), ["initial"])  # every refused try was withdrawn
+        self.assertGreater(len(self.worker.launches), 3)
+
+    def test_a_restart_after_a_refusal_continues_the_pending_fallback(self):
+        self.refuse_fallbacks(10 ** 4)
+        run = self.start()
+        run_id = run["run_id"]
+        self.assertTrue(wait_for(lambda: (self.turn(run_id).get("pending_fallback") or {}).get("refusal") == "busy"))
+        self.manager.close()  # the advisor stops mid-window
+        self.assertTrue(wait_for(lambda: not self.manager.fallbacks))
+        saved = Store(Path(self.state.name) / "runs")
+        saved.load(log=lambda line: None)
+        turn = saved.records[run_id]["turns"][-1]
+        self.assertEqual(turn["pending_fallback"]["predecessor"], turn["attempt_ids"][-1])  # saved after the refusal
+        self.assertEqual(turn["state"], "reconciling")
+        launches_before = len(self.worker.launches)
+        self.worker.refusals = []
+        self.worker.behavior = credit_leg_then_subscription()
+        self.manager = self.build()  # reconciliation takes the pending fallback over
+        run = self.settle(run_id)
+        self.assertEqual(run["state"], "done")
+        self.assertGreater(len(self.worker.launches), launches_before)
+        self.assertEqual(self.worker.launches[-1]["billing"], "subscription")
+        self.assertEqual(self.ledger_kinds(), ["initial", "fallback"])
+
+    def test_a_pending_fallback_past_its_deadline_fails_after_a_restart(self):
+        self.refuse_fallbacks(10 ** 4)
+        run_id = self.start()["run_id"]
+        self.assertTrue(wait_for(lambda: (self.turn(run_id).get("pending_fallback") or {}).get("refusal") == "busy"))
+        self.manager.close()
+        self.assertTrue(wait_for(lambda: not self.manager.fallbacks))
+        store = Store(Path(self.state.name) / "runs")
+        store.load(log=lambda line: None)
+        store.records[run_id]["turns"][-1]["pending_fallback"]["deadline"] = time.time() - 1
+        store.save(store.records[run_id])
+        self.worker.refusals = []
+        self.manager = self.build()
+        run = self.settle(run_id)
+        self.assertEqual((run["state"], run["reason"]), ("failed", "provider_error"))
+        self.assertEqual(run["error"], "busy now")
+
+
+class CancelTests(FallbackBase):
+    def test_cancel_during_the_credit_leg_is_never_relaunched(self):
+        self.worker.behavior = lambda body: None  # the credit process keeps running
+        run_id = self.start()["run_id"]
+        run = self.cancel(run_id)
+        run = self.settle(run_id)
+        self.assertEqual((run["state"], run["reason"]), ("cancelled", "cancelled"))
+        self.assertEqual(len(self.worker.launches), 1)
+        self.assertTrue(self.turn(run_id)["cancel_requested"])
+
+    def test_cancel_between_the_credit_outcome_and_the_relaunch_never_relaunches(self):
+        self.worker.withhold = True  # the credit failure is held on the worker, not yet seen
+        run_id = self.start()["run_id"]
+        self.cancel(run_id)
+        self.worker.release()
+        run = self.settle(run_id)
+        self.assertEqual(run["state"], "cancelled")
+        self.assertEqual(len(self.worker.launches), 1)
+
+    def test_cancel_while_the_fallback_waits_for_the_slot_settles_it_at_once(self):
+        self.worker.behavior = lambda body: credit_failure()
+        self.worker.refusals = []
+        original = self.worker.behavior
+
+        def behave(body):
+            if not self.worker.refusals:
+                self.worker.refusals = [(409, {"reason": "busy", "detail": "busy now"})] * 10 ** 4
+            return original(body)
+
+        self.worker.behavior = behave
+        run_id = self.start()["run_id"]
+        self.assertTrue(wait_for(lambda: (self.turn(run_id).get("pending_fallback") or {}).get("refusal") == "busy"))
+        run = self.cancel(run_id)
+        self.assertEqual(run["state"], "cancelled")
+        count = len(self.worker.launches)
+        time.sleep(.3)
+        self.assertEqual(len(self.worker.launches), count)  # nothing was sent after the cancel
+        self.assertIsNone(self.turn(run_id)["pending_fallback"])
+
+    def test_cancel_after_the_worker_holds_a_credit_outcome_then_a_restart_does_not_relaunch(self):
+        self.worker.withhold = True
+        run_id = self.start()["run_id"]
+        self.cancel(run_id)
+        self.manager.close()
+        self.assertTrue(wait_for(lambda: not self.manager.following))
+        self.worker.release()  # the outcome is now held on the worker
+        self.manager = self.build()  # reconciliation reads the held credit failure
+        run = self.settle(run_id)
+        self.assertEqual(run["state"], "cancelled")
+        self.assertEqual(len(self.worker.launches), 1)
+
+    def test_a_duplicate_predecessor_outcome_is_ignored(self):
+        first = credit_leg_then_subscription()
+        self.worker.behavior = lambda body: first(body) if body.get("billing") != "subscription" else None
+        run_id = self.start()["run_id"]
+        self.assertTrue(wait_for(lambda: len(self.worker.launches) == 2))
+        predecessor = self.worker.launches[0]["attempt_id"]
+        self.worker.redeliver.add(predecessor)  # its credit failure is shown as held again
+        self.manager._follow(run_id, predecessor)  # a second watcher meets the duplicate
+        time.sleep(.3)
+        self.assertEqual(len(self.worker.launches), 2)  # no second fallback
+        self.worker.finish(self.worker.launches[1]["attempt_id"], complete(self.worker.launches[1]))
+        self.assertEqual(self.settle(run_id)["state"], "done")
+        self.assertEqual(len(self.worker.launches), 2)
+
+
+class ReplayRequiredTests(FallbackBase):
+    def test_a_replay_required_refusal_becomes_a_fresh_forced_subscription_replay(self):
+        self.worker.behavior = lambda body: complete(body)
+        run = self.settle(self.start()["run_id"])
+        self.worker.refuse_resume = "replay_required"
+        self.ask(run["run_id"], "Which bracket?")
+        run = self.settle(run["run_id"])
+        self.assertEqual((run["state"], run["turns"][-1]["mode"]), ("done", "replayed"))
+        refused, replay = self.worker.launches[1:]
+        self.assertEqual((refused["kind"], replay["kind"], replay["billing"]), ("resume", "initial", "subscription"))
+        self.assertIn("OWNER ASKS NOW", replay["prompt"])
+        self.assertEqual(self.ledger_kinds(), ["initial", "replay"])  # the refusal's entry was withdrawn
+        self.assertNotEqual(refused["attempt_id"], replay["attempt_id"])
+
+    def test_an_ordinary_missing_session_replay_is_not_forced(self):
+        self.worker.behavior = lambda body: complete(body)
+        run = self.settle(self.start()["run_id"])
+        self.worker.refuse_resume = "session_missing"
+        self.ask(run["run_id"])
+        self.settle(run["run_id"])
+        self.assertNotIn("billing", self.worker.launches[-1])
+
+
+class CreditsRouteTests(FallbackBase):
+    def test_the_route_answers_the_view_and_a_missing_worker_is_503(self):
+        view = self.manager.handle("GET", "/v1/assistant/research/credits", None)
+        self.assertEqual((view["key_installed"], view["balance"]["state"]), (True, "unknown"))
+        self.assertEqual(view["new_research"]["billing"], "api_credits")
+        self.worker.down = True
+        with self.assertRaises(ChatError) as down:
+            self.manager.handle("GET", "/v1/assistant/research/credits", None)
+        self.assertEqual((down.exception.reason, down.exception.status), ("worker_unavailable", 503))
+
+
+if __name__ == "__main__":
+    unittest.main()
