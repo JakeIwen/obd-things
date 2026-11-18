@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import stat
 import tempfile
 import unittest
 from unittest import mock
@@ -109,7 +110,8 @@ class FileTests(unittest.TestCase):
             return real_replace(*args)
 
         def fsync(descriptor):
-            events.append("dir-fsync" if os.path.isdir(f"/proc/self/fd/{descriptor}") else "file-fsync")
+            # fstat, not /proc/self/fd: the suite also runs on macOS, which has no /proc.
+            events.append("dir-fsync" if stat.S_ISDIR(os.fstat(descriptor).st_mode) else "file-fsync")
             return real_fsync(descriptor)
 
         with mock.patch("os.replace", side_effect=replace), mock.patch("os.fsync", side_effect=fsync):
