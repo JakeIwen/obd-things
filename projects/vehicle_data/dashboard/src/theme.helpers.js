@@ -1,4 +1,5 @@
 import { DAY_MS, MINUTE_MS, SUN_OFFSETS_MINUTES, THEME_MODES } from "./theme.config.js";
+import { DRIVING_STATES, MAX_AUTOMATIC_STATE_AGE_MS } from "./settings.js";
 import { mountainDay, sunTimes } from "./sunTimes.js";
 
 export function sunBoundaries(day) {
@@ -47,4 +48,36 @@ export function nextThemeMode(mode) {
 
 export function themeButtonLabel(mode) {
   return `Theme: ${mode === "auto" ? "Auto (Denver sun schedule)" : mode}. Tap for ${nextThemeMode(mode)} theme.`;
+}
+
+/**
+ * Headlight state from current observations (`observationState` results): "on" when any is
+ * live true, "off" when all are live false, else "unknown" (missing, held or stale).
+ */
+export function headlightReading(observations, connectionState) {
+  if (connectionState !== "live" || !observations.length) return "unknown";
+  const live = (o) => o?.kind === "live" && typeof o.value === "boolean";
+  if (observations.some((o) => live(o) && o.value)) return "on";
+  return observations.every(live) ? "off" : "unknown";
+}
+
+/** The van is on: verified, fresh driving-class vehicle state (same bar as automatic view). */
+export function vanIsOn({ state, confidence, ageMs } = {}) {
+  return confidence === "verified" && DRIVING_STATES.has(state) &&
+    Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= MAX_AUTOMATIC_STATE_AGE_MS;
+}
+
+/** True while the lights are known off with the van on; the caller applies the hold. */
+export function headlightsOffWhileOn(reading, vanOn) {
+  return reading === "off" && Boolean(vanOn);
+}
+
+/**
+ * Auto mode only: a held headlights-off nudge shows the bright (light, not dim) palette. A
+ * manual theme and an active owner DIM override are never overridden.
+ */
+export function applyHeadlightNudge(schedule, mode, { dimOverrideUntil = null } = {}, now, nudge) {
+  if (!nudge || mode !== "auto") return schedule;
+  if (Number.isFinite(dimOverrideUntil) && dimOverrideUntil > now) return schedule;
+  return { ...schedule, theme: "light", dim: false };
 }

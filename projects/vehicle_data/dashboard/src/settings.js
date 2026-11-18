@@ -23,7 +23,7 @@ export const LEGACY_KEY = "van-telemetry.dashboard.v3";
 export const VIEWS = ["drive", "parked", "health", "history", "system"];
 
 /** Vehicle states that select Drive when verified and fresh (rule 16). */
-const DRIVING_STATES = new Set(["moving", "running", "ignition_on"]);
+export const DRIVING_STATES = new Set(["moving", "running", "ignition_on"]);
 
 /** Vehicle states that select Parked when fresh, any confidence (rule 16). */
 const PARKED_STATES = new Set(["asleep", "parked"]);

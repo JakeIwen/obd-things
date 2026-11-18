@@ -775,6 +775,15 @@ checks when stopped:
   pure schedule/override rule; `theme.js` applies root `.light`/`.dim` once per minute and
   on wake, without using the telemetry clock. Denver is a reference, not a GPS lookup:
   longitude changes sun times about four minutes per degree, so the margins absorb ordinary travel.
+- **Headlights-off nudge (owner request, 2026-11-17).** The cluster stays bright until the
+  headlights are on, so Auto does the same: when the van is on (verified, fresh
+  moving/running/ignition_on state) and every headlight metric (`lights.parking_headlights_on`,
+  `lights.high_beam_on`) is live and false for `HEADLIGHT_OFF_HOLD_MS` (5 s), `theme.js` shows
+  light, not dim, whatever the time of day. Either one live true, any unknown/held/stale
+  reading, a disconnect, or a parked/asleep van returns to the sun schedule at once, so a parked
+  van at night stays dark. The parking bit cannot be told from low beam and DRL sets neither, so
+  parking lights alone count as on. Manual Light/Dark and an active owner Dim override win.
+  Pure rule: `headlightReading`, `vanIsOn`, `applyHeadlightNudge` in `theme.helpers.js`.
 - **Light palette.** `styles/light.css` uses white cards, near-black ink and dark amber/red/green/blue
   accents; every SVG inherits the shared tokens. Canvas sparklines invalidate their cached
   colours on a root-class change. Native controls follow `color-scheme` (dark whenever dim),
