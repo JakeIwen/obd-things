@@ -12,6 +12,7 @@ from unittest import mock
 from projects.vehicle_data.warning_chat import (
     ChatError, CodexRunner, WarningChatManager, event_context, resolve_settings, RunTiming,
 )
+from projects.vehicle_data.assistant_pairing import OWNER_PATH, REDEEM_BODY_MAX, REDEEM_PATH
 from projects.vehicle_data.web import TelemetryWebServer
 
 
@@ -408,6 +409,67 @@ class WarningChatWebTests(unittest.TestCase):
             call = client.return_value.request.call_args
             self.assertEqual(call.args[:2], ("POST", "/v1/assistant/chats"))
             self.assertEqual(call.kwargs["headers"]["X-Van-Chat-Client"], "b" * 64)
+
+    def test_redeem_relay_forwards_no_assistant_headers(self):
+        with mock.patch("projects.vehicle_data.web.TelemetryClient") as client:
+            client.return_value.request.return_value = (403, {"available": False, "reason": "pin_rejected"})
+            self.assertEqual(self.request(path=REDEEM_PATH, body={"pin": "123456"})[0], 403)
+            call = client.return_value.request.call_args
+            self.assertEqual(call.args, ("POST", REDEEM_PATH, {"pin": "123456"}))
+            self.assertEqual(call.kwargs["headers"], {})
+            # No key at all is relayed too: the advisor decides.
+            self.assertEqual(self.request(path=REDEEM_PATH, body={"pin": "123456"},
+                                          headers={"X-Van-Assistant-Key": "", "X-Van-Chat-Client": ""})[0], 403)
+
+    def test_redeem_keeps_the_origin_json_and_size_gates(self):
+        oversized = {"pin": "1" * (REDEEM_BODY_MAX - len('{"pin": ""}') + 1)}
+        self.assertEqual(len(json.dumps(oversized)), REDEEM_BODY_MAX + 1)
+        with mock.patch("projects.vehicle_data.web.TelemetryClient") as client:
+            for headers, body, expected in [
+                ({"Origin": "http://evil.example"}, None, 403),
+                ({"Host": "evil.example", "Origin": "http://evil.example"}, None, 403),
+                ({"Sec-Fetch-Site": "cross-site"}, None, 403),
+                ({"Origin": ""}, None, 403),
+                ({"Content-Type": "text/plain"}, None, 415),
+                ({}, oversized, 400),
+                ({}, ["123456"], 400),
+            ]:
+                with self.subTest(headers=headers, body=body):
+                    self.assertEqual(self.request(path=REDEEM_PATH, headers=headers, body=body or {"pin": "123456"})[0], expected)
+            self.assertFalse(client.called)
+
+    def test_redeem_path_is_exact(self):
+        with mock.patch("projects.vehicle_data.web.TelemetryClient") as client:
+            for method, path in [("GET", REDEEM_PATH), ("POST", REDEEM_PATH + "/x"), ("POST", REDEEM_PATH + "x"),
+                                 ("POST", REDEEM_PATH + "/")]:
+                with self.subTest(method=method, path=path):
+                    status = self.request(method=method, path=path, body={"pin": "123456"},
+                                          headers={"X-Van-Assistant-Key": ""})[0]
+                    self.assertEqual(status, 404)
+            self.assertFalse(client.called)
+
+    def test_every_other_assistant_route_still_401_without_key(self):
+        from tests.test_assistant_pairing_relay import AUTHENTICATED_ROUTES
+        with mock.patch("projects.vehicle_data.web.TelemetryClient") as client:
+            for method, path, body in AUTHENTICATED_ROUTES:
+                if path.startswith(REDEEM_PATH):
+                    continue  # not relayed at all (test_redeem_path_is_exact)
+                with self.subTest(method=method, path=path):
+                    self.assertEqual(self.request(method=method, path=path, body=body,
+                                                  headers={"X-Van-Assistant-Key": ""})[0], 401)
+            self.assertFalse(client.called)
+
+    def test_relay_logs_no_pin_or_code(self):
+        with mock.patch("projects.vehicle_data.web.TelemetryClient") as client, \
+                mock.patch("sys.stdout", io.StringIO()) as out, mock.patch("sys.stderr", io.StringIO()) as err:
+            client.return_value.request.return_value = (200, {"available": True, "access_code": "q" * 43})
+            self.assertEqual(self.request(path=REDEEM_PATH, body={"pin": "482913"}), (200, {"available": True, "access_code": "q" * 43}))
+            client.return_value.request.return_value = (200, {"available": True, "pin": "715204", "pin_id": "0" * 16})
+            self.assertEqual(self.request(path=OWNER_PATH, body={"action": "create"})[0], 200)
+        text = out.getvalue() + err.getvalue()
+        self.assertIn(REDEEM_PATH, text)  # the one request line per request
+        for secret in ("482913", "715204", "q" * 43, "a" * 43):
+            self.assertNotIn(secret, text)
 
     def test_disabled_worker_and_transport_failure_are_explicit(self):
         self.web.warning_chat_socket = None

@@ -33,6 +33,9 @@ from projects.vehicle_data.broker import DEFAULT_SOCKET
 from projects.vehicle_data.dtc_ignore import API_PATH as DTC_IGNORE_PATH
 from projects.vehicle_data.history_recent import API_PATH as HISTORY_RECENT_PATH
 from projects.vehicle_data.dtc_research_contract import relay_allowed as dtc_research_relay_allowed
+from projects.vehicle_data.assistant_pairing import (
+    REDEEM_BODY_MAX as PAIRING_REDEEM_MAX, REDEEM_PATH as PAIRING_REDEEM_PATH, relay_allowed as pairing_relay_allowed,
+)
 from projects.vehicle_data.radar_reference import API_PATH as RADAR_REFERENCE_PATH
 from projects.vehicle_data.radar_service_alignment import (
     API_PATH as RADAR_SERVICE_PATH, LISTENER_DISABLED as RADAR_SERVICE_DISABLED,
@@ -257,6 +260,9 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
                    re.fullmatch(r"/v1/assistant/chats/[0-9a-f]{32}/(messages|cancel|apply-warning|remove-warning)", path) or
                    re.fullmatch(r"/v1/assistant/warnings/[0-9a-f]{64}/remove", path))) or (
                    dtc_research_relay_allowed(method, path))
+        # Pairing: the exact redeem path is the one assistant route relayed without the access code.
+        redeem = method == "POST" and path == PAIRING_REDEEM_PATH
+        allowed = allowed or redeem or pairing_relay_allowed(method, path)
         if not allowed:
             return self._json(404, {"available": False, "detail": "Unknown assistant request"})
         host = self.headers.get("Host", "")
@@ -266,7 +272,7 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
                 (method == "POST" and self.headers.get("Origin") != origin) or
                 (self.headers.get("Origin") not in (None, origin))):
             return self._json(403, {"available": False, "detail": "Warning chat requires a trusted same-origin request"})
-        headers = {name: self.headers.get(name, "") for name in ("X-Van-Assistant-Key", "X-Van-Chat-Client")}
+        headers = {} if redeem else {name: self.headers.get(name, "") for name in ("X-Van-Assistant-Key", "X-Van-Chat-Client")}
         if any(not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", value) for value in headers.values()):
             return self._json(401, {"available": False, "detail": "Connect this browser using the local assistant access code"})
         payload = None
@@ -274,7 +280,7 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
             if self.headers.get_content_type() != "application/json":
                 return self._json(415, {"available": False, "detail": "JSON is required"})
             try:
-                payload = self._read_json(MAX_WARNING_CHAT_BYTES)
+                payload = self._read_json(PAIRING_REDEEM_MAX if redeem else MAX_WARNING_CHAT_BYTES)
                 if not isinstance(payload, dict):
                     raise ValueError()
             except (ValueError, UnicodeDecodeError):
