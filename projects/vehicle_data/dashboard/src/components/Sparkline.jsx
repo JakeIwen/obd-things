@@ -9,7 +9,8 @@
 import { useEffect, useRef } from "preact/hooks";
 import { ringFor, ringVersion } from "../app/rings.js";
 import { band } from "../app/derive.js";
-import { redAboveFor, splitByThreshold } from "../sparkline.helpers.js";
+import { splitByThreshold } from "../sparkline.helpers.js";
+import { HEAT_TOKENS, heatRangeFor } from "../tileHeat.helpers.js";
 
 const REDRAW_MS = 10000;
 /** Minimum vertical span per metric, in its display unit. */
@@ -37,7 +38,7 @@ function readColours() {
   colours = {
     line: get("--spark-line"),
     band: get("--line-strong"),
-    red: get("--spark-red"),
+    heat: HEAT_TOKENS.map(get),
   };
   return colours;
 }
@@ -81,12 +82,20 @@ function draw(entry, now) {
     ctx.fillRect(0, top, w, Math.max(1, y(Math.max(b.lo, lo)) - top));
   }
   const colW = w / n;
-  const limit = redAboveFor(name);
+  const heat = heatRangeFor(name);
+  // The same yellow → orange → red as the tile numeral, laid along the value axis: yellow at the
+  // range's start, red at its end and above. Below the start the line keeps its normal colour.
+  let hotStyle = c.line;
+  // addColorStop throws on an unset token; then the hot part keeps the normal colour.
+  if (heat && c.heat.every(Boolean)) {
+    hotStyle = ctx.createLinearGradient(0, y(heat.from), 0, y(heat.to));
+    c.heat.forEach((colour, i) => hotStyle.addColorStop(i / (c.heat.length - 1), colour));
+  }
   ctx.lineWidth = 1.5;
   // One unbroken run of columns at a time; a gap lifts the pen.
   const stroke = (run) => {
-    for (const part of splitByThreshold(run, limit)) {
-      ctx.strokeStyle = part.red ? c.red : c.line;
+    for (const part of splitByThreshold(run, heat ? heat.from : null)) {
+      ctx.strokeStyle = part.hot ? hotStyle : c.line;
       ctx.beginPath();
       part.points.forEach((p, k) => (k ? ctx.lineTo(p.x, y(p.v)) : ctx.moveTo(p.x, y(p.v))));
       ctx.stroke();

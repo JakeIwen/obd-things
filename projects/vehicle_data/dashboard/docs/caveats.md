@@ -210,7 +210,7 @@ what they meant and where that information lives now.
   red only when the charging-failure warning is open. Parked (settled): 12.2 V or more is normal,
   11.8–12.2 V amber, under 11.8 V red, and under 11.5 V critical. Cranking dips to 11.1 V have been
   recorded and are normal.
-- **Alternator** (`generator.field_duty`, the Alternator field tile on page 1; a dash when the field is not live; the line turns red above 80 % and the numeral shades yellow to orange to red from 60 to 100 %, display rules that raise no warning): PCM identifier `01A1`, the
+- **Alternator** (`generator.field_duty`, the Alternator field tile on page 1; a dash when the field is not live; the numeral, and the line above 60 %, shade yellow to orange to red from 60 to 100 %, a display rule that raises no warning): PCM identifier `01A1`, the
   generator field command duty in percent.
   - It is a command, not alternator current or temperature. Sustained high duty means the engine
     computer is asking for a lot of charging effort; the dashboard does not infer any thermal

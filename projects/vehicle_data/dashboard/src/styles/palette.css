@@ -15,8 +15,8 @@
   --red-bg: #2c1a18;
   /* Drive sparkline strokes (canvas, so read once per palette change by Sparkline.jsx). */
   --spark-line: var(--text-2);
-  --spark-red: var(--red);
-  /* Heat numerals (tileHeat.helpers.js): yellow → orange → red, mixed in Tile.jsx. */
+  /* Heat (tileHeat.helpers.js): yellow → orange → red, mixed in Tile.jsx for the numeral and laid
+     along the value axis by Sparkline.jsx for the line. */
   --heat-yellow: #ffd84a;
   --heat-orange: #ff9a3c;
   --heat-red: var(--red);

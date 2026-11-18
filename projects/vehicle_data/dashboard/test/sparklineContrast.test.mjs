@@ -41,15 +41,18 @@ const light = tokens(css("palette"), css("light"));
 test("Dim sparkline strokes reach 4.5:1 on both tile backgrounds", () => {
   for (const bg of ["--card", "--card-2"]) {
     assert.ok(contrast(dim("--spark-line"), dim(bg)) >= 4.5, `normal line on ${bg}`);
-    assert.ok(contrast(dim("--spark-red"), dim(bg)) >= 4.5, `red line on ${bg}`);
   }
 });
 
-test("Dim red and normal sparkline strokes are different colours", () => {
-  assert.notEqual(dim("--spark-line"), dim("--spark-red"));
+test("the heat stops differ from the normal sparkline stroke in every theme", () => {
+  for (const [theme, t] of [["dark", dark], ["light", light], ["dim", dim]]) {
+    for (const stop of ["--heat-yellow", "--heat-orange", "--heat-red"]) {
+      assert.notEqual(t(stop), t("--spark-line"), `${theme} ${stop}`);
+    }
+  }
 });
 
-test("heat numeral stops reach 4.5:1 on both tile backgrounds in every theme", () => {
+test("heat stops (numeral and line) reach 4.5:1 on both tile backgrounds in every theme", () => {
   for (const [theme, t] of [["dark", dark], ["light", light], ["dim", dim]]) {
     for (const stop of ["--heat-yellow", "--heat-orange", "--heat-red"]) {
       for (const bg of ["--card", "--card-2"]) {

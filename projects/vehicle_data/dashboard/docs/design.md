@@ -376,7 +376,7 @@ tab bar, with 16 px gutters and 12 px gaps.
 |---|---|
 | A | **SPEED** (2 cols, hero numerals, `mph`; under the numeral an estimated economy row `now 19.4 mpg`, which has no text at all (the row keeps its height) without a figure; beside the numeral a `SPEED LIMIT 55` sign while the limit is live, then a right-edge column with the ACC text (`ACC` over a double-size `66`, then `engaged`) stacked above the four-bar gap readout; regular cruise uses `Cruise`; current off/ready/standby/override states are explicit) · **RPM over POWER** (1 col split into two half-height tiles: RPM on top, its footer `gear 6` once a live gear metric exists and empty until then; Power below, `hp`, sub-line `165 lb-ft`; both at the standard `--value` numeral, no sparklines, because a sparkline would leave the numeral under 40 px) |
 | B | **COOLANT** · **OIL TEMP (VVT)** · **TRANS OIL**: value, unit, band bar, 15-min sparkline |
-| C | **VOLTAGE** (battery voltage alone, to 1 decimal, band bar, sparkline) · **ALTERNATOR FIELD** (`generator.field_duty` percent and a 15-min sparkline; the line is drawn red wherever the plotted value is above 80 % and the live numeral shades yellow at 60 % through orange at 80 % to red at 100 %, display only: no warning card, chime or `derive.js` colour) · **OIL PRESSURE** |
+| C | **VOLTAGE** (battery voltage alone, to 1 decimal, band bar, sparkline) · **ALTERNATOR FIELD** (`generator.field_duty` percent and a 15-min sparkline; the live numeral, and the line wherever the plotted value is above 60 %, shade yellow at 60 % through orange at 80 % to red at 100 %, display only: no warning card, chime or `derive.js` colour) · **OIL PRESSURE** |
 | D | **TIRES** (2 cols: 2×2 grid FL FR / RL RR) · **THIS DRIVE** (Time, Distance `12.3 mi`, MPG `16.4 mpg`, Coolant max, Avg power at 19 px, 25 % above the earlier 15 px; the heading keeps its size; info icon on the heading) |
 
 The portrait gate is no scrolling within ≤ 1,096 visible px (the browser toolbar stays; see the
@@ -444,15 +444,15 @@ Rules for Drive tiles:
   only "live/on" UI (the connection dot, active toggles and the current tab).
 - Ignition is not a tile; its value is in the System catalog. Odometer is not a page-1 tile; it is in
   Service and on page 2 (3.1.1), and trip distance comes from the speed integral.
-- Sparklines may carry a per-metric "red above N" threshold (`SPARK_RED_ABOVE` in
-  `src/sparkline.helpers.js`, read by `Sparkline.jsx`): the line switches to the palette's
-  `--spark-red` exactly where it crosses N. A tile numeral may carry a heat range (`TILE_HEAT` in
-  `src/tileHeat.helpers.js`, read by `Tile.jsx`): while the live value is in it, the numeral is
-  mixed from the `--heat-yellow`, `--heat-orange` and `--heat-red` tokens (yellow at the start,
-  orange midway, red at the top; `src/paletteTokens.js` re-reads them on a theme change). Only
-  `generator.field_duty` has either, on page 1's Alternator field tile: red line above 80 %, numeral
-  heat from 60 to 100 % (owner request 2026-11-17; page 2 no longer shows that metric; its field
-  tile is Fuel tank). Both are display rules, distinct from warnings, which come from the broker.
+- A tile may carry a heat range (`TILE_HEAT` in `src/tileHeat.helpers.js`): yellow at its start,
+  orange midway, red at its end and above, from the `--heat-yellow`, `--heat-orange` and
+  `--heat-red` tokens. `Tile.jsx` mixes the live numeral's colour from them (`src/paletteTokens.js`
+  re-reads them on a theme change); `Sparkline.jsx` draws the part of the line above the range's
+  start with the same three stops laid along the value axis, so each point of the line has the
+  colour the numeral had at that value, and the colour changes exactly where the line crosses the
+  start (`src/sparkline.helpers.js`). Only `generator.field_duty` has one, 60 to 100 %, on page 1's
+  Alternator field tile (owner requests 2026-11-17; page 2 no longer shows that metric; its field
+  tile is Fuel tank). It is a display rule, distinct from warnings, which come from the broker.
 - Sparklines show the last 15 minutes from the client ring, with no axis and no labels. They start
   empty and fill live; they are not seeded from 900 s buckets. Each scales to its own range with a
   per-metric minimum span (10 psi, 20 °F, 0.5 V) and draws only the nearest band edge.

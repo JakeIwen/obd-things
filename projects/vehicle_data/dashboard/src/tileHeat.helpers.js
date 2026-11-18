@@ -1,10 +1,12 @@
 /**
- * Pure rules for a tile numeral that shades yellow → orange → red as a value climbs. Display only:
- * nothing here raises a warning, chime or card colour. The colours are the `--heat-*` palette
- * tokens; `src/paletteTokens.js` reads them and `components/Tile.jsx` applies the mix.
+ * Pure rules for a tile that shades yellow → orange → red as a value climbs: its numeral, and its
+ * sparkline wherever the line is above the range's start. Display only: nothing here raises a
+ * warning, chime or card colour. The colours are the `--heat-*` palette tokens; `components/Tile.jsx`
+ * mixes them for the numeral (read through `src/paletteTokens.js`) and `components/Sparkline.jsx`
+ * lays them along the line's value axis.
  */
 
-/** Metric → the value range its numeral shades across: yellow at `from`, orange midway, red at `to`. */
+/** Metric → the value range it shades across: yellow at `from`, orange midway, red at `to` and above. */
 export const TILE_HEAT = Object.freeze({
   // Alternator field duty near 100 % means the alternator is at its limit (owner request 2026-11-17).
   "generator.field_duty": Object.freeze({ from: 60, to: 100 }),

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { SPARK_RED_ABOVE } from "../src/sparkline.helpers.js";
+import { heatRangeFor } from "../src/tileHeat.helpers.js";
 import { buildDemoScene, validateDemoScene } from "../tools/demo_data.mjs";
 
 const NOW = Date.UTC(2026, 9, 21, 19, 30);
@@ -26,8 +26,9 @@ test("demo validation rejects a missing tile or values that contradict each othe
   assert.throws(() => validateDemoScene({ ...scene, sparklines: trace }), /sparkline for engine\.rpm must end/);
 });
 
-test("the demo Alternator field trace crosses the red line and ends below it", () => {
+test("the demo Alternator field trace climbs through its heat range and ends below it", () => {
   const knots = buildDemoScene(NOW).sparklines["generator.field_duty"];
-  assert.ok(Math.max(...knots) > SPARK_RED_ABOVE["generator.field_duty"]);
-  assert.ok(knots[knots.length - 1] <= SPARK_RED_ABOVE["generator.field_duty"]);
+  const { from, to } = heatRangeFor("generator.field_duty");
+  assert.ok(Math.max(...knots) > (from + to) / 2, "reaches the orange half of the gradient");
+  assert.ok(knots[knots.length - 1] <= from);
 });

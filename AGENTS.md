@@ -518,12 +518,11 @@ both dialogs share). Research is offered on the dashboard only while the owner's
 `research_cli_policy.json` records measured memory peaks for the installed Claude copy (measured
 and activated for 2.1.325 on 2026-11-17; a different copy needs measuring again).
 
-Drive pages (2026-11-16): `src/sparkline.helpers.js` holds the per-metric "red above N" table
-(`SPARK_RED_ABOVE`, alternator field above 80 %) that `components/Sparkline.jsx` reads;
-`src/tileHeat.helpers.js` holds the numeral heat ranges (`TILE_HEAT`, alternator field yellow →
-orange → red from 60 to 100 %, `--heat-*` tokens) that `components/Tile.jsx` reads, and
-`src/paletteTokens.js` reads CSS tokens for code that mixes colours itself. All are display rules,
-not warnings. `styles/drive-page1.css`
+Drive pages (2026-11-16): `src/tileHeat.helpers.js` holds the heat ranges (`TILE_HEAT`, alternator
+field yellow → orange → red from 60 to 100 %, `--heat-*` tokens) that `components/Tile.jsx` mixes
+for the numeral and `components/Sparkline.jsx` lays along the line's value axis above the range's
+start (`src/sparkline.helpers.js` splits the line there); `src/paletteTokens.js` reads CSS tokens
+for code that mixes colours itself. These are display rules, not warnings. `styles/drive-page1.css`
 has page 1's RPM-over-Power stack and `styles/drive-radar.css` page 2's radar tile note.
 `radar_alignment.py` records `parked` beside `drive` on each radar row (first value of a new
 drive minus the last value before the park, absent when there is no earlier reading);
@@ -535,7 +534,7 @@ page 2's Fuel tank tile. The sparklines are seeded once per page load (2026-11-1
 and serves it from memory. Its query ends at the last whole minute, never later: `metric_series`
 rolls up every minute before its `end`. `src/historySeed.helpers.js` places the points by their age
 on the Pi's clock and joins adjacent minutes; `src/app/historySeed.js` is the one-shot fetch. The
-strokes use the `--spark-line` and `--spark-red` tokens.
+strokes use the `--spark-line` and `--heat-*` tokens.
 
 The hourly drive DTC read (radar and BCM, one `19 02 8F` frame each, no flow control) is
 off by default behind the broker flag `--enable-drive-dtc-reads`, which is not in the unit.

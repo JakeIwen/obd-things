@@ -4,7 +4,8 @@ import fs from "node:fs";
 import { signal } from "@preact/signals";
 
 import { createRing } from "../src/ring.js";
-import { splitByThreshold, redAboveFor } from "../src/sparkline.helpers.js";
+import { splitByThreshold } from "../src/sparkline.helpers.js";
+import { heatRangeFor } from "../src/tileHeat.helpers.js";
 import { SPARK_METRICS } from "../src/app/rings.js";
 import { loadHistorySeed, startHistorySeed } from "../src/app/historySeed.js";
 import { BUCKET_MS, JOIN_STEP_MS, RECENT_METRICS, WINDOW_MS, joinBuckets, seedPlan } from "../src/historySeed.helpers.js";
@@ -103,19 +104,20 @@ test("a van parked for an hour gives a plan with no metrics", () => {
   assert.deepEqual(seedPlan(reply(), { sentMono: 0, receivedMono: 5 }).metrics, {});
 });
 
-test("seeded alternator points obey the red-above-80 rule, with the colour change at the threshold", () => {
+test("seeded alternator points shade above the heat range's start, with the colour change at it", () => {
   const r = reply();
-  r.metrics["generator.field_duty"] = [bucket(5, 60), bucket(4, 100), bucket(3, 100), bucket(2, 60)];
+  r.metrics["generator.field_duty"] = [bucket(5, 40), bucket(4, 100), bucket(3, 100), bucket(2, 40)];
   const plan = seedPlan(r, { sentMono: 0, receivedMono: 10 });
   const ring = createRing({ windowMs: WINDOW_MS });
   ring.seed(plan.metrics["generator.field_duty"], plan.mapping);
   const cols = ring.columns(60, 10);
   const run = [];
   cols.forEach((c, i) => c && run.push({ x: i, v: c.mean }));
-  const parts = splitByThreshold(run, redAboveFor("generator.field_duty"));
-  assert.ok(parts.some((p) => p.red) && parts.some((p) => !p.red));
+  const { from } = heatRangeFor("generator.field_duty");
+  const parts = splitByThreshold(run, from);
+  assert.ok(parts.some((p) => p.hot) && parts.some((p) => !p.hot));
   for (const part of parts) {
-    for (const p of part.points) assert.ok(part.red ? p.v >= 80 : p.v <= 80, `${p.v} in a ${part.red ? "red" : "normal"} part`);
+    for (const p of part.points) assert.ok(part.hot ? p.v >= from : p.v <= from, `${p.v} in a ${part.hot ? "hot" : "normal"} part`);
   }
 });
 
