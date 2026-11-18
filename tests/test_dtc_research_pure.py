@@ -11,8 +11,10 @@ from unittest import mock
 
 from projects.vehicle_data import dtc_research_context as context
 from projects.vehicle_data.dtc_research_contract import (
-    CONTRACT, ResearchError, encoded_len, relay_allowed, truncate_encoded, validate_post,
+    CONTRACT, ResearchError, encoded_len, is_admin_path, is_research_path, relay_allowed, truncate_encoded,
+    validate_post,
 )
+from projects.vehicle_data.api_credits_contract import ADMIN_ROUTES, ROUTES
 from projects.vehicle_data.dtc_research_ledger import Ledger
 from projects.vehicle_data.dtc_research_prompt import (
     REPORT_SECTIONS, VIN_MASK, first_prompt, follow_up_prompt, mask_vin, parse_report, replay_prompt,
@@ -71,13 +73,18 @@ class ContractTests(unittest.TestCase):
         allowed = [("GET", "/v1/assistant/models"), ("GET", "/v1/assistant/dtc-research"),
                    ("POST", "/v1/assistant/dtc-research"), ("GET", "/v1/assistant/dtc-research/code/radar_acc/C1418-78"),
                    ("GET", "/v1/assistant/dtc-research/run/" + "c" * 32),
-                   ("GET", "/v1/assistant/dtc-research/run/" + "c" * 32 + "/progress")]
-        refused = [("POST", "/v1/assistant/models"), ("GET", "/v1/assistant/dtc-research/other"),
+                   ("GET", "/v1/assistant/dtc-research/run/" + "c" * 32 + "/progress"),
+                   ("GET", ROUTES["credits"])]
+        refused = [("POST", "/v1/assistant/models"), ("POST", ROUTES["credits"]), ("GET", ROUTES["credits"] + "/x"),
+                   *((method, path) for path in ADMIN_ROUTES.values() for method in ("GET", "POST")), ("GET", "/v1/assistant/dtc-research/other"),
                    ("POST", "/v1/assistant/dtc-research/run/" + "c" * 32), ("DELETE", "/v1/assistant/dtc-research")]
         for method, path in allowed:
             self.assertTrue(relay_allowed(method, path), path)
         for method, path in refused:
             self.assertFalse(relay_allowed(method, path), path)
+        self.assertTrue(is_research_path(ROUTES["credits"]))  # the advisor's socket routes it to research
+        self.assertFalse(any(is_research_path(path) for path in ADMIN_ROUTES.values()))
+        self.assertTrue(all(is_admin_path(path) for path in ADMIN_ROUTES.values()))
 
     def test_truncation_is_by_encoded_size(self):
         text = "\U0001F600" * 5000  # 12 encoded bytes each
@@ -223,6 +230,15 @@ class LedgerTests(unittest.TestCase):
         self.now += timedelta(hours=24, seconds=1)
         self.ledger().admit("r" * 32, "d" * 32, "initial")
         self.assertEqual(self.ledger().count(), 1)
+
+    def test_a_fallback_launch_counts_toward_the_daily_cap(self):
+        ledger = self.ledger()
+        for n in range(59):
+            ledger.admit("r" * 32, f"{n:032x}", "initial")
+        ledger.admit("r" * 32, "f" * 32, "fallback")
+        with self.assertRaises(ResearchError) as limit:
+            ledger.admit("r" * 32, "e" * 32, "fallback")
+        self.assertEqual(limit.exception.reason, "daily_limit")
 
     def test_unreadable_or_unwritable_ledger_refuses(self):
         self.path.write_text("not json")

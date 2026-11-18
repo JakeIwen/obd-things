@@ -8,6 +8,8 @@ import threading
 import unittest
 import uuid
 
+from projects.vehicle_data.api_client import TelemetryClient
+from projects.vehicle_data.api_credits_contract import ADMIN_ROUTES
 from projects.vehicle_data.assistant_models import Catalog
 from projects.vehicle_data.dtc_research import ResearchManager
 from projects.vehicle_data.dtc_research_contract import SIZES, encoded_len
@@ -49,6 +51,14 @@ class Unused:
         raise OSError("not used")
 
 
+class CreditsOnly(Unused):
+    """A worker that answers only the credits route (the relay tests need no turns)."""
+
+    def credits(self):
+        return {"key_installed": True, "enabled": True, "until": "2026-12-08T00:00:00Z", "entries": [],
+                "latches": {"account": None, "models": {}}, "last_fallback": None, "ledger_full": False}
+
+
 class RelaySizeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -59,7 +69,8 @@ class RelaySizeTests(unittest.TestCase):
             record = full_record(index)
             store.records[record["run_id"]] = record
         self.store = store
-        research = ResearchManager(store, Ledger(base / "ledger.json"), Catalog(Unused()), Unused(), Unused())
+        research = self.research = ResearchManager(store, Ledger(base / "ledger.json"), Catalog(Unused()), CreditsOnly(), Unused(),
+                                  pause_file=base / "paused")
         # A short directory: AF_UNIX paths are limited to about 104 bytes (macOS temp dirs are long).
         self.socket_dir = tempfile.TemporaryDirectory(dir="/tmp", prefix="rs")
         self.socket = str(Path(self.socket_dir.name) / "a.sock")
@@ -79,13 +90,21 @@ class RelaySizeTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def get(self, path):
+        return self.call("GET", path)
+
+    def call(self, method, path, payload=None):
+        """A request through the web listener with the paired browser's headers."""
+        origin = f"http://127.0.0.1:{self.web.server_port}"
+        headers = {"Origin": origin, "X-Van-Assistant-Key": self.chat.token, "X-Van-Chat-Client": "b" * 64}
+        body = None
+        if payload is not None:
+            body, headers["Content-Type"] = json.dumps(payload), "application/json"
         connection = http.client.HTTPConnection("127.0.0.1", self.web.server_port, timeout=20)
-        connection.request("GET", path, headers={"Origin": f"http://127.0.0.1:{self.web.server_port}",
-                                                 "X-Van-Assistant-Key": self.chat.token, "X-Van-Chat-Client": "b" * 64})
+        connection.request(method, path, body=body, headers=headers)
         response = connection.getresponse()
-        body = response.read()
+        data = response.read()
         connection.close()
-        return response.status, body
+        return response.status, data
 
     def test_largest_replies_fit_the_relay(self):
         biggest_run = max(encoded_len(records.full(r)) for r in self.store.records.values())
@@ -106,6 +125,31 @@ class RelaySizeTests(unittest.TestCase):
         self.assertLessEqual(len(body), SIZES["runEncodedBytes"] + 1024)
         status, body = self.get(f"/v1/assistant/dtc-research/run/{run_id}/progress")
         self.assertLess(len(body), 2048)
+
+    def test_the_credits_route_is_relayed_with_the_access_code_and_never_without_it(self):
+        status, body = self.get("/v1/assistant/research/credits")
+        self.assertEqual(status, 200, body[:200])
+        self.assertEqual(json.loads(body)["balance"]["state"], "unknown")
+        connection = http.client.HTTPConnection("127.0.0.1", self.web.server_port, timeout=20)
+        connection.request("GET", "/v1/assistant/research/credits",
+                           headers={"Origin": f"http://127.0.0.1:{self.web.server_port}",
+                                    "X-Van-Assistant-Key": "w" * 40, "X-Van-Chat-Client": "b" * 64})
+        self.assertEqual(connection.getresponse().status, 401)  # the advisor checks the code
+        connection.close()
+
+    def test_the_admin_routes_answer_404_through_the_web_relay_even_with_valid_credentials(self):
+        for method, route in (("POST", "pause"), ("POST", "resume"), ("GET", "drained")):
+            path = ADMIN_ROUTES[route]
+            status, body = self.call(method, path, {} if method == "POST" else None)
+            self.assertEqual(status, 404, (path, body))
+        self.assertFalse(self.research.pause.paused)
+
+    def test_the_admin_routes_work_on_the_advisors_own_socket_without_an_access_code(self):
+        client = TelemetryClient(self.socket, timeout=5)
+        self.assertEqual(client.request("POST", ADMIN_ROUTES["pause"], {}), (200, {"paused": True}))
+        self.assertTrue(self.research.pause.paused)
+        self.assertEqual(client.request("POST", ADMIN_ROUTES["resume"], {}), (200, {"paused": False}))
+        self.assertEqual(client.request("GET", ADMIN_ROUTES["pause"])[0], 404)
 
     def test_a_full_run_refuses_another_follow_up(self):
         record = next(iter(self.store.records.values()))

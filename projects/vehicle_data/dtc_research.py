@@ -8,20 +8,25 @@ that the worker does not know and has fenced (so the launch can no longer arrive
 turn ``interrupted``. It never infers that research is idle
 from a timeout, and it acknowledges an outcome only once the record holding it is on disk: a failed
 write keeps the follow thread asking (and, if a follow thread itself fails, the turn goes back to
-reconciliation). See docs/dtc-research.md.
+reconciliation. A credit launch the API refused is relaunched on the subscription
+(``dtc_research_fallback``); a pause (``dtc_research_pause``) closes new starts and questions for a
+rollback. See docs/dtc-research.md.
 """
 
 import copy
-from datetime import datetime
-import json
-import sys
+from datetime import datetime, timezone
 import threading
 import time
 import uuid
 
+from projects.vehicle_data.api_credits_contract import API_CREDITS, CREDIT_CODES, PROTOCOL, SUBSCRIPTION
+from projects.vehicle_data.api_credits_view import build_view
 from projects.vehicle_data.assistant_common import ChatError, now
 from projects.vehicle_data.assistant_slot import StartWindow
 from projects.vehicle_data import dtc_research_context, dtc_research_store as records
+from projects.vehicle_data.dtc_research_fallback import FallbackMixin, is_credit_failure
+from projects.vehicle_data.dtc_research_log import log
+from projects.vehicle_data.dtc_research_pause import PauseFile, PauseMixin
 from projects.vehicle_data.dtc_research_contract import (
     LIMITS, MAX_TURNS, TURN_REASONS, ResearchError, parse_path, validate_post,
 )
@@ -40,12 +45,20 @@ REFUSAL_DETAIL = {"warning_chat": "A warning chat is answering a question; try a
                   "stale_instance": "The research service restarted; try again in a few seconds"}
 
 
-def log(event, **fields):
-    print(json.dumps({"event": event, **fields}), file=sys.stderr, flush=True)
+REPLAY_REQUIRED = PROTOCOL["replayRequiredRefusal"]
+FORCED_BILLING = PROTOCOL["forcedBillingField"]
+CAPABILITY = PROTOCOL["capabilityField"]
 
 
-class ResearchManager:
-    def __init__(self, store, ledger, catalog, worker, broker, *, window=None, poll=POLL_SECONDS):
+class RefusalReason(str):
+    """A worker refusal reason that also carries the worker's detail, for the callers that wait it out."""
+
+    detail = None
+
+
+class ResearchManager(FallbackMixin, PauseMixin):
+    def __init__(self, store, ledger, catalog, worker, broker, *, window=None, poll=POLL_SECONDS,
+                 pause_file=None, snapshots=None):
         self.store, self.ledger, self.catalog, self.worker, self.broker = store, ledger, catalog, worker, broker
         self.window = window or StartWindow(LIMITS["startsPerWindow"], LIMITS["windowSeconds"])
         self.poll = poll
@@ -54,6 +67,10 @@ class ResearchManager:
         self.instance_id = None
         self.following = set()  # attempt ids a follow thread is watching
         self.starting = {}  # request_id -> (module_key, fca_display) of starts still gathering their context
+        self.fallbacks = set()  # run ids a fallback thread is sending or retrying for
+        self.pause = PauseFile(pause_file)
+        self.snapshots = snapshots  # the Mac's credit snapshot (api_credits_snapshot.SnapshotStore) or None
+        self.billing_capable = False  # the worker's /status says it understands the credit protocol
         self.closed = threading.Event()
 
     # --- routes ----------------------------------------------------------------------------------
@@ -64,6 +81,8 @@ class ResearchManager:
         name, args = route
         if name == "models":
             return self.catalog.reply()
+        if name == "credits":
+            return self.credits_view()
         with self.lock:
             if name == "list":
                 return {"available": True, "items": self.store.items()}
@@ -77,6 +96,15 @@ class ResearchManager:
                         else {"available": True, "progress": records.progress(record)})
         action, fields = validate_post(payload)
         return {"start": self.start, "ask": self.ask, "cancel": self.cancel}[action](fields)
+
+    def credits_view(self):
+        """The credit card's reply: the worker's ledger against the Mac's snapshot (never the key)."""
+        try:
+            credits = self.worker.credits()
+        except WorkerUnreachable:
+            raise ResearchError("worker_unavailable", "The research service on the Pi is not running") from None
+        snapshot = self.snapshots.current() if self.snapshots else None
+        return build_view(credits, snapshot, datetime.now(timezone.utc))
 
     def _record(self, run_id):
         record = self.store.records.get(run_id)
@@ -108,6 +136,7 @@ class ResearchManager:
             if request_id in self.starting or code in self.starting.values() \
                     or any(records.busy(r) for r in self.store.for_code(*code)):
                 raise ResearchError("run_busy", "Research is already running for this code")
+            self._require_unpaused()
             self._admission()
             self.catalog.validate(fields["provider"], fields["model"], fields["effort"])
             # Reserved until this start ends: no second start for this request or this code meanwhile.
@@ -116,6 +145,7 @@ class ResearchManager:
             context = dtc_research_context.gather(self.broker, *code)  # outside the lock: broker reads take seconds
             with self.lock:
                 self._require_idle()  # a worker restart may have been noticed while gathering
+                self._require_unpaused()  # a pause may have landed while gathering: nothing is launched
                 return self._create_and_launch(fields, context)
         finally:
             with self.lock:
@@ -160,6 +190,7 @@ class ResearchManager:
                 raise ResearchError("turn_limit", f"This research has reached its {MAX_TURNS}-turn limit")
             if not records.has_room(record):
                 raise ResearchError("record_full", "This research is full; start new research to continue")
+            self._require_unpaused()
             self._admission()
             if len(record["request_ids"]) >= LIMITS["requestIdsPerRun"]:
                 raise ResearchError("turn_limit", "This research has reached its request limit")
@@ -169,10 +200,11 @@ class ResearchManager:
             try:
                 self._save(record)
                 if record["session"]["state"] == "present":
-                    refusal = self._launch(record, "resume", follow_up_prompt(fields["question"]), quiet={"session_missing"})
-                    if refusal == "session_missing":
+                    refusal = self._launch(record, "resume", follow_up_prompt(fields["question"]),
+                                           quiet={"session_missing", REPLAY_REQUIRED})
+                    if refusal:  # the session is gone, or was made on credits and the subscription must not resume it
                         record["session"] = {"id": None, "state": "absent"}
-                        self._launch(record, "replay", self._replay_prompt(record))
+                        self._launch(record, "replay", self._replay_prompt(record), forced=refusal == REPLAY_REQUIRED)
                 else:
                     self._launch(record, "replay", self._replay_prompt(record))
             except Exception:
@@ -190,13 +222,27 @@ class ResearchManager:
         with self.lock:
             record = self._record(fields["run_id"])
             if records.busy(record):
-                turn = record["turns"][-1]
-                for attempt_id in turn["attempt_ids"][-1:]:
-                    try:
-                        self.worker.cancel(attempt_id)
-                    except WorkerUnreachable:
-                        pass
+                self._cancel_turn(record)
             return {"available": True, "run": records.full(record)}
+
+    def _cancel_turn(self, record):
+        """Record the intent durably, then forward it. A relaunch, a restart or a late credit outcome
+        then settles the turn as cancelled instead of launching again."""
+        def mark(saved):
+            saved["turns"][-1]["cancel_requested"] = True
+
+        if not self._persist(record, mark, "cancel"):
+            record["turns"][-1]["cancel_requested"] = True  # at least for this process; forward it anyway
+        turn = record["turns"][-1]
+        pending = turn.get("pending_fallback")
+        if pending and turn["attempt_ids"][-1] == pending["predecessor"]:
+            self._settle(record, {"status": "cancelled"})  # no live attempt to forward to
+            return
+        for attempt_id in turn["attempt_ids"][-1:]:
+            try:
+                self.worker.cancel(attempt_id)
+            except WorkerUnreachable:
+                pass
 
     # --- launching and following ---------------------------------------------------------------
     def _replay_prompt(self, record):
@@ -204,12 +250,14 @@ class ResearchManager:
         exchanges = [(t["question"], t["answer"]) for t in record["turns"][1:-1] if t["state"] == "complete"]
         return replay_prompt(record["context"], report, exchanges, record["turns"][-1]["question"])
 
-    def _launch(self, record, kind, prompt, quiet=()):
+    def _launch(self, record, kind, prompt, quiet=(), *, forced=False, ledger_kind=None, accepted=None):
         """Admit in the ledger, send the launch once, and follow it. Raises ``ResearchError`` for a
-        refusal the caller reports; returns a refusal reason listed in ``quiet`` instead."""
+        refusal the caller reports; returns a ``RefusalReason`` listed in ``quiet`` instead.
+        ``forced`` asks for the subscription; ``ledger_kind`` names the launch in the daily count
+        when it is not ``kind``; ``accepted`` is called once the worker took the launch."""
         turn = record["turns"][-1]
         attempt_id = uuid.uuid4().hex
-        self.ledger.admit(record["run_id"], attempt_id, kind)
+        self.ledger.admit(record["run_id"], attempt_id, ledger_kind or kind)
         turn["attempt_ids"].append(attempt_id)
         mode_before = turn["mode"]  # restored when the launch is refused: the mode says what actually ran
         turn["mode"] = {"initial": "initial", "resume": "resumed", "replay": "replayed"}[kind]
@@ -224,14 +272,8 @@ class ResearchManager:
         except ResearchError:
             withdraw()
             raise
-        body = {"attempt_id": attempt_id, "expected_instance_id": self.instance_id, "run_id": record["run_id"],
-                "provider": record["provider"], "model": record["model"], "effort": record["effort"],
-                "kind": "resume" if kind == "resume" else "initial",
-                "turn_kind": "report" if turn["kind"] == "report" else "follow_up", "prompt": prompt}
-        if kind == "resume":
-            body["session_id"] = record["session"]["id"]
         try:
-            code, reply = self.worker.launch("/turns", body)
+            code, reply = self.worker.launch("/turns", self._turn_body(record, turn, kind, attempt_id, prompt, forced))
         except WorkerUnreachable as exc:
             if not exc.sent:  # certainly never arrived: nothing was launched
                 withdraw()
@@ -239,19 +281,41 @@ class ResearchManager:
             code, reply = None, None  # it may or may not have arrived: from now on only ask about it
         if code == 409:
             withdraw()
-            reason = reply.get("reason")
-            if reason == "stale_instance":
-                self.state = "unknown"  # the reconciler learns the new instance
-                self.wake_reconciler()
-            if reason in quiet:
-                return reason
-            error = REFUSAL_TO_ERROR.get(reason, "busy")
-            raise ResearchError(error, REFUSAL_DETAIL.get(reason) or reply.get("detail") or "Research is busy")
+            return self._refused(record, turn, reply, quiet)
         if code not in (202, None):
             raise ResearchError("worker_unavailable", "The research service on the Pi did not accept the request")
         turn["phase"] = "starting"
+        if accepted:
+            accepted(record, turn, attempt_id)
         self._follow(record["run_id"], attempt_id)
         return None
+
+    def _turn_body(self, record, turn, kind, attempt_id, prompt, forced):
+        body = {"attempt_id": attempt_id, "expected_instance_id": self.instance_id, "run_id": record["run_id"],
+                "provider": record["provider"], "model": record["model"], "effort": record["effort"],
+                "kind": "resume" if kind == "resume" else "initial",
+                "turn_kind": "report" if turn["kind"] == "report" else "follow_up", "prompt": prompt}
+        if kind == "resume":
+            body["session_id"] = record["session"]["id"]
+        if self.billing_capable:  # an old worker gets the old protocol: subscription only
+            body[CAPABILITY] = True
+            if forced:
+                body[FORCED_BILLING] = SUBSCRIPTION
+        return body
+
+    def _refused(self, record, turn, reply, quiet):
+        reason = reply.get("reason")
+        if reason == "stale_instance":
+            self.state = "unknown"  # the reconciler learns the new instance
+            self.wake_reconciler()
+        if turn.get("pending_fallback"):
+            self._fallback_refused(record, turn, reason, REFUSAL_DETAIL.get(reason) or reply.get("detail"))
+        if reason in quiet:
+            refusal = RefusalReason(reason)
+            refusal.detail = reply.get("detail")
+            return refusal
+        error = REFUSAL_TO_ERROR.get(reason, "busy")
+        raise ResearchError(error, REFUSAL_DETAIL.get(reason) or reply.get("detail") or "Research is busy")
 
     def _follow(self, run_id, attempt_id):
         self.following.add(attempt_id)
@@ -339,7 +403,13 @@ class ResearchManager:
             turn = record["turns"][-1]
             if attempt_id not in turn["attempt_ids"] or turn["state"] not in records.BUSY_STATES:
                 return True
+            if attempt_id != turn["attempt_ids"][-1]:
+                return True  # an earlier attempt's late outcome: acknowledged, never acted on
+            if is_credit_failure(outcome):
+                return self._credit_failure(record, turn, attempt_id, outcome)
             if outcome.get("reason") == "resume_unverified" and turn["mode"] == "resumed":
+                if turn.get("cancel_requested"):
+                    return self._settle(record, {"status": "cancelled"})
                 record["session"] = {"id": None, "state": "absent"}
                 try:
                     self._launch(record, "replay", self._replay_prompt(record))
@@ -351,20 +421,30 @@ class ResearchManager:
     def _settle(self, record, outcome):
         """Apply ``outcome`` to the record's last turn and save it; the live record changes only once
         the result is on disk. ``False`` when the save failed (the turn stays as it was)."""
-        settled = copy.deepcopy(record)
-        self._apply(settled, settled["turns"][-1], outcome)
+        return self._persist(record, lambda settled: self._apply(settled, settled["turns"][-1], outcome), "outcome")
+
+    def _persist(self, record, change, during):
+        """Apply ``change`` to a copy of the record, save the copy, and only then adopt it: ``False``
+        (record untouched) when the save failed."""
+        changed = copy.deepcopy(record)
+        change(changed)
         try:
-            self.store.save(settled)
+            self.store.save(changed)
         except OSError:
-            log("dtc_research_save_failed", run_id=record["run_id"], during="outcome")
+            log("dtc_research_save_failed", run_id=record["run_id"], during=during)
             return False
         record.clear()
-        record.update(settled)
+        record.update(changed)
         return True
 
     def _apply(self, record, turn, outcome):
         turn["completed_at"] = now()
         turn["phase"] = None
+        turn["pending_fallback"] = None
+        if outcome.get("billing") in (API_CREDITS, SUBSCRIPTION):
+            turn["billing"] = outcome["billing"]
+        if outcome.get("credit_code") in CREDIT_CODES:
+            turn["credit_code"] = outcome["credit_code"]
         started = turn["started_at"]
         turn["duration_s"] = round(time.time() - _epoch(started))
         if "session_present" in outcome:

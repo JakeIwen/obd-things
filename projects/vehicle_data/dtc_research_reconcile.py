@@ -6,7 +6,9 @@ reservation is waited for); every turn left ``reconciling`` is asked about once,
 worker does not know (and has fenced against a late launch), or whose outcome it dropped, becomes
 ``interrupted``. Nothing is ever
 relaunched here, and nothing is inferred from a timeout: an unreachable worker keeps the state
-``unknown`` and research answers ``worker_unavailable``. An outcome is acknowledged only after its
+``unknown`` and research answers ``worker_unavailable``. The one thing it does continue is a
+pending fallback (``dtc_research_fallback``): a credit failure whose subscription relaunch had not
+been accepted yet is sent again until its saved deadline, never beyond it. An outcome is acknowledged only after its
 record was saved; a failed write keeps the state ``unknown`` and the pass is retried.
 """
 
@@ -57,6 +59,16 @@ class Reconciler:
                 manager.state = "unknown"
             manager.store.retry_deletes()
 
+    def _continue_fallback(self, record, turn):
+        """Whether the turn waits on a pending fallback (its last attempt is still the failed credit
+        one); its thread then takes it over and the worker is not asked about that attempt."""
+        pending = turn.get("pending_fallback")
+        if not pending or turn["attempt_ids"][-1] != pending["predecessor"]:
+            return False
+        turn["state"] = "running"
+        self.manager._fallback_follow(record["run_id"])
+        return True
+
     def reconcile_once(self):
         """One pass; ``True`` once admission can reopen."""
         manager = self.manager
@@ -66,9 +78,11 @@ class Reconciler:
             return False
         with manager.lock:
             manager.instance_id = status["instance_id"]
+            manager.billing_capable = status.get("billing_capable") is True
             pending = {turn["attempt_ids"][-1]: record["run_id"]
                        for record in manager.store.records.values() if record["turns"]
-                       for turn in record["turns"][-1:] if turn["state"] == "reconciling" and turn["attempt_ids"]}
+                       for turn in record["turns"][-1:] if turn["state"] == "reconciling" and turn["attempt_ids"]
+                       and not self._continue_fallback(record, turn)}
             for record in manager.store.records.values():  # reconciling without any attempt: never launched
                 last = record["turns"][-1] if record["turns"] else None
                 if last and last["state"] == "reconciling" and not last["attempt_ids"] \
