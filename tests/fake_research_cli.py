@@ -4,6 +4,13 @@
 saved beside it as ``scenario.json``, since the worker passes the child only an allowlisted
 environment). The fake records its argv, cwd and environment to ``calls.jsonl`` and each turn's
 prompt to ``prompts.jsonl`` in its state directory.
+
+Credit scenarios: ``init`` carries ``apiKeySource`` (``ANTHROPIC_API_KEY`` when the child's
+environment has that variable, else ``none``; ``api_key_source`` overrides it). ``events`` replaces
+the default tool-use and answer events with the given stream-json events (after init), ``pre_init``
+prints events instead of init, ``stderr`` is written to stderr, ``exit_code`` is the exit status of
+those two paths, and ``delta`` is the ``costUSD`` of the default result's
+``model_usage_since_last_result`` (``null`` omits it; ``result_index`` numbers it).
 """
 
 import json
@@ -39,6 +46,8 @@ if opt("--input-format") == "stream-json":
         "account": {"tokenSource": "CLAUDE_CODE_OAUTH_TOKEN" if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") else "none"}}}})
     sys.stdin.read()
     sys.exit(0)
+def source():
+    return S.get("api_key_source") or ("ANTHROPIC_API_KEY" if os.environ.get("ANTHROPIC_API_KEY") else "none")
 prompt = sys.stdin.read()
 with open(HERE / "prompts.jsonl", "a") as log:
     log.write(json.dumps({"argv": argv, "prompt": prompt}) + "\n")
@@ -50,6 +59,11 @@ if "--resume" in argv and not path.exists():
     print("No conversation found with session ID", file=sys.stderr)
     sys.exit(1)
 store.mkdir(parents=True, exist_ok=True)
+if S.get("pre_init") is not None:
+    for event in S["pre_init"]:
+        emit(event)
+    print(S.get("stderr", ""), end="", file=sys.stderr, flush=True)
+    sys.exit(S.get("exit_code", 1))
 mode = S.get("mode", "ok")
 if mode != "no_growth" or not path.exists():
     with open(path, "a") as f:
@@ -63,7 +77,14 @@ if mode == "huge_line":
     time.sleep(5)
 tools = S.get("tools", ["WebSearch", "WebFetch"])
 emit({"type": "system", "subtype": "init", "session_id": S.get("init_session", session), "tools": tools,
-       "mcp_servers": []})
+       "mcp_servers": [], "apiKeySource": source()})
+if S.get("events") is not None:
+    for event in S["events"]:
+        emit(event)
+    print(S.get("stderr", ""), end="", file=sys.stderr, flush=True)
+    if mode == "hang_after_result":
+        time.sleep(60)
+    sys.exit(S.get("exit_code", 0))
 if mode == "hang":
     time.sleep(60)
 if mode == "grandchild":
@@ -91,8 +112,11 @@ if mode == "exit_error":
     emit({"type": "result", "subtype": "error_during_execution", "is_error": True})
     sys.exit(1)
 emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "..."}]}})
-emit({"type": "result", "subtype": "success", "is_error": False, "result": S.get("answer", "SUMMARY: Fine.\n## What it means\nok"),
-       "total_cost_usd": S.get("cost", 0.5), "num_turns": 3})
+done = {"type": "result", "subtype": "success", "is_error": False, "result": S.get("answer", "SUMMARY: Fine.\n## What it means\nok"),
+        "total_cost_usd": S.get("cost", 0.5), "num_turns": 3, "result_index": S.get("result_index", 0)}
+if S.get("delta", 0.25) is not None:
+    done["model_usage_since_last_result"] = {opt("--model"): {"costUSD": S.get("delta", 0.25)}}
+emit(done)
 '''
 
 

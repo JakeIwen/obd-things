@@ -9,15 +9,58 @@ discovery home. The worker keeps the volume under its targets: per run, across r
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 
+from projects.vehicle_data.api_credits_contract import PATHS
 from projects.vehicle_data.dtc_research_contract import RUN_ID_RE, WORKER
+from projects.vehicle_data.research_cli import claude_session_files
 
 MIB = 1024 * 1024
 FREE_FLOOR_MIB = 16
 RUN_CAP_MIB = 16
 SESSIONS_TARGET_MIB = 128
 CODEX_HOME_SOFT_MIB = 48
+VOLUME_IMAGE = "/var/lib/vanresearch.img"  # the loop-mounted image behind WORKER["volume"] (systemd/var-lib-vanresearch.mount)
+
+
+def mount_problem(root, image=VOLUME_IMAGE, *, is_mount=os.path.ismount, mountinfo=Path("/proc/self/mountinfo"),
+                  sys_block=Path("/sys/block")):
+    """``None`` when ``root`` is a mount point whose source is the research image, else a sentence.
+    An unmounted volume is just a directory on the SD card, where a credential must never be written.
+    The mount's source is the image itself or the loop device whose backing file is the image."""
+    root = str(root)
+    if not is_mount(root):
+        return f"{root} is not a mount point; the research volume is not mounted"
+    source = _mount_source(root, mountinfo)
+    if source is None:
+        return f"{root} has no readable mount record"
+    if source == image:
+        return None
+    loop = re.fullmatch(r"/dev/(loop\d+)", source)
+    if loop:
+        try:
+            backing = (Path(sys_block) / loop[1] / "loop" / "backing_file").read_text().strip()
+        except OSError:
+            return f"the loop device behind {root} cannot be identified"
+        if backing.removesuffix(" (deleted)") == image:
+            return None
+    return f"{root} is mounted from something other than the research image"
+
+
+def _mount_source(root, mountinfo):
+    """The source of the last (visible) mount at ``root`` in a ``mountinfo`` file, or ``None``."""
+    try:
+        lines = Path(mountinfo).read_text().splitlines()
+    except OSError:
+        return None
+    source = None
+    for line in lines:
+        head, separator, tail = line.partition(" - ")
+        fields, parts = head.split(), tail.split()
+        if separator and len(fields) >= 5 and len(parts) > 1 and fields[4].replace("\\040", " ") == root:
+            source = parts[1]
+    return source
 
 
 def footprint(path):
@@ -40,6 +83,8 @@ class Volume:
     runs = property(lambda self: self.root / "runs")
     tmp = property(lambda self: self.root / "tmp")
     catalog = property(lambda self: self.root / "catalog")
+    api_key = property(lambda self: self.root / Path(PATHS["keyFile"]).name)
+    credit_ledger = property(lambda self: self.root / Path(PATHS["ledgerFile"]).name)
 
     def run_dir(self, run_id):
         if not RUN_ID_RE.fullmatch(run_id):
@@ -80,6 +125,27 @@ class Volume:
         if rollout and Path(rollout).resolve().is_relative_to(self.codex_home.resolve()):
             Path(rollout).unlink(missing_ok=True)
         (self.run_dir(run_id) / "session.json").unlink(missing_ok=True)
+
+    def _runs_billed(self, billing):
+        for path in self.runs.glob("*"):
+            if path.is_dir() and RUN_ID_RE.fullmatch(path.name) \
+                    and (self.session_record(path.name) or {}).get("billing") == billing:
+                yield path.name
+
+    def drop_sessions_billed(self, billing):
+        """Delete the CLI session of every run whose ``session.json`` says it was created under ``billing``."""
+        for name in list(self._runs_billed(billing)):
+            self.drop_session(name)
+
+    def count_sessions_billed(self, billing):
+        """Runs created under ``billing`` whose CLI transcript still exists (a marker alone does not count)."""
+        count = 0
+        for name in self._runs_billed(billing):
+            record = self.session_record(name) or {}
+            if isinstance(record.get("session_id"), str) \
+                    and claude_session_files(self.run_dir(name) / "home", record["session_id"]):
+                count += 1
+        return count
 
     def delete_run(self, run_id):
         self.drop_session(run_id)

@@ -10,16 +10,22 @@ again just before each spawn, and a cancelled attempt never spawns. Nothing here
 
 from dataclasses import dataclass
 from pathlib import Path
+import json
+import sys
 import time
 import uuid
 
 from projects.vehicle_data import cli_process, research_cli
+from projects.vehicle_data.api_credits import PRE_INIT_RESULT, CreditEnd, UsageTally, classify_credit_failure
+from projects.vehicle_data.api_credits_contract import API_CREDITS, PROTOCOL, SUBSCRIPTION
+from projects.vehicle_data.api_credits_ledger import LedgerError
 from projects.vehicle_data.dtc_research_contract import SIZES, TIMEOUTS, truncate_encoded
+from projects.vehicle_data.research_credits import SUBSCRIPTION_PLAN
 from projects.vehicle_data.research_memory import MIB, Watchdog, launch_refusal
 from projects.vehicle_data.research_volume import FREE_FLOOR_MIB, RUN_CAP_MIB
 
 # Stop reasons that are not turn reasons: the advisor reacts to them itself.
-INTERNAL_REASONS = ("resume_unverified",)
+INTERNAL_REASONS = ("resume_unverified", PROTOCOL["fallbackReason"])
 HELP_MAX_BYTES = 1024 * 1024  # a CLI's --help text is a few KiB
 
 
@@ -35,17 +41,37 @@ class TurnRequest:
     timeout_s: int
     session_id: str | None = None
     budget_usd: float | None = None
+    billing_capable: bool = False  # the advisor implements credit fallback and replay-required
+    forced_billing: str | None = None
 
 
 class Runner:
-    def __init__(self, volume, identity, thresholds_for, clock=time.monotonic, meminfo=Path("/proc/meminfo")):
+    def __init__(self, volume, identity, thresholds_for, clock=time.monotonic, meminfo=Path("/proc/meminfo"),
+                 credits=None):
         self.volume, self.identity, self.thresholds_for, self.clock = volume, identity, thresholds_for, clock
         self.meminfo = meminfo
+        self.credits = credits
 
-    def run_turn(self, attempt, request):
+    def run_turn(self, attempt, request, plan=SUBSCRIPTION_PLAN):
+        """One turn. ``plan`` is the billing the worker chose at admission (maintenance runs get the
+        subscription plan); a credit plan arrives with its ledger entry already open, which this
+        method always settles or withdraws."""
+        try:
+            outcome = self._run_turn(attempt, request, plan)
+        except BaseException:
+            # An unexpected failure after the spawn may have spent: the entry settles as unknown.
+            self._close_entry(plan, None, None, spawned=attempt.state == "running")
+            raise
+        outcome.setdefault("billing", plan.billing.choice)
+        outcome.setdefault("credit_code", None)
+        outcome.setdefault("diagnostics", {}).update(billing=outcome["billing"], credit_code=outcome["credit_code"])
+        return outcome
+
+    def _run_turn(self, attempt, request, plan):
         identity = self.identity.check(request.provider)
         token, problem = research_cli.read_token(self.volume.token)
-        if identity.state != "ok" or problem:
+        if identity.state != "ok" or (problem and not plan.credit):  # a credit launch never carries the token
+            self._close_entry(plan, None, None, spawned=False)
             return _failed("provider_error", identity.reason or problem)
         run = self.volume.prepare_run(request.run_id)
         home, tmpdir = run / "home", self.volume.tmpdir(attempt.attempt_id)
@@ -59,20 +85,27 @@ class Runner:
                 session_id = request.session_id
                 before = research_cli.session_size(research_cli.claude_session_files(home, session_id))
             attempt.session_id = session_id
-            self.volume.save_session_record(request.run_id, {"provider": "claude", "session_id": session_id})
+            origin = plan.billing.choice if request.kind == "initial" else (
+                (self.volume.session_record(request.run_id) or {}).get("billing") or SUBSCRIPTION)
+            self.volume.save_session_record(request.run_id, {"provider": "claude", "session_id": session_id,
+                                                             "billing": origin})
             argv = research_cli.claude_argv(identity.executable, model=request.model, effort=request.effort,
                                              session_id=session_id, resume=request.kind == "resume",
                                              budget_usd=request.budget_usd)
-            env = research_cli.claude_env(home, tmpdir, token)
-            stream = research_cli.ClaudeStream(session_id)
+            env = research_cli.claude_credit_env(home, tmpdir, plan.key) if plan.credit \
+                else research_cli.claude_env(home, tmpdir, token)
+            stream = research_cli.ClaudeStream(session_id, credit=plan.credit)
             result, watchdog = self._launch(attempt, request, argv, env, run / "work", stream)
             outcome = self._outcome(request, stream, result, watchdog)
+            self._close_entry(plan, stream, result, spawned=result.returncode is not None)
+            outcome = self._credit_outcome(plan, request, stream, result, outcome)
             if outcome["status"] == "complete" and request.kind == "resume":
                 after = research_cli.session_size(research_cli.claude_session_files(home, session_id))
                 if after <= before:
                     outcome = _failed("resume_unverified", "the session file did not grow")
             spawned = result.returncode is not None  # a launch refused before its spawn left the session alone
-            if spawned and outcome.get("reason") in ("resume_unverified", "space_exhausted", "memory_exhausted"):
+            if spawned and outcome.get("reason") in ("resume_unverified", "space_exhausted", "memory_exhausted",
+                                                     PROTOCOL["fallbackReason"]):
                 self.volume.drop_session(request.run_id)
             outcome["session_present"] = bool(research_cli.claude_session_files(home, session_id))
             outcome["session_id"] = session_id if outcome["session_present"] else None
@@ -80,6 +113,39 @@ class Runner:
         finally:
             self.volume.clear(tmpdir)
             self.volume.enforce_targets(busy_run=None)
+
+    def _close_entry(self, plan, stream, result, *, spawned):
+        """Settle a credit launch's ledger entry from its process's own deltas, or withdraw it when
+        nothing spawned. A settlement write failure keeps the answer; the entry settles as unknown at
+        the next worker start."""
+        if not plan.credit or self.credits is None:
+            return
+        if not spawned:
+            self.credits.withdraw(plan)
+            return
+        clean = result is not None and result.stop_reason in (None, PRE_INIT_RESULT)
+        try:
+            self.credits.settle(plan, stream.tally if stream else UsageTally(), clean_exit=clean)
+        except LedgerError:
+            print(json.dumps({"event": "dtc_research_credit_settlement_failed", "attempt_id": plan.attempt_id}),
+                  file=sys.stderr, flush=True)
+
+    def _credit_outcome(self, plan, request, stream, result, outcome):
+        """A credit launch's outcome: billing noted, and a failure of the credits themselves becomes
+        ``credit_fallback`` with its fixed code and the latch (the advisor relaunches on the subscription)."""
+        if not plan.credit:
+            return outcome
+        outcome["billing"] = API_CREDITS
+        if outcome["status"] != "failed":
+            return outcome
+        end = CreditEnd(result.stop_reason, result.returncode, False, stream.result, stream.typed_error,
+                        stream.session_id is not None, result.stderr_tail)
+        code = classify_credit_failure(end)
+        if code is None:
+            return outcome
+        self.credits.latch(code, request.model)
+        return {**outcome, "reason": PROTOCOL["fallbackReason"], "credit_code": code,
+                "detail": "the API credits could not be used for this turn"}
 
     def _launch(self, attempt, request, argv, env, workdir, stream):
         def on_line(event):
@@ -126,7 +192,9 @@ class Runner:
         if result.stop_reason == "cancelled":
             return {"status": "cancelled", "answer": None, "reason": "cancelled", "detail": "Stopped",
                     "diagnostics": diagnostics}
-        if result.stop_reason:
+        if result.stop_reason == PRE_INIT_RESULT:
+            outcome = _failed("provider_error", result.stop_detail)
+        elif result.stop_reason:
             outcome = _failed(result.stop_reason, result.stop_detail)
         elif stream.answer and result.returncode == 0:
             cap = SIZES["reportEncodedBytes"] if request.turn_kind == "report" else SIZES["answerEncodedBytes"]

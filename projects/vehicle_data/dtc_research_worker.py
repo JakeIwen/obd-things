@@ -13,6 +13,7 @@ lock.
 """
 
 import argparse
+from datetime import datetime, timezone
 import http.server
 import json
 import os
@@ -26,6 +27,8 @@ import sys
 import threading
 import time
 
+from projects.vehicle_data.api_credits import REPLAY_REQUIRED, SESSION_MISSING, redact
+from projects.vehicle_data.api_credits_contract import API_CREDITS, PROTOCOL, SUBSCRIPTION
 from projects.vehicle_data.assistant_http import QuietDisconnects, send_json
 from projects.vehicle_data.dtc_research_contract import (
     MODEL_ID_RE, RUN_ID_RE, TIMEOUTS, WORKER, EFFORT_ORDER,
@@ -34,6 +37,7 @@ from projects.vehicle_data.model_cli_lock import ACQUIRED, CliLock, HELD
 from projects.vehicle_data import research_maintenance, research_memory
 from projects.vehicle_data.research_attempts import AttemptTable, Refused
 from projects.vehicle_data.research_cli import read_token
+from projects.vehicle_data.research_credits import Credits
 from projects.vehicle_data.research_cli_policy import IdentityChecker, POLICY
 from projects.vehicle_data.research_runner import Runner, TurnRequest
 from projects.vehicle_data.research_volume import Volume
@@ -78,15 +82,19 @@ def systemd_notify(message):
 
 
 class Worker:
-    def __init__(self, volume, identity, cli_lock, meminfo=Path("/proc/meminfo"), policy=POLICY, dns=None):
+    def __init__(self, volume, identity, cli_lock, meminfo=Path("/proc/meminfo"), policy=POLICY, dns=None,
+                 now=lambda: datetime.now(timezone.utc)):
         self.volume, self.identity, self.cli_lock, self.meminfo, self.policy = volume, identity, cli_lock, meminfo, policy
         self.table = AttemptTable()
-        self.runner = Runner(volume, identity, self.thresholds, meminfo=meminfo)
+        self.credits = Credits(volume.api_key, volume.credit_ledger, policy, now=now)
+        self.runner = Runner(volume, identity, self.thresholds, meminfo=meminfo, credits=self.credits)
         self.dns = dns or DnsProbe()
         self.facts = Facts(self._slow_facts, before=self.dns.start)
 
     def start(self):
-        """Begin the background checks (the CLI copy's hash, the first DNS lookup) before anyone asks."""
+        """Recover the credit ledger (and, with credits disabled, drop API-created sessions), then begin
+        the background checks (the CLI copy's hash, the first DNS lookup) before anyone asks."""
+        self.credits.start(self.volume)
         self.facts.start()
         self.facts.request()
 
@@ -140,6 +148,7 @@ class Worker:
         except OSError:
             free = None
         return {"instance_id": self.table.instance_id, "pid": os.getpid(), "job": self.table.job(),
+                PROTOCOL["capabilityField"]: True,
                 "providers": facts["providers"], "memory_policy": facts["memory_policy"],
                 "checked_at": checked_at, "checks_current": current, "dns_ok": dns["ok"], "dns": dns,
                 "volume": {"free_bytes": free}, "mem_available_bytes": available}
@@ -171,15 +180,34 @@ class Worker:
     def admit_turn(self, body):
         request = _turn_request(body)
 
+        plans = []
+
         def check():
             self._check_launch(request.provider, turn=True)
             if request.kind == "resume" and not self._session_exists(request):
                 raise Refused("session_missing", "the CLI session for this run is gone")
-            self._take_cli_lock()
+            plan = self._plan_billing(request, body["attempt_id"])
+            try:
+                self._take_cli_lock()
+            except BaseException:
+                self.credits.withdraw(plan)  # nothing spawns: its reserved ledger entry goes away
+                raise
+            plans.append(plan)
 
         attempt = self.table.admit(body["attempt_id"], "turn", body["expected_instance_id"], request.run_id, check)
-        self._start(attempt, lambda: self.runner.run_turn(attempt, request))
+        self._start(attempt, lambda: self.runner.run_turn(attempt, request, plans[0]))
         return attempt
+
+    def _plan_billing(self, request, attempt_id):
+        """The turn's billing, or a pre-spawn refusal: a resume of an API-created session that cannot
+        stay on credits is ``replay_required`` (the advisor replays it on the subscription)."""
+        record = self.volume.session_record(request.run_id) if request.kind == "resume" else None
+        plan = self.credits.plan(request, record, credits_allowed=True, attempt_id=attempt_id)
+        if plan.billing.choice == REPLAY_REQUIRED:
+            raise Refused(REPLAY_REQUIRED, "this session was billed to API credits and cannot resume on the subscription")
+        if plan.billing.choice == SESSION_MISSING:
+            raise Refused("session_missing", "the CLI session for this run is gone")
+        return plan
 
     def _session_exists(self, request):
         from projects.vehicle_data.research_cli import claude_session_files
@@ -212,12 +240,13 @@ class Worker:
             try:
                 outcome = work()
             except Exception as exc:  # the outcome must always be recorded and the slot freed
-                outcome = {"status": "failed", "reason": "provider_error", "detail": str(exc)[:300]}
+                outcome = {"status": "failed", "reason": "provider_error", "detail": redact(exc)[:300]}
             finally:
                 self.cli_lock.release()
             self.table.finish(attempt, outcome)
             print(json.dumps({"event": "dtc_research_timing", "kind": attempt.kind,
                               "status": outcome.get("status"), "reason": outcome.get("reason"),
+                              "billing": outcome.get("billing"), "credit_code": outcome.get("credit_code"),
                               **(outcome.get("diagnostics") or {})}), file=sys.stderr, flush=True)
         threading.Thread(target=body, daemon=True).start()
 
@@ -255,7 +284,7 @@ class Worker:
             try:
                 result = functions[step]()
             except Exception as exc:
-                result = {"result": "failed", "reason": str(exc)[:300]}
+                result = {"result": "failed", "reason": redact(exc)[:300]}
             finally:
                 self.cli_lock.release()
             with self.table.lock:
@@ -318,8 +347,13 @@ def _turn_request(body):
         raise Refused("invalid", "empty prompt")
     limit = TIMEOUTS["reportSeconds"] if body["turn_kind"] == "report" else TIMEOUTS["followUpSeconds"]
     budget = POLICY["claude"]["budget_usd"]["report" if body["turn_kind"] == "report" else "follow_up"]
+    capable = body.get(PROTOCOL["capabilityField"], False)
+    forced = body.get(PROTOCOL["forcedBillingField"])
+    if not isinstance(capable, bool) or forced not in (None, SUBSCRIPTION):
+        raise Refused("invalid", "invalid billing fields")
     return TurnRequest(body["run_id"], "claude", body["model"], body.get("effort"), body["kind"], body["turn_kind"],
-                       body["prompt"], limit, session_id=body.get("session_id"), budget_usd=budget)
+                       body["prompt"], limit, session_id=body.get("session_id"), budget_usd=budget,
+                       billing_capable=capable, forced_billing=forced)
 
 
 class WorkerHandler(http.server.BaseHTTPRequestHandler):
@@ -369,6 +403,8 @@ def dispatch(worker, method, path, read):
     """``(status, payload)`` for one worker route."""
     if method == "GET" and path == "/status":
         return 200, worker.status()
+    if method == "GET" and path == PROTOCOL["workerCreditsRoute"]:
+        return 200, {**worker.credits.view(), "api_sessions": worker.volume.count_sessions_billed(API_CREDITS)}
     if method == "POST" and path in ("/turns", "/discover", "/maintenance"):
         body = _launch_body(read)
         admit = {"/turns": worker.admit_turn, "/discover": worker.admit_discovery,

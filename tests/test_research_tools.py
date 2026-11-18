@@ -52,6 +52,10 @@ class PeakSamplerTests(unittest.TestCase):
         self.assertEqual(result["peak_tree_rss_mib"], 0)
 
 
+def mounted(_volume):
+    """The tests' volume is a plain temp directory; the mount check has its own tests."""
+
+
 class SigninTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -61,17 +65,17 @@ class SigninTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_save_token_writes_mode_0600_and_replaces_atomically(self):
-        path = dtc_research_signin.save_token(self.volume, "  sk-ant-oat01_abc.DEF-1\n")
+        path = dtc_research_signin.save_token(self.volume, "  sk-ant-oat01_abc.DEF-1\n", mounted=mounted)
         self.assertEqual(path.read_text(), "sk-ant-oat01_abc.DEF-1\n")
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
-        dtc_research_signin.save_token(self.volume, "second")
+        dtc_research_signin.save_token(self.volume, "second", mounted=mounted)
         self.assertEqual(path.read_text(), "second\n")
         self.assertEqual(sorted(p.name for p in self.volume.iterdir()), ["claude-oauth-token"])
 
     def test_bad_tokens_and_missing_volume_are_refused_without_echoing_the_token(self):
         for bad in ("", "has space", "semi;colon", "x" * 5000):
             with self.subTest(bad[:12]), self.assertRaises(ValueError) as refused:
-                dtc_research_signin.save_token(self.volume, bad)
+                dtc_research_signin.save_token(self.volume, bad, mounted=mounted)
             self.assertNotIn("semi", str(refused.exception))
         with self.assertRaises(ValueError):
             dtc_research_signin.save_token(self.volume / "absent", "token")
@@ -81,14 +85,14 @@ class SigninTests(unittest.TestCase):
         out, err = io.StringIO(), io.StringIO()
         with mock.patch("getpass.getpass", return_value="secret-token-value"), \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            self.assertEqual(dtc_research_signin.main(["claude", "--volume", str(self.volume)]), 0)
+            self.assertEqual(dtc_research_signin.main(["claude", "--volume", str(self.volume)], mounted=mounted), 0)
         self.assertNotIn("secret-token-value", out.getvalue() + err.getvalue())
         with contextlib.redirect_stdout(out):
             dtc_research_signin.main(["status", "--volume", str(self.volume)])
         self.assertIn("Claude: signed in", out.getvalue())
         self.assertIn("Codex: not signed in", out.getvalue())
         with mock.patch("getpass.getpass", return_value="bad token"), contextlib.redirect_stderr(err):
-            self.assertEqual(dtc_research_signin.main(["claude", "--volume", str(self.volume)]), 1)
+            self.assertEqual(dtc_research_signin.main(["claude", "--volume", str(self.volume)], mounted=mounted), 1)
 
 
 def rollout(*items):

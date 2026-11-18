@@ -17,7 +17,16 @@ import threading
 
 from projects.vehicle_data.dtc_research_contract import WORKER
 
-POLICY = json.loads(Path(__file__).with_name("research_cli_policy.json").read_text())
+
+
+def _validated(policy):
+    credits = policy["claude"].get("api_credits")
+    if not isinstance(credits, dict) or not isinstance(credits.get("enabled"), bool):
+        raise ValueError("research_cli_policy.json: claude.api_credits.enabled must be true or false")
+    return policy
+
+
+POLICY = _validated(json.loads(Path(__file__).with_name("research_cli_policy.json").read_text()))
 CLI_ROOT = Path(WORKER["cliRoot"])
 IDENTITY_FILE = "identity.json"
 # "checking": the copy's files changed since they were last hashed and a caller that must not wait
