@@ -518,6 +518,16 @@ both dialogs share). Research is offered on the dashboard only while the owner's
 `research_cli_policy.json` records measured memory peaks for the installed Claude copy (measured
 and activated for 2.1.325 on 2026-11-17; a different copy needs measuring again).
 
+Assistant pairing PIN (owner request 2026-11-17): a paired browser shows a one-time 6-digit PIN
+(5 min, single use) that a new device types to receive the access code. `assistant_pairing.py`
+with `assistant_pairing.json` (routes, limits, states shared with the dashboard) holds the PINs,
+limits and the relay allowlist; `POST /v1/assistant/pairing/redeem` is the only assistant route
+relayed without the code. `assistant_http.read_json_body` is the advisor's one request-body
+reader. Dashboard: `src/assistantAccess.js` (strings, pure helpers), `src/assistantPairing.js`
+(requests, PIN entry and panel controllers), `components/AssistantPairing.jsx` (PIN field) and
+`components/PairAnotherDevice.jsx`, styled by `styles/assistant-pairing.css`. Contract:
+`projects/vehicle_data/docs/warning-chat.md` section "Pairing another device".
+
 Drive pages (2026-11-16): `src/tileHeat.helpers.js` holds the heat ranges (`TILE_HEAT`, alternator
 field yellow → orange → red from 60 to 100 %, `--heat-*` tokens) that `components/Tile.jsx` mixes
 for the numeral and `components/Sparkline.jsx` lays along the line's value axis above the range's

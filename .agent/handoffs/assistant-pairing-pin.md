@@ -1,9 +1,10 @@
-# Assistant pairing PIN (plan)
+# Assistant pairing PIN
 
 tier: T3 (adds the first unauthenticated route through the assistant relay on both web listeners and
 the advisor; changes an authentication gate)
-last reviewed: plan not yet reviewed
-written against: `ce71087` (master `0393eee` plus four early-warning commits)
+last reviewed: plan reviewed by gpt-6-astra 2026-11-17 (ship); implementation not yet reviewed
+written against: `ce71087` (master `0393eee` plus four early-warning commits); built on
+`9209c9e` in branch `worktree-agent-a08cb912082166e3f`
 
 ## Objective
 
@@ -88,11 +89,15 @@ if pasted. Reasons:
 
 ### Relay change in `web.py` (exact shape)
 
-`_assistant_request` gains one computed flag and one branch; nothing else moves:
+`_assistant_request` gains one computed flag and one branch; nothing else moves. The existing
+allowlist expression and dispatch are not rewritten: two lines are added after the expression, so a
+parallel change (the early-warning catalog and rule-save routes) can add its routes to that
+expression in either merge order and they stay authenticated:
 
 ```text
-redeem  = method == "POST" and path == pairing.REDEEM_PATH          # exact string equality
-allowed = redeem or <existing allowlist> or pairing.relay_allowed(method, path)  # owner route: GET, POST
+allowed = <existing allowlist, unchanged>
+redeem  = method == "POST" and path == PAIRING_REDEEM_PATH          # exact string equality (added)
+allowed = allowed or redeem or pairing_relay_allowed(method, path)  # owner route: GET, POST (added)
 404 unless allowed                                   (unchanged)
 403 origin / Sec-Fetch-Site / Origin checks          (unchanged; apply to redeem too, so POST needs Origin)
 if redeem:   headers = {}                            # no assistant header is forwarded, whatever the caller sent
@@ -110,21 +115,22 @@ that answered 401 without the key before still does, at the web layer and again 
 
 - New module `projects/vehicle_data/assistant_pairing.py` (imports only the standard library and
   `assistant_common`; nothing from the broker, the runner or `warning_chat`): loads the contract;
-  exposes `OWNER_PATH`, `REDEEM_PATH`, `REDEEM_BODY_MAX`, `relay_allowed(method, path)`; and class
-  `PairingPins(access_code, *, clock=time.monotonic, randbelow=secrets.randbelow, log=<stderr JSON line>)`
-  with `create()`, `cancel(pin_id)`, `status()`, `redeem(payload) -> (http_status, reply)`, and
-  `handle(method, path, payload)` for the owner route. All state sits behind one `threading.Lock`
+  exposes `OWNER_PATH`, `REDEEM_PATH`, `REDEEM_BODY_MAX`, `relay_allowed(method, path)`,
+  `well_formed_pin(payload)`; and class `PairingPins(access_code, *, clock=time.monotonic,
+  randbelow=secrets.randbelow, token_hex=secrets.token_hex, log=<stderr JSON line>)` with
+  `create()`, `cancel(pin_id)`, `status()`, `redeem(payload)` and `handle(method, payload)` for the
+  owner route, each returning `(http_status, reply)`. All state sits behind one `threading.Lock`
   (`PairingPins._lock`), separate from `manager.lock`, so a redeem flood never waits on or blocks a
   chat.
-- `ChatHandler.handle_request` (keep `warning_chat.py` from growing): first, if
-  `method == "POST" and self.path == REDEEM_PATH`, read the body with the redeem limit and return
-  `self.reply(*server.pairing.redeem(payload))` before `authorize` runs; this branch reads no
-  header. All other routes keep `authorize` first. After `authorize`, the owner path dispatches to
-  `server.pairing.handle(...)` before `manager.lock`, like research. To make room, extract the
-  existing POST body parse into `assistant_http.read_json_body(handler, limit)` (raises
-  `ChatError(400, ...)`); both branches use it. `main()` builds `PairingPins(manager.token)` and
-  sets `server.pairing`. Net growth of `warning_chat.py` should be about zero; if it grows, say so
-  in the commit.
+- `ChatHandler.handle_request` (built; `warning_chat.py` shrank from 901 to 899 lines): first, if
+  `method == "POST" and self.path == REDEEM_PATH` (exact; nothing else is handled before
+  `authorize`), read the body with the redeem limit and return
+  `self.reply(*server.pairing.redeem(payload))`; this branch reads no header. A body that fails
+  the size or JSON check raises `ChatError(400)` from `assistant_http.read_json_body` and never
+  reaches `redeem`. All other routes keep `authorize` first. After `authorize`, the owner path
+  dispatches to `server.pairing.handle(method, payload)` before `manager.lock`, like research.
+  `main()` builds `PairingPins(manager.token)` and sets `server.pairing`. The body parse moved
+  into `assistant_http.read_json_body` in its own tidying commit.
 - Advisor restart drops the active PIN and the failure window (memory only). Accepted: a guest
   cannot restart the advisor, and the owner simply makes a new PIN.
 
@@ -139,16 +145,25 @@ that answered 401 without the key before still does, at the web layer and again 
 - Comparison: `hmac.compare_digest(pin.encode(), active.encode())`, both 6 ASCII bytes after a
   `^[0-9]{6}$` format check.
 - Per PIN: 5 failed redeems while it is active burn it (`wrong_tries`).
-- Global window: every relayed redeem that does not return the code counts as one failure (wrong
-  PIN, no PIN active, expired, malformed body), from any client id, origin or listener, because the
+- Malformed requests (plan-review amendment): a request that fails transport or JSON parsing, or
+  is not exactly `{pin: "<6 ASCII digits>"}`, is refused with its own status (403 origin and 415
+  content type at the relay; 400 for a bad size, bad JSON or the wrong shape at either hop) and is
+  **not counted**: it never reaches a comparison, so it gives no extra guesses and is no PIN-state
+  oracle. The shape check runs before the lock check, so a malformed body is 400 even while locked.
+- Global window: every well-formed redeem that does not return the code counts as one failure
+  (wrong PIN, no PIN active, expired, burned), from any client id, origin or listener, because the
   advisor sees none of them and keeps one counter. At 10 failures in a rolling 900 s the advisor is
   locked: redeem answers 429 without comparing anything, `create` answers 429, and the active PIN is
   burned. Refusals while locked are not counted (the record is a `deque(maxlen=10)` of monotonic
   times, bounded memory), so the lock lifts when the oldest failure is 900 s old.
-- No oracle: wrong PIN, no PIN, expired, burned and malformed-but-relayed all return the same 403
-  body `{available: false, reason: "pin_rejected", detail: <one fixed sentence>}`. No attempts-left
-  count is returned. The 429 reveals only that 10 failures happened, which is true whether or not a
-  PIN exists.
+- No oracle, stated narrowly (plan-review amendment): wrong PIN, no PIN, expired and burned all
+  return the identical 403 status and body `{available: false, reason: "pin_rejected", detail:
+  <one fixed sentence>}`, with no attempts-left count and no prefix leakage (`hmac.compare_digest`
+  on 6 bytes). With no PIN active the advisor compares against a dummy, so both cases do the same
+  comparison work. Whole-request timing is not claimed constant: lock waits, per-PIN bookkeeping
+  and log writes differ by microseconds, far below LAN jitter. The test proves the comparison is
+  made exactly once per well-formed redeem in every case, not that timing is equal. The 429
+  reveals only that 10 failures happened, which is true whether or not a PIN exists.
 - Arithmetic. A guest who knows a PIN is active gets at most 5 guesses on it (fewer if the window
   already holds failures): P = 5 / 10^6 = 1 in 200,000. Creating new PINs gives no extra
   guesses, because the window caps all guessing at 10 per 15 minutes: at most 10 / 10^6 per
@@ -162,10 +177,13 @@ that answered 401 without the key before still does, at the web layer and again 
 ### Logging
 
 `PairingPins` logs one JSON line per event to stderr: `{"event": "assistant_pairing", "action":
-"created|redeemed|rejected|locked|unlocked|cancelled|expired", "failures_in_window": n}`. Never the
-PIN, the `pin_id` or the code. Refusals while locked are not logged one by one (only the `locked`
-transition and the later `unlocked`), so a flood cannot fill the journal. Detail strings are fixed
-constants. The web relay passes the reply through `_json` and logs only the request line.
+"created|redeemed|rejected|burned|locked|unlocked|cancelled|expired", "failures_in_window": n}`.
+Never the PIN, the `pin_id` or the code. Refusals while locked and malformed requests are not logged
+one by one (only the `locked` transition and the later `unlocked`), so a flood cannot fill the
+journal. Detail strings are fixed constants. Qualification (plan-review amendment): pairing events
+log action and counts only, but `web.py` still logs one request line per HTTP request (client
+address, method, path, status), as it does for every route; that line is pre-existing and holds no
+header or body, so no PIN or code.
 
 ### Exposure
 
@@ -260,12 +278,16 @@ Python (`tests/test_assistant_pairing.py`, pure, fake clock and random):
   refusals while locked do not extend it)
 - `test_lockout_refuses_create_and_burns_the_active_pin`
 - `test_rejections_are_identical_for_wrong_none_expired_and_burned` (same status and body bytes)
-- `test_comparison_is_constant_time` (wraps `hmac.compare_digest`, asserts it decided the match)
+- `test_comparison_is_constant_time_and_done_whether_or_not_a_pin_is_active` (wraps
+  `hmac.compare_digest`: exactly one 6-byte comparison per well-formed redeem, none for a malformed
+  one; it does not measure whole-request timing)
+- `test_malformed_bodies_are_400_and_not_counted`, `test_owner_route_bodies_are_exact`,
+  `test_default_log_is_one_json_line_on_stderr`
 - `test_logs_never_carry_pin_pin_id_or_code` (capture stderr across a full scenario; no PIN, no
   `pin_id`, no code, no six-digit run)
 - `test_contract_matches_module_constants`
 
-Advisor (`tests/test_warning_chat.py`, real `ChatServer` on a temp socket):
+Advisor (`tests/test_assistant_pairing_relay.py`, real `ChatServer` on a temp socket):
 - `test_redeem_is_the_only_route_answered_without_the_key` (a table of every assistant route,
   research included, without the key: 401; redeem: 403 `pin_rejected`)
 - `test_pairing_owner_route_requires_the_key_and_exact_bodies`
@@ -278,9 +300,12 @@ Web relay (`WarningChatWebTests`, mocked advisor client):
 - `test_every_other_assistant_route_still_401_without_key`
 - `test_relay_logs_no_pin_or_code` (capture the listener's stdout)
 
-End to end (`tests/test_assistant_pairing_relay.py`, real web plus real advisor, like
-`test_dtc_research_relay.py`): create through the web with the key, redeem without it, receive the
-code; the second redeem is 403; captured output of both servers holds no secret.
+End to end (`tests/test_assistant_pairing_relay.py`, one real advisor behind two real web relays,
+as the LAN and Tailscale listeners are): create on one relay with the key, redeem on the other
+without it, receive the code once; the second redeem is 403; captured output of all three servers
+holds no secret. Plan-review additions: `test_locked_pairing_leaves_authenticated_requests_working`
+(while locked, chat status and research list answer 200 for the existing client and for a browser
+that pastes the code with a new client id) and `test_two_relays_share_one_failure_window`.
 
 Dashboard (`test/assistantPairing.test.mjs`): `normalizePin`/`isValidPin`, `pinDisplay`,
 `countdownText`, `redeemRequest` exact body and no `X-Van-Assistant-Key`, `redeemOutcome` for 200
@@ -316,6 +341,12 @@ Order (after the review's `ship`, the merge to master and a green whole suite):
 
 Live checks that print neither the code nor a PIN:
 - `systemctl is-active` for the three units; their journals since the restart hold no traceback.
+- Before any probe, make sure no PIN is active (`000000` is a valid possible PIN): no "Pair another
+  device" panel is open anywhere, and the advisor was just restarted (memory only, so no PIN).
+- Repeat every check below through both listeners: LAN `http://192.168.6.103:8765` and Tailscale
+  under its trusted name `http://vanpi:8765` (run there from a tailnet device, with
+  `-H 'Origin: http://vanpi:8765'`), plus one cross-origin probe per listener
+  (`-H 'Origin: http://evil.example'` on the redeem: 403).
 - Without the key, each answers 401: `curl -sS -m 5 -o /dev/null -w '%{http_code}\n' -H 'Origin: http://192.168.6.103:8765' http://192.168.6.103:8765/v1/assistant/status`, and the same `POST /v1/assistant/pairing` with `-H 'Content-Type: application/json' --data '{"action":"create"}'`.
 - One redeem with a wrong PIN answers 403 (it spends 1 of the 10 window failures):
   `curl -sS -m 5 -o /dev/null -w '%{http_code}\n' -H 'Origin: http://192.168.6.103:8765' -H 'Content-Type: application/json' --data '{"pin":"000000"}' http://192.168.6.103:8765/v1/assistant/pairing/redeem`
@@ -363,8 +394,14 @@ every browser then gets 401 and re-pairs (paste on one, PINs on the rest).
 - Both listeners offer create and redeem; one PIN and one failure window shared across them.
 - Numbers: 6 digits, 300 s, 5 tries per PIN, 10 failures per rolling 900 s, one active PIN,
   everything in memory. Change them in `assistant_pairing.json` only.
-- Every non-success redeem counts toward the window, including when no PIN is active (no oracle,
-  bounded memory); refusals while locked do not.
+- Every well-formed non-success redeem counts toward the window, including when no PIN is active
+  (no oracle, bounded memory); malformed requests and refusals while locked do not.
+- Built, beyond the plan: a `burned` log action for a PIN ended by wrong tries or a lockout;
+  `handle(method, payload)` without a path argument (the caller dispatches the exact path); the
+  panel shows "This PIN is no longer valid" when the status has no `pin_id` (advisor restarted) and
+  "This PIN was cancelled" for `cancelled`, and this PIN's own ending wins over a later lock;
+  `assistantAccess.js` is 162 lines, not under 150 (the strings and pure helpers stayed together as
+  planned). Undo any of them in `assistant_pairing.py` or `assistantAccess.js`.
 - Lockout refuses `create` too, so the owner sees the lock on the device he is using.
 - The tablet keeps its own chat history and saved-warning list (the client id is not transferred).
   Undo: also return and adopt the creator's client id, which would let the tablet read and cancel
@@ -379,5 +416,15 @@ his own typing (no change expected), and whether he wants per-device revocation 
 
 ## Status
 
-Plan only; no code written. Next: cross-family plan review (Astra), then a fresh builder from this
-note in a worktree, the whole suite, a T3 review of the diff, then the deploy above.
+Built in worktree branch `worktree-agent-a08cb912082166e3f` (on `9209c9e`): contract and advisor,
+web relay, dashboard, docs, each in its own commit, plus a tidying commit for
+`assistant_http.read_json_body`. Verified: targeted pytest and the whole dashboard `node --test`
+suite on vanpi, a scratch dashboard build, and the whole suite on the Mac worker (job id and tested
+commit in the builder's report). Not verified: the UI was not rendered (no screenshot or browser
+pass); the README screenshots of the paired dialogs were not retaken. The research worker now also
+imports `assistant_common` through `assistant_http` (checked with `-X importtime`); it still needs
+no restart for this change.
+
+Deploy: not done. Next: T3 review of the diff (Astra), merge, whole suite on master, then the deploy
+above (advisor, then both web units, then the dashboard build), then the live checks and the owner
+step.

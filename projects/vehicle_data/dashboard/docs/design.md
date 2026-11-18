@@ -647,7 +647,9 @@ checks when stopped:
     fetched, and a 404 on the routes (a Pi without research) hides the controls.
   - The dialog (lazy chunk, `modalDialog.js` + `useController.js`): header code, module and
     meaning. Without an access code it shows the warning chat's pairing form
-    (`components/AssistantPairing.jsx`, `assistantAccess.js`). No run yet (or `New research`): the
+    (`components/AssistantPairing.jsx`, `assistantAccess.js`: a PIN field first, then the paste
+    field); with one, both dialogs end with the collapsed `Pair another device`
+    (`components/PairAnotherDevice.jsx`, `assistantPairing.js`). No run yet (or `New research`): the
     **model picker**, a line saying what is sent (code, module, the van's model facts; never the VIN
     or a location; the model searches the web), and `Start research`, disabled while the catalog
     says it is refreshing (re-fetched every 2 s, at most 15 times). A running turn shows the

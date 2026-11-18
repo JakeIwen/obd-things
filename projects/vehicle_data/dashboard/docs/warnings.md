@@ -160,7 +160,9 @@ filter throwing away an implausible reading, never notify; they are listed in Sy
 `Ask Codex` explains a warning or drafts a new rule. It runs on the Pi, and appears only on screens
 where the advisor is enabled. Conversations are saved on the Pi for the browser that started them,
 and closing the dialog does not stop an answer. The access code is read on the Pi (not an OpenAI API
-key). A code entered once in a browser is remembered by that browser.
+key). A code entered once in a browser is remembered by that browser. Another device, such as the
+tablet, can instead type a one-time 6-digit PIN that a connected browser shows under
+`Pair another device`.
 
 ## Current status
 

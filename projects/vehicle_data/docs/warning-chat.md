@@ -7,7 +7,9 @@ text selection and existing interactive controls keep their normal behavior.
 
 ## User experience
 
-- Connect each browser/origin once with the local assistant access code.
+- Connect each browser/origin once with the local assistant access code: paste it, or type
+  a one-time 6-digit PIN that an already connected browser shows under **Pair another device**
+  (see "Pairing another device" below). The PIN field comes first, for the driving tablet.
 - The first click creates an explanation; reopening the event restores its
   latest conversation instead of generating another paid/model response.
 - Ask follow-ups in the dialog. Send, Stop, Retry Answer, Reconnect and New Chat
@@ -221,6 +223,90 @@ The dashboard (`dashboard/src/dialogs/WarningChat.jsx`, served by `web_v2.py`)
 offers Ask Codex only when the listener advertises `warning_chat_enabled`, so a
 listener started with `--no-warning-chat` simply hides it.
 
+## Pairing another device
+
+Owner request (2026-11-17): the driving tablet (Android, portrait, on-screen keyboard, no shared
+clipboard) cannot receive the 43-character access code, and guests on the van Wi-Fi must stay out.
+A browser that already holds the code shows a one-time 6-digit PIN; the new device types it once
+and receives the code, which it stores exactly as if pasted. Both dialogs share it.
+
+`assistant_pairing.json` is the contract (routes, actions, states, reasons, limits) read by
+`assistant_pairing.py` and the dashboard (`src/assistantAccess.js`, `src/assistantPairing.js`).
+
+| Route | Needs the code | Body | Reply |
+| --- | --- | --- | --- |
+| `GET /v1/assistant/pairing` | yes | none | `{available, pin_id, state, expires_in_s, locked_for_s}` |
+| `POST /v1/assistant/pairing` | yes | exactly `{action: "create"}` | `{available, pin, pin_id, expires_in_s}`; 429 `pairing_locked` while locked |
+| `POST /v1/assistant/pairing` | yes | exactly `{action: "cancel", pin_id}` | the status; cancels only the named active PIN; idempotent |
+| `POST /v1/assistant/pairing/redeem` | **no** | exactly `{pin: "<6 ASCII digits>"}` | 200 `{available, access_code}`; 403 `pin_rejected`; 429 `pairing_locked` + `retry_after_s`; 400 `invalid_request` |
+
+`state` is `none` (nothing made since the advisor started), `active`, `redeemed`, `expired`,
+`wrong_tries` (burned by the per-PIN limit or a lockout) or `cancelled`. `pin_id` (16 hex) goes
+only to code holders. The PIN travels only in a body, never a path or query string, so no request
+line logged anywhere can carry it.
+
+Redeem is the only assistant route relayed without the code: the web relay matches the exact
+method and path (prefix and suffix variants are 404), forwards no assistant header for it, and
+keeps the same-origin, `Origin`-required, JSON and size (64-byte) gates. In the advisor, only that
+exact path is handled before `authorize`; every other route, the owner pairing route included,
+still answers 401 without the code at both hops.
+
+Limits (all in memory; an advisor restart drops the PIN and the window):
+
+- One active PIN; `create` replaces it (the old one becomes `cancelled`). 10^6 values from
+  `secrets.randbelow`, leading zeros kept. Lifetime 300 s on the monotonic clock, single use (of
+  two simultaneous correct redeems exactly one gets the code). 5 failed redeems burn a PIN.
+- One failure window for every listener and client: 10 failures in a rolling 900 s lock redeem
+  and `create` and burn the active PIN. Refusals while locked are not counted, so the lock lifts
+  when the oldest failure is 900 s old.
+- A request that fails transport or JSON parsing, or is not exactly `{pin: <6 ASCII digits>}`, is
+  refused with its own status (403 for a failed origin check and 415 for a non-JSON type at the
+  relay, 400 for a bad size, bad JSON or the wrong shape) and is **not counted**: it never reaches a comparison, so it gives no extra guesses and says nothing about a
+  PIN. A well-formed PIN that is wrong, expired, burned or offered while no PIN is active gets the
+  one identical 403 (same status and body, no attempts-left count) and **is counted**.
+- The match is `hmac.compare_digest` on the 6 ASCII bytes; with no PIN active the advisor compares
+  against a dummy so both cases do the same comparison work. This is not a claim that whole-request
+  timing is constant (lock waits and bookkeeping differ by microseconds, well below LAN jitter).
+  The 429 reveals only that 10 failures happened, which is true whether or not a PIN exists.
+
+Arithmetic: a guest who knows a PIN is active gets at most 5 guesses on it, 1 in 200,000. New PINs
+give no extra guesses, because the window caps all guessing at 10 per 15 minutes: at most 10 in
+10^6 per 15 minutes even with a PIN always active (about 0.1 % per day in that unrealistic case).
+A PIN is realistically active for a minute or two a few times a year.
+
+Denial of service (accepted): a guest who spends 10 guesses every 15 minutes keeps pairing locked.
+The paste path still works, and the lock is visible (the panel says pairing is paused; the journal
+shows `locked`).
+
+Logging: `assistant_pairing.py` writes one JSON line per event to the advisor's stderr,
+`{"event": "assistant_pairing", "action": created|redeemed|rejected|burned|locked|unlocked|cancelled|expired,
+"failures_in_window": n}`, never the PIN, the `pin_id` or the code; malformed requests and
+refusals while locked are not logged one by one. Separately, the web listener still logs one
+request line per HTTP request (client address, method, path, status), as for every route; it
+holds no header or body, so no PIN or code.
+
+Threat model:
+
+- **LAN guest** (curl or a browser on the van Wi-Fi): can call redeem and forge Host and Origin
+  from curl, so only the PIN and the limits stand in the way. Can lock pairing and see that 10
+  failures happened. Cannot reach any other assistant route without the code, and a rejection does
+  not say whether a PIN is active. An active attacker on the LAN could already read the code from
+  any assistant request (plain HTTP); a passive sniffer learns nothing new. Whoever reads the PIN
+  off the owner's screen and types it first gets the code; the tablet then sees a rejection while
+  the panel says "Device paired", the cue to rotate the code.
+- **Tailscale peer**: the same, over an encrypted path, sharing the one failure window.
+- **Hostile web page**: cannot send the JSON POST (no preflight is ever granted; a mismatched
+  `Origin` is 403) or read a reply. DNS rebinding carries an untrusted Host: 403.
+- **Journal reader**: sees pairing timing and counts only.
+
+UI: the unpaired form shows the PIN field first (`inputmode="numeric"`,
+`autocomplete="one-time-code"`, focused), then "Or paste the access code". A connected dialog has
+a collapsed **Pair another device**: opening it makes a PIN shown as `042 917` in large digits
+with a countdown, polls the status every 2 s, and stops on `redeemed` ("Device paired"),
+`expired`, `wrong_tries`, a replaced `pin_id` or a lock. Closing it, or the dialog, cancels the
+PIN. A newly paired device keeps its own chat history and saved-warning list (the client id is not
+transferred).
+
 ## Activation on vanpi
 
 **Advisor installed; owner reports successful chat after the indexing fix.**
@@ -249,7 +335,17 @@ the code, CPUQuota 30%, Nice 15, idle I/O scheduling and MemoryMax 768M.
 Check the unit status/journal, then read
 `/var/lib/van-telemetry-advisor/access-code` locally and paste it into the
 dialog's password field. Do not paste it into an agent conversation or commit
-it. The file belongs to `pi` and is mode 0600.
+it. The file belongs to `pi` and is mode 0600. Other devices then pair with a
+PIN from that browser (see "Pairing another device").
+
+Rotating the code (also the response to a suspected leak, or to a "Device paired"
+the owner did not cause):
+
+```bash
+sudo systemctl stop van-telemetry-advisor && sudo rm -f /var/lib/van-telemetry-advisor/access-code && sudo systemctl start van-telemetry-advisor
+```
+
+Every browser then gets 401 and re-pairs: paste the new code on one, PINs on the rest.
 
 Chat accepts the listener's literal IP origin by default. If using a DNS URL,
 add its exact origin to that web unit's existing ExecStart, for example

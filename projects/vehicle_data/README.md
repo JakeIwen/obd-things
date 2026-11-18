@@ -119,6 +119,8 @@ The frontend distinguishes saved from broker-loaded rules and supports removal.
 See [warning chat](docs/warning-chat.md) for boundaries and activation. The same advisor
 serves the diagnostic-code research routes ([DTC research](docs/dtc-research.md)); a
 warning-chat Codex and a research CLI never run at the same time.
+A connected browser can pair another device (the driving tablet) with a one-time 6-digit PIN
+instead of the pasted code; see [warning chat](docs/warning-chat.md) section "Pairing another device".
 Source is updated; advisor/web restarts and one safe parked broker restart are
 needed. No live warning was installed during tests.
 

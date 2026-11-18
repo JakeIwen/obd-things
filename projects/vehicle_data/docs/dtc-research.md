@@ -28,6 +28,11 @@ only web search and web fetch.
 
 ## Routes (all behind the access code and browser key, relayed by `web.py`)
 
+The one assistant route relayed without the code is the pairing-PIN redeem
+(`POST /v1/assistant/pairing/redeem`), which returns the code to a device that types a valid PIN;
+see [warning chat](warning-chat.md) section "Pairing another device". Every research route below
+still answers 401 without the code.
+
 - `GET /v1/assistant/models` → `{available, refreshing, groups: [{provider, label, available, reason,
   source: discovered|fallback, checked_at, models: [{id, label, efforts, default_effort}]}],
   default: {provider, model, effort} | null}`. A model with no efforts is started with
