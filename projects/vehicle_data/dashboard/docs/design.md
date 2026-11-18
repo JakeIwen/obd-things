@@ -374,7 +374,7 @@ tab bar, with 16 px gutters and 12 px gaps.
 
 | row | content |
 |---|---|
-| A | **SPEED** (2 cols, hero numerals, `mph`; under the numeral an estimated economy row `now 19.4 mpg`, which has no text at all (the row keeps its height) without a figure; beside the numeral a `SPEED LIMIT 55` sign while the limit is live, then a right-edge column with the ACC text (`ACC 66` over `engaged`) stacked above the four-bar gap readout; regular cruise uses `Cruise`; current off/ready/standby/override states are explicit) · **RPM over POWER** (1 col split into two half-height tiles: RPM on top, its footer `gear 6` once a live gear metric exists and empty until then; Power below, `hp`, sub-line `165 lb-ft`; both at the standard `--value` numeral, no sparklines, because a sparkline would leave the numeral under 40 px) |
+| A | **SPEED** (2 cols, hero numerals, `mph`; under the numeral an estimated economy row `now 19.4 mpg`, which has no text at all (the row keeps its height) without a figure; beside the numeral a `SPEED LIMIT 55` sign while the limit is live, then a right-edge column with the ACC text (`ACC` over a double-size `66`, then `engaged`) stacked above the four-bar gap readout; regular cruise uses `Cruise`; current off/ready/standby/override states are explicit) · **RPM over POWER** (1 col split into two half-height tiles: RPM on top, its footer `gear 6` once a live gear metric exists and empty until then; Power below, `hp`, sub-line `165 lb-ft`; both at the standard `--value` numeral, no sparklines, because a sparkline would leave the numeral under 40 px) |
 | B | **COOLANT** · **OIL TEMP (VVT)** · **TRANS OIL**: value, unit, band bar, 15-min sparkline |
 | C | **VOLTAGE** (battery voltage alone, to 1 decimal, band bar, sparkline) · **ALTERNATOR FIELD** (`generator.field_duty` percent and a 15-min sparkline; the line is drawn red wherever the plotted value is above 80 % and the live numeral shades yellow at 60 % through orange at 80 % to red at 100 %, display only: no warning card, chime or `derive.js` colour) · **OIL PRESSURE** |
 | D | **TIRES** (2 cols: 2×2 grid FL FR / RL RR) · **THIS DRIVE** (Time, Distance `12.3 mi`, MPG `16.4 mpg`, Coolant max, Avg power at 19 px, 25 % above the earlier 15 px; the heading keeps its size; info icon on the heading) |
@@ -399,8 +399,8 @@ Rules for Drive tiles:
   phones), the extras wrap under the numeral rather than shrinking the sign.
 - All ACC/Cruise text sits in the third column of the Speed tile, above the gap readout
   (`src/views/SpeedAcc.jsx`, `styles/speed-acc.css`; the owner moved it from Speed's footer,
-  which now carries only the held time stamp). Two 14 px lines: the mode and set speed
-  (`ACC 66`, `Cruise 65`, `ACC` without a speed; mph is the tile's unit) over a short state
+  which now carries only the held time stamp). Stacked: the 14 px mode label (`ACC`, `Cruise`), the set speed at twice that size
+  (mph is the tile's unit; no number line without a speed) and a short state
   word (`engaged`, `override`, `ready`, `standby`), or the single line `ACC off`. The model is
   `speedAccLines` in `views/driveSpeed.helpers.js` over the shared `currentAcc`, so the same
   gates apply: a missing/stale/unknown ACC state hides every line, off/ready hides cached set
