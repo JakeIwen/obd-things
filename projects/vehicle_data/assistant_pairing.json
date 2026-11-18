@@ -1,0 +1,31 @@
+{
+  "routes": {
+    "owner": "/v1/assistant/pairing",
+    "redeem": "/v1/assistant/pairing/redeem"
+  },
+  "actions": {
+    "create": "create",
+    "cancel": "cancel"
+  },
+  "states": {
+    "none": "none",
+    "active": "active",
+    "redeemed": "redeemed",
+    "expired": "expired",
+    "wrongTries": "wrong_tries",
+    "cancelled": "cancelled"
+  },
+  "reasons": {
+    "rejected": "pin_rejected",
+    "locked": "pairing_locked",
+    "invalid": "invalid_request"
+  },
+  "pinDigits": 6,
+  "pinLifetimeSeconds": 300,
+  "maxAttemptsPerPin": 5,
+  "windowFailureLimit": 10,
+  "windowSeconds": 900,
+  "redeemBodyMaxBytes": 64,
+  "statusPollSeconds": 2,
+  "pinIdPattern": "^[0-9a-f]{16}$"
+}

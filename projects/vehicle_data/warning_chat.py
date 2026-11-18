@@ -29,6 +29,7 @@ import uuid
 from projects.vehicle_data.api import TelemetryClient, _prepare_socket_path
 from projects.vehicle_data.assistant_common import ChatError, ID_RE, TOKEN_RE, now, require_keys
 from projects.vehicle_data.assistant_http import QuietDisconnects, read_json_body, send_json
+from projects.vehicle_data import assistant_pairing as pairing
 from projects.vehicle_data.assistant_slot import ModelSlot
 from projects.vehicle_data import dtc_research_service
 from projects.vehicle_data.engine_off_voltage import _atomic_json
@@ -796,10 +797,15 @@ class ChatHandler(http.server.BaseHTTPRequestHandler):
     def handle_request(self, method):
         manager = self.server.manager
         try:
+            if method == "POST" and self.path == pairing.REDEEM_PATH:
+                # The one route answered without the access code; it reads no header.
+                return self.reply(*self.server.pairing.redeem(read_json_body(self, pairing.REDEEM_BODY_MAX)))
             token = self.headers.get("X-Van-Assistant-Key", "")
             owner = manager.authorize(token, self.headers.get("X-Van-Chat-Client", ""))
             path = self.path
             payload = read_json_body(self, MAX_BODY) if method == "POST" else None
+            if path == pairing.OWNER_PATH:
+                return self.reply(*self.server.pairing.handle(method, payload))
             research = getattr(self.server, "research", None)
             if research is not None and dtc_research_service.is_research_path(path):
                 # Outside manager.lock: research has its own lock and never blocks the warning chat.
@@ -872,8 +878,8 @@ def main():
     path = Path(args.socket)
     _prepare_socket_path(path)
     server = ChatServer(str(path), ChatHandler)
-    server.manager = manager
-    server.research = research
+    server.manager, server.research = manager, research
+    server.pairing = pairing.PairingPins(manager.token)
     os.chmod(path, 0o600)
     def stop(_signum, _frame):
         threading.Thread(target=server.shutdown, daemon=True).start()
