@@ -1148,8 +1148,9 @@ Verification (Phase 1):
   pairing, CLI lock isolation): 579 passed. After the optimisation: `test_custom_warnings`,
   `test_custom_warning_file`, `test_vehicle_early_warning`, `test_warning_replay`, advisory
   episodes, insights, lifecycle regressions, warning package, drift and rules_v3: 223 passed.
-  Dashboard `health`, `WarningChat.helpers` and `demoDialogs` node tests: 82 passed. Whole suite: run on the commit that adds this line (job id
-  and summary in the builder's report to the parent).
+  Dashboard `health`, `WarningChat.helpers` and `demoDialogs` node tests: 82 passed. Whole suite: van-compute job `20261118T072921Z-866ff9fa`
+  on the Mac, tip `c3b8a44` rebased on master `e5344b8`: 3098 passed, 13 skipped, all offline gates
+  passed.
 - Built-in invariance, oracle: `tests/advisory_lifecycle_oracle.py --repo-root <worktree>` output
   byte-identical to the master baseline (`1ed6d7f`; no oracle-covered file changed on master since).
 - Built-in invariance, replay: `tools.warning_replay replay --evaluator both --current-ref master`
