@@ -63,6 +63,8 @@ class EarlyWarningEvaluator(
         self._phase_cache: tuple[int, dict[int, dict[str, object]]] | None = None
         self._lock = threading.RLock()
         self._local = threading.local()
+        # Owner custom-rule holds, timed per stored recording (custom_warnings.RuleHolds).
+        self.custom_holds = None
         self._lookbacks: dict[str, float] = {}
         for rule in self.rules:
             for metric, seconds in _rule_lookbacks(rule).items():
@@ -449,6 +451,35 @@ class EarlyWarningEvaluator(
                 if at_us - int(entry["last_seen_us"]) > limit:
                     self._candidates.pop(key, None)
 
+    def _evaluate_custom(self, evaluated, recording, assessments) -> dict[str, object]:
+        """Append owner custom-rule assessments; return their ``custom_rules`` status."""
+        from projects.vehicle_data import custom_warning_file
+        from projects.vehicle_data.custom_warnings import EVALUATOR_REVISION, RuleHolds, evaluate_rules
+
+        status = {"enabled": self.custom_rules_path is not None, "count": 0, "error": None,
+                  "evaluator_revision": EVALUATOR_REVISION, "rejected_ids": []}
+        if self.custom_rules_path is None:
+            return status
+        with self._lock:
+            if self.custom_holds is None:
+                self.custom_holds = RuleHolds()
+        try:
+            rules_file = custom_warning_file.read(self.custom_rules_path)
+            # One invalid row is skipped alone; its open episode retires like a removed rule's.
+            status["rejected_ids"] = [row.get("id") if isinstance(row, dict) and isinstance(row.get("id"), str)
+                                      else None for row in rules_file.rejected]
+            failed = []
+            assessments.extend(evaluate_rules(self.historian, rules_file.rows, evaluated,
+                                              holds=self.custom_holds, recording=recording, failed=failed))
+            status["count"] = len(rules_file.rows) - len(failed)
+            status["rule_ids"] = [row["id"] for row in rules_file.rows if row["id"] not in failed]
+            status["rejected_ids"].extend(failed)
+        except (OSError, ValueError, KeyError, TypeError):
+            # A file-level failure (unreadable or malformed file, readings query) stops every custom
+            # rule; it must not suppress built-in warnings.
+            status["error"] = "Custom warning configuration could not be evaluated"
+        return status
+
     # ------------------------------------------------------------------
     # Public entry points
 
@@ -479,8 +510,13 @@ class EarlyWarningEvaluator(
         self,
         *,
         at: datetime | str | None = None,
+        recording: tuple[int, float] | None = None,
     ) -> dict[str, object]:
-        """Return the assessment list, the active warning subset and candidates."""
+        """Return the assessment list, the active warning subset and candidates.
+
+        ``recording`` is ``(snapshot_id, recording_clock_seconds)`` when this evaluates a newly
+        stored snapshot; only owner custom rules read it (their holds advance), built-ins never.
+        """
 
         evaluated = _utc(at)
         self.historian.refresh_rollups(through=evaluated)
@@ -495,18 +531,7 @@ class EarlyWarningEvaluator(
             ]
         finally:
             self._local.tick = previous
-        custom_status = {"enabled": self.custom_rules_path is not None, "count": 0, "error": None}
-        if self.custom_rules_path is not None:
-            from projects.vehicle_data.custom_warnings import load_rules, evaluate_rule
-            try:
-                rows = load_rules(self.custom_rules_path)
-                custom = [evaluate_rule(self.historian, row, evaluated) for row in rows]
-                assessments.extend(custom)
-                custom_status["count"] = len(rows)
-                custom_status["rule_ids"] = [row["id"] for row in rows]
-            except (OSError, ValueError, KeyError, TypeError):
-                # Malformed owner configuration must not suppress built-in warnings.
-                custom_status["error"] = "Custom warning configuration could not be evaluated"
+        custom_status = self._evaluate_custom(evaluated, recording, assessments)
         from projects.vehicle_data.monitoring_coverage import coverage_assessments
         assessments.extend(coverage_assessments(self.historian, assessments, evaluated))
         active = [
