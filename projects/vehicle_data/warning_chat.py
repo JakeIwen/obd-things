@@ -539,12 +539,12 @@ class CodexRunner:
 
 
 class WarningChatManager:
-    def __init__(self, state_dir, client, runner):
+    def __init__(self, state_dir, client, runner, cli_lock=None):
         self.state_dir = Path(state_dir)
         self.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.client, self.runner = client, runner
         self.lock = threading.RLock()
-        self.slot = ModelSlot()
+        self.slot = ModelSlot(cli_lock=cli_lock)
         self.cancelled = threading.Event()
         self.worker = None
         self.chats = {}

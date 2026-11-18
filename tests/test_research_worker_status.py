@@ -29,6 +29,7 @@ from projects.vehicle_data.research_worker_client import WorkerClient
 from projects.vehicle_data.research_worker_facts import DnsProbe, Facts, refusal_detail
 from projects.vehicle_data.warning_chat import ChatHandler, ChatServer, WarningChatManager
 from tests.research_support import WorkerRig
+from tests.assistant_lock_support import private_cli_lock
 
 # The bound a caller may rely on: the worker's own wait plus generous room for a busy test host.
 STATUS_BOUND = STATUS_WAIT_SECONDS + 1.0
@@ -309,7 +310,8 @@ class AdvisorClientGoneTests(unittest.TestCase):
     def test_a_caller_gone_before_the_advisor_replies(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        chat = WarningChatManager(Path(tmp.name) / "advisor", object(), runner=None)
+        chat = WarningChatManager(Path(tmp.name) / "advisor", object(), runner=None,
+                                  cli_lock=private_cli_lock(tmp.name))
         asked, left = threading.Event(), threading.Event()
 
         class SlowResearch:

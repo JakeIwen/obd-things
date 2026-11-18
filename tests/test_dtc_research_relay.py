@@ -17,6 +17,7 @@ from projects.vehicle_data.dtc_research_store import Store
 from projects.vehicle_data.http_common import MAX_RESPONSE_BYTES
 from projects.vehicle_data.warning_chat import ChatHandler, ChatServer, WarningChatManager
 from projects.vehicle_data.web import TelemetryWebServer
+from tests.assistant_lock_support import private_cli_lock
 
 WIDE = "\U0001F600"  # 12 encoded bytes per character
 CODE = ("radar_acc", "C1418-78")
@@ -52,7 +53,7 @@ class RelaySizeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         base = Path(self.tmp.name)
-        self.chat = WarningChatManager(base / "advisor", Unused(), runner=None)
+        self.chat = WarningChatManager(base / "advisor", Unused(), runner=None, cli_lock=private_cli_lock(base))
         store = Store(base / "advisor" / "dtc-research" / "runs")
         for index in range(60):
             record = full_record(index)

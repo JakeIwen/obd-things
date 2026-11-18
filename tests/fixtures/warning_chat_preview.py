@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 
 from tests.test_warning_chat import CachedEvidence
+from tests.assistant_lock_support import private_cli_lock
 from projects.vehicle_data.warning_chat import ChatError, ChatHandler, ChatServer, WarningChatManager
 from projects.vehicle_data.web import TelemetryWebHandler, TelemetryWebServer
 
@@ -89,7 +90,7 @@ def main():
         signal.signal(sig, lambda *_: done.set())
     with tempfile.TemporaryDirectory(prefix="warning-chat-preview-") as tmp:
         client = FixtureClient()
-        manager = WarningChatManager(Path(tmp) / "state", client, FixtureRunner())
+        manager = WarningChatManager(Path(tmp) / "state", client, FixtureRunner(), cli_lock=private_cli_lock(tmp))
         manager.token = "a" * 43  # Fixture-only credential, never the live worker code.
         socket = str(Path(tmp) / "advisor.sock")
         advisor = ChatServer(socket, ChatHandler)

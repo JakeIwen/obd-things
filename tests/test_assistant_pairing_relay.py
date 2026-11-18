@@ -19,6 +19,7 @@ from projects.vehicle_data.dtc_research_ledger import Ledger
 from projects.vehicle_data.dtc_research_store import Store
 from projects.vehicle_data.warning_chat import ChatHandler, ChatServer, WarningChatManager
 from projects.vehicle_data.web import TelemetryWebServer
+from tests.assistant_lock_support import private_cli_lock
 
 CLIENT = "b" * 64
 CHAT = "a" * 32
@@ -61,7 +62,7 @@ class PairingRelayTests(unittest.TestCase):
         self.out = [patch.start() for patch in patches][1:]
         for patch in patches:
             self.addCleanup(patch.stop)
-        self.chat = WarningChatManager(base / "advisor", Unused(), runner=None)
+        self.chat = WarningChatManager(base / "advisor", Unused(), runner=None, cli_lock=private_cli_lock(base))
         research = ResearchManager(Store(base / "advisor" / "dtc-research" / "runs"), Ledger(base / "ledger.json"),
                                    Catalog(Unused()), Unused(), Unused())
         # A short directory: AF_UNIX paths are limited to about 104 bytes (macOS temp dirs are long).

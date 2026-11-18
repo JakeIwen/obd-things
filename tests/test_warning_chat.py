@@ -14,6 +14,7 @@ from projects.vehicle_data.warning_chat import (
 )
 from projects.vehicle_data.assistant_pairing import OWNER_PATH, REDEEM_BODY_MAX, REDEEM_PATH
 from projects.vehicle_data.web import TelemetryWebServer
+from tests.assistant_lock_support import private_cli_lock
 
 
 class CachedEvidence:
@@ -61,7 +62,7 @@ class WarningChatTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.runner = FakeRunner()
         self.evidence = CachedEvidence()
-        self.manager = WarningChatManager(self.tmp.name, self.evidence, self.runner)
+        self.manager = WarningChatManager(self.tmp.name, self.evidence, self.runner, cli_lock=private_cli_lock(self.tmp.name))
         self.owner = self.manager.authorize(self.manager.token, "b" * 64)
 
     def tearDown(self):
@@ -129,7 +130,7 @@ class WarningChatTests(unittest.TestCase):
         self.assertEqual(record["turns"][-1]["state"], "cancelled")
         record["turns"][-1]["state"] = "running"
         self.manager.save(record)
-        recovered = WarningChatManager(self.tmp.name, self.evidence, FakeRunner())
+        recovered = WarningChatManager(self.tmp.name, self.evidence, FakeRunner(), cli_lock=private_cli_lock(self.tmp.name))
         self.assertEqual(recovered.get(chat["id"], self.owner)["turns"][-1]["state"], "error")
         recovered.close()
 
@@ -291,7 +292,7 @@ for event in [
         self.finish()
         reopened = self.manager.public(self.manager.get(chat["id"], self.owner))
         self.assertEqual(reopened["turns"][-1]["diagnostics"]["outcome"], "timeout")
-        recovered = WarningChatManager(self.tmp.name, self.evidence, FakeRunner())
+        recovered = WarningChatManager(self.tmp.name, self.evidence, FakeRunner(), cli_lock=private_cli_lock(self.tmp.name))
         self.assertEqual(recovered.get(chat["id"], self.owner)["turns"][-1]["diagnostics"]["elapsed_ms"], 300000)
         recovered.close()
 

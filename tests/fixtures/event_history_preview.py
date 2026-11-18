@@ -10,6 +10,7 @@ from datetime import timedelta
 ROOT=Path(__file__).resolve().parents[2]
 sys.path[:0]=[str(ROOT),str(ROOT/'tests'),str(Path(__file__).parent)]
 from tests.test_event_history import coolant, START
+from tests.assistant_lock_support import private_cli_lock
 from tests.test_vehicle_historian import definition, available, snapshot
 from projects.vehicle_data.historian import TelemetryHistorian
 from projects.vehicle_data.event_history import EventReader
@@ -50,7 +51,7 @@ def main():
                 if path=='/v1/health':return 200,{'available':True,'episodes':h.advisory_summary(),'assessments':[]}
                 return super().request(method,path,payload,**kwargs)
         client=Client()
-        manager=WarningChatManager(Path(temp)/'advisor',client,FixtureRunner())
+        manager=WarningChatManager(Path(temp)/'advisor',client,FixtureRunner(),cli_lock=private_cli_lock(temp))
         advisor=ChatServer(str(Path(temp)/'advisor.sock'),ChatHandler)
         advisor.manager=manager
         web=TelemetryWebServer(('127.0.0.1',0),socket_path='/unused',allow_acquisitions=False,
