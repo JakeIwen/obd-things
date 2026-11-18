@@ -17,10 +17,12 @@ import {
   ACCESS_TEXT, PAIRING, buildRequest, countdownText, isValidPin, minutesLeft, normalizePin, pairingStatusView,
   pinDisplay, redeemOutcome, redeemRequest, storedIdentity,
 } from "./assistantAccess.js";
-import { REQUEST_TIMEOUT_MS } from "./dialogs/WarningChat.helpers.js";
 
 const PIN_ID_RE = new RegExp(PAIRING.pinIdPattern);
 const TICK_MS = 1000;
+// Equals WarningChat.helpers REQUEST_TIMEOUT_MS; not imported because that module would join the
+// research dialog's bundle and break its size budget.
+const REQUEST_TIMEOUT_MS = 20000;
 
 /**
  * `{status, body}`; status 0 when the request failed or passed its deadline (the dialogs' 20 s
