@@ -1130,7 +1130,29 @@ Builder decisions within the plan (each undoable):
 
 Verification (Phase 1):
 
-VERIFICATION_PLACEHOLDER
+- Related tests after the rebase onto master `36f520a` (39 files: custom warnings, rules file,
+  historian, broker, drift, event history, insights, delivery, replay, rules_v3, web_v2, chat,
+  pairing, CLI lock isolation): 579 passed. Dashboard `health`, `WarningChat.helpers` and
+  `demoDialogs` node tests: 82 passed. Whole suite: not yet run on the final tip.
+- Built-in invariance, oracle: `tests/advisory_lifecycle_oracle.py --repo-root <worktree>` output
+  byte-identical to the master baseline (`1ed6d7f`; no oracle-covered file changed on master since).
+- Built-in invariance, replay: not yet run.
+- Rollback check: a v2 setup chat saved by this advisor, reopened by master `36f520a`'s
+  `WarningChatManager` (stub runner, private CLI lock): `open_chat` returns it with its transcript,
+  `apply_warning` with its `rule_proposal_id` answers 409 "Review the latest completed proposal
+  before applying it", and no rules file is created. Pass.
+- Cost gate (`telemetry-history-profile` on the Mac worker m4mac.01, in-memory export, under
+  cProfile; 32 rules with ten-minute holds, every catalog metric, 16 beyond their limit): ingest
+  183/230 ms without rules and 237/253 ms with 32 (two runs each; the runs vary by about 50 ms).
+  Exactly one readings query per recording. Attributed under cProfile: custom evaluation 9.2–9.7 ms
+  (`custom_warning_file.read` 2.2, `_open_warning` 1.8 for 16 rules, `digest` 1.7, `_qualified`
+  1.1); persisting the 32 extra assessments in the unchanged lifecycle about +20 ms
+  (`_prepare_advisory_evidence_locked`). The plan's 10 ms bound on the ingest difference is **not
+  met as measured**; most of the excess is lifecycle persistence that master pays for the same
+  rules. Master with 32 rules (gaps within the old stale cap) spent 46–69 ms in custom
+  `evaluate_rule` against 5.5–7.4 ms here. A Pi-local measurement without cProfile is still to do
+  (scratch script `costgate/pi_bench.py` in the builder's scratchpad); the bound needs a decision
+  by the reviewer or the owner.
 
 Next step: the Phase 1 implementation review by gpt-6-astra (diff, this note, test output); then the
 parent merges and deploys by section 8.
