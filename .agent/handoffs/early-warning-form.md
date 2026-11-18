@@ -838,8 +838,11 @@ Before install (with the review; each result recorded in the review brief):
   the task runs on a compute worker (usually the Mac) against an in-memory copy of the database,
   so its absolute times are not the Pi's. The ingest phase (one stored
   snapshot: ingest, warning evaluation, persistence) with 32 rules may exceed the run without
-  rules by at most 10 ms, against the 72.0 ms "Saved-snapshot ingest" figure in
-  `docs/broker-cpu.md`, and the custom block issues exactly one readings query. The cost does not
+  rules by at most 10 ms (the target), against the 72.0 ms "Saved-snapshot ingest" figure in
+  `docs/broker-cpu.md`, and the custom block issues exactly one readings query and at most one
+  episode read. The pass condition is the parent's gate under Decided ("Cost gate"): zero rules
+  unchanged from master, 32 worst-case rules no costlier than master with the same rules, and the
+  absolute added time measured on the Pi reported beside the 10 ms target. The cost does not
   depend on hold length or recording rate (no history walk), so one interval suffices. Custom
   rules reach the historian's cadence only through this ingest time (the loop waits the interval
   after the work), so a 10 ms bound keeps the 5 s interval's spacing within 0.2 %; the unit's
@@ -1021,6 +1024,16 @@ ledger file.
   metric with the same unit.
 - The agent never installs: its proposal fills the form (Phase 4); the automatic first turn goes.
 - Only screenshot 13 changes; the set stays at 19 images.
+- Cost gate (parent's decision, 2026-11-17): Phase 1 passes when (a) with the owner's real
+  configuration (zero saved rules) ingest time is unchanged from master within noise; (b) with 32
+  worst-case rules (ten-minute holds, some beyond their limit but not confirmed) it costs no more
+  than master with the same 32 rules; (c) the absolute added time with 32 rules, measured on the
+  Pi without a profiler, is reported against the 5 s recording interval and the 72 ms ingest
+  reference. The 10 ms figure stays as the target, with the measured number beside it. Why: the
+  owner has no saved rules, 32 ten-minute rules is a worst case, and Phase 1 must not make that
+  worst case worse than today's code; most of the excess over 10 ms is the unchanged lifecycle
+  storing 32 more assessments, which master pays too. Undo: make the 10 ms bound a hard gate
+  again (it then needs cheaper persistence of custom assessments before deploy).
 
 ## Open questions for the owner
 
@@ -1132,27 +1145,66 @@ Verification (Phase 1):
 
 - Related tests after the rebase onto master `36f520a` (39 files: custom warnings, rules file,
   historian, broker, drift, event history, insights, delivery, replay, rules_v3, web_v2, chat,
-  pairing, CLI lock isolation): 579 passed. Dashboard `health`, `WarningChat.helpers` and
-  `demoDialogs` node tests: 82 passed. Whole suite: not yet run on the final tip.
+  pairing, CLI lock isolation): 579 passed. After the optimisation: `test_custom_warnings`,
+  `test_custom_warning_file`, `test_vehicle_early_warning`, `test_warning_replay`, advisory
+  episodes, insights, lifecycle regressions, warning package, drift and rules_v3: 223 passed.
+  Dashboard `health`, `WarningChat.helpers` and `demoDialogs` node tests: 82 passed. Whole suite: run on the commit that adds this line (job id
+  and summary in the builder's report to the parent).
 - Built-in invariance, oracle: `tests/advisory_lifecycle_oracle.py --repo-root <worktree>` output
   byte-identical to the master baseline (`1ed6d7f`; no oracle-covered file changed on master since).
-- Built-in invariance, replay: not yet run.
+- Built-in invariance, replay: `tools.warning_replay replay --evaluator both --current-ref master`
+  on `export-20261003.sqlite3` (master `e5344b8`'s evaluator package from git against the
+  worktree's; five budgeted chunks each, resumed): all 5,851 ticks evaluated by both; counts,
+  persistence totals (37,549 inconclusive, 0 opened, resolved, updated or notified), recorded
+  outcomes, simulated deliveries and query verification identical; the summaries differ only in
+  timing, chunk boundaries, memo statistics and evaluator identity. Built-in transitions match. The
+  export opens no episode under either evaluator, so this check is weak; the oracle is the strong
+  one. The two 93 MB replay copies were deleted afterwards (reports kept under the worktree's
+  `tmp/vehicle_data/warning_replay/`).
 - Rollback check: a v2 setup chat saved by this advisor, reopened by master `36f520a`'s
   `WarningChatManager` (stub runner, private CLI lock): `open_chat` returns it with its transcript,
   `apply_warning` with its `rule_proposal_id` answers 409 "Review the latest completed proposal
   before applying it", and no rules file is created. Pass.
-- Cost gate (`telemetry-history-profile` on the Mac worker m4mac.01, in-memory export, under
-  cProfile; 32 rules with ten-minute holds, every catalog metric, 16 beyond their limit): ingest
-  183/230 ms without rules and 237/253 ms with 32 (two runs each; the runs vary by about 50 ms).
-  Exactly one readings query per recording. Attributed under cProfile: custom evaluation 9.2–9.7 ms
-  (`custom_warning_file.read` 2.2, `_open_warning` 1.8 for 16 rules, `digest` 1.7, `_qualified`
-  1.1); persisting the 32 extra assessments in the unchanged lifecycle about +20 ms
-  (`_prepare_advisory_evidence_locked`). The plan's 10 ms bound on the ingest difference is **not
-  met as measured**; most of the excess is lifecycle persistence that master pays for the same
-  rules. Master with 32 rules (gaps within the old stale cap) spent 46–69 ms in custom
-  `evaluate_rule` against 5.5–7.4 ms here. A Pi-local measurement without cProfile is still to do
-  (scratch script `costgate/pi_bench.py` in the builder's scratchpad); the bound needs a decision
-  by the reviewer or the owner.
+- Optimisation after the first cost run (`63c5f5c`): one evaluation reads the open advisory
+  episodes at most once for every custom rule (`custom_warnings.OpenWarnings`; 32 reads for 32
+  waiting rules before, 1 after, pinned by
+  `test_one_episode_read_per_evaluation_for_all_waiting_custom_rules`), and the rule revision
+  digest is cached per distinct rule. Oracle rerun on that commit: byte-identical to the
+  `1ed6d7f` baseline (no oracle-covered file changed on master through `e5344b8`).
+- Cost gate, first look (Mac worker m4mac.01, `telemetry-history-profile`, under cProfile, before
+  the optimisation; 32 rules with ten-minute holds, every catalog metric, 16 beyond their limit):
+  ingest 183/230 ms without rules and 237/253 ms with 32; custom evaluation 9.2–9.7 ms; storing
+  the 32 extra assessments in the unchanged lifecycle about +20 ms.
+- Cost gate, Pi (the gate of record; parent's definition under Decided). vanpi, no profiler,
+  `nice -n 10`, the in-memory export harness of `telemetry-history-profile` (its SQL statement
+  recorder adds overhead to every statement, so absolute times sit well above the broker's), 20
+  measured recordings 5 s apart per run, six runs per case in ABBA order, tip `63c5f5c` (measured
+  as `77857b4`, the same code before the rebase onto `e5344b8`) against a `git archive` of master
+  `e5344b8`. The van was on (broker, drive recorder, active-drive helper
+  running): 1-minute load 3.3–5.4 during the runs. Master needs the old rules (gaps within the
+  stale cap, `context-32old`) or it rejects them; the tip ran the same file. Medians of run
+  medians, [range]:
+
+  | Case | Ingest wall ms | Custom block ms |
+  | --- | ---: | ---: |
+  | master, no rules | 290.6 [278.6–347.1] | 0 |
+  | tip, no rules | 292.9 [265.6–342.6] | 0.02 |
+  | tip, 32 rules | 344.8 [284.1–395.9] | 5.1 [4.1–6.0] |
+  | master, 32 rules | 495.7 [465.8–663.1] | 86.9 [81.1–121.4] |
+
+  A second six-run batch at 40 recordings gave no rules 343.2 (master) and 314.5 (tip), and with
+  32 rules 365.1 (old file) and 339.3 (ten-minute holds, 15 s gaps) on the tip, custom block
+  4.8 ms; master with 32 rules exceeds that harness's 4096-statement cap at 40 recordings (its
+  per-rule history queries), so it has only the 20-recording batch.
+  (a) Zero rules: unchanged within noise (+2.3 ms in one batch, −28.7 ms in the other). Pass.
+  (b) 32 rules: tip 344.8 ms against master 495.7 ms; custom block 5.1 against 86.9 ms. Pass.
+  (c) Added by 32 worst-case rules on the Pi: about +25 to +52 ms per recording (0.5–1.0 % of the
+  5 s interval), of which the custom evaluation is about 5 ms and the rest is the unchanged
+  lifecycle storing 32 more assessments. The 10 ms target is met by the custom evaluation and not
+  by the whole ingest; the 72 ms Mac reference is not comparable to this harness's Pi figures.
+  Gate verdict under the parent's definition: pass. Raw results: builder scratchpad
+  `costgate/pi-results{,2,3}.jsonl` (the first, unordered three-run batch is superseded by the
+  ABBA batches: its order effects exceeded the difference measured).
 
 Next step: the Phase 1 implementation review by gpt-6-astra (diff, this note, test output); then the
 parent merges and deploys by section 8.
