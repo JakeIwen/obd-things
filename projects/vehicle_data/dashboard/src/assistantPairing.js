@@ -17,36 +17,60 @@ import {
   ACCESS_TEXT, PAIRING, buildRequest, countdownText, isValidPin, minutesLeft, normalizePin, pairingStatusView,
   pinDisplay, redeemOutcome, redeemRequest, storedIdentity,
 } from "./assistantAccess.js";
+import { REQUEST_TIMEOUT_MS } from "./dialogs/WarningChat.helpers.js";
 
 const PIN_ID_RE = new RegExp(PAIRING.pinIdPattern);
 const TICK_MS = 1000;
 
-/** `{status, body}`; status 0 when the request failed, body null unless it is one JSON object. */
-async function exchange(doFetch, {url, init}) {
+/**
+ * `{status, body}`; status 0 when the request failed or passed its deadline (the dialogs' 20 s
+ * REQUEST_TIMEOUT_MS), body null unless it is one JSON object. The deadline is raced, so a fetch
+ * that ignores the abort signal still ends the wait.
+ */
+async function exchange(doFetch, {url, init}, timing = {}) {
+  const {
+    setTimeout: setT = globalThis.setTimeout,
+    clearTimeout: clearT = globalThis.clearTimeout,
+    timeoutMs = REQUEST_TIMEOUT_MS,
+  } = timing;
+  const abort = typeof AbortController === "function" ? new AbortController() : null;
+  const request = abort ? {...init, signal: abort.signal} : init;
+  let timer = null;
+  const deadline = new Promise((resolve) => {
+    timer = setT(() => { if (abort) abort.abort(); resolve({status: 0, body: null}); }, timeoutMs);
+  });
+  const attempt = (async () => {
+    try {
+      const response = await doFetch(url, request);
+      let body = null;
+      try { body = await response.json(); } catch { body = null; }
+      return {status: response.status, body: body && typeof body === "object" && !Array.isArray(body) ? body : null};
+    } catch {
+      return {status: 0, body: null};
+    }
+  })();
   try {
-    const response = await doFetch(url, init);
-    let body = null;
-    try { body = await response.json(); } catch { body = null; }
-    return {status: response.status, body: body && typeof body === "object" && !Array.isArray(body) ? body : null};
-  } catch {
-    return {status: 0, body: null};
+    return await Promise.race([attempt, deadline]);
+  } finally {
+    clearT(timer);
   }
 }
 
-export const createPin = (doFetch, identity) =>
-  exchange(doFetch, buildRequest("POST", PAIRING.routes.owner, {action: PAIRING.actions.create}, identity));
-export const cancelPin = (doFetch, identity, pinId) =>
-  exchange(doFetch, buildRequest("POST", PAIRING.routes.owner, {action: PAIRING.actions.cancel, pin_id: pinId}, identity));
-export const pinStatus = (doFetch, identity) => exchange(doFetch, buildRequest("GET", PAIRING.routes.owner, undefined, identity));
+export const createPin = (doFetch, identity, timing) =>
+  exchange(doFetch, buildRequest("POST", PAIRING.routes.owner, {action: PAIRING.actions.create}, identity), timing);
+export const cancelPin = (doFetch, identity, pinId, timing) =>
+  exchange(doFetch, buildRequest("POST", PAIRING.routes.owner, {action: PAIRING.actions.cancel, pin_id: pinId}, identity), timing);
+export const pinStatus = (doFetch, identity, timing) =>
+  exchange(doFetch, buildRequest("GET", PAIRING.routes.owner, undefined, identity), timing);
 
 /** `{code}` or `{message}` (see redeemOutcome). */
-export async function redeemPin(doFetch, pin) {
-  const {status, body} = await exchange(doFetch, redeemRequest(pin));
+export async function redeemPin(doFetch, pin, timing) {
+  const {status, body} = await exchange(doFetch, redeemRequest(pin), timing);
   return redeemOutcome(status, body);
 }
 
 /** The PIN field: `submit(raw)` redeems and calls `onCode(code)` on success. */
-export function createPinEntry({fetch: doFetch, onCode, onChange = () => {}}) {
+export function createPinEntry({fetch: doFetch, onCode, onChange = () => {}, ...timing}) {
   const s = {busy: false, message: "", error: false};
   const snapshot = () => ({busy: s.busy, message: s.message, error: s.error});
   const emit = () => onChange(snapshot());
@@ -60,7 +84,7 @@ export function createPinEntry({fetch: doFetch, onCode, onChange = () => {}}) {
     }
     Object.assign(s, {busy: true, message: ACCESS_TEXT.pinWorking, error: false});
     emit();
-    const outcome = await redeemPin(doFetch, pin);
+    const outcome = await redeemPin(doFetch, pin, timing);
     Object.assign(s, {busy: false, message: outcome.code ? "" : outcome.message, error: !outcome.code});
     emit();
     if (outcome.code) onCode(outcome.code);
@@ -78,7 +102,9 @@ export function createPairingPanel(deps) {
     setTimeout: setT = globalThis.setTimeout,
     clearTimeout: clearT = globalThis.clearTimeout,
     onChange = () => {},
+    timeoutMs,
   } = deps;
+  const timing = {setTimeout: setT, clearTimeout: clearT, timeoutMs};
   const pollMs = PAIRING.statusPollSeconds * 1000;
   const s = {open: false, phase: "idle", pin: "", pinId: null, expiresAt: 0, message: "", error: false,
     tick: null, poll: null, generation: 0};
@@ -117,7 +143,7 @@ export function createPairingPanel(deps) {
       s.tick = null;
       if (generation !== s.generation) return;
       if (s.expiresAt - now() <= 0) {
-        end(ACCESS_TEXT.anotherExpired);
+        void finishAtExpiry(generation);
         return;
       }
       emit();
@@ -125,11 +151,26 @@ export function createPairingPanel(deps) {
     }, TICK_MS);
   }
 
+  /**
+   * The countdown ran out: read the PIN's status once more before saying it expired, so a
+   * redemption in the last second shows as paired. A status reply already in flight may also land
+   * meanwhile; the phase stays active until one of them ends it.
+   */
+  async function finishAtExpiry(generation) {
+    if (s.poll !== null) clearT(s.poll);
+    s.poll = null;
+    const {status, body} = await pinStatus(doFetch, identity(), timing);
+    if (generation !== s.generation || s.phase !== "active") return;
+    const view = status === 200 ? pairingStatusView(body, s.pinId) : null;
+    if (view && view.done) end(view.text, view.error);
+    else end(ACCESS_TEXT.anotherExpired);
+  }
+
   function schedulePoll(generation) {
     s.poll = setT(async () => {
       s.poll = null;
       if (generation !== s.generation) return;
-      const {status, body} = await pinStatus(doFetch, identity());
+      const {status, body} = await pinStatus(doFetch, identity(), timing);
       if (generation !== s.generation || s.phase !== "active") return;
       if (status === 401) {
         end(ACCESS_TEXT.pairingPrompt, true);
@@ -150,10 +191,10 @@ export function createPairingPanel(deps) {
     const generation = s.generation;
     Object.assign(s, {phase: "creating", pin: "", pinId: null, message: ACCESS_TEXT.anotherCreating, error: false});
     emit();
-    const {status, body} = await createPin(doFetch, identity());
+    const {status, body} = await createPin(doFetch, identity(), timing);
     const made = status === 200 && body && isValidPin(body.pin) && PIN_ID_RE.test(String(body.pin_id));
     if (generation !== s.generation) {
-      if (made) void cancelPin(doFetch, identity(), body.pin_id); // closed while it was being made
+      if (made) void cancelPin(doFetch, identity(), body.pin_id, timing); // closed while it was being made
       return;
     }
     if (made) {
@@ -186,7 +227,7 @@ export function createPairingPanel(deps) {
     s.open = false;
     s.generation += 1;
     stopTimers();
-    if (s.phase === "active" && s.pinId) void cancelPin(doFetch, identity(), s.pinId); // best effort
+    if (s.phase === "active" && s.pinId) void cancelPin(doFetch, identity(), s.pinId, timing); // best effort
     Object.assign(s, {phase: "idle", pin: "", pinId: null, message: "", error: false});
     emit();
   }

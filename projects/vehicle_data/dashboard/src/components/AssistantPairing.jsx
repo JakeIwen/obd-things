@@ -31,8 +31,8 @@ export default function AssistantPairing({ codeRef, pinRef, onSubmit, onCode, id
         <label class="field" for={id + "-pin"}>{ACCESS_TEXT.pinLabel}</label>
         <p class="muted chat-hint">{ACCESS_TEXT.pinHint}</p>
         <div class="pair-pin-row">
-          <input id={id + "-pin"} class="input pair-pin-input num" type="text" inputmode="numeric" pattern="[0-9]*"
-            autocomplete="one-time-code" enterkeyhint="go" maxLength={PAIRING.pinDigits} ref={pinRef} />
+          <input id={id + "-pin"} class="input pair-pin-input num" type="text" inputmode="numeric" pattern="[0-9 ]*"
+            autocomplete="one-time-code" enterkeyhint="go" maxLength={PAIRING.pinDigits * 2} ref={pinRef} />
           <button type="submit" class="btn btn--primary" disabled={snap.busy}>{ACCESS_TEXT.pinButton}</button>
         </div>
         {snap.message ? <p class={"status-line" + (snap.error ? " status-line--error" : "")} role="status">{snap.message}</p> : null}
