@@ -480,6 +480,18 @@ Never rebaseline as part of a feature or to pass the suite.
 `insights.py` (`DtcCacheValidationError`, `HEX_BYTE`, `timestamp_or_none`). The
 dashboard's three-source diagnostic-code merge is `dashboard/src/views/dtcSources.helpers.js`.
 
+Custom early warnings (owner request 2026-11-17) are the owner's threshold rules, defined in time
+(hold, longest time between recordings, floor of separate readings) and evaluated as revision
+`owner-threshold-v2`; `projects/vehicle_data/docs/custom-warnings.md` is the contract, with the
+zero-saved-rules deploy precondition and the rollback. Where things live: `custom_warnings.json` with
+`custom_warning_contract.py` (fields, limits, cap, form defaults, routes; shared with the dashboard),
+`custom_warnings.py` (catalog, validation, evaluation, advice; holds are timed in `RuleHolds` on the
+broker's monotonic clock, passed as `recording_clock` through `insights.ingest_snapshot`),
+`custom_warning_file.py` (the rules file: tolerant read, one durable write per operation, removed
+ids), `history/custom_rule_queries.py` (the one-recording readings query, a historian mixin).
+`tests/custom_rule_history.py` is the real-historian fixture the custom-rule tests share. The plan
+for the Add Early Warning form is `.agent/handoffs/early-warning-form.md`.
+
 Ignored diagnostic codes (owner request 2026-11-16) are an owner record, display bookkeeping
 that never clears a code or changes `/v1/diagnostics/dtcs`: `dtc_ignore.py` with `dtc_ignore.json`
 (route, actions, the 500-code limit, note limits in characters and bytes, the audit-log bound;

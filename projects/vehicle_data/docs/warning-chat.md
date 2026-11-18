@@ -167,35 +167,48 @@ was initiated. Do not merely raise the timeout or delete the user's history.
 Add Early Warning is available even without active events. A dedicated setup
 chat produces structured threshold-rule proposals using established numeric
 metrics and native units, above/below/absolute-magnitude-above comparisons,
-distinct-observation persistence, maximum sample age/gap, a bounded window,
-and optional fresh RPM >400 gating at each observation. Unsupported compound
+a hold time, the longest time between recordings, a floor of separate readings
+and optional RPM >400 at every recording. What a rule means, its limits and the
+rules file are in [custom warnings](custom-warnings.md). Unsupported compound
 logic or unmapped metrics requires a separate development task; Codex must not
 silently approximate it. The catalog includes `generator.field_duty` (the PCM's
 commanded alternator field duty, not current or temperature); built-in warnings
 still never use it as primary evidence, but a rule the owner defines himself may,
 and the setup prompt tells the model to say what it is. The advisor and the
 broker both read the catalog. When a metric joins it, restart and verify the broker
-first and the advisor second: the broker rejects the whole rules file, not one rule,
-when it meets a metric it does not know, so a rule saved by a newer advisor would
-switch off every custom warning until the broker catches up. If the guarded broker
-restart cannot run, leave the advisor as it is.
+first and the advisor second: a broker that does not know a rule's metric rejects that rule
+(it is listed in `custom_rules.rejected_ids` and stays off until the broker catches
+up). If the guarded broker restart cannot run, leave the advisor as it is.
 
 Only the latest completed, validated proposal can be installed: the full rule
 and units are shown, and its exact proposal ID plus explicit owner approval are
-required. Ordinary explanation mode cannot install rules. Revisions create new
+required. A proposal turn stores the rule under `rule_proposal`, `rule_proposal_id`
+and `rule_proposal_unit` with `semantics: "owner-threshold-v2"`; it never writes the
+pre-update `proposal` keys, so an advisor rolled back to the earlier meaning cannot
+install it (its transcript still reads). `apply-warning` and `remove-warning` take
+`{proposal_id, confirmed, semantics}`: a body without `semantics` (a dashboard tab
+from before the update) gets 409 reason `dashboard_reload_required` "The dashboard
+was updated; reload the page.", and a latest turn holding only the pre-update
+`proposal` gets 409 "This suggestion was made before an update; ask again."
+Ordinary explanation mode cannot install rules. Revisions create new
 proposals, not edits to existing approved rules. Saved Custom Warnings lists
 this browser's rules and allows removal, including from older conversations.
 Removal does not erase historical advisories.
 
-The application atomically writes approved data configuration (not executable
-code) to `/var/lib/van-telemetry-advisor/early-warnings.json`, maximum 32 rules.
+The application durably writes approved data configuration (not executable
+code) to `/var/lib/van-telemetry-advisor/early-warnings.json`, maximum 32 rules,
+through `custom_warning_file.py` (one write per operation; rows it cannot read and
+unknown keys are kept; removed ids are recorded, so a removed rule's id cannot be
+installed again).
 The upgraded broker reloads it during existing background warning evaluation;
 no acquisition or service restart is requested by chat. Custom assessments join
 the normal episode/notification pipeline. Saved versus broker-loaded status is
-explicit. Malformed custom configuration does not suppress built-in warnings.
+explicit. Malformed custom configuration does not suppress built-in warnings, and
+one rule the broker cannot load stops alone.
 
-Fresh source/unit/quality checks, distinct observations, gap limits and optional
-RPM evidence prevent stale, candidate or duplicate data from satisfying a rule.
+Fresh source/unit/quality checks, a hold timed on the broker's steady clock, the
+gap limit, separate readings and RPM from the same recording prevent stale,
+candidate or duplicate data from satisfying a rule.
 Thresholds are owner monitoring references, not OEM limits or diagnoses. Chat
 cannot remove built-in warnings, and Codex receives no shell, app-source,
 filesystem-write, CAN or service-control tools. Approved configuration is the

@@ -112,9 +112,15 @@ CAN or service-control tools. Approved configuration is the supported app
 modification path; unsupported trigger logic needs a separate implementation.
 
 `custom_warnings.py` validates and evaluates owner rules using fresh historian
-data. The advisor writes `/var/lib/van-telemetry-advisor/early-warnings.json`;
-the production evaluator reloads it in existing background evaluations. Tests
-opt in with a temporary path. Built-ins are unaffected by configuration errors.
+data. A rule is defined in time: every recording of the metric for the hold time
+must be beyond the limit, recordings no further apart than its gap, with at least
+its floor of separate readings; holds are timed on the broker's monotonic clock and
+restart with the broker (evaluator revision `owner-threshold-v2`; contract, rules
+file, deploy precondition and rollback in [custom warnings](docs/custom-warnings.md)).
+The advisor writes `/var/lib/van-telemetry-advisor/early-warnings.json` through
+`custom_warning_file.py`; the production evaluator reloads it in existing background
+evaluations. Tests opt in with a temporary path. Built-ins are unaffected by
+configuration errors, and one rule the broker cannot load stops alone.
 The frontend distinguishes saved from broker-loaded rules and supports removal.
 See [warning chat](docs/warning-chat.md) for boundaries and activation. The same advisor
 serves the diagnostic-code research routes ([DTC research](docs/dtc-research.md)); a

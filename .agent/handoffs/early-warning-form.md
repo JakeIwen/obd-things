@@ -3,7 +3,7 @@
 tier: T3 (custom-rule evaluator semantics in the broker, a new historian query, a new advisor write
 route that installs monitoring rules without a model proposal, a change to the web relay
 allowlist, and a deploy precondition on the owner's rules file)
-last reviewed: plan revision 3 awaiting re-check (round 3 by gpt-6-astra on `5296ab4`: hold)
+last reviewed: plan round 4 by gpt-6-astra (ship); Phase 1 implementation not yet reviewed
 plan written against: commit `ce71087` (master `0393eee` plus four early-warning commits of
 2026-11-17). Master has since gained the same content, a small review fix and unrelated
 dashboard commits; none touches the evaluator, historian or advisor logic below (re-checked
@@ -833,14 +833,21 @@ Before install (with the review; each result recorded in the review brief):
 - Built-in invariance proof ("Custom rule semantics").
 - Cost gate: `tools/telemetry_history_profile.py` (`telemetry-history-profile` compute task) on a
   finalized backup, with a context whose saved `custom_rules` holds 32 valid rules (ten-minute
-  holds, every catalog metric represented) and once with none. The ingest phase (one stored
+  holds, every catalog metric represented, some beyond their limit but not yet confirmed, so the
+  candidate path and its episode lookup are measured) and once with none. It is a relative check:
+  the task runs on a compute worker (usually the Mac) against an in-memory copy of the database,
+  so its absolute times are not the Pi's. The ingest phase (one stored
   snapshot: ingest, warning evaluation, persistence) with 32 rules may exceed the run without
   rules by at most 10 ms, against the 72.0 ms "Saved-snapshot ingest" figure in
   `docs/broker-cpu.md`, and the custom block issues exactly one readings query. The cost does not
   depend on hold length or recording rate (no history walk), so one interval suffices. Custom
   rules reach the historian's cadence only through this ingest time (the loop waits the interval
   after the work), so a 10 ms bound keeps the 5 s interval's spacing within 0.2 %; the unit's
-  `--history-interval` is unchanged.
+  `--history-interval` is unchanged. After install, one live Pi sample: the median historian
+  interval over five minutes (consecutive `/v1/status` `history_recorder.last_stored_at`
+  differences, as `docs/broker-cpu.md` measured it) minus the 5 s wait is the per-recording work on
+  the Pi; with no rules it must match the pre-install figure within its spread (runbook in
+  `docs/custom-warnings.md`).
 - Rollback check of the chat keys: in a scratch worktree at the deployed ref, with a temporary
   state directory holding the v2 setup chat saved by
   `test_v2_proposal_turn_carries_no_key_the_pre_v2_advisor_installs`, construct the old
@@ -888,6 +895,8 @@ variable from this one:
 4. `sudo systemctl start van-telemetry-advisor.service` and rebuild. Tell the owner N and that
    those rules are kept in the saved file, inactive. Saved chats are left as they are: their v2
    proposals are under keys the old advisor does not install, and their transcripts stay readable.
+   The old advisor's replay sends `turn.get("proposal")`, so a v2 proposal reaches its model as
+   null: accepted, context only.
 5. Roll-forward (any time later; replaces Phase 1 steps 1–3):
    1. `sudo systemctl stop van-telemetry-advisor.service`.
    2. `sudo sh -c 'ls -1 $0.v2-saved-*' $F`. With none, deploy Phase 1 as above. With more than
@@ -1092,9 +1101,36 @@ safeguard.
   `broker.py` join Phase 1 to pass the recording clock; a broker restart restarts a hold (an
   open warning still holds through `_open_warning`); with one cached reading able to span a hold,
   the floor of 2 is enforced rather than implied.
-- last reviewed: plan revision 3 awaiting re-check (round 3 findings closed; same reviewer).
+- Round 4, gpt-6-astra (plan revision 3): `Verdict: ship`. Three lows, folded in: the cost gate is
+  a relative check because `telemetry-history-profile` runs on a compute worker against an
+  in-memory database, plus one live Pi ingest-time sample after install (section 8); the 32-rule
+  benchmark includes rules beyond their limit but not yet confirmed; after a rollback the old
+  advisor's replay sends `turn.get("proposal")`, so a v2 proposal reaches its model as null
+  (accepted, context only; section 8 rollback step 4).
+- last reviewed: plan round 4 by gpt-6-astra (ship); Phase 1 implementation not yet reviewed.
 
 ## Status
 
-Plan only. No code changed. Next step: plan revision 3 re-check by gpt-6-astra; then a fresh
-builder starts Phase 1 from this note in a worktree.
+Phase 1 built in worktree `.claude/worktrees/agent-a67697fc393f05642` (branch
+`worktree-agent-a67697fc393f05642`), not reviewed, not merged, not deployed. Verification results
+are recorded below as they are run; the deploy (section 8, Phase 1) has not started.
+
+Builder decisions within the plan (each undoable):
+
+- `custom_warning_contract.relay_allowed` is deferred to Phase 2 (no relay route in Phase 1).
+- Replay sends only `rule_proposal` to the model, so a pre-update turn's proposal reaches it as
+  null.
+- `remove_saved_warning` keeps the owner filter until Phase 2 makes rules vehicle-wide.
+- An exception in one rule's assessment stops that rule alone and lists its id in `rejected_ids`
+  (the plan's per-rule tolerance); `error` is set only when the file or the shared readings query
+  fails.
+- Health has no card that shows candidates, so the Early warning card gained one status line per
+  custom candidate ("… beyond its limit for 12 of 30 s, waiting to confirm.") and the rejected
+  count line; a small render change in `Health.jsx`.
+
+Verification (Phase 1):
+
+VERIFICATION_PLACEHOLDER
+
+Next step: the Phase 1 implementation review by gpt-6-astra (diff, this note, test output); then the
+parent merges and deploys by section 8.
