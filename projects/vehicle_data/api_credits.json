@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "until": "2026-12-08T00:00:00Z",
+  "grants": [
+    {"label": "Nov 25", "expires": "2026-11-25T00:00:00Z"},
+    {"label": "Dec 8", "expires": "2026-12-08T00:00:00Z"}
+  ],
+  "billing": {"apiCredits": "api_credits", "subscription": "subscription"},
+  "billingReasons": [
+    "legacy", "forced", "ineligible", "disabled", "no_key", "expired", "unavailable",
+    "ledger_unavailable", "ledger_full"
+  ],
+  "creditCodes": {
+    "exhausted": "account",
+    "invalid_key": "account",
+    "key_ignored": "account",
+    "model_unavailable": "model"
+  },
+  "protocol": {
+    "capabilityField": "billing_capable",
+    "forcedBillingField": "billing",
+    "fallbackReason": "credit_fallback",
+    "replayRequiredRefusal": "replay_required",
+    "fallbackOfField": "fallback_of",
+    "workerCreditsRoute": "/credits"
+  },
+  "routes": {
+    "credits": "/v1/assistant/research/credits"
+  },
+  "adminRoutes": {
+    "pause": "/admin/dtc-research/pause",
+    "resume": "/admin/dtc-research/resume",
+    "drained": "/admin/dtc-research/drained"
+  },
+  "paths": {
+    "keyFile": "/var/lib/vanresearch/anthropic-api-key",
+    "ledgerFile": "/var/lib/vanresearch/api-credits.json",
+    "pauseFile": "/var/lib/van-telemetry-advisor/dtc-research/paused",
+    "snapshotFile": "/home/pi/.agent/usage-budget/claude-promo-credits.json",
+    "snapshotCache": "/var/lib/van-telemetry-advisor/dtc-research/credit-snapshot.json"
+  },
+  "keyPattern": "^sk-ant-api\\d{2}-[A-Za-z0-9_-]{20,300}$",
+  "keyFileMaxBytes": 1024,
+  "ledger": {"schemaVersion": 1, "maxEntries": 2000, "retainDaysAfterUntil": 30},
+  "snapshot": {"maxBytes": 16384, "maxGrants": 8, "freshSeconds": 3600},
+  "fallback": {"retrySeconds": 2, "windowSeconds": 120},
+  "balanceStates": {"known": "known", "unknown": "unknown"},
+  "card": {"pollMs": 60000}
+}
