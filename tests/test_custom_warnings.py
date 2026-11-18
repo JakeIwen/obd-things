@@ -106,8 +106,7 @@ class CustomWarningTests(unittest.TestCase):
             self.assertEqual(name in entries, definition.value_type == "number" and established, name)
 
     def test_schema_and_limits_reject_unsafe_or_ambiguous_rules(self):
-        for change in ({"command": "anything"}, {"metric": "generator.field_duty"},
-                       {"metric": "engine.oil_life_remaining"}, {"threshold": float("nan")},
+        for change in ({"command": "anything"}, {"metric": "engine.oil_life_remaining"}, {"threshold": float("nan")},
                        {"persistence_observations": 1}, {"persistence_observations": True},
                        {"max_age_seconds": 3600}, {"window_seconds": 601}, {"engine_running": "yes"}):
             with self.subTest(change=change), self.assertRaises(ValueError):

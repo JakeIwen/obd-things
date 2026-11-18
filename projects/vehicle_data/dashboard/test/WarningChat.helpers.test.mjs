@@ -315,7 +315,7 @@ describe("formatting", () => {
     // Plain names in name order, never the raw metric key.
     assert.deepEqual(v.rows, [{ key: "generator.field_duty", text: "Alternator (%)" },
       { key: "battery.voltage", text: "Battery (V)" }, { key: "engine.rpm", text: "Engine speed" }]);
-    assert.equal(v.rule, "A rule fires when a value stays above or below your number for 2 to 60 readings in a row. Anything else needs a development task.");
+    assert.equal(v.rule, "A rule fires after 2 to 60 qualifying readings in a row are above your number, below it, or beyond it in either direction, each one fresh and inside the rule's time window. Other conditions need a development task.");
     assert.equal(H.monitorView(chat([turn()], { catalog: setup.catalog })).visible, false);
     assert.equal(H.monitorView(chat([turn()], { event: H.SETUP_EVENT })).visible, false);
     assert.equal(H.monitorView(chat([turn()], { event: H.SETUP_EVENT, catalog: [] })).visible, false);

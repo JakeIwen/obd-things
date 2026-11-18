@@ -75,7 +75,7 @@ export function demoExplainChat(nowMs) {
 
 /** A small illustrative slice of the advisor's catalog summary (the real one lists every metric). */
 const SETUP_CATALOG = Object.freeze([
-  ["battery.voltage", "V"], ["engine.coolant_temp", "°F"], ["engine.rpm", "rpm"],
+  ["battery.voltage", "V"], ["engine.coolant_temperature", "°F"], ["engine.rpm", "rpm"],
   ["generator.field_duty", "%"], ["vehicle.speed", "mph"],
 ].map(([metric, unit]) => Object.freeze({metric, unit})));
 

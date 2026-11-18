@@ -172,8 +172,11 @@ silently approximate it. The catalog includes `generator.field_duty` (the PCM's
 commanded alternator field duty, not current or temperature); built-in warnings
 still never use it as primary evidence, but a rule the owner defines himself may,
 and the setup prompt tells the model to say what it is. The advisor and the
-broker both read the catalog, so both services need a restart before a rule on
-it can be proposed and then loaded.
+broker both read the catalog. When a metric joins it, restart and verify the broker
+first and the advisor second: the broker rejects the whole rules file, not one rule,
+when it meets a metric it does not know, so a rule saved by a newer advisor would
+switch off every custom warning until the broker catches up. If the guarded broker
+restart cannot run, leave the advisor as it is.
 
 Only the latest completed, validated proposal can be installed: the full rule
 and units are shown, and its exact proposal ID plus explicit owner approval are

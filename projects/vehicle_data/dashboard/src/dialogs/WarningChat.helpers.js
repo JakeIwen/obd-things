@@ -73,7 +73,7 @@ export const TEXT = Object.freeze({
   confirmRemove: "Remove this custom warning?",
   confirmNewChat: "Refresh the event evidence and start a new explanation? This conversation and its original evidence remain saved on the Pi.",
   monitorTitle: "What you can monitor",
-  monitorRule: (min, max) => `A rule fires when a value stays above or below your number for ${min} to ${max} readings in a row. Anything else needs a development task.`,
+  monitorRule: (min, max) => `A rule fires after ${min} to ${max} qualifying readings in a row are above your number, below it, or beyond it in either direction, each one fresh and inside the rule's time window. Other conditions need a development task.`,
   askLabel: "Ask a follow-up",
   askPlaceholder: "What does this mean for the van?",
 });
