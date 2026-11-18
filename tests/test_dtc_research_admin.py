@@ -116,6 +116,20 @@ class PauseAndDrainTests(FallbackBase):
         self.assertIn("worker_restarted", reply["reasons"])
         self.assertEqual(self.manager.state, "unknown")  # reconcile before asking again
 
+    def test_an_api_created_session_blocks_drained_until_none_remain(self):
+        self.pause()
+        self.worker.credits_reply = {**self.worker.credits_reply, "api_sessions": 2}
+        self.assertIn("api_sessions_remain", self.drained()["reasons"])
+        self.worker.credits_reply = {**self.worker.credits_reply, "api_sessions": 0}
+        self.assertTrue(self.drained()["drained"])
+
+    def test_a_credits_reply_without_the_count_is_not_drained_but_an_old_worker_is(self):
+        self.pause()
+        self.worker.credits_reply = {k: v for k, v in self.worker.credits_reply.items() if k != "api_sessions"}
+        self.assertIn("api_sessions_unknown", self.drained()["reasons"])
+        self.worker.capable = False  # no billing, so no API sessions by construction
+        self.assertTrue(self.drained()["drained"])
+
     def test_a_running_worker_job_blocks(self):
         self.worker.job = {"attempt_id": "a" * 32, "kind": "maintenance"}
         self.pause()

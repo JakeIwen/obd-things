@@ -7,7 +7,7 @@ paused until a person removes it.
 
 ``drained`` runs under the manager lock and answers true only when nothing can still produce a
 credit outcome that an old advisor would not understand: no start gathering context, no busy or
-reconciling turn, no pending fallback, no running worker attempt, and no held turn outcome whose
+reconciling turn, no pending fallback, no running worker attempt, no API-created session on the worker, and no held turn outcome whose
 turn is not already settled. Held outcomes of settled turns (a lost acknowledgment) are
 acknowledged here. A held ``credit_fallback`` keeps the answer "not drained" until the turn is
 settled; it is never discarded to pass. Maintenance and discovery outcomes have no turn, so they
@@ -97,6 +97,7 @@ class PauseMixin:
             if instance.get("job"):
                 reasons.append("worker_job")
             reasons += self._settle_held_outcomes()
+            reasons += self._api_session_blockers(instance)
             if self.worker.status().get("instance_id") != instance.get("instance_id"):
                 reasons.append("worker_restarted")  # a new instance: reconcile, then ask again
                 self.state = "unknown"
@@ -104,6 +105,17 @@ class PauseMixin:
         except WorkerUnreachable:
             reasons.append("worker_unreachable")
         return reasons
+
+    def _api_session_blockers(self, status):
+        """An API-created session needs the new worker's replay path, so none may remain; a worker
+        that does not advertise billing has none by construction."""
+        if not status.get("billing_capable"):
+            return []
+        credits = self.worker.credits()
+        count = credits.get("api_sessions")
+        if not isinstance(count, int) or isinstance(count, bool):
+            return ["api_sessions_unknown"]
+        return ["api_sessions_remain"] if count else []
 
     def _settle_held_outcomes(self):
         """Acknowledge the held outcome of every attempt whose turn already has its answer,
