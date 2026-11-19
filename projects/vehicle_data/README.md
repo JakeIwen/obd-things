@@ -338,7 +338,8 @@ The initial drive-publisher vocabulary is intentionally narrow:
 `engine.fuel_rate` (added 2026-10-20) is decoded from the same `0x2ED`
 frame as coolant, so the passive collector and the active-drive snapshot pick
 it up with no new frame, filter or allowlist entry. It is the 16-bit field at
-DBC start bit 34, raw / 512 L/h times 1.131 to match the instrument cluster,
+DBC start bit 34, raw / 512 L/h times 1.18 to match fuel pumped (owner choice 2026-11-19;
+the instrument cluster's own figure is about 1.131, so the app reads about 4 % lower mpg),
 published in US gal/h at candidate quality; the factor lives in
 `lib/broadcast_signals.FUEL_RATE`. `fuel_economy.py` owns the metric
 definition and adds estimated economy to the history response: each listed

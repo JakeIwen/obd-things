@@ -218,13 +218,13 @@ def legacy_fuel_rate_observations(
     return (
         PassiveObservation(
             metric="engine.fuel_rate",
-            value=(raw * 1.131 / 512.0 + 0.0) / 3.785411784,
+            value=(raw * 1.18 / 512.0 + 0.0) / 3.785411784,
             unit="gal/h",
             source="ccan.broadcast.0x2ed",
             quality="candidate",
             detail=(
-                "0x2ED 16-bit field at DBC start bit 34 / 512 L/h, x 1.131 to "
-                "match the cluster's fuel figure, converted to US gal/h"
+                "0x2ED 16-bit field at DBC start bit 34 / 512 L/h, x 1.18 to "
+                "match fuel pumped, converted to US gal/h"
             ),
         ),
     )
@@ -295,7 +295,7 @@ class BroadcastSignalsTests(unittest.TestCase):
     def test_fuel_rate_reference_frame(self):
         # The recorded 0x2ED frame in test_display_frames: raw 6714, 13.11 L/h nominal.
         value = bs.FUEL_RATE.decode(bytes.fromhex("821FC00000D1D000"))
-        self.assertAlmostEqual(value, 6714 / 512 * 1.131 / 3.785411784)
+        self.assertAlmostEqual(value, 6714 / 512 * 1.18 / 3.785411784)
         self.assertIsNone(bs.FUEL_RATE.decode(bytes.fromhex("821FC00000D1")))
 
     def test_every_rpm_word_including_masked_bits(self):

@@ -246,7 +246,8 @@ The fuel-rate source is now the C-CAN `0x2ED` broadcast (strong candidate,
 nominal `raw/512` L/h); start with the
 [October 14 cluster-video finding](projects/ecu_mapping/findings/promaster_2022/2026-10-14_fuel_rate_cluster_video.md).
 Since 2026-10-20 it is telemetry metric `engine.fuel_rate` (candidate, gal/h,
-cluster-matched ×1.131 in `lib/broadcast_signals.FUEL_RATE`). `fuel_economy.py`
+pump-matched ×1.18 in `lib/broadcast_signals.FUEL_RATE` since 2026-11-19, ×1.131 to
+match the cluster before; see the [fuel-level finding](projects/ecu_mapping/findings/promaster_2022/2026-11-15_fuel_level_0x356.md)). `fuel_economy.py`
 owns the metric definition and the estimated trip and 7/30-day economy added
 to the history response; `history/running_totals.py` sums engine-running
 samples per trip or window; `dashboard/src/fuelEconomy.helpers.js` formats the

@@ -98,11 +98,11 @@ what they meant and where that information lives now.
 - **Fuel rate and fuel economy** (shown unmarked since 2026-11-13, economy to one decimal; `now` under Speed and MPG in This drive on Drive page 1,
   Fuel rate on page 2, and on the History Drives card): estimates. The fuel rate is the engine computer's own fuel-flow
   figure from C-CAN frame `0x2ED` (the coolant frame), read without asking the engine anything. It
-  drops to zero when coasting in gear and reads about 0.4–0.5 gal/h at a warm idle. Its scale is
-  chosen to match the cluster: the cluster's instant and trip-average mpg both work out to 1.13
-  times the engine computer's nominal figure, so the app does the same and should agree with the
-  dash within a few percent. Neither has been checked against fuel actually pumped, so treat both
-  as the cluster's opinion, not a measurement. `now 20.0 mpg` (under Speed, and under the rate on
+  drops to zero when coasting in gear and reads about 0.4–0.5 gal/h at a warm idle. Since
+  2026-11-19 its scale matches fuel actually pumped (1.18 times the engine computer's nominal
+  figure, from two fills), so the app reads about 4 % lower mpg than the dash, whose instant and
+  trip-average mpg work out to 1.13 times. Drives recorded before that date keep the old scale,
+  so 7- and 30-day economy blends the two until those drives age out. `now 20.0 mpg` (under Speed, and under the rate on
   page 2) is the instant economy while moving; during the fuel cut it reads `99+` under Speed
   and `coasting, no fuel` on page 2, like the cluster's capped readout. Drive and 7/30-day economy are
   average speed over average fuel rate across the Pi's engine-running history samples, one every

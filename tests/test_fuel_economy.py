@@ -157,7 +157,7 @@ class FuelRateMetricTests(unittest.TestCase):
         self.assertEqual(source.name, "ccan.broadcast.0x2ed")
         self.assertEqual(source.quality, "candidate")
         self.assertTrue(source.publisher_allowed)
-        self.assertGreater(definition_.maximum, 65535 * 1.131 / 512 / 3.785411784)
+        self.assertGreater(definition_.maximum, 65535 * 1.18 / 512 / 3.785411784)
 
 
 if __name__ == "__main__":

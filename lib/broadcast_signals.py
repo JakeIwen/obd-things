@@ -20,10 +20,12 @@ KPA_TO_PSI = 0.14503773773020923
 KMH_TO_MPH = 0.621371192237334
 NM_TO_LB_FT = 0.7375621492772656
 LITRES_PER_US_GALLON = 3.785411784
-# The cluster's instant-mpg video and a reset Trip B average both put its fuel
-# at about 1.131 x the nominal raw/512 L/h. Only a fill-up can say which scale
-# is real fuel; until then telemetry follows the cluster.
-FUEL_RATE_CLUSTER_FACTOR = 1.131
+# Fuel actually pumped puts real fuel at about 1.18 x the nominal raw/512 L/h
+# (two fills, 2026-11-15 and 11-18; airflow / E10 stoichiometry agrees). The
+# cluster's own fuel figure is about 1.131 x, so telemetry reads about 4 %
+# lower mpg than the dash, by owner choice (2026-11-19: match the pump). The
+# name predates that choice.
+FUEL_RATE_CLUSTER_FACTOR = 1.18
 
 
 def _fahrenheit(celsius: float) -> float:
@@ -113,8 +115,8 @@ FUEL_RATE = BroadcastSignal(
     field=SignalField(34, 16, "big"), scale=FUEL_RATE_CLUSTER_FACTOR, offset=0.0,
     units="gal/h", quality="candidate", min_dlc=7,
     provenance=(
-        "0x2ED 16-bit field at DBC start bit 34 / 512 L/h, x 1.131 to "
-        "match the cluster's fuel figure, converted to US gal/h"
+        "0x2ED 16-bit field at DBC start bit 34 / 512 L/h, x 1.18 to "
+        "match fuel pumped, converted to US gal/h"
     ),
     divisor=512.0, conversion=_us_gallons,
 )
