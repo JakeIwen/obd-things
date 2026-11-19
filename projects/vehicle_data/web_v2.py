@@ -91,6 +91,7 @@ STATUS_LITE_KEYS = (
     "engine_off_voltage",
     "radar_alignment",
     "radar_alignment_polling",
+    "fuel_floor",
     "last_readings",
     "supplemental_cache",
     "current_owner",

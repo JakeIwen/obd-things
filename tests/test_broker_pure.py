@@ -90,6 +90,8 @@ class BrokerPureTests(unittest.TestCase):
         # web flag (the only difference across all 425 delivery cases), and again
         # on 2026-10-10 for the added radar_service_enabled web flag: with that
         # one key dropped the corpus still hashes to the previous f91ba5d9... digest.
+        # 2026-11-19: the additive status.fuel_floor key re-pinned it; with that one key
+        # dropped the corpus still hashes to the previous 27c8d3e7... digest.
         # Adapter lifecycle additions have their own contracts; retain every
         # byte of the original corpus rather than re-pinning this digest.
         legacy = [row for row in delivery_rows() if not row[0].startswith("adapter/")]
@@ -97,7 +99,7 @@ class BrokerPureTests(unittest.TestCase):
         data = (encode(legacy) + "\n").encode()
         self.assertEqual(
             hashlib.sha256(data).hexdigest(),
-            "27c8d3e79942c9b505cfad644e417df48de9c57b56a9554094832d8211db90ee",
+            "194a2c4c65ee48011cd9e5ff979f0926e5ed16ad29cd9568280398b1dfae766f",
         )
 
     def test_status_byte_baseline(self):

@@ -75,6 +75,7 @@
         "projects/vehicle_data/compass.json",
         "projects/vehicle_data/fuel_level.json",
         "projects/vehicle_data/fuel_range.json",
+        "projects/vehicle_data/fuel_floor.json",
         "projects/vehicle_data/radar_service_alignment.json",
         "projects/vehicle_data/radar_reference.json",
         "projects/vehicle_data/api_credits.json",

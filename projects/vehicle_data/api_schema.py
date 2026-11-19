@@ -175,6 +175,7 @@ class StatusResponse(TypedDict):
     vehicle_state: VehicleState
     radar_alignment: JsonObject
     radar_alignment_polling: JsonObject
+    fuel_floor: JsonObject
     inflight: list[InflightAcquisition]
     last_acquisition_errors: dict[str, AcquisitionError]
     cached_metrics: dict[str, MetricResponse]

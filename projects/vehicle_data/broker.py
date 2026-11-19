@@ -44,6 +44,10 @@ from projects.vehicle_data.helper_startup_grant import (
 from projects.vehicle_data import history_recent
 from projects.vehicle_data.dtc_ignore import FILE_NAME as DTC_IGNORE_FILE, DtcIgnoreStore
 from projects.vehicle_data.maintenance import MaintenanceStore
+from projects.vehicle_data.active_session_gates import RUNNING_RPM
+from projects.vehicle_data.fuel_economy import METRIC as FUEL_RATE_METRIC
+from projects.vehicle_data.fuel_floor_contract import FILE_NAME as FUEL_FLOOR_FILE
+from projects.vehicle_data.fuel_floor_store import FuelFloorStore
 from projects.vehicle_data.last_readings import LastReadings
 from projects.vehicle_data.radar_alignment import (
     AlignmentHistory, LIVE_POLLING_COMMISSIONED, METRICS as RADAR_METRICS,
@@ -745,6 +749,7 @@ class TelemetryBroker:
         radar_history=None,
         last_readings=None,
         drive_dtc=None,
+        fuel_floor_store=None,
     ):
         if acquirer is None:
             raise ValueError(
@@ -753,6 +758,7 @@ class TelemetryBroker:
         self.acquirer = acquirer
         self.maintenance = maintenance_store or MaintenanceStore()
         self.dtc_ignores = dtc_ignore_store or DtcIgnoreStore()
+        self.fuel_floor = fuel_floor_store or FuelFloorStore()
         self.definitions = definitions or METRICS
         self.last_readings = last_readings or LastReadings(self.definitions)
         self.monotonic = monotonic
@@ -993,6 +999,37 @@ class TelemetryBroker:
 
     def dtc_ignores_request(self, payload):
         return self.dtc_ignores.request(payload)
+
+    def fuel_floor_response(self) -> dict[str, object]:
+        return self.fuel_floor.response()
+
+    def fuel_floor_request(self, payload):
+        return self.fuel_floor.request(payload, self.monotonic())
+
+    def observe_fuel_tank_reading(self, level: int) -> None:
+        """A fresh van tank reading, 0 included, from the B-CAN companion receiver."""
+        self.fuel_floor.observe_van_level(level, self.monotonic())
+
+    def _note_fuel_rate(self, result: AcquisitionResult) -> None:
+        """Feed a just-stored fuel-rate sample to the below-empty gauge.
+
+        Called once per newly stored sample (never for a cache re-read), so a frozen cached
+        value adds nothing; the gauge itself also ignores a repeated timestamp.
+        """
+        if result.metric != FUEL_RATE_METRIC or result.observed_monotonic is None:
+            return
+        with self._lock:
+            rpm = self._cache.get("engine.rpm")
+        now = self.monotonic()
+        rpm_definition = self.definitions.get("engine.rpm")
+        running = bool(
+            rpm is not None and rpm.available and rpm_definition is not None
+            and rpm.observed_monotonic is not None
+            and now - rpm.observed_monotonic <= rpm_definition.stale_after_seconds
+            and isinstance(rpm.value, (int, float)) and not isinstance(rpm.value, bool)
+            and rpm.value >= RUNNING_RPM
+        )
+        self.fuel_floor.observe_fuel_rate(result.value, result.observed_monotonic, running, now)
 
     def health_response(self) -> dict[str, object]:
         """Return explainable, history-relative advisory assessments only."""
@@ -1623,6 +1660,7 @@ class TelemetryBroker:
         if plausibility_error is not None:
             return rejected
         self._update_vehicle_state(result)
+        self._note_fuel_rate(result)
         return result
 
     def _store_active_observation(self, event: dict[str, object]) -> None:
@@ -1695,6 +1733,7 @@ class TelemetryBroker:
         if metric == "vehicle.odometer":
             self.maintenance.observe_odometer(result)
         self._update_vehicle_state(result)
+        self._note_fuel_rate(result)
         if metric == "engine.crankshaft_torque":
             self._refresh_derived_power()
 
@@ -2372,6 +2411,7 @@ class TelemetryBroker:
             engine_off_voltage=engine_off_voltage,
             radar_polling_commissioned=LIVE_POLLING_COMMISSIONED,
             radar_storage_error=self._radar_history.storage_error,
+            fuel_floor=self.fuel_floor.status_block(),
         )
 
     def _update_vehicle_state(self, result: AcquisitionResult) -> None:
@@ -3502,6 +3542,7 @@ class TelemetryBroker:
         self.maintenance.flush()
         self._radar_history.flush()
         self.last_readings.flush()
+        self.fuel_floor.flush(self.monotonic())
         self.drive_dtc.close()
 
 
@@ -3610,6 +3651,7 @@ def main(argv=None) -> int:
 
     maintenance_store, radar_history, last_readings = _reading_stores(args.history_db)
     dtc_ignore_store = DtcIgnoreStore(pathlib.Path(args.history_db).with_name(DTC_IGNORE_FILE))
+    fuel_floor_store = FuelFloorStore(pathlib.Path(args.history_db).with_name(FUEL_FLOOR_FILE))
     insights = None
     if not args.no_history:
         historian = TelemetryHistorian(args.history_db)
@@ -3646,6 +3688,7 @@ def main(argv=None) -> int:
         engine_off_voltage_capture=engine_off_voltage_capture,
         maintenance_store=maintenance_store,
         dtc_ignore_store=dtc_ignore_store,
+        fuel_floor_store=fuel_floor_store,
         radar_history=radar_history,
         last_readings=last_readings,
         drive_dtc=DriveDtcControl.from_args(args),

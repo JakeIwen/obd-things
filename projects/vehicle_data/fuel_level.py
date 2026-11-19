@@ -25,6 +25,17 @@ DEFINITION = MetricDefinition(
 )
 
 
+def raw_reading(can_id: int, data: bytes):
+    """The tank percent of a well-formed 0x356 frame, 0 included, else ``None``.
+
+    The decoder above drops raw 0 so the metric never shows it; the below-empty gauge
+    (``fuel_floor``) needs that 0 to know the van's gauge has bottomed out.
+    """
+    if can_id not in FRAME_DLCS or len(data) != FRAME_DLCS[can_id] or data[0] > CONTRACT['maximum']:
+        return None
+    return data[0]
+
+
 def decode_fuel_level_observations(can_id: int, data: bytes):
     """Byte 0 of 0x356 is the tank level in percent.
 

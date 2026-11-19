@@ -111,7 +111,7 @@ const LIVE = {
 /** Mirrors web_v2.status_lite (STATUS_LITE_KEYS and the interface projection). */
 const STATUS_LITE_KEYS = [
   "service", "started_at", "vehicle_state", "collector", "active_drive", "auxiliary_drive",
-  "engine_off_voltage", "radar_alignment", "radar_alignment_polling", "last_readings",
+  "engine_off_voltage", "radar_alignment", "radar_alignment_polling", "fuel_floor", "last_readings",
   "supplemental_cache", "current_owner", "interface_probe", "history_recorder", "inflight",
   "last_acquisition_errors", "active_acquisition_permitted",
 ];

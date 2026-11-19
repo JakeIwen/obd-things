@@ -1,0 +1,23 @@
+{
+  "path": "/v1/fuel-floor",
+  "status_key": "fuel_floor",
+  "file_name": "fuel-floor.json",
+  "gal_per_point_reference": 0.175,
+  "reference_cluster_factor": 1.131,
+  "start_reading": 0,
+  "recovery_reading": 1,
+  "recovery_hold_seconds": 60,
+  "refuel_reading": 3,
+  "van_reading_max_gap_seconds": 10.0,
+  "fuel_sample_max_gap_seconds": 5.0,
+  "frozen_after_seconds": 30.0,
+  "implausible_raw": -30,
+  "floor_set_minimum": -30,
+  "min_logged_gallons": 0.01,
+  "max_earlier_floors": 20,
+  "max_episodes": 20,
+  "write_interval_seconds": 60,
+  "end_reasons": {"recovered": "recovered", "refuel": "refuel"},
+  "floor_sources": {"default": "default", "episode": "episode", "set": "set", "restore": "restore"},
+  "actions": {"set": "set", "restore": "restore"}
+}

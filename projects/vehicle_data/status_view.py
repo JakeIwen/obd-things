@@ -297,6 +297,7 @@ def build_status(
     last_readings: dict[str, object], display_receiver: dict[str, object],
     usb_can_monitor: dict[str, object], engine_off_voltage: dict[str, object],
     radar_polling_commissioned: bool, radar_storage_error: str | None,
+    fuel_floor: dict[str, object],
 ) -> dict[str, object]:
     """Assemble the public keys in their established wire order."""
     return {
@@ -331,6 +332,7 @@ def build_status(
                 "Live monitoring awaits a parked no-session radar angle support check"
             ),
         },
+        "fuel_floor": fuel_floor,
         "inflight": snapshot.inflight,
         "last_acquisition_errors": snapshot.last_errors,
         "cached_metrics": snapshot.cached,

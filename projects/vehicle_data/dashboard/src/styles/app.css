@@ -273,6 +273,7 @@ a { color: var(--blue); }
 .tile--held .tile__value { opacity: .55; }
 .tile--held .tile__sub { color: var(--dim); }
 .tile--off .tile__value { color: var(--dim); }
+.tile--below-empty .tile__value { color: var(--red); }
 .tile--amber { border-color: var(--amber); }
 .tile--amber .tile__value { color: var(--amber); }
 .tile--red { border-color: var(--red); background: var(--red-bg); }

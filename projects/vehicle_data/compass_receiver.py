@@ -19,7 +19,7 @@ import threading
 import time
 
 from lib import can_handoff
-from projects.vehicle_data import bcan_companion
+from projects.vehicle_data import bcan_companion, fuel_level
 from projects.vehicle_data.can_interfaces import B_CAN_ROLE
 from projects.vehicle_data.api_schema import StatusResponse
 from projects.vehicle_data.display_receiver import CONTROL_SECONDS, RECHECK_SECONDS, receive_display_frames
@@ -52,7 +52,7 @@ def armed_compass_route(status):
 
 class CompassReceiver:
     def __init__(self, manager, *, status_reader, publish, invalidate, invalidate_frame=None,
-                 receiver=receive_display_frames, admit=admit_secondary_route,
+                 tank_tap=None, receiver=receive_display_frames, admit=admit_secondary_route,
                  monotonic=time.monotonic):
         self.manager = manager
         self.status_reader = status_reader
@@ -60,6 +60,8 @@ class CompassReceiver:
         self.publish = publish
         self.invalidate = invalidate
         self.invalidate_frame = invalidate_frame
+        # Sees every fresh 0x356 reading, 0 included, which the published metric never carries.
+        self.tank_tap = tank_tap
         self.receiver = receiver
         self.admit = admit
         self.monotonic = monotonic
@@ -127,11 +129,18 @@ class CompassReceiver:
             throttle.reset()
             self.invalidate_frame(can_id)
 
+        def decode(can_id, data):
+            if self.tank_tap is not None:
+                level = fuel_level.raw_reading(can_id, data)
+                if level is not None:
+                    self.tank_tap(level)
+            return bcan_companion.decode_bcan_companion(can_id, data)
+
         with self._lock:
             self._status.update(state='receiving', channel=channel, reason=None,
                                 interface_mode=mode)
         self.receiver(channel, valid=valid, stopped=self._stop.is_set, publish=publish,
-                      frame_dlcs=bcan_companion.FRAME_DLCS, decode=bcan_companion.decode_bcan_companion,
+                      frame_dlcs=bcan_companion.FRAME_DLCS, decode=decode,
                       lost=lost, frame_lost=frame_lost if self.invalidate_frame else None)
 
     def _listen_armed(self, route, check, owner_pid):

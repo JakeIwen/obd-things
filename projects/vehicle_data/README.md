@@ -2150,6 +2150,76 @@ cache or `GET /v1/diagnostics/dtcs`. A code is identified by
   (path, actions and limits, shared with the dashboard); the broker and
   `api_server.py` only route to it. Tests: `tests/test_dtc_ignore.py`.
 
+### Fuel gauge below empty (2026-11-19)
+
+The van's tank level (`fuel.tank_level`) is believed to stop at 0 with 2-3 gallons left (nobody has
+seen it at 0; the lowest reading so far is 10). The Fuel tank tile on Drive page 2 keeps counting
+below zero by subtracting the fuel burned, and each time that happens the lowest point reached
+becomes the gauge's new zero. `fuel.tank_level`, its history and every existing `/v1` field are
+unchanged; the new values are additive (`status.fuel_floor`).
+
+- **Raw level**, in van-gauge points: the van's fresh reading, or during a below-empty episode
+  `-(gallons burned since it began) / GAL_PER_POINT`. `GAL_PER_POINT` is 0.175 gal (of
+  `engine.fuel_rate` fuel; measured 2026-11-18 over the 40 to 10 % band at cluster factor 1.131),
+  scaled as `0.175 * FUEL_RATE_CLUSTER_FACTOR / 1.131` so a later factor change leaves points
+  unchanged (at the current factor 1.18 that is about 0.183 gal per point).
+- **Episode start:** a fresh van reading of 0 with no episode open; the anchor is that reading's
+  receipt time and gallons start at 0. The decoder publishes no metric for raw 0, so
+  `compass_receiver` hands every fresh `0x356` reading to the broker through a tap
+  (`fuel_level.raw_reading`, `broker.observe_fuel_tank_reading`). A 0 at key-off or wake that burns
+  under 0.01 gal is dropped when it ends, leaving no episode and no floor.
+- **During an episode** the broker integrates each newly stored `engine.fuel_rate` sample
+  (trapezoid between consecutive samples) while a fresh `engine.rpm` is at least 400. Nothing is
+  added for a repeated or older timestamp, an engine-off or invalid sample, a gap over 5 s, or a
+  value bit-identical for over 30 s (the frozen 0.7248 gal/h seen with the engine off on
+  2026-11-18). A missing or stale van reading neither starts nor ends an episode; dead
+  reckoning continues without it.
+- **Episode end:** the van reading stays at 1 or above for a continuous 60 s (readings more than
+  10 s apart restart the count; a reading of 0 restarts it), or reaches 3 or above (a refuel). Only
+  then is `floor = min(floor, deepest raw)` committed; during the episode the floor in force is the
+  one from before it.
+- **Sanity bound:** raw never goes below -30 points (about 5 gal). Reaching it holds there and
+  marks the episode `implausible`; such an episode commits no floor.
+- **Displayed level:** `adjusted = (raw - floor) / (100 - floor) * 100`. With floor 0 and no episode
+  it equals the van's reading; it is negative only below the floor in force, in territory never
+  driven into. The numeral turns red (`--red`) when the rounded value is below 0. During an episode
+  the sub-line reads `est. · 1.4 gal past empty` (the range figure follows if shown); with a
+  non-zero floor and no episode it adds `van NN%` so the difference from the dash is explained.
+  With floor 0 and no episode the tile is the plain one.
+- **Gallons are accumulated in the broker and saved, not recomputed from the historian.** The
+  historian keeps minute rollups of sums and counts without per-sample times, so it cannot apply
+  the gap, repeated-sample and frozen-value rules. A restart loses at most the last minute of
+  gallons and the time spent down, which adds nothing.
+- **Record:** `fuel-floor.json` beside `maintenance.json` (`/var/lib/van-telemetry/` on vanpi),
+  single writer the broker, written atomically on episode start and end, on `set`/`restore`, and
+  at most once a minute during an episode. It holds the floor in force, at most 20 earlier floors
+  (each with when and by which episode or `set`/`restore` it was committed), at most 20 episodes
+  (start, end, deepest raw, gallons, end reason, van reading at end, `implausible`,
+  `floor_committed`) and the open episode. A missing file is floor 0; an unreadable one is moved
+  to `fuel-floor.json.unreadable` and reported as `storage_error`; a failed write is reported and
+  retried, never raised.
+- **Owner control** (no web relay, no dashboard dialog): `python3 -m projects.vehicle_data.fuel_floor
+  list|set <points>|restore <n>` over the broker's local socket (`GET`/`POST /v1/fuel-floor`,
+  `{"action":"set","points":-4.5}` between -30 and 0, `{"action":"restore","index":1}`). `set` and
+  `restore` keep the replaced floor in the earlier list. The tile reads `status.fuel_floor`
+  (`floor`, `gal_per_point`, `episode` with `gallons`, `raw`, `adjusted`, `implausible`,
+  `storage_error`), carried on the lite stream.
+- **Limits.** The new zero means "lowest driven to", not "empty". Fuel added while below zero that
+  does not lift the van's reading to 3 or above (or to 1 or above for a minute) is invisible. A
+  van reading of 0 the broker never receives (receiver down or the frame not sent) starts nothing.
+  The gallons-per-point figure comes from one band of the tank and the fuel rate is the cluster-matched
+  estimate, so the estimate carries both errors.
+  Fuel the owner's gasoline furnace (a Velit air heater on the main tank) burns while the van is
+  parked is not counted, so after a cold night below freezing the tile shows somewhat more fuel than
+  there is. While any operation inhibit is active (for example during an AlfaOBD campaign) the B-CAN
+  companion receiver is paused, so a 0 % reading during one starts no episode.
+- **Code.** `fuel_floor.json` / `fuel_floor_contract.py` (constants, shared with the dashboard),
+  `fuel_floor_model.py` (pure episode and floor rules, record validation), `fuel_floor_store.py`
+  (file, throttled writes, local API), `fuel_floor.py` (owner CLI). Dashboard:
+  `src/fuelFloor.js`, `src/fuelFloor.helpers.js`. Deploy: a broker restart (`s restart_broker`) for
+  the record and tap, plus the dashboard build. Tests: `tests/test_fuel_floor.py` and
+  `dashboard/test/fuelFloor.test.mjs`.
+
 ### Code research with AI (2026-11-16; built, not yet deployed)
 
 Each code on the Codes card can be researched by a model the owner picks: it searches the web

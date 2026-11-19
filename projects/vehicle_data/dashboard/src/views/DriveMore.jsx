@@ -21,7 +21,9 @@ import * as store from "../store.js";
 import { DASH } from "../format.js";
 import { candidateReadingModel } from "../candidateReading.helpers.js";
 import { fuelRateText, instantText } from "../fuelEconomy.helpers.js";
-import { FUEL_LEVEL, FUEL_RANGE, tankValueText, tankRangeText, tankIsLive } from "../fuelLevel.js";
+import { FUEL_LEVEL, FUEL_RANGE } from "../fuelLevel.js";
+import { FUEL_FLOOR } from "../fuelFloor.js";
+import { tankTileModel } from "../fuelFloor.helpers.js";
 import {
   RADAR_TILE_AXES,
   radarTileModel,
@@ -103,13 +105,25 @@ function FuelTile() {
 // the record like the rate). Dims like the held tiles when the level is a retained reading.
 const tankRec = computed(() => store.metricSignal(FUEL_LEVEL.metric).value);
 const tankObs = computed(() => obs(FUEL_LEVEL.metric).value);
-const tank = computed(() => tankValueText(tankRec.value, tankObs.value));
+// The gauge keeps counting below the van's own 0 % (fuel_floor.json): the numeral, sub-line and
+// red state come from one model, which is the plain tile while the floor is 0 and no episode is open.
+const tankModel = computed(() => {
+  const lite = store.statusLite.value;
+  const full = store.summary.statusFull.value;
+  return tankTileModel({
+    levelRec: tankRec.value,
+    levelObs: tankObs.value,
+    rangeRec: store.metricSignal(FUEL_RANGE.metric).value,
+    rangeObs: obs(FUEL_RANGE.metric).value,
+    block: (lite && lite[FUEL_FLOOR.status_key]) || (full && full[FUEL_FLOOR.status_key]) || null,
+  });
+});
+const tank = computed(() => tankModel.value.value);
 const tankUnit = computed(() => (tank.value ? "%" : ""));
 const tankCls = computed(() => "tile tile--value area-d2tank " +
-  (!tank.value ? "tile--off" : tankIsLive(tankRec.value, tankObs.value) ? "tile--live" : "tile--held"));
-const tankSub = computed(() =>
-  tankRangeText(tankRec.value, tankObs.value, store.metricSignal(FUEL_RANGE.metric).value, obs(FUEL_RANGE.metric).value),
-);
+  (!tank.value ? "tile--off" : tankModel.value.live ? "tile--live" : "tile--held") +
+  (tankModel.value.negative ? " tile--below-empty" : ""));
+const tankSub = computed(() => tankModel.value.sub);
 
 function TankTile() {
   return (

@@ -14,6 +14,11 @@ function figure(contract, rec, observation) {
   return { value, live };
 }
 
+/** The van's own tank reading (`{value, live}`), for the below-empty tile model; null with no valid figure. */
+export function tankFigure(levelRec, levelObservation) {
+  return figure(level, levelRec, levelObservation);
+}
+
 /** Tank percent for the Fuel tank tile's value: `~49` (the tile adds the `%` unit); the `~` marks candidate quality. "" with no figure. */
 export function tankValueText(levelRec, levelObservation) {
   const f = figure(level, levelRec, levelObservation);

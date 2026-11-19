@@ -281,6 +281,14 @@ candidates (`engine.intake_air_temperature`, `hvac.ac_high_side_pressure`): deco
 of snapshot completeness, and read by the active-drive helper only when the broker sets
 `VAN_TELEMETRY_INTAKE_AC_BROADCASTS=1` in its environment (an old broker rejects unknown sources and
 would terminate the helper; an environment variable, unlike a flag, is ignored by an old helper). Page-2 tiles "Intake air" and "A/C high side" show them.
+The fuel gauge that keeps counting below the van's 0 % (owner request 2026-11-19; contract in the
+vehicle-data README section "Fuel gauge below empty") lives in `fuel_floor.json` /
+`fuel_floor_contract.py` (every constant, shared with the dashboard), `fuel_floor_model.py` (pure
+episode and floor rules), `fuel_floor_store.py` (the broker-owned `fuel-floor.json` record beside
+`maintenance.json`, throttled writes, the local `/v1/fuel-floor` routes) and `fuel_floor.py` (owner
+CLI `list|set|restore`). The broker feeds it through `observe_fuel_tank_reading` (raw 0 included, via
+the companion receiver's `tank_tap` and `fuel_level.raw_reading`) and `_note_fuel_rate`; it exposes
+`status.fuel_floor`, which the Drive page 2 tile reads through `dashboard/src/fuelFloor.helpers.js`.
 `tools/candump_arrays.py` (`candump-id-arrays` compute task) saves finalized
 candump logs as per-identifier numpy arrays for offline reference syncs.
 `lib.reports.require_distinct_output` protects evidence inputs from report
@@ -633,6 +641,7 @@ caller has retired, with owner/callers/retirement stated in the wrapper header.
 | `projects/vehicle_data/bcan_auxiliary.py` | Broker drive_helper_launch | B-CAN auxiliary helper |
 | `projects/vehicle_data/cop_can_wake.py` | van-cop-can-wake.service | Fixed wake supervisor |
 | `projects/vehicle_data/warning_chat.py` | van-telemetry-advisor.service | Advisory chat worker |
+| `projects/vehicle_data/fuel_floor.py` | Owner CLI (`python3 -m projects.vehicle_data.fuel_floor list\|set\|restore`) | Below-empty fuel gauge floor, over the broker's local socket (the broker is the only writer) |
 | `projects/vehicle_data/dtc_research_admin.py` | Owner CLI (research rollback procedure) | Pause, resume and `drained` on the advisor's local admin routes |
 | `projects/vehicle_data/dtc_research_worker.py` | van-telemetry-research.service | DTC research worker: the only launcher of research CLIs |
 | `projects/vehicle_data/van_scan_harvest.py` | van-scan-harvest.service | Completed-capture DTC harvest |

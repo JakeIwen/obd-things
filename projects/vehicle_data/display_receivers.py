@@ -11,7 +11,8 @@ class DisplayReceivers:
         self.compass = CompassReceiver(manager, status_reader=broker.status_response,
                                       publish=broker.store_display_frame,
                                       invalidate=broker.invalidate_bcan_companion,
-                                      invalidate_frame=broker.invalidate_bcan_companion)
+                                      invalidate_frame=broker.invalidate_bcan_companion,
+                                      tank_tap=getattr(broker, 'observe_fuel_tank_reading', None))
 
     def status(self):
         return {**self.cluster.status(), 'compass': self.compass.status()}
