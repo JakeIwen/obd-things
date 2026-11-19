@@ -39,6 +39,8 @@ export const DRIVE_TILES = [
     ["torque", "Torque"],
     ["target", "Target torque"],
     ["odometer", "Odometer"],
+    ["intake", "Intake air"],
+    ["acpress", "A/C high side"],
   ].map(([id, label]) => ({ id, label: label + " (page 2)" })),
 ];
 

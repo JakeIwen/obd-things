@@ -402,8 +402,10 @@ class ActiveDriveAllowlistRegressionTests(unittest.TestCase):
     broker reject the helper's forwarded observation and latch restoration_failed."""
 
     def active_snapshot(self):
+        # The recorded window predates 0x417/0x41B; real warm frames (2026-08-19)
+        # lead it, since they are optional and a complete window ends the read.
         result, _fake = snapshot(
-            window_frames(),
+            window_frames("417#b4000c9920000000 41B#4da0000000600000 " + REAL_WINDOW),
             include_battery=True,
             display_wait=cp.LowRateFrameWait(),
         )

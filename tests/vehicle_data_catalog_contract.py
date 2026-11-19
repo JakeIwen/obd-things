@@ -4,6 +4,8 @@ EXPECTED_METRIC_NAMES = frozenset({
     "battery.voltage",
     "engine.coolant_temperature",
     "engine.fuel_rate",
+    "engine.intake_air_temperature",
+    "hvac.ac_high_side_pressure",
     "engine.crankshaft_power",
     "engine.crankshaft_torque",
     "generator.field_duty",

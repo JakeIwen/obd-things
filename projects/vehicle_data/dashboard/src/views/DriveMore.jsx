@@ -242,6 +242,8 @@ export default function DriveMore({ page, onPageChange }) {
         {show("torque") && <Tile name="engine.crankshaft_torque" label="Torque" area="d2torque" />}
         {show("target") && <Tile name="engine.target_crankshaft_torque" label="Target torque" area="d2target" />}
         {show("odometer") && <Tile name="vehicle.odometer" label="Odometer" area="d2odo" />}
+        {show("intake") && <Tile name="engine.intake_air_temperature" label="Intake air" area="d2iat" />}
+        {show("acpress") && <Tile name="hvac.ac_high_side_pressure" label="A/C high side" area="d2airc" />}
       </div>
       <DriveFooter page={page} onPageChange={onPageChange} />
     </>

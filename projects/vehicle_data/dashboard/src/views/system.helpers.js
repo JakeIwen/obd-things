@@ -509,6 +509,8 @@ const CATALOG_LABELS = Object.freeze({
   "generator.field_duty": "Alternator duty",
   "engine.target_crankshaft_torque": "Torque request",
   "engine.fuel_rate": "Fuel rate",
+  "engine.intake_air_temperature": "Intake air temperature",
+  "hvac.ac_high_side_pressure": "A/C high-side pressure",
   "fuel.tank_level": "Fuel tank level",
   "fuel.range": "Distance to empty",
   "transmission.output_speed": "Output shaft speed",

@@ -110,6 +110,29 @@ COOLANT_TEMPERATURE = BroadcastSignal(
     provenance="0x2ED byte 0 - 40 °C, converted to °F for telemetry",
     conversion=_fahrenheit,
 )
+INTAKE_AIR_TEMPERATURE = BroadcastSignal(
+    bus="c-can", can_id=0x417, metric="engine.intake_air_temperature",
+    field=SignalField(20, 8, "big"), scale=1.0, offset=-40.0,
+    units="°F", quality="candidate", min_dlc=4,
+    provenance=(
+        "0x417 8-bit field (byte 2 bits 4-0, byte 3 bits 7-5) - 40 °C, "
+        "converted to °F; width screened on warm July 27 and August 19 "
+        "captures (field 62-100, smooth crossings of 63/64), not yet tied "
+        "to a PCM DID"
+    ),
+    conversion=_fahrenheit,
+)
+AC_HIGH_SIDE_PRESSURE = BroadcastSignal(
+    bus="c-can", can_id=0x41B, metric="hvac.ac_high_side_pressure",
+    field=SignalField(7, 9, "big"), scale=9.9, offset=6.0,
+    units="psi", quality="candidate", min_dlc=2,
+    provenance=(
+        "0x41B 9-bit field (byte 0, then byte 1 bit 7) x 9.9 + 6 kPa, "
+        "converted to psi; scale fitted only up to about 420 kPa against "
+        "one PCM DID 0329 reference drive and extrapolated above it (+/-3 %)"
+    ),
+    conversion=_psi,
+)
 FUEL_RATE = BroadcastSignal(
     bus="c-can", can_id=0x2ED, metric="engine.fuel_rate",
     field=SignalField(34, 16, "big"), scale=FUEL_RATE_CLUSTER_FACTOR, offset=0.0,
@@ -187,6 +210,8 @@ SIGNALS = (
     SYSTEM_VOLTAGE,
     OIL_PRESSURE,
     COOLANT_TEMPERATURE,
+    INTAKE_AIR_TEMPERATURE,
+    AC_HIGH_SIDE_PRESSURE,
     FUEL_RATE,
     ENGINE_SPEED,
     TARGET_CRANK_TORQUE,

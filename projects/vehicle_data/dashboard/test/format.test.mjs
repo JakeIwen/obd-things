@@ -302,3 +302,10 @@ test("formatters never call Intl or toLocaleString", () => {
   assert.ok(!/toLocale/.test(src));
   assert.ok(!/\bDate\.prototype\.toString\b|\.toDateString\(|\.toTimeString\(/.test(src));
 });
+
+test("intake air and A/C high side: whole degrees and psi, units by name", () => {
+  assert.equal(fmtValue("engine.intake_air_temperature", 96.8), "97");
+  assert.equal(fmtUnit("engine.intake_air_temperature", undefined), "°F");
+  assert.equal(fmtValue("hvac.ac_high_side_pressure", 223.4), "223");
+  assert.equal(fmtUnit("hvac.ac_high_side_pressure", undefined), "psi");
+});

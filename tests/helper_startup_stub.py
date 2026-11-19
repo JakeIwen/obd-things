@@ -27,6 +27,7 @@ def main(argv=None):
     parser.add_argument("--expected-dev-id")
     parser.add_argument("--expected-parent-pid", type=int)
     parser.add_argument("--enable-oil-life", action="store_true")
+    parser.add_argument("--enable-intake-ac-broadcasts", action="store_true")
     parser.add_argument("--enable-radar-service-alignment", action="store_true")
     parser.add_argument(helper_startup_grant.GRANT_FD_FLAG, type=int, default=None)
     args = parser.parse_args(argv)

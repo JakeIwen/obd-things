@@ -47,6 +47,19 @@ VEHICLE_SPEED_ID = broadcast_signals.VEHICLE_SPEED.can_id
 TRANSMISSION_SHAFT_SPEED_ID = broadcast_signals.TRANSMISSION_OUTPUT_SPEED.can_id
 IGNITION_ON_ID = broadcast_signals.IGNITION_ON.can_id
 SYSTEM_VOLTAGE_ID = broadcast_signals.SYSTEM_VOLTAGE.can_id
+# Intake air (0x417) and A/C high-side pressure (0x41B) exist only while the
+# engine runs and are never required for a snapshot to be complete. A helper
+# that reports them to a broker without them in its source allowlist would be
+# terminated as a protocol violation, so the helper reads them only when the
+# broker's launch handshake says it can accept them (read_broadcast_snapshot's
+# ``include_intake_ac``).
+INTAKE_AC_FLAG = "--enable-intake-ac-broadcasts"
+INTAKE_AC_SIGNALS = (
+    broadcast_signals.INTAKE_AIR_TEMPERATURE,
+    broadcast_signals.AC_HIGH_SIDE_PRESSURE,
+)
+INTAKE_AC_IDS = tuple(signal.can_id for signal in INTAKE_AC_SIGNALS)
+INTAKE_AC_SOURCES = frozenset(signal.source for signal in INTAKE_AC_SIGNALS)
 # Owner-referenced cluster display frames (2026-09-27 and 2026-09-28 drives):
 # 0x0E0 B0 is the traffic-sign speed limit in mph (10 Hz); 0x5A0 is the
 # cluster ACC frame (1 Hz plus on change) whose B3 is the set speed in mph and
@@ -63,7 +76,7 @@ FILTER_IDS = (
     VEHICLE_SPEED_ID,
     TRANSMISSION_SHAFT_SPEED_ID,
     IGNITION_ON_ID,
-) + DISPLAY_FRAME_IDS
+) + INTAKE_AC_IDS + DISPLAY_FRAME_IDS
 ACTIVE_FILTER_IDS = FILTER_IDS + (SYSTEM_VOLTAGE_ID,)
 KPA_TO_PSI = 0.14503773773020923
 KMH_TO_MPH = 0.621371192237334
@@ -616,8 +629,11 @@ def _configure_snapshot_socket(
     channel: str,
     *,
     include_battery: bool,
+    include_intake_ac: bool = True,
 ) -> None:
     filter_ids = ACTIVE_FILTER_IDS if include_battery else FILTER_IDS
+    if not include_intake_ac:
+        filter_ids = tuple(i for i in filter_ids if i not in INTAKE_AC_IDS)
     filters = b"".join(
         struct.pack("=II", can_id, FILTER_MASK) for can_id in filter_ids
     )
@@ -648,6 +664,7 @@ def _record_received_frame(
     *,
     monotonic: Callable[[], float],
     temperature_gate: TransmissionTemperaturePlausibilityGate | None,
+    include_intake_ac: bool = True,
 ) -> bool:
     if len(frame) != 16:
         raise RuntimeError(
@@ -663,6 +680,8 @@ def _record_received_frame(
     state.frame_count += 1
     frame_observed_monotonic = monotonic()
     standard_id = can_id & SFF_MASK
+    if not include_intake_ac and standard_id in INTAKE_AC_IDS:
+        return True
     observations = decode_frame_observations(
         standard_id, raw_data[: min(dlc, 8)]
     )
@@ -727,6 +746,7 @@ def _receive_snapshot_frames(
     wanted_display: frozenset[int],
     monotonic: Callable[[], float],
     temperature_gate: TransmissionTemperaturePlausibilityGate | None,
+    include_intake_ac: bool = True,
 ) -> bool:
     extended_for_display = False
     while monotonic() < deadline:
@@ -745,6 +765,7 @@ def _receive_snapshot_frames(
             frame,
             monotonic=monotonic,
             temperature_gate=temperature_gate,
+            include_intake_ac=include_intake_ac,
         ):
             continue
         if _snapshot_is_complete(
@@ -813,6 +834,7 @@ def read_broadcast_snapshot(
     monotonic: Callable[[], float] = time.monotonic,
     temperature_gate: TransmissionTemperaturePlausibilityGate | None = None,
     display_wait: LowRateFrameWait | None = None,
+    include_intake_ac: bool = True,
 ) -> BroadcastSnapshot:
     """Read a short filtered snapshot without changing interface state.
 
@@ -824,6 +846,10 @@ def read_broadcast_snapshot(
     Without ``display_wait`` the display frames (0x0E0, 0x5A0) are decoded
     only when they arrive before the powertrain set completes. With it, the
     snapshot may keep listening for them, bounded by ``timeout``.
+
+    ``include_intake_ac=False`` drops the optional intake-air and A/C frames
+    from both the kernel filter and the decode (see ``INTAKE_AC_SIGNALS``);
+    with either value those frames never decide whether a snapshot is complete.
     """
     _validate_snapshot_request(timeout, required_rpm_samples)
     sock = socket_factory(AF_CAN, socket.SOCK_RAW, CAN_RAW)
@@ -836,6 +862,7 @@ def read_broadcast_snapshot(
             sock,
             channel,
             include_battery=include_battery,
+            include_intake_ac=include_intake_ac,
         )
         deadline = monotonic() + timeout
         extended_for_display = _receive_snapshot_frames(
@@ -847,6 +874,7 @@ def read_broadcast_snapshot(
             wanted_display=wanted_display,
             monotonic=monotonic,
             temperature_gate=temperature_gate,
+            include_intake_ac=include_intake_ac,
         )
     finally:
         sock.close()

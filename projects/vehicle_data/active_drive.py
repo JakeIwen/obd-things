@@ -151,6 +151,10 @@ class SystemBackend:
         # Listen within the snapshot timeout for a due 0x0E0/0x5A0 display
         # frame; its observations are forwarded like every other broadcast.
         self.display_wait = ccan_powertrain.LowRateFrameWait()
+        # Off until the broker's launch handshake says it accepts the
+        # intake-air and A/C sources (an older broker rejects them and the
+        # helper would be terminated mid-drive).
+        self.include_intake_ac = False
 
     def interface_state(self):
         return canbus.interface_state(self.channel)
@@ -189,6 +193,7 @@ class SystemBackend:
             monotonic=self.monotonic,
             temperature_gate=self.temperature_gate,
             display_wait=self.display_wait,
+            include_intake_ac=self.include_intake_ac,
         )
 
     def arm(self, initial: canbus.InterfaceState) -> bool:
@@ -1110,6 +1115,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--expected-parent-pid", type=int, required=True)
     parser.add_argument("--enable-oil-life", action="store_true",
                         help="broker accepts the fixed oil-life metric (rolling-deploy handshake)")
+    parser.add_argument(ccan_powertrain.INTAKE_AC_FLAG, action="store_true",
+                        help="broker accepts the intake-air and A/C pressure metrics (rolling-deploy handshake)")
     parser.add_argument(helper_startup_grant.GRANT_FD_FLAG, type=int, default=None,
                         help="internal: read end of the supervisor's startup grant pipe")
     parser.add_argument(radar_service_alignment.ENABLE_FLAG, action="store_true",
@@ -1144,6 +1151,7 @@ def main(argv=None) -> int:
         expected_usb_serial=args.expected_usb_serial,
         expected_dev_id=args.expected_dev_id,
     )
+    backend.include_intake_ac = args.enable_intake_ac_broadcasts
     with diagnostic_safety.interrupt_on_termination() as termination:
         outcome = run_active_session(
             backend,

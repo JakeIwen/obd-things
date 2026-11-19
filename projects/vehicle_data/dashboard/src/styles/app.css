@@ -165,13 +165,14 @@ a { color: var(--blue); }
   height: 100%;
   gap: var(--gap);
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-template-rows: 1fr 1fr 1.2fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr 1.2fr 1fr 1fr 1fr;
   grid-template-areas:
     "d2limit d2acc d2acc"
     "d2tank d2fuel d2gear"
     "d2radar d2radar d2radar"
     "d2turb d2out d2power"
-    "d2torque d2target d2odo";
+    "d2torque d2target d2odo"
+    "d2iat d2airc d2airc";
 }
 .area-d2limit { grid-area: d2limit; }
 .area-d2acc { grid-area: d2acc; }
@@ -185,6 +186,8 @@ a { color: var(--blue); }
 .area-d2torque { grid-area: d2torque; }
 .area-d2target { grid-area: d2target; }
 .area-d2odo { grid-area: d2odo; }
+.area-d2iat { grid-area: d2iat; }
+.area-d2airc { grid-area: d2airc; }
 /* Six-digit odometer with separator must fit a one-third column. */
 .area-d2odo .tile__value { font-size: var(--tire); }
 .area-d2odo .tile__unit { font-size: max(13px, .4em); }
@@ -216,12 +219,13 @@ a { color: var(--blue); }
 @media (min-aspect-ratio: 1/1) and (min-width: 900px) {
   .drive2 {
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    grid-template-rows: repeat(4, minmax(0, 1fr));
+    grid-template-rows: repeat(5, minmax(0, 1fr));
     grid-template-areas:
       "d2limit d2acc d2acc d2gear"
       "d2tank d2fuel d2power d2odo"
       "d2radar d2radar d2turb d2out"
-      "d2radar d2radar d2torque d2target";
+      "d2radar d2radar d2torque d2target"
+      "d2iat d2iat d2airc d2airc";
   }
 }
 @media (max-width: 640px) {
@@ -240,6 +244,7 @@ a { color: var(--blue); }
       "d2turb d2out"
       "d2torque d2target"
       "d2power d2odo"
+      "d2iat d2airc"
       "d2fuel d2fuel";
   }
 }

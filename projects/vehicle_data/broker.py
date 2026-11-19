@@ -27,6 +27,7 @@ from projects.vehicle_data.drive_dtc_control import (
 )
 from projects.vehicle_data.engine_off_voltage import EngineOffVoltageCapture
 from projects.vehicle_data.helper_events import validate_helper_status
+from projects.vehicle_data.ccan_powertrain import INTAKE_AC_FLAG
 from projects.vehicle_data.helper_hold import (
     HELD_BLOCKED_REASON,
     HoldRefusal,
@@ -84,7 +85,9 @@ ACTIVE_DRIVE_SOURCES = frozenset(
         "ccan.broadcast.0x1f7",
         "ccan.broadcast.0x2ed",
         "ccan.broadcast.0x2ef",
+        "ccan.broadcast.0x417",
         "ccan.broadcast.0x41a",
+        "ccan.broadcast.0x41b",
         "ccan.broadcast.0x41d",
         # read_broadcast_snapshot derives the gear from 0x1F7, and the helper
         # reuses that snapshot; without this every drive latched restoration
@@ -394,7 +397,8 @@ class ActiveDriveSupervisor:
             ]
         )
         if self.helper_module == ACTIVE_DRIVE_HELPER:
-            command.extend(["--enable-oil-life", *drive_dtc_arguments(self.drive_dtc)])
+            command.extend([INTAKE_AC_FLAG, "--enable-oil-life",
+                            *drive_dtc_arguments(self.drive_dtc)])
         grant, process, early_final = self._start_helper(command, stop_event)
         if early_final is not None:
             return early_final

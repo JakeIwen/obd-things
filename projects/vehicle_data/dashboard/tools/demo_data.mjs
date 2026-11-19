@@ -14,6 +14,7 @@ export const DRIVE_DEMO_METRICS = Object.freeze([
   "engine.crankshaft_power",
   "engine.crankshaft_torque",
   "engine.fuel_rate",
+  "engine.intake_air_temperature",
   "engine.oil_pressure",
   "engine.rpm",
   "engine.target_crankshaft_torque",
@@ -21,6 +22,7 @@ export const DRIVE_DEMO_METRICS = Object.freeze([
   "fuel.range",
   "fuel.tank_level",
   "generator.field_duty",
+  "hvac.ac_high_side_pressure",
   "lights.high_beam_on",
   "lights.parking_headlights_on",
   "radar.alignment.azimuth",
@@ -59,6 +61,7 @@ export const DEMO_SCENE = Object.freeze({
     "engine.crankshaft_power": metric(64, "hp", "observed_alfa_scale", "derived.pcm_06da_x_ccan_0x0fc"),
     "engine.crankshaft_torque": metric(148, "lb-ft", "observed_alfa_scale", "pcm.did.06da"),
     "engine.fuel_rate": metric(3.3, "gal/h", "candidate", "ccan.broadcast.0x2ed"),
+    "engine.intake_air_temperature": metric(97, "°F", "candidate", "ccan.broadcast.0x417"),
     "engine.oil_life_remaining": metric(76, "%", "observed_alfa_scale", "pcm.did.2185"),
     "engine.oil_pressure": metric(43, "psi", "observed_alfa_scale", "ccan.broadcast.0x41d"),
     "engine.rpm": metric(2280, "rpm", "observed_alfa_scale", "ccan.broadcast.0x0fc"),
@@ -66,6 +69,7 @@ export const DEMO_SCENE = Object.freeze({
     "engine.vvt_oil_temperature": metric(205, "°F", "observed_alfa_scale", "pcm.did.069f"),
     "fuel.range": metric(160, "mi", "candidate", "bcan.broadcast.0x760"),
     "fuel.tank_level": metric(62, "%", "candidate", "bcan.broadcast.0x356"),
+    "hvac.ac_high_side_pressure": metric(215, "psi", "candidate", "ccan.broadcast.0x41b"),
     "generator.field_duty": metric(39, "%", "observed_alfa_scale", "pcm.did.01a1"),
     "lights.high_beam_on": metric(false, "boolean", "verified", "ccan.broadcast.0x73e"),
     "lights.parking_headlights_on": metric(true, "boolean", "verified", "ccan.broadcast.0x73e"),
@@ -223,6 +227,14 @@ export function validateDemoScene(scene) {
   if (Math.abs(power - value("engine.crankshaft_power")) > 1) {
     throw new Error("demo power must agree with RPM and torque");
   }
+  // Intake air runs a little above ambient and well below coolant; with the A/C
+  // on, the high side sits in the usual 150-250 psi band at highway speed.
+  const intake = value("engine.intake_air_temperature");
+  if (!(intake >= 60 && intake <= 130 && intake < value("engine.coolant_temperature") - 50)) {
+    throw new Error("demo intake air must be a plausible warm-air reading well below coolant");
+  }
+  const acPsi = value("hvac.ac_high_side_pressure");
+  if (!(acPsi >= 150 && acPsi <= 250)) throw new Error("demo A/C high-side pressure must be in the 150-250 psi running band");
   const volts = value("battery.voltage");
   if (!(volts >= 13.6 && volts <= 14.8)) throw new Error("demo running voltage must be in the charging range");
   for (const [name, knots] of Object.entries(scene.sparklines)) {

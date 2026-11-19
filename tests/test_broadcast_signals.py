@@ -230,6 +230,44 @@ def legacy_fuel_rate_observations(
     )
 
 
+def legacy_intake_ac_observations(can_id, data):
+    """Literal baseline for 0x417 and 0x41B (field widths per the Nov 19 screen)."""
+    if can_id == 0x417 and len(data) >= 4:
+        raw = ((data[2] << 8 | data[3]) >> 5) & 0xFF
+        return (
+            PassiveObservation(
+                metric="engine.intake_air_temperature",
+                value=float(raw - 40) * 9.0 / 5.0 + 32.0,
+                unit="°F",
+                source="ccan.broadcast.0x417",
+                quality="candidate",
+                detail=(
+                    "0x417 8-bit field (byte 2 bits 4-0, byte 3 bits 7-5) - 40 °C, "
+                    "converted to °F; width screened on warm July 27 and August 19 "
+                    "captures (field 62-100, smooth crossings of 63/64), not yet tied "
+                    "to a PCM DID"
+                ),
+            ),
+        )
+    if can_id == 0x41B and len(data) >= 2:
+        raw = data[0] << 1 | data[1] >> 7
+        return (
+            PassiveObservation(
+                metric="hvac.ac_high_side_pressure",
+                value=(raw * 9.9 / 1.0 + 6.0) * KPA_TO_PSI,
+                unit="psi",
+                source="ccan.broadcast.0x41b",
+                quality="candidate",
+                detail=(
+                    "0x41B 9-bit field (byte 0, then byte 1 bit 7) x 9.9 + 6 kPa, "
+                    "converted to psi; scale fitted only up to about 420 kPa against "
+                    "one PCM DID 0329 reference drive and extrapolated above it (+/-3 %)"
+                ),
+            ),
+        )
+    return ()
+
+
 def legacy_b_can_voltage(data):
     if len(data) >= 6:
         return (((data[4] << 8) | data[5]) & 0x1FFF) / 400.0
@@ -238,7 +276,7 @@ def legacy_b_can_voltage(data):
 
 class BroadcastSignalsTests(unittest.TestCase):
     def check_observations(self, can_id, data):
-        expected = legacy_observations(can_id, data) + legacy_fuel_rate_observations(can_id, data)
+        expected = legacy_observations(can_id, data) + legacy_fuel_rate_observations(can_id, data) + legacy_intake_ac_observations(can_id, data)
         actual = table_observations(can_id, data)
         # repr includes every metadata string, tuple order, and value type
         # (1, 1.0, True), and distinguishes signed zero and adjacent floats.
@@ -271,15 +309,15 @@ class BroadcastSignalsTests(unittest.TestCase):
                     )
 
     def test_frozen_rows_and_unique_keys(self):
-        self.assertEqual(len(bs.SIGNALS), 12)
-        self.assertEqual(len({(s.bus, s.can_id, s.metric) for s in bs.SIGNALS}), 12)
+        self.assertEqual(len(bs.SIGNALS), 14)
+        self.assertEqual(len({(s.bus, s.can_id, s.metric) for s in bs.SIGNALS}), 14)
         with self.assertRaises(FrozenInstanceError):
             bs.ENGINE_SPEED.can_id = 1
 
     def test_every_raw_byte(self):
         for raw in range(256):
             data = bytes((raw, 0, raw, raw, 0, 0, 0, 0))
-            for can_id in (0x41A, 0x41D, 0x2ED, 0x1F7):
+            for can_id in (0x41A, 0x41D, 0x417, 0x41B, 0x2ED, 0x1F7):
                 self.check_observations(can_id, data)
 
     def test_every_fuel_rate_word_and_its_neighbouring_bits(self):
@@ -327,7 +365,7 @@ class BroadcastSignalsTests(unittest.TestCase):
 
     def test_seeded_payloads_and_every_short_length(self):
         rng = random.Random(0xB10ADCA57)
-        ids = (0x41A, 0x41D, 0x2ED, 0x0FC, 0x100, 0x101, 0x1F7, 0x2EF, 0x7FF, 0x46C)
+        ids = (0x41A, 0x41D, 0x417, 0x41B, 0x2ED, 0x0FC, 0x100, 0x101, 0x1F7, 0x2EF, 0x7FF, 0x46C)
         for length in range(9):
             for _ in range(256):
                 data = rng.randbytes(length)
