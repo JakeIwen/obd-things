@@ -12,7 +12,7 @@ from pathlib import Path
 import threading
 
 from projects.vehicle_data.dtc_research_contract import LIMITS, ResearchError
-from projects.vehicle_data.engine_off_voltage import _atomic_json
+from lib.reports import atomic_json
 
 FILE_NAME = "admissions.json"
 KINDS = ("initial", "resume", "replay", "fallback")
@@ -42,7 +42,9 @@ class Ledger:
 
     def _write(self, launches):
         try:
-            _atomic_json(self.path, {"version": 1, "launches": launches})
+            # Directory-durable: a counted fallback admission must survive a power cut (the daily cap).
+            atomic_json(self.path, {"version": 1, "launches": launches}, prefix=f".{self.path.name}.", indent=None,
+                        sort_keys=True, fsync=True, fsync_dir=True)
         except OSError:
             raise ResearchError("storage_error", "The Pi could not record the launch; nothing was started") from None
 

@@ -247,7 +247,7 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(unreadable.exception.reason, "storage_error")
         self.assertEqual(self.path.read_text(), "not json")
         self.path.unlink()
-        with mock.patch("projects.vehicle_data.dtc_research_ledger._atomic_json", side_effect=OSError("full")):
+        with mock.patch("projects.vehicle_data.dtc_research_ledger.atomic_json", side_effect=OSError("full")):
             with self.assertRaises(ResearchError) as unwritable:
                 self.ledger().admit("r" * 32, "a" * 32, "initial")
         self.assertEqual(unwritable.exception.reason, "storage_error")

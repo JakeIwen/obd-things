@@ -149,12 +149,12 @@ class PauseAndDrainTests(FallbackBase):
         self.assertFalse(reply["rollback_ready"])
         self.assertEqual(reply["reasons"], ["worker_not_billing_capable"])
 
-    def test_a_ledger_the_worker_reports_unavailable_is_not_rollback_ready(self):
+    def test_an_unreadable_ledger_does_not_block_rollback_but_a_missing_attestation_does(self):
         self.pause()
         self.worker.credits_reply = {**self.worker.credits_reply, "enabled": False, "ledger_available": False}
-        self.assertEqual(self.ready()["reasons"], ["ledger_unavailable"])
-        self.worker.credits_reply = {**self.worker.credits_reply, "ledger_available": True}
         self.assertTrue(self.ready()["rollback_ready"])
+        self.worker.credits_reply = {key: value for key, value in self.worker.credits_reply.items() if key != "ledger_available"}
+        self.assertEqual(self.ready()["reasons"], ["ledger_state_unknown"])
 
     def test_a_held_outcome_of_the_oldest_attempt_is_found_however_many_runs_follow(self):
         self.manager.window.limit = 10 ** 6

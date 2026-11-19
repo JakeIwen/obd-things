@@ -145,10 +145,10 @@ class PauseMixin:
             reasons.append("api_sessions_unknown")
         elif count:
             reasons.append("api_sessions_remain")
-        if "ledger_available" not in credits:
+        # The worker must say whether its ledger loaded (it attests to its state), but an unreadable
+        # ledger does not block rollback: with credits off and no API sessions, no credential is at stake.
+        if not isinstance(credits.get("ledger_available"), bool):
             reasons.append("ledger_state_unknown")
-        elif credits["ledger_available"] is not True:
-            reasons.append("ledger_unavailable")
         return reasons
 
     def _settle_held_outcomes(self):
