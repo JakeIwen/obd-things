@@ -50,14 +50,15 @@ class FallbackBase(unittest.TestCase):
         wait_for(lambda: not any(m.following or m.fallbacks for m in self.managers), 5)
         self.state.cleanup()
 
-    def build(self, ledger_limit=60, worker=None):
+    def build(self, ledger_limit=60, worker=None, reconcile=True):
         base = Path(self.state.name)
         store = Store(base / "runs")
         store.load(log=lambda line: None)
         manager = ResearchManager(store, Ledger(base / "admissions.json", limit=ledger_limit), StubCatalog(),
                                   worker or self.worker, Broker(), poll=.02, pause_file=base / "paused",
                                   clock=lambda: INSIDE_GRANTS)
-        self.assertTrue(Reconciler(manager, retry=.05).reconcile_once())
+        if reconcile:
+            self.assertTrue(Reconciler(manager, retry=.05).reconcile_once())
         self.managers.append(manager)
         return manager
 
@@ -441,6 +442,160 @@ class FallbackRefusalDurabilityTests(FallbackBase):
         self.worker.finish(self.worker.launches[1]["attempt_id"], complete(self.worker.launches[1]))
         self.assertEqual(self.settle(run_id)["state"], "done")
         self.assertEqual(len(self.worker.launches), 2)
+
+
+class Crash(BaseException):
+    """The advisor dying inside a call (never caught by the fallback thread's ``except Exception``)."""
+
+
+class FallbackRecoveryTests(FallbackBase):
+    def crash_after_the_worker_admitted_the_fallback(self):
+        """Worker A admits the fallback request; the advisor dies before it records the acceptance."""
+        hook = mock.patch.object(threading, "excepthook", lambda args: None)  # the simulated death's traceback
+        hook.start()
+        self.addCleanup(hook.stop)
+        self.worker.behavior = lambda body: credit_failure() if body.get("billing") != "subscription" else None
+        real = self.worker.launch
+
+        def admitting_then_dying(route, body):
+            real(route, body)
+            if body.get("billing") == "subscription":
+                raise Crash()
+            return 202, {}
+
+        self.worker.launch = admitting_then_dying
+        run_id = self.start()["run_id"]
+        self.assertTrue(wait_for(lambda: len(self.worker.launches) == 2 and not self.manager.fallbacks))
+        self.worker.launch = real
+        self.manager.closed.set()
+        return run_id
+
+    def replace_worker(self):
+        """Worker B: a new instance that has never heard of the fallback request."""
+        self.worker.attempts.clear()
+        self.worker.instance_id = "b" * 32
+        self.worker.job = None
+
+    def test_a_replacement_worker_fence_is_not_proof_the_previous_worker_never_launched(self):
+        run_id = self.crash_after_the_worker_admitted_the_fallback()
+        self.replace_worker()
+        self.manager = self.build()
+        run = self.settle(run_id)
+        self.assertEqual((run["state"], run["reason"]), ("failed", "interrupted"))  # the ambiguous-launch rule
+        self.assertEqual(len(self.worker.launches), 2)  # no relaunch
+        self.assertEqual(self.ledger_kinds(), ["initial", "fallback"])  # the admission stays counted
+
+    def test_a_fence_by_the_same_instance_is_proof_and_the_fallback_continues(self):
+        run_id = self.crash_after_the_worker_admitted_the_fallback()
+        self.worker.attempts.clear()  # the request never arrived at this instance (e.g. it was lost)
+        self.worker.behavior = credit_leg_then_subscription()
+        self.manager = self.build()
+        run = self.settle(run_id)
+        self.assertEqual((run["state"], run["turns"][0]["state"]), ("done", "complete"))
+        self.assertEqual(self.ledger_kinds(), ["initial", "fallback"])
+
+    def test_the_retained_fence_still_proves_non_admission_when_saving_the_withdrawal_failed(self):
+        run_id = self.crash_after_the_worker_admitted_the_fallback()
+        self.worker.attempts.clear()
+        self.worker.behavior = credit_leg_then_subscription()
+        self.manager = self.build(reconcile=False)
+        real = self.manager.store.save
+        failures = []
+
+        def failing_once(record):
+            if not failures and "sending" not in (record["turns"][-1].get("pending_fallback") or {"sending": 1}):
+                failures.append(1)
+                raise OSError("disk full")
+            return real(record)
+
+        self.manager.store.save = failing_once
+        self.assertFalse(Reconciler(self.manager, retry=.05).reconcile_once())  # fenced, withdrawal not saved
+        self.assertTrue(failures)
+        self.assertTrue(Reconciler(self.manager, retry=.05).reconcile_once())  # the tombstone answers now
+        run = self.settle(run_id)
+        self.assertEqual((run["state"], run["turns"][0]["state"]), ("done", "complete"))
+
+    def test_an_advisor_restart_between_fencing_and_saving_still_continues_the_fallback(self):
+        run_id = self.crash_after_the_worker_admitted_the_fallback()
+        self.worker.attempts.clear()
+        self.worker.fence(self.turn(run_id)["pending_fallback"]["sending"]["attempt_id"])  # fenced, never saved
+        self.worker.behavior = credit_leg_then_subscription()
+        self.manager = self.build()
+        run = self.settle(run_id)
+        self.assertEqual((run["state"], run["turns"][0]["state"]), ("done", "complete"))
+
+    def test_reconciliation_never_cancels_a_fallback_request_whose_reply_is_outstanding(self):
+        self.worker.behavior = lambda body: credit_failure() if body.get("billing") != "subscription" else None
+        entered, gate = threading.Event(), threading.Event()
+        real = self.worker.launch
+
+        def slow(route, body):
+            reply = real(route, body)
+            if body.get("billing") == "subscription":
+                entered.set()
+                gate.wait(20)
+            return reply
+
+        self.worker.launch = slow
+        self.addCleanup(gate.set)
+        run_id = self.start()["run_id"]
+        self.assertTrue(entered.wait(10))
+        sending = self.turn(run_id)["pending_fallback"]["sending"]["attempt_id"]
+        self.worker.job = {"attempt_id": sending, "kind": "turn"}
+        self.assertFalse(Reconciler(self.manager, retry=.05).reconcile_once())  # waits, as for any owned job
+        self.assertEqual(self.worker.cancelled, [])
+        self.assertEqual(len(self.worker.launches), 2)  # and nothing is sent a second time
+        gate.set()
+        self.worker.job = None
+        self.worker.finish(sending, complete(self.worker.launches[1]))
+        self.assertEqual(self.settle(run_id)["state"], "done")
+
+    def test_a_thread_that_cannot_start_during_restart_recovery_leaves_the_turn_reconciling(self):
+        from projects.vehicle_data import dtc_research_fallback
+        original = self.worker.behavior
+        self.worker.behavior = lambda body: credit_failure() if body.get("billing") != "subscription" else None
+        run_id = self.crash_after_the_worker_admitted_the_fallback()
+        self.worker.attempts.clear()
+        self.worker.behavior = original
+        real = dtc_research_fallback.threading.Thread
+        failures = []
+
+        class FailingOnce(real):
+            def start(self):
+                if self._target and self._target.__name__ == "_fallback_loop" and not failures:
+                    failures.append(1)
+                    raise RuntimeError("can't start new thread")
+                super().start()
+
+        self.manager = self.build(reconcile=False)
+        reconciler = Reconciler(self.manager, retry=.05)
+        with mock.patch.object(dtc_research_fallback.threading, "Thread", FailingOnce):
+            with self.assertRaises(RuntimeError):
+                reconciler.reconcile_once()
+            self.assertEqual(self.turn(run_id)["state"], "reconciling")  # picked up again by the next pass
+            self.assertNotEqual(self.manager.state, "idle")
+            self.assertTrue(reconciler.reconcile_once())
+        run = self.settle(run_id)
+        self.assertEqual((run["state"], run["turns"][0]["state"]), ("done", "complete"))
+
+
+class StoreDurabilityTests(FallbackBase):
+    def test_a_saved_cancel_syncs_the_records_directory(self):
+        import os
+        import stat
+        self.worker.behavior = lambda body: None
+        run_id = self.start()["run_id"]
+        synced = []
+        real = os.fsync
+
+        def recording(fd):
+            synced.append(stat.S_ISDIR(os.fstat(fd).st_mode))
+            return real(fd)
+
+        with mock.patch("os.fsync", recording):
+            self.cancel(run_id)
+        self.assertIn(True, synced)  # the rename is durable, not only the file's bytes
+        self.assertIn(False, synced)
 
 
 class FallbackThreadTests(FallbackBase):

@@ -141,9 +141,19 @@ class PauseAndDrainTests(FallbackBase):
         self.worker.job = {"attempt_id": "a" * 32, "kind": "maintenance"}
         self.assertIn("worker_job", self.ready()["reasons"])
 
-    def test_an_old_worker_without_billing_is_rollback_ready_once_drained(self):
+    def test_an_old_worker_is_drained_but_never_rollback_ready_because_it_cannot_attest(self):
         self.pause()
         self.worker.capable = False
+        self.assertTrue(self.drained()["drained"])  # drained stays interoperable
+        reply = self.ready()
+        self.assertFalse(reply["rollback_ready"])
+        self.assertEqual(reply["reasons"], ["worker_not_billing_capable"])
+
+    def test_a_ledger_the_worker_reports_unavailable_is_not_rollback_ready(self):
+        self.pause()
+        self.worker.credits_reply = {**self.worker.credits_reply, "enabled": False, "ledger_available": False}
+        self.assertEqual(self.ready()["reasons"], ["ledger_unavailable"])
+        self.worker.credits_reply = {**self.worker.credits_reply, "ledger_available": True}
         self.assertTrue(self.ready()["rollback_ready"])
 
     def test_a_held_outcome_of_the_oldest_attempt_is_found_however_many_runs_follow(self):

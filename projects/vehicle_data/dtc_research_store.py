@@ -18,7 +18,7 @@ from projects.vehicle_data.assistant_common import now
 from projects.vehicle_data.dtc_research_contract import (
     CONTINUE_MODES, MAX_RUNS, MAX_TURNS, PHASES, RUN_ID_RE, SIZES, STATES, encoded_len,
 )
-from projects.vehicle_data.engine_off_voltage import _atomic_json
+from lib.reports import atomic_json
 
 SCHEMA_VERSION = 1
 BUSY_STATES = ("running", "reconciling")
@@ -162,7 +162,11 @@ class Store:
 
     def save(self, record):
         record["updated_at"] = now()
-        _atomic_json(self.directory / f"{record['run_id']}.json", record)
+        # Directory-durable: a cancel or pending-fallback transition that is acknowledged must survive
+        # a power loss, or a restart would relaunch what the owner stopped.
+        path = self.directory / f"{record['run_id']}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_json(path, record, prefix=f".{path.name}.", indent=None, sort_keys=True, fsync=True, fsync_dir=True)
 
     def delete(self, run_id):
         """Forget the run now, even when its file cannot be removed: a run that is gone from memory can

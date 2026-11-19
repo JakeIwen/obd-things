@@ -505,8 +505,9 @@ advisor's JSON reply; `drained` and `rollback-ready` exit 0 only when their cond
 
    `rollback-ready` is `drained` and, from the worker's `/credits`, `enabled: false`, no
    API-created session (`api_sessions`, counted by transcript, not marker; an old worker looks
-   for the transcript) and a reported `ledger_available`. An old worker with no billing
-   capability has none of these by construction.
+   for the transcript) and `ledger_available: true`. The worker must advertise billing: an old
+   worker, or any reply that cannot attest to these, is never ready (`drained` alone stays
+   satisfiable with an old worker).
 4. Roll the **worker** back first (previous code, restart `van-telemetry-research.service`) and
    check that `/status` answers with a new `instance_id`. Then roll the **advisor** back last
    (previous code, restart `van-telemetry-advisor.service`): its startup is where admission

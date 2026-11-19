@@ -131,10 +131,11 @@ class PauseMixin:
 
     def _credit_state_blockers(self, status):
         """What an old worker must not meet: credits still on, an API-created session (it looks for the
-        transcript, not the billing marker), or a worker that does not report its ledger state. A
-        worker that does not advertise billing has none of these by construction."""
+        transcript, not the billing marker), or a worker that cannot attest to either. Only a worker
+        that advertises billing and explicitly reports credits off, zero sessions and its ledger state
+        passes; anything uncheckable (including an old worker) is not ready."""
         if not status.get("billing_capable"):
-            return []
+            return ["worker_not_billing_capable"]
         credits = self.worker.credits()
         reasons = []
         if credits.get("enabled") is not False:
@@ -146,6 +147,8 @@ class PauseMixin:
             reasons.append("api_sessions_remain")
         if "ledger_available" not in credits:
             reasons.append("ledger_state_unknown")
+        elif credits["ledger_available"] is not True:
+            reasons.append("ledger_unavailable")
         return reasons
 
     def _settle_held_outcomes(self):
