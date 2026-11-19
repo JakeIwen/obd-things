@@ -46,11 +46,6 @@ class CreditClient(RigClient):
             reply.pop("billing_capable", None)
         return reply
 
-    def credits(self):
-        # The worker side (a parallel change) reports ``ledger_available``; until the two sides merge the
-        # real worker omits it, so this default says "its ledger loaded", which is what the rig builds.
-        return {"ledger_available": True, **super().credits()}
-
     def launch(self, route, body):
         self.bodies.append(body)
         if self.on_subscription and body.get("billing") == "subscription":

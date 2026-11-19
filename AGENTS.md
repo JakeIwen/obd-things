@@ -539,7 +539,7 @@ dashboard imports the JSON); worker side `api_credits.py` (pure: key reader, bil
 failure classifier, spend tally), `api_credits_ledger.py` (the durable ledger and latches),
 `research_credits.py` (policy flag, key, ledger and the per-launch plan the runner settles; policy
 flag `claude.api_credits.enabled` in `research_cli_policy.json`); advisor side
-`dtc_research_fallback.py` (the counted subscription relaunch, cancel intent, pending fallback),
+`dtc_research_launch.py` (the reserved/sent launch shape the fallback sends outside the manager lock), `dtc_research_fallback.py` (the counted subscription relaunch, cancel intent, pending fallback),
 `dtc_research_pause.py` (rollback pause file, `drained`, admin routes), `dtc_research_admin.py`
 (owner CLI for them), `api_credits_snapshot.py` (the Mac's balance snapshot, a disclosed copy of
 `~/config/shared/promo-api/credits.py` `validate()`), `api_credits_view.py` (the pure view behind
