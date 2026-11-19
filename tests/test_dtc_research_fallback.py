@@ -485,6 +485,17 @@ class FallbackRecoveryTests(FallbackBase):
         self.assertEqual(len(self.worker.launches), 2)  # no relaunch
         self.assertEqual(self.ledger_kinds(), ["initial", "fallback"])  # the admission stays counted
 
+    def test_a_plain_unknown_reply_from_the_destination_is_not_fallback_fence_proof(self):
+        run_id = self.crash_after_the_worker_admitted_the_fallback()
+        self.worker.attempts.clear()
+        self.worker.behavior = credit_leg_then_subscription()
+        with mock.patch.object(self.worker, "fence", side_effect=self.worker.attempt):
+            self.manager = self.build()
+        run = self.settle(run_id)
+        self.assertEqual((run["state"], run["reason"]), ("failed", "interrupted"))
+        self.assertEqual(len(self.worker.launches), 2)
+        self.assertEqual(self.ledger_kinds(), ["initial", "fallback"])
+
     def test_a_fence_by_the_same_instance_is_proof_and_the_fallback_continues(self):
         run_id = self.crash_after_the_worker_admitted_the_fallback()
         self.worker.attempts.clear()  # the request never arrived at this instance (e.g. it was lost)

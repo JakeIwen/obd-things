@@ -184,8 +184,6 @@ class Worker:
 
         def check():
             self._check_launch(request.provider, turn=True)
-            if request.kind == "resume" and not self._session_exists(request):
-                raise Refused("session_missing", "the CLI session for this run is gone")
             plan = self._plan_billing(request, body["attempt_id"])
             try:
                 self._take_cli_lock()
@@ -204,20 +202,16 @@ class Worker:
         stay on credits is ``replay_required`` (the advisor replays it on the subscription)."""
         record = None
         if request.kind == "resume":
-            origin = self.volume.session_origin(request.run_id, request.session_id)
-            if origin is None:  # missing or unreadable provenance: never resumed on either credential
-                raise Refused("session_missing", "the CLI session for this run has no readable origin")
-            record = {"billing": origin}
+            resumed = self.volume.resume_session(request.run_id, request.session_id)
+            if resumed is None:
+                raise Refused("session_missing", "the CLI session for this run has no verified transcript and origin")
+            record = {"billing": resumed[0]}
         plan = self.credits.plan(request, record, credits_allowed=True, attempt_id=attempt_id)
         if plan.billing.choice == REPLAY_REQUIRED:
             raise Refused(REPLAY_REQUIRED, "this session was billed to API credits and cannot resume on the subscription")
         if plan.billing.choice == SESSION_MISSING:
             raise Refused("session_missing", "the CLI session for this run is gone")
         return plan
-
-    def _session_exists(self, request):
-        from projects.vehicle_data.research_cli import claude_session_files
-        return bool(claude_session_files(self.volume.run_dir(request.run_id) / "home", request.session_id))
 
     def admit_discovery(self, body):
         if body.get("provider") != "claude":

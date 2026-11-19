@@ -24,7 +24,7 @@ from projects.vehicle_data.api_credits_ledger import LedgerError
 from projects.vehicle_data.dtc_research_contract import SIZES, TIMEOUTS, truncate_encoded
 from projects.vehicle_data.research_credits import SUBSCRIPTION_PLAN
 from projects.vehicle_data.research_memory import MIB, Watchdog, launch_refusal
-from projects.vehicle_data.research_volume import FREE_FLOOR_MIB, RUN_CAP_MIB
+from projects.vehicle_data.research_volume import FREE_FLOOR_MIB, PENDING_SCAN, RUN_CAP_MIB
 
 # Stop reasons that are not turn reasons: the advisor reacts to them itself.
 INTERNAL_REASONS = ("resume_unverified", PROTOCOL["fallbackReason"])
@@ -87,14 +87,15 @@ class Runner:
                 before = 0
             else:
                 session_id = request.session_id
-                before = research_cli.session_size(research_cli.claude_session_files(home, session_id))
+                resumed = self.volume.resume_session(request.run_id, session_id)
+                if resumed is None or resumed[0] != plan.billing.choice:
+                    self._close_entry(plan, None, None, spawned=False)
+                    return _failed("session_missing", "the origin of this run's session is not recorded")
+                _, before = resumed
             attempt.session_id = session_id
-            origin = plan.billing.choice if request.kind == "initial" else self.volume.session_origin(request.run_id, request.session_id)
-            if origin is None:  # admission refuses this; a record lost since then is never guessed at
-                self._close_entry(plan, None, None, spawned=False)
-                return _failed("session_missing", "the origin of this run's session is not recorded")
-            self.volume.save_session_record(request.run_id, {"provider": "claude", "session_id": session_id,
-                                                             "billing": origin})
+            marker = {"provider": "claude", "session_id": session_id, "billing": plan.billing.choice}
+            # A crash anywhere after the marker is durable but before the scan leaves only replay.
+            self.volume.save_session_record(request.run_id, {**marker, PENDING_SCAN: True} if plan.credit else marker)
             argv = research_cli.claude_argv(identity.executable, model=request.model, effort=request.effort,
                                              session_id=session_id, resume=request.kind == "resume",
                                              budget_usd=request.budget_usd)
@@ -105,32 +106,45 @@ class Runner:
             outcome = self._outcome(request, stream, result, watchdog)
             self._close_entry(plan, stream, result, spawned=result.returncode is not None)
             outcome = self._credit_outcome(plan, request, stream, result, outcome)
-            if outcome["status"] == "complete" and request.kind == "resume":
-                after = research_cli.session_size(research_cli.claude_session_files(home, session_id))
-                if after <= before:
-                    outcome = _failed("resume_unverified", "the session file did not grow")
-            spawned = result.returncode is not None  # a launch refused before its spawn left the session alone
-            tainted = spawned and plan.credit and self.volume.transcript_holds(request.run_id, plan.key)
-            if tainted:
-                self._retire_tainted_session(request.run_id)
-            elif spawned and outcome.get("reason") in ("resume_unverified", "space_exhausted", "memory_exhausted",
-                                                     PROTOCOL["fallbackReason"]):
-                self.volume.drop_session(request.run_id)
-            outcome["session_present"] = bool(research_cli.claude_session_files(home, session_id)) and not tainted
-            outcome["session_id"] = session_id if outcome["session_present"] else None
-            return outcome
+            spawned = result.returncode is not None
+            return self._finish_session(request, plan, marker, before, spawned, outcome)
         finally:
             self.volume.clear(tmpdir)
             self.volume.enforce_targets(busy_run=None)
 
+    def _finish_session(self, request, plan, marker, before, spawned, outcome):
+        session_id, size, unsafe = marker["session_id"], None, False
+        if not plan.credit or spawned:
+            inventory = self.volume.transcript_inventory(request.run_id, plan.key)
+            size = inventory.matching_size(session_id)
+            unsafe = inventory.inspection_error or inventory.marker_error or (bool(inventory.files) and size is None)
+            if plan.credit:
+                unsafe = unsafe or inventory.key_found or inventory.record != {**marker, PENDING_SCAN: True}
+        if outcome["status"] == "complete" and request.kind == "resume" and (size is None or size <= before):
+            outcome = _failed("resume_unverified", "the session file did not grow")
+        if spawned and plan.credit and unsafe:
+            self._retire_tainted_session(request.run_id)
+        elif spawned and outcome.get("reason") in ("resume_unverified", "space_exhausted", "memory_exhausted",
+                                                   PROTOCOL["fallbackReason"]):
+            self.volume.drop_session(request.run_id)
+            size = None
+        elif spawned and plan.credit:
+            # The child has been reaped and the whole inventory is verified. Only now is the
+            # provenance safe to use (including for a subsequent credit resume).
+            try:
+                self.volume.save_session_record(request.run_id, marker)
+            except OSError:
+                unsafe = True  # keep the sanitized answer; do not advertise a resumable session
+        outcome["session_present"] = size is not None and not unsafe
+        outcome["session_id"] = session_id if outcome["session_present"] else None
+        return outcome
+
     def _retire_tainted_session(self, run_id):
-        """The CLI's own transcript holds the installed key (the child echoed it into the conversation),
-        and ``--resume`` would feed it back to the model: poison the session so no resume is admitted
-        on either credential (the advisor replays from its sanitized record), then delete it."""
+        """Retire an unsafe transcript. If poisoning fails, its pending marker still bars resume."""
         try:
             self.volume.poison_session(run_id)
         except OSError:
-            (self.volume.run_dir(run_id) / "session.json").unlink(missing_ok=True)
+            pass
         self.volume.drop_session(run_id)
 
     def _close_entry(self, plan, stream, result, *, spawned):

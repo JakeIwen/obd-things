@@ -6,11 +6,14 @@ working directory and HOME (which holds Claude's session), the attempt's TMPDIR 
 discovery home. The worker keeps the volume under its targets: per run, across runs, and free space.
 """
 
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import stat
 
 from lib.reports import atomic_json
 from projects.vehicle_data.api_credits_contract import API_CREDITS, PATHS, SUBSCRIPTION
@@ -74,9 +77,165 @@ def footprint(path):
     return total
 
 
+# Bound the walk as well as its reads. The run watchdog already caps total run storage.
+MAX_TRANSCRIPT_BYTES = RUN_CAP_MIB * MIB
+MAX_HOME_ENTRIES = 8192
+MAX_HOME_DEPTH = 32
+MAX_MARKER_BYTES = 8192
+PENDING_SCAN = "pending_scan"
+READ_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+
+
+@contextmanager
+def _directory(path, parent=None):
+    fd = os.open(path, READ_FLAGS | os.O_DIRECTORY, dir_fd=parent)
+    try:
+        yield fd
+    finally:
+        os.close(fd)
+
+
+@contextmanager
+def _regular_file(parent, name):
+    fd = os.open(name, READ_FLAGS, dir_fd=parent)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError("not a regular file")
+        yield fd, info
+    finally:
+        os.close(fd)
+
+
+def _read_marker(run_fd):
+    try:
+        with _regular_file(run_fd, "session.json") as (fd, info):
+            if info.st_size > MAX_MARKER_BYTES:
+                raise ValueError("session marker is too large")
+            data = os.read(fd, MAX_MARKER_BYTES + 1)
+            if len(data) != info.st_size:
+                raise ValueError("session marker read was incomplete")
+            record = json.loads(data)
+            if not isinstance(record, dict):
+                raise ValueError("session marker is not an object")
+            return record, False
+    except FileNotFoundError:
+        return {}, False
+    except (OSError, ValueError, RecursionError):
+        return {}, True
+
+
+def _marker_origin(record):
+    if not isinstance(record.get("session_id"), str) or record.get("poisoned", False) is not False \
+            or record.get(PENDING_SCAN, False) is not False:
+        return None
+    origin = record.get("billing", SUBSCRIPTION)
+    return origin if origin in (API_CREDITS, SUBSCRIPTION) else None
+
+
+@dataclass
+class TranscriptInventory:
+    record: dict = field(default_factory=dict)
+    files: dict[tuple[str, ...], int] = field(default_factory=dict)
+    marker_error: bool = False
+    inspection_error: bool = False
+    key_found: bool = False
+    entries: int = 0
+    remaining_bytes: int = MAX_TRANSCRIPT_BYTES
+
+    def matching_size(self, session_id):
+        """A single matching transcript in the layout Claude can actually resume."""
+        if len(self.files) != 1:
+            return None
+        (path, size), = self.files.items()
+        if len(path) == 4 and path[:2] == (".claude", "projects") and path[-1] == session_id + ".jsonl":
+            return size
+        return None
+
+    def resume(self, session_id):
+        if self.inspection_error or self.marker_error or self.record.get("session_id") != session_id:
+            return None
+        size, origin = self.matching_size(session_id), _marker_origin(self.record)
+        return (origin, size) if size is not None and origin is not None else None
+
+    def counts_as(self, billing):
+        session_id = self.record.get("session_id")
+        safe = self.resume(session_id) if isinstance(session_id, str) else None
+        if safe:
+            return safe[0] == billing
+        return billing == API_CREDITS and bool(
+            self.files or self.marker_error or self.inspection_error or self.record.get(PENDING_SCAN))
+
+
+def _scan_transcript(parent, name, inventory, needle):
+    with _regular_file(parent, name) as (fd, info):
+        size = info.st_size
+        if size > min(MAX_TRANSCRIPT_BYTES, inventory.remaining_bytes):
+            raise OSError("transcript read budget exceeded")
+        remaining, tail = size, b""
+        while remaining:
+            chunk = os.read(fd, min(remaining, 1 << 20))
+            if not chunk:
+                raise OSError("transcript shrank during inspection")
+            remaining -= len(chunk)
+            inventory.remaining_bytes -= len(chunk)
+            if needle:
+                window = tail + chunk
+                inventory.key_found |= needle in window
+                tail = window[-len(needle):]
+        after = os.fstat(fd)
+        if (after.st_size, after.st_mtime_ns, after.st_ctime_ns) != (size, info.st_mtime_ns, info.st_ctime_ns):
+            raise OSError("transcript changed during inspection")
+        return size
+
+
+def _scan_home(fd, prefix, inventory, needle):
+    if len(prefix) >= MAX_HOME_DEPTH:
+        inventory.inspection_error = True
+        return
+    # Open each directory relative to its already-open parent: a symlink substitution cannot
+    # redirect the walk outside the home. Keep scanning siblings after any failed inspection.
+    try:
+        with os.scandir(fd) as entries:
+            for entry in entries:
+                if inventory.entries >= MAX_HOME_ENTRIES:
+                    inventory.inspection_error = True
+                    return
+                inventory.entries += 1
+                path = (*prefix, entry.name)
+                try:
+                    mode = entry.stat(follow_symlinks=False).st_mode
+                    if stat.S_ISLNK(mode):
+                        inventory.inspection_error = True  # cannot attest to a linked subtree
+                    elif stat.S_ISDIR(mode):
+                        with _directory(entry.name, fd) as child:
+                            _scan_home(child, path, inventory, needle)
+                    elif entry.name.endswith(".jsonl"):
+                        if not stat.S_ISREG(mode):
+                            raise OSError("not a regular transcript")
+                        inventory.files[path] = _scan_transcript(fd, entry.name, inventory, needle)
+                except OSError:
+                    inventory.inspection_error = True
+    except OSError:
+        inventory.inspection_error = True
+
+
+def _scan_run_home(run_fd, inventory, secret=None):
+    try:
+        with _directory("home", run_fd) as home:
+            _scan_home(home, (), inventory, secret.encode() if secret else None)
+    except FileNotFoundError:
+        pass  # no HOME means there can be no transcript
+    except OSError:
+        inventory.inspection_error = True
+
+
 class Volume:
     def __init__(self, root=WORKER["volume"]):
         self.root = Path(root)
+        # A failed directory fsync or marker removal is not a verified purge, even if a later
+        # inventory can no longer see a transcript. A disabled-worker restart retries the drop.
+        self._unverified_credit_drops = set()
 
     token = property(lambda self: self.root / "claude-oauth-token")
     codex_home = property(lambda self: self.root / "codex-home")
@@ -107,114 +266,112 @@ class Volume:
 
     def session_record(self, run_id):
         try:
-            return json.loads((self.run_dir(run_id) / "session.json").read_text())
-        except (OSError, ValueError, RecursionError):
+            with _directory(self.runs) as runs, _directory(self.run_dir(run_id).name, runs) as run:
+                record, error = _read_marker(run)
+                return record if record and not error else None
+        except OSError:
             return None
 
-    def _record_fields(self, run_id):
-        """The record as a dict: a damaged file holding any other JSON value reads as empty."""
-        record = self.session_record(run_id)
-        return record if isinstance(record, dict) else {}
-
     def save_session_record(self, run_id, record):
-        """Durably (file and directory fsynced) replace the run's ``session.json``: the billing origin
-        must survive a crash before the process that creates the transcript is spawned."""
+        """Durably replace ``session.json`` before the process can create or append a transcript."""
         path = self.run_dir(run_id) / "session.json"
         atomic_json(path, record, prefix=".session-", indent=None, fsync=True, fsync_dir=True)
 
-    def session_origin(self, run_id, session_id=None):
-        """The billing a run's session was created under: ``api_credits`` or ``subscription`` when the
-        record says so, ``subscription`` for an intact record of the era before billing was recorded
-        (a readable object with a session id and no ``billing`` key), and ``None`` when the provenance
-        is missing, unreadable, malformed, poisoned (the transcript may hold the key) or, when
-        ``session_id`` is given, a marker for a different session. ``None`` is never resumable."""
-        record = self._record_fields(run_id)
-        if not isinstance(record.get("session_id"), str) or record.get("poisoned") is True:
-            return None
-        if session_id is not None and record["session_id"] != session_id:
-            return None
-        if "billing" not in record:
-            return SUBSCRIPTION
-        return record["billing"] if record["billing"] in (API_CREDITS, SUBSCRIPTION) else None
+    def transcript_inventory(self, run_id, secret=None):
+        """One bounded inspection, including files that have no matching safe session marker."""
+        inventory = TranscriptInventory()
+        try:
+            with _directory(self.runs) as runs, _directory(self.run_dir(run_id).name, runs) as run:
+                inventory.record, inventory.marker_error = _read_marker(run)
+                _scan_run_home(run, inventory, secret)
+        except FileNotFoundError:
+            pass  # the run was never created or has been deleted
+        except OSError:
+            inventory.inspection_error = True
+        return inventory
+
+    def resume_session(self, run_id, session_id):
+        """The origin and size of the only resumable transcript, or ``None`` (replay required)."""
+        return self.transcript_inventory(run_id).resume(session_id)
 
     def poison_session(self, run_id):
-        """Mark the run's session unresumable on either credential (durably), keeping its other fields."""
-        self.save_session_record(run_id, {**self._record_fields(run_id), "poisoned": True})
-
-    def transcript_state(self, run_id):
-        """``"present"``, ``"absent"`` (verified: the scan met no error) or ``"error"`` (a directory
-        could not be listed, so absence is not proven) for the CLI transcripts anywhere in a run's HOME."""
-        errors = []
-        for _root, _dirs, names in os.walk(self.run_dir(run_id) / "home", onerror=errors.append):
-            if any(name.endswith(".jsonl") for name in names):
-                return "present"
-        return "error" if any(not isinstance(error, FileNotFoundError) for error in errors) else "absent"
-
-    def transcript_holds(self, run_id, secret):
-        """True when any transcript file in the run's HOME contains ``secret`` (exact bytes), or cannot be
-        read to find out. Files are read in chunks, with overlap so a match across a boundary is seen."""
-        needle = secret.encode()
-        for root, _dirs, names in os.walk(self.run_dir(run_id) / "home", onerror=lambda _e: None):
-            for name in names:
-                if not name.endswith(".jsonl"):
-                    continue
-                try:
-                    with open(os.path.join(root, name), "rb") as handle:
-                        tail = b""
-                        while chunk := handle.read(1 << 20):
-                            if needle in tail + chunk:
-                                return True
-                            tail = (tail + chunk)[-len(needle):]
-                except OSError:
-                    return True
-        return self.transcript_state(run_id) == "error"
+        """Mark a run's session unresumable on either credential (durably)."""
+        self.save_session_record(run_id, {**(self.session_record(run_id) or {}), "poisoned": True})
 
     def drop_session(self, run_id):
-        """Delete a run's CLI session files; later follow-ups replay. Returns whether the deletion is
-        verified (the scan met no error and found no transcript): the provenance marker stays
-        otherwise, so a leftover transcript is never left without its origin."""
-        record = self._record_fields(run_id)
-        shutil.rmtree(self.run_dir(run_id) / "home", ignore_errors=True)
-        rollout = record.get("rollout_path")
-        if isinstance(rollout, str) and Path(rollout).resolve().is_relative_to(self.codex_home.resolve()):
-            Path(rollout).unlink(missing_ok=True)
-        if self.transcript_state(run_id) != "absent":
+        """Delete the CLI session, and remove its marker only after verifying the home is clean."""
+        path = self.run_dir(run_id)
+        try:
+            with _directory(self.runs) as runs, _directory(path.name, runs) as run:
+                record, _ = _read_marker(run)
+                shutil.rmtree("home", dir_fd=run, ignore_errors=True)
+                rollout = record.get("rollout_path")
+                if isinstance(rollout, str) and Path(rollout).resolve().is_relative_to(self.codex_home.resolve()):
+                    Path(rollout).unlink(missing_ok=True)
+                inventory = TranscriptInventory()
+                _scan_run_home(run, inventory)
+                if inventory.files or inventory.inspection_error:
+                    return False
+                # Make removal of HOME durable before allowing its provenance to disappear.
+                os.fsync(run)
+                try:
+                    os.unlink("session.json", dir_fd=run)
+                except FileNotFoundError:
+                    pass
+        except FileNotFoundError:
+            return True  # no run or runs directory
+        except (OSError, ValueError, RuntimeError):
             return False
-        (self.run_dir(run_id) / "session.json").unlink(missing_ok=True)
         return True
 
-    def _run_names(self):
-        return [path.name for path in self.runs.glob("*") if path.is_dir() and RUN_ID_RE.fullmatch(path.name)]
+    def _session_runs(self):
+        """Yield names to inspect; ``None`` means enumeration could not be completed."""
+        try:
+            with _directory(self.runs) as runs, os.scandir(runs) as entries:
+                for index, entry in enumerate(entries):
+                    if index >= MAX_HOME_ENTRIES:
+                        yield None
+                        return
+                    if RUN_ID_RE.fullmatch(entry.name):
+                        yield entry.name  # inventory opens it without following symlinks
+        except FileNotFoundError:
+            pass
+        except OSError:
+            yield None
 
     def drop_sessions_billed(self, billing):
-        """Delete the CLI session of every run created under ``billing``; for API credits that includes
-        a run whose transcript has no readable origin (it must not survive a rollback). Returns the
-        number of runs whose deletion could not be verified."""
-        failed = 0
-        for name in self._run_names():
-            origin = self.session_origin(name)
-            if origin == billing or (origin is None and billing == API_CREDITS
-                                     and self.transcript_state(name) != "absent"):
-                failed += not self.drop_session(name)
-        return failed
+        """Drop matching sessions (including unsafe ones for API billing); count unverified drops."""
+        failed, unverified = 0, set()
+        for name in self._session_runs():
+            if name is None:
+                failed += 1
+            elif self.transcript_inventory(name).counts_as(billing) or (
+                    billing == API_CREDITS and name in self._unverified_credit_drops):
+                if not self.drop_session(name):
+                    unverified.add(name)
+        if billing == API_CREDITS:
+            self._unverified_credit_drops = unverified | (self._unverified_credit_drops if failed else set())
+        return failed + len(unverified)
 
     def count_sessions_billed(self, billing):
-        """Runs whose CLI transcript still exists (or cannot be shown absent) and was created under
-        ``billing``; for API credits a transcript with a missing or unreadable origin counts too."""
-        count = 0
-        for name in self._run_names():
-            origin = self.session_origin(name)
-            if (origin == billing or (origin is None and billing == API_CREDITS)) \
-                    and self.transcript_state(name) != "absent":
-                count += 1
-        return count
+        """Count matching runs, including unsafe transcripts and failed API purge attestations."""
+        names = set()
+        uncertain = 0
+        for name in self._session_runs():
+            if name is None:
+                uncertain += billing == API_CREDITS
+            elif self.transcript_inventory(name).counts_as(billing):
+                names.add(name)
+        if billing == API_CREDITS:
+            names.update(self._unverified_credit_drops)
+        return len(names) + uncertain
 
     def delete_run(self, run_id):
         self.drop_session(run_id)
         self.clear(self.run_dir(run_id))
 
     def run_footprint(self, run_id):
-        rollout = self._record_fields(run_id).get("rollout_path")
+        rollout = (self.session_record(run_id) or {}).get("rollout_path")
         extra = Path(rollout).stat().st_size if isinstance(rollout, str) and Path(rollout).exists() else 0
         return footprint(self.run_dir(run_id)) + extra
 

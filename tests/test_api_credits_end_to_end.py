@@ -3,6 +3,7 @@
 import json
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import os
 from pathlib import Path
 import tempfile
 import time
@@ -10,6 +11,7 @@ import unittest
 from unittest import mock
 import uuid
 
+from projects.vehicle_data import cli_process
 from projects.vehicle_data.api_credits_contract import ADMIN_ROUTES, FALLBACK, GRANTS, UNTIL
 from projects.vehicle_data.api_credits_snapshot import GrantBalance, Snapshot
 from projects.vehicle_data.assistant_models import Catalog
@@ -122,6 +124,16 @@ class EndToEndBase(unittest.TestCase):
         return [call for call in self.rig.calls() if "ANTHROPIC_API_KEY" in call["env"]]
 
 
+    def restart_worker(self, *, credits_enabled):
+        rig = self.rig
+        rig.policy["claude"]["api_credits"]["enabled"] = credits_enabled
+        rig.worker.close()
+        rig.worker = Worker(rig.volume, IdentityChecker(rig.cli_root, rig.policy), CliLock(rig.lock_path),
+                            meminfo=rig.meminfo, policy=rig.policy, dns=rig.worker.dns, now=lambda: rig.now)
+        rig.worker.start()
+        rig.settle()
+
+
 class CreditLegFailureTests(EndToEndBase):
     scenario = BILLING_FAILURE
 
@@ -175,6 +187,53 @@ class CreditSuccessTests(EndToEndBase):
         self.assertEqual(turns[-1]["billing"], "subscription")
         self.assertNotIn("--resume", " ".join(self.turn_calls()[-1]["argv"]))
 
+    def test_an_interrupted_credit_resume_is_not_resumed_again_after_restart(self):
+        run_id = self.start()["run_id"]
+        self.assertEqual(self.settle(run_id)["turns"][0]["state"], "complete")
+        self.rig.scenario({"echo_key": True, "answer": REPORT})
+        real_run = cli_process.run
+
+        def interrupt_after_reaping(argv, **kwargs):
+            result = real_run(argv, **kwargs)
+            if "--resume" in argv:
+                raise RuntimeError("interrupted before the transcript scan")
+            return result
+
+        with mock.patch.object(cli_process, "run", side_effect=interrupt_after_reaping):
+            self.ask(run_id)
+            self.assertEqual(self.settle(run_id)["turns"][-1]["state"], "failed")
+        run_dir = self.rig.volume.run_dir(run_id)
+        self.assertIs(json.loads((run_dir / "session.json").read_text())["pending_scan"], True)
+        self.assertTrue(any(FAKE_KEY in path.read_text() for path in (run_dir / "home").glob("**/*.jsonl")))
+        self.restart_worker(credits_enabled=True)
+        self.assertTrue(Reconciler(self.manager, retry=.05).reconcile_once())
+        self.assertEqual(self.client.credits()["api_sessions"], 1)
+        self.rig.scenario({"mode": "ok", "answer": "Start with the bracket."})
+        self.ask(run_id, "What should I check?")
+        self.assertEqual(self.settle(run_id)["turns"][-1]["text"], "Start with the bracket.")
+        turns = [body["kind"] for body in self.client.bodies if "turn_kind" in body]
+        self.assertEqual(turns, ["initial", "resume", "resume", "initial"])
+        self.assertEqual(["--resume" in call["argv"] for call in self.turn_calls()], [False, True, False])
+        self.assertNotIn(FAKE_KEY, self.rig.prompts()[-1])
+
+    def test_a_clean_marker_write_failure_keeps_the_answer_but_requires_replay(self):
+        save = self.rig.volume.save_session_record
+
+        def refuse_clean_marker(run_id, record):
+            if not record.get("pending_scan"):
+                raise OSError("cannot clear pending marker")
+            save(run_id, record)
+
+        with mock.patch.object(self.rig.volume, "save_session_record", side_effect=refuse_clean_marker):
+            run_id = self.start()["run_id"]
+            self.assertEqual(self.settle(run_id)["turns"][0]["state"], "complete")
+        self.assertIs(self.rig.volume.session_record(run_id)["pending_scan"], True)
+        self.assertEqual(self.client.credits()["api_sessions"], 1)
+        self.rig.scenario({"mode": "ok", "answer": "Check the bracket."})
+        self.ask(run_id)
+        self.assertEqual(self.settle(run_id)["turns"][-1]["state"], "complete")
+        self.assertNotIn("--resume", self.turn_calls()[-1]["argv"])
+
     def test_cancel_during_the_credit_leg_settles_cancelled_and_never_launches_again(self):
         self.rig.scenario({"mode": "hang"})
         run_id = self.start()["run_id"]
@@ -186,18 +245,62 @@ class CreditSuccessTests(EndToEndBase):
         self.assertEqual(len(self.turn_calls()), 1)
 
 
+class UnsafeTranscriptTests(EndToEndBase):
+    def test_a_transcript_fifo_does_not_hang_the_scan_and_is_not_verified(self):
+        self.rig.scenario({**self.scenario, "fifo_transcript": True})
+        with mock.patch("projects.vehicle_data.research_volume.shutil.rmtree"):
+            run_id = self.start()["run_id"]
+            self.assertEqual(self.settle(run_id)["turns"][0]["state"], "complete")
+        home = self.rig.volume.run_dir(run_id) / "home"
+        self.assertTrue(any(path.is_fifo() for path in home.glob("**/*.jsonl")))
+        self.assertEqual(self.client.credits()["api_sessions"], 1)
+        self.rig.scenario({"mode": "ok", "answer": "Check the bracket."})
+        self.ask(run_id)
+        self.assertEqual(self.settle(run_id)["turns"][-1]["state"], "complete")
+        self.assertNotIn("--resume", self.turn_calls()[-1]["argv"])
+
+    def test_an_unreadable_sibling_of_a_clean_transcript_is_not_verified(self):
+        if os.geteuid() == 0:
+            self.skipTest("a root process can list any directory")
+        self.rig.scenario({**self.scenario, "unreadable_sibling": True})
+        run_id = self.start()["run_id"]
+        self.assertEqual(self.settle(run_id)["turns"][0]["state"], "complete")
+        home = self.rig.volume.run_dir(run_id) / "home"
+        try:
+            self.assertEqual(self.client.credits()["api_sessions"], 1)
+            marker = json.loads((home.parent / "session.json").read_text())
+            self.assertIs(marker["poisoned"], True)
+        finally:
+            for sibling in home.glob(".claude/projects/*/hidden"):
+                sibling.chmod(0o700)
+        self.rig.scenario({"mode": "ok", "answer": "Check the bracket."})
+        self.ask(run_id)
+        self.assertEqual(self.settle(run_id)["turns"][-1]["state"], "complete")
+        self.assertNotIn("--resume", self.turn_calls()[-1]["argv"])
+
+
+class MalformedLedgerTests(unittest.TestCase):
+    def test_a_parseable_ledger_with_a_deep_unknown_field_allows_subscription_research(self):
+        entry = {"attempt_id": "a" * 32, "model": "sonnet", "started_at": "2026-11-20T00:00:00Z",
+                 "settled_at": None, "known_usd": 0.1, "unknown": False, "state": "open", "extra": "DEEP"}
+        ledger = {"schema_version": 1, "entries": [entry], "latches": {"account": None, "models": {}},
+                  "last_fallback": None}
+        text = json.dumps(ledger).replace('"DEEP"', "[" * 700 + "0" + "]" * 700)
+        json.loads(text)  # parseable, but the unknown nested value must not be copied or saved
+        rig = WorkerRig(with_key=True, prepare=lambda rig: rig.volume.credit_ledger.write_text(text))
+        try:
+            self.assertIs(CreditClient(rig).credits()["ledger_available"], False)
+            attempt = rig.worker.admit_turn(rig.turn_body(billing_capable=True))
+            outcome = rig.wait(attempt.attempt_id)["outcome"]
+            self.assertEqual((outcome["status"], outcome["billing"]), ("complete", "subscription"))
+            self.assertEqual(rig.volume.credit_ledger.read_text(), text)
+        finally:
+            rig.close()
+
+
 class RollbackSequenceTests(EndToEndBase):
     def admin(self, name):
         return self.manager.handle_admin("GET" if name != "pause" else "POST", ADMIN_ROUTES[name])
-
-    def restart_worker_with_credits_off(self):
-        rig = self.rig
-        rig.policy["claude"]["api_credits"]["enabled"] = False
-        rig.worker.close()
-        rig.worker = Worker(rig.volume, IdentityChecker(rig.cli_root, rig.policy), CliLock(rig.lock_path),
-                            meminfo=rig.meminfo, policy=rig.policy, dns=rig.worker.dns, now=lambda: rig.now)
-        rig.worker.start()  # a worker that starts with credits off drops its API-created sessions
-        rig.settle()
 
     def test_the_documented_sequence_passes_from_a_completed_api_report_with_no_manual_edits(self):
         self.assertEqual(self.settle(self.start()["run_id"])["turns"][0]["state"], "complete")
@@ -208,11 +311,31 @@ class RollbackSequenceTests(EndToEndBase):
         blocked = self.admin("rollbackReady")
         self.assertFalse(blocked["rollback_ready"])
         self.assertEqual(set(blocked["reasons"]), {"credits_enabled", "api_sessions_remain"})
-        self.restart_worker_with_credits_off()  # step 3: disable credits, restart the worker
+        self.restart_worker(credits_enabled=False)  # step 3: disable credits, restart the worker
         self.assertTrue(self.admin("drained")["drained"])
         ready = self.admin("rollbackReady")
         self.assertEqual((ready["rollback_ready"], ready["reasons"]), (True, []))
         self.assertEqual(self.client.credits()["api_sessions"], 0)
+
+    def test_a_stale_subscription_marker_cannot_hide_an_api_transcript_from_rollback(self):
+        run_id = self.start()["run_id"]
+        self.assertEqual(self.settle(run_id)["turns"][0]["state"], "complete")
+        run_dir = self.rig.volume.run_dir(run_id)
+        marker = run_dir / "session.json"
+        record = json.loads(marker.read_text())
+        marker.write_text(json.dumps({**record, "billing": "subscription", "session_id": str(uuid.uuid4())}))
+        self.admin("pause")
+        self.assertTrue(self.admin("drained")["drained"])
+        self.assertEqual(self.client.credits()["api_sessions"], 1)
+        with mock.patch("projects.vehicle_data.research_volume.shutil.rmtree"):
+            self.restart_worker(credits_enabled=False)
+        self.assertEqual(self.admin("rollbackReady")["reasons"], ["api_sessions_remain"])
+        self.assertTrue(list((run_dir / "home").glob("**/*.jsonl")))
+        self.restart_worker(credits_enabled=False)
+        self.assertEqual(self.client.credits()["api_sessions"], 0)
+        self.assertTrue(self.admin("rollbackReady")["rollback_ready"])
+        self.assertFalse(marker.exists())
+        self.assertFalse(list((run_dir / "home").glob("**/*.jsonl")))
 
     def test_a_report_still_running_blocks_drained_and_then_the_sequence_completes(self):
         self.rig.scenario({"mode": "hang"})

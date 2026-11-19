@@ -11,6 +11,8 @@ view; nothing here decides billing from an estimate.
 import copy
 from datetime import datetime, timedelta, timezone
 import json
+import os
+import stat
 import threading
 
 from lib.reports import atomic_json
@@ -20,6 +22,7 @@ from projects.vehicle_data.api_credits_contract import ACCOUNT_CODES, CREDIT_COD
 OPEN, SETTLED = "open", "settled"
 FILE_MAX_BYTES = 4 * 1024 * 1024  # 2000 entries are well under 1 MiB
 TEXT_LIMIT = 200  # bound on an attempt id, model name or latch table size
+ENTRY_FIELDS = ("attempt_id", "model", "started_at", "settled_at", "known_usd", "unknown", "state")
 
 
 class LedgerError(Exception):
@@ -57,7 +60,7 @@ def _text(value, limit):
 
 
 def _entry_valid(entry):
-    if not isinstance(entry, dict) or entry.get("state") not in (OPEN, SETTLED):
+    if not isinstance(entry, dict) or entry.keys() != set(ENTRY_FIELDS) or entry["state"] not in (OPEN, SETTLED):
         return False
     known = entry.get("known_usd")
     if isinstance(known, bool) or not isinstance(known, (int, float)) or not 0 <= known <= 10000:
@@ -69,40 +72,49 @@ def _entry_valid(entry):
 
 
 def _fallback_valid(fallback):
-    return fallback is None or (isinstance(fallback, dict) and _stamp_ok(fallback.get("at"))
-                                and _code(fallback.get("code"), CREDIT_CODES) and _text(fallback.get("model"), TEXT_LIMIT))
+    return fallback is None or (isinstance(fallback, dict) and fallback.keys() == {"at", "code", "model"}
+                                and _stamp_ok(fallback["at"]) and _code(fallback["code"], CREDIT_CODES)
+                                and _text(fallback["model"], TEXT_LIMIT))
 
 
-def _valid(record):
-    """The whole bounded durable schema: any other shape leaves the file untouched and unavailable."""
-    try:
-        return _valid_shape(record)
-    except (TypeError, ValueError, KeyError, AttributeError, RecursionError):
-        return False  # an unforeseen shape is an untrusted file, never a crash at start-up
+def _project(record):
+    """Validate all fields before projecting into the worker's bounded, shallow schema."""
+    if not isinstance(record, dict) or record.keys() != _empty().keys() \
+            or type(record["schema_version"]) is not int or record["schema_version"] != LEDGER["schemaVersion"]:
+        raise ValueError("invalid ledger record")
+    latches, entries, fallback = record["latches"], record["entries"], record["last_fallback"]
+    if not isinstance(latches, dict) or latches.keys() != {"account", "models"} \
+            or not isinstance(entries, list) or len(entries) > LEDGER["maxEntries"]:
+        raise ValueError("invalid ledger entries or latches")
+    account, models = latches["account"], latches["models"]
+    if not (_fallback_valid(fallback) and (account is None or _code(account, ACCOUNT_CODES))
+            and isinstance(models, dict) and len(models) <= TEXT_LIMIT
+            and all(_text(m, TEXT_LIMIT) and _code(code, MODEL_CODES) for m, code in models.items())
+            and all(_entry_valid(entry) for entry in entries)):
+        raise ValueError("invalid ledger fields")
+    return {"schema_version": LEDGER["schemaVersion"],
+            "entries": [{key: entry[key] for key in ENTRY_FIELDS} for entry in entries],
+            "latches": {"account": account, "models": dict(models)},
+            "last_fallback": {key: fallback[key] for key in ("at", "code", "model")} if fallback else None}
 
 
-def _valid_shape(record):
-    if not isinstance(record, dict) or record.get("schema_version") != LEDGER["schemaVersion"]:
-        return False
-    latches, entries = record.get("latches"), record.get("entries")
-    if not isinstance(latches, dict) or not isinstance(entries, list) or len(entries) > LEDGER["maxEntries"]:
-        return False
-    models = latches.get("models")
-    return "last_fallback" in record and _fallback_valid(record["last_fallback"]) \
-        and (latches.get("account") is None or _code(latches.get("account"), ACCOUNT_CODES)) \
-        and isinstance(models, dict) and len(models) <= TEXT_LIMIT \
-        and all(_text(m, TEXT_LIMIT) and _code(code, MODEL_CODES) for m, code in models.items()) \
-        and all(_entry_valid(entry) for entry in entries)
+def _unique_object(items):
+    obj = dict(items)
+    if len(obj) != len(items):
+        raise ValueError("duplicate ledger field")
+    return obj
 
 
 def read_bounded(path):
-    """The file's parsed JSON; ``FileNotFoundError`` when absent; ``ValueError`` when oversized or not
-    JSON (the size is checked before any parsing)."""
-    with open(path, "rb") as handle:
+    """Read a bounded regular ledger; a missing file is distinct from an untrusted one."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise ValueError("not a regular ledger file")
         data = handle.read(FILE_MAX_BYTES + 1)
     if len(data) > FILE_MAX_BYTES:
         raise ValueError("the ledger file is larger than its bound")
-    return json.loads(data)
+    return json.loads(data, object_pairs_hook=_unique_object)
 
 
 def durable_write(path, record):
@@ -123,24 +135,22 @@ class CreditLedger:
         (they live until a restart); delete entries after ``until`` + the retention days."""
         with self._lock:
             try:
-                loaded = read_bounded(self.path)
-            except FileNotFoundError:
-                loaded = _empty()
-            except (OSError, ValueError, RecursionError):
-                loaded = None
-            if loaded is None or not _valid(loaded):
-                self.available = False
-                return
-            self.available = True
-            record = copy.deepcopy(loaded)
-            now = self.now()
-            for entry in record["entries"]:
-                if entry.get("state") == OPEN:
-                    entry.update(state=SETTLED, unknown=True, settled_at=_stamp(now))
-            record["latches"] = {"account": None, "models": {}}
-            if now >= UNTIL + timedelta(days=LEDGER["retainDaysAfterUntil"]):
-                record["entries"] = []
-            self._commit(record, loaded)
+                try:
+                    loaded = read_bounded(self.path)
+                except FileNotFoundError:
+                    loaded = _empty()
+                record = _project(loaded)
+                now = self.now()
+                for entry in record["entries"]:
+                    if entry["state"] == OPEN:
+                        entry.update(state=SETTLED, unknown=True, settled_at=_stamp(now))
+                record["latches"] = {"account": None, "models": {}}
+                if now >= UNTIL + timedelta(days=LEDGER["retainDaysAfterUntil"]):
+                    record["entries"] = []
+                self.available = True
+                self._commit(record, loaded)
+            except (OSError, ValueError, TypeError, KeyError, AttributeError, OverflowError, RecursionError):
+                self.available = False  # untrusted input never prevents subscription research
 
     def _commit(self, record, previous):
         if record == previous and self.path.exists():
@@ -226,8 +236,7 @@ class CreditLedger:
         """The ledger part of ``GET /credits``: entries, latches, last fallback, whether it is full."""
         with self._lock:
             record = self._record
-            keys = ("attempt_id", "model", "started_at", "settled_at", "known_usd", "unknown", "state")
-            return {"entries": [{key: entry.get(key) for key in keys} for entry in record["entries"]],
+            return {"entries": [{key: entry[key] for key in ENTRY_FIELDS} for entry in record["entries"]],
                     "latches": {"account": record["latches"]["account"], "models": dict(record["latches"]["models"])},
                     "last_fallback": copy.deepcopy(record["last_fallback"]),
                     "ledger_full": len(record["entries"]) >= LEDGER["maxEntries"]}

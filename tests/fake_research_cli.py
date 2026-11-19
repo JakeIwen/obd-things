@@ -77,6 +77,13 @@ if mode == "huge_line":
     sys.stdout.write("x" * (5 * 1024 * 1024))
     sys.stdout.flush()
     time.sleep(5)
+if S.get("fifo_transcript"):
+    os.mkfifo(store / "not-a-transcript.jsonl")
+if S.get("unreadable_sibling"):
+    sibling = store / "hidden"
+    sibling.mkdir()
+    (sibling / "uninspected.jsonl").write_text("{}\n")
+    sibling.chmod(0)
 if S.get("echo_key"):  # a representative transcript line: the child echoed its key into the conversation
     with open(path, "a") as f:
         f.write(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text":

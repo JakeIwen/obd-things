@@ -209,9 +209,9 @@ class FallbackMixin:
 
     @staticmethod
     def is_fence(state):
-        """A worker reply that is a fence: the fresh one (``known: false``) or the tombstone it leaves
+        """A worker reply that is a fence: the explicit fresh fence (``fenced: true``) or the tombstone it leaves
         (``kind: fenced``, an outcome ``dropped`` that no real turn produced)."""
-        return state.get("known") is False or state.get("kind") == "fenced"
+        return state.get("fenced") is True or state.get("kind") == "fenced"
 
     def unsent_fallback(self, run_id, attempt_id, state):
         """After a restart (or a follow thread's fence): ``True`` when ``state`` proves ``attempt_id``
