@@ -165,7 +165,7 @@ a { color: var(--blue); }
   height: 100%;
   gap: var(--gap);
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-template-rows: 1fr 1fr 1.2fr 1fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr 1.2fr 1fr 1fr minmax(96px, .6fr);
   grid-template-areas:
     "d2limit d2acc d2acc"
     "d2tank d2fuel d2gear"
@@ -219,7 +219,8 @@ a { color: var(--blue); }
 @media (min-aspect-ratio: 1/1) and (min-width: 900px) {
   .drive2 {
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    grid-template-rows: repeat(5, minmax(0, 1fr));
+    /* The radar spans two rows and needs about 240 px for its five change rows; the added sensor row is the short one. */
+    grid-template-rows: repeat(4, minmax(0, 1fr)) minmax(88px, .7fr);
     grid-template-areas:
       "d2limit d2acc d2acc d2gear"
       "d2tank d2fuel d2power d2odo"

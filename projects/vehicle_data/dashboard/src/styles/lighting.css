@@ -6,11 +6,11 @@
 .light-indicator__icon { width: 28px; height: 19.6px; fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
 .light-indicator--lights.light-indicator--on { color: var(--green); }
 .light-indicator--high_beam.light-indicator--on { color: var(--blue); }
-/* Reserve enough room for the radar's labels and four history rows. */
+/* Reserve enough room for the radar's labels and its history rows (page 2's sixth row is the short intake-air and A/C one). */
 @media (min-width: 641px) and (max-aspect-ratio: 1/1) {
   .view--drive > .drive2 {
     grid-template-rows: minmax(120px, 1fr) minmax(156px, 1fr)
-      minmax(248px, 1.6fr) minmax(120px, 1fr) minmax(120px, 1fr);
+      minmax(272px, 1.8fr) minmax(120px, 1fr) minmax(120px, 1fr) minmax(104px, .6fr);
   }
 }
 @media (max-width: 640px) {
