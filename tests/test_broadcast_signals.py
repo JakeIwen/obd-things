@@ -243,9 +243,9 @@ def legacy_intake_ac_observations(can_id, data):
                 quality="candidate",
                 detail=(
                     "0x417 8-bit field (byte 2 bits 4-0, byte 3 bits 7-5) - 40 °C, "
-                    "converted to °F; width screened on warm July 27 and August 19 "
-                    "captures (field 62-100, smooth crossings of 63/64), not yet tied "
-                    "to a PCM DID"
+                    "converted to °F; tracks PCM DID 0123 (held-out RMSE 0.08 C). Proposed "
+                    "8-bit geometry: warm July 27 and August 19 captures (field 62-100, "
+                    "smooth 63/64 crossings) demonstrate at least 7 bits only"
                 ),
             ),
         )
@@ -261,7 +261,9 @@ def legacy_intake_ac_observations(can_id, data):
                 detail=(
                     "0x41B 9-bit field (byte 0, then byte 1 bit 7) x 9.9 + 6 kPa, "
                     "converted to psi; scale fitted only up to about 420 kPa against "
-                    "one PCM DID 0329 reference drive and extrapolated above it (+/-3 %)"
+                    "one PCM DID 0329 reference drive and extrapolated above it with "
+                    "unmeasured error; proposed 9-bit geometry, the August captures "
+                    "(field 47-155, smooth 64/128 crossings) show at least 8 bits"
                 ),
             ),
         )

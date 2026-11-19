@@ -141,22 +141,23 @@ several unrelated drifting fields equally, so none was promoted.
   constant set-B DIDs.
 - `012B` scale: needs a reference other than AlfaOBD's truncated display.
 
-## Correction 2026-11-19: field widths are 8 and 9 bits
+## Correction 2026-11-19: field widths are at least 7 and 8 bits (8 and 9 proposed)
 
 The warm-weather check listed under Next is done, using the July 27 pcm-plots captures and the
 August 19 three-bus candump (working scripts and filtered frames:
-`tmp/ecu_mapping/field-width-screen-20261119/`, gitignored). It overturns the 6-bit widths above:
+`tmp/ecu_mapping/field-width-screen-20261119/`, gitignored). It overturns the 6-bit widths above. What the data demonstrates is a minimum width; the exact geometry below is the proposal:
 
-- Intake air (`0x417`) is 8 bits, byte2 bits 4–0 + byte3 bits 7–5 (`((b2 << 8 | b3) >> 5) & 0xFF`,
+- Intake air (`0x417`) is proposed as 8 bits, byte2 bits 4–0 + byte3 bits 7–5 (`((b2 << 8 | b3) >> 5) & 0xFF`,
   `SignalField(20, 8, "big")`), decoded `field − 40 °C`. August field 62–100 (22–60 °C), with a
   31–36 °C heat soak at 90 °C coolant and 61 smooth 63↔64 crossings; a 6-bit field would have
-  wrapped at 64. byte3 bits 4–0 and byte4 are other fields.
-- A/C high side (`0x41B`) is 9 bits, byte0 + byte1 bit 7 (`(b0 << 1) | (b1 >> 7)`,
+  wrapped at 64. That shows at least 7 bits; the maximum, 100, never exercises an eighth. byte3 bits 4–0 and byte4 are other fields.
+- A/C high side (`0x41B`) is proposed as 9 bits, byte0 + byte1 bit 7 (`(b0 << 1) | (b1 >> 7)`,
   `SignalField(7, 9, "big")`), decoded ≈ `9.9 × field + 6 kPa`. Field 47–155 (about 470–1540 kPa),
-  with smooth crossings of 64 and 128. The fit was made only to about 420 kPa, so the scale above
-  it is extrapolated (±3 %) until a second reference covers the higher range. byte1 bits 6–0 and
+  with smooth crossings of 64 and 128, which shows at least 8 bits; the maximum, 155, never
+  exercises a ninth. The fit was made only to about 420 kPa, so the scale above it is extrapolated
+  and its error there is unmeasured until a second reference covers the higher range. byte1 bits 6–0 and
   bytes 4–5 are other fields.
-- B-CAN `0x3E2` carries the same pressure as a 9-bit field from MSB-first position 10, but it holds
+- B-CAN `0x3E2` carries the same pressure as a proposed 9-bit field from MSB-first position 10, but it holds
   non-pressure values (128, 133, 511) with the engine off, so telemetry uses `0x41B` only.
 
 Both are now candidate telemetry metrics (`engine.intake_air_temperature`,
