@@ -313,6 +313,8 @@ The initial drive-publisher vocabulary is intentionally narrow:
 | `engine.oil_pressure` | `ccan.broadcast.0x41d` | number, `psi` | `observed_alfa_scale` |
 | `engine.coolant_temperature` | `ccan.broadcast.0x2ed` | number, `°F` | `observed_alfa_scale` |
 | `engine.fuel_rate` | `ccan.broadcast.0x2ed` | number, `gal/h` | `candidate` |
+| `engine.intake_air_temperature` | `ccan.broadcast.0x417` | number, `°F` | `candidate` |
+| `hvac.ac_high_side_pressure` | `ccan.broadcast.0x41b` | number, `psi` | `candidate` |
 | `engine.rpm` | `ccan.broadcast.0x0fc` | number, `rpm` | `observed_alfa_scale` |
 | `engine.target_crankshaft_torque` | `ccan.broadcast.0x100` | number, `lb-ft` | `observed_alfa_scale` |
 | `transmission.output_speed` | `ccan.broadcast.0x1f7` | number, `rpm` | `observed_alfa_scale` |
@@ -672,6 +674,18 @@ shaft speeds, and explicitly labeled TCM target crankshaft torque:
 | `transmission.oil_temperature` | `0x1F7` byte 3 signed i8 | native raw × 0.375 + 57 °C, published as °F | `observed_alfa_scale` |
 | `transmission.turbine_speed` | `0x1F7` bytes 4–5 u16be | raw / 2 rpm | `observed_alfa_scale` |
 | `engine.target_crankshaft_torque` | `0x100` bytes 3–4 upper 11 bits | raw - 500 Nm, published as lb-ft | `observed_alfa_scale` |
+| `engine.intake_air_temperature` | `0x417` 8 bits: byte 2 bits 4–0, byte 3 bits 7–5 | raw - 40 °C, published as °F | `candidate` |
+| `hvac.ac_high_side_pressure` | `0x41B` 9 bits: byte 0, byte 1 bit 7 | raw × 9.9 + 6 kPa (fitted to about 420 kPa, extrapolated above, ±3 %), published as psi | `candidate` |
+
+Intake air and A/C high side (`0x417`, `0x41B`, 10 Hz, engine running only) are optional in
+every snapshot: a missing frame never delays or fails one, and neither is in the completeness
+set. The broker validates every event a helper sends and terminates the helper (restoration
+unverified, so an inhibit) on an unregistered metric or source. The helper therefore reads these
+two frames only when launched with `--enable-intake-ac-broadcasts`, which the broker passes; an
+older broker never passes it, so a new helper under an old broker silently omits them. The
+in-process passive reader always includes them. The A/C scale is fitted only up to about 420 kPa
+and extrapolated above (±3 %); see the
+[2026-11-18 finding's correction](../ecu_mapping/findings/promaster_2022/2026-11-18_pcm_plots_reference_drive.md).
 
 All are in the public registry and the passive collector reads them only
 after its normal C-CAN interface and identity gates pass. They require no
