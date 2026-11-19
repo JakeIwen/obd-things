@@ -66,6 +66,7 @@ class ScriptedWorker:
         self.down = False
         self.ack_fails = False
         self.lose_reply_for = set()  # launch ordinals (1-based) whose reply is lost after arrival
+        self.fenced = set()  # ids fenced here: like the real AttemptTable, a retained tombstone
         self.extra_attempts = {}  # attempt id -> state reply, for jobs this advisor never launched
         self.credits_reply = {"key_installed": True, "enabled": True, "until": "2026-12-08T00:00:00Z",
                               "entries": [], "latches": {"account": None, "models": {}}, "last_fallback": None,
@@ -117,12 +118,21 @@ class ScriptedWorker:
             if attempt_id in self.extra_attempts:
                 return self.extra_attempts[attempt_id]
             attempt = self.attempts.get(attempt_id)
+            if attempt is None and attempt_id in self.fenced:
+                return {"instance_id": self.instance_id, "known": True, "attempt_id": attempt_id, "kind": "fenced",
+                        "state": "finished", "outcome_state": "dropped"}
             if attempt is None:
                 return {"known": False, "instance_id": self.instance_id}
             return self._view(attempt_id, attempt)
 
     def fence(self, attempt_id):
-        return self.attempt(attempt_id)
+        """A known attempt's state, else a new tombstone and ``known: false, fenced: true`` (as the real worker)."""
+        with self.lock:
+            state = self.attempt(attempt_id)
+            if state.get("known") or attempt_id in self.fenced:
+                return state
+            self.fenced.add(attempt_id)
+            return {"instance_id": self.instance_id, "known": False, "fenced": True}
 
     def acknowledge(self, attempt_id):
         self._check()

@@ -144,8 +144,9 @@ class FallbackMixin:
         prompt = first_prompt(record["context"]) if report else self._replay_prompt(record)
 
         def mark(saved_turn, reserved):
-            saved_turn["pending_fallback"]["sending"] = {"attempt_id": reserved.attempt_id,
-                                                         "mode_before": reserved.mode_before}
+            saved_turn["pending_fallback"]["sending"] = {
+                "attempt_id": reserved.attempt_id, "mode_before": reserved.mode_before,
+                "instance_id": reserved.body["expected_instance_id"]}  # the only worker that can have admitted it
 
         return self._reserve(record, kind, prompt, forced=True, ledger_kind="fallback", mark=mark)
 
@@ -206,11 +207,20 @@ class FallbackMixin:
 
         return acknowledge
 
-    def unsent_fallback(self, run_id, attempt_id):
-        """After a restart (or a follow thread's fence): ``True`` when ``attempt_id`` was a fallback
-        request the worker has fenced as never admitted; it is withdrawn, saved, and the pending
-        fallback continues. ``False`` when it is not that, ``None`` when the withdrawal could not be
-        saved yet (ask again). Never resends the withdrawn request: it is a new attempt id."""
+    @staticmethod
+    def is_fence(state):
+        """A worker reply that is a fence: the fresh one (``known: false``) or the tombstone it leaves
+        (``kind: fenced``, an outcome ``dropped`` that no real turn produced)."""
+        return state.get("known") is False or state.get("kind") == "fenced"
+
+    def unsent_fallback(self, run_id, attempt_id, state):
+        """After a restart (or a follow thread's fence): ``True`` when ``state`` proves ``attempt_id``
+        was a fallback request its destination worker never admitted; it is withdrawn, saved, and the
+        pending fallback continues. ``False`` when it is not that, ``None`` when the withdrawal could
+        not be saved yet (ask again). The proof is a fence by the worker instance the request was
+        addressed to: a different instance only proves it cannot run the attempt, so the admission
+        stays counted and the turn settles by the ambiguous-launch rule (no relaunch). Never resends
+        the withdrawn request: a continued fallback is a new attempt id."""
         with self.lock:
             record = self.store.records.get(run_id)
             turn = record["turns"][-1] if record and record["turns"] else None
@@ -219,18 +229,21 @@ class FallbackMixin:
             if not sending or sending["attempt_id"] != attempt_id or turn["attempt_ids"][-1] != attempt_id \
                     or turn["state"] not in records.BUSY_STATES:
                 return False
+            if not self.is_fence(state) or state.get("instance_id") != sending.get("instance_id"):
+                return False
 
             def withdraw(saved):
                 last = saved["turns"][-1]
                 last["attempt_ids"].pop()
                 last["mode"] = sending["mode_before"]
                 last["pending_fallback"].pop("sending", None)
-                last["state"] = "running"
 
             if not self._persist(record, withdraw, "fallback_withdraw"):
                 return None
             self.ledger.refused(attempt_id)
-        self._fallback_follow(run_id)
+            self._fallback_follow(run_id)  # raises when no thread can start; the turn keeps its state
+            if turn["state"] == "reconciling":
+                turn["state"] = "running"
         return True
 
     def _save_quietly(self, record, during):

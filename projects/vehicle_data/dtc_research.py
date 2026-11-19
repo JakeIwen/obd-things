@@ -372,8 +372,8 @@ class ResearchManager(FallbackMixin, PauseMixin):
             except WorkerUnreachable:
                 time.sleep(LOST_POLL_SECONDS)
                 continue
-            if not state.get("known"):
-                unsent = self.unsent_fallback(run_id, attempt_id)
+            if self.is_fence(state):
+                unsent = self.unsent_fallback(run_id, attempt_id, state)
                 if unsent:
                     return  # a fallback reservation the worker never admitted: the fallback thread continues it
                 if unsent is None:  # the withdrawal could not be saved yet

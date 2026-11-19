@@ -65,9 +65,16 @@ class Reconciler:
         pending = turn.get("pending_fallback")
         if not pending or turn["attempt_ids"][-1] != pending["predecessor"]:
             return False
+        self.manager._fallback_follow(record["run_id"])  # raises when no thread can start: stay reconciling
         turn["state"] = "running"
-        self.manager._fallback_follow(record["run_id"])
         return True
+
+    @staticmethod
+    def _in_flight(manager):
+        """Attempt ids of fallback requests saved as ``sending``: jobs this advisor owns."""
+        sending = (((record["turns"][-1] if record["turns"] else {}).get("pending_fallback") or {}).get("sending")
+                   for record in manager.store.records.values())
+        return {entry["attempt_id"] for entry in sending if entry}
 
     def reconcile_once(self):
         """One pass; ``True`` once admission can reopen."""
@@ -94,6 +101,8 @@ class Reconciler:
                 run_id = pending.pop(job["attempt_id"])
                 manager.store.records[run_id]["turns"][-1]["state"] = "running"
                 manager._follow(run_id, job["attempt_id"])
+            elif job and job.get("attempt_id") in self._in_flight(manager):
+                return False  # our own fallback request, reply outstanding: never cancelled, never sent again
             elif job and job.get("attempt_id") not in manager.following:
                 if job.get("kind") != "maintenance":
                     try:
@@ -106,8 +115,8 @@ class Reconciler:
                 state = manager.fence_unknown(attempt_id, manager.worker.attempt(attempt_id), manager.instance_id)
             except WorkerUnreachable:
                 return False
-            if not state.get("known"):
-                unsent = manager.unsent_fallback(run_id, attempt_id)  # a fenced fallback reservation continues
+            if manager.is_fence(state):
+                unsent = manager.unsent_fallback(run_id, attempt_id, state)  # a fenced fallback reservation continues
                 if unsent is None:
                     return False
                 if unsent:
