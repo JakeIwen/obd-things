@@ -177,6 +177,40 @@ class CreditFailureTests(CreditTestCase):
         self.assertEqual(self.latches(), {"account": None, "models": {}})
         self.assertIsNone(self.worker.credits.view()["last_fallback"])
 
+    def test_the_pinned_clis_key_refusal_codes_fall_back_and_latch_invalid_key(self):
+        for code in ("api_key_auth_disabled", "org_disabled_credential"):
+            with self.subTest(code):
+                self.rig.worker.credits.ledger.start()  # latches live until a restart
+                self.failing("Your organization has disabled API key authentication", error="invalid_request",
+                             api_error_code=code, api_error_status=403)
+                _, outcome = self.go()
+                self.assertEqual((outcome["reason"], outcome["credit_code"]), ("credit_fallback", "invalid_key"))
+                self.assertEqual(self.latches()["account"], "invalid_key")
+
+    def test_an_unrelated_403_is_not_a_credit_failure(self):
+        self.failing("forbidden by a policy", error="invalid_request", api_error_status=403)
+        _, outcome = self.go()
+        self.assertEqual((outcome["reason"], outcome["credit_code"]), ("provider_error", None))
+
+    def test_a_structural_rate_limit_outranks_a_remembered_billing_error(self):
+        self.failing("an opaque message", error="billing_error", api_error_type="rate_limit_error",
+                     api_error_status=429)
+        _, outcome = self.go()
+        self.assertEqual((outcome["status"], outcome["credit_code"]), ("failed", None))
+        self.assertEqual(self.latches(), {"account": None, "models": {}})
+
+    def test_a_malformed_or_silent_pre_init_end_never_latches_a_healthy_key(self):
+        for name, scenario in (("bare result", {"pre_init": [{"type": "result"}], "exit_code": 1}),
+                               ("killed with nothing", {"pre_init": [], "kill_self": True}),
+                               ("exit 1 with nothing", {"pre_init": [], "exit_code": 1})):
+            with self.subTest(name):
+                self.rig.scenario(scenario)
+                _, outcome = self.go()
+                self.assertEqual((outcome["status"], outcome["reason"], outcome["credit_code"]),
+                                 ("failed", "protocol_error", None))
+                self.assertEqual(self.latches(), {"account": None, "models": {}})
+                self.assertIsNone(self.worker.credits.view()["last_fallback"])
+
     def test_the_errors_array_is_classified(self):
         self.rig.scenario({"events": [dict(result(0, error="", cost=0), errors=["Your credit balance is too low"])],
                            "exit_code": 1})
@@ -428,6 +462,191 @@ class ResumeBillingTests(CreditTestCase):
             restarted.close()
 
 
+class SessionProvenanceTests(CreditTestCase):
+    def api_session(self):
+        body, outcome = self.go()
+        return body, outcome["session_id"]
+
+    def resume(self, body, session, **kwargs):
+        return self.rig.turn_body(run_id=body["run_id"], kind="resume", session_id=session, turn_kind="follow_up",
+                                  **{"billing_capable": True, **kwargs})
+
+    def record_path(self, body):
+        return self.rig.volume.run_dir(body["run_id"]) / "session.json"
+
+    def count(self):
+        return dispatch(self.worker, "GET", "/credits", None)[1]["api_sessions"]
+
+    def test_the_billing_origin_is_durable_before_the_process_spawns(self):
+        self.rig.scenario({"mode": "hang"})
+        body = self.rig.turn_body(billing_capable=True)
+        attempt = self.worker.admit_turn(body)
+        deadline = time.monotonic() + 15
+        while self.worker.table.get(attempt.attempt_id)["state"] != "running" and time.monotonic() < deadline:
+            time.sleep(.05)
+        self.assertEqual(json.loads(self.record_path(body).read_text())["billing"], "api_credits")
+        self.worker.table.cancel(attempt.attempt_id)
+        self.rig.wait(attempt.attempt_id)
+
+    def test_a_record_that_cannot_be_saved_stops_the_launch_before_any_spawn(self):
+        with mock.patch("projects.vehicle_data.research_volume.atomic_json", side_effect=OSError("disk full")):
+            _, outcome = self.go()
+        self.assertEqual((outcome["status"], outcome["reason"]), ("failed", "provider_error"))
+        self.assertEqual(self.rig.calls(), [])
+        self.assertEqual(self.entries(), [])  # the reserved entry was withdrawn: nothing spawned
+
+    def test_a_resume_with_missing_or_unreadable_provenance_is_refused_on_either_credential(self):
+        for name, damage in (("missing", lambda path: path.unlink()),
+                             ("unreadable", lambda path: path.write_text("{not json")),
+                             ("not an object", lambda path: path.write_text("[]")),
+                             ("odd billing", lambda path: path.write_text(json.dumps(
+                                 {"provider": "claude", "session_id": "x", "billing": "gift"})))):
+            with self.subTest(name):
+                body, session = self.api_session()
+                damage(self.record_path(body))
+                spawned = len(self.rig.calls())
+                for capable in (True, None):
+                    with self.assertRaises(Refused) as refused:
+                        self.worker.admit_turn(self.resume(body, session, billing_capable=capable))
+                    self.assertEqual(refused.exception.reason, "session_missing")
+                self.assertEqual(len(self.rig.calls()), spawned)
+
+    def test_an_intact_record_from_before_billing_was_recorded_resumes_on_the_subscription(self):
+        body, session = self.go(billing="subscription")[0], None
+        record = json.loads(self.record_path(body).read_text())
+        session = record["session_id"]
+        del record["billing"]
+        self.record_path(body).write_text(json.dumps(record))
+        attempt = self.worker.admit_turn(self.resume(body, session))
+        outcome = self.rig.wait(attempt.attempt_id)["outcome"]
+        self.assertEqual((outcome["status"], outcome["billing"]), ("complete", "subscription"))
+
+    def test_the_rollback_count_includes_a_transcript_whose_provenance_is_missing(self):
+        body, _ = self.api_session()
+        self.record_path(body).unlink()
+        self.assertEqual(self.count(), 1)
+        self.record_path(body).write_text("{not json")
+        self.assertEqual(self.count(), 1)
+
+    def test_an_intact_subscription_or_legacy_record_is_not_an_api_session(self):
+        body, _ = self.go(billing="subscription")
+        self.assertEqual(self.count(), 0)
+        record = json.loads(self.record_path(body).read_text())
+        del record["billing"]
+        self.record_path(body).write_text(json.dumps(record))
+        self.assertEqual(self.count(), 0)
+
+    def test_a_deletion_that_leaves_a_transcript_keeps_the_marker_and_the_count(self):
+        body, _ = self.api_session()
+        with mock.patch("projects.vehicle_data.research_volume.shutil.rmtree"):  # a deletion that did nothing
+            self.assertEqual(self.rig.volume.drop_sessions_billed("api_credits"), 1)
+        self.assertEqual(json.loads(self.record_path(body).read_text())["billing"], "api_credits")
+        self.assertEqual(self.count(), 1)
+        self.assertEqual(self.rig.volume.drop_sessions_billed("api_credits"), 0)  # a real deletion verifies
+        self.assertFalse(self.record_path(body).exists())
+        self.assertEqual(self.count(), 0)
+
+    def test_a_disabled_worker_start_drops_a_transcript_with_no_provenance(self):
+        body, _ = self.api_session()
+        self.record_path(body).unlink()
+        policy = copy.deepcopy(self.rig.policy)
+        policy["claude"]["api_credits"]["enabled"] = False
+        restarted = Worker(self.rig.volume, IdentityChecker(self.rig.cli_root, policy), CliLock(self.rig.lock_path),
+                           meminfo=self.rig.meminfo, policy=policy, dns=self.worker.dns, now=lambda: self.rig.now)
+        restarted.start()
+        try:
+            self.assertEqual(dispatch(restarted, "GET", "/credits", None)[1]["api_sessions"], 0)
+        finally:
+            restarted.close()
+
+    def test_a_fresh_launch_that_cannot_clear_the_runs_old_session_does_not_spawn(self):
+        body, _ = self.api_session()
+        spawned = len(self.rig.calls())
+        with mock.patch("projects.vehicle_data.research_volume.shutil.rmtree"):
+            _, outcome = self.go(run_id=body["run_id"])
+        self.assertEqual((outcome["status"], outcome["reason"]), ("failed", "provider_error"))
+        self.assertEqual(len(self.rig.calls()), spawned)
+
+
+class CreditSpendAndSecrecyTests(CreditTestCase):
+    def test_a_signal_death_keeps_the_known_subtotal_and_marks_unknown(self):
+        self.rig.scenario({"events": [assistant("a"), result(0, cost=0.25)], "kill_self": True})
+        _, outcome = self.go()
+        self.assertEqual(outcome["status"], "failed")
+        (entry,) = self.entries()
+        self.assertEqual((entry["state"], entry["known_usd"], entry["unknown"]), ("settled", 0.25, True))
+
+    def test_an_exit_without_a_terminal_result_is_unknown_and_a_reported_api_error_is_not(self):
+        self.rig.scenario({"events": [assistant("a")], "exit_code": 1})
+        self.go()
+        self.rig.scenario({"events": [assistant("a"), result(0, error="API Error: overloaded_error", cost=0.1)],
+                           "exit_code": 1})
+        self.go()
+        first, second = self.entries()
+        self.assertTrue(first["unknown"])
+        self.assertEqual((second["known_usd"], second["unknown"]), (0.1, False))
+
+    def test_the_installed_key_never_leaves_in_the_answer_or_the_diagnostics(self):
+        text = f"SUMMARY: x\n## What it means\nthe key is {FAKE_KEY} and sk-ant-api03-OTHER_value-1 end"
+        self.rig.scenario({"answer": text})
+        _, outcome = self.go()
+        self.assertEqual(outcome["status"], "complete")
+        self.assertNotIn(FAKE_KEY, json.dumps(outcome))
+        self.assertNotIn("sk-ant-", json.dumps(outcome))
+        self.assertIn("[key]", outcome["answer"])
+
+    def test_a_key_split_by_the_answer_cap_is_redacted_before_truncation(self):
+        from projects.vehicle_data.dtc_research_contract import SIZES
+        cap = SIZES["reportEncodedBytes"] + 4096
+        text = "a" * (cap - 10) + FAKE_KEY
+        self.rig.scenario({"answer": text})
+        _, outcome = self.go()
+        self.assertNotIn("sk-ant-", outcome["answer"])
+        self.assertNotIn(FAKE_KEY[:20], outcome["answer"])
+
+    def test_only_real_numbers_reach_the_diagnostics(self):
+        for bad in (FAKE_KEY, True, float("nan"), [1]):
+            with self.subTest(bad=bad):
+                self.rig.scenario({"events": [assistant("a"), result(0, num_turns=bad, total_cost_usd=bad)]})
+                _, outcome = self.go()
+                self.assertIsNone(outcome["diagnostics"]["num_turns"])
+                self.assertIsNone(outcome["diagnostics"]["total_cost_usd"])
+                self.assertNotIn(FAKE_KEY, json.dumps(outcome))
+
+    def test_an_unexpected_runner_exception_still_carries_the_billing_fields(self):
+        with mock.patch.object(type(self.worker.runner), "_run_turn", side_effect=RuntimeError(f"boom {FAKE_KEY}")):
+            _, outcome = self.go()
+        self.assertEqual((outcome["status"], outcome["billing"], outcome["credit_code"]),
+                         ("failed", "api_credits", None))
+        self.assertNotIn(FAKE_KEY, json.dumps(outcome))
+        self.assertEqual(self.entries(), [])  # nothing had spawned, so the reservation was withdrawn
+
+
+class CreditLedgerReportingTests(unittest.TestCase):
+    def test_a_corrupt_ledger_is_reported_unavailable_and_the_route_still_answers(self):
+        def prepare(rig):
+            rig.volume.credit_ledger.write_text(json.dumps({"schema_version": 1, "entries": [{"state": "open"}],
+                                                            "latches": {"account": None, "models": {}}}))
+        rig = WorkerRig(with_key=True, prepare=prepare)
+        try:
+            status, view = dispatch(rig.worker, "GET", "/credits", None)
+            self.assertEqual(status, 200)
+            self.assertIs(view["ledger_available"], False)
+            attempt = rig.worker.admit_turn(rig.turn_body(billing_capable=True))
+            self.assertEqual(rig.wait(attempt.attempt_id)["outcome"]["billing"], "subscription")
+            self.assertIn("entries", json.loads(rig.volume.credit_ledger.read_text()))  # left untouched
+            self.assertIs(dispatch(rig.worker, "GET", "/credits", None)[1]["ledger_available"], False)
+        finally:
+            rig.close()
+
+    def test_a_healthy_ledger_is_reported_available(self):
+        rig = WorkerRig(with_key=True)
+        try:
+            self.assertIs(dispatch(rig.worker, "GET", "/credits", None)[1]["ledger_available"], True)
+        finally:
+            rig.close()
+
+
 class CreditRoutesAndSecrecyTests(CreditTestCase):
     def test_status_advertises_billing_capable(self):
         status, payload = dispatch(self.worker, "GET", "/status", None)
@@ -440,7 +659,7 @@ class CreditRoutesAndSecrecyTests(CreditTestCase):
         self.assertEqual(status, 200)
         self.assertEqual((view["key_installed"], view["enabled"], view["until"]), (True, True, "2026-12-08T00:00:00Z"))
         self.assertEqual(set(view), {"key_installed", "enabled", "until", "entries", "latches", "last_fallback",
-                                    "ledger_full", "api_sessions"})
+                                    "ledger_full", "ledger_available", "api_sessions"})
         self.assertEqual(set(view["entries"][0]), {"attempt_id", "model", "started_at", "settled_at", "known_usd",
                                                    "unknown", "state"})
         self.assertNotIn(FAKE_KEY, json.dumps(view))

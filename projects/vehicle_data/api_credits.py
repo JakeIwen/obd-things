@@ -27,9 +27,38 @@ API_KEY_SOURCE = "ANTHROPIC_API_KEY"
 NO_KEY_SOURCE = "none"
 
 
-def redact(text):
-    """``text`` with anything shaped like an Anthropic key removed (exception boundary)."""
-    return KEY_ANYWHERE.sub("[key]", str(text))
+def redact(text, key=None):
+    """``text`` with the installed key (exact value) and anything shaped like an Anthropic key removed."""
+    text = str(text)
+    if key:
+        text = text.replace(key, "[key]")
+    return KEY_ANYWHERE.sub("[key]", text)
+
+
+def scrub(value, key=None):
+    """``value`` with every string inside it redacted (the boundary for everything a runner returns)."""
+    if isinstance(value, str):
+        return redact(value, key)
+    if isinstance(value, dict):
+        return {scrub(k, key) if isinstance(k, str) else k: scrub(v, key) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [scrub(item, key) for item in value]
+    return value
+
+
+def number_or_none(value):
+    """``value`` when it is a real int or float (not a bool, not NaN or infinite), else ``None``."""
+    ok = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    return value if ok else None
+
+
+def is_failed_terminal_result(event):
+    """A well-formed terminal ``result`` that reports failure: ``is_error`` true or an explicit
+    non-success subtype string. A bare ``{"type": "result"}`` is malformed, not a failure."""
+    if not isinstance(event, dict) or event.get("type") != "result":
+        return False
+    subtype = event.get("subtype")
+    return event.get("is_error") is True or (isinstance(subtype, str) and bool(subtype) and subtype != "success")
 
 
 # --- the key ----------------------------------------------------------------------------------------
@@ -159,11 +188,19 @@ _TEXT_RULES = (
     ("exhausted", re.compile(r"credit balance is too low|insufficient[_ ]credit|out of credits|purchase more "
                              r"credits|exceeded your (?:credit|spend)|billing[_ ]error|plans? (?:&|and) billing")),
     ("invalid_key", re.compile(r"invalid api key|invalid x-api-key|authentication_error|"
-                               r"api key.{0,40}(?:revoked|disabled|expired)|fix external api key")),
+                               r"api key.{0,40}(?:revoked|disabled|expired)|fix external api key|"
+                               r"organization has disabled api key authentication|"
+                               r"anthropic_api_key belongs to a disabled organization")),
     ("model_unavailable", re.compile(r"not_found_error|model.{0,60}(?:not found|not available|does not exist|"
                                      r"not supported)|(?:not found|no access|not available).{0,40}model")),
 )
 TEXT_MAX = 4000
+# The CLI's terminal result carries these identifiers itself (``api_error_code`` is the server's
+# error.details.error_code, ``api_error_type`` its error.type, ``api_error_status`` the HTTP status).
+STRUCTURED_CODES = {"api_key_auth_disabled": "invalid_key", "org_disabled_credential": "invalid_key"}
+CODE_FIELDS = ("api_error_code", "api_error", "error_code")
+TRANSIENT_TYPES = frozenset({"rate_limit_error", "overloaded_error"})
+TRANSIENT_STATUSES = frozenset({429, 529})
 
 
 @dataclass
@@ -189,8 +226,20 @@ def _terminal_texts(result):
 
 
 def _failed_end(end, result):
-    ended_badly = bool(result) and (bool(result.get("is_error")) or result.get("subtype") != "success")
+    ended_badly = is_failed_terminal_result(result)
     return ended_badly or end.returncode not in (0, None)
+
+
+def _structured_identifiers(result):
+    """Identifier strings the terminal result names itself, top level and inside an ``error`` object."""
+    holders = [result] + ([result["error"]] if isinstance(result.get("error"), dict) else [])
+    return [holder[field] for holder in holders for field in CODE_FIELDS if isinstance(holder.get(field), str)]
+
+
+def _structurally_transient(result):
+    status = result.get("api_error_status")
+    return result.get("api_error_type") in TRANSIENT_TYPES or (
+        isinstance(status, int) and not isinstance(status, bool) and status in TRANSIENT_STATUSES)
 
 
 def classify_credit_failure(end):
@@ -204,18 +253,24 @@ def classify_credit_failure(end):
     result = end.result or {}
     if result.get("subtype") == "error_max_budget_usd":
         return None
+    if _structurally_transient(result):
+        return None
     texts = _terminal_texts(result)
     if any(_TRANSIENT.search(text) for text in texts):
         return None
     failed = _failed_end(end, result)
+    if failed:
+        for identifier in _structured_identifiers(result):
+            if identifier in STRUCTURED_CODES:
+                return STRUCTURED_CODES[identifier]
     if end.typed_error in TYPED_ERRORS and failed:
         return TYPED_ERRORS[end.typed_error]
     scanned = texts + ([end.stderr_tail[-TEXT_MAX:].lower()] if not end.init_seen else [])
     for code, pattern in _TEXT_RULES:
         if any(pattern.search(text) for text in scanned):
             return code
-    if not end.init_seen and failed and not end.stderr_tail.strip():
-        return "invalid_key"  # died before it started and said nothing: the key cannot be used
+    if not end.init_seen and is_failed_terminal_result(end.result) and not end.stderr_tail.strip():
+        return "invalid_key"  # a failed result before init and nothing on stderr: the key cannot be used
     return None
 
 

@@ -9,7 +9,7 @@ Credit scenarios: ``init`` carries ``apiKeySource`` (``ANTHROPIC_API_KEY`` when 
 environment has that variable, else ``none``; ``api_key_source`` overrides it). ``events`` replaces
 the default tool-use and answer events with the given stream-json events (after init), ``pre_init``
 prints events instead of init, ``stderr`` is written to stderr, ``exit_code`` is the exit status of
-those two paths, and ``delta`` is the ``costUSD`` of the default result's
+those two paths (``kill_self`` ends either path by SIGKILL instead), and ``delta`` is the ``costUSD`` of the default result's
 ``model_usage_since_last_result`` (``null`` omits it; ``result_index`` numbers it).
 """
 
@@ -63,6 +63,8 @@ if S.get("pre_init") is not None:
     for event in S["pre_init"]:
         emit(event)
     print(S.get("stderr", ""), end="", file=sys.stderr, flush=True)
+    if S.get("kill_self"):
+        os.kill(os.getpid(), signal.SIGKILL)
     sys.exit(S.get("exit_code", 1))
 mode = S.get("mode", "ok")
 if mode != "no_growth" or not path.exists():
@@ -84,6 +86,8 @@ if S.get("events") is not None:
     print(S.get("stderr", ""), end="", file=sys.stderr, flush=True)
     if mode == "hang_after_result":
         time.sleep(60)
+    if S.get("kill_self"):  # an OS kill after the printed events: no exit status, only a signal
+        os.kill(os.getpid(), signal.SIGKILL)
     sys.exit(S.get("exit_code", 0))
 if mode == "hang":
     time.sleep(60)

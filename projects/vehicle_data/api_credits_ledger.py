@@ -15,9 +15,10 @@ import threading
 
 from lib.reports import atomic_json
 from projects.vehicle_data.api_credits import latch_scope
-from projects.vehicle_data.api_credits_contract import LEDGER, UNTIL
+from projects.vehicle_data.api_credits_contract import ACCOUNT_CODES, CREDIT_CODES, LEDGER, MODEL_CODES, UNTIL
 
 OPEN, SETTLED = "open", "settled"
+TEXT_LIMIT = 200  # bound on an attempt id, model name or latch table size
 
 
 class LedgerError(Exception):
@@ -37,12 +38,48 @@ def _empty():
             "latches": {"account": None, "models": {}}, "last_fallback": None}
 
 
+def _stamp_ok(value):
+    try:
+        datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _text(value, limit):
+    return isinstance(value, str) and 0 < len(value) <= limit
+
+
+def _entry_valid(entry):
+    if not isinstance(entry, dict) or entry.get("state") not in (OPEN, SETTLED):
+        return False
+    known = entry.get("known_usd")
+    if isinstance(known, bool) or not isinstance(known, (int, float)) or not 0 <= known <= 10000:
+        return False  # NaN and infinity fail the range test
+    settled_at = entry.get("settled_at")
+    return _text(entry.get("attempt_id"), TEXT_LIMIT) and _text(entry.get("model"), TEXT_LIMIT) \
+        and _stamp_ok(entry.get("started_at")) and isinstance(entry.get("unknown"), bool) \
+        and (_stamp_ok(settled_at) if entry["state"] == SETTLED else settled_at is None)
+
+
+def _fallback_valid(fallback):
+    return fallback is None or (isinstance(fallback, dict) and _stamp_ok(fallback.get("at"))
+                                and fallback.get("code") in CREDIT_CODES and _text(fallback.get("model"), TEXT_LIMIT))
+
+
 def _valid(record):
+    """The whole bounded durable schema: any other shape leaves the file untouched and unavailable."""
     if not isinstance(record, dict) or record.get("schema_version") != LEDGER["schemaVersion"]:
         return False
-    latches = record.get("latches")
-    return isinstance(record.get("entries"), list) and isinstance(latches, dict) \
-        and isinstance(latches.get("models"), dict) and all(isinstance(e, dict) for e in record["entries"])
+    latches, entries = record.get("latches"), record.get("entries")
+    if not isinstance(latches, dict) or not isinstance(entries, list) or len(entries) > LEDGER["maxEntries"]:
+        return False
+    models = latches.get("models")
+    return "last_fallback" in record and _fallback_valid(record["last_fallback"]) \
+        and latches.get("account") in (None, *ACCOUNT_CODES) \
+        and isinstance(models, dict) and len(models) <= TEXT_LIMIT \
+        and all(_text(m, TEXT_LIMIT) and code in MODEL_CODES for m, code in models.items()) \
+        and all(_entry_valid(entry) for entry in entries)
 
 
 def durable_write(path, record):

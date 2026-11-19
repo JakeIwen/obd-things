@@ -16,7 +16,9 @@ import time
 import uuid
 
 from projects.vehicle_data import cli_process, research_cli
-from projects.vehicle_data.api_credits import PRE_INIT_RESULT, CreditEnd, UsageTally, classify_credit_failure
+from projects.vehicle_data.api_credits import (
+    PRE_INIT_RESULT, CreditEnd, UsageTally, classify_credit_failure, scrub,
+)
 from projects.vehicle_data.api_credits_contract import API_CREDITS, PROTOCOL, SUBSCRIPTION
 from projects.vehicle_data.api_credits_ledger import LedgerError
 from projects.vehicle_data.dtc_research_contract import SIZES, TIMEOUTS, truncate_encoded
@@ -65,7 +67,7 @@ class Runner:
         outcome.setdefault("billing", plan.billing.choice)
         outcome.setdefault("credit_code", None)
         outcome.setdefault("diagnostics", {}).update(billing=outcome["billing"], credit_code=outcome["credit_code"])
-        return outcome
+        return scrub(outcome, plan.key)  # nothing that leaves the runner carries the installed key
 
     def _run_turn(self, attempt, request, plan):
         identity = self.identity.check(request.provider)
@@ -77,7 +79,9 @@ class Runner:
         home, tmpdir = run / "home", self.volume.tmpdir(attempt.attempt_id)
         try:
             if request.kind == "initial":
-                self.volume.drop_session(request.run_id)
+                if not self.volume.drop_session(request.run_id):
+                    self._close_entry(plan, None, None, spawned=False)
+                    return _failed("provider_error", "the run's earlier session could not be removed")
                 (run / "home").mkdir(parents=True, exist_ok=True, mode=0o700)
                 session_id = str(uuid.uuid4())
                 before = 0
@@ -85,8 +89,10 @@ class Runner:
                 session_id = request.session_id
                 before = research_cli.session_size(research_cli.claude_session_files(home, session_id))
             attempt.session_id = session_id
-            origin = plan.billing.choice if request.kind == "initial" else (
-                (self.volume.session_record(request.run_id) or {}).get("billing") or SUBSCRIPTION)
+            origin = plan.billing.choice if request.kind == "initial" else self.volume.session_origin(request.run_id)
+            if origin is None:  # admission refuses this; a record lost since then is never guessed at
+                self._close_entry(plan, None, None, spawned=False)
+                return _failed("session_missing", "the origin of this run's session is not recorded")
             self.volume.save_session_record(request.run_id, {"provider": "claude", "session_id": session_id,
                                                              "billing": origin})
             argv = research_cli.claude_argv(identity.executable, model=request.model, effort=request.effort,
@@ -94,7 +100,7 @@ class Runner:
                                              budget_usd=request.budget_usd)
             env = research_cli.claude_credit_env(home, tmpdir, plan.key) if plan.credit \
                 else research_cli.claude_env(home, tmpdir, token)
-            stream = research_cli.ClaudeStream(session_id, credit=plan.credit)
+            stream = research_cli.ClaudeStream(session_id, credit=plan.credit, key=plan.key)
             result, watchdog = self._launch(attempt, request, argv, env, run / "work", stream)
             outcome = self._outcome(request, stream, result, watchdog)
             self._close_entry(plan, stream, result, spawned=result.returncode is not None)
@@ -123,7 +129,7 @@ class Runner:
         if not spawned:
             self.credits.withdraw(plan)
             return
-        clean = result is not None and result.stop_reason in (None, PRE_INIT_RESULT)
+        clean = _confirmed_terminal_exit(stream, result)
         try:
             self.credits.settle(plan, stream.tally if stream else UsageTally(), clean_exit=clean)
         except LedgerError:
@@ -202,6 +208,9 @@ class Runner:
             answer, truncated = truncate_encoded(stream.answer, cap + 4096)
             outcome = {"status": "complete", "answer": answer, "reason": None, "detail": None,
                        "mode": "resumed" if request.kind == "resume" else "initial", "truncated": truncated}
+        elif stream.credit and stream.session_id is None and stream.result is None \
+                and not (result.stderr_tail or "").strip():
+            outcome = _failed("protocol_error", "Claude ended before it started and said nothing")
         else:
             outcome = _failed(stream.failure(), "the model provider did not return an answer")
         outcome["diagnostics"] = diagnostics
@@ -253,6 +262,17 @@ class Runner:
         if result.stop_reason:
             raise RuntimeError(_stopped(result))
         return "\n".join(lines)
+
+
+def _confirmed_terminal_exit(stream, result):
+    """True when the process reported a terminal result and ended on its own: a signal death or an
+    exit without a terminal result leaves the spend beyond the reported deltas unknown. A pre-init
+    failure result we stopped ourselves counts, since it is the process's own final word."""
+    if result is None or stream is None or stream.result is None:
+        return False
+    if result.stop_reason == PRE_INIT_RESULT:
+        return True
+    return result.stop_reason is None and result.returncode is not None and result.returncode >= 0
 
 
 def _failed(reason, detail):

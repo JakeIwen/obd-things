@@ -119,6 +119,13 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("removed", out)
         self.assertIn("No API key", self.main("api-key", "--remove")[1])
 
+    def test_removing_the_key_makes_the_removal_durable_with_a_directory_fsync(self):
+        self.main("api-key")
+        with mock.patch("projects.vehicle_data.dtc_research_signin.os.fsync") as synced:
+            self.main("api-key", "--remove")
+        self.assertTrue(synced.called)
+        self.assertFalse(self.installed().exists())
+
     def test_status_reports_installed_or_not_and_never_the_value(self):
         self.assertIn("API key (promotional credits): not installed", self.main("status")[1])
         self.main("api-key")
@@ -171,7 +178,9 @@ class MountCheckTests(unittest.TestCase):
 
     def test_the_images_loop_device_is_accepted(self):
         self.assertIsNone(self.check("/dev/loop3", backing=VOLUME_IMAGE))
-        self.assertIsNone(self.check("/dev/loop3", backing=VOLUME_IMAGE + " (deleted)"))
+
+    def test_a_loop_device_whose_backing_file_was_deleted_is_refused(self):
+        self.assertIn("other than the research image", self.check("/dev/loop3", backing=VOLUME_IMAGE + " (deleted)"))
 
     def test_the_image_itself_as_the_source_is_accepted(self):
         self.assertIsNone(self.check(VOLUME_IMAGE))

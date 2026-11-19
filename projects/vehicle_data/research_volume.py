@@ -12,9 +12,9 @@ from pathlib import Path
 import re
 import shutil
 
-from projects.vehicle_data.api_credits_contract import PATHS
+from lib.reports import atomic_json
+from projects.vehicle_data.api_credits_contract import API_CREDITS, PATHS, SUBSCRIPTION
 from projects.vehicle_data.dtc_research_contract import RUN_ID_RE, WORKER
-from projects.vehicle_data.research_cli import claude_session_files
 
 MIB = 1024 * 1024
 FREE_FLOOR_MIB = 16
@@ -43,7 +43,7 @@ def mount_problem(root, image=VOLUME_IMAGE, *, is_mount=os.path.ismount, mountin
             backing = (Path(sys_block) / loop[1] / "loop" / "backing_file").read_text().strip()
         except OSError:
             return f"the loop device behind {root} cannot be identified"
-        if backing.removesuffix(" (deleted)") == image:
+        if backing == image:  # a backing file the kernel marks "(deleted)" is no longer the image on disk
             return None
     return f"{root} is mounted from something other than the research image"
 
@@ -112,38 +112,63 @@ class Volume:
             return None
 
     def save_session_record(self, run_id, record):
+        """Durably (file and directory fsynced) replace the run's ``session.json``: the billing origin
+        must survive a crash before the process that creates the transcript is spawned."""
         path = self.run_dir(run_id) / "session.json"
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(record))
-        os.replace(temporary, path)
+        atomic_json(path, record, prefix=".session-", indent=None, fsync=True, fsync_dir=True)
+
+    def session_origin(self, run_id):
+        """The billing a run's session was created under: ``api_credits`` or ``subscription`` when the
+        record says so, ``subscription`` for an intact record of the era before billing was recorded
+        (a readable object with a session id and no ``billing`` key), and ``None`` when the provenance
+        is missing, unreadable or malformed. ``None`` is never resumable on either credential."""
+        record = self.session_record(run_id)
+        if not isinstance(record, dict) or not isinstance(record.get("session_id"), str):
+            return None
+        if "billing" not in record:
+            return SUBSCRIPTION
+        return record["billing"] if record["billing"] in (API_CREDITS, SUBSCRIPTION) else None
+
+    def transcripts(self, run_id):
+        """Every CLI transcript file left in a run's HOME, whatever its session id."""
+        return sorted((self.run_dir(run_id) / "home" / ".claude" / "projects").glob("*/*.jsonl"))
 
     def drop_session(self, run_id):
-        """Delete a run's CLI session files; later follow-ups replay."""
+        """Delete a run's CLI session files; later follow-ups replay. Returns whether the deletion is
+        verified: the provenance marker stays while any transcript file remains, so a leftover
+        transcript is never left without its origin."""
         record = self.session_record(run_id) or {}
-        self.clear(self.run_dir(run_id) / "home")
+        home = self.run_dir(run_id) / "home"
+        shutil.rmtree(home, ignore_errors=True)
         rollout = record.get("rollout_path")
         if rollout and Path(rollout).resolve().is_relative_to(self.codex_home.resolve()):
             Path(rollout).unlink(missing_ok=True)
+        if home.exists() and any(home.rglob("*.jsonl")):
+            return False
         (self.run_dir(run_id) / "session.json").unlink(missing_ok=True)
+        return True
 
-    def _runs_billed(self, billing):
-        for path in self.runs.glob("*"):
-            if path.is_dir() and RUN_ID_RE.fullmatch(path.name) \
-                    and (self.session_record(path.name) or {}).get("billing") == billing:
-                yield path.name
+    def _run_names(self):
+        return [path.name for path in self.runs.glob("*") if path.is_dir() and RUN_ID_RE.fullmatch(path.name)]
 
     def drop_sessions_billed(self, billing):
-        """Delete the CLI session of every run whose ``session.json`` says it was created under ``billing``."""
-        for name in list(self._runs_billed(billing)):
-            self.drop_session(name)
+        """Delete the CLI session of every run created under ``billing``; for API credits that includes
+        a run whose transcript has no readable origin (it must not survive a rollback). Returns the
+        number of runs whose deletion could not be verified."""
+        failed = 0
+        for name in self._run_names():
+            origin = self.session_origin(name)
+            if origin == billing or (origin is None and billing == API_CREDITS and self.transcripts(name)):
+                failed += not self.drop_session(name)
+        return failed
 
     def count_sessions_billed(self, billing):
-        """Runs created under ``billing`` whose CLI transcript still exists (a marker alone does not count)."""
+        """Runs whose CLI transcript still exists and was created under ``billing``; for API credits a
+        transcript with a missing or unreadable origin counts too (a marker alone does not)."""
         count = 0
-        for name in self._runs_billed(billing):
-            record = self.session_record(name) or {}
-            if isinstance(record.get("session_id"), str) \
-                    and claude_session_files(self.run_dir(name) / "home", record["session_id"]):
+        for name in self._run_names():
+            origin = self.session_origin(name)
+            if (origin == billing or (origin is None and billing == API_CREDITS)) and self.transcripts(name):
                 count += 1
         return count
 

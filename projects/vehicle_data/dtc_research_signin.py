@@ -47,12 +47,17 @@ def write_secret(directory, name, text):
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
+    fsync_directory(directory)
+    return path
+
+
+def fsync_directory(directory):
+    """Make a rename or removal in ``directory`` durable (the entry, not just the file bytes)."""
     directory_fd = os.open(directory, os.O_RDONLY)
     try:
         os.fsync(directory_fd)
     finally:
         os.close(directory_fd)
-    return path
 
 
 def save_token(volume, token, *, mounted=require_mounted):
@@ -77,6 +82,7 @@ def remove_api_key(volume, *, mounted=require_mounted):
     path = Volume(volume).api_key
     existed = path.exists() or path.is_symlink()
     path.unlink(missing_ok=True)
+    fsync_directory(path.parent)  # the key must stay gone after a power loss
     return existed
 
 

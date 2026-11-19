@@ -12,7 +12,8 @@ import os
 from pathlib import Path
 
 from projects.vehicle_data.api_credits import (
-    API_KEY_SOURCE, NO_KEY_SOURCE, PRE_INIT_RESULT, TYPED_ERRORS, UsageTally,
+    API_KEY_SOURCE, NO_KEY_SOURCE, PRE_INIT_RESULT, TYPED_ERRORS, UsageTally, is_failed_terminal_result,
+    number_or_none, redact,
 )
 from projects.vehicle_data.cli_process import StopRun
 from projects.vehicle_data.dtc_research_prompt import SYSTEM
@@ -110,9 +111,10 @@ class ClaudeStream:
     (else the worker stops it as ``key_ignored``), a subscription launch must report none, and a
     credit launch's result events feed ``tally``."""
 
-    def __init__(self, expected_session, *, credit=False):
+    def __init__(self, expected_session, *, credit=False, key=None):
         self.expected_session = expected_session
         self.credit = credit
+        self.key = key  # redacted from the answer before it is stored (and so before any truncation)
         self.tally = UsageTally()
         self.typed_error = None
         self.api_key_source = None
@@ -154,12 +156,12 @@ class ClaudeStream:
             if self.credit:
                 self.tally.add(event)
             if event.get("subtype") == "success" and not event.get("is_error") and isinstance(event.get("result"), str):
-                self.answer = event["result"]
+                self.answer = redact(event["result"], self.key)
             self.phase = "finishing"
 
     @staticmethod
     def _is_failed_result(event):
-        return bool(event.get("is_error")) or event.get("subtype") != "success"
+        return is_failed_terminal_result(event)
 
     def _check_key_source(self, event):
         self.api_key_source = event.get("apiKeySource")
@@ -192,8 +194,8 @@ class ClaudeStream:
 
     def diagnostics(self):
         result = self.result or {}
-        cost = result.get("total_cost_usd")
-        return {"num_turns": result.get("num_turns"), "total_cost_usd": cost if isinstance(cost, (int, float)) else None}
+        return {"num_turns": number_or_none(result.get("num_turns")),
+                "total_cost_usd": number_or_none(result.get("total_cost_usd"))}
 
 
 def claude_session_files(home, session_id):

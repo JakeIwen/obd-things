@@ -195,13 +195,19 @@ class Worker:
             plans.append(plan)
 
         attempt = self.table.admit(body["attempt_id"], "turn", body["expected_instance_id"], request.run_id, check)
-        self._start(attempt, lambda: self.runner.run_turn(attempt, request, plans[0]))
+        self._start(attempt, lambda: self.runner.run_turn(attempt, request, plans[0]),
+                    lambda: {"billing": plans[0].billing.choice, "credit_code": None})
         return attempt
 
     def _plan_billing(self, request, attempt_id):
         """The turn's billing, or a pre-spawn refusal: a resume of an API-created session that cannot
         stay on credits is ``replay_required`` (the advisor replays it on the subscription)."""
-        record = self.volume.session_record(request.run_id) if request.kind == "resume" else None
+        record = None
+        if request.kind == "resume":
+            origin = self.volume.session_origin(request.run_id)
+            if origin is None:  # missing or unreadable provenance: never resumed on either credential
+                raise Refused("session_missing", "the CLI session for this run has no readable origin")
+            record = {"billing": origin}
         plan = self.credits.plan(request, record, credits_allowed=True, attempt_id=attempt_id)
         if plan.billing.choice == REPLAY_REQUIRED:
             raise Refused(REPLAY_REQUIRED, "this session was billed to API credits and cannot resume on the subscription")
@@ -235,12 +241,15 @@ class Worker:
         self._start(attempt, work)
         return attempt
 
-    def _start(self, attempt, work):
+    def _start(self, attempt, work, failure_fields=dict):
+        """Run ``work`` on its own thread. ``failure_fields`` gives the outcome fields (a turn's
+        ``billing`` and ``credit_code``) that an unexpected exception's outcome must still carry."""
         def body():
             try:
                 outcome = work()
             except Exception as exc:  # the outcome must always be recorded and the slot freed
-                outcome = {"status": "failed", "reason": "provider_error", "detail": redact(exc)[:300]}
+                outcome = {"status": "failed", "reason": "provider_error", "detail": redact(exc)[:300],
+                           **failure_fields()}
             finally:
                 self.cli_lock.release()
             self.table.finish(attempt, outcome)

@@ -79,4 +79,4 @@ class Credits:
     def view(self):
         key, _ = read_key_file(self.key_path)
         return {"key_installed": key is not None, "enabled": self.enabled(), "until": CONTRACT["until"],
-                **self.ledger.snapshot()}
+                "ledger_available": self.ledger.available, **self.ledger.snapshot()}

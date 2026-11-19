@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 from projects.vehicle_data.api_credits import (
-    CreditEnd, Billing, UsageTally, choose_billing, classify_credit_failure, read_key_file, redact,
+    CreditEnd, Billing, UsageTally, choose_billing, classify_credit_failure, read_key_file, redact, scrub,
 )
 from projects.vehicle_data.api_credits_contract import BILLING_REASONS, UNTIL
 from projects.vehicle_data.api_credits_ledger import CreditLedger, LedgerError
@@ -189,7 +189,7 @@ class ClassifierTests(unittest.TestCase):
                          "key_ignored")
 
     def test_pre_init_failures(self):
-        silent = end(init_seen=False, returncode=1, stderr_tail="")
+        silent = end(init_seen=False, returncode=1, stderr_tail="", result=failed())
         self.assertEqual(classify_credit_failure(silent), "invalid_key")
         self.assertEqual(classify_credit_failure(end(init_seen=False, stderr_tail="Invalid API key provided")),
                          "invalid_key")
@@ -200,6 +200,45 @@ class ClassifierTests(unittest.TestCase):
         self.assertIsNone(classify_credit_failure(end(init_seen=False, returncode=0)))
         # With the failure after init, the stderr tail is ignored.
         self.assertIsNone(classify_credit_failure(end(init_seen=True, stderr_tail="", returncode=1)))
+
+    def test_pre_init_deaths_and_malformed_results_never_latch_a_healthy_key(self):
+        cases = {"no result, exit 1": end(init_seen=False, returncode=1),
+                 "signal death": end(init_seen=False, returncode=-9),
+                 "bare result": end(init_seen=False, returncode=1, result={"type": "result"}),
+                 "result with a null subtype": end(init_seen=False, returncode=1,
+                                                   result={"type": "result", "subtype": None}),
+                 "explicit success": end(init_seen=False, returncode=0, result={
+                     "type": "result", "subtype": "success", "is_error": False})}
+        for name, case in cases.items():
+            with self.subTest(name):
+                self.assertIsNone(classify_credit_failure(case))
+        for result in (failed(), {"type": "result", "is_error": True}, {"type": "result", "subtype": "error_x"}):
+            self.assertEqual(classify_credit_failure(end(init_seen=False, result=result)), "invalid_key")
+
+    def test_terminal_key_refusal_codes_are_invalid_key_by_structure_or_exact_text(self):
+        for field in ("api_error_code", "api_error"):
+            for code in ("api_key_auth_disabled", "org_disabled_credential"):
+                with self.subTest(field=field, code=code):
+                    result = {**failed("x"), field: code, "api_error_status": 403}
+                    self.assertEqual(classify_credit_failure(end(result=result)), "invalid_key")
+        nested = {**failed("x"), "error": {"api_error": "org_disabled_credential"}}
+        self.assertEqual(classify_credit_failure(end(result=nested)), "invalid_key")
+        for text in ("Your organization has disabled API key authentication",
+                     "Your ANTHROPIC_API_KEY belongs to a disabled organization"):
+            self.assertEqual(classify_credit_failure(end(result=failed(text))), "invalid_key")
+        self.assertIsNone(classify_credit_failure(end(result={**failed("forbidden"), "api_error_status": 403})))
+
+    def test_structural_rate_limit_and_overload_outrank_a_remembered_assistant_error(self):
+        for extra in ({"api_error_type": "rate_limit_error"}, {"api_error_type": "overloaded_error"},
+                      {"api_error_status": 429}, {"api_error_status": 529}):
+            with self.subTest(extra):
+                result = {**failed("an opaque message"), **extra}
+                self.assertIsNone(classify_credit_failure(end(typed_error="billing_error", result=result)))
+
+    def test_redact_removes_the_exact_key_and_anything_shaped_like_one(self):
+        self.assertEqual(redact("odd-secret-value here", "odd-secret-value"), "[key] here")
+        self.assertEqual(scrub({"a": ["x odd-secret", {"b": "sk-ant-api03-zzzz"}], "n": 3}, "odd-secret"),
+                         {"a": ["x [key]", {"b": "[key]"}], "n": 3})
 
     def test_redact_removes_anything_shaped_like_a_key(self):
         self.assertEqual(redact(f"boom {FAKE_KEY} and sk-ant-oat01-abc"), "boom [key] and [key]")
@@ -340,6 +379,51 @@ class LedgerTests(unittest.TestCase):
         with self.assertRaises(LedgerError):
             ledger.reserve("a" * 32, "sonnet")
         self.assertEqual(self.path.read_text(), "{not json")
+
+    def good_record(self, **changes):
+        record = {"schema_version": 1, "latches": {"account": None, "models": {}}, "last_fallback": None,
+                  "entries": [{"attempt_id": "a" * 32, "model": "sonnet", "started_at": "2026-11-20T00:00:00Z",
+                               "settled_at": "2026-11-20T00:00:01Z", "known_usd": 0.1, "unknown": False,
+                               "state": "settled"}]}
+        record.update(changes)
+        return record
+
+    def test_any_schema_violation_leaves_the_file_untouched_and_the_ledger_unavailable(self):
+        entry = self.good_record()["entries"][0]
+        bad = {
+            "entry that is not an object": self.good_record(entries=["x"]),
+            "entry without its state": self.good_record(entries=[{k: v for k, v in entry.items() if k != "state"}]),
+            "negative spend": self.good_record(entries=[{**entry, "known_usd": -1}]),
+            "boolean spend": self.good_record(entries=[{**entry, "known_usd": True}]),
+            "spend as text": self.good_record(entries=[{**entry, "known_usd": "0.1"}]),
+            "unknown as a number": self.good_record(entries=[{**entry, "unknown": 1}]),
+            "bad timestamp": self.good_record(entries=[{**entry, "started_at": "yesterday"}]),
+            "open entry that has a settled time": self.good_record(entries=[{**entry, "state": "open"}]),
+            "no last_fallback": {k: v for k, v in self.good_record().items() if k != "last_fallback"},
+            "last_fallback that is not an object": self.good_record(last_fallback="x"),
+            "last_fallback with an unknown code": self.good_record(
+                last_fallback={"at": "2026-11-20T00:00:00Z", "code": "boom", "model": "m"}),
+            "account latch with a model code": self.good_record(
+                latches={"account": "model_unavailable", "models": {}}),
+            "model latch with an unknown code": self.good_record(latches={"account": None, "models": {"m": "x"}}),
+            "too many entries": self.good_record(entries=[entry] * 2001),
+        }
+        for name, record in bad.items():
+            with self.subTest(name):
+                text = json.dumps(record)
+                self.path.write_text(text)
+                ledger = self.ledger()
+                self.assertFalse(ledger.available)
+                self.assertEqual(self.path.read_text(), text)
+                with self.assertRaises(LedgerError):
+                    ledger.reserve("b" * 32, "sonnet")
+                self.assertEqual(ledger.snapshot()["last_fallback"], None)  # a usable reply, never a crash
+
+    def test_a_well_formed_file_with_every_field_loads(self):
+        record = self.good_record(last_fallback={"at": "2026-11-20T00:00:00Z", "code": "exhausted", "model": "m"},
+                                  latches={"account": "invalid_key", "models": {"m": "model_unavailable"}})
+        self.path.write_text(json.dumps(record))
+        self.assertTrue(self.ledger().available)
 
 
 if __name__ == "__main__":
