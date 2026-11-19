@@ -8,7 +8,7 @@ prompt to ``prompts.jsonl`` in its state directory.
 Credit scenarios: ``init`` carries ``apiKeySource`` (``ANTHROPIC_API_KEY`` when the child's
 environment has that variable, else ``none``; ``api_key_source`` overrides it). ``events`` replaces
 the default tool-use and answer events with the given stream-json events (after init), ``pre_init``
-prints events instead of init, ``stderr`` is written to stderr, ``exit_code`` is the exit status of
+prints events instead of init, ``stderr`` is written to stderr, ``echo_key`` writes the child's API key into its transcript, ``exit_code`` is the exit status of
 those two paths (``kill_self`` ends either path by SIGKILL instead), and ``delta`` is the ``costUSD`` of the default result's
 ``model_usage_since_last_result`` (``null`` omits it; ``result_index`` numbers it).
 """
@@ -77,6 +77,10 @@ if mode == "huge_line":
     sys.stdout.write("x" * (5 * 1024 * 1024))
     sys.stdout.flush()
     time.sleep(5)
+if S.get("echo_key"):  # a representative transcript line: the child echoed its key into the conversation
+    with open(path, "a") as f:
+        f.write(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text":
+                "my key is " + os.environ.get("ANTHROPIC_API_KEY", "")}]}}) + "\n")
 tools = S.get("tools", ["WebSearch", "WebFetch"])
 emit({"type": "system", "subtype": "init", "session_id": S.get("init_session", session), "tools": tools,
        "mcp_servers": [], "apiKeySource": source()})

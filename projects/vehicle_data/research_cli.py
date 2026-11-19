@@ -123,6 +123,7 @@ class ClaudeStream:
         self.searches = self.pages = 0
         self.phase = "starting"
         self.result = None
+        self.ended_on_result = False  # False again once assistant or user events follow a result
         self.answer = None
 
     def __call__(self, event):
@@ -131,6 +132,7 @@ class ClaudeStream:
             if self.credit and kind == "result" and self._is_failed_result(event):
                 # Diagnostic evidence only: it authorizes nothing and ends the run.
                 self.result = event
+                self.ended_on_result = True
                 self.tally.add(event)
                 raise StopRun(PRE_INIT_RESULT, "Claude ended before it started", immediate=True)
             if kind != "system" or event.get("subtype") != "init":
@@ -143,6 +145,8 @@ class ClaudeStream:
                 raise StopRun("resume_unverified", "Claude started a different session", immediate=True)
             self._check_key_source(event)
             return
+        if kind in ("assistant", "user"):
+            self.ended_on_result = False
         if kind == "assistant":
             if isinstance(event.get("error"), str):
                 self.typed_error = event["error"] if event["error"] in TYPED_ERRORS else None
@@ -153,6 +157,7 @@ class ClaudeStream:
                     self.phase = "writing"
         elif kind == "result":
             self.result = event
+            self.ended_on_result = True
             if self.credit:
                 self.tally.add(event)
             if event.get("subtype") == "success" and not event.get("is_error") and isinstance(event.get("result"), str):

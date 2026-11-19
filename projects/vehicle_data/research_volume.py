@@ -108,8 +108,13 @@ class Volume:
     def session_record(self, run_id):
         try:
             return json.loads((self.run_dir(run_id) / "session.json").read_text())
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             return None
+
+    def _record_fields(self, run_id):
+        """The record as a dict: a damaged file holding any other JSON value reads as empty."""
+        record = self.session_record(run_id)
+        return record if isinstance(record, dict) else {}
 
     def save_session_record(self, run_id, record):
         """Durably (file and directory fsynced) replace the run's ``session.json``: the billing origin
@@ -117,33 +122,63 @@ class Volume:
         path = self.run_dir(run_id) / "session.json"
         atomic_json(path, record, prefix=".session-", indent=None, fsync=True, fsync_dir=True)
 
-    def session_origin(self, run_id):
+    def session_origin(self, run_id, session_id=None):
         """The billing a run's session was created under: ``api_credits`` or ``subscription`` when the
         record says so, ``subscription`` for an intact record of the era before billing was recorded
         (a readable object with a session id and no ``billing`` key), and ``None`` when the provenance
-        is missing, unreadable or malformed. ``None`` is never resumable on either credential."""
-        record = self.session_record(run_id)
-        if not isinstance(record, dict) or not isinstance(record.get("session_id"), str):
+        is missing, unreadable, malformed, poisoned (the transcript may hold the key) or, when
+        ``session_id`` is given, a marker for a different session. ``None`` is never resumable."""
+        record = self._record_fields(run_id)
+        if not isinstance(record.get("session_id"), str) or record.get("poisoned") is True:
+            return None
+        if session_id is not None and record["session_id"] != session_id:
             return None
         if "billing" not in record:
             return SUBSCRIPTION
         return record["billing"] if record["billing"] in (API_CREDITS, SUBSCRIPTION) else None
 
-    def transcripts(self, run_id):
-        """Every CLI transcript file left in a run's HOME, whatever its session id."""
-        return sorted((self.run_dir(run_id) / "home" / ".claude" / "projects").glob("*/*.jsonl"))
+    def poison_session(self, run_id):
+        """Mark the run's session unresumable on either credential (durably), keeping its other fields."""
+        self.save_session_record(run_id, {**self._record_fields(run_id), "poisoned": True})
+
+    def transcript_state(self, run_id):
+        """``"present"``, ``"absent"`` (verified: the scan met no error) or ``"error"`` (a directory
+        could not be listed, so absence is not proven) for the CLI transcripts anywhere in a run's HOME."""
+        errors = []
+        for _root, _dirs, names in os.walk(self.run_dir(run_id) / "home", onerror=errors.append):
+            if any(name.endswith(".jsonl") for name in names):
+                return "present"
+        return "error" if any(not isinstance(error, FileNotFoundError) for error in errors) else "absent"
+
+    def transcript_holds(self, run_id, secret):
+        """True when any transcript file in the run's HOME contains ``secret`` (exact bytes), or cannot be
+        read to find out. Files are read in chunks, with overlap so a match across a boundary is seen."""
+        needle = secret.encode()
+        for root, _dirs, names in os.walk(self.run_dir(run_id) / "home", onerror=lambda _e: None):
+            for name in names:
+                if not name.endswith(".jsonl"):
+                    continue
+                try:
+                    with open(os.path.join(root, name), "rb") as handle:
+                        tail = b""
+                        while chunk := handle.read(1 << 20):
+                            if needle in tail + chunk:
+                                return True
+                            tail = (tail + chunk)[-len(needle):]
+                except OSError:
+                    return True
+        return self.transcript_state(run_id) == "error"
 
     def drop_session(self, run_id):
         """Delete a run's CLI session files; later follow-ups replay. Returns whether the deletion is
-        verified: the provenance marker stays while any transcript file remains, so a leftover
-        transcript is never left without its origin."""
-        record = self.session_record(run_id) or {}
-        home = self.run_dir(run_id) / "home"
-        shutil.rmtree(home, ignore_errors=True)
+        verified (the scan met no error and found no transcript): the provenance marker stays
+        otherwise, so a leftover transcript is never left without its origin."""
+        record = self._record_fields(run_id)
+        shutil.rmtree(self.run_dir(run_id) / "home", ignore_errors=True)
         rollout = record.get("rollout_path")
-        if rollout and Path(rollout).resolve().is_relative_to(self.codex_home.resolve()):
+        if isinstance(rollout, str) and Path(rollout).resolve().is_relative_to(self.codex_home.resolve()):
             Path(rollout).unlink(missing_ok=True)
-        if home.exists() and any(home.rglob("*.jsonl")):
+        if self.transcript_state(run_id) != "absent":
             return False
         (self.run_dir(run_id) / "session.json").unlink(missing_ok=True)
         return True
@@ -158,17 +193,19 @@ class Volume:
         failed = 0
         for name in self._run_names():
             origin = self.session_origin(name)
-            if origin == billing or (origin is None and billing == API_CREDITS and self.transcripts(name)):
+            if origin == billing or (origin is None and billing == API_CREDITS
+                                     and self.transcript_state(name) != "absent"):
                 failed += not self.drop_session(name)
         return failed
 
     def count_sessions_billed(self, billing):
-        """Runs whose CLI transcript still exists and was created under ``billing``; for API credits a
-        transcript with a missing or unreadable origin counts too (a marker alone does not)."""
+        """Runs whose CLI transcript still exists (or cannot be shown absent) and was created under
+        ``billing``; for API credits a transcript with a missing or unreadable origin counts too."""
         count = 0
         for name in self._run_names():
             origin = self.session_origin(name)
-            if (origin == billing or (origin is None and billing == API_CREDITS)) and self.transcripts(name):
+            if (origin == billing or (origin is None and billing == API_CREDITS)) \
+                    and self.transcript_state(name) != "absent":
                 count += 1
         return count
 
@@ -177,9 +214,8 @@ class Volume:
         self.clear(self.run_dir(run_id))
 
     def run_footprint(self, run_id):
-        record = self.session_record(run_id) or {}
-        rollout = record.get("rollout_path")
-        extra = Path(rollout).stat().st_size if rollout and Path(rollout).exists() else 0
+        rollout = self._record_fields(run_id).get("rollout_path")
+        extra = Path(rollout).stat().st_size if isinstance(rollout, str) and Path(rollout).exists() else 0
         return footprint(self.run_dir(run_id)) + extra
 
     def free_bytes(self):

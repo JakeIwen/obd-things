@@ -204,7 +204,7 @@ class Worker:
         stay on credits is ``replay_required`` (the advisor replays it on the subscription)."""
         record = None
         if request.kind == "resume":
-            origin = self.volume.session_origin(request.run_id)
+            origin = self.volume.session_origin(request.run_id, request.session_id)
             if origin is None:  # missing or unreadable provenance: never resumed on either credential
                 raise Refused("session_missing", "the CLI session for this run has no readable origin")
             record = {"billing": origin}

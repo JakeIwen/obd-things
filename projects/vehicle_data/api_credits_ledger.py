@@ -18,6 +18,7 @@ from projects.vehicle_data.api_credits import latch_scope
 from projects.vehicle_data.api_credits_contract import ACCOUNT_CODES, CREDIT_CODES, LEDGER, MODEL_CODES, UNTIL
 
 OPEN, SETTLED = "open", "settled"
+FILE_MAX_BYTES = 4 * 1024 * 1024  # 2000 entries are well under 1 MiB
 TEXT_LIMIT = 200  # bound on an attempt id, model name or latch table size
 
 
@@ -46,6 +47,11 @@ def _stamp_ok(value):
     return True
 
 
+def _code(value, allowed):
+    """``value`` is a string in ``allowed`` (the type is checked first: a list is not hashable)."""
+    return isinstance(value, str) and value in allowed
+
+
 def _text(value, limit):
     return isinstance(value, str) and 0 < len(value) <= limit
 
@@ -64,11 +70,18 @@ def _entry_valid(entry):
 
 def _fallback_valid(fallback):
     return fallback is None or (isinstance(fallback, dict) and _stamp_ok(fallback.get("at"))
-                                and fallback.get("code") in CREDIT_CODES and _text(fallback.get("model"), TEXT_LIMIT))
+                                and _code(fallback.get("code"), CREDIT_CODES) and _text(fallback.get("model"), TEXT_LIMIT))
 
 
 def _valid(record):
     """The whole bounded durable schema: any other shape leaves the file untouched and unavailable."""
+    try:
+        return _valid_shape(record)
+    except (TypeError, ValueError, KeyError, AttributeError, RecursionError):
+        return False  # an unforeseen shape is an untrusted file, never a crash at start-up
+
+
+def _valid_shape(record):
     if not isinstance(record, dict) or record.get("schema_version") != LEDGER["schemaVersion"]:
         return False
     latches, entries = record.get("latches"), record.get("entries")
@@ -76,10 +89,20 @@ def _valid(record):
         return False
     models = latches.get("models")
     return "last_fallback" in record and _fallback_valid(record["last_fallback"]) \
-        and latches.get("account") in (None, *ACCOUNT_CODES) \
+        and (latches.get("account") is None or _code(latches.get("account"), ACCOUNT_CODES)) \
         and isinstance(models, dict) and len(models) <= TEXT_LIMIT \
-        and all(_text(m, TEXT_LIMIT) and code in MODEL_CODES for m, code in models.items()) \
+        and all(_text(m, TEXT_LIMIT) and _code(code, MODEL_CODES) for m, code in models.items()) \
         and all(_entry_valid(entry) for entry in entries)
+
+
+def read_bounded(path):
+    """The file's parsed JSON; ``FileNotFoundError`` when absent; ``ValueError`` when oversized or not
+    JSON (the size is checked before any parsing)."""
+    with open(path, "rb") as handle:
+        data = handle.read(FILE_MAX_BYTES + 1)
+    if len(data) > FILE_MAX_BYTES:
+        raise ValueError("the ledger file is larger than its bound")
+    return json.loads(data)
 
 
 def durable_write(path, record):
@@ -100,10 +123,10 @@ class CreditLedger:
         (they live until a restart); delete entries after ``until`` + the retention days."""
         with self._lock:
             try:
-                loaded = json.loads(self.path.read_text())
+                loaded = read_bounded(self.path)
             except FileNotFoundError:
                 loaded = _empty()
-            except (OSError, ValueError):
+            except (OSError, ValueError, RecursionError):
                 loaded = None
             if loaded is None or not _valid(loaded):
                 self.available = False

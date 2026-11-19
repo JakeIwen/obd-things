@@ -89,7 +89,7 @@ class Runner:
                 session_id = request.session_id
                 before = research_cli.session_size(research_cli.claude_session_files(home, session_id))
             attempt.session_id = session_id
-            origin = plan.billing.choice if request.kind == "initial" else self.volume.session_origin(request.run_id)
+            origin = plan.billing.choice if request.kind == "initial" else self.volume.session_origin(request.run_id, request.session_id)
             if origin is None:  # admission refuses this; a record lost since then is never guessed at
                 self._close_entry(plan, None, None, spawned=False)
                 return _failed("session_missing", "the origin of this run's session is not recorded")
@@ -110,15 +110,28 @@ class Runner:
                 if after <= before:
                     outcome = _failed("resume_unverified", "the session file did not grow")
             spawned = result.returncode is not None  # a launch refused before its spawn left the session alone
-            if spawned and outcome.get("reason") in ("resume_unverified", "space_exhausted", "memory_exhausted",
+            tainted = spawned and plan.credit and self.volume.transcript_holds(request.run_id, plan.key)
+            if tainted:
+                self._retire_tainted_session(request.run_id)
+            elif spawned and outcome.get("reason") in ("resume_unverified", "space_exhausted", "memory_exhausted",
                                                      PROTOCOL["fallbackReason"]):
                 self.volume.drop_session(request.run_id)
-            outcome["session_present"] = bool(research_cli.claude_session_files(home, session_id))
+            outcome["session_present"] = bool(research_cli.claude_session_files(home, session_id)) and not tainted
             outcome["session_id"] = session_id if outcome["session_present"] else None
             return outcome
         finally:
             self.volume.clear(tmpdir)
             self.volume.enforce_targets(busy_run=None)
+
+    def _retire_tainted_session(self, run_id):
+        """The CLI's own transcript holds the installed key (the child echoed it into the conversation),
+        and ``--resume`` would feed it back to the model: poison the session so no resume is admitted
+        on either credential (the advisor replays from its sanitized record), then delete it."""
+        try:
+            self.volume.poison_session(run_id)
+        except OSError:
+            (self.volume.run_dir(run_id) / "session.json").unlink(missing_ok=True)
+        self.volume.drop_session(run_id)
 
     def _close_entry(self, plan, stream, result, *, spawned):
         """Settle a credit launch's ledger entry from its process's own deltas, or withdraw it when
@@ -268,8 +281,8 @@ def _confirmed_terminal_exit(stream, result):
     """True when the process reported a terminal result and ended on its own: a signal death or an
     exit without a terminal result leaves the spend beyond the reported deltas unknown. A pre-init
     failure result we stopped ourselves counts, since it is the process's own final word."""
-    if result is None or stream is None or stream.result is None:
-        return False
+    if result is None or stream is None or stream.result is None or not stream.ended_on_result:
+        return False  # work after the last result means spend the deltas never reported
     if result.stop_reason == PRE_INIT_RESULT:
         return True
     return result.stop_reason is None and result.returncode is not None and result.returncode >= 0

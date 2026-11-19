@@ -4,6 +4,7 @@ import contextlib
 import copy
 import io
 import json
+import os
 import time
 import unittest
 from unittest import mock
@@ -567,8 +568,80 @@ class SessionProvenanceTests(CreditTestCase):
         self.assertEqual((outcome["status"], outcome["reason"]), ("failed", "provider_error"))
         self.assertEqual(len(self.rig.calls()), spawned)
 
+    def test_an_unenumerable_transcript_directory_is_not_proof_of_absence(self):
+        if os.geteuid() == 0:
+            self.skipTest("a root process can list any directory")
+        body, _ = self.api_session()
+        projects = self.rig.volume.run_dir(body["run_id"]) / "home" / ".claude" / "projects"
+        projects.chmod(0)
+        try:
+            self.assertEqual(self.count(), 1)  # a scan error counts as a possible transcript
+            self.assertEqual(self.rig.volume.drop_sessions_billed("api_credits"), 1)
+            self.assertTrue(self.record_path(body).exists())  # the marker is kept
+            self.record_path(body).unlink()
+            self.assertEqual(self.count(), 1)
+        finally:
+            projects.chmod(0o700)
+
+    def test_a_marker_for_another_session_does_not_authorize_the_transcript(self):
+        body, session = self.api_session()
+        record = json.loads(self.record_path(body).read_text())
+        record.update(session_id="another-session", billing="subscription")
+        self.record_path(body).write_text(json.dumps(record))
+        for capable in (True, None):
+            with self.assertRaises(Refused) as refused:
+                self.worker.admit_turn(self.resume(body, session, billing_capable=capable))
+            self.assertEqual(refused.exception.reason, "session_missing")
+
+    def test_a_damaged_non_object_record_does_not_stop_a_disabled_worker_from_starting(self):
+        body, _ = self.api_session()
+        self.record_path(body).write_text('["x"]')
+        policy = copy.deepcopy(self.rig.policy)
+        policy["claude"]["api_credits"]["enabled"] = False
+        restarted = Worker(self.rig.volume, IdentityChecker(self.rig.cli_root, policy), CliLock(self.rig.lock_path),
+                           meminfo=self.rig.meminfo, policy=policy, dns=self.worker.dns, now=lambda: self.rig.now)
+        restarted.start()
+        try:
+            self.assertEqual(dispatch(restarted, "GET", "/credits", None)[1]["api_sessions"], 0)
+        finally:
+            restarted.close()
+
+    def test_a_transcript_that_holds_the_key_is_retired_and_cannot_be_resumed(self):
+        self.rig.scenario({"echo_key": True})
+        body, outcome = self.go()
+        self.assertEqual(outcome["status"], "complete")
+        self.assertFalse(outcome["session_present"])
+        self.assertIsNone(outcome["session_id"])
+        self.assertEqual(list((self.rig.volume.run_dir(body["run_id"]) / "home").glob("**/*.jsonl")), [])
+        with self.assertRaises(Refused) as refused:
+            self.worker.admit_turn(self.resume(body, "x" * 36))
+        self.assertEqual(refused.exception.reason, "session_missing")
+
+    def test_a_tainted_session_that_cannot_be_deleted_is_still_unresumable_and_counted(self):
+        self.rig.scenario({"echo_key": True})
+        with mock.patch("projects.vehicle_data.research_volume.shutil.rmtree"):
+            body, outcome = self.go()
+        self.assertIsNone(outcome["session_id"])
+        record = json.loads(self.record_path(body).read_text())
+        self.assertIs(record["poisoned"], True)
+        with self.assertRaises(Refused) as refused:
+            self.worker.admit_turn(self.resume(body, record["session_id"]))
+        self.assertEqual(refused.exception.reason, "session_missing")
+        self.assertEqual(self.count(), 1)  # the transcript with the key blocks rollback until it is gone
+
+    def test_a_clean_transcript_stays_resumable(self):
+        body, session = self.api_session()
+        attempt = self.worker.admit_turn(self.resume(body, session))
+        self.assertEqual(self.rig.wait(attempt.attempt_id)["outcome"]["status"], "complete")
+
 
 class CreditSpendAndSecrecyTests(CreditTestCase):
+    def test_activity_after_the_last_result_is_unknown_even_with_a_normal_exit(self):
+        self.rig.scenario({"events": [assistant("a"), result(0, cost=0.25), assistant("more work")], "exit_code": 1})
+        self.go()
+        (entry,) = self.entries()
+        self.assertEqual((entry["known_usd"], entry["unknown"]), (0.25, True))
+
     def test_a_signal_death_keeps_the_known_subtotal_and_marks_unknown(self):
         self.rig.scenario({"events": [assistant("a"), result(0, cost=0.25)], "kill_self": True})
         _, outcome = self.go()
@@ -623,6 +696,38 @@ class CreditSpendAndSecrecyTests(CreditTestCase):
 
 
 class CreditLedgerReportingTests(unittest.TestCase):
+    def test_malformed_ledgers_never_stop_the_worker_and_subscription_research_still_works(self):
+        entry = {"attempt_id": "a" * 32, "model": "sonnet", "started_at": "2026-11-20T00:00:00Z",
+                 "settled_at": "2026-11-20T00:00:01Z", "known_usd": 0.1, "unknown": False, "state": "settled"}
+        base = {"schema_version": 1, "entries": [entry], "latches": {"account": None, "models": {}},
+                "last_fallback": None}
+        cases = {
+            "list-valued model latch": {**base, "latches": {"account": None, "models": {"m": ["x"]}}},
+            "list-valued account latch": {**base, "latches": {"account": ["exhausted"], "models": {}}},
+            "list-valued last_fallback code": {**base, "last_fallback": {"at": "2026-11-20T00:00:00Z",
+                                                                         "code": ["exhausted"], "model": "m"}},
+            "dict-valued last_fallback code": {**base, "last_fallback": {"at": "2026-11-20T00:00:00Z",
+                                                                         "code": {}, "model": "m"}},
+        }
+        for name, record in cases.items():
+            with self.subTest(name):
+                self._check(json.dumps(record))
+        with self.subTest("oversized file"):
+            self._check(json.dumps({**base, "padding": "x" * (5 * 1024 * 1024)}))
+        with self.subTest("deeply nested"):
+            self._check("[" * 100000)
+
+    def _check(self, text):
+        rig = WorkerRig(with_key=True, prepare=lambda rig: rig.volume.credit_ledger.write_text(text))
+        try:
+            self.assertIs(dispatch(rig.worker, "GET", "/credits", None)[1]["ledger_available"], False)
+            attempt = rig.worker.admit_turn(rig.turn_body(billing_capable=True))
+            outcome = rig.wait(attempt.attempt_id)["outcome"]
+            self.assertEqual((outcome["status"], outcome["billing"]), ("complete", "subscription"))
+            self.assertEqual(rig.volume.credit_ledger.read_text(), text)  # left untouched
+        finally:
+            rig.close()
+
     def test_a_corrupt_ledger_is_reported_unavailable_and_the_route_still_answers(self):
         def prepare(rig):
             rig.volume.credit_ledger.write_text(json.dumps({"schema_version": 1, "entries": [{"state": "open"}],
