@@ -9,7 +9,7 @@
  * the tree renders once and later updates touch only the text that changed.
  */
 
-import { computed } from "@preact/signals";
+import { computed, useComputed } from "@preact/signals";
 import { Tile } from "../components/Tile.jsx";
 import { AccDistance } from "../components/AccDistance.jsx";
 import { currentAcc } from "../accDisplay.js";
@@ -19,6 +19,7 @@ import { DriveFooter } from "./DriveFooter.jsx";
 import { liveValue, obs, isHidden, dayClock } from "../app/derive.js";
 import * as store from "../store.js";
 import { DASH } from "../format.js";
+import { candidateReadingModel } from "../candidateReading.helpers.js";
 import { fuelRateText, instantText } from "../fuelEconomy.helpers.js";
 import { FUEL_LEVEL, FUEL_RANGE, tankValueText, tankRangeText, tankIsLive } from "../fuelLevel.js";
 import {
@@ -119,6 +120,25 @@ function TankTile() {
         <span class="tile__unit">{tankUnit}</span>
       </div>
       <div class="tile__sub">{tankSub}</div>
+    </section>
+  );
+}
+
+// Candidate readings without a retained value (intake air, A/C high side): the record is read
+// directly, as for the fuel rate, because derive.obs would never call candidate quality live.
+function CandidateTile({ name, label, area }) {
+  const model = useComputed(() => candidateReadingModel(name, store.metricSignal(name).value));
+  const cls = useComputed(() => `tile tile--value area-${area} tile--${model.value.kind}`);
+  const text = useComputed(() => model.value.text);
+  const unit = useComputed(() => model.value.unit);
+  return (
+    <section class={cls} aria-label={label}>
+      <div class="tile__label">{label}</div>
+      <div class="tile__value num">
+        <span>{text}</span>
+        <span class="tile__unit">{unit}</span>
+      </div>
+      <div class="tile__sub"></div>
     </section>
   );
 }
@@ -242,8 +262,8 @@ export default function DriveMore({ page, onPageChange }) {
         {show("torque") && <Tile name="engine.crankshaft_torque" label="Torque" area="d2torque" />}
         {show("target") && <Tile name="engine.target_crankshaft_torque" label="Target torque" area="d2target" />}
         {show("odometer") && <Tile name="vehicle.odometer" label="Odometer" area="d2odo" />}
-        {show("intake") && <Tile name="engine.intake_air_temperature" label="Intake air" area="d2iat" />}
-        {show("acpress") && <Tile name="hvac.ac_high_side_pressure" label="A/C high side" area="d2airc" />}
+        {show("intake") && <CandidateTile name="engine.intake_air_temperature" label="Intake air" area="d2iat" />}
+        {show("acpress") && <CandidateTile name="hvac.ac_high_side_pressure" label="A/C high side" area="d2airc" />}
       </div>
       <DriveFooter page={page} onPageChange={onPageChange} />
     </>
