@@ -73,7 +73,8 @@ class KeyReaderTests(unittest.TestCase):
             with self.subTest(key[:11]):
                 path = self.write(key, name=key[7:10])
                 self.assertEqual(read_key_file(path), (key, None))
-        for bad in ("sk-ant-usr01-" + "A" * 40, "sk-ant-usr-short", "sk-ant-user-" + "A" * 40):
+        for bad in ("sk-ant-usr01-" + "A" * 40, "sk-ant-usr-short", "sk-ant-user-" + "A" * 40,
+                    "sk-ant-api\u0663\u0663-" + "A" * 40):  # non-ASCII digits
             with self.subTest(bad[:12]):
                 self.assertIsNone(read_key_file(self.write(bad, name="bad"))[0])
 

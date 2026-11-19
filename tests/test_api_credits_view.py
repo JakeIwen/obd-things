@@ -223,6 +223,8 @@ class ViewTests(unittest.TestCase):
         last = {"at": iso(NOW), "code": "exhausted", "model": "opus"}
         self.assertEqual(view(last_fallback=last)["last_fallback"], last)
         self.assertIsNone(view(last_fallback={"at": "no", "code": "x"})["last_fallback"])
+        keyish = {"at": iso(NOW), "code": "exhausted", "model": "sk-ant-usr-" + "A" * 40}
+        self.assertIsNone(view(last_fallback=keyish)["last_fallback"])  # never echo anything key-shaped
 
     def test_the_view_never_carries_anything_the_worker_did_not_whitelist_and_never_a_key(self):
         hostile = worker_credits(extra_field=FAKE_KEY, key=FAKE_KEY, key_path="/var/lib/vanresearch/anthropic-api-key")

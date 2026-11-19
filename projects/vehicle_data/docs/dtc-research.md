@@ -255,7 +255,7 @@ python3 -m projects.vehicle_data.dtc_research_signin status               # inst
 ```
 
 (run as `pi` from the checkout; `s dtc_research_signin api-key` is the same.) The installer accepts
-only a model key, `^sk-ant-(?:api\d{2}|usr)-[A-Za-z0-9_-]{20,300}$`, and names the refusal for an admin
+only a model key, `^sk-ant-(?:api[0-9]{2}|usr)-[A-Za-z0-9_-]{20,300}$`, and names the refusal for an admin
 key (`sk-ant-admin…`) or an OAuth token (`sk-ant-oat…`). Model keys carry either prefix:
 `sk-ant-api03-`, or `sk-ant-usr-`, which the owner's Console organization issued on 2026-11-19
 (`api.anthropic.com` accepted it as `x-api-key` on the free token-count endpoint). It refuses when no terminal can hide the
@@ -269,9 +269,10 @@ file, no group or other bits, bounded, one key), so installing, rotating or remo
 restart.
 
 A **dedicated Console key** for research (same organization, so the same grants, revocable alone)
-is recommended. The owner's shared key (`/home/pi/secrets/.anthropic_promo_key`) also works but
-widens the research boundary to that shared billing key; a key from any other organization must not
-be used.
+is the one installed (2026-11-19). The owner's shared key (`/home/pi/secrets/.anthropic_promo_key`)
+would widen the research boundary to that shared billing key, and on 2026-11-19 the API refused it
+(`401 invalid x-api-key`), so installing it would only latch `invalid_key`; a key from any other
+organization must not be used.
 
 ### The billing choice
 

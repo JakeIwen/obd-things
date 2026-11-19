@@ -127,7 +127,7 @@ def _last_fallback(value):
     if not isinstance(value, dict) or value.get("code") not in CREDIT_CODES:
         return None
     at, model = _instant(value.get("at")), value.get("model")
-    if at is None or not isinstance(model, str):
+    if at is None or not isinstance(model, str) or "sk-ant-" in model:  # never echo anything key-shaped
         return None
     return {"at": _iso(at), "code": value["code"], "model": model[:120]}
 
