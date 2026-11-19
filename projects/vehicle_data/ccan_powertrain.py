@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from lib import broadcast_signals
+from projects.vehicle_data import intake_ac_metrics
 
 # Linux SocketCAN numeric constants keep fake-socket offline tests portable to
 # Python builds that do not expose AF_CAN/CAN_RAW (for example macOS workers).
@@ -60,6 +61,7 @@ INTAKE_AC_SIGNALS = (
 )
 INTAKE_AC_IDS = tuple(signal.can_id for signal in INTAKE_AC_SIGNALS)
 INTAKE_AC_SOURCES = frozenset(signal.source for signal in INTAKE_AC_SIGNALS)
+INTAKE_AC_METRICS = frozenset(signal.metric for signal in INTAKE_AC_SIGNALS)
 # Owner-referenced cluster display frames (2026-09-27 and 2026-09-28 drives):
 # 0x0E0 B0 is the traffic-sign speed limit in mph (10 Hz); 0x5A0 is the
 # cluster ACC frame (1 Hz plus on change) whose B3 is the set speed in mph and
@@ -693,6 +695,11 @@ def _record_received_frame(
         state.display_latest[standard_id] = observations
         observations = ()
     for observation in observations:
+        if (
+            observation.metric in INTAKE_AC_METRICS
+            and not intake_ac_metrics.in_registry_range(observation.metric, observation.value)
+        ):
+            continue
         if (
             temperature_gate is not None
             and observation.metric == TRANSMISSION_TEMPERATURE_METRIC

@@ -46,3 +46,16 @@ AC_HIGH_SIDE_PRESSURE_DEFINITION = _metric(
     AC_HIGH_SIDE_PRESSURE, "2026-11-18_pcm_plots_reference_drive.md", 0.0, 735.0
 )
 DEFINITIONS = (INTAKE_AIR_TEMPERATURE_DEFINITION, AC_HIGH_SIDE_PRESSURE_DEFINITION)
+_BOUNDS = {d.name: (d.minimum, d.maximum) for d in DEFINITIONS}
+
+
+def in_registry_range(metric: str, value: object) -> bool:
+    """Whether a decoded reading of one of these optional metrics is one the broker accepts.
+
+    The IAT field's top raw values decode above the registry's maximum, and the broker
+    treats an out-of-range helper observation as a protocol violation that ends the helper.
+    The reader therefore drops such a frame's reading (it is implausible, and optional)
+    before it can reach a snapshot, leaving the other readings of that snapshot intact.
+    """
+    low, high = _BOUNDS[metric]
+    return isinstance(value, (int, float)) and low <= value <= high

@@ -5,7 +5,7 @@ from itertools import count
 from unittest import mock
 
 from lib import broadcast_signals as bs
-from projects.vehicle_data import active_drive, ccan_powertrain as cp
+from projects.vehicle_data import active_drive, ccan_powertrain as cp, intake_ac_metrics
 from projects.vehicle_data.metrics import METRICS
 from tests.test_ccan_powertrain import FakeSocket, TEST_CHANNEL, frame
 
@@ -140,6 +140,62 @@ class IntakeAcSnapshotTests(unittest.TestCase):
         self.assertNotIn("engine.intake_air_temperature", metrics)
         self.assertNotIn("hvac.ac_high_side_pressure", metrics)
         self.assertIn("engine.rpm", metrics)
+
+
+class ImplausibleReadingTests(unittest.TestCase):
+    """The broker rejects out-of-registry-range observations by ending the helper."""
+
+    IAT_RAW_255 = "b71e1ff8e0000000"   # byte 2 bits 4-0 and byte 3 bits 7-5 all set
+    AC_RAW_511 = "ffa0000000400000"
+
+    def read(self, frames):
+        return IntakeAcSnapshotTests.read(self, frames)
+
+    def required_frames(self):
+        return [frame(i, bytes.fromhex(h)) for i, h in REQUIRED]
+
+    def test_raw_extremes_decode_as_expected(self):
+        # Guards the fixture bytes: 255 is 215 C = 419 F, over the 302 F registry maximum.
+        self.assertAlmostEqual(bs.INTAKE_AIR_TEMPERATURE.decode(bytes.fromhex(self.IAT_RAW_255)), 419.0)
+        self.assertAlmostEqual(
+            bs.AC_HIGH_SIDE_PRESSURE.decode(bytes.fromhex(self.AC_RAW_511)),
+            (9.9 * 511 + 6) * bs.KPA_TO_PSI)
+
+    def test_every_raw_value_is_within_registry_bounds_or_dropped(self):
+        for raw in range(256):
+            data = bytearray.fromhex("b71e07f8e0000000")
+            data[2] = (data[2] & 0xE0) | (raw >> 3)
+            data[3] = (data[3] & 0x1F) | ((raw & 7) << 5)
+            for obs in cp.decode_frame_observations(0x417, bytes(data)):
+                self.assertEqual(obs.value, bs.INTAKE_AIR_TEMPERATURE.decode(bytes(data)))
+        for raw in range(512):
+            data = bytearray.fromhex("1ca0000000400000")
+            data[0] = raw >> 1
+            data[1] = (data[1] & 0x7F) | ((raw & 1) << 7)
+            value = bs.AC_HIGH_SIDE_PRESSURE.decode(bytes(data))
+            self.assertTrue(intake_ac_metrics.in_registry_range("hvac.ac_high_side_pressure", value), raw)
+
+    def test_implausible_intake_is_dropped_and_the_rest_of_the_snapshot_arrives(self):
+        extra = [frame(0x417, bytes.fromhex(self.IAT_RAW_255)),
+                 frame(0x41B, bytes.fromhex(self.AC_RAW_511))]
+        _, snapshot = self.read(extra + self.required_frames())
+        by_metric = {o.metric: o.value for o in snapshot.observations}
+        self.assertNotIn("engine.intake_air_temperature", by_metric)
+        self.assertAlmostEqual(
+            by_metric["hvac.ac_high_side_pressure"], (9.9 * 511 + 6) * bs.KPA_TO_PSI)
+        self.assertIn("engine.rpm", by_metric)
+        for obs in snapshot.observations:
+            definition = METRICS.get(obs.metric)
+            if definition and definition.maximum is not None:
+                self.assertLessEqual(obs.value, definition.maximum, obs.metric)
+
+    def test_one_bad_frame_does_not_spoil_the_median_of_good_ones(self):
+        good = bytes.fromhex(IAT_FRAMES[0][0])
+        extra = [frame(0x417, good), frame(0x417, bytes.fromhex(self.IAT_RAW_255)),
+                 frame(0x417, good)]
+        _, snapshot = self.read(extra + self.required_frames())
+        by_metric = {o.metric: o.value for o in snapshot.observations}
+        self.assertAlmostEqual(by_metric["engine.intake_air_temperature"], 73.4)
 
 
 class RollingDeployTests(unittest.TestCase):
