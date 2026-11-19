@@ -2,7 +2,7 @@
 
 Both come from broadcast frames that exist only while the engine runs
 (0x417 and 0x41B, 10 Hz), so they are optional in the snapshot and gated by the
-helper's ``--enable-intake-ac-broadcasts`` handshake (see ``ccan_powertrain``).
+broker's ``INTAKE_AC_ENV`` handshake (see ``ccan_powertrain``).
 """
 
 from __future__ import annotations

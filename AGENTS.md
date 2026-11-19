@@ -278,9 +278,9 @@ dashboard shows both in the page-2 fuel tile sub-line via `src/fuelLevel.js`.
 Intake air temperature (`0x417`) and A/C high-side pressure (`0x41B`) are optional C-CAN broadcast
 candidates (`engine.intake_air_temperature`, `hvac.ac_high_side_pressure`): decoders in
 `lib/broadcast_signals.py`, registry rows in `projects/vehicle_data/intake_ac_metrics.py`, never part
-of snapshot completeness, and read by the active-drive helper only under the broker's
-`--enable-intake-ac-broadcasts` launch handshake (an old broker rejects unknown sources and the
-helper would be terminated). Page-2 tiles "Intake air" and "A/C high side" show them.
+of snapshot completeness, and read by the active-drive helper only when the broker sets
+`VAN_TELEMETRY_INTAKE_AC_BROADCASTS=1` in its environment (an old broker rejects unknown sources and
+would terminate the helper; an environment variable, unlike a flag, is ignored by an old helper). Page-2 tiles "Intake air" and "A/C high side" show them.
 `tools/candump_arrays.py` (`candump-id-arrays` compute task) saves finalized
 candump logs as per-identifier numpy arrays for offline reference syncs.
 `lib.reports.require_distinct_output` protects evidence inputs from report

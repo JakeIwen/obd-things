@@ -1116,8 +1116,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--expected-parent-pid", type=int, required=True)
     parser.add_argument("--enable-oil-life", action="store_true",
                         help="broker accepts the fixed oil-life metric (rolling-deploy handshake)")
-    parser.add_argument(ccan_powertrain.INTAKE_AC_FLAG, action="store_true",
-                        help="broker accepts the intake-air and A/C pressure metrics (rolling-deploy handshake)")
     parser.add_argument(helper_startup_grant.GRANT_FD_FLAG, type=int, default=None,
                         help="internal: read end of the supervisor's startup grant pipe")
     parser.add_argument(radar_service_alignment.ENABLE_FLAG, action="store_true",
@@ -1151,7 +1149,7 @@ def main(argv=None) -> int:
         args.channel,
         expected_usb_serial=args.expected_usb_serial,
         expected_dev_id=args.expected_dev_id,
-        include_intake_ac=args.enable_intake_ac_broadcasts,
+        include_intake_ac=ccan_powertrain.intake_ac_enabled(os.environ),
     )
     with diagnostic_safety.interrupt_on_termination() as termination:
         outcome = run_active_session(

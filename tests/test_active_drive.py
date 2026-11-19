@@ -2247,7 +2247,6 @@ class BrokerActiveDriveTests(unittest.TestCase):
                 TEST_SERIAL,
                 "--expected-dev-id",
                 hex(TEST_DEV_ID),
-                "--enable-intake-ac-broadcasts",
                 "--enable-oil-life",
             ],
         )
@@ -2284,13 +2283,12 @@ class BrokerActiveDriveTests(unittest.TestCase):
             supervisor.run(threading.Event())
 
         self.assertEqual(
-            commands[0][-8:-2],
+            commands[0][-7:-2],
             [
                 "--expected-usb-serial",
                 TEST_SERIAL,
                 "--expected-dev-id",
                 hex(TEST_DEV_ID),
-                "--enable-intake-ac-broadcasts",
                 "--enable-oil-life",
             ],
         )

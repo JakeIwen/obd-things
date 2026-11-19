@@ -27,7 +27,7 @@ from projects.vehicle_data.drive_dtc_control import (
 )
 from projects.vehicle_data.engine_off_voltage import EngineOffVoltageCapture
 from projects.vehicle_data.helper_events import validate_helper_status
-from projects.vehicle_data.ccan_powertrain import INTAKE_AC_FLAG
+from projects.vehicle_data.ccan_powertrain import INTAKE_AC_ENV, INTAKE_AC_ENV_ON
 from projects.vehicle_data.helper_hold import (
     HELD_BLOCKED_REASON,
     HoldRefusal,
@@ -359,6 +359,8 @@ class ActiveDriveSupervisor:
                 bufsize=1,
                 cwd=HELPER_CWD,
                 pass_fds=(grant.child_fd,),
+                # Only the active-drive helper reads it; see INTAKE_AC_ENV.
+                env={**os.environ, INTAKE_AC_ENV: INTAKE_AC_ENV_ON},
             )
         except Exception as exc:
             return None, None, {
@@ -397,8 +399,7 @@ class ActiveDriveSupervisor:
             ]
         )
         if self.helper_module == ACTIVE_DRIVE_HELPER:
-            command.extend([INTAKE_AC_FLAG, "--enable-oil-life",
-                            *drive_dtc_arguments(self.drive_dtc)])
+            command.extend(["--enable-oil-life", *drive_dtc_arguments(self.drive_dtc)])
         grant, process, early_final = self._start_helper(command, stop_event)
         if early_final is not None:
             return early_final

@@ -681,21 +681,20 @@ Intake air and A/C high side (`0x417`, `0x41B`, 10 Hz, engine running only) are 
 every snapshot: a missing frame never delays or fails one, and neither is in the completeness
 set. The broker validates every event a helper sends and terminates the helper (restoration
 unverified, so an inhibit) on an unregistered metric or source. The helper therefore reads these
-two frames only when launched with `--enable-intake-ac-broadcasts`, which the broker passes; an
-older broker never passes it, so a new helper under an old broker silently omits them. The
+two frames only when its environment has `VAN_TELEMETRY_INTAKE_AC_BROADCASTS=1`, which the broker
+sets; an older broker never sets it, so a new helper under an old broker silently omits them. The
 in-process passive reader always includes them. The A/C scale is fitted only up to about 420 kPa
 and extrapolated above, with unmeasured error; the field widths are proposed geometry (the data shows at least 7 and 8 bits), and the intake reading's top raw values decode above the registry
 maximum, so the reader drops them (`intake_ac_metrics.in_registry_range`). See the
 [2026-11-18 finding's correction](../ecu_mapping/findings/promaster_2022/2026-11-18_pcm_plots_reference_drive.md).
 
-Rolling-deploy order, both ways: a new broker unconditionally passes the flag (as it does
-`--enable-oil-life` and the drive-DTC arguments), and an older helper rejects an unknown argument
-before `ready`, so the restoration check sees a helper that ended without a final event and latches
-an inhibit. Deploying forward is safe in either order. Rolling the checkout back below this feature
-while the new broker is still resident is not: roll the checkout back, then run the guarded parked
-broker restart (`s restart_broker`) before the next drive, as for the startup grant and the drive DTC
-flags ("Restarting the broker"). The broker's launch cannot be made to depend on the checkout it
-later loads without weakening the restoration gates, so none is attempted.
+Rolling-deploy order: either side can be rolled back alone. The handshake is an environment
+variable rather than a launch flag because an older helper's parser rejects an unknown argument
+before `ready`, which the restoration check treats as a helper that ended without a final event
+(an inhibit); an older helper ignores an unknown variable. `tests/test_intake_ac_broadcasts.py`
+covers both mixed-version launches. (`--enable-oil-life` and the drive-DTC arguments are still
+flags, so rolling the checkout back below those features still needs the guarded parked restart
+before the next drive; see "Restarting the broker".)
 
 All are in the public registry and the passive collector reads them only
 after its normal C-CAN interface and identity gates pass. They require no

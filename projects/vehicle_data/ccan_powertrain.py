@@ -52,9 +52,20 @@ SYSTEM_VOLTAGE_ID = broadcast_signals.SYSTEM_VOLTAGE.can_id
 # engine runs and are never required for a snapshot to be complete. A helper
 # that reports them to a broker without them in its source allowlist would be
 # terminated as a protocol violation, so the helper reads them only when the
-# broker's launch handshake says it can accept them (read_broadcast_snapshot's
-# ``include_intake_ac``).
-INTAKE_AC_FLAG = "--enable-intake-ac-broadcasts"
+# broker says it can accept them (read_broadcast_snapshot's
+# ``include_intake_ac``). The broker says so through the child's environment,
+# not argv: an older helper ignores an unknown variable, whereas its parser
+# would reject an unknown flag before ``ready`` and latch a restoration
+# inhibit, so either side can be rolled back alone.
+INTAKE_AC_ENV = "VAN_TELEMETRY_INTAKE_AC_BROADCASTS"
+INTAKE_AC_ENV_ON = "1"
+
+
+def intake_ac_enabled(environ) -> bool:
+    """Whether the launching broker accepts the intake-air and A/C sources."""
+    return environ.get(INTAKE_AC_ENV) == INTAKE_AC_ENV_ON
+
+
 INTAKE_AC_SIGNALS = (
     broadcast_signals.INTAKE_AIR_TEMPERATURE,
     broadcast_signals.AC_HIGH_SIDE_PRESSURE,

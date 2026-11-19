@@ -1,5 +1,6 @@
 """Intake-air (0x417) and A/C high-side (0x41B) broadcasts, end to end."""
 import struct
+import threading
 import unittest
 from itertools import count
 from unittest import mock
@@ -199,30 +200,67 @@ class ImplausibleReadingTests(unittest.TestCase):
 
 
 class RollingDeployTests(unittest.TestCase):
-    """A broker without the new sources terminates a helper that reports them."""
+    """Either side can be rolled back alone without the broker killing a helper.
 
-    def test_helper_defaults_to_not_reading_them(self):
-        args = active_drive.build_parser().parse_args(
-            ["--channel", "can0", "--expected-usb-serial", "S",
-             "--expected-dev-id", "0", "--expected-parent-pid", "1"])
-        self.assertFalse(args.enable_intake_ac_broadcasts)
+    An old broker rejects the new sources, so a new helper reads them only when
+    the broker's environment variable says so; an old helper ignores the
+    variable, whereas an unknown flag would fail its parser before ``ready``.
+    """
+
+    HELPER_ARGS = ["--channel", "can0", "--expected-usb-serial", "S",
+                   "--expected-dev-id", "0", "--expected-parent-pid", "1"]
+
+    def helper_backend_kwargs(self, environ):
+        built = []
+
+        def backend(*_args, **kwargs):
+            built.append(kwargs)
+            raise SystemExit(0)
+
+        with mock.patch.object(active_drive, "_set_parent_death_signal", lambda *_a: None), \
+                mock.patch.object(active_drive, "SystemBackend", backend), \
+                mock.patch.dict(active_drive.os.environ, environ, clear=True):
+            with self.assertRaises(SystemExit):
+                active_drive.main(self.HELPER_ARGS)
+        return built[0]
+
+    def test_new_helper_under_an_old_broker_reads_neither(self):
+        self.assertIs(self.helper_backend_kwargs({})["include_intake_ac"], False)
         backend = active_drive.SystemBackend(
             "can0", expected_usb_serial="S", expected_dev_id=0)
-        self.assertFalse(backend.include_intake_ac)
         with mock.patch.object(cp, "read_broadcast_snapshot") as read:
             backend.broadcast_snapshot(0.5)
         self.assertIs(read.call_args.kwargs["include_intake_ac"], False)
-        backend.include_intake_ac = True
-        with mock.patch.object(cp, "read_broadcast_snapshot") as read:
-            backend.broadcast_snapshot(0.5)
-        self.assertIs(read.call_args.kwargs["include_intake_ac"], True)
 
-    def test_flag_is_in_the_parser_vocabulary(self):
-        self.assertEqual(cp.INTAKE_AC_FLAG, "--enable-intake-ac-broadcasts")
-        args = active_drive.build_parser().parse_args(
-            ["--channel", "can0", "--expected-usb-serial", "S",
-             "--expected-dev-id", "0", "--expected-parent-pid", "1", cp.INTAKE_AC_FLAG])
-        self.assertTrue(args.enable_intake_ac_broadcasts)
+    def test_new_helper_under_a_new_broker_reads_both(self):
+        kwargs = self.helper_backend_kwargs({cp.INTAKE_AC_ENV: cp.INTAKE_AC_ENV_ON})
+        self.assertIs(kwargs["include_intake_ac"], True)
+        self.assertFalse(cp.intake_ac_enabled({cp.INTAKE_AC_ENV: "yes"}))
+
+    def test_new_broker_launch_stays_parseable_by_an_old_helper(self):
+        from projects.vehicle_data import broker
+        launches = []
+
+        class Process:
+            stdout = iter(())
+            pid = 1
+
+            def poll(self):
+                return 0
+
+            def wait(self, timeout=None):
+                return 0
+
+        supervisor = broker.ActiveDriveSupervisor(
+            channel="can7", expected_usb_serial="serial-a", expected_dev_id=0,
+            event_handler=lambda _event: None,
+            popen_factory=lambda command, **kw: launches.append((command, kw)) or Process(),
+        )
+        supervisor.run(threading.Event())
+        command, kwargs = launches[0]
+        # No argument the pre-feature helper parser lacks.
+        self.assertFalse([arg for arg in command if "intake" in arg])
+        self.assertEqual(kwargs["env"][cp.INTAKE_AC_ENV], cp.INTAKE_AC_ENV_ON)
 
     def test_broker_allowlists_both_sources(self):
         from projects.vehicle_data import broker
