@@ -25,6 +25,7 @@ from projects.vehicle_data.assistant_common import ChatError, now
 from projects.vehicle_data.assistant_slot import StartWindow
 from projects.vehicle_data import dtc_research_context, dtc_research_store as records
 from projects.vehicle_data.dtc_research_fallback import FallbackMixin, is_credit_failure
+from projects.vehicle_data.dtc_research_launch import UNSENT, Reserved
 from projects.vehicle_data.dtc_research_log import log
 from projects.vehicle_data.dtc_research_pause import PauseFile, PauseMixin
 from projects.vehicle_data.dtc_research_contract import (
@@ -58,7 +59,7 @@ class RefusalReason(str):
 
 class ResearchManager(FallbackMixin, PauseMixin):
     def __init__(self, store, ledger, catalog, worker, broker, *, window=None, poll=POLL_SECONDS,
-                 pause_file=None, snapshots=None):
+                 pause_file=None, snapshots=None, clock=lambda: datetime.now(timezone.utc)):
         self.store, self.ledger, self.catalog, self.worker, self.broker = store, ledger, catalog, worker, broker
         self.window = window or StartWindow(LIMITS["startsPerWindow"], LIMITS["windowSeconds"])
         self.poll = poll
@@ -69,6 +70,7 @@ class ResearchManager(FallbackMixin, PauseMixin):
         self.starting = {}  # request_id -> (module_key, fca_display) of starts still gathering their context
         self.fallbacks = set()  # run ids a fallback thread is sending or retrying for
         self.pause = PauseFile(pause_file)
+        self.clock = clock  # the credit view's instant (``until``, snapshot age); tests freeze it
         self.snapshots = snapshots  # the Mac's credit snapshot (api_credits_snapshot.SnapshotStore) or None
         self.billing_capable = False  # the worker's /status says it understands the credit protocol
         self.closed = threading.Event()
@@ -104,7 +106,7 @@ class ResearchManager(FallbackMixin, PauseMixin):
         except WorkerUnreachable:
             raise ResearchError("worker_unavailable", "The research service on the Pi is not running") from None
         snapshot = self.snapshots.current() if self.snapshots else None
-        return build_view(credits, snapshot, datetime.now(timezone.utc))
+        return build_view(credits, snapshot, self.clock())
 
     def _record(self, run_id):
         record = self.store.records.get(run_id)
@@ -227,12 +229,13 @@ class ResearchManager(FallbackMixin, PauseMixin):
 
     def _cancel_turn(self, record):
         """Record the intent durably, then forward it. A relaunch, a restart or a late credit outcome
-        then settles the turn as cancelled instead of launching again."""
+        then settles the turn as cancelled instead of launching again; a cancel that could not be
+        saved is refused, because acknowledging it would let a restart launch the owed successor."""
         def mark(saved):
             saved["turns"][-1]["cancel_requested"] = True
 
         if not self._persist(record, mark, "cancel"):
-            record["turns"][-1]["cancel_requested"] = True  # at least for this process; forward it anyway
+            raise ResearchError("storage_error", "The Pi could not save the cancel; the research was not stopped")
         turn = record["turns"][-1]
         pending = turn.get("pending_fallback")
         if pending and turn["attempt_ids"][-1] == pending["predecessor"]:
@@ -242,7 +245,7 @@ class ResearchManager(FallbackMixin, PauseMixin):
             try:
                 self.worker.cancel(attempt_id)
             except WorkerUnreachable:
-                pass
+                pass  # the follow thread forwards the saved intent again
 
     # --- launching and following ---------------------------------------------------------------
     def _replay_prompt(self, record):
@@ -250,44 +253,61 @@ class ResearchManager(FallbackMixin, PauseMixin):
         exchanges = [(t["question"], t["answer"]) for t in record["turns"][1:-1] if t["state"] == "complete"]
         return replay_prompt(record["context"], report, exchanges, record["turns"][-1]["question"])
 
-    def _launch(self, record, kind, prompt, quiet=(), *, forced=False, ledger_kind=None, accepted=None):
+    def _launch(self, record, kind, prompt, quiet=(), *, forced=False, ledger_kind=None):
         """Admit in the ledger, send the launch once, and follow it. Raises ``ResearchError`` for a
         refusal the caller reports; returns a ``RefusalReason`` listed in ``quiet`` instead.
         ``forced`` asks for the subscription; ``ledger_kind`` names the launch in the daily count
-        when it is not ``kind``; ``accepted`` is called once the worker took the launch."""
+        when it is not ``kind``."""
+        reserved = self._reserve(record, kind, prompt, forced=forced, ledger_kind=ledger_kind)
+        code, reply = self._transmit(reserved)
+        return self._conclude(record, record["turns"][-1], reserved, code, reply, quiet)
+
+    def _reserve(self, record, kind, prompt, *, forced=False, ledger_kind=None, mark=None):
+        """Admit the launch in the ledger and save its attempt id (``mark(turn)`` may add more to the
+        turn first), so the id is on disk before the request can arrive. Raises ``ResearchError``."""
         turn = record["turns"][-1]
         attempt_id = uuid.uuid4().hex
         self.ledger.admit(record["run_id"], attempt_id, ledger_kind or kind)
         turn["attempt_ids"].append(attempt_id)
         mode_before = turn["mode"]  # restored when the launch is refused: the mode says what actually ran
         turn["mode"] = {"initial": "initial", "resume": "resumed", "replay": "replayed"}[kind]
-
-        def withdraw():
-            self.ledger.refused(attempt_id)
-            turn["attempt_ids"].pop()
-            turn["mode"] = mode_before
-
+        reserved = Reserved(attempt_id, mode_before, self._turn_body(record, turn, kind, attempt_id, prompt, forced))
+        if mark:
+            mark(turn, reserved)
         try:
-            self._save(record)  # the attempt id is on disk before the request can arrive
+            self._save(record)
         except ResearchError:
-            withdraw()
+            self._withdraw(turn, reserved)
             raise
+        return reserved
+
+    def _withdraw(self, turn, reserved):
+        """Take back a launch the worker certainly never admitted (memory only; the caller saves)."""
+        self.ledger.refused(reserved.attempt_id)
+        if turn["attempt_ids"] and turn["attempt_ids"][-1] == reserved.attempt_id:
+            turn["attempt_ids"].pop()
+        turn["mode"] = reserved.mode_before
+
+    def _transmit(self, reserved):
+        """The one send of a reserved launch: ``(code, reply)``; ``(None, None)`` when it may or may
+        not have arrived (only ever asked about from now on) and ``(UNSENT, None)`` when it certainly
+        did not. Holds no lock."""
         try:
-            code, reply = self.worker.launch("/turns", self._turn_body(record, turn, kind, attempt_id, prompt, forced))
+            return self.worker.launch("/turns", reserved.body)
         except WorkerUnreachable as exc:
-            if not exc.sent:  # certainly never arrived: nothing was launched
-                withdraw()
-                raise ResearchError("worker_unavailable", "The research service on the Pi is not running") from None
-            code, reply = None, None  # it may or may not have arrived: from now on only ask about it
+            return (None, None) if exc.sent else (UNSENT, None)
+
+    def _conclude(self, record, turn, reserved, code, reply, quiet):
+        if code == UNSENT:
+            self._withdraw(turn, reserved)
+            raise ResearchError("worker_unavailable", "The research service on the Pi is not running")
         if code == 409:
-            withdraw()
-            return self._refused(record, turn, reply, quiet)
+            self._withdraw(turn, reserved)
+            return self._refused(reply, quiet)
         if code not in (202, None):
             raise ResearchError("worker_unavailable", "The research service on the Pi did not accept the request")
         turn["phase"] = "starting"
-        if accepted:
-            accepted(record, turn, attempt_id)
-        self._follow(record["run_id"], attempt_id)
+        self._follow(record["run_id"], reserved.attempt_id)
         return None
 
     def _turn_body(self, record, turn, kind, attempt_id, prompt, forced):
@@ -303,19 +323,21 @@ class ResearchManager(FallbackMixin, PauseMixin):
                 body[FORCED_BILLING] = SUBSCRIPTION
         return body
 
-    def _refused(self, record, turn, reply, quiet):
+    def _refusal_error(self, reply):
+        reason = reply.get("reason")
+        return ResearchError(REFUSAL_TO_ERROR.get(reason, "busy"),
+                             REFUSAL_DETAIL.get(reason) or reply.get("detail") or "Research is busy")
+
+    def _refused(self, reply, quiet):
         reason = reply.get("reason")
         if reason == "stale_instance":
             self.state = "unknown"  # the reconciler learns the new instance
             self.wake_reconciler()
-        if turn.get("pending_fallback"):
-            self._fallback_refused(record, turn, reason, REFUSAL_DETAIL.get(reason) or reply.get("detail"))
         if reason in quiet:
             refusal = RefusalReason(reason)
             refusal.detail = reply.get("detail")
             return refusal
-        error = REFUSAL_TO_ERROR.get(reason, "busy")
-        raise ResearchError(error, REFUSAL_DETAIL.get(reason) or reply.get("detail") or "Research is busy")
+        raise self._refusal_error(reply)
 
     def _follow(self, run_id, attempt_id):
         self.following.add(attempt_id)
@@ -343,12 +365,20 @@ class ResearchManager(FallbackMixin, PauseMixin):
 
     def _watch(self, run_id, attempt_id):
         expected = self.instance_id
+        cancel_sent = False
         while not self.closed.is_set():
             try:
                 state = self.fence_unknown(attempt_id, self.worker.attempt(attempt_id), expected)
             except WorkerUnreachable:
                 time.sleep(LOST_POLL_SECONDS)
                 continue
+            if not state.get("known"):
+                unsent = self.unsent_fallback(run_id, attempt_id)
+                if unsent:
+                    return  # a fallback reservation the worker never admitted: the fallback thread continues it
+                if unsent is None:  # the withdrawal could not be saved yet
+                    time.sleep(self.poll)
+                    continue
             if not state.get("known") or state.get("outcome_state") == "dropped":
                 why = "it was never accepted" if state.get("instance_id") == expected else "the research service restarted"
                 if self._finish(run_id, attempt_id, {"status": "failed", "reason": "interrupted",
@@ -363,7 +393,22 @@ class ResearchManager(FallbackMixin, PauseMixin):
                     return
             else:
                 self._progress(run_id, attempt_id, state)
+                cancel_sent = cancel_sent or self._forward_saved_cancel(run_id, attempt_id)
             time.sleep(self.poll)
+
+    def _forward_saved_cancel(self, run_id, attempt_id):
+        """Send a cancel the owner saved but the worker may never have received (the first forward was
+        lost, or the advisor restarted and adopted the attempt). ``True`` once it was sent."""
+        with self.lock:
+            record = self.store.records.get(run_id)
+            turn = record["turns"][-1] if record and record["turns"] else None
+            if not turn or not turn.get("cancel_requested") or turn["attempt_ids"][-1:] != [attempt_id]:
+                return False
+        try:
+            self.worker.cancel(attempt_id)
+        except WorkerUnreachable:
+            return False
+        return True
 
     def fence_unknown(self, attempt_id, state, expected):
         """The worker's final word on an attempt. ``known: false`` from the instance the launch was

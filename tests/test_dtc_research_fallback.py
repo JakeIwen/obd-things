@@ -1,8 +1,10 @@
 """Credit-failure fallback, cancel intent and replay-required in the advisor, against a scripted worker."""
 
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -19,6 +21,7 @@ from tests.dtc_research_scripted_worker import (
 )
 from tests.test_dtc_research_manager import Broker, CODE
 
+INSIDE_GRANTS = datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)  # before ``until`` whatever today's date is
 FAST = {"retrySeconds": .05, "windowSeconds": 30}
 
 
@@ -52,7 +55,8 @@ class FallbackBase(unittest.TestCase):
         store = Store(base / "runs")
         store.load(log=lambda line: None)
         manager = ResearchManager(store, Ledger(base / "admissions.json", limit=ledger_limit), StubCatalog(),
-                                  worker or self.worker, Broker(), poll=.02, pause_file=base / "paused")
+                                  worker or self.worker, Broker(), poll=.02, pause_file=base / "paused",
+                                  clock=lambda: INSIDE_GRANTS)
         self.assertTrue(Reconciler(manager, retry=.05).reconcile_once())
         self.managers.append(manager)
         return manager
@@ -296,15 +300,197 @@ class ReplayRequiredTests(FallbackBase):
         self.assertNotIn("billing", self.worker.launches[-1])
 
 
+class CancelDurabilityTests(FallbackBase):
+    def test_a_cancel_that_cannot_be_saved_is_refused_and_not_forwarded(self):
+        self.worker.behavior = lambda body: None
+        run_id = self.start()["run_id"]
+        real = self.manager.store.save
+
+        def failing(record):
+            raise OSError("disk full")
+
+        self.manager.store.save = failing
+        with self.assertRaises(ChatError) as refused:
+            self.cancel(run_id)
+        self.assertEqual(refused.exception.reason, "storage_error")
+        self.assertEqual(self.worker.cancelled, [])  # nothing was forwarded or acknowledged
+        self.assertFalse(self.turn(run_id).get("cancel_requested"))
+        self.manager.store.save = real
+        self.cancel(run_id)  # the owner can try again once the disk works
+        self.assertEqual(self.settle(run_id)["state"], "cancelled")
+
+    def test_a_saved_cancel_whose_forward_was_lost_is_sent_again_when_a_restart_adopts_the_attempt(self):
+        self.worker.behavior = lambda body: None  # the credit process keeps running
+        run_id = self.start()["run_id"]
+        attempt = self.worker.launches[0]["attempt_id"]
+        self.worker.down = True
+        self.cancel(run_id)  # saved, but the worker never hears of it
+        self.manager.close()
+        self.assertTrue(wait_for(lambda: not self.manager.following))
+        self.worker.down = False
+        self.assertEqual(self.worker.cancelled, [])
+        self.worker.job = {"attempt_id": attempt, "kind": "turn"}  # what the worker reports for a running attempt
+        self.manager = self.build()  # reconciliation adopts the still-running attempt
+        self.assertTrue(wait_for(lambda: attempt in self.worker.cancelled))
+        self.assertEqual(self.settle(run_id)["state"], "cancelled")
+
+
+class FallbackLockTests(FallbackBase):
+    def test_a_blocked_fallback_launch_does_not_block_cancel_or_progress(self):
+        self.worker.behavior = lambda body: credit_failure() if body.get("billing") != "subscription" else None
+        entered, gate = threading.Event(), threading.Event()
+        real = self.worker.launch
+
+        def slow(route, body):
+            if body.get("billing") == "subscription":
+                entered.set()
+                gate.wait(20)
+            return real(route, body)
+
+        self.worker.launch = slow
+        self.addCleanup(gate.set)
+        run_id = self.start()["run_id"]
+        self.assertTrue(entered.wait(10))  # the fallback request is out and its reply is blocked
+        answered = []
+
+        def probe():
+            self.manager.handle("GET", f"/v1/assistant/dtc-research/run/{run_id}/progress", None)
+            answered.append(self.cancel(run_id))
+
+        thread = threading.Thread(target=probe, daemon=True)
+        thread.start()
+        thread.join(3)
+        self.assertEqual(len(answered), 1, "progress and cancel waited for the worker's launch reply")
+        gate.set()
+        run = self.settle(run_id)
+        self.assertEqual(run["state"], "cancelled")  # the cancel saved meanwhile reaches the accepted fallback
+        self.assertEqual(len(self.worker.launches), 2)
+
+
+class FallbackRefusalDurabilityTests(FallbackBase):
+    def refuse_fallback_with(self, reason, times):
+        original = self.worker.behavior
+
+        def behave(body):
+            if body.get("billing") != "subscription" and not self.worker.refusals:
+                self.worker.refusals = [(409, {"reason": reason, "detail": "refused"})] * times
+            return original(body)
+
+        self.worker.behavior = behave
+
+    def test_a_refusal_whose_withdrawal_cannot_be_saved_continues_the_fallback_after_a_restart(self):
+        self.refuse_fallback_with("busy", 10 ** 4)
+        real = self.manager.store.save
+        refused_once = threading.Event()
+
+        def failing(record):
+            pending = record["turns"][-1].get("pending_fallback") or {}
+            if pending.get("refusal"):
+                refused_once.set()
+                raise OSError("disk full")  # the restored predecessor cannot be saved
+            return real(record)
+
+        self.manager.store.save = failing
+        run_id = self.start()["run_id"]
+        self.assertTrue(refused_once.wait(10))
+        self.manager.close()
+        self.assertTrue(wait_for(lambda: not self.manager.fallbacks))
+        saved = Store(Path(self.state.name) / "runs")
+        saved.load(log=lambda line: None)
+        turn = saved.records[run_id]["turns"][-1]
+        self.assertEqual(len(turn["attempt_ids"]), 2)  # disk still names the refused successor, as "sending"
+        self.assertEqual(turn["pending_fallback"]["sending"]["attempt_id"], turn["attempt_ids"][-1])
+        self.worker.refusals = []
+        self.worker.behavior = credit_leg_then_subscription()
+        self.manager = self.build()  # the fenced, never-admitted reservation is withdrawn; the fallback continues
+        run = self.settle(run_id)
+        self.assertEqual((run["state"], run["turns"][0]["state"]), ("done", "complete"))
+        self.assertNotEqual(run["turns"][0].get("reason"), "interrupted")
+        self.assertEqual(self.worker.launches[-1]["billing"], "subscription")
+        self.assertEqual(self.ledger_kinds(), ["initial", "fallback"])
+
+    def test_a_stale_instance_between_retries_refreshes_the_instance_and_continues(self):
+        self.refuse_fallback_with("stale_instance", 1)
+        original = self.worker.behavior
+        restarted = "new" * 10 + "ab"
+
+        def behave(body):
+            result = original(body)
+            if body.get("billing") != "subscription":
+                self.worker.instance_id = restarted  # the worker restarts before the fallback's first try
+            return result
+
+        self.worker.behavior = behave
+        run = self.settle(self.start()["run_id"])
+        self.assertEqual((run["state"], run["turns"][0]["state"]), ("done", "complete"))
+        refused, accepted = self.worker.launches[1:]
+        self.assertNotEqual(refused["expected_instance_id"], restarted)
+        self.assertEqual((accepted["expected_instance_id"], accepted["billing"]), (restarted, "subscription"))
+        self.assertEqual(self.ledger_kinds(), ["initial", "fallback"])
+
+    def test_an_ambiguous_fallback_launch_is_never_resent_after_the_restart_that_fenced_it(self):
+        self.worker.lose_reply_for = {2}  # the fallback request arrives, its reply is lost
+        self.worker.behavior = lambda body: credit_failure() if body.get("billing") != "subscription" else None
+        run_id = self.start()["run_id"]
+        self.assertTrue(wait_for(lambda: len(self.worker.launches) == 2))
+        self.manager.close()
+        self.assertTrue(wait_for(lambda: not self.manager.following and not self.manager.fallbacks))
+        self.worker.job = {"attempt_id": self.worker.launches[1]["attempt_id"], "kind": "turn"}
+        self.manager = self.build()  # the worker knows the attempt: it is adopted, not relaunched
+        self.assertEqual(len(self.worker.launches), 2)
+        self.worker.finish(self.worker.launches[1]["attempt_id"], complete(self.worker.launches[1]))
+        self.assertEqual(self.settle(run_id)["state"], "done")
+        self.assertEqual(len(self.worker.launches), 2)
+
+
+class FallbackThreadTests(FallbackBase):
+    def test_a_fallback_thread_that_cannot_start_leaves_the_fallback_to_reconciliation(self):
+        from projects.vehicle_data import dtc_research_fallback
+        real = dtc_research_fallback.threading.Thread
+        failures = []
+
+        class FailingOnce(real):
+            def start(self):
+                if self._target and self._target.__name__ == "_fallback_loop" and not failures:
+                    failures.append(1)
+                    raise RuntimeError("can't start new thread")
+                super().start()
+
+        with mock.patch.object(dtc_research_fallback.threading, "Thread", FailingOnce):
+            run_id = self.start()["run_id"]
+            self.assertTrue(wait_for(lambda: failures))
+            self.assertTrue(wait_for(lambda: self.turn(run_id)["state"] != "running" or not self.manager.fallbacks))
+            self.assertNotIn(run_id, self.manager.fallbacks)  # not left registered with no thread behind it
+        self.assertTrue(wait_for(lambda: self.turn(run_id).get("pending_fallback")))
+        self.manager.state = "unknown"
+        self.assertTrue(Reconciler(self.manager, retry=.05).reconcile_once())  # takes the pending fallback over
+        self.assertEqual(self.settle(run_id)["state"], "done")
+
+
 class CreditsRouteTests(FallbackBase):
     def test_the_route_answers_the_view_and_a_missing_worker_is_503(self):
         view = self.manager.handle("GET", "/v1/assistant/research/credits", None)
         self.assertEqual((view["key_installed"], view["balance"]["state"]), (True, "unknown"))
         self.assertEqual(view["new_research"]["billing"], "api_credits")
+        self.assertTrue(view["ledger_available"])
         self.worker.down = True
         with self.assertRaises(ChatError) as down:
             self.manager.handle("GET", "/v1/assistant/research/credits", None)
         self.assertEqual((down.exception.reason, down.exception.status), ("worker_unavailable", 503))
+
+
+    def test_the_advisors_own_clock_decides_expiry_and_a_ledger_the_worker_cannot_load_bills_the_subscription(self):
+        until = datetime(2026, 12, 8, tzinfo=timezone.utc)
+        self.manager.clock = lambda: until - timedelta(seconds=1)
+        self.assertEqual(self.manager.handle("GET", "/v1/assistant/research/credits", None)["new_research"]["billing"],
+                         "api_credits")
+        self.manager.clock = lambda: until
+        expired = self.manager.handle("GET", "/v1/assistant/research/credits", None)
+        self.assertEqual((expired["expired"], expired["new_research"]["reason"]), (True, "expired"))
+        self.manager.clock = lambda: INSIDE_GRANTS
+        self.worker.credits_reply = {**self.worker.credits_reply, "ledger_available": False}
+        view = self.manager.handle("GET", "/v1/assistant/research/credits", None)
+        self.assertEqual((view["ledger_available"], view["new_research"]["reason"]), (False, "ledger_unavailable"))
 
 
 if __name__ == "__main__":

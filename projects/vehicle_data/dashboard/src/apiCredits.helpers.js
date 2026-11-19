@@ -46,8 +46,10 @@ export const CARD_TEXT = Object.freeze({
   lastFallback: "Last fallback",
   uncertain: "uncertain",
   unknownSpend: "unknown spend",
-  uncertainInfo: "Research runs whose cost could not be confirmed. Their spend is not subtracted from the balance until the next balance update.",
+  uncertainInfo: "Research runs whose cost could not be confirmed. Their spend is subtracted from the balance in full, so the balance shown may be lower than the real remainder.",
   unknownSpendInfo: "Runs whose cost the CLI did not report, so the balance may be higher than the account's real remainder.",
+  ledgerUnavailable: "spend accounting unavailable",
+  ledgerUnavailableInfo: "The research service cannot record or read its API spend, so new research bills the subscription and no balance is shown.",
   infoLabel: "What does this mean?",
 });
 
@@ -96,6 +98,7 @@ function balanceModel(balance, now) {
 
 function qualifiers(view) {
   const out = [];
+  if (view.ledger_available === false) out.push({ text: CARD_TEXT.ledgerUnavailable, info: CARD_TEXT.ledgerUnavailableInfo });
   const uncertain = count(view.uncertain_count);
   const unknownSpend = count(view.unknown_spend_count);
   if (uncertain) out.push({ text: uncertain + " " + CARD_TEXT.uncertain, info: CARD_TEXT.uncertainInfo });

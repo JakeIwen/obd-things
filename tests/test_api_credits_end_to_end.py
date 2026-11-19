@@ -1,7 +1,7 @@
 """The advisor's real manager over the real worker (fake Claude CLI): the credit protocol end to end."""
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 import tempfile
@@ -10,18 +10,22 @@ import unittest
 from unittest import mock
 import uuid
 
-from projects.vehicle_data.api_credits_contract import FALLBACK, GRANTS
+from projects.vehicle_data.api_credits_contract import ADMIN_ROUTES, FALLBACK, GRANTS, UNTIL
 from projects.vehicle_data.api_credits_snapshot import GrantBalance, Snapshot
 from projects.vehicle_data.assistant_models import Catalog
 from projects.vehicle_data.dtc_research import ResearchManager
 from projects.vehicle_data.dtc_research_ledger import Ledger
 from projects.vehicle_data.dtc_research_reconcile import Reconciler
 from projects.vehicle_data.dtc_research_store import Store
+from projects.vehicle_data.dtc_research_worker import Worker
+from projects.vehicle_data.model_cli_lock import CliLock
+from projects.vehicle_data.research_cli_policy import IdentityChecker
 from tests.research_support import FAKE_KEY, WorkerRig
 from tests.test_dtc_research_fallback import FAST, wait_for
 from tests.test_dtc_research_manager import Broker, CODE, REPORT, RigClient
 from tests.test_research_credits import OAUTH, assistant, result
 
+NOW = datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)  # the advisor's frozen clock: before ``until`` whatever today is
 CREDITS_PATH = "/v1/assistant/research/credits"
 BILLING_FAILURE = {"events": [assistant("sorry", error="billing_error"),
                               result(0, error="Credit balance is too low", cost=0)], "exit_code": 1}
@@ -41,6 +45,11 @@ class CreditClient(RigClient):
         if not self.billing_capable:
             reply.pop("billing_capable", None)
         return reply
+
+    def credits(self):
+        # The worker side (a parallel change) reports ``ledger_available``; until the two sides merge the
+        # real worker omits it, so this default says "its ledger loaded", which is what the rig builds.
+        return {"ledger_available": True, **super().credits()}
 
     def launch(self, route, body):
         self.bodies.append(body)
@@ -78,7 +87,7 @@ class EndToEndBase(unittest.TestCase):
         store.load(log=lambda line: None)
         catalog = Catalog(self.client, poll=.05)
         self.manager = ResearchManager(store, Ledger(base / "admissions.json", limit=60), catalog,
-                                       self.client, Broker(), poll=.05)
+                                       self.client, Broker(), poll=.05, clock=lambda: NOW)
         self.assertTrue(Reconciler(self.manager, retry=.05).reconcile_once())
         self.assertTrue(catalog.refresh())
 
@@ -180,6 +189,59 @@ class CreditSuccessTests(EndToEndBase):
         self.assertEqual(run["turns"][0]["state"], "cancelled")
         time.sleep(.5)
         self.assertEqual(len(self.turn_calls()), 1)
+
+
+class RollbackSequenceTests(EndToEndBase):
+    def admin(self, name):
+        return self.manager.handle_admin("GET" if name != "pause" else "POST", ADMIN_ROUTES[name])
+
+    def restart_worker_with_credits_off(self):
+        rig = self.rig
+        rig.policy["claude"]["api_credits"]["enabled"] = False
+        rig.worker.close()
+        rig.worker = Worker(rig.volume, IdentityChecker(rig.cli_root, rig.policy), CliLock(rig.lock_path),
+                            meminfo=rig.meminfo, policy=rig.policy, dns=rig.worker.dns, now=lambda: rig.now)
+        rig.worker.start()  # a worker that starts with credits off drops its API-created sessions
+        rig.settle()
+
+    def test_the_documented_sequence_passes_from_a_completed_api_report_with_no_manual_edits(self):
+        self.assertEqual(self.settle(self.start()["run_id"])["turns"][0]["state"], "complete")
+        self.assertEqual(self.client.credits()["api_sessions"], 1)  # the report's transcript is retained
+        self.admin("pause")  # step 1
+        drained = self.admin("drained")  # step 2: work is drained although the API session remains
+        self.assertEqual((drained["drained"], drained["reasons"]), (True, []))
+        blocked = self.admin("rollbackReady")
+        self.assertFalse(blocked["rollback_ready"])
+        self.assertEqual(set(blocked["reasons"]), {"credits_enabled", "api_sessions_remain"})
+        self.restart_worker_with_credits_off()  # step 3: disable credits, restart the worker
+        self.assertTrue(self.admin("drained")["drained"])
+        ready = self.admin("rollbackReady")
+        self.assertEqual((ready["rollback_ready"], ready["reasons"]), (True, []))
+        self.assertEqual(self.client.credits()["api_sessions"], 0)
+
+    def test_a_report_still_running_blocks_drained_and_then_the_sequence_completes(self):
+        self.rig.scenario({"mode": "hang"})
+        run_id = self.start()["run_id"]
+        self.assertTrue(wait_for(lambda: self.turn_calls()))
+        self.admin("pause")
+        self.assertIn("turn_running", self.admin("drained")["reasons"])
+        self.post(action="cancel", run_id=run_id)
+        self.settle(run_id)
+        self.assertTrue(wait_for(lambda: self.admin("drained")["drained"]))
+
+
+class AdvisorClockTests(EndToEndBase):
+    def test_the_view_bills_by_the_advisors_frozen_clock_on_both_sides_of_until(self):
+        self.settle(self.start()["run_id"])
+        self.manager.snapshots = FixedSnapshot()
+        self.assertEqual(self.view()["new_research"]["billing"], "api_credits")
+        self.assertEqual(self.view()["balance"]["total_usd"], 4.75)
+        self.manager.clock = lambda: UNTIL - timedelta(seconds=1)
+        self.assertFalse(self.view()["expired"])
+        self.manager.clock = lambda: UNTIL
+        expired = self.view()
+        self.assertEqual((expired["expired"], expired["new_research"]["reason"]), (True, "expired"))
+        self.assertEqual(expired["balance"]["grants"], [])
 
 
 class OldWorkerTests(EndToEndBase):

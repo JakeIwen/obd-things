@@ -399,8 +399,9 @@ The advisor builds the view; the dashboard only renders it.
   the advisor's `credit-snapshot.json`; a cache write failure only loses the cache.
 - **Spend since the snapshot.** An entry settled at or before `fetched_at` is already reflected. An
   entry that started after `fetched_at` draws on the earliest-expiring grant live at its start,
-  spilling to the next. An entry that straddles the fetch or is still open is subtracted in full
-  and counted `uncertain`. An expired grant's remainder is lost, so only live grants are listed and
+  spilling to the next. An entry that straddles the fetch or is still open (including one that
+  started after it) is subtracted in full and counted `uncertain`, so the shown balance may be
+  lower than the real remainder. An expired grant's remainder is lost, so only live grants are listed and
   totalled. `unknown_spend_count` counts entries with unknown spend.
 - **Uncertain.** The balance is an estimate that can lag the account by up to the push interval; a
   run with unknown spend means the real remainder may be lower than shown.
@@ -409,13 +410,16 @@ The advisor builds the view; the dashboard only renders it.
 
 - `GET /v1/assistant/research/credits` (access code and browser key like the other research
   routes, relayed by the web listeners) replies `{key_installed, enabled, until, expired,
-  new_research: {billing, reason, latched_models}, balance: {state: known|unknown, total_usd, as_of,
+  ledger_available, new_research: {billing, reason, latched_models}, balance: {state: known|unknown, total_usd, as_of,
   stale, grants: [{label, expires, remaining_usd}]}, spent_since_snapshot_usd, uncertain_count,
   unknown_spend_count, last_fallback}`. It is built from the worker's local `GET /credits` (never
   the key or a path to it); an unreachable worker answers 503 `worker_unavailable`. `new_research`
   is what a **new** run bills by default and why; follow-ups keep their run's billing.
+  `ledger_available` is passed through from the worker's `/credits`; a reply without it counts as
+  unavailable, and then `new_research` is `subscription` (reason `ledger_unavailable`) and the
+  balance is `unknown`, since spend cannot be accounted.
 - **Admin routes** (`adminRoutes` in the contract: `POST /admin/dtc-research/pause`, `POST
-  …/resume`, `GET …/drained`) exist only on the advisor's own Unix socket, which is owner-only, and
+  …/resume`, `GET …/drained`, `GET …/rollback-ready`) exist only on the advisor's own Unix socket, which is owner-only, and
   skip the access code. No web listener relays them (`tests/test_dtc_research_relay.py` checks that
   they answer 404 through the relay with valid pairing credentials).
 - Protocol additions between advisor and worker: the worker's `GET /status` carries top-level
@@ -464,7 +468,7 @@ an error: a refused or failed poll hides it until a later one succeeds.
 No arbitrary-order hot rollback is promised: a rolled-back advisor ignores the pause file and a
 rolled-back worker does not understand `replay_required`. Run as `pi` from the checkout. The
 admin CLI talks to `/run/van-telemetry-advisor/api.sock` (`--socket` overrides) and prints the
-advisor's JSON reply; `drained` exits 0 only when drained.
+advisor's JSON reply; `drained` and `rollback-ready` exit 0 only when their condition holds.
 
 1. Pause new research (completions, cancels, reconciliation and owed fallback or replay successors
    continue; new `start` and `ask` are refused as `provider_unavailable`, "Research is paused…",
@@ -484,16 +488,25 @@ advisor's JSON reply; `drained` exits 0 only when drained.
    `drained` holds the manager lock and is true only when the advisor is paused and idle (not
    reconciling, no start in progress, no busy turn, no `pending_fallback`), the worker reports no
    running job, no held turn outcome belongs to an unsettled turn (those of settled turns are
-   acknowledged, retrying a lost acknowledgment), the worker instance did not change during the
-   check, and the worker holds no API-created session (`api_sessions`, counted by transcript, not
-   marker). A held `credit_fallback` keeps it not drained until the subscription answer or the
-   requested cancel has settled the turn; it is never discarded to pass. Held maintenance and
-   discovery outcomes have no consumer and do not block.
+   acknowledged, retrying a lost acknowledgment; every attempt in the advisor's records is
+   asked about), and the worker instance did not change during the check. A held
+   `credit_fallback` keeps it not drained until the subscription answer or the requested cancel
+   has settled the turn; it is never discarded to pass. Held maintenance and discovery outcomes
+   have no consumer and do not block. It does not look at API-created sessions: a completed API
+   report keeps its transcript until step 3.
 3. Disable credits and restart the worker, still paused: set `claude.api_credits.enabled` to
    `false` in `research_cli_policy.json`, deploy that, then `sudo systemctl restart
-   van-telemetry-research.service`. The worker drops its API-created sessions at start. Run
-   `drained` again until it exits 0, so no API session remains for an old worker (which looks for
-   the transcript, not the billing marker) to meet.
+   van-telemetry-research.service`. The worker drops its API-created sessions at start. Then wait
+   until the worker is safe for the old code; repeat until it exits 0:
+
+   ```sh
+   python3 -m projects.vehicle_data.dtc_research_admin rollback-ready
+   ```
+
+   `rollback-ready` is `drained` and, from the worker's `/credits`, `enabled: false`, no
+   API-created session (`api_sessions`, counted by transcript, not marker; an old worker looks
+   for the transcript) and a reported `ledger_available`. An old worker with no billing
+   capability has none of these by construction.
 4. Roll the **worker** back first (previous code, restart `van-telemetry-research.service`) and
    check that `/status` answers with a new `instance_id`. Then roll the **advisor** back last
    (previous code, restart `van-telemetry-advisor.service`): its startup is where admission

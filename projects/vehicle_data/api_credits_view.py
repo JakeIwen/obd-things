@@ -11,7 +11,9 @@ Spend model, per ``docs/dtc-research.md`` "Promotional API credits":
 - an entry that started after ``fetched_at`` draws on the earliest-expiring grant live at its
   ``started_at`` (spilling to the next live grant when one runs out);
 - an entry that straddles the fetch (``started_at <= fetched_at`` and not settled before it) or is
-  still open is subtracted in full and counted as uncertain;
+  still open, even one that started after the fetch, is subtracted in full and counted as uncertain;
+- a worker whose reply lacks ``ledger_available: true`` has no spend accounting: the balance is unknown
+  and new research bills the subscription (``ledger_unavailable``);
 - a grant's remainder is lost when it expires, so only live grants are listed and totalled.
 """
 
@@ -49,6 +51,10 @@ def _amount(value):
     return number if number.is_finite() and number >= 0 else None
 
 
+def _ledger_available(credits):
+    return credits.get("ledger_available") is True
+
+
 def new_research(credits, expired):
     """What a new research run bills by default, and which models are latched to the subscription."""
     latches = credits.get("latches") if isinstance(credits.get("latches"), dict) else {}
@@ -59,7 +65,8 @@ def new_research(credits, expired):
     # The worker's own order (api_credits.choose_billing): disabled, no_key, expired, latch, ledger.
     reason = next((name for name, hit in (
         ("disabled", credits.get("enabled") is not True), ("no_key", credits.get("key_installed") is not True),
-        ("expired", expired), ("unavailable", account), ("ledger_full", credits.get("ledger_full") is True)) if hit), None)
+        ("expired", expired), ("unavailable", account), ("ledger_unavailable", not _ledger_available(credits)),
+        ("ledger_full", credits.get("ledger_full") is True)) if hit), None)
     return {"billing": SUBSCRIPTION if reason else API_CREDITS, "reason": reason, "latched_models": latched}
 
 
@@ -92,7 +99,7 @@ def _draw(remaining, grants, amount, at):
 
 def _balance(credits, snapshot, now):
     """``(balance, spent_since, uncertain_count, unknown_count)``."""
-    if snapshot is None or snapshot == UNKNOWN:
+    if snapshot is None or snapshot == UNKNOWN or not _ledger_available(credits):
         return ({"state": BALANCE_STATES["unknown"], "total_usd": None, "as_of": None, "stale": False,
                  "grants": []}, 0, 0, 0)
     fetched = snapshot.fetched_at
@@ -102,8 +109,8 @@ def _balance(credits, snapshot, now):
     for started, settled, known, spend_unknown in sorted(rows, key=lambda row: row[0]):
         if settled is not None and settled <= fetched:
             continue  # reflected in the snapshot
-        if started <= fetched:
-            uncertain += 1  # straddles the fetch, or is still open
+        if started <= fetched or settled is None:
+            uncertain += 1  # straddles the fetch, or is still open (whenever it started)
         spent += known
         unknown += 1 if spend_unknown else 0
         _draw(remaining, snapshot.grants, known, max(started, fetched))
@@ -131,6 +138,6 @@ def build_view(credits, snapshot, now):
     expired = now >= until
     balance, spent, uncertain, unknown = _balance(credits, snapshot, now)
     return {"key_installed": credits.get("key_installed") is True, "enabled": credits.get("enabled") is True,
-            "until": _iso(until), "expired": expired, "new_research": new_research(credits, expired),
+            "ledger_available": _ledger_available(credits), "until": _iso(until), "expired": expired, "new_research": new_research(credits, expired),
             "balance": balance, "spent_since_snapshot_usd": spent, "uncertain_count": uncertain,
             "unknown_spend_count": unknown, "last_fallback": _last_fallback(credits.get("last_fallback"))}

@@ -180,7 +180,7 @@ export function demoCreditsView(nowMs) {
   return {key_installed: true, enabled: true, until: "2026-12-08T00:00:00Z", expired: false,
     new_research: {billing: "api_credits", reason: null, latched_models: []},
     balance: {state: "known", total_usd: total, as_of: iso(nowMs - 4 * MINUTE_MS), stale: false, grants},
-    spent_since_snapshot_usd: 0.35, uncertain_count: 0, unknown_spend_count: 0, last_fallback: null};
+    ledger_available: true, spent_since_snapshot_usd: 0.35, uncertain_count: 0, unknown_spend_count: 0, last_fallback: null};
 }
 
 /** The research routes: models, the list, three codes with runs and one with none. */

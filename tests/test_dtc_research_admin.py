@@ -4,6 +4,7 @@ import io
 import threading
 import time
 import unittest
+from unittest import mock
 import uuid
 
 from projects.vehicle_data.api_credits_contract import ADMIN_ROUTES
@@ -116,19 +117,74 @@ class PauseAndDrainTests(FallbackBase):
         self.assertIn("worker_restarted", reply["reasons"])
         self.assertEqual(self.manager.state, "unknown")  # reconcile before asking again
 
-    def test_an_api_created_session_blocks_drained_until_none_remain(self):
-        self.pause()
-        self.worker.credits_reply = {**self.worker.credits_reply, "api_sessions": 2}
-        self.assertIn("api_sessions_remain", self.drained()["reasons"])
-        self.worker.credits_reply = {**self.worker.credits_reply, "api_sessions": 0}
-        self.assertTrue(self.drained()["drained"])
+    def ready(self):
+        return self.manager.handle_admin("GET", ADMIN_ROUTES["rollbackReady"])
 
-    def test_a_credits_reply_without_the_count_is_not_drained_but_an_old_worker_is(self):
+    def test_api_sessions_do_not_block_drained_but_block_rollback_ready_until_none_remain(self):
         self.pause()
-        self.worker.credits_reply = {k: v for k, v in self.worker.credits_reply.items() if k != "api_sessions"}
-        self.assertIn("api_sessions_unknown", self.drained()["reasons"])
-        self.worker.capable = False  # no billing, so no API sessions by construction
+        self.worker.credits_reply = {**self.worker.credits_reply, "enabled": False, "api_sessions": 2}
+        self.assertTrue(self.drained()["drained"])  # work is drained: the sessions go at the worker restart
+        self.assertIn("api_sessions_remain", self.ready()["reasons"])
+        self.worker.credits_reply = {**self.worker.credits_reply, "api_sessions": 0}
+        self.assertEqual(self.ready(), {"rollback_ready": True, "paused": True, "reasons": []})
+
+    def test_rollback_ready_also_needs_drained_credits_off_and_the_ledger_state(self):
+        self.worker.credits_reply = {**self.worker.credits_reply, "enabled": False}
+        self.assertIn("not_paused", self.ready()["reasons"])
+        self.pause()
+        self.worker.credits_reply = {**self.worker.credits_reply, "enabled": True}
+        self.assertEqual(self.ready()["reasons"], ["credits_enabled"])
         self.assertTrue(self.drained()["drained"])
+        self.worker.credits_reply = {k: v for k, v in self.worker.credits_reply.items()
+                                     if k not in ("api_sessions", "ledger_available")} | {"enabled": False}
+        self.assertEqual(self.ready()["reasons"], ["api_sessions_unknown", "ledger_state_unknown"])
+        self.worker.job = {"attempt_id": "a" * 32, "kind": "maintenance"}
+        self.assertIn("worker_job", self.ready()["reasons"])
+
+    def test_an_old_worker_without_billing_is_rollback_ready_once_drained(self):
+        self.pause()
+        self.worker.capable = False
+        self.assertTrue(self.ready()["rollback_ready"])
+
+    def test_a_held_outcome_of_the_oldest_attempt_is_found_however_many_runs_follow(self):
+        self.manager.window.limit = 10 ** 6
+        self.manager = self.build(ledger_limit=500)
+        self.manager.window.limit = 10 ** 6
+        self.worker.behavior = lambda body: complete(body)
+        self.worker.ack_fails = True
+        first = self.settle(self.start()["run_id"])["run_id"]
+        self.worker.ack_fails = False
+        for _ in range(35):
+            self.settle(self.start()["run_id"])
+        self.worker.ack_fails = True  # the oldest turn's lost acknowledgment cannot be retried
+        self.pause()
+        reply = self.drained()
+        self.assertFalse(reply["drained"], reply)
+        self.assertIn("acknowledgment_failed", reply["reasons"])
+        self.assertIn(self.manager.store.records[first]["turns"][-1]["attempt_ids"][-1], self.worker.attempts)
+
+    def test_a_worker_job_that_appears_during_the_check_blocks(self):
+        self.pause()
+        statuses = [self.worker.status(), {**self.worker.status(), "job": {"attempt_id": "b" * 32, "kind": "turn"}}]
+        self.worker.status = lambda: statuses.pop(0) if len(statuses) > 1 else statuses[0]
+        self.assertIn("worker_job", self.drained()["reasons"])
+
+    def test_pause_and_resume_sync_the_directory_so_the_pause_survives_a_power_loss(self):
+        import os
+        import stat
+        synced = []
+        real = os.fsync
+
+        def recording(fd):
+            synced.append(stat.S_ISDIR(os.fstat(fd).st_mode))
+            return real(fd)
+
+        with mock.patch("os.fsync", recording):
+            self.pause()
+            self.assertIn(True, synced)  # the parent directory, not only the file
+            synced.clear()
+            self.manager.handle_admin("POST", ADMIN_ROUTES["resume"])
+            self.assertEqual(synced, [True])
 
     def test_a_running_worker_job_blocks(self):
         self.worker.job = {"attempt_id": "a" * 32, "kind": "maintenance"}
@@ -161,6 +217,7 @@ class PauseAndDrainTests(FallbackBase):
 
     def test_unknown_admin_requests_are_404(self):
         for method, path in (("GET", ADMIN_ROUTES["pause"]), ("POST", ADMIN_ROUTES["drained"]),
+                             ("POST", ADMIN_ROUTES["rollbackReady"]),
                              ("POST", "/admin/dtc-research/other")):
             with self.assertRaises(ChatError) as unknown:
                 self.manager.handle_admin(method, path)
@@ -194,6 +251,14 @@ class AdminCliTests(unittest.TestCase):
         self.assertEqual(drained.calls, [("GET", ADMIN_ROUTES["drained"], None)])
         self.assertEqual(self.run_verb("drained", self.Client({"drained": False, "reasons": ["turn_running"]}))[0], 1)
         self.assertEqual(self.run_verb("pause", self.Client({"detail": "no"}, status=404))[0], 2)
+
+    def test_rollback_ready_uses_its_route_and_exits_zero_only_when_ready(self):
+        ready = self.Client({"rollback_ready": True, "reasons": []})
+        self.assertEqual(self.run_verb("rollback-ready", ready)[0], 0)
+        self.assertEqual(ready.calls, [("GET", ADMIN_ROUTES["rollbackReady"], None)])
+        blocked = self.Client({"rollback_ready": False, "drained": True, "reasons": ["api_sessions_remain"]})
+        self.assertEqual(self.run_verb("rollback-ready", blocked)[0], 1)
+        self.assertEqual(self.run_verb("rollback-ready", self.Client({"drained": True}))[0], 1)  # drained alone is not enough
 
     def test_an_unreachable_advisor_exits_2(self):
         def refusing(socket_path, timeout):

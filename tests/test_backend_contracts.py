@@ -95,6 +95,27 @@ class BackendContractsTests(unittest.TestCase):
                     )
         self.assertGreater(entry_count, 0)
 
+    def test_tasks_that_carry_the_dashboard_source_carry_every_json_it_imports(self):
+        # The dashboard imports its shared vocabularies from files beside the Python modules; a task
+        # that packages the dashboard but not one of them fails its isolated build.
+        dashboard = ROOT / "projects/vehicle_data/dashboard"
+        import_re = re.compile(r"""from\s+["']([^"']+\.json)["']""")
+        needed = set()
+        for source in sorted((dashboard / "src").rglob("*")):
+            if source.suffix in {".js", ".jsx", ".mjs"}:
+                for target in import_re.findall(source.read_text()):
+                    resolved = (source.parent / target).resolve()
+                    if resolved.is_relative_to(dashboard.resolve().parent):
+                        needed.add(str(resolved.relative_to(ROOT)))
+        self.assertIn("projects/vehicle_data/api_credits.json", needed)
+        tasks = json.loads((ROOT / ".van-compute.json").read_text())["tasks"]
+        carriers = [task for task in tasks if packaged("projects/vehicle_data/dashboard/src/main.jsx", task["source_paths"])]
+        self.assertTrue(carriers)
+        for task in carriers:
+            for path in sorted(needed):
+                with self.subTest(task=task["name"], path=path):
+                    self.assertTrue(packaged(path, task["source_paths"]))
+
     def test_shared_library_has_no_application_dependencies(self):
         libraries = sorted((ROOT / "lib").rglob("*.py"))
         self.assertTrue(libraries)
