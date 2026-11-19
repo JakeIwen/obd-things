@@ -40,7 +40,7 @@
     "snapshotFile": "/home/pi/.agent/usage-budget/claude-promo-credits.json",
     "snapshotCache": "/var/lib/van-telemetry-advisor/dtc-research/credit-snapshot.json"
   },
-  "keyPattern": "^sk-ant-api\\d{2}-[A-Za-z0-9_-]{20,300}$",
+  "keyPattern": "^sk-ant-(?:api\\d{2}|usr)-[A-Za-z0-9_-]{20,300}$",
   "keyFileMaxBytes": 1024,
   "ledger": {"schemaVersion": 1, "maxEntries": 2000, "retainDaysAfterUntil": 30},
   "snapshot": {"maxBytes": 16384, "maxGrants": 8, "freshSeconds": 3600},

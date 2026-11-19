@@ -76,6 +76,13 @@ class InstallerTests(unittest.TestCase):
                 self.assertIn("Not saved", err)
         self.assertFalse(self.installed().exists())
 
+    def test_a_pasted_sk_ant_usr_key_with_surrounding_whitespace_is_installed(self):
+        key = "sk-ant-usr-" + "Zz9_-" * 19
+        code, out, err = self.main("api-key", prompt=lambda _: f"\n {key} \n")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(read_key_file(self.installed()), (key, None))
+        self.assertNotIn(key, out)
+
     def test_admin_oauth_and_other_keys_are_refused_without_echoing_them(self):
         for bad in ("sk-ant-admin01-" + "A" * 40, "sk-ant-oat01-" + "A" * 40, "sk-ant-api03-short", "hello",
                     "", "sk-proj-" + "A" * 40):

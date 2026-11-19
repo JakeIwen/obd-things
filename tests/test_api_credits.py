@@ -67,6 +67,16 @@ class KeyReaderTests(unittest.TestCase):
                 self.assertTrue(problem)
                 self.assertNotIn("sk-ant", problem)
 
+    def test_both_model_key_prefixes_are_accepted(self):
+        # The owner's Console issues sk-ant-usr- model keys (verified on the API, 2026-11-19).
+        for key in ("sk-ant-api03-" + "A1_b-" * 8, "sk-ant-usr-" + "A1_b-" * 19):
+            with self.subTest(key[:11]):
+                path = self.write(key, name=key[7:10])
+                self.assertEqual(read_key_file(path), (key, None))
+        for bad in ("sk-ant-usr01-" + "A" * 40, "sk-ant-usr-short", "sk-ant-user-" + "A" * 40):
+            with self.subTest(bad[:12]):
+                self.assertIsNone(read_key_file(self.write(bad, name="bad"))[0])
+
     def test_a_source_file_need_not_be_private_but_the_installed_copy_must_be(self):
         path = self.write(FAKE_KEY, mode=0o644)
         self.assertEqual(read_key_file(path, require_private=False)[0], FAKE_KEY)

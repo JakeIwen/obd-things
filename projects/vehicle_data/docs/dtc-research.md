@@ -255,8 +255,10 @@ python3 -m projects.vehicle_data.dtc_research_signin status               # inst
 ```
 
 (run as `pi` from the checkout; `s dtc_research_signin api-key` is the same.) The installer accepts
-only a model key, `^sk-ant-api\d{2}-[A-Za-z0-9_-]{20,300}$`, and names the refusal for an admin
-key (`sk-ant-admin…`) or an OAuth token (`sk-ant-oat…`). It refuses when no terminal can hide the
+only a model key, `^sk-ant-(?:api\d{2}|usr)-[A-Za-z0-9_-]{20,300}$`, and names the refusal for an admin
+key (`sk-ant-admin…`) or an OAuth token (`sk-ant-oat…`). Model keys carry either prefix:
+`sk-ant-api03-`, or `sk-ant-usr-`, which the owner's Console organization issued on 2026-11-19
+(`api.anthropic.com` accepted it as `x-api-key` on the free token-count endpoint). It refuses when no terminal can hide the
 input (a `getpass` warning is an error), when the research image is not really the mount at the
 volume (a bare directory on the SD card is refused, for the OAuth writer too), and for a
 `--from-file` that is not one bounded, regular, non-symlink file (1 KiB at most) holding one line:
