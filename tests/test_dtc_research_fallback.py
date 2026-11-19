@@ -165,13 +165,15 @@ class FallbackBusyTests(FallbackBase):
         self.assertEqual(self.ledger_kinds(), ["initial", "fallback"])
 
     def test_after_the_window_the_turn_fails_with_the_busy_wording(self):
-        FALLBACK["windowSeconds"] = .4
+        # The window must outlast one durable refused try on a loaded host; at 0.4 s a busy Pi fit
+        # only two tries. The credit leg plus two refused tries is enough to show one retry.
+        FALLBACK["windowSeconds"] = 1.0
         self.refuse_fallbacks(10 ** 4, reason="warning_chat", detail="ignored")
         run = self.settle(self.start()["run_id"])
         self.assertEqual((run["state"], run["reason"]), ("failed", "provider_error"))
         self.assertEqual(run["error"], REFUSAL_DETAIL["warning_chat"])
         self.assertEqual(self.ledger_kinds(), ["initial"])  # every refused try was withdrawn
-        self.assertGreater(len(self.worker.launches), 3)
+        self.assertGreaterEqual(len(self.worker.launches), 3)
 
     def test_a_restart_after_a_refusal_continues_the_pending_fallback(self):
         self.refuse_fallbacks(10 ** 4)
