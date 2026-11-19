@@ -241,6 +241,16 @@ only: the API's own refusal is the guard, because the Console organization behin
 purchased credit and no auto-reload, so an exhausted promotional lane fails at the API and cannot
 spill into paid credit. No billing choice depends on a balance estimate.
 
+**Activation (2026-11-19).** Deployed at `e9d323d` with a dedicated `sk-ant-usr-` Console key and
+live-checked: a Sonnet report billed credits (journal `billing: api_credits`, ledger entry settled
+from the per-process delta, $0.0186); its follow-up resumed the same session ($0.0063, not the
+cumulative `total_cost_usd`); an invalid key gave one `credit_fallback`/`invalid_key` leg at $0,
+the latch, and one visible answer replayed on the subscription; reinstalling the key and
+restarting research cleared the latch. `/credits` through the advisor answered in 9-12 ms with one
+retained API session (426 ms on the first, cold call). A deploy that changes
+`dtc_research_contract.py` or `api_credits_contract.py` also restarts both web listeners, which
+import the relay allowlist from them.
+
 ### The key
 
 The research API key is a research-owned credential at `/var/lib/vanresearch/anthropic-api-key`

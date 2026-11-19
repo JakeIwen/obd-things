@@ -530,8 +530,8 @@ both dialogs share). Research is offered on the dashboard only while the owner's
 `research_cli_policy.json` records measured memory peaks for the installed Claude copy (measured
 and activated for 2.1.325 on 2026-11-17; a different copy needs measuring again).
 
-Promotional API credits for research (2026-11-18): research turns bill an owner-installed Anthropic
-model API key first and fall back to the subscription; the contract (billing choice, ledger, balance
+Promotional API credits for research (2026-11-18; deployed and live-checked 2026-11-19): research turns
+bill an owner-installed Anthropic model API key first and fall back to the subscription; the contract (billing choice, ledger, balance
 view, off switch, expiry, rollback procedure) is `projects/vehicle_data/docs/dtc-research.md`
 section "Promotional API credits". Where things live: `api_credits.json` / `api_credits_contract.py`
 (the one copy of `until`, the verified grant table, reasons, codes, routes, paths and limits; the
