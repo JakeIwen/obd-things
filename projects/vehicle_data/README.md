@@ -2163,16 +2163,25 @@ unchanged; the new values are additive (`status.fuel_floor`).
   `engine.fuel_rate` fuel; measured 2026-11-18 over the 40 to 10 % band at cluster factor 1.131),
   scaled as `0.175 * FUEL_RATE_CLUSTER_FACTOR / 1.131` so a later factor change leaves points
   unchanged (at the current factor 1.18 that is about 0.183 gal per point).
-- **Episode start:** a fresh van reading of 0 with no episode open; the anchor is that reading's
-  receipt time and gallons start at 0. The decoder publishes no metric for raw 0, so
-  `compass_receiver` hands every fresh `0x356` reading to the broker through a tap
-  (`fuel_level.raw_reading`, `broker.observe_fuel_tank_reading`). A 0 at key-off or wake that burns
-  under 0.01 gal is dropped when it ends, leaving no episode and no floor.
-- **During an episode** the broker integrates each newly stored `engine.fuel_rate` sample
-  (trapezoid between consecutive samples) while a fresh `engine.rpm` is at least 400. Nothing is
-  added for a repeated or older timestamp, an engine-off or invalid sample, a gap over 5 s, or a
-  value bit-identical for over 30 s (the frozen 0.7248 gal/h seen with the engine off on
-  2026-11-18). A missing or stale van reading neither starts nor ends an episode; dead
+- **Episode start:** `0x356` also sends 0 as a no-value sentinel at wake and key-off (the
+  2026-11-15 capture shows a wake 0 followed 2.2 s later by 99), so a fresh van 0 only opens an
+  in-memory *candidate*. It becomes an episode when all of these hold: the 0 has persisted for 30 s
+  with no reading above 0 in between (readings more than 10 s apart break it); a fresh
+  `engine.rpm` above 0 was seen within 10 s of each 0; and the last reading above 0 before the first
+  0 was 5 or less and no more than 15 min earlier. Until then nothing is displayed, written or
+  committable. On confirmation the anchor is the first 0's receipt time and the gallons burned since
+  then (held in memory while pending) count. A candidate that fails is dropped silently. The decoder
+  publishes no metric for raw 0, so the companion receiver hands the gauge every fresh `0x356`
+  reading (at most one a second) through `display_receiver.receive_display_frames(observe=...)`,
+  only when the route check that gates publication still passes, with the kernel receipt time the
+  metric uses (`fuel_level.raw_reading`, `broker.observe_fuel_tank_reading`). A confirmed episode
+  that burned under 0.01 gal is dropped when it ends, leaving no episode and no floor.
+- **Burned fuel:** the broker integrates each newly stored `engine.fuel_rate` sample (trapezoid
+  between consecutive samples) while the engine speed of the sample's own snapshot is at least
+  400 (metrics are stored in name order, so the rate is paired with the rpm of its snapshot, not the
+  previous one). Nothing is added for a repeated or older timestamp, an engine-off or invalid
+  sample, a gap over 5 s, or a value bit-identical for over 30 s (the frozen 0.7248 gal/h seen with
+  the engine off on 2026-11-18); the 30 s freeze timer restarts after any gap or engine-off sample. A missing or stale van reading neither starts nor ends an episode; dead
   reckoning continues without it.
 - **Episode end:** the van reading stays at 1 or above for a continuous 60 s (readings more than
   10 s apart restart the count; a reading of 0 restarts it), or reaches 3 or above (a refuel). Only
@@ -2183,9 +2192,18 @@ unchanged; the new values are additive (`status.fuel_floor`).
 - **Displayed level:** `adjusted = (raw - floor) / (100 - floor) * 100`. With floor 0 and no episode
   it equals the van's reading; it is negative only below the floor in force, in territory never
   driven into. The numeral turns red (`--red`) when the rounded value is below 0. During an episode
-  the sub-line reads `est. · 1.4 gal past empty` (the range figure follows if shown); with a
-  non-zero floor and no episode it adds `van NN%` so the difference from the dash is explained.
+  the sub-line reads `est. · 1.4 gal past empty` (the range figure follows if shown), or
+  `estimate unreliable · bound reached` once the sanity bound is hit; the numeral is dimmed (held)
+  while status delivery is stale (a tablet disconnect), never styled live. With a non-zero floor
+  and no episode the sub-line adds `van NN%` so the difference from the dash is explained.
   With floor 0 and no episode the tile is the plain one.
+- **Threads.** The receive and publication threads only append observations to a bounded in-memory
+  queue (no file I/O, no lock a write holds). A broker-owned worker thread
+  (`van-telemetry-fuel-floor`, started with the collector, stopped and flushed at shutdown) drains
+  it, applies the model and writes the file. Status and the local API read an immutable copy swapped
+  in under a lock never held across file I/O, so a stalled disk delays saving, never reception or
+  status. Any unreadable record (invalid JSON, nesting too deep, out-of-range numbers, a directory
+  that cannot be written) leaves the broker running with floor 0 and a `storage_error`.
 - **Gallons are accumulated in the broker and saved, not recomputed from the historian.** The
   historian keeps minute rollups of sums and counts without per-sample times, so it cannot apply
   the gap, repeated-sample and frozen-value rules. A restart loses at most the last minute of
@@ -2207,8 +2225,9 @@ unchanged; the new values are additive (`status.fuel_floor`).
 - **Limits.** The new zero means "lowest driven to", not "empty". Fuel added while below zero that
   does not lift the van's reading to 3 or above (or to 1 or above for a minute) is invisible. A
   van reading of 0 the broker never receives (receiver down or the frame not sent) starts nothing.
-  The gallons-per-point figure comes from one band of the tank and the fuel rate is the cluster-matched
-  estimate, so the estimate carries both errors.
+  The gallons-per-point figure comes from one band of the tank and the fuel rate is the broker's
+  estimate (telemetry has used 1.18 times the nominal rate to match fuel pumped since 2026-11-19; the
+  cluster's own figure is about 1.131), so the estimate carries both errors.
   Fuel the owner's gasoline furnace (a Velit air heater on the main tank) burns while the van is
   parked is not counted, so after a cold night below freezing the tile shows somewhat more fuel than
   there is. While any operation inhibit is active (for example during an AlfaOBD campaign) the B-CAN
@@ -2216,9 +2235,20 @@ unchanged; the new values are additive (`status.fuel_floor`).
 - **Code.** `fuel_floor.json` / `fuel_floor_contract.py` (constants, shared with the dashboard),
   `fuel_floor_model.py` (pure episode and floor rules, record validation), `fuel_floor_store.py`
   (file, throttled writes, local API), `fuel_floor.py` (owner CLI). Dashboard:
-  `src/fuelFloor.js`, `src/fuelFloor.helpers.js`. Deploy: a broker restart (`s restart_broker`) for
-  the record and tap, plus the dashboard build. Tests: `tests/test_fuel_floor.py` and
+  `src/fuelFloor.js`, `src/fuelFloor.helpers.js`. Tests: `tests/test_fuel_floor.py` and
   `dashboard/test/fuelFloor.test.mjs`.
+- **Deploy, in order.** (1) Build the dashboard (`cd dashboard && npm ci && npm run build`; any
+  time). (2) Restart the broker parked: `s restart_broker` (the status gains `fuel_floor`, and the
+  worker and receiver tap exist only in the new process). (3) Restart both web listeners, because
+  their lite-stream allowlist (`web_v2.STATUS_LITE_KEYS`, which includes `fuel_floor`) is read at
+  start: they are `PartOf=van-telemetry.service` and normally cycle with the broker, so check
+  `systemctl show -p ActiveEnterTimestamp van-telemetry.service van-telemetry-web.service
+  van-telemetry-web-tailscale.service` and otherwise run
+  `sudo systemctl restart van-telemetry-web.service van-telemetry-web-tailscale.service`.
+  (4) Verify `fuel_floor` on the lite stream from both listeners:
+  `curl -s -m 5 -N http://vanpi.lan:8765/v2/stream | grep -m1 -c fuel_floor` and the same with the
+  Tailscale address (`tailscale ip -4`), each printing `1`; then `python3 -m
+  projects.vehicle_data.fuel_floor list` answers over the broker socket.
 
 ### Code research with AI (2026-11-16; built, not yet deployed)
 

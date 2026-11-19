@@ -17,7 +17,24 @@
   "max_earlier_floors": 20,
   "max_episodes": 20,
   "write_interval_seconds": 60,
-  "end_reasons": {"recovered": "recovered", "refuel": "refuel"},
-  "floor_sources": {"default": "default", "episode": "episode", "set": "set", "restore": "restore"},
-  "actions": {"set": "set", "restore": "restore"}
+  "end_reasons": {
+    "recovered": "recovered",
+    "refuel": "refuel"
+  },
+  "floor_sources": {
+    "default": "default",
+    "episode": "episode",
+    "set": "set",
+    "restore": "restore"
+  },
+  "actions": {
+    "set": "set",
+    "restore": "restore"
+  },
+  "candidate_hold_seconds": 30.0,
+  "candidate_max_prior_reading": 5,
+  "candidate_max_prior_age_seconds": 900.0,
+  "engine_fresh_seconds": 10.0,
+  "number_bound": 1000000.0,
+  "queue_max": 2000
 }

@@ -190,7 +190,7 @@ export function buildDemoScene(nowMs = Date.now()) {
     statusLite: {
       ...radarStatusAt(nowMs), service: "van-telemetry", started_at: iso(nowMs - 2 * HOUR_MS),
       // Floor 0 and no below-empty episode: the Fuel tank tile shows the van's own 62 %, as before.
-      fuel_floor: {floor: 0, gal_per_point: 0.175, episode: null},
+      fuel_floor: {floor: 0, gal_per_point: 0.182582, episode: null},
       collector: {state: "running", interval_seconds: 1, last_cycle_at: iso(nowMs)},
       history_recorder: {enabled: true, state: "recording"},
       active_drive: {state: "running"}, auxiliary_drive: {state: "running"},

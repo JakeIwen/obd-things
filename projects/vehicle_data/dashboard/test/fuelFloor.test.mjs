@@ -6,7 +6,7 @@ import { tankRangeText, tankValueText } from "../src/fuelLevel.js";
 
 const live = (value) => ({ available: true, stale: false, value });
 const held = (value) => [{ available: false }, { kind: "held", value }];
-const NO_EPISODE = { floor: 0, gal_per_point: 0.175, episode: null };
+const NO_EPISODE = { floor: 0, gal_per_point: 0.182582, episode: null };
 const model = (over) => tankTileModel({
   levelRec: live(12), levelObs: null, rangeRec: live(40), rangeObs: null, block: NO_EPISODE, ...over,
 });
@@ -81,4 +81,16 @@ test("malformed blocks fall back to the neutral one", () => {
   assert.deepEqual(floorBlock({ floor: Infinity }), { floor: 0, episode: null });
   assert.deepEqual(floorBlock({ floor: -2, episode: { adjusted: -3, gallons: 1, implausible: true } }),
     { floor: -2, episode: { adjusted: -3, gallons: 1, implausible: true } });
+});
+
+test("a stale status delivery shows the open estimate held, not live", () => {
+  const block = { floor: 0, episode: { gallons: 1.44, adjusted: -8.2, implausible: false } };
+  assert.equal(model({ block, stale: true }).live, false);
+  assert.equal(model({ block, stale: false }).live, true);
+  assert.equal(model({ block, stale: true }).value, "~-8");
+});
+
+test("an implausible episode says the estimate is unreliable", () => {
+  const block = { floor: 0, episode: { gallons: 5.5, adjusted: -30, implausible: true } };
+  assert.match(model({ block }).sub, /^estimate unreliable/);
 });

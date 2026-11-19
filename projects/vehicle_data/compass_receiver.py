@@ -129,18 +129,26 @@ class CompassReceiver:
             throttle.reset()
             self.invalidate_frame(can_id)
 
-        def decode(can_id, data):
-            if self.tank_tap is not None:
-                level = fuel_level.raw_reading(can_id, data)
-                if level is not None:
-                    self.tank_tap(level)
-            return bcan_companion.decode_bcan_companion(can_id, data)
+        tank_next = float('-inf')
+
+        def observe(can_id, data, _observed_at, observed_monotonic):
+            # The gauge needs the 0 the metric never carries, with the receipt time the metric
+            # uses, and only from a frame the route check still admits. At most one a second.
+            nonlocal tank_next
+            if self.tank_tap is None or observed_monotonic < tank_next:
+                return
+            level = fuel_level.raw_reading(can_id, data)
+            if level is None or not valid(force=True):
+                return
+            tank_next = observed_monotonic + 1.0
+            self.tank_tap(level, observed_monotonic)
 
         with self._lock:
             self._status.update(state='receiving', channel=channel, reason=None,
                                 interface_mode=mode)
         self.receiver(channel, valid=valid, stopped=self._stop.is_set, publish=publish,
-                      frame_dlcs=bcan_companion.FRAME_DLCS, decode=decode,
+                      frame_dlcs=bcan_companion.FRAME_DLCS, decode=bcan_companion.decode_bcan_companion,
+                      observe=observe,
                       lost=lost, frame_lost=frame_lost if self.invalidate_frame else None)
 
     def _listen_armed(self, route, check, owner_pid):

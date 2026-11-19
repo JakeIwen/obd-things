@@ -116,6 +116,7 @@ const tankModel = computed(() => {
     rangeRec: store.metricSignal(FUEL_RANGE.metric).value,
     rangeObs: obs(FUEL_RANGE.metric).value,
     block: (lite && lite[FUEL_FLOOR.status_key]) || (full && full[FUEL_FLOOR.status_key]) || null,
+    stale: store.statusStale.value,
   });
 });
 const tank = computed(() => tankModel.value.value);

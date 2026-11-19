@@ -102,6 +102,13 @@ export const vehicle = signal(unknownVehicle("no_snapshot", null, 0));
  */
 export const statusLite = signal({});
 
+/**
+ * True while no status delivery has been accepted recently (never one yet, a page restore, or
+ * a stalled link): readers of `statusLite` that show a live estimate (the fuel gauge) show it held.
+ */
+export const statusStale = signal(true);
+let lastStatusMono = null;
+
 /** Web listener flags (`active_acquisition_enabled`, `dtc_jobs_enabled`, ...). */
 export const web = signal({});
 
@@ -266,6 +273,7 @@ export function applySummary(bundle, nowMono) {
  */
 export function invalidate(reason, nowMono) {
   batch(() => {
+    if (!statusStale.peek()) statusStale.value = true;
     metricSignals.forEach((sig) => {
       const rec = sig.peek();
       if (rec && !rec.stale) sig.value = withStale(rec);
@@ -290,6 +298,9 @@ export function invalidate(reason, nowMono) {
 export function tick(nowMono) {
   batch(() => {
     advanceClock(nowMono);
+    if (!statusStale.peek() && (lastStatusMono === null || nowMono - lastStatusMono > MAX_STATE_AGE_MS)) {
+      statusStale.value = true;
+    }
     metricSignals.forEach((sig) => {
       const rec = sig.peek();
       if (!rec || rec.stale || !rec.available) return;
@@ -416,6 +427,8 @@ function applyDelivery(body, deliveryAgeMs, nowMono) {
   if (names.join("\n") !== metricNames.peek().join("\n")) metricNames.value = names;
 
   const status = body.status && typeof body.status === "object" ? body.status : {};
+  lastStatusMono = nowMono;
+  if (statusStale.peek()) statusStale.value = false;
   const stable = JSON.stringify(status, stableStatusReplacer);
   if (stable !== lastJson.status) {
     lastJson.status = stable;

@@ -11,6 +11,7 @@ import {
   metricNames,
   vehicle,
   statusLite,
+  statusStale,
   web,
   clock,
   summary,
@@ -413,6 +414,19 @@ test("applySummary publishes a slice only when its JSON changed", () => {
   assert.equal(runs.history.runs, 1);
 
   Object.values(runs).forEach((c) => c.dispose());
+});
+
+test("status delivery staleness: fresh on a delivery, stale on invalidate and after the freshness limit", () => {
+  applyBaseline(freshSnapshot(), 500, 800000);
+  assert.equal(statusStale.value, false);
+  tick(800000 + 2000);
+  assert.equal(statusStale.value, false);
+  tick(800000 + 6000);
+  assert.equal(statusStale.value, true, "a stalled link must not leave the estimate looking live");
+  applyBaseline(freshSnapshot(), 500, 900000);
+  assert.equal(statusStale.value, false);
+  invalidate("client_page_hidden", 900100);
+  assert.equal(statusStale.value, true);
 });
 
 test("invalidate marks every live observation stale and the vehicle unknown, publishing only what flips", () => {

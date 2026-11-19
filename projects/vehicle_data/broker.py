@@ -44,7 +44,6 @@ from projects.vehicle_data.helper_startup_grant import (
 from projects.vehicle_data import history_recent
 from projects.vehicle_data.dtc_ignore import FILE_NAME as DTC_IGNORE_FILE, DtcIgnoreStore
 from projects.vehicle_data.maintenance import MaintenanceStore
-from projects.vehicle_data.active_session_gates import RUNNING_RPM
 from projects.vehicle_data.fuel_economy import METRIC as FUEL_RATE_METRIC
 from projects.vehicle_data.fuel_floor_contract import FILE_NAME as FUEL_FLOOR_FILE
 from projects.vehicle_data.fuel_floor_store import FuelFloorStore
@@ -1006,30 +1005,33 @@ class TelemetryBroker:
     def fuel_floor_request(self, payload):
         return self.fuel_floor.request(payload, self.monotonic())
 
-    def observe_fuel_tank_reading(self, level: int) -> None:
-        """A fresh van tank reading, 0 included, from the B-CAN companion receiver."""
-        self.fuel_floor.observe_van_level(level, self.monotonic())
+    def observe_fuel_tank_reading(self, level: int, observed_monotonic: float | None = None) -> None:
+        """A fresh van tank reading, 0 included, from the B-CAN companion receiver.
 
-    def _note_fuel_rate(self, result: AcquisitionResult) -> None:
-        """Feed a just-stored fuel-rate sample to the below-empty gauge.
+        Called on the receive thread: it only queues the reading (receipt time when given).
+        """
+        self.fuel_floor.enqueue_van_level(
+            level, self.monotonic() if observed_monotonic is None else observed_monotonic)
 
-        Called once per newly stored sample (never for a cache re-read), so a frozen cached
-        value adds nothing; the gauge itself also ignores a repeated timestamp.
+    def _note_fuel_rate(self, result: AcquisitionResult, rpm: object = None) -> None:
+        """Queue a just-stored fuel-rate sample, paired with an engine speed, for the gauge.
+
+        ``rpm`` is the engine speed of the sample's own snapshot when the caller has it; otherwise
+        the cached one counts only while fresh. Called once per newly stored sample (never for a
+        cache re-read); the gauge also ignores a repeated timestamp.
         """
         if result.metric != FUEL_RATE_METRIC or result.observed_monotonic is None:
             return
-        with self._lock:
-            rpm = self._cache.get("engine.rpm")
         now = self.monotonic()
-        rpm_definition = self.definitions.get("engine.rpm")
-        running = bool(
-            rpm is not None and rpm.available and rpm_definition is not None
-            and rpm.observed_monotonic is not None
-            and now - rpm.observed_monotonic <= rpm_definition.stale_after_seconds
-            and isinstance(rpm.value, (int, float)) and not isinstance(rpm.value, bool)
-            and rpm.value >= RUNNING_RPM
-        )
-        self.fuel_floor.observe_fuel_rate(result.value, result.observed_monotonic, running, now)
+        if rpm is None:
+            with self._lock:
+                cached = self._cache.get("engine.rpm")
+            rpm_definition = self.definitions.get("engine.rpm")
+            if (cached is not None and cached.available and rpm_definition is not None
+                    and cached.observed_monotonic is not None
+                    and now - cached.observed_monotonic <= rpm_definition.stale_after_seconds):
+                rpm = cached.value
+        self.fuel_floor.enqueue_fuel_rate(result.value, result.observed_monotonic, rpm, now)
 
     def health_response(self) -> dict[str, object]:
         """Return explainable, history-relative advisory assessments only."""
@@ -1554,6 +1556,7 @@ class TelemetryBroker:
         source: str,
         bus: str,
         quality: str,
+        note_fuel_rate: bool = True,
     ) -> AcquisitionResult:
         """Accept one exact allowlisted observation over the local Unix API.
 
@@ -1660,7 +1663,8 @@ class TelemetryBroker:
         if plausibility_error is not None:
             return rejected
         self._update_vehicle_state(result)
-        self._note_fuel_rate(result)
+        if note_fuel_rate:
+            self._note_fuel_rate(result)
         return result
 
     def _store_active_observation(self, event: dict[str, object]) -> None:
@@ -2649,6 +2653,7 @@ class TelemetryBroker:
 
     def start_collector(self) -> None:
         self.start_usb_monitor()
+        self.fuel_floor.start(self.monotonic)
         # Prime expensive read-only products before the Unix listener starts.
         # Later refreshes run in the history thread, never in a request handler.
         if self.insights is not None:
@@ -2838,6 +2843,7 @@ class TelemetryBroker:
             )
         accepted = 0
         rpm_evidence = None
+        fuel_rate_result = None
         for observation in observations:
             if self.display_receiver is not None and observation.source in {
                 "ccan.broadcast.0x0e0", "ccan.broadcast.0x5a0",
@@ -2850,8 +2856,11 @@ class TelemetryBroker:
                 source=observation.source,
                 bus="c-can",
                 quality=observation.quality,
+                note_fuel_rate=False,
             )
             accepted += int(result.available)
+            if observation.metric == FUEL_RATE_METRIC and result.available:
+                fuel_rate_result = result
             if (
                 observation.metric == "engine.rpm"
                 and result.available
@@ -2864,6 +2873,14 @@ class TelemetryBroker:
                     if float(observation.value) >= 400.0
                     else "stopped"
                 )
+        # Metrics run in name order, so engine.fuel_rate is stored before engine.rpm; the gauge
+        # pairs the rate with the engine speed of this same snapshot, not the previous one.
+        snapshot_rpm = next((o.value for o in observations if o.metric == "engine.rpm"
+                             and o.source == "ccan.broadcast.0x0fc"), None)
+        if snapshot_rpm is not None:
+            self.fuel_floor.enqueue_engine(snapshot_rpm, self.monotonic())
+        if fuel_rate_result is not None:
+            self._note_fuel_rate(fuel_rate_result, snapshot_rpm)
         if rpm_evidence == "running":
             self._passive_engine_evidence = "running"
             self._passive_stop_evidence_streak = 0
@@ -3542,7 +3559,7 @@ class TelemetryBroker:
         self.maintenance.flush()
         self._radar_history.flush()
         self.last_readings.flush()
-        self.fuel_floor.flush(self.monotonic())
+        self.fuel_floor.stop(self.monotonic)
         self.drive_dtc.close()
 
 

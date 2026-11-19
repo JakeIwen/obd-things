@@ -35,16 +35,19 @@ function roundedText(percent) {
 
 /** Sub-line while an episode is open: `est. · 1.4 gal past empty`, then the range figure if any. */
 function episodeSub(model, rangeText) {
-  const past = `est. · ${model.episode.gallons.toFixed(1)} gal past empty`;
+  const past = model.episode.implausible
+    ? "estimate unreliable · bound reached"
+    : `est. · ${model.episode.gallons.toFixed(1)} gal past empty`;
   return rangeText ? `${past} · ${rangeText}` : past;
 }
 
 /**
  * The tile's numeral, sub-line, liveness and red state.
- * @param {{levelRec: object|null, levelObs: object|null, rangeRec: object|null, rangeObs: object|null, block: object|null}} input
+ * `stale` (status delivery stale) shows an open-episode estimate held, not live.
+ * @param {{levelRec: object|null, levelObs: object|null, rangeRec: object|null, rangeObs: object|null, block: object|null, stale?: boolean}} input
  * @returns {{value: string, sub: string, live: boolean, negative: boolean}}
  */
-export function tankTileModel({ levelRec, levelObs, rangeRec, rangeObs, block }) {
+export function tankTileModel({ levelRec, levelObs, rangeRec, rangeObs, block, stale = false }) {
   const model = floorBlock(block);
   const range = tankRangeText(levelRec, levelObs, rangeRec, rangeObs);
   if (plain(model)) {
@@ -54,7 +57,7 @@ export function tankTileModel({ levelRec, levelObs, rangeRec, rangeObs, block })
     return {
       value: roundedText(model.episode.adjusted),
       sub: episodeSub(model, range),
-      live: true,
+      live: !stale,
       negative: Math.round(model.episode.adjusted) < 0,
     };
   }

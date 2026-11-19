@@ -26,13 +26,19 @@ def _default_floor() -> dict:
     return {"value": 0.0, "committed_at": None, "source": C.DEFAULT, "episode_id": None}
 
 
+def _num(value: object) -> bool:
+    """A bounded real: a huge or non-finite number in a saved file must not reach arithmetic."""
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and -C.NUMBER_BOUND <= value <= C.NUMBER_BOUND)
+
+
 def _text(value: object, nullable: bool = False) -> bool:
     return (value is None and nullable) or isinstance(value, str) and bool(value)
 
 
 def _valid_floor(row: object) -> dict:
     if (not isinstance(row, dict) or set(row) != {"value", "committed_at", "source", "episode_id"}
-            or not finite_number(row["value"]) or not C.FLOOR_SET_MINIMUM <= row["value"] <= 0
+            or not _num(row["value"]) or not C.FLOOR_SET_MINIMUM <= row["value"] <= 0
             or row["source"] not in C.FLOOR_SOURCES or not _text(row["committed_at"], True)
             or not _text(row["episode_id"], True)):
         raise ValueError("saved fuel floor is invalid")
@@ -42,8 +48,8 @@ def _valid_floor(row: object) -> dict:
 def _valid_open(row: object) -> dict:
     if (not isinstance(row, dict) or set(row) != {"id", "started_at", "gallons", "deepest_raw", "implausible"}
             or not _text(row["id"]) or not _text(row["started_at"]) or type(row["implausible"]) is not bool
-            or not finite_number(row["gallons"]) or row["gallons"] < 0
-            or not finite_number(row["deepest_raw"]) or not C.IMPLAUSIBLE_RAW <= row["deepest_raw"] <= 0):
+            or not _num(row["gallons"]) or row["gallons"] < 0
+            or not _num(row["deepest_raw"]) or not C.IMPLAUSIBLE_RAW <= row["deepest_raw"] <= 0):
         raise ValueError("saved open fuel episode is invalid")
     return dict(row)
 
@@ -56,8 +62,9 @@ def _valid_episode(row: object) -> dict:
     if (not isinstance(row, dict) or set(row) != _EPISODE_KEYS
             or not _text(row["id"]) or not _text(row["started_at"]) or not _text(row["ended_at"])
             or row["end_reason"] not in C.END_REASONS
-            or not finite_number(row["deepest_raw"]) or not finite_number(row["gallons"])
+            or not _num(row["deepest_raw"]) or not _num(row["gallons"])
             or not isinstance(row["van_reading_at_end"], int) or isinstance(row["van_reading_at_end"], bool)
+            or abs(row["van_reading_at_end"]) > C.NUMBER_BOUND
             or type(row["implausible"]) is not bool or type(row["floor_committed"]) is not bool):
         raise ValueError("saved fuel episode is invalid")
     return dict(row)
@@ -85,6 +92,11 @@ class FuelFloorModel:
         self.earlier_floors: list[dict] = []
         self.episodes: list[dict] = []
         self.episode: _Episode | None = None
+        # Run-time only, never saved or shown: a 0 waiting to prove it is not a sentinel.
+        self.pending: _Episode | None = None
+        self._pending_since = 0.0
+        self._last_nonzero: tuple[int, float] | None = None
+        self._engine_positive_mono: float | None = None
         # Run-time only: monotonic evidence that a restart rightly forgets.
         self._above_since: float | None = None
         self._last_van: float | None = None
@@ -123,19 +135,27 @@ class FuelFloorModel:
 
     # -- the van's own reading -----------------------------------------------
 
+    def observe_engine(self, rpm_positive: bool, mono: float) -> None:
+        """Whether a fresh engine speed above zero was just seen (from the same snapshot as a rate)."""
+        self._engine_positive_mono = mono if rpm_positive else None
+
+    def _engine_fresh(self, mono: float) -> bool:
+        seen = self._engine_positive_mono
+        return seen is not None and mono - seen <= C.ENGINE_FRESH_SECONDS
+
     def observe_van_level(self, value: int, mono: float, wall: str) -> bool:
         """One fresh van reading; True when the record changed in a way that must be saved now.
 
         A missing or stale reading is never fed in, so it neither starts nor ends an episode.
+        A 0 only opens a candidate (0x356 sends 0 as "no value" at wake and key-off); it becomes
+        an episode after ``CANDIDATE_HOLD_SECONDS`` of unbroken 0 with the engine running.
         """
         previous, self._last_van = self._last_van, mono
+        if value != C.START_READING:
+            self.pending = None
+            self._last_nonzero = (value, mono)
         if self.episode is None:
-            if value == C.START_READING:
-                self.episode = _Episode(uuid.uuid4().hex, wall)
-                self._reset_run_state()
-                self.dirty = True
-                return True
-            return False
+            return value == C.START_READING and self._observe_zero(mono, wall, previous)
         if value < C.RECOVERY_READING:
             self._above_since = None
             return False
@@ -147,6 +167,28 @@ class FuelFloorModel:
         elif mono - self._above_since >= C.RECOVERY_HOLD_SECONDS:
             return self._end(C.RECOVERED, value, wall)
         return False
+
+    def _observe_zero(self, mono: float, wall: str, previous: float | None) -> bool:
+        pending = self.pending
+        if pending is not None and (previous is None or mono - previous > C.VAN_READING_MAX_GAP_SECONDS):
+            pending = self.pending = None  # a silent receiver breaks "no nonzero in between"
+        if not self._engine_fresh(mono):
+            self.pending = None
+            return False
+        if pending is None:
+            prior = self._last_nonzero
+            if (prior is None or prior[0] > C.CANDIDATE_MAX_PRIOR_READING
+                    or mono - prior[1] > C.CANDIDATE_MAX_PRIOR_AGE_SECONDS):
+                return False  # not a gauge running down: a wake or key-off sentinel
+            self.pending = _Episode(uuid.uuid4().hex, wall)
+            self._pending_since = mono
+            self._reset_run_state()
+            return False
+        if mono - self._pending_since < C.CANDIDATE_HOLD_SECONDS:
+            return False
+        self.episode, self.pending = pending, None
+        self.dirty = True
+        return True
 
     def _reset_run_state(self) -> None:
         self._above_since = None
@@ -179,31 +221,34 @@ class FuelFloorModel:
     # -- fuel burned ---------------------------------------------------------
 
     def observe_fuel_rate(self, rate_gph: float, sample_mono: float, engine_running: bool) -> None:
-        """One fuel-rate sample stamped when it was received; only a fresh running one adds fuel."""
-        episode = self.episode
-        if episode is None:
+        """One fuel-rate sample stamped when it was received; only a fresh running one adds fuel.
+
+        Fuel burned while a candidate is pending is kept in memory, so a confirmed episode counts
+        from its first 0.
+        """
+        target = self.episode or self.pending
+        if target is None:
             return
         if not engine_running or not finite_number(rate_gph) or rate_gph < 0:
             self._last_rate = None  # the span across an engine-off or bad sample is not burned fuel
+            self._frozen = None
             return
         previous = self._last_rate
         if previous is not None and sample_mono <= previous[0]:
             return  # the same or an older observation read again adds nothing
-        if self._frozen is None or self._frozen[0] != rate_gph:
-            self._frozen = (rate_gph, sample_mono)
+        broken = previous is None or sample_mono - previous[0] > C.FUEL_SAMPLE_MAX_GAP_SECONDS
+        if broken or self._frozen is None or self._frozen[0] != rate_gph:
+            self._frozen = (rate_gph, sample_mono)  # continuity broke: the freeze timer restarts
         frozen = sample_mono - self._frozen[1] > C.FROZEN_AFTER_SECONDS
         self._last_rate = (sample_mono, rate_gph)
-        if previous is None or frozen:
+        if broken or frozen:
             return
-        elapsed = sample_mono - previous[0]
-        if elapsed > C.FUEL_SAMPLE_MAX_GAP_SECONDS:
-            return
-        episode.gallons += (previous[1] + rate_gph) / 2.0 * elapsed / 3600.0
-        self.dirty = True
+        target.gallons += (previous[1] + rate_gph) / 2.0 * (sample_mono - previous[0]) / 3600.0
+        self.dirty = self.dirty or target is self.episode
         floor_gallons = -C.IMPLAUSIBLE_RAW * C.GAL_PER_POINT
-        if episode.gallons >= floor_gallons:
-            episode.gallons, episode.implausible = floor_gallons, True
-        episode.deepest_raw = min(episode.deepest_raw, episode.raw)
+        if target.gallons >= floor_gallons:
+            target.gallons, target.implausible = floor_gallons, True
+        target.deepest_raw = min(target.deepest_raw, target.raw)
 
     # -- owner changes -------------------------------------------------------
 

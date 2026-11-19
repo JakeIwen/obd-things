@@ -49,12 +49,14 @@ def _decode_display(can_id, data):
 def receive_display_frames(channel, *, valid, stopped, publish,
                            socket_factory=socket.socket, monotonic=time.monotonic,
                            wall_time=time.time, frame_dlcs=DISPLAY_FRAME_DLCS,
-                           decode=_decode_display, lost=None, frame_lost=None):
+                           decode=_decode_display, lost=None, frame_lost=None, observe=None):
     """Keep one filtered socket open, publishing each received frame immediately.
 
     Kernel receipt timestamps prevent a host stall or a queued frame from
     acquiring a new age. No snapshot schedule, aggregation, or sample holding
     participates in this path. ``valid`` also cooperatively yields ownership.
+    ``observe``, when given, sees every well-formed fresh frame (ID, payload, receipt time,
+    monotonic receipt time) before decoding, for readings the decoder deliberately drops.
     """
     notify_loss = lost if lost is not None else (lambda: None)
     # A rejection specific to one frame ID (bad DLC or payload) may end only that ID's evidence;
@@ -106,10 +108,13 @@ def receive_display_frames(channel, *, valid, stopped, publish,
             if age < -0.05 or age > 1.0:
                 notify_loss()
                 continue  # Discard a stalled queue; wait for a current frame.
+            received_at = datetime.fromtimestamp(received, timezone.utc)
+            observed_monotonic = monotonic() - max(0.0, age)
+            if observe is not None:  # every well-formed fresh frame, including ones with no metric
+                observe(can_id, data[:dlc], received_at, observed_monotonic)
             observations = decode(can_id, data[:dlc])
             if observations:
-                publish(observations, datetime.fromtimestamp(received, timezone.utc),
-                        monotonic() - max(0.0, age))
+                publish(observations, received_at, observed_monotonic)
             elif observations is not None:  # None: understood, nothing to publish
                 notify_frame_loss(can_id)
     finally:

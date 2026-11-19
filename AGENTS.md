@@ -284,10 +284,12 @@ would terminate the helper; an environment variable, unlike a flag, is ignored b
 The fuel gauge that keeps counting below the van's 0 % (owner request 2026-11-19; contract in the
 vehicle-data README section "Fuel gauge below empty") lives in `fuel_floor.json` /
 `fuel_floor_contract.py` (every constant, shared with the dashboard), `fuel_floor_model.py` (pure
-episode and floor rules), `fuel_floor_store.py` (the broker-owned `fuel-floor.json` record beside
-`maintenance.json`, throttled writes, the local `/v1/fuel-floor` routes) and `fuel_floor.py` (owner
-CLI `list|set|restore`). The broker feeds it through `observe_fuel_tank_reading` (raw 0 included, via
-the companion receiver's `tank_tap` and `fuel_level.raw_reading`) and `_note_fuel_rate`; it exposes
+candidate, episode and floor rules), `fuel_floor_store.py` (the broker-owned `fuel-floor.json` record
+beside `maintenance.json`: bounded queue, drain worker thread, throttled writes, reader copy, the
+local `/v1/fuel-floor` routes) and `fuel_floor.py` (owner CLI `list|set|restore`). Receive and
+publication threads only queue: `observe_fuel_tank_reading` (raw 0 included, from the companion
+receiver's `tank_tap` fed by `receive_display_frames(observe=...)` after the route check) and
+`_note_fuel_rate` (paired with its own snapshot's rpm); it exposes
 `status.fuel_floor`, which the Drive page 2 tile reads through `dashboard/src/fuelFloor.helpers.js`.
 `tools/candump_arrays.py` (`candump-id-arrays` compute task) saves finalized
 candump logs as per-identifier numpy arrays for offline reference syncs.
