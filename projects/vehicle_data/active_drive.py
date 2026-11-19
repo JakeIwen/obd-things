@@ -126,6 +126,7 @@ class SystemBackend:
         role_resolver: SysfsCanRoleResolver | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
+        include_intake_ac: bool = False,
     ):
         if not expected_usb_serial:
             raise ValueError("active-drive USB serial is required")
@@ -154,7 +155,7 @@ class SystemBackend:
         # Off until the broker's launch handshake says it accepts the
         # intake-air and A/C sources (an older broker rejects them and the
         # helper would be terminated mid-drive).
-        self.include_intake_ac = False
+        self.include_intake_ac = include_intake_ac
 
     def interface_state(self):
         return canbus.interface_state(self.channel)
@@ -1150,8 +1151,8 @@ def main(argv=None) -> int:
         args.channel,
         expected_usb_serial=args.expected_usb_serial,
         expected_dev_id=args.expected_dev_id,
+        include_intake_ac=args.enable_intake_ac_broadcasts,
     )
-    backend.include_intake_ac = args.enable_intake_ac_broadcasts
     with diagnostic_safety.interrupt_on_termination() as termination:
         outcome = run_active_session(
             backend,
