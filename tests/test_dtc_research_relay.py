@@ -54,9 +54,13 @@ class Unused:
 class CreditsOnly(Unused):
     """A worker that answers only the credits route (the relay tests need no turns)."""
 
+    def status(self):
+        return {"instance_id": "i" * 32, "job": None}
+
     def credits(self):
         return {"key_installed": True, "enabled": True, "until": "2026-12-08T00:00:00Z", "entries": [],
-                "latches": {"account": None, "models": {}}, "last_fallback": None, "ledger_full": False}
+                "latches": {"account": None, "models": {}}, "last_fallback": None, "ledger_full": False,
+                "ledger_available": True}
 
 
 class RelaySizeTests(unittest.TestCase):
@@ -138,7 +142,8 @@ class RelaySizeTests(unittest.TestCase):
         connection.close()
 
     def test_the_admin_routes_answer_404_through_the_web_relay_even_with_valid_credentials(self):
-        for method, route in (("POST", "pause"), ("POST", "resume"), ("GET", "drained")):
+        for method, route in (("POST", "pause"), ("POST", "resume"), ("GET", "drained"),
+                              ("GET", "rollbackReady")):
             path = ADMIN_ROUTES[route]
             status, body = self.call(method, path, {} if method == "POST" else None)
             self.assertEqual(status, 404, (path, body))
@@ -150,6 +155,9 @@ class RelaySizeTests(unittest.TestCase):
         self.assertTrue(self.research.pause.paused)
         self.assertEqual(client.request("POST", ADMIN_ROUTES["resume"], {}), (200, {"paused": False}))
         self.assertEqual(client.request("GET", ADMIN_ROUTES["pause"])[0], 404)
+        status, reply = client.request("GET", ADMIN_ROUTES["rollbackReady"])
+        self.assertEqual(status, 200, reply)
+        self.assertIn("rollback_ready", reply)
 
     def test_a_full_run_refuses_another_follow_up(self):
         record = next(iter(self.store.records.values()))

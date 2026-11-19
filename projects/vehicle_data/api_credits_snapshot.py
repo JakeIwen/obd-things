@@ -19,7 +19,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import json
+import os
 from pathlib import Path
+import stat
 import threading
 
 from projects.vehicle_data.api_credits_contract import GRANTS, SNAPSHOT
@@ -112,15 +114,19 @@ def is_error_record(record):
 
 def _read_bounded_json(path):
     """The parsed file, or ``None`` when it is absent, oversized (read one byte past the bound), a
-    symlink or not JSON."""
-    path = Path(path)
+    symlink, not a regular file (a FIFO would block a read) or not JSON."""
     try:
-        if path.is_symlink():
-            return None
-        with path.open("rb") as handle:
-            raw = handle.read(SNAPSHOT["maxBytes"] + 1)
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
         return None
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            return None
+        raw = os.read(descriptor, SNAPSHOT["maxBytes"] + 1)
+    except OSError:
+        return None
+    finally:
+        os.close(descriptor)
     if len(raw) > SNAPSHOT["maxBytes"]:
         return None
     try:

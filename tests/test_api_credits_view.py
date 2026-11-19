@@ -37,7 +37,8 @@ def entry(started, settled, known, unknown=False, state=None):
 
 def worker_credits(entries=(), **extra):
     base = {"key_installed": True, "enabled": True, "until": iso(GRANTS[-1][1]), "entries": list(entries),
-            "latches": {"account": None, "models": {}}, "last_fallback": None, "ledger_full": False}
+            "latches": {"account": None, "models": {}}, "last_fallback": None, "ledger_full": False,
+            "ledger_available": True}
     return {**base, **extra}
 
 
@@ -98,6 +99,19 @@ class StoreTests(unittest.TestCase):
         self.file.unlink()
         restarted = SnapshotStore(self.file, self.cache, clock=lambda: NOW)
         self.assertEqual(restarted.current().fetched_at, first.fetched_at)
+
+    def test_a_fifo_or_a_symlink_at_the_snapshot_path_is_unusable_and_never_blocks(self):
+        import os
+        self.file.write_text(json.dumps(record()))
+        first = self.store.current()
+        self.file.unlink()
+        os.mkfifo(self.file)  # a plain read of this would wait for a writer forever
+        self.assertEqual(self.store.current(), first)
+        self.file.unlink()
+        target = Path(self.tmp.name, "real.json")
+        target.write_text(json.dumps(record()))
+        self.file.symlink_to(target)
+        self.assertEqual(self.store.current(), first)  # a link is never followed
 
     def test_no_file_and_no_cache_is_none_and_a_cache_write_failure_only_loses_the_cache(self):
         self.assertIsNone(self.store.current())
@@ -171,6 +185,35 @@ class ViewTests(unittest.TestCase):
         # an expired view outranks a latch
         both = view(now=GRANTS[-1][1], latches={"account": "exhausted", "models": {}})
         self.assertEqual(both["new_research"]["reason"], "expired")
+
+    def test_an_open_entry_that_started_after_the_fetch_is_uncertain_and_subtracted_in_full(self):
+        after = FETCHED + timedelta(minutes=1)
+        reply = view([entry(after, None, 0.3), entry(after, after + timedelta(seconds=5), 0.2)])
+        self.assertEqual(reply["uncertain_count"], 1)  # the settled one after the fetch is not uncertain
+        self.assertEqual(reply["unknown_spend_count"], 1)  # an open entry's spend is unknown
+        self.assertEqual(reply["spent_since_snapshot_usd"], 0.5)
+        self.assertEqual(reply["balance"]["grants"][0]["remaining_usd"], 74.5)
+
+    def test_an_unavailable_ledger_is_reported_and_bills_the_subscription_with_an_unknown_balance(self):
+        for extra in ({"ledger_available": False}, {"ledger_available": None}):
+            with self.subTest(extra=extra):
+                reply = view([entry(FETCHED + timedelta(minutes=1), None, 0.3)], **extra)
+                self.assertFalse(reply["ledger_available"])
+                self.assertEqual(reply["new_research"], {"billing": "subscription", "reason": "ledger_unavailable",
+                                                         "latched_models": []})
+                self.assertEqual(reply["balance"], {"state": "unknown", "total_usd": None, "as_of": None, "stale": False,
+                                                    "grants": []})
+        lacking = {k: v for k, v in worker_credits().items() if k != "ledger_available"}  # a worker without the field
+        reply = build_view(lacking, validate_snapshot(record(), NOW), NOW)
+        self.assertEqual((reply["ledger_available"], reply["new_research"]["reason"]), (False, "ledger_unavailable"))
+        self.assertTrue(view()["ledger_available"])
+
+    def test_billing_flips_exactly_at_until(self):
+        until = GRANTS[-1][1]
+        before = view(now=until - timedelta(seconds=1))
+        self.assertEqual((before["expired"], before["new_research"]["billing"]), (False, "api_credits"))
+        at = view(now=until)
+        self.assertEqual((at["expired"], at["new_research"]["reason"]), (True, "expired"))
 
     def test_no_snapshot_is_balance_unknown(self):
         reply = build_view(worker_credits(), None, NOW)

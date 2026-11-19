@@ -76,7 +76,14 @@
         "projects/vehicle_data/fuel_level.json",
         "projects/vehicle_data/fuel_range.json",
         "projects/vehicle_data/radar_service_alignment.json",
-        "projects/vehicle_data/radar_reference.json"
+        "projects/vehicle_data/radar_reference.json",
+        "projects/vehicle_data/api_credits.json",
+        "projects/vehicle_data/assistant_pairing.json",
+        "projects/vehicle_data/custom_warnings.json",
+        "projects/vehicle_data/drive_dtc.json",
+        "projects/vehicle_data/dtc_ignore.json",
+        "projects/vehicle_data/dtc_research.json",
+        "projects/vehicle_data/history_recent.json"
       ],
       "minimum_inputs": 0,
       "maximum_inputs": 0,

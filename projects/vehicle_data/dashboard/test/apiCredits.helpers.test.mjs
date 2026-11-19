@@ -13,7 +13,7 @@ const view = (over = {}) => ({
   new_research: { billing: "api_credits", reason: null, latched_models: [] },
   balance: { state: "known", total_usd: 14.5, as_of: "2026-11-20T17:56:00Z", stale: false,
     grants: [{ label: "Nov 25", expires: "2026-11-25T00:00:00Z", remaining_usd: 6.4 }, { label: "Dec 8", expires: "2026-12-08T00:00:00Z", remaining_usd: 8.1 }] },
-  spent_since_snapshot_usd: 0, uncertain_count: 0, unknown_spend_count: 0, last_fallback: null, ...over,
+  ledger_available: true, spent_since_snapshot_usd: 0, uncertain_count: 0, unknown_spend_count: 0, last_fallback: null, ...over,
 });
 const model = (v, hasAccessCode = true, nowMs = NOW) => creditsModel(v, { hasAccessCode, nowMs });
 
@@ -61,6 +61,21 @@ test("uncertain and unknown spend counts appear only when non-zero, each with an
   const q = model(view({ uncertain_count: 2, unknown_spend_count: 1 })).qualifiers;
   assert.deepEqual(q.map((x) => x.text), ["2 uncertain", "1 unknown spend"]);
   assert.ok(q.every((x) => x.info.length > 10));
+});
+
+test("uncertain spend is described as subtracted in full, so the balance may read low", () => {
+  const info = model(view({ uncertain_count: 1 })).qualifiers[0].info;
+  assert.match(info, /subtracted from the balance in full/);
+  assert.match(info, /lower than the real remainder/);
+  assert.doesNotMatch(info, /not subtracted/);
+});
+
+test("an unavailable spend ledger says so, and an available one adds nothing", () => {
+  const unavailable = model(view({ ledger_available: false, balance: { state: "unknown", total_usd: null, as_of: null, stale: false, grants: [] } }));
+  assert.equal(unavailable.balance.total, CARD_TEXT.unknown);
+  assert.deepEqual(unavailable.qualifiers.map((x) => x.text), [CARD_TEXT.ledgerUnavailable]);
+  assert.ok(unavailable.qualifiers[0].info.length > 10);
+  assert.deepEqual(model(view()).qualifiers, []);
 });
 
 test("subscription billing names its reason in plain words; latched models are listed", () => {

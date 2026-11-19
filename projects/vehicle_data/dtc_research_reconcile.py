@@ -106,6 +106,12 @@ class Reconciler:
                 state = manager.fence_unknown(attempt_id, manager.worker.attempt(attempt_id), manager.instance_id)
             except WorkerUnreachable:
                 return False
+            if not state.get("known"):
+                unsent = manager.unsent_fallback(run_id, attempt_id)  # a fenced fallback reservation continues
+                if unsent is None:
+                    return False
+                if unsent:
+                    continue
             if state.get("known") and state.get("outcome_state") == "held":
                 if not manager._finish(run_id, attempt_id, state["outcome"]):
                     return False  # not saved: keep it on the worker and try again

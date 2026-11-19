@@ -1,9 +1,10 @@
-"""Owner CLI for the research rollback controls: ``pause``, ``resume`` and ``drained``.
+"""Owner CLI for the research rollback controls: ``pause``, ``resume``, ``drained`` and ``rollback-ready``.
 
 Run as the advisor's user from the repo root:
-``python3 -m projects.vehicle_data.dtc_research_admin pause|resume|drained [--socket PATH]``.
+``python3 -m projects.vehicle_data.dtc_research_admin pause|resume|drained|rollback-ready [--socket PATH]``.
 It talks to the advisor's own Unix socket, on routes no web listener relays. ``drained`` exits 0
-when everything in flight has settled and 1 otherwise (repeat until it exits 0); the other verbs
+when everything in flight has settled and ``rollback-ready`` when, besides, credits are off and no
+API-created session is left; both exit 1 otherwise (repeat until 0); the other verbs
 exit 0 on success. The reply is printed as JSON. The procedure is docs/dtc-research.md
 "Promotional API credits"; this module holds no policy.
 """
@@ -17,7 +18,8 @@ from projects.vehicle_data.api_credits_contract import ADMIN_ROUTES
 
 DEFAULT_SOCKET = "/run/van-telemetry-advisor/api.sock"  # warning_chat.DEFAULT_SOCKET; not imported to keep the CLI light
 VERBS = {"pause": ("POST", ADMIN_ROUTES["pause"]), "resume": ("POST", ADMIN_ROUTES["resume"]),
-         "drained": ("GET", ADMIN_ROUTES["drained"])}
+         "drained": ("GET", ADMIN_ROUTES["drained"]), "rollback-ready": ("GET", ADMIN_ROUTES["rollbackReady"])}
+SUCCESS_FIELD = {"drained": "drained", "rollback-ready": "rollback_ready"}  # the reply field that must be true
 
 
 def run(verb, socket_path, client_factory=TelemetryClient, out=sys.stdout):
@@ -31,7 +33,7 @@ def run(verb, socket_path, client_factory=TelemetryClient, out=sys.stdout):
     print(json.dumps(reply, sort_keys=True), file=out)
     if status != 200:
         return 2
-    return 0 if verb != "drained" or reply.get("drained") is True else 1
+    return 0 if verb not in SUCCESS_FIELD or reply.get(SUCCESS_FIELD[verb]) is True else 1
 
 
 def main(argv=None):

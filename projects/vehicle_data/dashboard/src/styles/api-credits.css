@@ -2,7 +2,7 @@
 .api-credits__total { font-size: 28px; font-weight: 700; color: var(--text); }
 .api-credits__stale { color: var(--credits-stale); font-weight: 700; }
 .api-credits__grants { margin: 8px 0; }
-.api-credits__line { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; }
+.api-credits__line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-bottom: 4px; }
 .api-credits__text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .api-credits__line .popover { flex: 1 0 100%; margin: 4px 0; padding: 8px 12px; }
 .api-credits__i {

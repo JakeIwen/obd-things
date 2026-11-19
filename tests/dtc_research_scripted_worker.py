@@ -69,7 +69,7 @@ class ScriptedWorker:
         self.extra_attempts = {}  # attempt id -> state reply, for jobs this advisor never launched
         self.credits_reply = {"key_installed": True, "enabled": True, "until": "2026-12-08T00:00:00Z",
                               "entries": [], "latches": {"account": None, "models": {}}, "last_fallback": None,
-                              "ledger_full": False, "api_sessions": 0}
+                              "ledger_full": False, "ledger_available": True, "api_sessions": 0}
         self.job = None
 
     def _check(self):

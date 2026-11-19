@@ -30,7 +30,8 @@
   "adminRoutes": {
     "pause": "/admin/dtc-research/pause",
     "resume": "/admin/dtc-research/resume",
-    "drained": "/admin/dtc-research/drained"
+    "drained": "/admin/dtc-research/drained",
+    "rollbackReady": "/admin/dtc-research/rollback-ready"
   },
   "paths": {
     "keyFile": "/var/lib/vanresearch/anthropic-api-key",
