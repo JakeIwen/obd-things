@@ -190,6 +190,24 @@ disks have no reason to be on USB 2.0).
 - Undo: `install.sh uninstall`, then `echo 0 | sudo tee
   /sys/bus/usb/devices/1-1/1-1:1.0/1-1-port2/disable`. Do that only after the faulty hub or
   cable is out of the chain; while the watcher runs it undoes a manual `0` at its next pass.
+- Open as of 2026-11-23, the first boot with the block installed (installed 2026-11-22 21:14
+  US/Mountain; the Pi had been up since 19:47 that evening). A boot is the first time the watcher
+  has to cut an enumerated chain. Whichever session first finds `uptime -s` later than the
+  install time runs the check and replaces this bullet with the dated result: `install.sh status`
+  exits 0 with `block: held`; `journalctl -u vanpi-usb2-disk-hub-off -b` shows one or more
+  "powering it off" warnings followed by "off again" (an error line, or an ntfy "vanpi USB 2.0
+  block FAILED", is a failure); `journalctl -k -b | grep -c 'usb 1-1'` stays flat after the first
+  minute. The owner reboots when he chooses (`sudo /home/pi/scripts/safe_reboot.sh`); agents do
+  not reboot the Pi for this.
+- Waiting on the owner (physical, not urgent while the block holds; told 2026-11-22 and
+  2026-11-23, no answer recorded): port 2 of the deepest disk hub (`1-1.2.4.4`) is the faulty
+  one, since the failures stayed on it after the Seagate was moved to port 3, which cleared that
+  disk, its cable and enclosure. Anything still plugged into port 2 should be unplugged, and if
+  it is empty that hub has a bad port and should come out of the chain. At 19:22 on 2026-11-22
+  the first disk hub's own USB 2.0 link to the Pi's port 2 also failed, so that hub, its
+  upstream cable or the Pi port may be involved too. The card reader the block cuts off needs
+  moving to Pi port 1 or 3 if he uses it. Unrelated to USB 2.0: the WD Elements 6 TB logged 13
+  `critical medium error` reads on 2026-11-22.
 
 ## CAN adapter USB drop (Board A) and automatic recovery
 
