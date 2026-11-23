@@ -144,10 +144,10 @@ socket or replace the unit.
   to the checkout, watcher enabled and active, block held); `install.sh uninstall` removes them,
   verifies it and exits 1 when anything is left.
   - `vanpi-usb2-disk-hub-off` (Python, standard library) → `/usr/local/sbin/`, run as root by
-    `vanpi-usb2-disk-hub-off.service` (`watch`). Every 5 s for its first minute, then every 30 s,
+    `vanpi-usb2-disk-hub-off.service` (`watch`). Every 5 s for its first minute, then every 10 s,
     it checks that `/sys/bus/usb/devices/1-1/1-1:1.0/1-1-port2/disable` reads `1` and that
-    nothing is enumerated at `1-1.2`. When either fails it writes `1` (three attempts, each
-    confirmed twice), which disconnects whatever enumerated behind the port and stops detection
+    nothing is enumerated at `1-1.2`. When either fails it writes `1` (five attempts 2 s apart,
+    each confirmed twice), which disconnects whatever enumerated behind the port and stops detection
     on it, and it sends one ntfy per boot when the port cannot be held off; the sender runs as
     `pi`, never as root.
   - It is the only writer on purpose. A single write at boot is not enough: a connection event
@@ -162,8 +162,14 @@ socket or replace the unit.
     mounted, is swap, is held by another block device or cannot be inspected or claimed makes
     it refuse and alert. It cuts only storage it knows: `KNOWN_STORAGE_DISKS` in the program
     lists each model with the number of disks it registers (the Genesys 05e3:0764 reader: two,
-    one per card slot), and the write waits until all of them are listed, because the kernel
-    registers disks one by one, a second or more after the USB probe. Any other storage behind
+    one per card slot), and the write waits for all of them to be listed, because the kernel
+    registers disks one by one, a second or more after the USB probe. That wait is bounded
+    (owner approval 2026-11-23): a reader whose probe is failing never lists its disks, so when
+    three attempts in a row see the identical listing with a known reader still short of its
+    disks, the third claims the disks that are listed and writes. A disk of that reader that
+    the kernel registers and something mounts between the last listing and the write is then
+    disconnected unclaimed (udisks2 and the desktop file manager can automount a card); a
+    reader in that state is not working anyway. Any other storage behind
     the port, such as a disk that fell back to USB 2.0, is never disconnected: it refuses and
     alerts, and a person decides. It then lists the storage behind the port again, and writes
     nothing on that attempt if a disk or storage interface appeared, left or changed while it
@@ -208,11 +214,14 @@ socket or replace the unit.
   - 03:15:43: the watcher logged "the USB 2.0 block holds again" without having logged a write
     of its own; how the port returned to off is not established.
   This is the third time the CAN adapters dropped with the chain on USB 2.0 and the first with
-  the block installed. Open problem, not fixed: the watcher cannot cut a chain whose known
-  reader never finishes registering its disks. Until the faulty socket is retired or the unit
-  replaced, or the watcher gains a bound on that wait (a change to a root-run program, to be
-  reviewed as such), the block reduces the exposure but does not remove it. From 03:18 to 13:41
-  that day, with the block held, the kernel logged no USB line at all.
+  the block installed. The watcher of that night could not cut a chain whose known reader never
+  finished registering its disks, and it looked only every 30 s; the bounded wait and the 10 s
+  interval described above are the answer to both. With them a reopened port is cut about 15 s
+  after it reopens (up to 10 s to notice, 4 s of unchanged listings), against the 100 s the
+  collapse took that night. That margin rests on one observation, and the bounded wait has run
+  only against a scratch sysfs tree (`tests/test_usb2_disk_hub_off.py`), never against the real
+  stuck reader. From 03:18 to 13:41 that day, with the block held, the kernel logged no USB
+  line at all.
 - The fault's pattern, reconciled from the kernel logs by a Mac session on 2026-11-23 (not
   re-derived here): the failing port enumerates a low-speed device that is not there, about four
   attempts a second, alternating `descriptor read/64, error -32` and `not accepting address,
@@ -229,9 +238,12 @@ socket or replace the unit.
 - Limits: xHCI is built into the kernel, so at boot the chain enumerates until the watcher's
   first pass, when the multi-user services start. A USB 2.0-only device anywhere in the disk
   hub chain stops working (one was present on 2026-11-22: a Genesys 05e3:0764 "USB Storage"
-  reader on the first hub's port 1, holding two 62.5 GB cards); plug such a device into Pi port
-  1 or 3 instead. Do not
-  plug the CAN hub into port 2.
+  reader on the first hub's port 1, holding two 62.5 GB cards); such a device needs one of the
+  Pi's own sockets instead. Ports 1 and 2 of the onboard hub are the USB 2.0 halves of the two
+  blue sockets and ports 3 and 4 are the two black ones, so a blue socket with a USB 3.0 device
+  in it is not free. On 2026-11-23 none was free: a USB 3.0 stick in port 1's socket, the disk
+  hub in port 2's, and the CAN hub and (at times) the owner's Galaxy tablet in the black ones.
+  Do not plug the CAN hub into port 2.
 - Check: `projects/vehicle_data/usb2_block/install.sh status`, or
   `/usr/local/sbin/vanpi-usb2-disk-hub-off status` (prints `held`). The watcher's journal
   (`journalctl -u vanpi-usb2-disk-hub-off`) is silent while the block holds and has a warning
@@ -257,7 +269,8 @@ socket or replace the unit.
   whether an empty socket still fails is not known, because the block has kept the USB 2.0 side
   off since. At 19:22 on 2026-11-22 the first disk hub's own USB 2.0 link to the Pi's port 2
   also failed, so the unit's upstream cable or the Pi port may be involved too. The card reader
-  the block cuts off needs moving to Pi port 1 or 3 if he uses it.
+  the block cuts off works only on a free Pi socket (see Limits); if he does not use it,
+  unplugging it removes the one device that has stalled the watcher.
 - Unrelated to USB 2.0, also the owner's: the WD Elements 6 TB (`/mnt/bigboi`) has a disk fault,
   not a cable fault. SMART shows 12 pending sectors and no CRC errors, and the kernel's medium
   errors repeat at the same three addresses on every mount (13 on 2026-11-22; SMART read by a
