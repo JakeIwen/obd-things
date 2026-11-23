@@ -75,11 +75,15 @@ def interface_state(channel):
         capture_output=True,
         text=True,
     )
-    if result.returncode != 0:
+    return parse_interface_state(channel, result.stdout if result.returncode == 0 else None)
+
+
+def parse_interface_state(channel: str, out: str | None) -> InterfaceState:
+    """Parse one ``ip -details link show`` reply; None denotes a failed lookup."""
+    if out is None:
         return InterfaceState(
             channel, False, False, None, False, None, None, None, None
         )
-    out = result.stdout
     link_flags = re.search(r"^\s*\d+:\s+[^\n]*<([^>\n]*)>", out, re.MULTILINE)
     flags = set(link_flags.group(1).split(",")) if link_flags else set()
     bitrate_match = re.search(r"\bbitrate\s+(\d+)\b", out)
