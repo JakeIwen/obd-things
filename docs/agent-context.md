@@ -153,11 +153,14 @@ disks have no reason to be on USB 2.0).
     on every disk behind the port, whatever capacity the disk reports, checks that each opened
     node is the device sysfs describes, and holds the claims across the write. A disk that is
     mounted, is swap, is held by another block device or cannot be inspected or claimed makes
-    it refuse and alert. It then lists the storage behind the port again, and writes nothing on
-    that attempt if a disk or storage interface appeared, left or changed while it was claiming.
-    An unused disk, or a card reader with no card, does not stop the power-off. What is left
-    is the instant between the second listing and the write, in which a device would have to
-    enumerate, be probed and be mounted.
+    it refuse and alert. A USB storage interface whose disk has not appeared yet is a disk on
+    its way (the kernel registers the disk a second or more after the USB probe), so nothing is
+    written while one exists. It then lists the storage behind the port again, and writes
+    nothing on that attempt if a disk or storage interface appeared, left or changed while it
+    was claiming. An unused disk, or a card reader with no card, does not stop the power-off.
+    Two listings are not a lock on the USB topology: a device whose storage interface appears
+    after the second listing, and whose disk is registered and mounted before the kernel
+    carries out the write, is not covered.
   - A hub at `1-1` whose port control is missing counts as a failure after three passes, at
     once when something is enumerated behind the port. It writes nothing but that attribute
     and its alert marker under `/run`, and never touches another port or a hub that is not

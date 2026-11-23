@@ -106,9 +106,10 @@ def release(claims):
 def storage_behind_port():
     """A comparable snapshot of what is, or is about to be, a disk behind the port.
 
-    (USB mass-storage interfaces, {disk name: (device number, sectors)}). A storage interface
-    exists before its disk does, so it is part of the snapshot. Raises OSError when sysfs
-    cannot be listed.
+    (USB mass-storage interfaces, {disk name: (device number, sectors, real sysfs path)}). A
+    storage interface exists before its disk does (the kernel registers the disk a second or
+    more after the USB probe), so it is part of the snapshot. Raises OSError when sysfs cannot
+    be listed.
     """
     interfaces = []
     for entry in SYSFS.iterdir():
@@ -120,8 +121,17 @@ def storage_behind_port():
     for entry in SYS_BLOCK.iterdir():
         real = os.path.realpath(str(entry))
         if BEHIND_PORT in real + "/":
-            disks[entry.name] = (read_attr(pathlib.Path(real, "dev")), read_attr(pathlib.Path(real, "size")))
+            disks[entry.name] = (read_attr(pathlib.Path(real, "dev")), read_attr(pathlib.Path(real, "size")), real)
     return sorted(interfaces), disks
+
+
+def interface_without_disk(snapshot):
+    """A storage interface in the snapshot that no listed disk sits behind, or None."""
+    interfaces, disks = snapshot
+    for interface in interfaces:
+        if not any("/%s/" % interface in real for _number, _sectors, real in disks.values()):
+            return interface
+    return None
 
 
 def claim(name, device_number):
@@ -157,10 +167,12 @@ def power_off(log):
     from attaching over USB 2.0, not to pull one that is in use (a disk can fall back to USB 2.0
     and be mounted before a pass sees it). So every disk behind the port is claimed first and
     the claims are held across the write; a disk that cannot be claimed or inspected is REFUSED.
-    The claims cover the disks of one snapshot, so the snapshot is taken again after claiming:
-    if storage appeared, left or changed meanwhile, nothing is written (UNSETTLED) and the caller
-    tries again. What remains is the instant between that second snapshot and the write, in
-    which a device would have to enumerate, be probed and be mounted.
+    A storage interface whose disk has not appeared yet is a disk on its way, so nothing is
+    written while one exists (UNSETTLED; the caller tries again). The claims cover the disks of
+    one snapshot, so the snapshot is taken again after claiming: if storage appeared, left or
+    changed meanwhile, nothing is written either. Two listings are not a lock on the USB
+    topology: a device whose storage interface appears after the second listing, and whose disk
+    is registered and mounted before the kernel carries out the write, is not covered.
     """
     claims = []
     try:
@@ -168,7 +180,10 @@ def power_off(log):
             before = storage_behind_port()
         except OSError as error:
             return REFUSED, "the storage behind it cannot be listed (%s)" % error.strerror
-        for name, (device_number, _sectors) in sorted(before[1].items()):
+        pending = interface_without_disk(before)
+        if pending:
+            return UNSETTLED, "storage interface %s behind it has no disk yet" % pending
+        for name, (device_number, _sectors, _real) in sorted(before[1].items()):
             if device_number is None:
                 return REFUSED, "%s behind it cannot be inspected" % name
             descriptor, why = claim(name, device_number)
@@ -194,6 +209,7 @@ def enforce(log):
     """One pass: (result, reason). Only a port read back as held, twice, counts as powered off."""
     state = assess()
     attempt = 0
+    unsettled = ""
     while True:
         if state == "held":
             return HELD, ""
@@ -211,7 +227,7 @@ def enforce(log):
             log(ERROR, reason)
             return FAILED, reason
         if attempt == ATTEMPTS:
-            reason = "%s is still on after %d attempts (%s)" % (PORT_NAME, ATTEMPTS, state)
+            reason = "%s is still on after %d attempts (%s)%s" % (PORT_NAME, ATTEMPTS, state, unsettled)
             log(ERROR, reason)
             return FAILED, reason
         attempt += 1
@@ -222,6 +238,7 @@ def enforce(log):
             log(ERROR, reason)
             return FAILED, reason
         if outcome == UNSETTLED:
+            unsettled = "; " + why
             log(WARNING, "%s; nothing written on attempt %d" % (why, attempt))
         time.sleep(SETTLE_SECONDS)
         state = assess()

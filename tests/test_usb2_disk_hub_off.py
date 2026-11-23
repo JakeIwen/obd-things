@@ -66,7 +66,10 @@ class Tree:
 
         Its node is a regular file, whose device number reads as 0:0.
         """
-        real = self.root / "real" / "usb1" / "1-1" / "1-1.2" / "1-1.2.1" / "block" / name
+        real = (
+            self.root / "real" / "usb1" / "1-1" / "1-1.2" / "1-1.2.1" / "1-1.2.1:1.0" / "host0"
+            / "block" / name
+        )
         real.mkdir(parents=True)
         (real / "size").write_text(f"{sectors}\n")
         if device_number is not None:
@@ -74,6 +77,12 @@ class Tree:
         (self.sys_block / name).symlink_to(real)
         if node:
             (self.dev / name).write_text("")
+
+    def attach_storage_interface(self) -> None:
+        """The USB mass-storage interface attach_disk's disks sit behind."""
+        interface = self.sysfs / "1-1.2.1:1.0"
+        interface.mkdir()
+        (interface / "bInterfaceClass").write_text("08\n")
 
     def run(self, verb: str) -> subprocess.CompletedProcess:
         return subprocess.run(
@@ -242,6 +251,24 @@ def test_a_disk_that_appears_while_disks_are_claimed_is_never_cut_unclaimed(tree
     assert tree.disable.read_text().strip() == "0"
     assert "changed while its disks were being claimed; nothing written on attempt 1" in stderr
     assert "sdb behind it cannot be claimed" in stderr
+
+
+def test_a_storage_interface_whose_disk_has_not_appeared_stops_the_power_off(tree):
+    # The kernel registers a disk a second or more after its USB interface is probed.
+    tree.attach_storage_interface()
+    result = tree.run("check")
+    assert result.returncode == 1
+    assert tree.disable.read_text().strip() == "0"
+    assert result.stderr.count("storage interface 1-1.2.1:1.0 behind it has no disk yet; nothing written") == 3
+    assert "still on after 3 attempts" in result.stderr
+
+
+def test_a_storage_interface_with_its_disk_claimed_does_not_stop_the_power_off(tree):
+    tree.attach_storage_interface()
+    tree.attach_disk("sdz")
+    result = tree.run("check")
+    assert result.returncode == 0
+    assert tree.disable.read_text().strip() == "1"
 
 
 def test_a_disk_elsewhere_is_not_claimed(tree):
