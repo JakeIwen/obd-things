@@ -373,7 +373,7 @@ def _restoration_is_latched(channel):
     if _restoration_failed:
         return True
     return any(
-        item.get("name") == RESTORATION_INHIBIT_NAME
+        can_operation_state.inhibit_is_for(item, RESTORATION_INHIBIT_NAME)
         for item in _active_inhibits(channel)
         if isinstance(item, dict)
     )

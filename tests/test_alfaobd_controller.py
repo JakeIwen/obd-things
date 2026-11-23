@@ -1,11 +1,34 @@
 import contextlib
+import fcntl
 import io
+import json
 from types import SimpleNamespace
 import unittest
 from unittest import mock
 
 from lib.alfaobd_adb import SAFE_ACTIONS, UiState, WaitOutcome
 from tools import alfaobd_controller as controller
+
+
+def test_campaign_commands_report_and_end_fallback_inhibit(tmp_path, monkeypatch, capsys):
+    state = controller.can_operation_state
+    monkeypatch.setattr(state, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(state, "current_boot_id", lambda: "12345678-1234-abcd-1234-123456789abc")
+    monkeypatch.setattr(state, "WRITER_LOCK_WAIT_SECONDS", 0.05)
+    with mock.patch.object(controller, "_live_objects") as live:
+        with (tmp_path / ".inhibit-writers.lock").open("wb+") as holder:
+            fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            assert controller.main(["campaign-begin"]) == 0
+        fallback = json.loads(capsys.readouterr().out)
+        assert fallback["name"].startswith("nolock.")
+        assert fallback["stands_for"] == controller.ALFA_INHIBIT_NAME
+        assert controller.main(["campaign-status"]) == 0
+        assert json.loads(capsys.readouterr().out)["active_inhibits"] == [fallback]
+        assert controller.main(["campaign-end"]) == 0
+        assert json.loads(capsys.readouterr().out)["removed"] is True
+        assert controller.main(["campaign-status"]) == 0
+        assert json.loads(capsys.readouterr().out)["active_inhibits"] == []
+    live.assert_not_called()
 
 
 class AlfaCampaignGateTests(unittest.TestCase):

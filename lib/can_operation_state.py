@@ -12,13 +12,20 @@ physical-topology assumptions. Missing, malformed, or unknown topology never aut
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+import errno
+import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import tempfile
+import time
+from typing import Literal
 
 from lib import diagnostic_safety
 
@@ -26,6 +33,27 @@ from lib import diagnostic_safety
 STATE_DIR = Path(diagnostic_safety.LOCK_DIR) / "operation-state"
 VALID_BUSES = frozenset(("c-can", "b-can", "can-ch", "unknown"))
 SAFE_NAME = re.compile(r"[A-Za-z0-9_.-]+")
+WRITER_LOCK_WAIT_SECONDS = 2.0
+WRITER_LOCK_END_WAIT_SECONDS = 10.0
+_WRITER_LOCK_POLL_SECONDS = 0.02
+_WRITER_LOCK_NAME = ".inhibit-writers.lock"
+_FALLBACK_PREFIX = "nolock."
+_FALLBACK_BOOT = re.compile(r"[0-9a-fA-F]{32}")
+_FALLBACK_FILE = re.compile(r"inhibit-nolock\.([0-9a-fA-F]{32})\.[0-9a-f]{64}\.json")
+_EndOutcome = Literal["removed", "mismatch", "unavailable", "expired", "partial"]
+_LockOutcome = Literal["held", "unavailable", "expired"]
+
+
+class InhibitStateBusy(OSError):
+    """The writer lock could not be acquired; no inhibits were ended."""
+
+
+@dataclass(frozen=True)
+class EndResult:
+    outcome: _EndOutcome
+    removed: tuple[str, ...] = ()
+    durable: bool = True
+    detail: str = ""
 
 
 @dataclass(frozen=True)
@@ -173,18 +201,79 @@ def load_topology(channel: str) -> TopologyState:
     )
 
 
+@contextmanager
+def _writer_lock(
+    deadline_monotonic: float, *, monotonic: Callable[[], float] = time.monotonic,
+) -> Iterator[_LockOutcome]:
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(STATE_DIR / _WRITER_LOCK_NAME, os.O_CREAT | os.O_RDWR, 0o640)
+    except OSError:
+        yield "unavailable"
+        return
+    try:
+        while monotonic() <= deadline_monotonic:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                if exc.errno not in (errno.EACCES, errno.EAGAIN):
+                    yield "unavailable"
+                    return
+            else:
+                yield "held" if monotonic() <= deadline_monotonic else "expired"
+                return
+            remaining = deadline_monotonic - monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(_WRITER_LOCK_POLL_SECONDS, remaining))
+        yield "expired"
+    finally:
+        os.close(descriptor)
+
+
+def _canonical_inhibit_path(name: str) -> Path:
+    path = _inhibit_path(name)
+    if name.startswith(_FALLBACK_PREFIX):
+        raise ValueError(f"reserved inhibit name: {name!r}")
+    return path
+
+
+def _boot_component(boot_id: str) -> str | None:
+    component = boot_id.replace("-", "")
+    return component if _FALLBACK_BOOT.fullmatch(component) else None
+
+
+def _fallback_name(name: str, boot_component: str) -> str:
+    return f"{_FALLBACK_PREFIX}{boot_component}.{hashlib.sha256(name.encode('ascii')).hexdigest()}"
+
+
+def _prune_old_fallbacks(boot_component: str | None) -> None:
+    if boot_component is None:
+        return
+    # A current-boot fallback writer never publishes to any of these paths.
+    for path in STATE_DIR.glob(f"inhibit-{_FALLBACK_PREFIX}*.json"):
+        match = _FALLBACK_FILE.fullmatch(path.name)
+        if match and match[1].lower() != boot_component.lower():
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                # Housekeeping must not prevent a current-boot safety write.
+                continue
+
+
 def begin_inhibit(
     name: str,
     *,
     channel: str,
     reason: str,
 ) -> dict[str, object]:
-    name = _validate_name(name, "inhibit name")
+    path = _canonical_inhibit_path(name)
     channel = _validate_inhibit_channel(channel)
     reason = _bounded_text(reason, "reason")
     boot_id = current_boot_id()
     if not boot_id:
         raise RuntimeError("cannot establish current boot id")
+    boot_component = _boot_component(boot_id)
     payload: dict[str, object] = {
         "name": name,
         "channel": channel,
@@ -192,17 +281,122 @@ def begin_inhibit(
         "boot_id": boot_id,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    _atomic_json(_inhibit_path(name), payload)
+    with _writer_lock(time.monotonic() + WRITER_LOCK_WAIT_SECONDS) as lock:
+        if lock == "held":
+            _atomic_json(path, payload)
+            _prune_old_fallbacks(boot_component)
+            return payload
+    if boot_component is None:
+        raise RuntimeError("cannot establish current boot id for fallback inhibit")
+    fallback = _fallback_name(name, boot_component)
+    payload.update(
+        name=fallback, stands_for=name, channel="*",
+        reason=f"{reason} [written without the inhibit writer lock; requested channel {channel}]",
+    )
+    _atomic_json(_inhibit_path(fallback), payload)
     return payload
 
 
-def end_inhibit(name: str) -> bool:
-    path = _inhibit_path(name)
+def _unlink_inhibit(path: Path) -> bool:
     try:
         path.unlink()
     except FileNotFoundError:
         return False
     return True
+
+
+def end_inhibit(name: str) -> bool:
+    path = _inhibit_path(name)
+    with _writer_lock(time.monotonic() + WRITER_LOCK_END_WAIT_SECONDS) as lock:
+        if lock != "held":
+            raise InhibitStateBusy("cannot acquire inhibit writer lock; no inhibits ended")
+        boot_component = _boot_component(current_boot_id())
+        removed = _unlink_inhibit(path)
+        if boot_component is not None and not name.startswith(_FALLBACK_PREFIX):
+            removed_fallback = _unlink_inhibit(_inhibit_path(_fallback_name(name, boot_component)))
+            removed = removed or removed_fallback
+        _prune_old_fallbacks(boot_component)
+        return removed
+
+
+def inhibit_is_for(record: Mapping[str, object], name: str) -> bool:
+    return record.get("name") == name or record.get("stands_for") == name
+
+
+def _same_boot_inhibits(
+    boot_id: str, invalid_channel: str = "*",
+) -> Iterator[tuple[Path, dict[str, object]]]:
+    # Unlike glob, iterdir reports an unreadable directory rather than an empty match.
+    try:
+        entries = sorted(STATE_DIR.iterdir())
+    except FileNotFoundError:
+        return
+    for path in entries:
+        if not (path.name.startswith("inhibit-") and path.name.endswith(".json")):
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            payload = None
+        if not isinstance(payload, dict):
+            yield path, {"name": path.name, "channel": invalid_channel, "invalid": True}
+        elif payload.get("boot_id") == boot_id:
+            yield path, payload
+
+
+def _inhibit_difference(expected_paths: Mapping[Path, dict], boot_id: str) -> str | None:
+    unmatched = dict(expected_paths)
+    for path, payload in _same_boot_inhibits(boot_id):
+        if payload.get("invalid") is True or unmatched.pop(path, None) != payload:
+            return path.name
+    return next((path.name for path in unmatched), None)
+
+
+def _end_compared_inhibits(
+    paths: Mapping[str, Path], directory_fd: int, deadline_monotonic: float,
+    monotonic: Callable[[], float],
+) -> EndResult:
+    removed: list[str] = []
+    for name, path in paths.items():
+        if monotonic() > deadline_monotonic:
+            return EndResult("partial" if removed else "expired", tuple(removed), detail=name)
+        try:
+            os.unlink(path)
+        except OSError as exc:
+            outcome = "mismatch" if isinstance(exc, FileNotFoundError) else "unavailable"
+            return EndResult("partial" if removed else outcome, tuple(removed), detail=name)
+        removed.append(name)
+        try:
+            os.fsync(directory_fd)
+        except OSError as exc:
+            outcome = "partial" if len(removed) < len(paths) else "removed"
+            return EndResult(outcome, tuple(removed), durable=False, detail=str(exc))
+    return EndResult("removed", tuple(removed))
+
+
+def end_inhibits_if_exactly(
+    expected: Mapping[str, dict], *, deadline_monotonic: float, monotonic=time.monotonic,
+) -> EndResult:
+    """End only the exact current-boot record set, in the supplied order."""
+    paths = {name: _canonical_inhibit_path(name) for name in expected}
+    expected_paths = {path: expected[name] for name, path in paths.items()}
+    with _writer_lock(deadline_monotonic, monotonic=monotonic) as lock:
+        if lock != "held":
+            return EndResult(lock)
+        boot_id = current_boot_id()
+        if not boot_id:
+            return EndResult("unavailable", detail="cannot establish current boot id")
+        try:
+            difference = _inhibit_difference(expected_paths, boot_id)
+            if difference is not None:
+                return EndResult("mismatch", detail=difference)
+            directory_fd = os.open(STATE_DIR, os.O_RDONLY | os.O_DIRECTORY)
+        except OSError as exc:
+            return EndResult("unavailable", detail=str(exc))
+        try:
+            return _end_compared_inhibits(paths, directory_fd, deadline_monotonic, monotonic)
+        finally:
+            os.close(directory_fd)
 
 
 def active_inhibits(channel: str) -> tuple[dict[str, object], ...]:
@@ -211,49 +405,23 @@ def active_inhibits(channel: str) -> tuple[dict[str, object], ...]:
     if not boot_id:
         return ({"name": "boot-id-unavailable", "channel": channel},)
     try:
-        entries = sorted(STATE_DIR.glob("inhibit-*.json"))
+        return tuple(
+            payload for _, payload in _same_boot_inhibits(boot_id, invalid_channel=channel)
+            if payload.get("channel") in (channel, "*")
+        )
     except OSError:
         return ({"name": "inhibit-state-unreadable", "channel": channel},)
-    active: list[dict[str, object]] = []
-    for path in entries:
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            active.append({"name": path.name, "channel": channel, "invalid": True})
-            continue
-        if not isinstance(payload, dict):
-            active.append({"name": path.name, "channel": channel, "invalid": True})
-            continue
-        if payload.get("boot_id") != boot_id:
-            continue
-        if payload.get("channel") in (channel, "*"):
-            active.append(payload)
-    return tuple(active)
 
 
 def all_active_inhibits() -> tuple[dict[str, object], ...]:
     """Return every same-boot inhibit without inventing a netdev identity."""
-
     boot_id = current_boot_id()
     if not boot_id:
         return ({"name": "boot-id-unavailable", "channel": "*"},)
     try:
-        entries = sorted(STATE_DIR.glob("inhibit-*.json"))
+        return tuple(payload for _, payload in _same_boot_inhibits(boot_id))
     except OSError:
         return ({"name": "inhibit-state-unreadable", "channel": "*"},)
-    active: list[dict[str, object]] = []
-    for path in entries:
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            active.append({"name": path.name, "channel": "*", "invalid": True})
-            continue
-        if not isinstance(payload, dict):
-            active.append({"name": path.name, "channel": "*", "invalid": True})
-            continue
-        if payload.get("boot_id") == boot_id:
-            active.append(payload)
-    return tuple(active)
 
 
 def status(channel: str) -> dict[str, object]:

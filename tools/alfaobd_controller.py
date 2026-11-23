@@ -202,7 +202,7 @@ def main(argv: list[str] | None = None) -> int:
                         "active_inhibits": [
                             item
                             for item in can_operation_state.all_active_inhibits()
-                            if item.get("name") == ALFA_INHIBIT_NAME
+                            if can_operation_state.inhibit_is_for(item, ALFA_INHIBIT_NAME)
                         ],
                         "scope": "global; no ephemeral SocketCAN topology is recorded",
                     },
