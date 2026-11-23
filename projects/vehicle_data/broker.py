@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import pathlib
@@ -12,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -57,6 +59,8 @@ from projects.vehicle_data.display_contract import DISPLAY_SOURCES, display_resu
 from projects.vehicle_data.bcan_companion import METRICS as BCAN_COMPANION_METRICS, METRICS_BY_FRAME
 from projects.vehicle_data.receive_watch import ReceiveSilenceWatch
 from projects.vehicle_data.can_availability import CanAvailability
+from projects.vehicle_data.usb_recovery_contract import ACTIVE_DRIVE, AUXILIARY_DRIVE, OWNED_INHIBITS
+from projects.vehicle_data.usb_recovery_model import BrokerGates
 from projects.vehicle_data.wake_state import wake_state_conflicts
 from projects.vehicle_data.vehicle_state import (
     accepts_state_observation, initial_vehicle_state, needs_current_authority, passive_vehicle_state,
@@ -77,8 +81,8 @@ ACTIVE_DRIVE_HELPER = "projects.vehicle_data.active_drive"
 BCAN_AUXILIARY_HELPER = "projects.vehicle_data.bcan_auxiliary"
 MAX_ACTIVE_EVENT_BYTES = 64 * 1024
 SUPPLEMENTAL_REFRESH_INTERVAL_SECONDS = 60.0
-ACTIVE_DRIVE_RESTORATION_INHIBIT = "vehicle-data-restoration-failed"
-AUXILIARY_DRIVE_RESTORATION_INHIBIT = "vehicle-data-bcan-restoration-failed"
+ACTIVE_DRIVE_RESTORATION_INHIBIT = OWNED_INHIBITS[ACTIVE_DRIVE]
+AUXILIARY_DRIVE_RESTORATION_INHIBIT = OWNED_INHIBITS[AUXILIARY_DRIVE]
 AUXILIARY_ODOMETER_METRIC = "vehicle.odometer"
 ACTIVE_DRIVE_SOURCES = frozenset(
     {
@@ -242,6 +246,7 @@ class ActiveDriveSupervisor:
         self._lock = threading.Lock()
         self._process = None
         self._launch = None
+        self.last_grant: StartupGrant | None = None
 
     def _note_stall(self, stalled: float, credit: float) -> None:
         """Count a tolerated stall and leave one line in the service journal."""
@@ -338,6 +343,7 @@ class ActiveDriveSupervisor:
             )
         try:
             grant = StartupGrant()
+            self.last_grant = grant
         except OSError as exc:
             return None, None, {
                 "type": "final",
@@ -749,6 +755,7 @@ class TelemetryBroker:
         last_readings=None,
         drive_dtc=None,
         fuel_floor_store=None,
+        usb_drop_recovery=None,
     ):
         if acquirer is None:
             raise ValueError(
@@ -767,6 +774,10 @@ class TelemetryBroker:
             raise ValueError("history interval must be positive")
         self.passive_powertrain_reader = passive_powertrain_reader
         self.display_receiver = display_receiver
+        self.usb_drop_recovery = usb_drop_recovery
+        self._auxiliary_thread: threading.Thread | None = None
+        self._recovery_armed: set[str] = set()
+        self._recent_recovery_errors: deque[str] = deque(maxlen=32)
         self._configure_drive_helpers(
             active_drive_supervisor, active_drive_enabled,
             auxiliary_drive_supervisor, auxiliary_drive_enabled, drive_dtc=drive_dtc,
@@ -918,6 +929,7 @@ class TelemetryBroker:
         self._recent_data_quality: list[dict[str, object]] = []
         self._vehicle_state_observed_monotonic: float | None = None
         self._vehicle_state: dict[str, object] = initial_vehicle_state()
+        self._bind_usb_drop_recovery()
 
     def _configure_drive_helpers(
         self, active_drive_supervisor, active_drive_enabled,
@@ -2045,6 +2057,8 @@ class TelemetryBroker:
                 self._active_drive["helper_pid"] = event["pid"]
             if event_type == "final":
                 self._active_drive["helper_pid"] = None
+        if event_type == "status" and interface_mode == "armed_diagnostic":
+            self._note_recovery_armed(ACTIVE_DRIVE, event.get("pid"))
         if event_type in ("failure", "final") and reason in ACTIVE_DRIVE_FAILURE_REASONS:
             self._record_active_failure(
                 reason,
@@ -2055,8 +2069,9 @@ class TelemetryBroker:
             with self._lock:
                 self._active_drive_restoration_latched = True
                 self._active_drive["restoration_failed"] = True
+            payload = None
             try:
-                can_operation_state.begin_inhibit(
+                payload = can_operation_state.begin_inhibit(
                     ACTIVE_DRIVE_RESTORATION_INHIBIT,
                     channel="*",
                     reason=(
@@ -2070,6 +2085,9 @@ class TelemetryBroker:
                         f"{detail}; persistent restoration inhibit could not "
                         f"be recorded: {type(exc).__name__}: {exc}"
                     )
+
+            if self.usb_drop_recovery is not None:
+                self.usb_drop_recovery.note_latch(ACTIVE_DRIVE, event, payload)
 
     def _record_auxiliary_failure(
         self,
@@ -2142,14 +2160,17 @@ class TelemetryBroker:
                 self._auxiliary_drive["helper_pid"] = pid
             if event_type == "final":
                 self._auxiliary_drive["helper_pid"] = None
+        if event_type == "status" and interface_mode == "armed_diagnostic":
+            self._note_recovery_armed(AUXILIARY_DRIVE, pid)
         if event_type in ("failure", "final"):
             self._record_auxiliary_failure(reason, detail, interface_mode=interface_mode)
         if reason == "restoration_failed" or event.get("restored") is False:
             with self._lock:
                 self._auxiliary_drive_restoration_latched = True
                 self._auxiliary_drive["restoration_failed"] = True
+            payload = None
             try:
-                can_operation_state.begin_inhibit(
+                payload = can_operation_state.begin_inhibit(
                     AUXILIARY_DRIVE_RESTORATION_INHIBIT,
                     channel="*",
                     reason=f"broker could not verify B-CAN restoration: {detail}",
@@ -2160,6 +2181,9 @@ class TelemetryBroker:
                         f"{detail}; persistent B-CAN restoration inhibit could "
                         f"not be recorded: {type(exc).__name__}: {exc}"
                     )
+
+            if self.usb_drop_recovery is not None:
+                self.usb_drop_recovery.note_latch(AUXILIARY_DRIVE, event, payload)
 
     def _refresh_interface_status(self) -> None:
         probe_state = "ready"
@@ -3015,7 +3039,12 @@ class TelemetryBroker:
 
     def _claim_helper_launch(self, helper: str) -> bool:
         """Claim a helper launch; False while held. Excludes a concurrent hold-on."""
-        return self._helper_hold.claim(helper)
+        claimed = self._helper_hold.claim(helper)
+        if claimed and self.usb_drop_recovery is not None:
+            with self._lock:
+                self._recovery_armed.discard(helper)
+            self.usb_drop_recovery.begin_launch(helper)
+        return claimed
 
     def _end_helper_run(self, helper: str, outcome: dict[str, object] | None) -> None:
         """Release a launch claim; give a helper a hold stopped the `held` block."""
@@ -3280,6 +3309,7 @@ class TelemetryBroker:
                     name="van-telemetry-bcan-auxiliary",
                     daemon=True,
                 )
+                self._auxiliary_thread = auxiliary_thread
                 auxiliary_thread.start()
             except BaseException:
                 self._end_helper_run("auxiliary_drive", None)  # never ran
@@ -3447,6 +3477,54 @@ class TelemetryBroker:
             ):
                 self._auxiliary_drive.update(blocked)
 
+    def _bind_usb_drop_recovery(self) -> None:
+        if self.usb_drop_recovery is not None:
+            self.usb_drop_recovery.bind(
+                clear_latches=self._clear_restoration_latches,
+                display_receiver=self.display_receiver,
+            )
+
+    def _note_recovery_armed(self, helper: str, pid: object) -> None:
+        if self.usb_drop_recovery is None or type(pid) is not int or pid <= 0:
+            return
+        with self._lock:
+            if helper in self._recovery_armed:
+                return
+            self._recovery_armed.add(helper)
+        self.usb_drop_recovery.note_armed(helper, pid)
+
+    def _recovery_gates(self) -> BrokerGates:
+        with self._lock:
+            latched = frozenset(helper for helper in OWNED_INHIBITS
+                                if getattr(self, f"_{helper}_restoration_latched"))
+            return BrokerGates(
+                claimed=self._helper_hold.claimed_helpers(), hold_active=self._helper_hold.active,
+                startup_faults_unrecorded=bool(self._armed_at_startup_faults), latched=latched,
+                auxiliary_thread_alive=self._auxiliary_thread is not None and self._auxiliary_thread.is_alive(),
+                stopping=self._collector_stop.is_set(),
+            )
+
+    def _clear_restoration_latches(self, helpers, incident_id: str) -> None:
+        update = dict(
+            restoration_failed=False, state="idle", reason="engine_not_running",
+            interface_mode="listen_only", helper_pid=None,
+            detail=f"restoration latch cleared by automatic USB re-enumeration recovery "
+                   f"(incident {incident_id[:8]}); waiting for qualified engine-running evidence",
+        )
+        with self._lock:
+            for helper in OWNED_INHIBITS.keys() & helpers:
+                setattr(self, f"_{helper}_restoration_latched", False)
+                getattr(self, f"_{helper}").update(update)
+
+    def _run_usb_drop_recovery(self) -> None:
+        try:
+            self.usb_drop_recovery.run_if_due(self._recovery_gates)
+        except Exception as exc:
+            message = f"{type(exc).__name__}: {exc}"[:240].splitlines()[0]
+            if message not in self._recent_recovery_errors:
+                self._recent_recovery_errors.append(message)
+                logging.getLogger(__name__).error("usb-drop-recovery unexpected error: %s", message)
+
     def _collector_loop(self) -> None:
         with self._lock:
             self._collector_state = "running"
@@ -3467,6 +3545,8 @@ class TelemetryBroker:
                     with self._lock:
                         self._interface_reconcile = reconcile
                     self._inhibit_armed_at_startup(reconcile)
+                if self.usb_drop_recovery is not None:
+                    self._run_usb_drop_recovery()
                 # Initial reconciliation records role topology under exclusive
                 # locks. Do not let a long-lived observer overtake that step.
                 if self.display_receiver is not None:
@@ -3571,6 +3651,13 @@ def _reading_stores(history_db):
     return maintenance_store, radar_history, last_readings
 
 
+def _board_a_monitor_ids(monitor) -> tuple[str, ...]:
+    from projects.vehicle_data.usb_recovery_contract import BOARD_A_SERIAL
+
+    return tuple(incident["incident_id"] for incident in monitor.status_snapshot()["active"]
+                 if BOARD_A_SERIAL in incident["affected_serials"])
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     if (
@@ -3648,14 +3735,31 @@ def main(argv=None) -> int:
     active_supervisor = None
     auxiliary_supervisor = None
     auxiliary_drive_enabled = active_drive_enabled and not args.no_auxiliary_drive
+    def active_factory(**kwargs):
+        broker = broker_holder["broker"]
+        return broker.radar_service.supervisor(ActiveDriveSupervisor, drive_dtc=broker.drive_dtc, **kwargs)
+
+    auxiliary_factory = AuxiliaryDriveSupervisor
+    recovery = None
+    if args.enable_usb_drop_recovery:
+        from projects.vehicle_data.usb_recovery import UsbDropRecovery
+
+        recovery = UsbDropRecovery.if_enabled(
+            args.enable_usb_drop_recovery, interface_manager,
+            radar_marker=lambda: broker_holder["broker"].radar_service.request_marker(),
+            monitor_ids=lambda: _board_a_monitor_ids(usb_can_monitor),
+        )
+        if recovery is not None:
+            active_factory = recovery.launch_recorder(ACTIVE_DRIVE, active_factory)
+            auxiliary_factory = recovery.launch_recorder(AUXILIARY_DRIVE, auxiliary_factory)
+
     if active_drive_enabled:
         active_supervisor = RoleAwareActiveDriveSupervisor(
             interface_manager,
             event_handler=lambda event: broker_holder[
                 "broker"
             ].handle_active_drive_event(event),
-            supervisor_factory=lambda **kwargs: broker_holder["broker"].radar_service.supervisor(
-                ActiveDriveSupervisor, drive_dtc=broker_holder["broker"].drive_dtc, **kwargs),
+            supervisor_factory=active_factory,
         )
     if auxiliary_drive_enabled:
         auxiliary_supervisor = RoleAwareAuxiliaryDriveSupervisor(
@@ -3663,7 +3767,7 @@ def main(argv=None) -> int:
             event_handler=lambda event: broker_holder[
                 "broker"
             ].handle_auxiliary_drive_event(event),
-            supervisor_factory=AuxiliaryDriveSupervisor,
+            supervisor_factory=auxiliary_factory,
         )
 
     maintenance_store, radar_history, last_readings = _reading_stores(args.history_db)
@@ -3709,10 +3813,14 @@ def main(argv=None) -> int:
         radar_history=radar_history,
         last_readings=last_readings,
         drive_dtc=DriveDtcControl.from_args(args),
+        usb_drop_recovery=recovery,
     )
     broker_holder["broker"] = broker
     from projects.vehicle_data.display_receivers import DisplayReceivers
     broker.display_receiver = DisplayReceivers(interface_manager, broker)
+    if recovery is not None:
+        # The receivers need broker callbacks; their completed binding precedes the collector.
+        broker._bind_usb_drop_recovery()
     broker.start_usb_monitor()
     if not args.no_collector:
         broker.start_collector()

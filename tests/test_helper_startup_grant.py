@@ -184,6 +184,31 @@ class GrantPipeTests(unittest.TestCase):
         self.assertIsNone(self.grant._write_fd)
         self.assertEqual(self.read(), b"")
 
+    def test_grant_attempt_timestamps_are_written_once_before_delivery(self):
+        monotonic = mock.Mock(side_effect=[42.5, 100.0])
+        stamp = "2030-01-01T00:00:00+00:00"
+        grant = grant_module.StartupGrant(monotonic=monotonic)
+        self.addCleanup(grant.close)
+        seen = []
+
+        def write(_fd, _data):
+            seen.append((grant.grant_attempted, grant.granted_monotonic, grant.granted_at))
+            raise BrokenPipeError
+
+        self.assertEqual((grant.granted_monotonic, grant.granted_at), (None, None))
+        with mock.patch.object(grant_module, "utc_now", return_value=stamp) as utc, \
+             mock.patch.object(grant_module.os, "write", write):
+            self.assertTrue(grant.try_grant())
+            self.assertFalse(grant.try_grant())
+        self.assertEqual(seen, [(True, 42.5, stamp)])
+        self.assertEqual((grant.granted_monotonic, grant.granted_at), (42.5, stamp))
+        monotonic.assert_called_once_with()
+        utc.assert_called_once_with()
+
+    def test_refused_grant_has_no_timestamps(self):
+        self.assertFalse(self.grant.try_grant(lambda: True))
+        self.assertEqual((self.grant.granted_monotonic, self.grant.granted_at), (None, None))
+
     def test_close_releases_both_ends(self):
         ends = (self.grant._read_fd, self.grant._write_fd)
         self.grant.close()

@@ -205,6 +205,69 @@ class ControlTests(unittest.TestCase):
         self.assertEqual((code, body["reason"], body["run"]["state"]),
                          (503, "not_delivered", service.FAILED))
 
+    def test_request_marker_retains_terminal_and_failed_delivery_attempts(self):
+        helper = Helper().launch()
+        marker = helper.control.request_marker
+        self.assertEqual(marker(), (0, False))
+        for sequence, finish, reason in (
+            (1, service.COMPLETED, None),
+            (2, service.FAILED, "no_response"),
+            (3, service.STOPPED, "owner_stopped"),
+        ):
+            helper.clock.value += control.START_MIN_INTERVAL_SECONDS
+            code, body = helper.control.request(START)
+            self.assertEqual(code, 202)
+            self.assertEqual(marker(), (sequence, True))
+            if finish == service.STOPPED:
+                self.assertEqual(helper.control.request(STOP)[0], 202)
+            helper.emit(event(finish, request_id=body["run"]["request_id"], reason=reason))
+            self.assertEqual(marker(), (sequence, False))
+        helper.clock.value += control.START_MIN_INTERVAL_SECONDS
+        helper.process.stdin.close()
+        self.assertEqual(helper.control.request(START)[1]["reason"], "not_delivered")
+        self.assertEqual(marker(), (4, False))
+
+    def test_request_marker_does_not_settle_an_expired_run(self):
+        helper = Helper().launch()
+        self.assertEqual(helper.control.request(START)[0], 202)
+        helper.clock.value += control.REQUEST_ACK_SECONDS + 1
+        self.assertEqual(helper.control.request_marker(), (1, True))
+        self.assertEqual(helper.run()["reason"], "not_delivered")
+        self.assertEqual(helper.control.request_marker(), (1, False))
+
+    def test_start_between_new_pipe_publication_and_callback_remains_marked(self):
+        from projects.vehicle_data.usb_recovery_contract import ACTIVE_DRIVE, RadarCondition
+        from projects.vehicle_data.usb_recovery_model import HelperRecord, Incident, radar_condition
+
+        before_reset = None
+        original = control.RadarServiceControl._helper_started
+
+        def callback(radar):
+            if before_reset is not None:
+                before_reset()
+            original(radar)
+
+        with mock.patch.object(control.RadarServiceControl, "_helper_started", callback):
+            helper = Helper().launch()
+            radar = helper.control
+            claim = radar.request_marker()
+            incident = Incident("test", "boot", 42, "broker", "now", 0, "now", helpers={
+                ACTIVE_DRIVE: HelperRecord("c-can", radar_at_claim=claim),
+            })
+            self.assertIs(radar_condition(incident, claim), RadarCondition.NONE)
+            old_process = helper.process
+            helper.process = FakeProcess()
+            helper.process.stdin.close()
+
+            def start_on_new_pipe_before_reset():
+                self.assertEqual(radar.request(START)[1]["reason"], "not_delivered")
+
+            before_reset = start_on_new_pipe_before_reset
+            helper.launch(announce=False)
+        self.assertEqual(old_process.commands(), [])
+        self.assertEqual(radar.request_marker(), (1, False))
+        self.assertIs(radar_condition(incident, radar.request_marker()), RadarCondition.ATTEMPTED)
+
     def test_malformed_helper_events_are_rejected(self):
         good = event(service.RUNNING, request_id="a" * 32, progress=10, routine_status="00 01 0A 00")
         control.validate_event(good)

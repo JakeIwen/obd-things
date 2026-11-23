@@ -207,6 +207,8 @@ class NoLegacyCanTopologyTests(unittest.TestCase):
             Path("projects/vehicle_data/bcan_auxiliary.py"),
             Path("projects/vehicle_data/can_runtime.py"),
             Path("projects/vehicle_data/sources.py"),
+            # Recovery corroborates C-CAN only after serial/connector resolution, locks and passive readback.
+            Path("projects/vehicle_data/usb_recovery.py"),
         }
         callers = set()
         for path in REPO.rglob("*.py"):

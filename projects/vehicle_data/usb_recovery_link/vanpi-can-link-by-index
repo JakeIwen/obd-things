@@ -1,0 +1,116 @@
+#!/usr/bin/python3 -I
+"""Standalone index-only link setter. Install the reviewed copy before use."""
+
+import errno
+import signal
+import socket
+import struct
+import sys
+import time
+
+_HEADER = struct.Struct("=IHHII")
+_ATTRIBUTE = struct.Struct("=HH")
+_LINK = struct.Struct("=BBHiII")
+_ERROR = struct.Struct("=i")
+_RTM_NEWLINK = 16
+_NLMSG_ERROR = 2
+_REQUEST_ACK = 0x05
+_SEQ = 1
+_IFF_UP = 1
+_MAX_IFINDEX = 2**31 - 1
+
+
+def _attribute(kind, data):
+    length = _ATTRIBUTE.size + len(data)
+    return _ATTRIBUTE.pack(length, kind) + data + bytes(-length % 4)
+
+
+def _request(index, bitrate):
+    body = _LINK.pack(socket.AF_UNSPEC, 0, 0, index,
+                      _IFF_UP if bitrate is not None else 0, _IFF_UP)
+    if bitrate is not None:
+        restart_ms = _attribute(6, struct.pack("=I", 0))  # IFLA_CAN_RESTART_MS
+        bit_timing = _attribute(1, struct.pack("=8I", bitrate, 0, 0, 0, 0, 0, 0, 0))
+        ctrlmode = _attribute(5, struct.pack("=II", 0x2a, 0x02))  # Enable only listen-only.
+        kind = _attribute(1, b"can")  # IFLA_INFO_KIND; iproute2 leaves the zero in padding.
+        data = _attribute(2, restart_ms + bit_timing + ctrlmode)  # IFLA_INFO_DATA
+        body += _attribute(18, kind + data)  # IFLA_LINKINFO
+    return _HEADER.pack(_HEADER.size + len(body), _RTM_NEWLINK, _REQUEST_ACK, _SEQ, 0) + body
+
+
+def _decimal(text, minimum, maximum):
+    if not text.isascii() or not text.isdecimal():
+        raise ValueError
+    value = int(text)
+    if not minimum <= value <= maximum:
+        raise ValueError
+    return value
+
+
+def _parse(argv):
+    if len(argv) == 5 and argv[0] == "up-listen-only":
+        bitrate = _decimal(argv[2], 10_000, 1_000_000)
+    elif len(argv) == 4 and argv[0] == "down":
+        bitrate = None
+    else:
+        raise ValueError
+    index = _decimal(argv[1], 1, _MAX_IFINDEX)
+    if argv[-2] != "--not-after":
+        raise ValueError
+    deadline = float(argv[-1])
+    if not -float("inf") < deadline < float("inf"):
+        raise ValueError
+    return index, bitrate, deadline
+
+
+def _ack_errno(reply, sender, request):
+    embedded = _HEADER.size + _ERROR.size
+    if sender != (0, 0) or len(reply) < embedded + _HEADER.size:
+        return None
+    length, kind, _, seq, _ = _HEADER.unpack_from(reply)
+    if not embedded + _HEADER.size <= length <= len(reply) or kind != _NLMSG_ERROR or seq != _SEQ:
+        return None
+    if reply[embedded:embedded + _HEADER.size] != request[:_HEADER.size]:
+        return None
+    (error,) = _ERROR.unpack_from(reply, _HEADER.size)
+    return -error if error <= 0 else None
+
+
+def _submit(request, deadline, socket_factory, monotonic):
+    if monotonic() >= deadline:
+        return 5
+    try:
+        with socket_factory(socket.AF_NETLINK, socket.SOCK_RAW, socket.NETLINK_ROUTE) as sock:
+            sock.settimeout(2.0)
+            sock.connect((0, 0))
+            if monotonic() >= deadline:
+                return 5
+            sock.send(request)
+            reply, sender = sock.recvfrom(8192)
+    except OSError:
+        return 4
+    error = _ack_errno(reply, sender, request)
+    if error is None:
+        return 4
+    if error:
+        print(f"errno={error} {errno.errorcode.get(error, 'UNKNOWN')}")
+        return 3
+    return 0
+
+
+def main(argv=None, *, socket_factory=socket.socket, monotonic=time.monotonic, alarm=signal.alarm):
+    alarm(3)
+    try:
+        try:
+            index, bitrate, deadline = _parse(sys.argv[1:] if argv is None else argv)
+        except ValueError:
+            print("usage: vanpi-can-link-by-index (up-listen-only INDEX BITRATE | down INDEX) "
+                  "--not-after MONOTONIC_SECONDS", file=sys.stderr)
+            return 2
+        return _submit(_request(index, bitrate), deadline, socket_factory, monotonic)
+    finally:
+        alarm(0)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -169,6 +169,7 @@ class RadarServiceControl:
         self._lock = threading.Lock()
         self._supported = False
         self._run: TrackedRun | None = None
+        self._start_seq = 0
         self._requested_monotonic = -math.inf
         self._log_path: pathlib.Path | None = None
         self._log_error: str | None = None
@@ -279,6 +280,11 @@ class RadarServiceControl:
             return self._refused(400, "invalid_request",
                                  "body must be the exact start or stop request")
 
+    def request_marker(self) -> tuple[int, bool]:
+        """Snapshot start attempts without settling or altering the current run."""
+        with self._lock:
+            return self._start_seq, self._run is not None and self._run.active
+
     def unless_run_active(self, action) -> bool:
         """Call ``action`` under this lock unless a run is active; False if one is.
 
@@ -306,6 +312,7 @@ class RadarServiceControl:
             return self._refused(429, "rate_limited", "wait a few seconds before starting again")
         stamp = utc_now()
         run = self._run = TrackedRun(uuid.uuid4().hex, requested_at=stamp, updated_at=stamp)
+        self._start_seq += 1
         self._requested_monotonic = now
         if self._log_dir is not None:
             name = re.sub(r"[^0-9T]", "", stamp.split(".")[0])

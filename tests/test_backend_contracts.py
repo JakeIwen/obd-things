@@ -30,6 +30,8 @@ PURE_MODULES = (
     "projects.vehicle_data.armed_at_startup",
     "projects.vehicle_data.helper_hold",
     "projects.vehicle_data.wake_state",
+    "projects.vehicle_data.usb_recovery_contract",
+    "projects.vehicle_data.usb_recovery_model",
 )
 
 

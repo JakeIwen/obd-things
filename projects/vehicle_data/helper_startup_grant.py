@@ -31,7 +31,10 @@ import fcntl
 import os
 import stat
 import threading
+import time
 from typing import Callable
+
+from lib.timeutil import utc_now
 
 PROTOCOL_VERSION = 1
 GRANT_FD_FLAG = "--startup-grant-fd"
@@ -43,7 +46,7 @@ _READY_KEYS = frozenset({"type", "protocol", "pid"})
 class StartupGrant:
     """Parent-side state of one launch: the pipe, cancellation and grant attempt."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, monotonic=time.monotonic) -> None:
         # os.pipe() ends are close-on-exec; only pass_fds re-enables the read end
         # in the one child, so no sibling helper ever inherits this write end.
         read_fd, write_fd = os.pipe()
@@ -52,6 +55,9 @@ class StartupGrant:
         self._lock = threading.Lock()
         self.cancelled = False
         self.grant_attempted = False
+        self.granted_monotonic: float | None = None
+        self.granted_at: str | None = None
+        self._monotonic = monotonic
         try:
             os.set_blocking(write_fd, False)
         except BaseException:
@@ -93,6 +99,8 @@ class StartupGrant:
                 self._close_fd("_write_fd")  # the child sees EOF, never a grant
             if self.cancelled or self.grant_attempted or self._write_fd is None:
                 return False
+            self.granted_monotonic = self._monotonic()
+            self.granted_at = utc_now()
             self.grant_attempted = True
             try:
                 os.write(self._write_fd, GRANT_TOKEN)

@@ -1160,7 +1160,11 @@ on loss of RPM or C-CAN traffic, topology/inhibit changes, adapter health
 failure, timeout, malformed response, rejection, termination, or exception.
 `session_required` is reported distinctly and does not enable a session
 change. A failed or unverified restoration sets a persistent operation inhibit,
-is latched in the broker, and prevents another active interval.
+is latched in the broker, and prevents another active interval. The one opt-in
+exception is [USB drop recovery](docs/usb-drop-recovery.md): the same broker can
+verify *both* Board A replacements after a USB re-enumeration, and end only its
+own matching restoration inhibits. It spends at most one attempt per boot. A
+broker restart never adopts the previous process's incident.
 
 The broker's supervisor (`ActiveDriveSupervisor`, also used for the B-CAN
 auxiliary helper) ends a helper that emits nothing for 10 s, and kills one that
@@ -1207,7 +1211,8 @@ needs the guarded parked restart. See the
   `python3 -m tools.can_operation_state inhibit-end NAME` (from the repository root) for each inhibit,
   then restart `van-telemetry` (the broker also holds the latch in memory).
   The broker serves a cached interface status, so an ended inhibit can still be
-  listed for a few seconds.
+  listed for a few seconds. A lost confirmation without the disappearance of
+  the armed netdevs does **not** qualify for [automatic clearance](docs/usb-drop-recovery.md).
 - Tests: `tests/test_active_drive.py`, the `test_supervisor_*stall*` cases and
   `test_supervisor_still_bounds_a_helper_that_hangs_without_a_stall`.
 
@@ -1581,7 +1586,8 @@ waits for each configured helper to relaunch and fails if one does not. Costs: b
 the tablet reconnects within a few seconds; history and drive recording have a
 gap; and if a helper's restoration fails the broker latches its inhibit, so
 telemetry stays passive for the drive until someone inspects the adapters and
-ends it (`tools/can_operation_state.py inhibit-end NAME`). `--while-running`
+ends it after inspection (`python3 -m tools.can_operation_state inhibit-end NAME`),
+unless the incident qualifies for the opt-in [USB drop recovery](docs/usb-drop-recovery.md). `--while-running`
 needs a broker that already has the hold control (a broker that predates it
 answers 404 and is refused), so the first install of that control is a parked
 restart. A restart still loads whatever code is on disk, so a deploy that

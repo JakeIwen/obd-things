@@ -492,6 +492,8 @@ The repo-owned checker has no `layout` baseline and is advisory.
 selected pure imports, declared launch targets and compute entry packaging.
 Never rebaseline as part of a feature or to pass the suite.
 
+Automatic USB drop recovery is opt-in (`--enable-usb-drop-recovery`); the [contract](projects/vehicle_data/docs/usb-drop-recovery.md) covers eligibility, bootstrap limits, install, verification and rollback. In `projects/vehicle_data/`, `usb_recovery.py` captures grant/armed/latch evidence and owns the collector transaction; `usb_recovery_contract.py`, `usb_recovery_model.py` and `usb_recovery_record.py` own vocabulary, pure decisions and durable bounded records respectively. `service_cgroup.py` checks for surviving privileged submitters, `lib/netdev_instance.py` identifies a netdev instance and USB enumeration, and `bound_link.py` checks the root-owned, digest-pinned installed `usb_recovery_link/vanpi-can-link-by-index` and verifies its index-addressed listen-only/down requests. Only `usb_recovery_link/install.sh install` updates the installed copy. `lib.can_operation_state.end_inhibits_if_exactly` compares the entire same-boot inhibit set and ends matching records under the writer lock. Other callers looking for a logical inhibit use `inhibit_is_for` to include a writer's lock-timeout wildcard.
+
 vanpi's USB 2.0 block for the disk hub chain (2026-11-22) lives in
 `projects/vehicle_data/usb2_block/`: the watcher program (the only writer) with its unit, and
 `install.sh` (`status|install|uninstall`). The installed copies under `/etc` and
@@ -644,6 +646,7 @@ caller has retired, with owner/callers/retirement stated in the wrapper header.
 
 | Path | Caller | Owner |
 | --- | --- | --- |
+| `projects/vehicle_data/usb_recovery_link/vanpi-can-link-by-index` | bound_link via the root-owned installed copy | One index-only passive bring-up or down; install.sh manages the copy |
 | `projects/vehicle_data/broker.py` | van-telemetry.service | Telemetry runtime and ordered CAN lifecycle |
 | `projects/vehicle_data/web_v2.py` | Both van-telemetry-web listeners | Dashboard static serving and web.py /v1 API |
 | `projects/vehicle_data/restart_broker.py` | Owner/agent CLI (`s restart_broker`) | Guarded `van-telemetry.service` restart: parked by default, `--while-running` through the helper hold |
