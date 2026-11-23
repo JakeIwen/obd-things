@@ -5,7 +5,8 @@ Documentation=file:///home/pi/dev/obd-things/docs/agent-context.md
 [Service]
 Type=simple
 # Root: the port's sysfs attribute is root-writable only. The program is a root-owned copy
-# outside the checkout. No filesystem sandboxing: it writes /sys and runs the ntfy sender.
+# outside the checkout, and it runs the ntfy sender (a file root does not own) as pi.
+# No filesystem sandboxing: it writes /sys and the sender reads pi's settings.
 ExecStart=/usr/local/sbin/vanpi-usb2-disk-hub-off watch
 # The watcher has no clean exit; any exit is a fault and it must come back.
 Restart=always

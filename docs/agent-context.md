@@ -141,7 +141,11 @@ disks have no reason to be on USB 2.0).
   - `vanpi-usb2-disk-hub-off` → `/usr/local/sbin/`, run by `vanpi-usb2-disk-hub-off.service`
     (`watch`): every 5 s for its first minute, then every 30 s, it checks that `disable` reads `1`
     and that nothing is enumerated at `1-1.2`, writes `1` again when either fails (three attempts,
-    each confirmed twice), and sends one ntfy per boot when the port cannot be held off. It
+    each confirmed twice), and sends one ntfy per boot when the port cannot be held off; the
+    sender runs as `pi`, never as root. It refuses, and alerts, when a disk behind the port is
+    mounted or held: the block keeps disks from attaching over USB 2.0, it does not pull one
+    that is in use. A hub at `1-1` whose port control is missing counts as a failure after
+    three passes, at once when something is enumerated behind the port. It
     covers what the rule cannot: a connection event already queued in the kernel can power the
     port back on after a successful write, a failed control transfer leaves it on, and an
     in-place hub reset or controller recovery fires no udev event. It writes nothing but that
@@ -162,7 +166,13 @@ disks have no reason to be on USB 2.0).
   each time it had to power the port off again.
 - Undo: `install.sh uninstall`, then `echo 0 | sudo tee
   /sys/bus/usb/devices/1-1/1-1:1.0/1-1-port2/disable`. Do that only after the faulty hub or
-  cable is out of the chain; with the watcher running, a manual `0` lasts at most 30 s.
+  cable is out of the chain; while the watcher runs it undoes a manual `0` at its next pass
+  (30 s apart). `uninstall` verifies what it removed and exits 1 with the remaining step when
+  something is left. One such case: initramfs-tools copies custom rules from
+  `/etc/udev/rules.d` into each boot image it builds, so after a kernel update the image
+  carries the rule too (`install.sh status` lists such images). That copy only applies the block
+  earlier in boot, but it survives the removal of the installed files until
+  `sudo update-initramfs -u -k all` rebuilds the images.
 
 ## Private environment context
 

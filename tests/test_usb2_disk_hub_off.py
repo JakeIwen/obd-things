@@ -32,10 +32,17 @@ class Tree:
         notify = root / "notify"
         notify.write_text(f'#!/bin/bash\nprintf "%s|%s\\n" "$1" "$3" >> "{self.alerts}"\n')
         notify.chmod(notify.stat().st_mode | stat.S_IXUSR)
+        self.sys_block = root / "block"
+        self.sys_block.mkdir()
+        self.mounts = root / "mounts"
+        self.mounts.write_text("/dev/mmcblk0p2 / ext4 rw 0 0\n")
         self.env = {
             "PATH": os.environ["PATH"],
             "USB2_BLOCK_SYSFS": str(self.sysfs),
+            "USB2_BLOCK_SYS_BLOCK": str(self.sys_block),
+            "USB2_BLOCK_MOUNTS": str(self.mounts),
             "USB2_BLOCK_NOTIFY": str(notify),
+            "USB2_BLOCK_NOTIFY_USER": "",
             "USB2_BLOCK_STATE_DIR": str(root / "state"),
             "USB2_BLOCK_SETTLE_SECONDS": "0",
             "USB2_BLOCK_FAST_INTERVAL_SECONDS": "0.05",
@@ -46,6 +53,12 @@ class Tree:
         child = self.sysfs / "1-1.2"
         child.mkdir()
         return child
+
+    def attach_disk(self, name: str) -> None:
+        """A block device whose real sysfs path runs through the hub's port 2."""
+        real = self.root / "real" / "usb1" / "1-1" / "1-1.2" / "1-1.2.1" / "block" / name
+        real.mkdir(parents=True)
+        (self.sys_block / name).symlink_to(real)
 
     def run(self, verb: str) -> subprocess.CompletedProcess:
         return subprocess.run(
@@ -101,11 +114,68 @@ def test_a_different_hub_at_the_path_is_never_written(tree, tmp_path):
     assert "not the Pi's onboard hub (foreign 0bda:5411)" in result.stderr
 
 
-def test_no_hub_or_no_ports_is_nothing_to_block(tree, tmp_path):
+def test_no_hub_at_the_path_is_nothing_to_block_and_not_a_held_block(tree, tmp_path):
     empty = Tree(tmp_path / "empty")
     empty.disable.unlink()
-    assert empty.run("check").returncode == 0
-    assert empty.run("status").stdout == "absent\n"
+    for attribute in ("idVendor", "idProduct"):
+        (empty.hub / attribute).unlink()
+    empty.port.rmdir()
+    empty.port.parent.rmdir()
+    empty.hub.rmdir()
+    result = empty.run("check")
+    assert (result.returncode, result.stderr) == (0, "")
+    status = empty.run("status")
+    assert (status.returncode, status.stdout) == (1, "no-hub\n")
+
+
+def test_a_hub_without_its_port_control_is_not_a_held_block(tree):
+    tree.disable.unlink()
+    result = tree.run("check")
+    assert result.returncode == 3
+    assert "present without its port 2 control" in result.stderr
+    assert "off again" not in result.stderr
+
+
+def test_a_device_behind_a_port_with_no_control_fails_the_check(tree):
+    tree.disable.unlink()
+    tree.attach_child()
+    result = tree.run("check")
+    assert result.returncode == 1
+    assert "has no control attribute" in result.stderr
+
+
+def test_a_mounted_disk_behind_the_port_is_never_disconnected(tree):
+    tree.attach_child()
+    tree.attach_disk("sdz")
+    tree.mounts.write_text("/dev/mmcblk0p2 / ext4 rw 0 0\n/dev/sdz1 /mnt/fallback ext4 rw 0 0\n")
+    result = tree.run("check")
+    assert result.returncode == 1
+    assert tree.disable.read_text().strip() == "0"
+    assert "sdz behind it is mounted or held; not disconnecting it" in result.stderr
+
+
+def test_an_unmounted_disk_behind_the_port_does_not_stop_the_power_off(tree):
+    tree.attach_disk("sdz")
+    result = tree.run("check")
+    assert result.returncode == 0
+    assert tree.disable.read_text().strip() == "1"
+
+
+def test_watch_alerts_when_the_port_control_stays_missing(tree):
+    tree.disable.unlink()
+    watcher = subprocess.Popen(
+        ["bash", str(PROGRAM), "watch"], env=tree.env, stderr=subprocess.PIPE, text=True
+    )
+    try:
+        deadline = time.monotonic() + 15
+        while not tree.alerts.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+    finally:
+        watcher.terminate()
+        stderr = watcher.communicate(timeout=10)[1]
+    assert tree.alerts.read_text() == "vanpi USB 2.0 block FAILED|high\n"
+    assert "present without its port 2 control (for 4 passes)" in stderr
+    assert "holds again" not in stderr
 
 
 def test_watch_alerts_once_while_the_block_keeps_failing_and_reports_recovery(tree):

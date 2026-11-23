@@ -11,12 +11,18 @@
 # udev event. This program is the check that the block holds, the retry, and the alert.
 #
 #   status  print the block's state; exit 0 only when it holds
-#   check   one pass: power the port off if it is on; exit 1 if it stays on
-#   watch   repeat `check` forever and alert once per boot when it cannot be held
+#   check   one pass: power the port off if it is on; exit 0 only when it holds or there is no
+#           hub at 1-1
+#   watch   repeat the pass forever and alert once per boot when the block cannot be held
 set -u
 
 sysfs=${USB2_BLOCK_SYSFS:-/sys/bus/usb/devices}
+sys_block=${USB2_BLOCK_SYS_BLOCK:-/sys/block}
+mounts_file=${USB2_BLOCK_MOUNTS:-/proc/mounts}
 notify_command=${USB2_BLOCK_NOTIFY:-/home/pi/scripts/ntfy_send.sh}
+# The sender and the settings file it reads are not root-owned, so root never executes them:
+# the alert runs as this account. Empty runs the sender as the caller (tests).
+notify_user=${USB2_BLOCK_NOTIFY_USER-pi}
 state_dir=${USB2_BLOCK_STATE_DIR:-/run/vanpi-usb2-disk-hub-off}
 settle_seconds=${USB2_BLOCK_SETTLE_SECONDS:-2}
 # Boot and re-enumeration are when the port comes back, so the first minute is checked closely.
@@ -24,11 +30,17 @@ fast_interval_seconds=${USB2_BLOCK_FAST_INTERVAL_SECONDS:-5}
 slow_interval_seconds=${USB2_BLOCK_SLOW_INTERVAL_SECONDS:-30}
 fast_passes=12
 attempts=3
+# Passes a present hub may lack its port control (its driver still binding) before that is a fault.
+grace_passes=3
 
 hub="$sysfs/1-1"
 port="$hub/1-1:1.0/1-1-port2"
 child="$sysfs/1-1.2"
 quiet=0
+reason=
+
+# enforce's results.
+readonly HELD=0 FAILED=1 UNCONTROLLED=3 NO_HUB=4
 
 # systemd reads the <N> prefix as the journal priority (3 error, 4 warning, 5 notice).
 log() {
@@ -41,63 +53,124 @@ read_attr() {
   printf '%s' "$value"
 } 2>/dev/null
 
-# Prints one of: held | absent | foreign <vid>:<pid> | open disable=<v> child=<present|absent>.
-# `absent` means there is nothing to block: no hub at 1-1, or its driver has no ports yet.
-# `disable` alone is not trusted (the kernel reports a failed status read as its last answer),
-# so the block holds only when nothing is enumerated behind the port as well.
+child_word() {
+  if [[ -e "$child" ]]; then echo present; else echo absent; fi
+}
+
+# Prints one of:
+#   held                           disable reads 1 and nothing is enumerated behind the port
+#   no-hub                         nothing at USB path 1-1
+#   foreign <vid>:<pid>            1-1 is not the Pi's onboard hub
+#   uncontrolled child=<word>      the hub is there but its identity or the port control is not
+#   open disable=<v> child=<word>  the port is on, or something is enumerated behind it
+# `disable` alone is not trusted: the kernel does not report a failed port-status read, so the
+# block holds only when nothing is enumerated behind the port as well.
 assess() {
   local vendor product disable
-  [[ -d "$hub" ]] || { echo absent; return; }
+  [[ -d "$hub" ]] || { echo no-hub; return; }
   if ! vendor=$(read_attr "$hub/idVendor") || ! product=$(read_attr "$hub/idProduct"); then
-    echo absent
+    echo "uncontrolled child=$(child_word)"
     return
   fi
   if [[ "$vendor" != 2109 || "$product" != 3431 ]]; then
     echo "foreign $vendor:$product"
     return
   fi
-  [[ -e "$port/disable" ]] || { echo absent; return; }
+  [[ -e "$port/disable" ]] || { echo "uncontrolled child=$(child_word)"; return; }
   disable=$(read_attr "$port/disable") || disable=unreadable
   if [[ "$disable" == 1 && ! -e "$child" ]]; then
     echo held
-  elif [[ -e "$child" ]]; then
-    echo "open disable=$disable child=present"
   else
-    echo "open disable=$disable child=absent"
+    echo "open disable=$disable child=$(child_word)"
   fi
 }
 
-settled() {
-  [[ "$1" == held || "$1" == absent ]]
-}
-
-enforce() {
-  local state try
-  state=$(assess)
-  for (( try = 1; try <= attempts; try++ )); do
-    if settled "$state"; then
+# Names a disk behind port 2 that is mounted or held by another block device, if there is one.
+# Powering the port off disconnects everything behind it, and the owner's rule is to keep disks
+# from attaching over USB 2.0, not to pull one that is in use.
+disk_in_use_behind_port() {
+  local block real name
+  if [[ ! -r "$mounts_file" ]]; then
+    echo "an unknown disk ($mounts_file is unreadable)"
+    return 0
+  fi
+  for block in "$sys_block"/*; do
+    [[ -e "$block" ]] || continue
+    real=$(readlink -f -- "$block") || continue
+    [[ "$real" == */1-1/1-1.2/* ]] || continue
+    name=${block##*/}
+    if grep -Eq "^/dev/${name}(p?[0-9]+)? " "$mounts_file" ||
+      compgen -G "$real/holders/*" > /dev/null ||
+      compgen -G "$real/$name*/holders/*" > /dev/null; then
+      echo "$name"
       return 0
     fi
-    if [[ "$state" == foreign* ]]; then
-      log "<3>USB path 1-1 is not the Pi's onboard hub ($state); port 2 left alone"
-      return 1
+  done
+  return 1
+}
+
+# One pass. Returns HELD, FAILED (with $reason), UNCONTROLLED (with $reason; may be a hub whose
+# driver is still binding) or NO_HUB. Only a port read back as held, twice, counts as powered off.
+enforce() {
+  local state try=0 in_use
+  state=$(assess)
+  while :; do
+    case "$state" in
+      held)
+        return "$HELD"
+        ;;
+      no-hub)
+        return "$NO_HUB"
+        ;;
+      foreign*)
+        reason="USB path 1-1 is not the Pi's onboard hub ($state); port 2 left alone"
+        log "<3>$reason"
+        return "$FAILED"
+        ;;
+      "uncontrolled child=absent")
+        reason="the onboard USB 2.0 hub is present without its port 2 control"
+        return "$UNCONTROLLED"
+        ;;
+      uncontrolled*)
+        reason="a device is enumerated behind port 2 of the onboard USB 2.0 hub and the port has no control attribute"
+        log "<3>$reason"
+        return "$FAILED"
+        ;;
+    esac
+    if (( try == attempts )); then
+      reason="port 2 of the onboard USB 2.0 hub is still on after $attempts attempts ($state)"
+      log "<3>$reason"
+      return "$FAILED"
     fi
+    if in_use=$(disk_in_use_behind_port); then
+      reason="port 2 of the onboard USB 2.0 hub is on and $in_use behind it is mounted or held; not disconnecting it"
+      log "<3>$reason"
+      return "$FAILED"
+    fi
+    try=$(( try + 1 ))
     log "<4>port 2 of the onboard USB 2.0 hub is on ($state); powering it off, attempt $try of $attempts"
     { echo 1 > "$port/disable"; } 2>/dev/null || log "<4>writing 1 to $port/disable failed"
     sleep "$settle_seconds"
     state=$(assess)
-    if settled "$state"; then
+    if [[ "$state" == held ]]; then
       # A queued connection event can power the port back on after a successful write.
       sleep "$settle_seconds"
       state=$(assess)
-      if settled "$state"; then
+      if [[ "$state" == held ]]; then
         log "<5>port 2 of the onboard USB 2.0 hub is off again"
-        return 0
+        return "$HELD"
       fi
     fi
   done
-  log "<3>port 2 of the onboard USB 2.0 hub is still on after $attempts attempts ($state)"
-  return 1
+}
+
+send_alert() {
+  if [[ -n "$notify_user" ]]; then
+    setpriv --reuid "$notify_user" --regid "$notify_user" --init-groups --reset-env -- \
+      "$notify_command" "$@"
+  else
+    "$notify_command" "$@"
+  fi
 }
 
 # One phone alert per boot: the marker lives under /run.
@@ -108,8 +181,8 @@ alert_once() {
     echo "<3>cannot create $state_dir; no alert sent" >&2
     return 1
   fi
-  if [[ -x "$notify_command" ]] && "$notify_command" "vanpi USB 2.0 block FAILED" \
-    "Port 2 of the Pi's onboard USB 2.0 hub (the disk hub chain) is on and could not be powered off. The CAN adapters share that hub. See obd-things docs/agent-context.md, USB 2.0 block for the disk hub chain." \
+  if [[ -x "$notify_command" ]] && send_alert "vanpi USB 2.0 block FAILED" \
+    "The disk hub chain's USB 2.0 half cannot be kept off: $reason. The CAN adapters share that hub. See obd-things docs/agent-context.md, USB 2.0 block for the disk hub chain." \
     high warning; then
     : > "$marker"
   else
@@ -119,19 +192,31 @@ alert_once() {
 }
 
 watch() {
-  local pass=0 failing=0
+  local pass=0 failing=0 uncontrolled=0 result
   while :; do
     # While it keeps failing, say so once, not on every pass.
     quiet=$failing
-    if enforce; then
+    enforce
+    result=$?
+    if (( result == UNCONTROLLED )); then
+      uncontrolled=$(( uncontrolled + 1 ))
+      if (( uncontrolled > grace_passes )); then
+        result=$FAILED
+        log "<3>$reason (for $uncontrolled passes)"
+      fi
+    else
+      uncontrolled=0
+    fi
+    if (( result == HELD )); then
       if (( failing )); then
         echo "<5>the USB 2.0 block holds again" >&2
       fi
       failing=0
-    else
+    elif (( result == FAILED )); then
       failing=1
       alert_once
     fi
+    # NO_HUB and an UNCONTROLLED pass inside the grace change nothing: there is no port to judge.
     pass=$(( pass + 1 ))
     if (( pass <= fast_passes )); then
       sleep "$fast_interval_seconds"
@@ -149,6 +234,14 @@ case "${1:-}" in
     ;;
   check)
     enforce
+    result=$?
+    if (( result == NO_HUB )); then
+      exit 0
+    fi
+    if (( result == UNCONTROLLED )); then
+      echo "<3>$reason" >&2
+    fi
+    exit "$result"
     ;;
   watch)
     watch
