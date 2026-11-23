@@ -146,7 +146,7 @@ socket or replace the unit.
   - `vanpi-usb2-disk-hub-off` (Python, standard library) → `/usr/local/sbin/`, run as root by
     `vanpi-usb2-disk-hub-off.service` (`watch`). Every 5 s for its first minute, then every 10 s,
     it checks that `/sys/bus/usb/devices/1-1/1-1:1.0/1-1-port2/disable` reads `1` and that
-    nothing is enumerated at `1-1.2`. When either fails it writes `1` (five attempts 2 s apart,
+    nothing is enumerated at `1-1.2`. When either fails it writes `1` (up to six attempts 2 s apart,
     each confirmed twice), which disconnects whatever enumerated behind the port and stops detection
     on it, and it sends one ntfy per boot when the port cannot be held off; the sender runs as
     `pi`, never as root.
@@ -166,10 +166,14 @@ socket or replace the unit.
     registers disks one by one, a second or more after the USB probe. That wait is bounded
     (owner approval 2026-11-23): a reader whose probe is failing never lists its disks, so when
     three attempts in a row see the identical listing with a known reader still short of its
-    disks, the third claims the disks that are listed and writes. A disk of that reader that
-    the kernel registers and something mounts between the last listing and the write is then
-    disconnected unclaimed (udisks2 and the desktop file manager can automount a card); a
-    reader in that state is not working anyway. Any other storage behind
+    disks, the third claims the disks that are listed and writes, with one warning in the
+    journal that names the reader. A write, or a listing that changes, restarts the count, and
+    a listing that cannot be read in full counts for nothing: it refuses. Three checks span
+    about 4 s, which a slow but working reader can meet too, so such a reader is cut as well.
+    Not covered: a disk of that reader that the kernel registers after the final listing has
+    read the block entries, and that something mounts before the kernel carries out the write,
+    is disconnected unclaimed (udisks2 and the desktop file manager can automount a card). Any
+    other storage behind
     the port, such as a disk that fell back to USB 2.0, is never disconnected: it refuses and
     alerts, and a person decides. It then lists the storage behind the port again, and writes
     nothing on that attempt if a disk or storage interface appeared, left or changed while it
@@ -216,9 +220,12 @@ socket or replace the unit.
   This is the third time the CAN adapters dropped with the chain on USB 2.0 and the first with
   the block installed. The watcher of that night could not cut a chain whose known reader never
   finished registering its disks, and it looked only every 30 s; the bounded wait and the 10 s
-  interval described above are the answer to both. With them a reopened port is cut about 15 s
-  after it reopens (up to 10 s to notice, 4 s of unchanged listings), against the 100 s the
-  collapse took that night. That margin rests on one observation, and the bounded wait has run
+  interval described above are the answer to both. With them the first write to a port that
+  reopens between two 10 s checks comes about 15 s after the reopening when the listing does
+  not change (up to 10 s to notice, 4 s of unchanged listings), against the 100 s the collapse
+  took that night. That is the time to the first write, not a limit on how long the port can
+  stay on: a listing that keeps changing, or a refusal, leaves it on and alerts. The margin
+  rests on one observation, and the bounded wait has run
   only against a scratch sysfs tree (`tests/test_usb2_disk_hub_off.py`), never against the real
   stuck reader. From 03:18 to 13:41 that day, with the block held, the kernel logged no USB
   line at all.
