@@ -124,6 +124,13 @@ is the USB 2.0 half of the external disk hub chain (three Realtek 0bda:5411 hubs
 disks all run on USB 3.0 (bus 2). Port 2 is kept logically off (owner decision 2026-11-22: the
 disks have no reason to be on USB 2.0).
 
+The three hubs are very likely one box, not three: each hangs off port 4 of the one before and
+they offer 3 + 3 + 4 sockets (`lsusb -t`, 2026-11-23), which matches the Sabrent HB-BU10 10-port
+powered hub in the owner's inventory (a Mac session's reading of the same day; nobody has looked
+at the unit). If so, the "deepest hub" (`1-1.2.4.4` on USB 2.0, `2-2.4.4` on USB 3.0) is a chip
+inside it that cannot be taken out of the chain; the physical choices are to retire the one
+socket or replace the unit.
+
 - Why: on 2026-11-22 port 2 of the deepest disk hub (`1-1.2.4.4`) failed low-speed enumeration
   every few seconds for a day (about 197,000 kernel lines). The failures stayed on that port
   after the disk that had been on it was moved to another. Twice that evening every USB 2.0
@@ -181,8 +188,12 @@ disks have no reason to be on USB 2.0).
   it guards against happened within two minutes.
   - 03:13:23: port 2 came back on by itself (`disable` read `0`) in the same second a Samsung
     Android device (04e8:6860) enumerated on Pi port 3 (`1-1.3`). The whole chain enumerated
-    again, the failing `1-1.2.4.4` port included. Cause not established; the coincidence says a
-    connection on another port of the onboard hub can reopen port 2.
+    again, the failing `1-1.2.4.4` port included, and its failures restarted at 03:13:25. Cause
+    not established; the coincidence says a connection on another port of the onboard hub can
+    reopen port 2. The device is a Galaxy Tab E that the owner's voice-desk project drives over
+    ADB from the Mac (not the dash tablet), so it will reconnect from time to time. That night
+    the owner was replugging cables for that project from 02:35 to 03:13, which is how the
+    tablet reached port 3.
   - 03:13:51-03:13:57: the watcher saw it at its next pass and refused three times, "storage
     interface 1-1.2.1:1.0 behind it shows 0 of its 2 disks; nothing written", then logged "still
     on after 3 attempts". The card reader was being reset by the kernel and never registered its
@@ -198,9 +209,23 @@ disks have no reason to be on USB 2.0).
     of its own; how the port returned to off is not established.
   This is the third time the CAN adapters dropped with the chain on USB 2.0 and the first with
   the block installed. Open problem, not fixed: the watcher cannot cut a chain whose known
-  reader never finishes registering its disks. Until the faulty hub is out of the chain, or the
-  watcher gains a bound on that wait (a change to a root-run program, to be reviewed as such),
-  the block reduces the exposure but does not remove it.
+  reader never finishes registering its disks. Until the faulty socket is retired or the unit
+  replaced, or the watcher gains a bound on that wait (a change to a root-run program, to be
+  reviewed as such), the block reduces the exposure but does not remove it. From 03:18 to 13:41
+  that day, with the block held, the kernel logged no USB line at all.
+- The fault's pattern, reconciled from the kernel logs by a Mac session on 2026-11-23 (not
+  re-derived here): the failing port enumerates a low-speed device that is not there, about four
+  attempts a second, alternating `descriptor read/64, error -32` and `not accepting address,
+  error -71`. Every USB 2.0 device under `1-1` failed at once four times: 17:45:34, 19:22:19 and
+  19:50:27 on 2026-11-22 and 03:15:05 on 2026-11-23. All four came while that port was failing
+  and none in about twelve hours without it, but two 80-minute runs of failures (10:58-12:18 and
+  17:47-19:08 on 2026-11-22) passed with no such collapse, so the failures alone do not cause
+  one. `xhci_hcd: unexpected setup address command completion code 0x24` preceded three of the
+  four. On 2026-11-22 the failures ran only while the Galaxy tablet was not enumerated on that
+  chip's port 1: they stopped the second it enumerated and restarted the second it left, each
+  time. An unverified reading is that the port misbehaves only when the chip has no active
+  USB 2.0 child. Power is not indicated: `get_throttled=0x0` since boot, no over-current line,
+  and bus 2 kept every device through each collapse.
 - Limits: xHCI is built into the kernel, so at boot the chain enumerates until the watcher's
   first pass, when the multi-user services start. A USB 2.0-only device anywhere in the disk
   hub chain stops working (one was present on 2026-11-22: a Genesys 05e3:0764 "USB Storage"
@@ -226,12 +251,18 @@ disks have no reason to be on USB 2.0).
 - Waiting on the owner (physical, not urgent while the block holds; told 2026-11-22 and
   2026-11-23, no answer recorded): port 2 of the deepest disk hub (`1-1.2.4.4`) is the faulty
   one, since the failures stayed on it after the Seagate was moved to port 3, which cleared that
-  disk, its cable and enclosure. Anything still plugged into port 2 should be unplugged, and if
-  it is empty that hub has a bad port and should come out of the chain. At 19:22 on 2026-11-22
-  the first disk hub's own USB 2.0 link to the Pi's port 2 also failed, so that hub, its
-  upstream cable or the Pi port may be involved too. The card reader the block cuts off needs
-  moving to Pi port 1 or 3 if he uses it. Unrelated to USB 2.0: the WD Elements 6 TB logged 13
-  `critical medium error` reads on 2026-11-22.
+  disk, its cable and enclosure. On 2026-11-23 at 13:41 the 460 GB SanDisk stick mounted at
+  `/mnt/xf-500` sat in that socket (`2-2.4.4.2`, on USB 3.0). The owner's choices are to move
+  that stick to another socket and leave this one empty for good, or to replace the unit;
+  whether an empty socket still fails is not known, because the block has kept the USB 2.0 side
+  off since. At 19:22 on 2026-11-22 the first disk hub's own USB 2.0 link to the Pi's port 2
+  also failed, so the unit's upstream cable or the Pi port may be involved too. The card reader
+  the block cuts off needs moving to Pi port 1 or 3 if he uses it.
+- Unrelated to USB 2.0, also the owner's: the WD Elements 6 TB (`/mnt/bigboi`) has a disk fault,
+  not a cable fault. SMART shows 12 pending sectors and no CRC errors, and the kernel's medium
+  errors repeat at the same three addresses on every mount (13 on 2026-11-22; SMART read by a
+  Mac session on 2026-11-23). `/mnt/EXFAT512` was flagged "not properly unmounted" at 17:52 and
+  19:46 on 2026-11-22 and has not been checked.
 
 ## CAN adapter USB drop (Board A) and automatic recovery
 
