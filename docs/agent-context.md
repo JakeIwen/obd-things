@@ -177,6 +177,16 @@ disks have no reason to be on USB 2.0).
   one port's power-off is logical; the 5 V rail was not measured. That test wrote `1` to a port
   that was already idle; cutting off an enumerated chain happens only at a boot or a hub
   re-enumeration and had not been observed when this was written.
+- Observed 2026-11-23 03:13 (US/Mountain), with no reboot: port 2 came back on by itself
+  (`disable` read `0`) in the same second a Samsung Android device (04e8:6860) enumerated on Pi
+  port 3 (`1-1.3`), and the whole chain enumerated again, the failing `1-1.2.4.4` port included.
+  The watcher saw it at its next pass (28 s later), refused three times because the card
+  reader's storage interface listed none of its two disks yet, logged "still on after 3
+  attempts", and at a later pass cut the enumerated chain: "the USB 2.0 block holds again" at
+  03:15:43, about 140 s after the port opened. `can0`/`can1`/`can2` kept their interface indexes
+  and TX counters, and the broker logged nothing. So a connection on another port of the onboard
+  hub can reopen port 2, and the block is restored by the watcher within a few passes, not at
+  once. Whether the first "still on" pass sent its one-per-boot ntfy was not checked.
 - Limits: xHCI is built into the kernel, so at boot the chain enumerates until the watcher's
   first pass, when the multi-user services start. A USB 2.0-only device anywhere in the disk
   hub chain stops working (one was present on 2026-11-22: a Genesys 05e3:0764 "USB Storage"
