@@ -93,6 +93,17 @@ service, cron, network, and vehicle state before acting.
   required. Do not reintroduce that PEAK-era retry policy. The maintained C wake uses ONE-SHOT
   `22 FEFF` only until C-CAN signatures appear, then switches to normal retry for one acknowledged
   validation read and restores ONE-SHOT off.
+- Board A (CANable 2.5, ElmueSoft Candlelight firmware, serial `207C3384413250013`) can also hang
+  silently with no transmit history: from about 2026-11-19 to 2026-11-22 both its roles (C-CAN
+  `can0`, B-CAN `can1`) stayed up, listen-only and ERROR-ACTIVE with zero error counters and no
+  kernel messages, yet received nothing, and scheduled B-CAN wakes were counted as TX `dropped`.
+  The dashboard went dark through the next drive while Board B's CAN CH kept receiving. The
+  broker's `receive_watch` flagged both roles `receive_silent` against the CAN CH reference but
+  neither alerts nor recovers. Recovery (2026-11-22, while driving): `sudo usbreset BUS/DEV` for
+  that exact serial (read `busnum`/`devnum` under `/sys/bus/usb/devices/<port>`); the broker's
+  passive reconciler restored both roles to listen-only within seconds and relaunched the drive
+  helpers, with no broker restart. Check `receive_watch` in `/v1/status` `interface.role_interfaces`
+  when C-CAN data is missing while CAN CH is live.
 - Standing owner authorization: Codex may run already-reviewed, physically addressed, non-mutating
   data reads without requesting separate conversational approval each time. This covers UDS `19`,
   `1A`, `22`, result-only `31 03`, and controller-defined read-only AlfaOBD observations, provided no
