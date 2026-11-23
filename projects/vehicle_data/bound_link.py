@@ -14,6 +14,7 @@ from lib import canbus, netdev_instance
 from lib.can_runtime_route import LinkExpectation
 from lib.netdev_instance import NetdevInstance
 from projects.vehicle_data import usb_recovery_contract as contract
+from projects.vehicle_data.usb_recovery_child import kill_and_reap
 from projects.vehicle_data.usb_recovery_contract import MutationOutcome, Refusal
 
 _SEND_WINDOW_SECONDS = 2.0
@@ -77,15 +78,7 @@ def _stop(process):
     try:
         process.communicate(timeout=_TERMINATE_WAIT_SECONDS)
     except subprocess.TimeoutExpired:
-        try:
-            process.kill()
-        except ProcessLookupError:
-            pass
-        # A surviving command can still own the pipe. Wait only for sudo here.
-        try:
-            process.wait(timeout=_TERMINATE_WAIT_SECONDS)
-        except subprocess.TimeoutExpired:
-            pass  # Still uncertain: only a positive cgroup check can authorize rollback.
+        kill_and_reap(process)  # Only a positive cgroup check can authorize rollback.
 
 
 def _submit(command, index, args, *, popen, monotonic) -> _Submission:
