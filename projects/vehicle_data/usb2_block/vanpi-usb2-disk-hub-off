@@ -36,9 +36,16 @@ STATE_DIR = pathlib.Path(ENV.get("USB2_BLOCK_STATE_DIR", "/run/vanpi-usb2-disk-h
 SETTLE_SECONDS = float(ENV.get("USB2_BLOCK_SETTLE_SECONDS", "2"))
 # Boot and re-enumeration are when the port comes back, so the first minute is checked closely.
 FAST_INTERVAL_SECONDS = float(ENV.get("USB2_BLOCK_FAST_INTERVAL_SECONDS", "5"))
-SLOW_INTERVAL_SECONDS = float(ENV.get("USB2_BLOCK_SLOW_INTERVAL_SECONDS", "30"))
+# A pass is a few sysfs reads and logs nothing while the block holds, so a short interval is cheap;
+# a long one leaves the reopened port on long enough for the chain to fault.
+SLOW_INTERVAL_SECONDS = float(ENV.get("USB2_BLOCK_SLOW_INTERVAL_SECONDS", "10"))
 FAST_PASSES = 12
-ATTEMPTS = 3
+# Five, so that a cut on the third attempt (STUCK_SIGHTINGS) leaves two for the retry after a
+# queued connection event powers the port back on.
+ATTEMPTS = 5
+# Consecutive attempts of one pass that must show the identical snapshot, with a known reader
+# still short of its disks, before the reader is cut without them.
+STUCK_SIGHTINGS = 3
 # Passes a present hub may lack its port control (its driver still binding) before that is a fault.
 GRACE_PASSES = 3
 
@@ -138,30 +145,63 @@ def storage_behind_port():
     return sorted(interfaces), disks
 
 
-def storage_not_ready(snapshot):
+class Sightings:
+    """How many consecutive attempts of one pass saw the same incomplete snapshot.
+
+    Local to one enforce call: each pass starts fresh, and nothing outlives it.
+    """
+
+    def __init__(self):
+        self.snapshot = None
+        self.count = 0
+
+    def see(self, snapshot):
+        self.count = self.count + 1 if snapshot == self.snapshot else 1
+        self.snapshot = snapshot
+        return self.count
+
+    def reset(self):
+        self.snapshot = None
+        self.count = 0
+
+
+def storage_not_ready(snapshot, sightings, log):
     """Why the listed storage may not be claimed and cut yet: (outcome, why), or None.
 
     Every disk must sit behind a listed storage interface, every interface must be a known
-    model, and a known model must show exactly its number of disks: fewer means the kernel is
-    still registering them (UNSETTLED), anything else is REFUSED.
+    model, and a known model must show exactly its number of disks: more is REFUSED. Fewer
+    means the kernel may still be registering them (UNSETTLED), but a reader whose kernel
+    probe is failing never registers any, so the identical incomplete snapshot seen on
+    STUCK_SIGHTINGS consecutive attempts of the pass is cut with the disks that are listed
+    (None, after one WARNING). A change of snapshot restarts that count.
     """
     interfaces, disks = snapshot
     paths = {name: real for name, (_number, _sectors, real) in disks.items()}
     for name, real in sorted(paths.items()):
         if not any("/%s/" % interface in real for interface, _model in interfaces):
             return REFUSED, "%s behind it belongs to no listed storage interface" % name
+    short = []
     for interface, model in interfaces:
         expected = KNOWN_STORAGE_DISKS.get(model)
         if expected is None:
             return REFUSED, "storage device %s (%s) behind it is not one this block may disconnect" % (
                 interface, model)
         found = sum(1 for real in paths.values() if "/%s/" % interface in real)
-        if found < expected:
-            return UNSETTLED, "storage interface %s behind it shows %d of its %d disks" % (
-                interface, found, expected)
         if found > expected:
             return REFUSED, "storage interface %s behind it shows %d disks where %d are known" % (
                 interface, found, expected)
+        if found < expected:
+            short.append((interface, found, expected))
+    if not short:
+        sightings.reset()
+        return None
+    if sightings.see(snapshot) < STUCK_SIGHTINGS:
+        interface, found, expected = short[0]
+        return UNSETTLED, "storage interface %s behind it shows %d of its %d disks" % (
+            interface, found, expected)
+    for interface, found, expected in short:
+        log(WARNING, "storage interface %s behind it has shown %d of its %d disks on %d checks; "
+            "cutting it without them" % (interface, found, expected, STUCK_SIGHTINGS))
     return None
 
 
@@ -187,7 +227,7 @@ def claim(name, device_number):
     return descriptor, None
 
 
-def power_off(log):
+def power_off(log, sightings):
     """One guarded write of 1 to the port's control: (outcome, why).
 
     Powering the port off disconnects everything behind it. The owner's rule is to keep disks
@@ -196,11 +236,15 @@ def power_off(log):
     the claims are held across the write; a disk that cannot be claimed or inspected is REFUSED.
     Only known storage is cut, and only once all of its disks are listed (storage_not_ready);
     while the kernel is still registering them nothing is written (UNSETTLED; the caller tries
-    again). The claims cover the disks of one snapshot, so the snapshot is taken again after
-    claiming: if storage appeared, left or changed meanwhile, nothing is written either. Two
-    listings are not a lock on the USB topology: a device whose storage interface appears after
-    the second listing, and whose disks are registered and mounted before the kernel carries
-    out the write, is not covered.
+    again), until the same incomplete listing has stood for STUCK_SIGHTINGS attempts, when the
+    reader is cut with the disks it has. The claims cover the disks of one snapshot, so the
+    snapshot is taken again after claiming: if storage appeared, left or changed meanwhile,
+    nothing is written either. Two listings are not a lock on the USB topology: a device whose
+    storage interface appears after the second listing, and whose disks are registered and
+    mounted before the kernel carries out the write, is not covered. Residual for a reader cut
+    while incomplete: a disk of it that the kernel registers and something mounts between the
+    second listing and the write (udisks2 and a desktop file manager run on this host, so an
+    automount is possible) is disconnected unclaimed.
     """
     claims = []
     try:
@@ -208,7 +252,7 @@ def power_off(log):
             before = storage_behind_port()
         except OSError as error:
             return REFUSED, "the storage behind it cannot be listed (%s)" % error.strerror
-        not_ready = storage_not_ready(before)
+        not_ready = storage_not_ready(before, sightings, log)
         if not_ready:
             return not_ready
         for name, (device_number, _sectors, _real) in sorted(before[1].items()):
@@ -238,6 +282,7 @@ def enforce(log):
     state = assess()
     attempt = 0
     unsettled = ""
+    sightings = Sightings()
     while True:
         if state == "held":
             return HELD, ""
@@ -260,7 +305,7 @@ def enforce(log):
             return FAILED, reason
         attempt += 1
         log(WARNING, "%s is on (%s); powering it off, attempt %d of %d" % (PORT_NAME, state, attempt, ATTEMPTS))
-        outcome, why = power_off(log)
+        outcome, why = power_off(log, sightings)
         if outcome == REFUSED:
             reason = "%s is on and %s; not disconnecting it" % (PORT_NAME, why)
             log(ERROR, reason)

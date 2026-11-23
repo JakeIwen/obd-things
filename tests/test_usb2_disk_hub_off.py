@@ -127,7 +127,7 @@ def test_a_held_block_is_left_alone_and_silent(tree):
 def test_an_open_port_is_powered_off(tree):
     result = tree.run("check")
     tree.powered_off(result)
-    assert "powering it off, attempt 1 of 3" in result.stderr
+    assert "powering it off, attempt 1 of 5" in result.stderr
     assert "off again" in result.stderr
 
 
@@ -136,7 +136,7 @@ def test_a_device_still_enumerated_behind_the_port_fails_the_check(tree):
     tree.attach_child()
     result = tree.run("check")
     assert result.returncode == 1
-    assert "still on after 3 attempts" in result.stderr
+    assert "still on after 5 attempts" in result.stderr
     status = tree.run("status")
     assert (status.returncode, status.stdout) == (1, "open disable=1 child=present\n")
 
@@ -243,20 +243,148 @@ def test_a_disk_behind_no_listed_storage_interface_is_never_disconnected(tree):
     tree.refused(tree.run("check"), "sdz behind it belongs to no listed storage interface")
 
 
-def test_the_known_reader_before_any_disk_is_registered_stops_the_power_off(tree):
-    # The kernel registers disks a second or more after the USB interface is probed.
+CUT = "has shown {found} of its 2 disks on 3 checks; cutting it without them"
+
+
+def test_the_known_reader_that_stays_without_disks_is_cut_on_the_third_check(tree):
+    # A reader stuck in a kernel reset loop never registers a disk.
     tree.attach_storage()
     result = tree.run("check")
-    tree.refused(result, "still on after 3 attempts")
-    assert result.stderr.count("storage interface 1-1.2.1:1.0 behind it shows 0 of its 2 disks; nothing written") == 3
+    tree.powered_off(result)
+    assert result.stderr.count("shows 0 of its 2 disks; nothing written on attempt") == 2
+    assert "nothing written on attempt 1" in result.stderr
+    assert "nothing written on attempt 2" in result.stderr
+    assert result.stderr.count(CUT.format(found=0)) == 1
+    assert "storage interface 1-1.2.1:1.0 behind it " + CUT.format(found=0) in result.stderr
+    assert "off again" in result.stderr
 
 
-def test_the_known_reader_with_its_second_disk_still_missing_stops_the_power_off(tree):
+def test_the_known_reader_with_one_disk_listed_is_claimed_and_cut_on_the_third_check(tree):
     tree.attach_storage()
     tree.attach_disk("sdy")
     result = tree.run("check")
-    tree.refused(result, "still on after 3 attempts")
-    assert result.stderr.count("storage interface 1-1.2.1:1.0 behind it shows 1 of its 2 disks; nothing written") == 3
+    tree.powered_off(result)
+    assert result.stderr.count("shows 1 of its 2 disks; nothing written") == 2
+    assert CUT.format(found=1) in result.stderr
+
+
+def test_the_listed_disk_of_an_incomplete_reader_that_cannot_be_claimed_is_never_cut(tree):
+    tree.attach_storage()
+    tree.attach_disk("sdy", node=False)
+    result = tree.run("check")
+    tree.refused(result, "sdy behind it cannot be claimed")
+    assert "not disconnecting it" in result.stderr
+
+
+class Program:
+    """The watcher loaded into this process, so the scratch tree can change between attempts."""
+
+    def __init__(self, tree, monkeypatch):
+        for key, value in tree.env.items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setattr(sys, "dont_write_bytecode", True)
+        loader = importlib.machinery.SourceFileLoader("usb2_block_program", str(PROGRAM))
+        self.module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+        loader.exec_module(self.module)
+        self.sleeps = 0
+        self.then = lambda number: None
+        monkeypatch.setattr(self.module.time, "sleep", self.sleep)
+
+    def sleep(self, _seconds):
+        self.sleeps += 1
+        self.then(self.sleeps)
+
+    def check(self, monkeypatch, capsys):
+        code = self.module.main(["vanpi-usb2-disk-hub-off", "check"])
+        monkeypatch.undo()
+        return code, capsys.readouterr().err
+
+
+def test_a_listing_that_changes_between_attempts_restarts_the_count(tree, monkeypatch, capsys):
+    # 0 disks on attempts 1 and 2, a disk appears for attempt 3 (count restarts), the listing
+    # then stands for attempts 3, 4 and 5: the cut comes on attempt 5, not 3.
+    tree.attach_storage()
+    program = Program(tree, monkeypatch)
+    program.then = lambda number: tree.attach_disk("sdy") if number == 2 else None
+    code, stderr = program.check(monkeypatch, capsys)
+    assert code == 0
+    assert tree.disable.read_text().strip() == "1"
+    assert "nothing written on attempt 3" in stderr
+    assert "nothing written on attempt 4" in stderr
+    assert "powering it off, attempt 5 of 5" in stderr
+    assert CUT.format(found=1) in stderr
+    assert stderr.count("shows 0 of its 2 disks; nothing") == 2
+
+
+def test_a_reader_that_completes_during_the_pass_takes_the_ordinary_path(tree, monkeypatch, capsys):
+    tree.attach_storage()
+    tree.attach_disk("sdy")
+    program = Program(tree, monkeypatch)
+    program.then = lambda number: tree.attach_disk("sdz") if number == 1 else None
+    code, stderr = program.check(monkeypatch, capsys)
+    assert code == 0
+    assert tree.disable.read_text().strip() == "1"
+    assert "cutting it without them" not in stderr
+    assert "nothing written on attempt 1" in stderr
+    assert "nothing written on attempt 2" not in stderr
+
+
+def test_a_pass_whose_listing_keeps_changing_runs_out_after_five_attempts(tree, monkeypatch, capsys):
+    tree.attach_storage()
+    program = Program(tree, monkeypatch)
+
+    tree.attach_disk("sdy")
+    hidden = tree.root / "hidden-sdy"
+    (tree.sys_block / "sdy").rename(hidden)
+
+    def flip(_number):
+        # The disk is listed on every other attempt, so no two consecutive listings match.
+        if (tree.sys_block / "sdy").is_symlink():
+            (tree.sys_block / "sdy").rename(hidden)
+        else:
+            hidden.rename(tree.sys_block / "sdy")
+
+    program.then = flip
+    code, stderr = program.check(monkeypatch, capsys)
+    assert code == 1
+    assert tree.disable.read_text().strip() == "0"
+    assert "cutting it without them" not in stderr
+    # Attempts 1, 3 and 5 see no disk; the reason is the last attempt's own.
+    assert "still on after 5 attempts (open disable=0 child=absent); storage interface 1-1.2.1:1.0 behind it shows 0 of its 2 disks" in stderr
+
+
+def test_the_count_does_not_carry_from_one_pass_to_the_next(tree):
+    tree.attach_storage()
+    tree.powered_off(tree.run("check"))
+    tree.disable.write_text("0\n")
+    second = tree.run("check")
+    tree.powered_off(second)
+    assert "nothing written on attempt 2" in second.stderr
+    assert "nothing written on attempt 3" not in second.stderr
+
+
+def test_an_unknown_reader_with_no_disks_is_never_disconnected(tree):
+    tree.attach_storage(model=("0bc2", "2344"))
+    tree.refused(tree.run("check"), "(0bc2:2344) behind it is not one this block may disconnect")
+
+
+def test_a_known_reader_beside_an_unknown_one_is_never_disconnected(tree):
+    tree.attach_storage()
+    other = tree.sysfs / "1-1.2.2"
+    other.mkdir()
+    (other / "idVendor").write_text("0bc2\n")
+    (other / "idProduct").write_text("2344\n")
+    interface = tree.sysfs / "1-1.2.2:1.0"
+    interface.mkdir()
+    (interface / "bInterfaceClass").write_text("08\n")
+    tree.refused(tree.run("check"), "(0bc2:2344) behind it is not one this block may disconnect")
+
+
+def test_more_disks_than_the_known_reader_has_still_refuses(tree):
+    tree.attach_storage()
+    for name in ("sda", "sdb", "sdc"):
+        tree.attach_disk(name)
+    tree.refused(tree.run("check"), "shows 3 disks where 2 are known")
 
 
 def test_a_disk_that_appears_while_disks_are_claimed_is_never_cut_unclaimed(tree, monkeypatch, capsys):
@@ -307,8 +435,24 @@ def test_watch_alerts_once_while_the_block_keeps_failing_and_reports_recovery(tr
         watcher.terminate()
         stderr = watcher.communicate(timeout=10)[1]
     assert tree.alerts.read_text() == "vanpi USB 2.0 block FAILED|high\n"
-    assert stderr.count("still on after 3 attempts") == 1
+    assert stderr.count("still on after 5 attempts") == 1
     assert "holds again" in stderr
+
+
+def test_watch_does_not_alert_for_a_reader_stuck_without_disks_that_is_cut(tree):
+    tree.attach_storage()
+    watcher = tree.watch()
+    try:
+        deadline = time.monotonic() + 20
+        while tree.disable.read_text().strip() != "1" and time.monotonic() < deadline:
+            time.sleep(0.05)
+        time.sleep(0.5)  # several more passes
+    finally:
+        watcher.terminate()
+        stderr = watcher.communicate(timeout=10)[1]
+    assert tree.disable.read_text().strip() == "1"
+    assert not tree.alerts.exists()
+    assert "cutting it without them" in stderr
 
 
 def test_watch_alerts_when_the_port_control_stays_missing(tree):
