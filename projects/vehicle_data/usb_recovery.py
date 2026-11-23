@@ -6,6 +6,7 @@ import json
 import os
 import threading
 import time
+import urllib.parse
 import uuid
 from contextlib import ExitStack
 from dataclasses import dataclass
@@ -39,6 +40,12 @@ def _disk_record(name):
     return value if isinstance(value, dict) else {'invalid': True}
 
 
+def _inhibit_file_names():
+    """Names of every inhibit record physically in the state directory (foreign and fallback too)."""
+    # glob suppresses listing errors; an unreadable inventory must never look empty.
+    return [p.name for p in operation.STATE_DIR.iterdir() if p.match('inhibit-*.json')]
+
+
 def ignition_flag_present():
     # Match the producer's test -f. Its last positive can outlive the producer.
     return os.path.isfile(contract.IGNITION_FLAG_PATH)
@@ -58,6 +65,7 @@ class RecoveryEffects:
     processes: Callable = service_cgroup.inspect
     inhibits: Callable = operation.all_active_inhibits
     disk_record: Callable = _disk_record
+    inhibit_files: Callable = _inhibit_file_names
     end: Callable = operation.end_inhibits_if_exactly
     write_topology: Callable = operation.set_topology
     exclusive: Callable = diagnostic_safety.channel_lock
@@ -112,11 +120,44 @@ class UsbDropRecovery:
             return None
         recovery = cls(interface_manager, **kwargs)
         recovery._journal.start()
+        recovery._report_interrupted_commit()
         if not recovery.fx.helper_ok():
             recovery.log('usb-drop-recovery disabled: link helper not installed or differs')
             return None
         recovery.log(f'usb-drop-recovery enabled (once per boot, window {contract.RECOVERY_WINDOW_SECONDS} s)')
         return recovery
+
+    def _report_interrupted_commit(self):
+        """Startup diagnostic only: a `committing` incident of this boot has an unknown outcome.
+
+        `committing` is written before the final RPM sample, so it does not prove any unlink was
+        attempted. The broker that wrote it died before the terminal record; its latches are gone
+        and nothing here resumes, retries or repairs. The line lists the inhibit records physically
+        on disk (the two restoration names first); errors never reach startup.
+        """
+        try:
+            boot = self.fx.boot_id()
+            if not boot:
+                return
+            incidents = self.store.interrupted_commits(boot, directory=self.directory)
+            if not incidents:
+                return
+            try:
+                files = set(self.fx.inhibit_files())
+            except Exception:
+                files = None
+            if files is None:
+                remaining_text = 'inventory unavailable'
+            else:
+                owned = [f'inhibit-{n}.json' for n in contract.OWNED_INHIBITS.values()]
+                ordered = [f for f in owned if f in files] + sorted(files - set(owned))
+                remaining_text = ', '.join(urllib.parse.quote_from_bytes(os.fsencode(f), safe='') for f in ordered) or 'none'
+            self.log(
+                f'usb-drop-recovery incident(s) {",".join(i[:8] for i in incidents)} of this boot were '
+                f'interrupted while committing (outcome unknown, inspect remaining inhibits); remaining '
+                f'inhibit records: {remaining_text}', error=True)
+        except Exception as exc:
+            self.log(f'usb-drop-recovery startup diagnostic unavailable ({type(exc).__name__})', error=True)
 
     def bind(self, *, clear_latches, display_receiver):
         self.clear_latches = clear_latches
@@ -362,8 +403,11 @@ class UsbDropRecovery:
                 pass  # Correlation only, never evidence for recovery.
             self._phase(i, State.RESERVED)
             c, b = contract.BOARD_A_ROLES
-            self._configure(i, c, resolved[c], State.CONFIGURING)
-            self._engine(i, identify=True)
+            deadline = self._configure(i, c, resolved[c], State.CONFIGURING,
+                                       bootstrap_budget=contract.BOOTSTRAP_BUDGET_SECONDS)
+            if deadline is None:
+                raise Rejected(Refusal.WRONG_BUS, 'missing C-CAN submission time')
+            self._engine(i, bootstrap_deadline=deadline)
             self._configure(i, b, resolved[b], State.VERIFYING)
             self._topology(i, resolved)
             obs = self._observation(i, gates, self._resolve(), commit=True)
@@ -391,7 +435,7 @@ class UsbDropRecovery:
         except Exception as exc:
             raise Rejected(Refusal.INCIDENT_RECORD_UNWRITTEN) from exc
 
-    def _configure(self, i, role, target, state):
+    def _configure(self, i, role, target, state, *, bootstrap_budget=None):
         res, instance = target
         mutation = model.MutationRecord(role, instance.ifindex, self.fx.utc_now())
         i.transaction.mutations.append(mutation)
@@ -402,15 +446,18 @@ class UsbDropRecovery:
         except Exception:
             mutation.outcome = MutationOutcome.NOT_SUBMITTED
             raise
-        result = self.fx.up(instance, res.spec.bitrate)
+        result = self.fx.up(instance, res.spec.bitrate, bootstrap_budget=bootstrap_budget)
         mutation.outcome = result.outcome
         self._step(i, f'configure_{role}', result.refusal is None, str(result.outcome))
         if result.refusal is not None:
             raise Rejected(result.refusal)
+        return result.bootstrap_deadline
 
-    def _probe(self, i, kind, channel, failure):
+    def _probe(self, i, kind, channel, failure, deadline):
         try:
-            return self.fx.probe(kind, channel)
+            if deadline is not None and self.fx.monotonic() >= deadline:
+                raise ProbeFailed('bootstrap budget exhausted')
+            return self.fx.probe(kind, channel, deadline=deadline)
         except (ProbeFailed, OSError) as exc:
             detail = f'{kind}: {exc}'
             if isinstance(exc, ProbeFailed) and exc.unreaped_pid is not None:
@@ -418,23 +465,31 @@ class UsbDropRecovery:
                 self.log(f'usb-drop-recovery incident={i.incident_id[:8]} {detail}', error=True)
             raise Rejected(failure, detail) from exc
 
-    def _engine(self, i, *, identify=False):
-        instance = i.transaction.board_a[contract.BOARD_A_ROLES[0]]
-        if self.fx.read_link(instance.channel).ifindex != instance.ifindex:
+    def _check_evidence_link(self, instance, deadline, failure):
+        try:
+            read = bound_link.read_by_deadline(instance.channel, deadline=deadline, reader=self.fx.read_link,
+                                               monotonic=self.fx.monotonic)
+        except bound_link.BootstrapExpired:
+            raise Rejected(failure, 'bootstrap budget exhausted') from None
+        if read.ifindex != instance.ifindex:
             raise Rejected(Refusal.INSTANCE_CHANGED)
-        if identify:
-            identity = self._probe(i, contract.ProbeKind.IDENTITY, instance.channel, Refusal.WRONG_BUS)
+
+    def _engine(self, i, *, bootstrap_deadline=None):
+        instance = i.transaction.board_a[contract.BOARD_A_ROLES[0]]
+        bootstrap = bootstrap_deadline is not None
+        self._check_evidence_link(instance, bootstrap_deadline, Refusal.WRONG_BUS)
+        if bootstrap:
+            identity = self._probe(i, contract.ProbeKind.IDENTITY, instance.channel, Refusal.WRONG_BUS, bootstrap_deadline)
             self._step(i, 'identify_bus', identity.result)
             if not identity.result:
                 raise Rejected(Refusal.WRONG_BUS)
-        for _ in range(contract.RUNNING_CHECK_ATTEMPTS if identify else 1):
-            rpm = self._probe(i, contract.ProbeKind.RPM, instance.channel, Refusal.ENGINE_NOT_RUNNING)
+        for _ in range(contract.RUNNING_CHECK_ATTEMPTS if bootstrap else 1):
+            rpm = self._probe(i, contract.ProbeKind.RPM, instance.channel, Refusal.ENGINE_NOT_RUNNING, bootstrap_deadline)
             if rpm.result:
                 break
         else:
             raise Rejected(Refusal.ENGINE_NOT_RUNNING)
-        if self.fx.read_link(instance.channel).ifindex != instance.ifindex:
-            raise Rejected(Refusal.INSTANCE_CHANGED)
+        self._check_evidence_link(instance, bootstrap_deadline, Refusal.ENGINE_NOT_RUNNING)
         i.transaction.engine_seen_monotonic = rpm.started_monotonic
         self._step(i, 'engine_running')
         return rpm.started_monotonic + contract.ENGINE_EVIDENCE_MAX_AGE_SECONDS
@@ -473,7 +528,7 @@ class UsbDropRecovery:
             if result.removed:
                 state = State.COMMITTED if tuple(result.removed) == tuple(expected) else State.PARTIAL_COMMIT
                 if result.late:
-                    # Removals cannot be undone; a late one keeps every latch and is reported.
+                    # Removals cannot be retracted; one found finished after the deadline keeps every latch and is reported.
                     i.detail = f'late removal: {result.removed[-1]}'
                     if not result.durable:
                         i.detail += f'; directory sync failed: {result.detail}'

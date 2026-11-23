@@ -75,7 +75,8 @@ class RecoveryLab:
         self.old = self.netdevs.copy()
         self.radar = (0, False)
         self.store = SimpleNamespace(reserve=records.reserve, reservation_exists=records.reservation_exists,
-                                     write_incident=records.write_incident)
+                                     write_incident=records.write_incident,
+                                     interrupted_commits=records.interrupted_commits)
         self.effects = RecoveryEffects(
             monotonic=lambda: self.now, utc_now=lambda: WALL, sleep=self.sleep,
             boot_id=operation.current_boot_id, instance=self.netdevs.get, indexes=self.indexes,
@@ -134,7 +135,7 @@ class RecoveryLab:
         self.now += seconds
         self.trace.append(('sleep', seconds))
 
-    def read_link(self, name):
+    def read_link(self, name, *, timeout=None):
         self.trace.append(('read', name))
         inst = self.netdevs.get(name)
         up = inst is not None and inst.ifindex in self.up_indexes
@@ -161,16 +162,16 @@ class RecoveryLab:
         self.trace.append(('command', command, index))
         return self.submit(command, index)
 
-    def up(self, instance, bitrate):
+    def up(self, instance, bitrate, **kwargs):
         return bound_link.bring_up_listen_only(instance, bitrate, read_bound_state=self.effects.read_link,
-                                               popen=self.popen, monotonic=self.effects.monotonic)
+                                               popen=self.popen, monotonic=self.effects.monotonic, **kwargs)
 
     def down(self, instance, *, wait_quiet):
         return bound_link.bring_down(instance, wait_quiet=wait_quiet, read_bound_state=self.effects.read_link,
                                      present_ifindexes=self.indexes, popen=self.popen,
                                      monotonic=self.effects.monotonic)
 
-    def probe(self, kind, channel):
+    def probe(self, kind, channel, *, deadline=None):
         return usb_recovery_probe.observe(kind, channel, monotonic=self.effects.monotonic,
                                           identify=self.identify, snapshot=self.snapshot)
 

@@ -7,10 +7,11 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 
 from lib.reports import atomic_json
 from projects.vehicle_data.usb_recovery_contract import (
-    KEEP_BOOTS, MAX_INCIDENTS_PER_BOOT, MAX_RECORD_BYTES, RECORD_DIR,
+    KEEP_BOOTS, MAX_INCIDENTS_PER_BOOT, MAX_RECORD_BYTES, RECORD_DIR, IncidentState,
 )
 from projects.vehicle_data.usb_recovery_model import Incident, incident_from_dict, incident_to_dict
 
@@ -132,11 +133,37 @@ def write_incident(incident: Incident, *, directory: Path = RECORD_DIR) -> None:
 
 
 def read_incident(path: Path) -> Incident:
-    with path.open("rb") as file:
+    # Never block on a FIFO or follow a symlink planted under a matching name.
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    with os.fdopen(fd, "rb") as file:
+        if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
+            raise ValueError("USB recovery record is not a regular file")
         data = file.read(MAX_RECORD_BYTES + 1)
     if len(data) > MAX_RECORD_BYTES:
         raise ValueError("USB recovery record exceeds its byte limit")
     return incident_from_dict(json.loads(data))
+
+
+def interrupted_commits(boot_id: str, *, directory: Path = RECORD_DIR) -> tuple[str, ...]:
+    """Incident IDs of this boot whose last durable state is `committing`.
+
+    Read-only. An unreadable record is skipped: this serves a diagnostic, never a decision.
+    """
+    _reservation_path(directory, boot_id)
+    found = []
+    try:
+        owned = list(_owned_paths(directory))
+    except FileNotFoundError:
+        return ()  # No record directory yet: nothing was ever written.
+    for path, boot, incident_id in owned:
+        if boot != boot_id or incident_id is None:
+            continue
+        try:
+            if read_incident(path).state == IncidentState.COMMITTING:
+                found.append(incident_id)
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return tuple(sorted(found))
 
 
 def _prune(boot_id: str, directory: Path) -> None:

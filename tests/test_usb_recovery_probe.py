@@ -38,7 +38,7 @@ def test_hung_observer_is_killed_and_rollback_releases_every_lease(ready, kind):
     ci, bi = target_indexes(ready)
     healthy = ready.probe
 
-    def run(k, channel):
+    def run(k, channel, *, deadline=None):
         if k != kind or (k == ProbeKind.RPM and len(ready.up_indexes) < 2):
             return healthy(k, channel)
         return run_probe(k, channel, timeout=0.3, popen=substitute('import time; time.sleep(60)', children, k))
@@ -68,7 +68,7 @@ def test_unreaped_passive_child_is_recorded_and_does_not_block_rollback(ready):
             history.append('kill')
 
     before = ready.owned_files()
-    ready.effects.probe = partial(run_probe, popen=lambda *_, **__: Stuck())
+    ready.effects.probe = partial(run_probe, popen=lambda *_, **__: Stuck(), monotonic=ready.effects.monotonic)
     ready.run()
     assert_failed(ready, Refusal.WRONG_BUS, before)
     assert history[1:] == ['kill', REAP_SECONDS] and Stuck.stdout.closed
@@ -99,7 +99,7 @@ def test_no_evidence_from_bad_child_response(packet, status):
 
 
 def test_commit_dates_evidence_from_validated_child_start(ready):
-    def run(k, channel):
+    def run(k, channel, *, deadline=None):
         if len(ready.up_indexes) != 2:
             return ready.probe(k, channel)
         spawn = ready.now

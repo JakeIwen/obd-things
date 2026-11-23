@@ -589,9 +589,9 @@ def test_uncertain_up_or_failed_readback_rolls_back_an_up_link(ready, failure):
             return FakeCommand(ready, hangs=True)
         return result
 
-    def read_link(name):
+    def read_link(name, **kwargs):
         nonlocal bad_once
-        result = original_read(name)
+        result = original_read(name, **kwargs)
         if result.up and bad_once:
             bad_once = False
             return replace(result, state=replace(result.state, controller_state='ERROR-WARNING'))

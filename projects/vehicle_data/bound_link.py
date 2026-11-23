@@ -29,13 +29,13 @@ class LinkRead:
     state: canbus.InterfaceState
 
 
-def read_bound_state(name: str, *, run=None) -> LinkRead:
+def read_bound_state(name: str, *, run=None, timeout=contract.IP_TIMEOUT_SECONDS) -> LinkRead:
     try:
         if run is None:
-            result = canbus.bounded_link_details(name, timeout=contract.IP_TIMEOUT_SECONDS)
+            result = canbus.bounded_link_details(name, timeout=timeout)
         else:
             result = run(["ip", "-details", "link", "show", name], capture_output=True, text=True,
-                         timeout=contract.IP_TIMEOUT_SECONDS)
+                         timeout=timeout)
         text = result.stdout if result.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired):
         text = None
@@ -43,6 +43,22 @@ def read_bound_state(name: str, *, run=None) -> LinkRead:
     index, flags = header if header is not None else (None, None)
     return LinkRead(index, None if flags is None else "UP" in flags,
                     canbus.parse_interface_state(name, text))
+
+
+class BootstrapExpired(Exception):
+    """No more evidence may be acquired or accepted for this bootstrap."""
+
+
+def read_by_deadline(channel, *, deadline, reader, monotonic):
+    if deadline is None:
+        return reader(channel)
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        raise BootstrapExpired
+    link = reader(channel, timeout=min(contract.IP_TIMEOUT_SECONDS, remaining))
+    if monotonic() >= deadline:
+        raise BootstrapExpired
+    return link
 
 
 def link_helper_ok(*, path: str | Path | None = None, sha256: str | None = None) -> bool:
@@ -64,6 +80,7 @@ class _Submission:
     acknowledged: bool = False
     kernel_errno: int | None = None
     started: bool = True
+    submitted_monotonic: float | None = None
 
     @property
     def certain(self) -> bool:
@@ -81,9 +98,10 @@ def _stop(process):
         kill_and_reap(process)  # Only a positive cgroup check can authorize rollback.
 
 
-def _submit(command, index, args, *, popen, monotonic) -> _Submission:
+def _submit(command, index, args, *, popen, monotonic, wait_budget=None) -> _Submission:
     try:
-        deadline = monotonic() + _SEND_WINDOW_SECONDS
+        submitted = monotonic()
+        deadline = submitted + _SEND_WINDOW_SECONDS
     except Exception:
         return _Submission(started=False)
     argv = ["sudo", "-n", "/usr/bin/python3", "-I", "-B", contract.LINK_HELPER_PATH,
@@ -95,12 +113,15 @@ def _submit(command, index, args, *, popen, monotonic) -> _Submission:
         return _Submission(started=False)
     try:
         try:
-            out, _ = process.communicate(timeout=contract.IP_TIMEOUT_SECONDS)
+            timeout = contract.IP_TIMEOUT_SECONDS
+            if wait_budget is not None:
+                timeout = min(timeout, max(0.0, submitted + wait_budget - monotonic()))
+            out, _ = process.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             _stop(process)
             return _Submission()
         if process.returncode == 0:
-            return _Submission(acknowledged=True)
+            return _Submission(acknowledged=True, submitted_monotonic=submitted)
         if process.returncode == 3 and (match := _KERNEL_ERROR_LINE.fullmatch(out)):
             code = int(match[1])
             if errno.errorcode.get(code, "UNKNOWN") == match[2]:
@@ -115,11 +136,12 @@ def _submit(command, index, args, *, popen, monotonic) -> _Submission:
 class BringUpResult:
     outcome: MutationOutcome
     refusal: Refusal | None = None
+    bootstrap_deadline: float | None = None
 
 
 def bring_up_listen_only(
     instance: NetdevInstance, bitrate: int, *, read_bound_state=read_bound_state,
-    popen=subprocess.Popen, monotonic=time.monotonic,
+    popen=subprocess.Popen, monotonic=time.monotonic, bootstrap_budget=None,
 ) -> BringUpResult:
     try:
         before = read_bound_state(instance.channel)
@@ -130,7 +152,7 @@ def bring_up_listen_only(
     except Exception:
         return BringUpResult(MutationOutcome.NOT_SUBMITTED, Refusal.VERIFICATION_FAILED)
     result = _submit("up-listen-only", instance.ifindex, (str(bitrate),),
-                     popen=popen, monotonic=monotonic)
+                     popen=popen, monotonic=monotonic, wait_budget=bootstrap_budget)
     if not result.started:
         return BringUpResult(MutationOutcome.NOT_SUBMITTED, Refusal.CONFIGURE_FAILED)
     if result.kernel_errno is not None:
@@ -138,13 +160,17 @@ def bring_up_listen_only(
         return BringUpResult(MutationOutcome.KERNEL_REFUSED, refusal)
     if not result.acknowledged:
         return BringUpResult(MutationOutcome.CONFIGURE_FAILED, Refusal.CONFIGURE_FAILED)
-    after = read_bound_state(instance.channel)
+    deadline = None if bootstrap_budget is None else result.submitted_monotonic + bootstrap_budget
+    try:
+        after = read_by_deadline(instance.channel, deadline=deadline, reader=read_bound_state, monotonic=monotonic)
+    except BootstrapExpired:
+        return BringUpResult(MutationOutcome.VERIFICATION_FAILED, Refusal.WRONG_BUS)
     if after.ifindex != instance.ifindex:
         return BringUpResult(MutationOutcome.INSTANCE_CHANGED, Refusal.INSTANCE_CHANGED)
     expected = LinkExpectation(bitrate, listen_only=True, channel=instance.channel)
     if after.up is not True or not expected.matches(after.state):
         return BringUpResult(MutationOutcome.VERIFICATION_FAILED, Refusal.VERIFICATION_FAILED)
-    return BringUpResult(MutationOutcome.UP_VERIFIED)
+    return BringUpResult(MutationOutcome.UP_VERIFIED, bootstrap_deadline=deadline)
 
 
 def bring_down(

@@ -112,8 +112,8 @@ class ReplayKernel:
         self.channels[name] = (index, True, bitrate)
         return SimpleNamespace(communicate=lambda **_: ("", None), returncode=0, stdout=None)
 
-    def read_link(self, channel):
-        return bound_link.read_bound_state(channel, run=self.run)
+    def read_link(self, channel, **kwargs):
+        return bound_link.read_bound_state(channel, run=self.run, **kwargs)
 
     def snapshot(self, channel, **kwargs):
         assert self.channels[channel][1]
@@ -126,13 +126,16 @@ class ReplayKernel:
             return ()
         return self.snapshot(self.ccan).observations
 
+    def probe(self, kind, channel, *, deadline=None):
+        return usb_recovery_probe.observe(kind, channel, snapshot=self.snapshot)
+
     def effects(self):
         class_net = self.sysfs.class_net
         return RecoveryEffects(
             boot_id=lambda: _BOOT, helper_ok=lambda: True, ignition_flag=lambda: True,
             instance=partial(netdev_instance.read_instance, sys_class_net_root=class_net),
             indexes=partial(netdev_instance.present_ifindexes, sys_class_net_root=class_net),
-            read_link=self.read_link, probe=partial(usb_recovery_probe.observe, snapshot=self.snapshot),
+            read_link=self.read_link, probe=self.probe,
             processes=partial(service_cgroup.inspect, proc_root=self.proc, cgroup_root=self.cgroup),
             up=partial(bound_link.bring_up_listen_only, read_bound_state=self.read_link, popen=self.popen),
             down=partial(bound_link.bring_down, read_bound_state=self.read_link, popen=self.popen),

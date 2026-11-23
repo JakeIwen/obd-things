@@ -36,18 +36,22 @@ def _validated_reply(raw, spawn, now):
     return reply
 
 
-def run_probe(kind, channel, *, popen=subprocess.Popen, monotonic=time.monotonic, timeout=PROBE_WALL_SECONDS):
+def run_probe(kind, channel, *, popen=subprocess.Popen, monotonic=time.monotonic, timeout=PROBE_WALL_SECONDS,
+              deadline=None):
     spawn = monotonic()
+    expiry = spawn + timeout if deadline is None else min(spawn + timeout, deadline)
+    if spawn >= expiry:
+        raise ProbeFailed('probe budget exhausted before launch')
     child = popen([sys.executable, '-m', PROBE_MODULE, kind, channel], cwd=REPO,
                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     try:
         try:
-            status = child.wait(timeout=max(0.0, spawn + timeout - monotonic()))
+            status = child.wait(timeout=max(0.0, expiry - monotonic()))
         except subprocess.TimeoutExpired as exc:
             reaped = kill_and_reap(child)
             raise ProbeFailed('probe timed out', unreaped_pid=None if reaped else child.pid) from exc
         now = monotonic()
-        if status != 0 or now > spawn + timeout:
+        if status != 0 or now > expiry:
             raise ProbeFailed(f'probe exited with status {status} or missed its deadline')
         # A valid line fits inside the pipe. Don't accumulate output from a broken
         # child or wait for EOF from an unexpected descendant that inherited stdout.

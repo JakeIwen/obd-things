@@ -9,6 +9,7 @@ import pytest
 
 from lib import can_operation_state as operation
 from projects.vehicle_data import usb_recovery_record as records
+from projects.vehicle_data.usb_recovery import UsbDropRecovery
 from projects.vehicle_data.usb_recovery_contract import (
     ENGINE_EVIDENCE_MAX_AGE_SECONDS, IncidentState as State, Refusal,
 )
@@ -95,7 +96,7 @@ def test_commit_deadline_expires_twice_while_the_writer_lock_is_held(ready, monk
 @pytest.mark.parametrize('helpers,slow', [
     ((ACTIVE,), C_INHIBIT), ((ACTIVE, AUX), C_INHIBIT), ((ACTIVE, AUX), B_INHIBIT),
 ])
-def test_late_unlink_is_reported_never_undone(lab, monkeypatch, helpers, slow):
+def test_removal_found_finished_after_deadline_is_reported_never_undone(lab, monkeypatch, helpers, slow):
     lab.incident(*helpers)
     before = lab.owned_files()
     lab.replace_board()
@@ -374,3 +375,97 @@ def test_death_at_final_unlink_makes_no_second_attempt(ready, monkeypatch, took_
     ready.run()
     assert ready.persisted().reason == Refusal.BOOT_BUDGET_SPENT
     assert not ready.commands()
+
+
+def _startup_lines(ready, **kwargs):
+    lines = []
+    UsbDropRecovery.if_enabled(True, ready, log=lines.append, effects=ready.effects, store=ready.store,
+                               record_dir=ready.directory, **kwargs).flush_log()
+    return [line for line in lines if 'interrupted while committing' in line or 'diagnostic' in line]
+
+
+def _die_at_unlink(ready, monkeypatch, name):
+    original = os.unlink
+
+    def dying(path, *args, **kwargs):
+        if Path(path).name == f'inhibit-{name}.json':
+            raise SystemExit('simulated crash')
+        original(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(operation.os, 'unlink', dying)
+        with pytest.raises(SystemExit, match='simulated crash'):
+            ready.run()
+
+
+def test_startup_reports_remaining_records_of_an_interrupted_commit(ready, monkeypatch):
+    _die_at_unlink(ready, monkeypatch, C_INHIBIT)  # nothing removed: both records remain
+    lines = _startup_lines(ready)
+    assert len(lines) == 1 and lines[0].startswith('ERROR ')
+    assert C_INHIBIT in lines[0] and B_INHIBIT in lines[0]
+    assert not any(c == 'down' for c, _ in ready.commands())
+
+
+def test_startup_names_the_single_remaining_record(ready, monkeypatch):
+    _die_at_unlink(ready, monkeypatch, B_INHIBIT)  # first removed, second remains
+    (line,) = _startup_lines(ready)
+    assert B_INHIBIT in line and C_INHIBIT not in line
+
+
+def test_startup_reports_none_remaining_and_acts_on_nothing(ready, monkeypatch):
+    _die_at_unlink(ready, monkeypatch, B_INHIBIT)
+    os.unlink(ready.state_dir / f'inhibit-{B_INHIBIT}.json')
+    before = (ready.owned_files(), ready.persisted().state)
+    ready.trace.clear()
+    (line,) = _startup_lines(ready)
+    assert 'remaining inhibit records: none' in line
+    assert (ready.owned_files(), ready.persisted().state) == before
+    assert not ready.commands() and not ready.events('pause')
+
+
+def test_startup_is_silent_for_other_boots_terminal_incidents_and_disabled(ready, monkeypatch):
+    ready.run()  # a complete commit: terminal state
+    assert _startup_lines(ready) == []
+    ready.persisted()
+    monkeypatch.setattr(ready.effects, 'boot_id', lambda: 'a-later-boot')
+    assert _startup_lines(ready) == []
+    assert UsbDropRecovery.if_enabled(False, ready, effects=ready.effects) is None
+
+
+def test_startup_diagnostic_failure_never_changes_startup(ready, monkeypatch):
+    _die_at_unlink(ready, monkeypatch, C_INHIBIT)
+    monkeypatch.setattr(ready.store, 'interrupted_commits', lambda *a, **k: 1 / 0)
+    lines = []
+    recovery = UsbDropRecovery.if_enabled(True, ready, log=lines.append, effects=ready.effects,
+                                          store=ready.store, record_dir=ready.directory)
+    assert recovery is not None
+    recovery.flush_log()
+    assert any('diagnostic unavailable (ZeroDivisionError)' in line for line in lines)
+
+
+def test_startup_names_foreign_and_fallback_inhibits(ready, monkeypatch):
+    _die_at_unlink(ready, monkeypatch, B_INHIBIT)
+    os.unlink(ready.state_dir / f'inhibit-{B_INHIBIT}.json')
+    (ready.state_dir / 'inhibit-nolock.boot.abc.json').write_text('{}')
+    (ready.state_dir / 'inhibit-we ird%.json').write_text('{}')
+    (line,) = _startup_lines(ready)
+    assert 'nolock.boot.abc.json' in line and 'we%20ird%25.json' in line
+    assert 'none' not in line.split('remaining inhibit records:')[1]
+
+
+def test_startup_says_when_inventory_is_unavailable(ready, monkeypatch):
+    _die_at_unlink(ready, monkeypatch, C_INHIBIT)
+    monkeypatch.setattr(ready.effects, 'inhibit_files', lambda: 1 / 0)
+    (line,) = _startup_lines(ready)
+    assert 'inventory unavailable' in line and 'none' not in line
+
+
+def test_startup_scan_ignores_fifo_and_symlink_incident_names(ready, monkeypatch):
+    _die_at_unlink(ready, monkeypatch, C_INHIBIT)
+    boot = operation.current_boot_id()
+    os.mkfifo(ready.directory / f'incident-{boot}-{"1" * 32}.json')
+    target = ready.directory / 'elsewhere'
+    target.write_text('{}')
+    os.symlink(target, ready.directory / f'incident-{boot}-{"2" * 32}.json')
+    (line,) = _startup_lines(ready)  # would hang on the FIFO if it were opened blocking
+    assert C_INHIBIT in line

@@ -12,7 +12,7 @@ import pytest
 
 from lib import can_operation_state as operation
 from projects.vehicle_data.usb_recovery_contract import IncidentState as State, MutationOutcome, Refusal
-from projects.vehicle_data.usb_recovery_log import ERROR_PREFIX, QUEUE_LINES, BestEffortLog
+from projects.vehicle_data.usb_recovery_log import ERROR_PREFIX, MAX_LINE_BYTES, QUEUE_LINES, BestEffortLog, FdSink, fit_line
 from tests.usb_recovery_support import ACTIVE, assert_failed, lab, target_indexes
 
 REPO = Path(__file__).resolve().parents[1]
@@ -156,30 +156,118 @@ def test_healthy_pipe_shows_a_real_failed_transaction_before_the_process_exits(t
             child.communicate(b'x', timeout=10)
 
 
-SIMPLE_CHILD = '''
-import sys
+FULL_PIPE_CHILD = '''
+import os, sys, threading
 from projects.vehicle_data.usb_recovery import RecoveryEffects, UsbDropRecovery
-recovery = UsbDropRecovery.if_enabled(True, None, effects=RecoveryEffects(helper_ok=lambda: True))
-sys.stdin.buffer.read(1)
+entered, real_write = threading.Event(), os.write
+
+def spy(fd, data):  # The journal writer's os.write, seen just before it blocks on the full pipe.
+    if fd != 2:
+        entered.set()
+    return real_write(fd, data)
+
+os.write = spy
+recovery = UsbDropRecovery.if_enabled(True, None, effects=RecoveryEffects(boot_id=lambda: None, helper_ok=lambda: True))
+for n in range(2000):
+    recovery.log("x" * 200 + str(n), error=True)
+if not entered.wait(10):
+    sys.exit(3)
+print("WRITER-ENTERED", file=sys.stderr, flush=True)
 '''
 
 
-def test_log_calls_return_promptly_when_the_real_pipe_is_full():
-    code = SIMPLE_CHILD.replace("sys.stdin.buffer.read(1)", '''import time
-t = time.monotonic()
-for n in range(2000):
-    recovery.log("x" * 200 + str(n), error=True)
-print("ELAPSED", time.monotonic() - t, file=sys.stderr, flush=True)
-sys.stdin.buffer.read(1)''')
-    # Nobody reads the child's stdout: after about 64 KiB the pipe is full and the writer blocks.
-    with subprocess.Popen([sys.executable, '-c', code], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                          stderr=subprocess.PIPE, cwd=REPO, env=_child_env()) as child:
-        try:
-            assert select.select([child.stderr], [], [], 20)[0], 'log() blocked on a full pipe'
-            elapsed = float(child.stderr.readline().split()[1])
-            assert elapsed < 5
-        finally:
-            child.kill()
+def _fill_pipe():
+    """A pipe with no room for even one byte, blocking again as the child will expect."""
+    read, write = os.pipe()
+    os.set_blocking(write, False)
+    total = 0
+    for chunk in (b'x' * 4096, b'x'):
+        while True:
+            try:
+                total += os.write(write, chunk)
+            except BlockingIOError:
+                break
+    os.set_blocking(write, True)  # The flag is shared with the child's inherited descriptor.
+    return read, write, total
+
+
+def _pending(fd):
+    import array, fcntl, termios
+    size = array.array('i', [0])
+    fcntl.ioctl(fd, termios.FIONREAD, size)
+    return size[0]
+
+
+def test_process_exits_normally_while_the_real_stdout_pipe_stays_full():
+    read, write, filled = _fill_pipe()
+    try:
+        with subprocess.Popen([sys.executable, '-c', FULL_PIPE_CHILD], stdin=subprocess.DEVNULL, stdout=write,
+                              stderr=subprocess.PIPE, cwd=REPO, env=_child_env()) as child:
+            try:
+                # Nobody drains the pipe: the writer is blocked in os.write, yet the process must exit 0.
+                assert child.wait(timeout=20) == 0, child.stderr.read()
+                assert b'WRITER-ENTERED' in child.stderr.read()
+            finally:
+                child.kill()
+        assert _pending(read) == filled  # Still full: nothing was drained to let it through.
+    finally:
+        os.close(read), os.close(write)
+
+
+def test_default_sink_writes_whole_lines_to_a_private_descriptor_without_touching_sys_stdout(monkeypatch):
+    read, write = os.pipe()
+    monkeypatch.setattr(sys, 'stdout', type('NoStream', (), {'fileno': lambda self: write})())
+    sink = FdSink.for_stdout()
+    os.close(write)  # The sink holds its own duplicate.
+    monkeypatch.setattr(sys, 'stdout', None)  # Any use of sys.stdout would now raise.
+    try:
+        sink('hello')
+        sink('x' * 10000 + '\u00e9')
+        os.set_blocking(read, False)
+        data = os.read(read, 65536)
+    finally:
+        os.close(read)
+        os.close(sink._fd)
+    first, second = data.splitlines(keepends=True)
+    assert first == b'hello\n'
+    assert len(second) <= MAX_LINE_BYTES and second.endswith(b'\n')
+    second.decode()  # Truncation never splits a character.
+
+
+def test_fd_sink_completes_short_writes_with_exact_bytes(monkeypatch):
+    offered, accepted = [], []
+
+    def short(fd, data):
+        offered.append(bytes(data))
+        accepted.append(bytes(data[:3]))
+        return 3
+
+    monkeypatch.setattr(os, 'write', short)
+    FdSink(99)('abcdefg')
+    assert offered == [b'abcdefg\n', b'defg\n', b'g\n']
+    assert b''.join(accepted) == b'abcdefg\n'
+
+
+def test_drop_count_survives_truncation_of_a_long_line():
+    seen = []
+    gate, entered = threading.Event(), threading.Event()
+
+    def gated(line):
+        entered.set()
+        gate.wait(10)
+        seen.append(line)
+
+    journal = BestEffortLog(gated, capacity=1)
+    journal.start()
+    journal.emit('block')
+    assert entered.wait(5)
+    journal.emit('é' * 10000, error=True)
+    assert not journal.emit('lost')
+    gate.set()
+    assert journal.drain()
+    fitted = fit_line(seen[1])
+    assert fitted.endswith(b'[1 earlier usb-drop-recovery log lines dropped]\n')
+    assert fitted.decode().startswith(ERROR_PREFIX + 'é')
 
 
 def test_a_raising_sink_does_not_change_the_recovery_outcome(lab):

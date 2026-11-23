@@ -357,8 +357,11 @@ def _end_compared_inhibits(
     paths: Mapping[Path, dict], directory_fd: int, deadline_monotonic: float,
     monotonic: Callable[[], float],
 ) -> EndResult:
-    # No unlink is issued after the deadline. A removal cannot be retracted (readers act on the
-    # record's absence), so one that finishes late is reported with late=True, never re-created.
+    # The clock is checked immediately before each unlink and the unlink is refused if the deadline
+    # has passed. Scheduling or I/O can still delay the removal itself, and that can be neither
+    # prevented nor retracted (readers act on the record's absence), so the clock is read again
+    # afterwards: a removal found finished after the deadline is reported with late=True and never
+    # re-created. This cannot tell a late issue from a late completion.
     removed: list[str] = []
     late = False
     for path in paths:

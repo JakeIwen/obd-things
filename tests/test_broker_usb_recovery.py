@@ -65,7 +65,7 @@ def test_cli_defaults_off_and_the_four_inhibit_names_match():
 
 
 @pytest.mark.parametrize("flag,helper_ok,want_recovery", [(False, False, False), (True, False, False), (True, True, True)])
-def test_startup_requires_both_flag_and_verified_helper(monkeypatch, tmp_path, capsys, flag, helper_ok, want_recovery):
+def test_startup_requires_both_flag_and_verified_helper(monkeypatch, tmp_path, capfd, flag, helper_ok, want_recovery):
     from projects.vehicle_data import api, can_interfaces, display_receivers, usb_can_monitor, usb_recovery
 
     sys_class_net = tmp_path / "class-net"
@@ -80,7 +80,7 @@ def test_startup_requires_both_flag_and_verified_helper(monkeypatch, tmp_path, c
     check = mock.Mock(return_value=helper_ok)
     instance = mock.Mock(return_value=None)
     monkeypatch.setattr(usb_recovery, "RecoveryEffects", lambda: SimpleNamespace(
-        helper_ok=check, instance=instance, monotonic=time.monotonic,
+        helper_ok=check, instance=instance, monotonic=time.monotonic, boot_id=lambda: None,
     ))
     monkeypatch.setattr(telemetry.TelemetryBroker, "start_usb_monitor", lambda _: None)
     receiver = mock.Mock()
@@ -111,7 +111,7 @@ def test_startup_requires_both_flag_and_verified_helper(monkeypatch, tmp_path, c
     assert check.call_count == int(flag)
     assert make_journal.call_count == int(flag)
     assert journal.drain()  # Delivery is asynchronous, including the missing-helper refusal.
-    output = capsys.readouterr().out
+    output = capfd.readouterr().out
     assert ("usb-drop-recovery enabled" in output) == want_recovery
     assert ("usb-drop-recovery disabled" in output) == (flag and not helper_ok)
 
@@ -152,7 +152,7 @@ def test_startup_line_is_visible_on_a_buffered_pipe_before_exit():
     code = '''
 import sys
 from projects.vehicle_data.usb_recovery import RecoveryEffects, UsbDropRecovery
-UsbDropRecovery.if_enabled(True, None, effects=RecoveryEffects(helper_ok=lambda: True))
+UsbDropRecovery.if_enabled(True, None, effects=RecoveryEffects(boot_id=lambda: None, helper_ok=lambda: True))
 sys.stdin.buffer.read(1)
 '''
     env = os.environ.copy()
