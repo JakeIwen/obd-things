@@ -177,16 +177,30 @@ disks have no reason to be on USB 2.0).
   one port's power-off is logical; the 5 V rail was not measured. That test wrote `1` to a port
   that was already idle; cutting off an enumerated chain happens only at a boot or a hub
   re-enumeration and had not been observed when this was written.
-- Observed 2026-11-23 03:13 (US/Mountain), with no reboot: port 2 came back on by itself
-  (`disable` read `0`) in the same second a Samsung Android device (04e8:6860) enumerated on Pi
-  port 3 (`1-1.3`), and the whole chain enumerated again, the failing `1-1.2.4.4` port included.
-  The watcher saw it at its next pass (28 s later), refused three times because the card
-  reader's storage interface listed none of its two disks yet, logged "still on after 3
-  attempts", and at a later pass cut the enumerated chain: "the USB 2.0 block holds again" at
-  03:15:43, about 140 s after the port opened. `can0`/`can1`/`can2` kept their interface indexes
-  and TX counters, and the broker logged nothing. So a connection on another port of the onboard
-  hub can reopen port 2, and the block is restored by the watcher within a few passes, not at
-  once. Whether the first "still on" pass sent its one-per-boot ntfy was not checked.
+- Observed 2026-11-23 03:13-03:16 (US/Mountain), with no reboot: the block lapsed and the fault
+  it guards against happened within two minutes.
+  - 03:13:23: port 2 came back on by itself (`disable` read `0`) in the same second a Samsung
+    Android device (04e8:6860) enumerated on Pi port 3 (`1-1.3`). The whole chain enumerated
+    again, the failing `1-1.2.4.4` port included. Cause not established; the coincidence says a
+    connection on another port of the onboard hub can reopen port 2.
+  - 03:13:51-03:13:57: the watcher saw it at its next pass and refused three times, "storage
+    interface 1-1.2.1:1.0 behind it shows 0 of its 2 disks; nothing written", then logged "still
+    on after 3 attempts". The card reader was being reset by the kernel and never registered its
+    disks, so the rule that waits for all of a known reader's disks kept the watcher from writing
+    for as long as the chain stayed up. Whether its one-per-boot ntfy was sent was not checked.
+  - 03:15:05: `clear tt ... error -71` on the CAN adapters' hub (`1-1.4`); 03:15:16-03:15:22: the
+    chain, the CAN hub and both adapters disconnected and the kernel power-cycled port 2. The
+    adapters re-enumerated with new interface indexes. The van was asleep and no helper was
+    armed, so no restoration inhibit was written: the broker brought all three roles back up
+    listen-only at 03:15:24-03:15:25 by its ordinary reconciliation, and the USB drop recovery
+    below had nothing to do.
+  - 03:15:43: the watcher logged "the USB 2.0 block holds again" without having logged a write
+    of its own; how the port returned to off is not established.
+  This is the third time the CAN adapters dropped with the chain on USB 2.0 and the first with
+  the block installed. Open problem, not fixed: the watcher cannot cut a chain whose known
+  reader never finishes registering its disks. Until the faulty hub is out of the chain, or the
+  watcher gains a bound on that wait (a change to a root-run program, to be reviewed as such),
+  the block reduces the exposure but does not remove it.
 - Limits: xHCI is built into the kernel, so at boot the chain enumerates until the watcher's
   first pass, when the multi-user services start. A USB 2.0-only device anywhere in the disk
   hub chain stops working (one was present on 2026-11-22: a Genesys 05e3:0764 "USB Storage"
