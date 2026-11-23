@@ -153,14 +153,18 @@ disks have no reason to be on USB 2.0).
     on every disk behind the port, whatever capacity the disk reports, checks that each opened
     node is the device sysfs describes, and holds the claims across the write. A disk that is
     mounted, is swap, is held by another block device or cannot be inspected or claimed makes
-    it refuse and alert. A USB storage interface whose disk has not appeared yet is a disk on
-    its way (the kernel registers the disk a second or more after the USB probe), so nothing is
-    written while one exists. It then lists the storage behind the port again, and writes
+    it refuse and alert. It cuts only storage it knows: `KNOWN_STORAGE_DISKS` in the program
+    lists each model with the number of disks it registers (the Genesys 05e3:0764 reader: two,
+    one per card slot), and the write waits until all of them are listed, because the kernel
+    registers disks one by one, a second or more after the USB probe. Any other storage behind
+    the port, such as a disk that fell back to USB 2.0, is never disconnected: it refuses and
+    alerts, and a person decides. It then lists the storage behind the port again, and writes
     nothing on that attempt if a disk or storage interface appeared, left or changed while it
-    was claiming. An unused disk, or a card reader with no card, does not stop the power-off.
-    Two listings are not a lock on the USB topology: a device whose storage interface appears
-    after the second listing, and whose disk is registered and mounted before the kernel
-    carries out the write, is not covered.
+    was claiming. An unused disk, or a reader with no card, does not stop the power-off. Two
+    listings are not a lock on the USB topology: a device whose storage interface appears after
+    the second listing, and whose disks are registered and mounted before the kernel carries
+    out the write, is not covered. A new USB 2.0-only storage device in the chain needs a row
+    in that table (or a Pi port of its own) before the block will hold with it attached.
   - A hub at `1-1` whose port control is missing counts as a failure after three passes, at
     once when something is enumerated behind the port. It writes nothing but that attribute
     and its alert marker under `/run`, and never touches another port or a hub that is not
@@ -175,7 +179,8 @@ disks have no reason to be on USB 2.0).
 - Limits: xHCI is built into the kernel, so at boot the chain enumerates until the watcher's
   first pass, when the multi-user services start. A USB 2.0-only device anywhere in the disk
   hub chain stops working (one was present on 2026-11-22: a Genesys 05e3:0764 "USB Storage"
-  reader on the first hub's port 1); plug such a device into Pi port 1 or 3 instead. Do not
+  reader on the first hub's port 1, holding two 62.5 GB cards); plug such a device into Pi port
+  1 or 3 instead. Do not
   plug the CAN hub into port 2.
 - Check: `projects/vehicle_data/usb2_block/install.sh status`, or
   `/usr/local/sbin/vanpi-usb2-disk-hub-off status` (prints `held`). The watcher's journal

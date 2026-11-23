@@ -18,6 +18,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 PROGRAM = REPO_ROOT / "projects/vehicle_data/usb2_block/vanpi-usb2-disk-hub-off"
 # The installed copy runs through its own `python3 -I` line; here the suite's interpreter does.
 COMMAND = [sys.executable, "-I", str(PROGRAM)]
+KNOWN_READER = ("05e3", "0764")  # registers two disks, one per card slot
 
 
 class Tree:
@@ -59,10 +60,20 @@ class Tree:
         child.mkdir()
         return child
 
+    def attach_storage(self, model: tuple = KNOWN_READER) -> None:
+        """The USB storage device at 1-1.2.1 that attach_disk's disks sit behind."""
+        device = self.sysfs / "1-1.2.1"
+        device.mkdir()
+        (device / "idVendor").write_text(model[0] + "\n")
+        (device / "idProduct").write_text(model[1] + "\n")
+        interface = self.sysfs / "1-1.2.1:1.0"
+        interface.mkdir()
+        (interface / "bInterfaceClass").write_text("08\n")
+
     def attach_disk(
         self, name: str, sectors: int = 1000, node: bool = True, device_number: object = "0:0"
     ) -> None:
-        """A block device whose real sysfs path runs through the hub's port 2.
+        """A block device behind that storage device's interface.
 
         Its node is a regular file, whose device number reads as 0:0.
         """
@@ -78,12 +89,6 @@ class Tree:
         if node:
             (self.dev / name).write_text("")
 
-    def attach_storage_interface(self) -> None:
-        """The USB mass-storage interface attach_disk's disks sit behind."""
-        interface = self.sysfs / "1-1.2.1:1.0"
-        interface.mkdir()
-        (interface / "bInterfaceClass").write_text("08\n")
-
     def run(self, verb: str) -> subprocess.CompletedProcess:
         return subprocess.run(
             COMMAND + [verb], env=self.env, capture_output=True, text=True, timeout=30
@@ -96,6 +101,15 @@ class Tree:
         deadline = time.monotonic() + 20
         while not self.alerts.exists() and time.monotonic() < deadline:
             time.sleep(0.05)
+
+    def refused(self, result: subprocess.CompletedProcess, why: str) -> None:
+        assert result.returncode == 1
+        assert self.disable.read_text().strip() == "0"
+        assert why in result.stderr
+
+    def powered_off(self, result: subprocess.CompletedProcess) -> None:
+        assert result.returncode == 0
+        assert self.disable.read_text().strip() == "1"
 
 
 @pytest.fixture
@@ -112,8 +126,7 @@ def test_a_held_block_is_left_alone_and_silent(tree):
 
 def test_an_open_port_is_powered_off(tree):
     result = tree.run("check")
-    assert result.returncode == 0
-    assert tree.disable.read_text().strip() == "1"
+    tree.powered_off(result)
     assert "powering it off, attempt 1 of 3" in result.stderr
     assert "off again" in result.stderr
 
@@ -132,18 +145,12 @@ def test_a_write_the_port_refuses_fails_the_check(tree):
     tree.disable.chmod(0o444)
     if os.access(tree.disable, os.W_OK):
         pytest.skip("this user can write a read-only file, so a refused write cannot be staged")
-    result = tree.run("check")
-    assert result.returncode == 1
-    assert tree.disable.read_text().strip() == "0"
-    assert "writing 1 to" in result.stderr
+    tree.refused(tree.run("check"), "writing 1 to")
 
 
 def test_a_different_hub_at_the_path_is_never_written(tree, tmp_path):
     other = Tree(tmp_path / "other", vendor="0bda", product="5411")
-    result = other.run("check")
-    assert result.returncode == 1
-    assert other.disable.read_text().strip() == "0"
-    assert "not the Pi's onboard hub (foreign 0bda:5411)" in result.stderr
+    other.refused(other.run("check"), "not the Pi's onboard hub (foreign 0bda:5411)")
 
 
 def test_no_hub_at_the_path_is_nothing_to_block_and_not_a_held_block(tree, tmp_path):
@@ -176,60 +183,87 @@ def test_a_device_behind_a_port_with_no_control_fails_the_check(tree):
     assert "has no control attribute" in result.stderr
 
 
-def test_a_disk_behind_the_port_that_cannot_be_claimed_is_never_disconnected(tree):
+def test_the_known_reader_with_both_disks_unused_is_cut_off(tree):
+    tree.attach_storage()
+    tree.attach_disk("sdy")
+    tree.attach_disk("sdz")
+    tree.powered_off(tree.run("check"))
+
+
+def test_the_known_reader_with_no_cards_is_cut_off(tree):
+    tree.attach_storage()
+    tree.attach_disk("sdy", sectors=0)
+    tree.attach_disk("sdz", sectors=0)
+    tree.powered_off(tree.run("check"))
+
+
+def test_a_disk_that_cannot_be_claimed_is_never_disconnected(tree):
     # A mounted disk refuses the exclusive claim with EBUSY; that needs a real block device, so
     # the same refusal is staged with a device node that cannot be opened at all.
     tree.attach_child()
+    tree.attach_storage()
+    tree.attach_disk("sdy")
     tree.attach_disk("sdz", node=False)
     result = tree.run("check")
-    assert result.returncode == 1
-    assert tree.disable.read_text().strip() == "0"
-    assert "sdz behind it cannot be claimed" in result.stderr
+    tree.refused(result, "sdz behind it cannot be claimed")
     assert "not disconnecting it" in result.stderr
 
 
-def test_a_disk_behind_the_port_that_cannot_be_inspected_is_never_disconnected(tree):
+def test_a_disk_that_cannot_be_inspected_is_never_disconnected(tree):
+    tree.attach_storage()
+    tree.attach_disk("sdy")
     tree.attach_disk("sdz", device_number=None)
-    result = tree.run("check")
-    assert result.returncode == 1
-    assert tree.disable.read_text().strip() == "0"
-    assert "sdz behind it cannot be inspected" in result.stderr
-
-
-def test_an_unused_disk_behind_the_port_does_not_stop_the_power_off(tree):
-    tree.attach_disk("sdz")
-    result = tree.run("check")
-    assert result.returncode == 0
-    assert tree.disable.read_text().strip() == "1"
-
-
-def test_an_empty_card_reader_is_claimed_and_does_not_stop_the_power_off(tree):
-    tree.attach_disk("sdz", sectors=0)
-    result = tree.run("check")
-    assert result.returncode == 0
-    assert tree.disable.read_text().strip() == "1"
+    tree.refused(tree.run("check"), "sdz behind it cannot be inspected")
 
 
 def test_a_disk_reporting_no_capacity_is_still_claimed(tree):
     # The kernel shows a failed capacity read as 0 sectors, so 0 is not proof of an empty reader.
+    tree.attach_storage()
+    tree.attach_disk("sdy")
     tree.attach_disk("sdz", sectors=0, node=False)
-    result = tree.run("check")
-    assert result.returncode == 1
-    assert tree.disable.read_text().strip() == "0"
-    assert "sdz behind it cannot be claimed" in result.stderr
+    tree.refused(tree.run("check"), "sdz behind it cannot be claimed")
 
 
 def test_a_node_that_is_not_the_inspected_device_is_never_trusted(tree):
+    tree.attach_storage()
+    tree.attach_disk("sdy")
     tree.attach_disk("sdz", device_number="8:16")
+    tree.refused(tree.run("check"), "sdz behind it is not the device sysfs describes")
+
+
+def test_storage_this_block_does_not_know_is_never_disconnected(tree):
+    # A disk that fell back from USB 3.0: how many disks it will register is not known.
+    tree.attach_storage(model=("0bc2", "2344"))
+    tree.attach_disk("sdz")
+    tree.refused(tree.run("check"), "storage device 1-1.2.1:1.0 (0bc2:2344) behind it is not one this block may disconnect")
+
+
+def test_a_disk_behind_no_listed_storage_interface_is_never_disconnected(tree):
+    tree.attach_disk("sdz")
+    tree.refused(tree.run("check"), "sdz behind it belongs to no listed storage interface")
+
+
+def test_the_known_reader_before_any_disk_is_registered_stops_the_power_off(tree):
+    # The kernel registers disks a second or more after the USB interface is probed.
+    tree.attach_storage()
     result = tree.run("check")
-    assert result.returncode == 1
-    assert tree.disable.read_text().strip() == "0"
-    assert "sdz behind it is not the device sysfs describes" in result.stderr
+    tree.refused(result, "still on after 3 attempts")
+    assert result.stderr.count("storage interface 1-1.2.1:1.0 behind it shows 0 of its 2 disks; nothing written") == 3
+
+
+def test_the_known_reader_with_its_second_disk_still_missing_stops_the_power_off(tree):
+    tree.attach_storage()
+    tree.attach_disk("sdy")
+    result = tree.run("check")
+    tree.refused(result, "still on after 3 attempts")
+    assert result.stderr.count("storage interface 1-1.2.1:1.0 behind it shows 1 of its 2 disks; nothing written") == 3
 
 
 def test_a_disk_that_appears_while_disks_are_claimed_is_never_cut_unclaimed(tree, monkeypatch, capsys):
-    # Staged inside one process: the second disk is plugged in at the first claim.
+    # Staged inside one process: a third disk is plugged in at the first claim.
+    tree.attach_storage()
     tree.attach_disk("sda")
+    tree.attach_disk("sdb")
     for key, value in tree.env.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(sys, "dont_write_bytecode", True)
@@ -240,8 +274,8 @@ def test_a_disk_that_appears_while_disks_are_claimed_is_never_cut_unclaimed(tree
 
     def open_then_plug(path, flags, *more):
         descriptor = real_open(path, flags, *more)
-        if not (tree.sys_block / "sdb").exists():
-            tree.attach_disk("sdb", node=False)
+        if not (tree.sys_block / "sdc").exists():
+            tree.attach_disk("sdc")
         return descriptor
 
     monkeypatch.setattr(os, "open", open_then_plug)
@@ -250,34 +284,14 @@ def test_a_disk_that_appears_while_disks_are_claimed_is_never_cut_unclaimed(tree
     stderr = capsys.readouterr().err
     assert tree.disable.read_text().strip() == "0"
     assert "changed while its disks were being claimed; nothing written on attempt 1" in stderr
-    assert "sdb behind it cannot be claimed" in stderr
-
-
-def test_a_storage_interface_whose_disk_has_not_appeared_stops_the_power_off(tree):
-    # The kernel registers a disk a second or more after its USB interface is probed.
-    tree.attach_storage_interface()
-    result = tree.run("check")
-    assert result.returncode == 1
-    assert tree.disable.read_text().strip() == "0"
-    assert result.stderr.count("storage interface 1-1.2.1:1.0 behind it has no disk yet; nothing written") == 3
-    assert "still on after 3 attempts" in result.stderr
-
-
-def test_a_storage_interface_with_its_disk_claimed_does_not_stop_the_power_off(tree):
-    tree.attach_storage_interface()
-    tree.attach_disk("sdz")
-    result = tree.run("check")
-    assert result.returncode == 0
-    assert tree.disable.read_text().strip() == "1"
+    assert "shows 3 disks where 2 are known" in stderr
 
 
 def test_a_disk_elsewhere_is_not_claimed(tree):
     elsewhere = tree.root / "real" / "usb2" / "2-2" / "block" / "sdy"
     elsewhere.mkdir(parents=True)
     (tree.sys_block / "sdy").symlink_to(elsewhere)
-    result = tree.run("check")
-    assert result.returncode == 0
-    assert tree.disable.read_text().strip() == "1"
+    tree.powered_off(tree.run("check"))
 
 
 def test_watch_alerts_once_while_the_block_keeps_failing_and_reports_recovery(tree):
