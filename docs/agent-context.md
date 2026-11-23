@@ -125,54 +125,57 @@ disks all run on USB 3.0 (bus 2). Port 2 is kept logically off (owner decision 2
 disks have no reason to be on USB 2.0).
 
 - Why: on 2026-11-22 port 2 of the deepest disk hub (`1-1.2.4.4`) failed low-speed enumeration
-  every few seconds for a day (about 197,000 kernel lines). Twice that evening every USB 2.0
+  every few seconds for a day (about 197,000 kernel lines). The failures stayed on that port
+  after the disk that had been on it was moved to another. Twice that evening every USB 2.0
   device under `1-1` failed at once with `-71`, CAN adapters included: at 17:45, mid-drive, which
   latched the two restoration inhibits and ended telemetry for the drive, and at 19:50, five
-  minutes after a reboot let the chain enumerate again. Port 2 itself also failed enumeration at
-  19:22. The USB 3.0 side logged nothing each time. The chain is the suspected cause, not a
-  proven one: hub drops are also recorded on earlier dates (`usb_can_incidents`).
-- Source: `projects/vehicle_data/usb2_block/`. `install.sh install` copies three root-owned files
+  minutes after a reboot let the chain enumerate again. Port 2 of the Pi's own hub also failed
+  enumeration at 19:22. The USB 3.0 side logged nothing each time. The chain is the suspected
+  cause, not a proven one: hub drops are also recorded on earlier dates (`usb_can_incidents`).
+- Source: `projects/vehicle_data/usb2_block/`. `install.sh install` copies two root-owned files
   and enables the watcher; `install.sh status` is the read-only check (installed copies identical
-  to the checkout, watcher enabled and active, block held); `install.sh uninstall` removes them.
-  - `70-vanpi-usb2-disk-hub-off.rules` → `/etc/udev/rules.d/`: writes `1` to
-    `/sys/bus/usb/devices/1-1/1-1:1.0/1-1-port2/disable` when the onboard hub's driver is bound
-    (udev's coldplug `add` at boot, `bind` after a real re-enumeration or re-bind of `1-1`). It is
-    the fast path only: one write per event, and udev ignores a failed write.
-  - `vanpi-usb2-disk-hub-off` → `/usr/local/sbin/`, run by `vanpi-usb2-disk-hub-off.service`
-    (`watch`): every 5 s for its first minute, then every 30 s, it checks that `disable` reads `1`
-    and that nothing is enumerated at `1-1.2`, writes `1` again when either fails (three attempts,
-    each confirmed twice), and sends one ntfy per boot when the port cannot be held off; the
-    sender runs as `pi`, never as root. It refuses, and alerts, when a disk behind the port is
-    mounted or held: the block keeps disks from attaching over USB 2.0, it does not pull one
-    that is in use. A hub at `1-1` whose port control is missing counts as a failure after
-    three passes, at once when something is enumerated behind the port. It
-    covers what the rule cannot: a connection event already queued in the kernel can power the
-    port back on after a successful write, a failed control transfer leaves it on, and an
-    in-place hub reset or controller recovery fires no udev event. It writes nothing but that
-    attribute and its alert marker under `/run`, and never touches another port or a hub that
-    is not 2109:3431 at `1-1`.
+  to the checkout, watcher enabled and active, block held); `install.sh uninstall` removes them,
+  verifies it and exits 1 when anything is left.
+  - `vanpi-usb2-disk-hub-off` (Python, standard library) → `/usr/local/sbin/`, run as root by
+    `vanpi-usb2-disk-hub-off.service` (`watch`). Every 5 s for its first minute, then every 30 s,
+    it checks that `/sys/bus/usb/devices/1-1/1-1:1.0/1-1-port2/disable` reads `1` and that
+    nothing is enumerated at `1-1.2`. When either fails it writes `1` (three attempts, each
+    confirmed twice), which disconnects whatever enumerated behind the port and stops detection
+    on it, and it sends one ntfy per boot when the port cannot be held off; the sender runs as
+    `pi`, never as root.
+  - It is the only writer on purpose. A single write at boot is not enough: a connection event
+    already queued in the kernel can power the port back on, a failed control transfer leaves it
+    on, and an in-place hub reset or controller recovery can restore power with no udev event.
+    There is no udev rule: one would write without the disk check below, and initramfs-tools
+    would copy it into every boot image, out of an uninstall's reach.
+  - It never pulls a disk that is in use. Before each write it takes the kernel's exclusive
+    claim on every disk behind the port and holds it across the write; a disk that is mounted,
+    is swap, is held by another block device or cannot be inspected makes it refuse and alert.
+    (A disk can fall back from USB 3.0 to USB 2.0 and be mounted before a pass sees it.) An
+    unused disk, or a card reader with no card, does not stop the power-off.
+  - A hub at `1-1` whose port control is missing counts as a failure after three passes, at
+    once when something is enumerated behind the port. It writes nothing but that attribute
+    and its alert marker under `/run`, and never touches another port or a hub that is not
+    2109:3431 at `1-1`.
 - Tested live 2026-11-22 20:17 (VL805 firmware `000138c0`, kernel 6.12.62): with `disable` 1 and
   `early_stop` cleared, nothing enumerated on port 2 for the minutes observed, bus 2 kept all
   eight devices, every disk and mount stayed attached, and `can0`/`can1`/`can2` stayed UP,
   listen-only, ERROR-ACTIVE with no kernel message. The hub reports ganged power switching, so
-  one port's power-off is logical; the 5 V rail was not measured.
-- Limits: xHCI is built into the kernel, so at boot the chain enumerates for the seconds before
-  udev's coldplug runs. A USB 2.0-only device anywhere in the disk hub chain stops working (one
-  was present on 2026-11-22: a Genesys 05e3:0764 "USB Storage" reader on the first hub's port 1);
-  plug such a device into Pi port 1 or 3 instead. Do not plug the CAN hub into port 2.
+  one port's power-off is logical; the 5 V rail was not measured. That test wrote `1` to a port
+  that was already idle; cutting off an enumerated chain happens only at a boot or a hub
+  re-enumeration and had not been observed when this was written.
+- Limits: xHCI is built into the kernel, so at boot the chain enumerates until the watcher's
+  first pass, when the multi-user services start. A USB 2.0-only device anywhere in the disk
+  hub chain stops working (one was present on 2026-11-22: a Genesys 05e3:0764 "USB Storage"
+  reader on the first hub's port 1); plug such a device into Pi port 1 or 3 instead. Do not
+  plug the CAN hub into port 2.
 - Check: `projects/vehicle_data/usb2_block/install.sh status`, or
   `/usr/local/sbin/vanpi-usb2-disk-hub-off status` (prints `held`). The watcher's journal
   (`journalctl -u vanpi-usb2-disk-hub-off`) is silent while the block holds and has a warning
   each time it had to power the port off again.
 - Undo: `install.sh uninstall`, then `echo 0 | sudo tee
   /sys/bus/usb/devices/1-1/1-1:1.0/1-1-port2/disable`. Do that only after the faulty hub or
-  cable is out of the chain; while the watcher runs it undoes a manual `0` at its next pass
-  (30 s apart). `uninstall` verifies what it removed and exits 1 with the remaining step when
-  something is left. One such case: initramfs-tools copies custom rules from
-  `/etc/udev/rules.d` into each boot image it builds, so after a kernel update the image
-  carries the rule too (`install.sh status` lists such images). That copy only applies the block
-  earlier in boot, but it survives the removal of the installed files until
-  `sudo update-initramfs -u -k all` rebuilds the images.
+  cable is out of the chain; while the watcher runs it undoes a manual `0` at its next pass.
 
 ## Private environment context
 

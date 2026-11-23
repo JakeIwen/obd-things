@@ -493,7 +493,7 @@ selected pure imports, declared launch targets and compute entry packaging.
 Never rebaseline as part of a feature or to pass the suite.
 
 vanpi's USB 2.0 block for the disk hub chain (2026-11-22) lives in
-`projects/vehicle_data/usb2_block/`: a udev rule, the watcher program with its unit, and
+`projects/vehicle_data/usb2_block/`: the watcher program (the only writer) with its unit, and
 `install.sh` (`status|install|uninstall`). The installed copies under `/etc` and
 `/usr/local/sbin` are root-owned copies, so a change here takes effect only through
 `install.sh install`. It keeps port 2 of the Pi's onboard USB 2.0 hub off so a fault in the disk

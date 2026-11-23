@@ -1,18 +1,21 @@
 """The USB 2.0 block watcher, run as a program against a scratch sysfs tree.
 
-No test touches the real /sys or sends a notification: every path comes from the environment.
+No test touches the real /sys, /dev or a notification: every path comes from the environment.
 """
 
 import os
 import pathlib
 import stat
 import subprocess
+import sys
 import time
 
 import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 PROGRAM = REPO_ROOT / "projects/vehicle_data/usb2_block/vanpi-usb2-disk-hub-off"
+# The installed copy runs through its own `python3 -I` line; here the suite's interpreter does.
+COMMAND = [sys.executable, "-I", str(PROGRAM)]
 
 
 class Tree:
@@ -28,19 +31,19 @@ class Tree:
         (self.hub / "idProduct").write_text(product + "\n")
         self.disable = self.port / "disable"
         self.disable.write_text("0\n")
+        self.sys_block = root / "block"
+        self.sys_block.mkdir()
+        self.dev = root / "dev"
+        self.dev.mkdir()
         self.alerts = root / "alerts.log"
         notify = root / "notify"
         notify.write_text(f'#!/bin/bash\nprintf "%s|%s\\n" "$1" "$3" >> "{self.alerts}"\n')
         notify.chmod(notify.stat().st_mode | stat.S_IXUSR)
-        self.sys_block = root / "block"
-        self.sys_block.mkdir()
-        self.mounts = root / "mounts"
-        self.mounts.write_text("/dev/mmcblk0p2 / ext4 rw 0 0\n")
         self.env = {
             "PATH": os.environ["PATH"],
             "USB2_BLOCK_SYSFS": str(self.sysfs),
             "USB2_BLOCK_SYS_BLOCK": str(self.sys_block),
-            "USB2_BLOCK_MOUNTS": str(self.mounts),
+            "USB2_BLOCK_DEV": str(self.dev),
             "USB2_BLOCK_NOTIFY": str(notify),
             "USB2_BLOCK_NOTIFY_USER": "",
             "USB2_BLOCK_STATE_DIR": str(root / "state"),
@@ -54,16 +57,28 @@ class Tree:
         child.mkdir()
         return child
 
-    def attach_disk(self, name: str) -> None:
+    def attach_disk(self, name: str, sectors: object = 1000, node: bool = True) -> None:
         """A block device whose real sysfs path runs through the hub's port 2."""
         real = self.root / "real" / "usb1" / "1-1" / "1-1.2" / "1-1.2.1" / "block" / name
         real.mkdir(parents=True)
+        if sectors is not None:
+            (real / "size").write_text(f"{sectors}\n")
         (self.sys_block / name).symlink_to(real)
+        if node:
+            (self.dev / name).write_text("")
 
     def run(self, verb: str) -> subprocess.CompletedProcess:
         return subprocess.run(
-            ["bash", str(PROGRAM), verb], env=self.env, capture_output=True, text=True, timeout=20
+            COMMAND + [verb], env=self.env, capture_output=True, text=True, timeout=30
         )
+
+    def watch(self) -> subprocess.Popen:
+        return subprocess.Popen(COMMAND + ["watch"], env=self.env, stderr=subprocess.PIPE, text=True)
+
+    def wait_for_alert(self) -> None:
+        deadline = time.monotonic() + 20
+        while not self.alerts.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
 
 
 @pytest.fixture
@@ -144,50 +159,55 @@ def test_a_device_behind_a_port_with_no_control_fails_the_check(tree):
     assert "has no control attribute" in result.stderr
 
 
-def test_a_mounted_disk_behind_the_port_is_never_disconnected(tree):
+def test_a_disk_behind_the_port_that_cannot_be_claimed_is_never_disconnected(tree):
+    # A mounted disk refuses the exclusive claim with EBUSY; that needs a real block device, so
+    # the same refusal is staged with a device node that cannot be opened at all.
     tree.attach_child()
-    tree.attach_disk("sdz")
-    tree.mounts.write_text("/dev/mmcblk0p2 / ext4 rw 0 0\n/dev/sdz1 /mnt/fallback ext4 rw 0 0\n")
+    tree.attach_disk("sdz", node=False)
     result = tree.run("check")
     assert result.returncode == 1
     assert tree.disable.read_text().strip() == "0"
-    assert "sdz behind it is mounted or held; not disconnecting it" in result.stderr
+    assert "sdz behind it cannot be claimed" in result.stderr
+    assert "not disconnecting it" in result.stderr
 
 
-def test_an_unmounted_disk_behind_the_port_does_not_stop_the_power_off(tree):
+def test_a_disk_behind_the_port_that_cannot_be_inspected_is_never_disconnected(tree):
+    tree.attach_disk("sdz", sectors=None)
+    result = tree.run("check")
+    assert result.returncode == 1
+    assert tree.disable.read_text().strip() == "0"
+    assert "sdz behind it cannot be inspected" in result.stderr
+
+
+def test_an_unused_disk_behind_the_port_does_not_stop_the_power_off(tree):
     tree.attach_disk("sdz")
     result = tree.run("check")
     assert result.returncode == 0
     assert tree.disable.read_text().strip() == "1"
 
 
-def test_watch_alerts_when_the_port_control_stays_missing(tree):
-    tree.disable.unlink()
-    watcher = subprocess.Popen(
-        ["bash", str(PROGRAM), "watch"], env=tree.env, stderr=subprocess.PIPE, text=True
-    )
-    try:
-        deadline = time.monotonic() + 15
-        while not tree.alerts.exists() and time.monotonic() < deadline:
-            time.sleep(0.05)
-    finally:
-        watcher.terminate()
-        stderr = watcher.communicate(timeout=10)[1]
-    assert tree.alerts.read_text() == "vanpi USB 2.0 block FAILED|high\n"
-    assert "present without its port 2 control (for 4 passes)" in stderr
-    assert "holds again" not in stderr
+def test_a_card_reader_with_no_card_does_not_stop_the_power_off(tree):
+    tree.attach_disk("sdz", sectors=0, node=False)
+    result = tree.run("check")
+    assert result.returncode == 0
+    assert tree.disable.read_text().strip() == "1"
+
+
+def test_a_disk_elsewhere_is_not_claimed(tree):
+    elsewhere = tree.root / "real" / "usb2" / "2-2" / "block" / "sdy"
+    elsewhere.mkdir(parents=True)
+    (tree.sys_block / "sdy").symlink_to(elsewhere)
+    result = tree.run("check")
+    assert result.returncode == 0
+    assert tree.disable.read_text().strip() == "1"
 
 
 def test_watch_alerts_once_while_the_block_keeps_failing_and_reports_recovery(tree):
     tree.disable.write_text("1\n")
     child = tree.attach_child()
-    watcher = subprocess.Popen(
-        ["bash", str(PROGRAM), "watch"], env=tree.env, stderr=subprocess.PIPE, text=True
-    )
+    watcher = tree.watch()
     try:
-        deadline = time.monotonic() + 15
-        while not tree.alerts.exists() and time.monotonic() < deadline:
-            time.sleep(0.05)
+        tree.wait_for_alert()
         time.sleep(0.5)  # several more failing passes
         child.rmdir()
         time.sleep(0.5)
@@ -197,6 +217,19 @@ def test_watch_alerts_once_while_the_block_keeps_failing_and_reports_recovery(tr
     assert tree.alerts.read_text() == "vanpi USB 2.0 block FAILED|high\n"
     assert stderr.count("still on after 3 attempts") == 1
     assert "holds again" in stderr
+
+
+def test_watch_alerts_when_the_port_control_stays_missing(tree):
+    tree.disable.unlink()
+    watcher = tree.watch()
+    try:
+        tree.wait_for_alert()
+    finally:
+        watcher.terminate()
+        stderr = watcher.communicate(timeout=10)[1]
+    assert tree.alerts.read_text() == "vanpi USB 2.0 block FAILED|high\n"
+    assert "present without its port 2 control (for 4 passes)" in stderr
+    assert "holds again" not in stderr
 
 
 def test_unknown_verbs_are_usage_errors(tree):
