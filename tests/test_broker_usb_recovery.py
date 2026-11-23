@@ -74,6 +74,9 @@ def test_startup_requires_both_flag_and_verified_helper(monkeypatch, tmp_path, c
     monitor = usb_can_monitor.UsbCanIncidentMonitor(sysfs_root=tmp_path, boot_id="synthetic-boot")
     monkeypatch.setattr(can_interfaces, "PassiveInterfaceManager", lambda: manager)
     monkeypatch.setattr(usb_can_monitor, "UsbCanIncidentMonitor", lambda: monitor)
+    journal = usb_recovery.BestEffortLog()
+    make_journal = mock.Mock(return_value=journal)
+    monkeypatch.setattr(usb_recovery, "BestEffortLog", make_journal)
     check = mock.Mock(return_value=helper_ok)
     instance = mock.Mock(return_value=None)
     monkeypatch.setattr(usb_recovery, "RecoveryEffects", lambda: SimpleNamespace(
@@ -106,6 +109,8 @@ def test_startup_requires_both_flag_and_verified_helper(monkeypatch, tmp_path, c
         assert isinstance(delegate, cls)
     assert instance.call_args_list == ([mock.call("can-test")] * 2 if want_recovery else [])
     assert check.call_count == int(flag)
+    assert make_journal.call_count == int(flag)
+    assert journal.drain()  # Delivery is asynchronous, including the missing-helper refusal.
     output = capsys.readouterr().out
     assert ("usb-drop-recovery enabled" in output) == want_recovery
     assert ("usb-drop-recovery disabled" in output) == (flag and not helper_ok)

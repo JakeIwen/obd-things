@@ -13,14 +13,16 @@ from pathlib import Path
 from typing import Callable
 
 from lib import can_operation_state as operation
-from lib import canbus, diagnostic_safety, netdev_instance
+from lib import diagnostic_safety, netdev_instance
 from lib.can_runtime_route import LinkExpectation
 from lib.timeutil import utc_now
 from lib.vehicle_can_roles import ALL_CAN_ROLES
-from projects.vehicle_data import active_session_gates, bound_link, ccan_powertrain, service_cgroup
+from projects.vehicle_data import bound_link, service_cgroup
+from projects.vehicle_data.usb_recovery_probe_client import ProbeFailed, run_probe
 from projects.vehicle_data import usb_recovery_contract as contract
 from projects.vehicle_data import usb_recovery_model as model
 from projects.vehicle_data import usb_recovery_record
+from projects.vehicle_data.usb_recovery_log import BestEffortLog
 from projects.vehicle_data.usb_recovery_contract import IncidentState as State, MutationOutcome, Refusal
 
 
@@ -62,8 +64,7 @@ class RecoveryEffects:
     shared: Callable = diagnostic_safety.channel_observer_lock
     up: Callable = bound_link.bring_up_listen_only
     down: Callable = bound_link.bring_down
-    identify: Callable = canbus.identify_bus
-    snapshot: Callable = ccan_powertrain.read_broadcast_snapshot
+    probe: Callable = run_probe
 
 
 class Rejected(Exception):
@@ -81,7 +82,10 @@ class UsbDropRecovery:
         self.fx = effects or RecoveryEffects()
         self.store = store
         self.directory = Path(record_dir)
-        self._log_sink = log
+        # An injected sink (tests) is only ever the journal writer's target, never called from log().
+        self._journal = BestEffortLog() if log is None else BestEffortLog(log, error_prefix='ERROR ')
+        if log is not None:
+            self._journal.start()
         self.broker_instance = uuid.uuid4().hex
         self._lock = threading.Lock()
         self._slots = {}
@@ -93,21 +97,21 @@ class UsbDropRecovery:
         self.clear_latches = None
 
     def log(self, message, *, error=False):
-        # The unit's stdout is a journal socket. Its priority prefix is parsed by systemd.
+        # Only enqueues (see usb_recovery_log): a stalled journal must never hold the rollback.
         try:
-            if self._log_sink is None:
-                print(('<3>ERROR ' if error else '') + message, flush=True)
-            else:
-                self._log_sink(('ERROR ' if error else '') + message)
-            return True
+            return self._journal.emit(message, error=error)
         except Exception:
             return False  # Diagnostics cannot interrupt restoration or its durable record.
+
+    def flush_log(self, timeout=10):
+        return self._journal.drain(timeout)
 
     @classmethod
     def if_enabled(cls, enabled, interface_manager, **kwargs):
         if not enabled:
             return None
         recovery = cls(interface_manager, **kwargs)
+        recovery._journal.start()
         if not recovery.fx.helper_ok():
             recovery.log('usb-drop-recovery disabled: link helper not installed or differs')
             return None
@@ -216,12 +220,11 @@ class UsbDropRecovery:
 
     def _save(self, i, *, announce=True):
         i.updated_at = self.fx.utc_now()
-        logged = True
-        if announce:
-            logged = self.log(f'{i.updated_at} usb-drop-recovery incident={i.incident_id[:8]} state={i.state} '
+        if announce:  # Journal loss is never evidence failure: only the durable write below decides.
+            self.log(f'{i.updated_at} usb-drop-recovery incident={i.incident_id[:8]} state={i.state} '
                      f'reason={i.reason or "-"} detail={i.detail}', error=i.state == State.COMMITTED_LATE)
         self.store.write_incident(i, directory=self.directory)
-        return logged
+        return True
 
     def _save_before_reservation(self, i, *, announce=True):
         try:
@@ -405,31 +408,36 @@ class UsbDropRecovery:
         if result.refusal is not None:
             raise Rejected(result.refusal)
 
+    def _probe(self, i, kind, channel, failure):
+        try:
+            return self.fx.probe(kind, channel)
+        except (ProbeFailed, OSError) as exc:
+            detail = f'{kind}: {exc}'
+            if isinstance(exc, ProbeFailed) and exc.unreaped_pid is not None:
+                detail += f'; probe unreaped pid={exc.unreaped_pid}'
+                self.log(f'usb-drop-recovery incident={i.incident_id[:8]} {detail}', error=True)
+            raise Rejected(failure, detail) from exc
+
     def _engine(self, i, *, identify=False):
         instance = i.transaction.board_a[contract.BOARD_A_ROLES[0]]
-        t0 = self.fx.monotonic()
         if self.fx.read_link(instance.channel).ifindex != instance.ifindex:
             raise Rejected(Refusal.INSTANCE_CHANGED)
         if identify:
-            bus = self.fx.identify(instance.channel, probe=0.25, subprocess_timeout=contract.IP_TIMEOUT_SECONDS,
-                                   monotonic=self.fx.monotonic)
-            self._step(i, 'identify_bus', bus == contract.BOARD_A_ROLES[0], str(bus))
-            if bus != contract.BOARD_A_ROLES[0]:
+            identity = self._probe(i, contract.ProbeKind.IDENTITY, instance.channel, Refusal.WRONG_BUS)
+            self._step(i, 'identify_bus', identity.result)
+            if not identity.result:
                 raise Rejected(Refusal.WRONG_BUS)
-        try:
-            for _ in range(contract.RUNNING_CHECK_ATTEMPTS if identify else 1):
-                snap = self.fx.snapshot(instance.channel, timeout=0.5, required_rpm_samples=active_session_gates.REQUIRED_RPM_SAMPLES)
-                if active_session_gates.running_snapshot(snap):
-                    break
-            else:
-                raise Rejected(Refusal.ENGINE_NOT_RUNNING)
-        except OSError as exc:
-            raise Rejected(Refusal.ENGINE_NOT_RUNNING) from exc
+        for _ in range(contract.RUNNING_CHECK_ATTEMPTS if identify else 1):
+            rpm = self._probe(i, contract.ProbeKind.RPM, instance.channel, Refusal.ENGINE_NOT_RUNNING)
+            if rpm.result:
+                break
+        else:
+            raise Rejected(Refusal.ENGINE_NOT_RUNNING)
         if self.fx.read_link(instance.channel).ifindex != instance.ifindex:
             raise Rejected(Refusal.INSTANCE_CHANGED)
-        i.transaction.engine_seen_monotonic = t0
+        i.transaction.engine_seen_monotonic = rpm.started_monotonic
         self._step(i, 'engine_running')
-        return t0 + contract.ENGINE_EVIDENCE_MAX_AGE_SECONDS
+        return rpm.started_monotonic + contract.ENGINE_EVIDENCE_MAX_AGE_SECONDS
 
     def _topology(self, i, resolved):
         for role, (res, instance) in resolved.items():
@@ -465,8 +473,12 @@ class UsbDropRecovery:
             if result.removed:
                 state = State.COMMITTED if tuple(result.removed) == tuple(expected) else State.PARTIAL_COMMIT
                 if result.late:
-                    state = State.COMMITTED_LATE
-                    i.detail = result.detail
+                    # Removals cannot be undone; a late one keeps every latch and is reported.
+                    i.detail = f'late removal: {result.removed[-1]}'
+                    if not result.durable:
+                        i.detail += f'; directory sync failed: {result.detail}'
+                    if state == State.COMMITTED:
+                        state = State.COMMITTED_LATE
                 self._finish(i, state, result.removed, result.durable)
                 return
             self._disk_commit_started = False

@@ -12,7 +12,7 @@ from lib import diagnostic_safety
 from lib.canbus import InterfaceState
 from lib.netdev_instance import NetdevInstance
 from lib.vehicle_can_roles import CAN_ROLE_SPECS
-from projects.vehicle_data import bound_link, usb_recovery_record as records
+from projects.vehicle_data import bound_link, usb_recovery_probe, usb_recovery_record as records
 from projects.vehicle_data.usb_recovery import RecoveryEffects, UsbDropRecovery
 from projects.vehicle_data.usb_recovery_contract import (
     BOARD_A_ROLES, HELPERS, OWNED_INHIBITS, IncidentState as State,
@@ -65,7 +65,7 @@ class RecoveryLab:
         monkeypatch.setattr(diagnostic_safety, 'LOCK_DIR', str(tmp_path / 'locks'))
         self.now = 100.0
         self.trace = []
-        self.logs = []
+        self._logs = []
         self.latched = set()
         self.gates = {}
         self.up_indexes = set()
@@ -83,14 +83,23 @@ class RecoveryLab:
             ignition_flag=lambda: True,
             inhibits=operation.all_active_inhibits, end=self.end, write_topology=self.topology_write,
             exclusive=lambda name: self.lease(name, 'exclusive'), shared=lambda name: self.lease(name, 'shared'),
-            up=self.up, down=self.down, identify=self.identify, snapshot=self.snapshot,
+            up=self.up, down=self.down, probe=self.probe,
         )
         self.new_runtime()
 
-    def new_runtime(self, *, log=None):
+    @property
+    def logs(self):
+        self.recovery.flush_log()  # Lines reach the sink on the writer thread.
+        return self._logs
+
+    def new_runtime(self, *, log=None, stdout_journal=False):
         self.latched.clear()
-        self.recovery = UsbDropRecovery(self, radar_marker=lambda: self.radar, effects=self.effects,
-                                        store=self.store, record_dir=self.directory, log=log or self.logs.append)
+        kwargs = dict(radar_marker=lambda: self.radar, effects=self.effects, store=self.store,
+                      record_dir=self.directory)
+        if stdout_journal:  # The production writer to sys.stdout, started by the enabled path.
+            self.recovery = UsbDropRecovery.if_enabled(True, self, **kwargs)
+        else:
+            self.recovery = UsbDropRecovery(self, log=log or self._logs.append, **kwargs)
         self.recovery.bind(clear_latches=self.clear, display_receiver=self)
 
     def nodes(self, offset, devnum):
@@ -160,6 +169,10 @@ class RecoveryLab:
         return bound_link.bring_down(instance, wait_quiet=wait_quiet, read_bound_state=self.effects.read_link,
                                      present_ifindexes=self.indexes, popen=self.popen,
                                      monotonic=self.effects.monotonic)
+
+    def probe(self, kind, channel):
+        return usb_recovery_probe.observe(kind, channel, monotonic=self.effects.monotonic,
+                                          identify=self.identify, snapshot=self.snapshot)
 
     def identify(self, channel, *, probe, subprocess_timeout, monotonic):
         assert subprocess_timeout == 5 and monotonic is self.effects.monotonic

@@ -357,36 +357,27 @@ def _end_compared_inhibits(
     paths: Mapping[Path, dict], directory_fd: int, deadline_monotonic: float,
     monotonic: Callable[[], float],
 ) -> EndResult:
+    # No unlink is issued after the deadline. A removal cannot be retracted (readers act on the
+    # record's absence), so one that finishes late is reported with late=True, never re-created.
     removed: list[str] = []
-    for path, payload in paths.items():
+    late = False
+    for path in paths:
         name = path.stem.removeprefix('inhibit-')
         if monotonic() > deadline_monotonic:
-            return EndResult("partial" if removed else "expired", tuple(removed), detail=name)
+            return EndResult("partial" if removed else "expired", tuple(removed), detail=name, late=late)
         try:
             os.unlink(path)
         except OSError as exc:
             outcome = "mismatch" if isinstance(exc, FileNotFoundError) else "unavailable"
-            return EndResult("partial" if removed else outcome, tuple(removed), detail=name)
+            return EndResult("partial" if removed else outcome, tuple(removed), detail=name, late=late)
         removed.append(name)
-        expired = monotonic() > deadline_monotonic
-        late = False
-        detail = name
-        if expired:
-            try:
-                _atomic_json(path, payload)
-            except Exception as exc:
-                # An uncompensated removal is a commit, never an invitation to retry.
-                late, detail = True, f'{name}: write-back failed ({type(exc).__name__})'
-            else:
-                removed.pop()
-        outcome = 'expired' if not removed else 'partial' if len(removed) < len(paths) else 'removed'
+        late = monotonic() > deadline_monotonic
         try:
             os.fsync(directory_fd)
         except OSError as exc:
+            outcome = "partial" if len(removed) < len(paths) else "removed"
             return EndResult(outcome, tuple(removed), durable=False, detail=str(exc), late=late)
-        if expired:
-            return EndResult(outcome, tuple(removed), detail=detail, late=late)
-    return EndResult("removed", tuple(removed))
+    return EndResult("removed", tuple(removed), late=late)
 
 
 def end_inhibits_if_exactly(

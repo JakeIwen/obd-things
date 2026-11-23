@@ -13,7 +13,7 @@ import pytest
 from lib import can_operation_state as operation, canbus, diagnostic_safety, netdev_instance
 from lib.can_role_resolver import SysfsCanRoleResolver
 from lib.vehicle_can_roles import BOARD_A_SERIAL, BOARD_B_SERIAL
-from projects.vehicle_data import bound_link, broker as telemetry, ccan_powertrain, service_cgroup
+from projects.vehicle_data import bound_link, broker as telemetry, ccan_powertrain, service_cgroup, usb_recovery_probe
 from projects.vehicle_data.can_interfaces import PassiveInterfaceManager
 from projects.vehicle_data.can_runtime import (
     PassiveRoleReconciler, RoleAwareActiveDriveSupervisor, RoleAwareAuxiliaryDriveSupervisor,
@@ -132,7 +132,7 @@ class ReplayKernel:
             boot_id=lambda: _BOOT, helper_ok=lambda: True, ignition_flag=lambda: True,
             instance=partial(netdev_instance.read_instance, sys_class_net_root=class_net),
             indexes=partial(netdev_instance.present_ifindexes, sys_class_net_root=class_net),
-            read_link=self.read_link, snapshot=self.snapshot,
+            read_link=self.read_link, probe=partial(usb_recovery_probe.observe, snapshot=self.snapshot),
             processes=partial(service_cgroup.inspect, proc_root=self.proc, cgroup_root=self.cgroup),
             up=partial(bound_link.bring_up_listen_only, read_bound_state=self.read_link, popen=self.popen),
             down=partial(bound_link.bring_down, read_bound_state=self.read_link, popen=self.popen),

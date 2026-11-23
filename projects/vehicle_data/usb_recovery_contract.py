@@ -1,5 +1,6 @@
 """Shared vocabulary and limits for one-boot USB drop recovery."""
 
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
@@ -40,6 +41,23 @@ MAX_INCIDENTS_PER_BOOT = 8
 MAX_LATCHES_PER_HELPER = 8
 MAX_LATCH_DETAIL_CHARS = 240
 MAX_RECORD_BYTES = 16384
+
+
+PROBE_MODULE = "projects.vehicle_data.usb_recovery_probe"
+PROBE_WALL_SECONDS = 5.0
+PROBE_REPLY_BYTES = 512
+
+
+class ProbeKind(StrEnum):
+    IDENTITY = "identity"
+    RPM = "rpm"
+
+
+@dataclass(frozen=True)
+class ProbeReply:
+    result: bool
+    started_monotonic: float
+    finished_monotonic: float
 
 
 class IncidentState(StrEnum):

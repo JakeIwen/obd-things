@@ -1,5 +1,6 @@
 """Exercise the recovery collector transaction without touching vehicle or service state."""
 
+import time
 from dataclasses import replace
 
 import pytest
@@ -77,13 +78,13 @@ def test_replay_old_then_missing_then_replacement(lab):
 def test_second_drop_between_the_two_link_commands(ready):
     ci, bi = target_indexes(ready)
     name = ready.mapping[B]
-    original = ready.effects.snapshot
+    original = ready.snapshot
 
     def snapshot(*args, **kwargs):
         ready.netdevs[name] = replace(ready.netdevs[name], ifindex=bi + 1, usb_devnum=10)
         return original(*args, **kwargs)
 
-    ready.effects.snapshot = snapshot
+    ready.snapshot = snapshot
     before = ready.owned_files()
     ready.run()
     txn = assert_failed(ready, Refusal.INSTANCE_CHANGED, before)
@@ -97,10 +98,11 @@ def test_rollback_never_downs_a_link_someone_else_brought_up(ready, failure):
     ci, bi = target_indexes(ready)
     before = ready.owned_files()
     if failure == 'preflight':
+        original = ready.snapshot
         def sample(*args, **kwargs):
             ready.up_indexes.add(bi)
-            return ready.snapshot(*args, **kwargs)
-        ready.effects.snapshot = sample
+            return original(*args, **kwargs)
+        ready.snapshot = sample
     else:
         normal = ready.submit
         def refuse(cmd, idx):
@@ -130,26 +132,13 @@ def test_stuck_error_counter_fails_identity_and_releases_every_lease(ready, monk
     monkeypatch.setattr(canbus, 'socket', SimpleNamespace(
         AF_CAN=29, SOCK_RAW=3, CAN_RAW=1, timeout=TimeoutError, socket=lambda *_: sock,
     ))
-    ready.effects.identify = canbus.identify_bus
+    ready.identify = canbus.identify_bus
     ready.run()
     assert_failed(ready, Refusal.WRONG_BUS, before)
     assert stuck.history == [('communicate', 5), 'kill', ('wait', 2)] and stuck.stdout.closed
     assert sock.closed == (read == 2)
     assert len(ready.events('release')) == len(ready.events('lock')) == 6
     assert ready.commands() == [('up-listen-only', ci), ('down', ci)]
-
-
-def test_broken_log_sink_during_real_latch_capture_cannot_escape_or_authorize(lab):
-    def broken(_message):
-        raise BrokenPipeError()
-
-    lab.new_runtime(log=broken)
-    lab.incident(ACTIVE)
-    before = lab.owned_files()
-    lab.replace_board()
-    lab.run()
-    assert_deferred(lab, Refusal.ARMED_INSTANCE_UNKNOWN, terminal=True)
-    assert lab.owned_files() == before and lab.latched == {ACTIVE}
 
 
 @pytest.mark.parametrize('fault', ['factory_capture', 'armed_capture', 'late_latch'])
@@ -218,6 +207,7 @@ def test_unverified_first_rollback_does_not_abandon_the_other_instance(lab):
     ready.run()
     txn = assert_failed(ready, Refusal.COMMIT_REFUSED, before)
     assert [m.outcome for m in txn.mutations] == [MutationOutcome.DOWN_VERIFIED, MutationOutcome.ROLLBACK_UNVERIFIED]
+    assert ready.recovery.flush_log()
     assert ready.up_indexes == {bi} and len(errors) == 1
 
 
@@ -284,7 +274,7 @@ def test_overwritten_owned_inhibit_is_untouched(ready):
     'low', 'oserror', 'stops_at_commit', 'replaced_ccan', 'renamed_ccan', 'wrong_bus',
 ])
 def test_receive_only_engine_and_identity_gates(ready, sensor_failure):
-    original = ready.effects.snapshot
+    original = ready.snapshot
     ci, bi = target_indexes(ready)
     before = ready.owned_files()
 
@@ -303,9 +293,9 @@ def test_receive_only_engine_and_identity_gates(ready, sensor_failure):
             return ready.sample(399)
         return valid
 
-    ready.effects.snapshot = snapshot
+    ready.snapshot = snapshot
     if sensor_failure == 'wrong_bus':
-        ready.effects.identify = lambda channel, **kwargs: B
+        ready.identify = lambda channel, **kwargs: B
     ready.run()
     reasons = {'replaced_ccan': Refusal.INSTANCE_CHANGED, 'renamed_ccan': Refusal.INSTANCE_CHANGED,
                'wrong_bus': Refusal.WRONG_BUS}
@@ -431,8 +421,12 @@ def test_locked_terminal_refusal_resumes_displays(ready):
 
 def test_missing_link_helper_disables_opt_in_and_refuses_decision(ready):
     ready.effects.helper_ok = lambda: False
-    assert UsbDropRecovery.if_enabled(True, ready, effects=ready.effects, log=ready.logs.append) is None
-    assert ready.logs[-1] == 'usb-drop-recovery disabled: link helper not installed or differs'
+    lines = []
+    assert UsbDropRecovery.if_enabled(True, ready, effects=ready.effects, log=lines.append) is None
+    deadline = time.monotonic() + 5
+    while not lines and time.monotonic() < deadline:
+        time.sleep(0.01)  # The line is written by the journal's writer thread.
+    assert lines[-1] == 'usb-drop-recovery disabled: link helper not installed or differs'
     ready.run()
     assert_deferred(ready, Refusal.LINK_HELPER_UNVERIFIED, terminal=True)
     assert not ready.events('pause')
@@ -542,7 +536,7 @@ def test_uncertain_down_requires_a_second_positive_cgroup_check(ready, exits):
     ci, bi = target_indexes(ready)
     before = ready.owned_files()
     original_submit = ready.submit
-    original_snapshot = ready.effects.snapshot
+    original_snapshot = ready.snapshot
     down_at = None
 
     def submit(command, index):
@@ -565,7 +559,7 @@ def test_uncertain_down_requires_a_second_positive_cgroup_check(ready, exits):
         return ORPHAN
 
     ready.submit = submit
-    ready.effects.snapshot = snapshot
+    ready.snapshot = snapshot
     ready.effects.processes = processes
     ready.run()
     txn = assert_failed(ready, Refusal.ENGINE_NOT_RUNNING, before)

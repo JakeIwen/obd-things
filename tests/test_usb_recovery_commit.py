@@ -92,12 +92,10 @@ def test_commit_deadline_expires_twice_while_the_writer_lock_is_held(ready, monk
     assert [e[1] for e in ready.events('end')] == [t + ENGINE_EVIDENCE_MAX_AGE_SECONDS for t in attempts]
 
 
-@pytest.mark.parametrize('helpers,slow,write_back', [
-    ((ACTIVE,), C_INHIBIT, True), ((ACTIVE, AUX), C_INHIBIT, True),
-    ((ACTIVE, AUX), B_INHIBIT, True), ((ACTIVE,), C_INHIBIT, False),
-    ((ACTIVE, AUX), C_INHIBIT, False), ((ACTIVE, AUX), B_INHIBIT, False),
+@pytest.mark.parametrize('helpers,slow', [
+    ((ACTIVE,), C_INHIBIT), ((ACTIVE, AUX), C_INHIBIT), ((ACTIVE, AUX), B_INHIBIT),
 ])
-def test_unlink_must_complete_with_fresh_rpm_or_be_undone(lab, monkeypatch, helpers, slow, write_back):
+def test_late_unlink_is_reported_never_undone(lab, monkeypatch, helpers, slow):
     lab.incident(*helpers)
     before = lab.owned_files()
     lab.replace_board()
@@ -105,48 +103,41 @@ def test_unlink_must_complete_with_fresh_rpm_or_be_undone(lab, monkeypatch, help
     results = []
 
     def slow_unlink(path):
+        original(path)
         if Path(path).name == f'inhibit-{slow}.json':
             lab.now += ENGINE_EVIDENCE_MAX_AGE_SECONDS + 1
-        original(path)
-
-    def refused(*args):
-        raise OSError('no space to restore inhibit')
 
     def end(expected, **kwargs):
         with monkeypatch.context() as patch:
             patch.setattr(operation.os, 'unlink', slow_unlink)
-            if not write_back:
-                patch.setattr(operation, '_atomic_json', refused)
             result = lab.end(expected, **kwargs)
             results.append(result)
             return result
 
     lab.effects.end = end
     lab.run()
+    assert len(results) == 1 and results[0].late
+    result = results[0]
     assert lab.latched == set(helpers) and not lab.events('clear')
     incident = lab.persisted()
-    result = results[-1]
-    assert result.late is (not write_back)
-    if result.late:
-        assert len(results) == 1 and incident.state == State.COMMITTED_LATE
+    assert 'late' in incident.detail
+    assert not any(command == 'down' for command, _ in lab.commands())
+    if result.outcome == 'removed':
+        assert incident.state == State.COMMITTED_LATE
         assert any(line.startswith('ERROR ') and 'state=committed_late' in line for line in lab.logs)
-        assert result.removed == ((C_INHIBIT,) if slow == C_INHIBIT else (C_INHIBIT, B_INHIBIT))
-    elif slow == C_INHIBIT:
-        assert len(results) == 2 and all(r.outcome == 'expired' and not r.removed for r in results)
-        assert incident.reason == Refusal.ENGINE_EVIDENCE_STALE and not lab.up_indexes
+        assert result.removed == ((C_INHIBIT,) if slow == C_INHIBIT and helpers == (ACTIVE,) else (C_INHIBIT, B_INHIBIT))
     else:
         assert result.outcome == 'partial' and result.removed == (C_INHIBIT,)
         assert_partial(lab, before)
-    if result.removed:
-        assert all(cmd == 'up-listen-only' for cmd, _ in lab.commands())
-        assert incident.transaction.ended_inhibits == list(result.removed)
+    assert incident.transaction.ended_inhibits == list(result.removed)
+    # Whatever was removed stays removed; whatever remains is byte-identical and still honoured.
     assert lab.owned_files() == {k: v for k, v in before.items()
                                  if k not in {f'inhibit-{n}.json' for n in result.removed}}
 
 
 def test_commit_deadline_starts_before_a_slow_read(ready):
     before = ready.owned_files()
-    original = ready.effects.snapshot
+    original = ready.snapshot
 
     def late_sample(*args, **kwargs):
         reading = original(*args, **kwargs)
@@ -154,7 +145,7 @@ def test_commit_deadline_starts_before_a_slow_read(ready):
             ready.now += ENGINE_EVIDENCE_MAX_AGE_SECONDS + 1
         return reading
 
-    ready.effects.snapshot = late_sample
+    ready.snapshot = late_sample
     ready.run()
     txn = assert_failed(ready, Refusal.ENGINE_EVIDENCE_STALE, before)
     samples = [e[2] for e in ready.events('rpm')]
@@ -306,7 +297,7 @@ def test_crash_table(ready, monkeypatch, boundary, disk_state, remaining, up_cou
     elif boundary == 'pre_submit':
         ready.submit = crash
     elif boundary == 'only_c':
-        ready.effects.snapshot = crash
+        ready.snapshot = crash
     elif boundary == 'both_up':
         ready.effects.write_topology = crash
     elif boundary == 'first_unlink':
@@ -350,3 +341,36 @@ def test_crash_table(ready, monkeypatch, boundary, disk_state, remaining, up_cou
         assert ready.persisted().reason == Refusal.BOOT_BUDGET_SPENT
         ready.run()
         assert not ready.commands()
+
+
+@pytest.mark.parametrize('took_effect', [False, True])
+def test_death_at_final_unlink_makes_no_second_attempt(ready, monkeypatch, took_effect):
+    before = ready.owned_files()
+    incident_id = ready.persisted().incident_id
+    original = os.unlink
+
+    def dying(path, *args, **kwargs):
+        if Path(path).name == f'inhibit-{B_INHIBIT}.json':
+            if took_effect:
+                original(path, *args, **kwargs)
+            raise SystemExit('simulated crash')
+        original(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(operation.os, 'unlink', dying)
+        with pytest.raises(SystemExit, match='simulated crash'):
+            ready.run()
+    assert ready.persisted(incident_id).state == State.COMMITTING
+    expected_left = {} if took_effect else {f'inhibit-{B_INHIBIT}.json': before[f'inhibit-{B_INHIBIT}.json']}
+    assert ready.owned_files() == expected_left
+    assert [r['name'] for r in operation.active_inhibits('can0')] == ([] if took_effect else [B_INHIBIT])
+    ready.trace.clear()
+    ready.new_runtime()
+    ready.run()
+    assert ready.recovery.incident is None and not ready.commands()
+    assert ready.persisted(incident_id).state == State.COMMITTING
+    assert ready.owned_files() == expected_left
+    ready.latch(ACTIVE, 'new process observed another restoration fault')
+    ready.run()
+    assert ready.persisted().reason == Refusal.BOOT_BUDGET_SPENT
+    assert not ready.commands()

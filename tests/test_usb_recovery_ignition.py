@@ -74,8 +74,8 @@ def test_stopped_producer_can_leave_positive_but_cannot_supply_rpm(ready, marker
     marker.touch()
     os.utime(marker, (1, 1))  # Last ON marker, with no producer updating or clearing it.
     before = ready.owned_files()
-    ready.effects.identify = lambda *args, **kwargs: 'silent' if silent else C
-    ready.effects.snapshot = lambda *args, **kwargs: SimpleNamespace(frame_count=1, rpm_samples=())
+    ready.identify = lambda *args, **kwargs: 'silent' if silent else C
+    ready.snapshot = lambda *args, **kwargs: SimpleNamespace(frame_count=1, rpm_samples=())
     ready.run()
     reason = contract.Refusal.WRONG_BUS if silent else contract.Refusal.ENGINE_NOT_RUNNING
     assert_failed(ready, reason, before)
