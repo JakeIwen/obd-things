@@ -92,6 +92,58 @@ def test_commit_deadline_expires_twice_while_the_writer_lock_is_held(ready, monk
     assert [e[1] for e in ready.events('end')] == [t + ENGINE_EVIDENCE_MAX_AGE_SECONDS for t in attempts]
 
 
+@pytest.mark.parametrize('helpers,slow,write_back', [
+    ((ACTIVE,), C_INHIBIT, True), ((ACTIVE, AUX), C_INHIBIT, True),
+    ((ACTIVE, AUX), B_INHIBIT, True), ((ACTIVE,), C_INHIBIT, False),
+    ((ACTIVE, AUX), C_INHIBIT, False), ((ACTIVE, AUX), B_INHIBIT, False),
+])
+def test_unlink_must_complete_with_fresh_rpm_or_be_undone(lab, monkeypatch, helpers, slow, write_back):
+    lab.incident(*helpers)
+    before = lab.owned_files()
+    lab.replace_board()
+    original = os.unlink
+    results = []
+
+    def slow_unlink(path):
+        if Path(path).name == f'inhibit-{slow}.json':
+            lab.now += ENGINE_EVIDENCE_MAX_AGE_SECONDS + 1
+        original(path)
+
+    def refused(*args):
+        raise OSError('no space to restore inhibit')
+
+    def end(expected, **kwargs):
+        with monkeypatch.context() as patch:
+            patch.setattr(operation.os, 'unlink', slow_unlink)
+            if not write_back:
+                patch.setattr(operation, '_atomic_json', refused)
+            result = lab.end(expected, **kwargs)
+            results.append(result)
+            return result
+
+    lab.effects.end = end
+    lab.run()
+    assert lab.latched == set(helpers) and not lab.events('clear')
+    incident = lab.persisted()
+    result = results[-1]
+    assert result.late is (not write_back)
+    if result.late:
+        assert len(results) == 1 and incident.state == State.COMMITTED_LATE
+        assert any(line.startswith('ERROR ') and 'state=committed_late' in line for line in lab.logs)
+        assert result.removed == ((C_INHIBIT,) if slow == C_INHIBIT else (C_INHIBIT, B_INHIBIT))
+    elif slow == C_INHIBIT:
+        assert len(results) == 2 and all(r.outcome == 'expired' and not r.removed for r in results)
+        assert incident.reason == Refusal.ENGINE_EVIDENCE_STALE and not lab.up_indexes
+    else:
+        assert result.outcome == 'partial' and result.removed == (C_INHIBIT,)
+        assert_partial(lab, before)
+    if result.removed:
+        assert all(cmd == 'up-listen-only' for cmd, _ in lab.commands())
+        assert incident.transaction.ended_inhibits == list(result.removed)
+    assert lab.owned_files() == {k: v for k, v in before.items()
+                                 if k not in {f'inhibit-{n}.json' for n in result.removed}}
+
+
 def test_commit_deadline_starts_before_a_slow_read(ready):
     before = ready.owned_files()
     original = ready.effects.snapshot

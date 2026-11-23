@@ -51,6 +51,7 @@ class IncidentState(StrEnum):
     VERIFYING = "verifying"
     COMMITTING = "committing"
     COMMITTED = "committed"
+    COMMITTED_LATE = "committed_late"
     COMMITTED_LATCHES_KEPT = "committed_latches_kept"
     COMMIT_OUTCOME_UNKNOWN = "commit_outcome_unknown"
     FAILED = "failed"
@@ -59,7 +60,7 @@ class IncidentState(StrEnum):
 
 TERMINAL_STATES = frozenset({
     IncidentState.INELIGIBLE, IncidentState.COMMITTED, IncidentState.COMMITTED_LATCHES_KEPT,
-    IncidentState.COMMIT_OUTCOME_UNKNOWN, IncidentState.FAILED, IncidentState.PARTIAL_COMMIT,
+    IncidentState.COMMITTED_LATE, IncidentState.COMMIT_OUTCOME_UNKNOWN, IncidentState.FAILED, IncidentState.PARTIAL_COMMIT,
 })
 
 
@@ -70,6 +71,8 @@ class RadarCondition(StrEnum):
 
 
 class MutationOutcome(StrEnum):
+    NOT_SUBMITTED = "not_submitted"
+    KERNEL_REFUSED = "kernel_refused"
     UP_VERIFIED = "up_verified"
     CONFIGURE_FAILED = "configure_failed"
     VERIFICATION_FAILED = "verification_failed"

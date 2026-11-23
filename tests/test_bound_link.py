@@ -48,8 +48,10 @@ class FakeProcess:
     def kill(self):
         self.history.append("kill")
 
-    def wait(self):
-        self.history.append("wait")
+    def wait(self, *, timeout):
+        self.history.append(('wait', timeout))
+        if self.timeout:
+            raise subprocess.TimeoutExpired([], timeout)
         return -9
 
 
@@ -57,12 +59,12 @@ def up(popen, *texts):
     readback = Mock(side_effect=[read(text) for text in texts])
     outcome = bound_link.bring_up_listen_only(INSTANCE, 500000, read_bound_state=readback,
                                               popen=popen, monotonic=lambda: 10.0)
-    return outcome, readback.call_count
+    return outcome.outcome, outcome.refusal, readback.call_count
 
 
 def test_up_uses_one_installed_index_only_command():
     popen = Mock(return_value=FakeProcess())
-    assert up(popen, DOWN, UP) == (Outcome.UP_VERIFIED, 2)
+    assert up(popen, DOWN, UP) == (Outcome.UP_VERIFIED, None, 2)
     assert popen.call_count == 1
     assert popen.call_args.args == (PREFIX + ["up-listen-only", "3", "500000"] + DEADLINE,)
 
@@ -73,7 +75,7 @@ def test_up_uses_one_installed_index_only_command():
 ])
 def test_up_does_not_submit_without_same_index_and_positive_down_evidence(before, outcome):
     popen = Mock()
-    assert up(popen, before) == (outcome, 1)
+    assert up(popen, before) == (Outcome.NOT_SUBMITTED, outcome, 1)
     popen.assert_not_called()
 
 
@@ -85,22 +87,22 @@ def test_up_does_not_submit_without_same_index_and_positive_down_evidence(before
 ])
 def test_up_does_not_claim_success_without_exact_readback(after, outcome):
     popen = Mock(return_value=FakeProcess())
-    assert up(popen, DOWN, after) == (outcome, 2)
+    assert up(popen, DOWN, after) == (outcome, outcome, 2)
     assert popen.call_count == 1
 
 
 def test_enodev_cannot_be_confused_with_a_replacement():
     popen = Mock(return_value=FakeProcess(3, "errno=19 ENODEV\n"))
-    assert up(popen, DOWN) == (Outcome.INSTANCE_CHANGED, 1)
+    assert up(popen, DOWN) == (Outcome.KERNEL_REFUSED, Outcome.INSTANCE_CHANGED, 1)
     readback = Mock()
     assert bound_link.bring_down(INSTANCE, popen=popen, read_bound_state=readback) == Outcome.INSTANCE_GONE
     readback.assert_not_called()
 
 
-def test_up_timeout_terminates_then_kills_and_reaps_without_readback():
+def test_up_timeout_terminates_then_bounds_reap_without_trusting_readback():
     process = FakeProcess(timeout=True)
-    assert up(Mock(return_value=process), DOWN) == (Outcome.CONFIGURE_FAILED, 1)
-    assert process.history == [("communicate", 5), "terminate", ("communicate", 2), "kill", "wait"]
+    assert up(Mock(return_value=process), DOWN) == (Outcome.CONFIGURE_FAILED, Outcome.CONFIGURE_FAILED, 1)
+    assert process.history == [("communicate", 5), "terminate", ("communicate", 2), "kill", ("wait", 2)]
     assert process.stdout.closed
 
 

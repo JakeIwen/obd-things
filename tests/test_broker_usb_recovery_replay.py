@@ -58,7 +58,7 @@ class ReplayKernel:
         monkeypatch.setattr(operation, "STATE_DIR", root / "operation-state")
         monkeypatch.setattr(operation, "current_boot_id", lambda: _BOOT)
         monkeypatch.setattr(diagnostic_safety, "LOCK_DIR", str(root / "locks"))
-        monkeypatch.setattr(canbus, "rx_errors", lambda _: 0)
+        monkeypatch.setattr(canbus, "rx_errors", lambda _, **kwargs: 0)
         monkeypatch.setattr(canbus, "socket", SimpleNamespace(
             AF_CAN=29, SOCK_RAW=3, CAN_RAW=1, timeout=TimeoutError,
             socket=lambda *_: FakeSocket([frame(0x100, b"\0\0")]),

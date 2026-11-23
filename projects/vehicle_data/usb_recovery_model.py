@@ -453,6 +453,9 @@ def assess(incident: Incident, observation: Observation, now_monotonic: float) -
     age = now_monotonic - incident.opened_monotonic
     if not 0 <= age <= RECOVERY_WINDOW_SECONDS:
         return GiveUp(Refusal.WINDOW_EXPIRED)
+    if any(slot.ambiguous and slot.launch is None for slot in incident.helpers.values()):
+        # A capture fault discarded this launch; there is no radar or arm history to interpret.
+        return GiveUp(Refusal.ARMED_INSTANCE_UNKNOWN)
     latched = latched_helpers(incident)
     # A B-CAN-only latch has no C-CAN launch to evaluate; classify it under R4a.
     if latched != {AUXILIARY_DRIVE} and (reason := _radar_refusal(incident, observation.radar_marker)):

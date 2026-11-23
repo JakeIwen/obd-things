@@ -2086,8 +2086,8 @@ class TelemetryBroker:
                         f"be recorded: {type(exc).__name__}: {exc}"
                     )
 
-            if self.usb_drop_recovery is not None:
-                self.usb_drop_recovery.note_latch(ACTIVE_DRIVE, event, payload)
+            if (recovery := self.usb_drop_recovery) is not None:
+                recovery.capture(recovery.note_latch, ACTIVE_DRIVE, event, payload)
 
     def _record_auxiliary_failure(
         self,
@@ -2182,8 +2182,8 @@ class TelemetryBroker:
                         f"not be recorded: {type(exc).__name__}: {exc}"
                     )
 
-            if self.usb_drop_recovery is not None:
-                self.usb_drop_recovery.note_latch(AUXILIARY_DRIVE, event, payload)
+            if (recovery := self.usb_drop_recovery) is not None:
+                recovery.capture(recovery.note_latch, AUXILIARY_DRIVE, event, payload)
 
     def _refresh_interface_status(self) -> None:
         probe_state = "ready"
@@ -3040,10 +3040,10 @@ class TelemetryBroker:
     def _claim_helper_launch(self, helper: str) -> bool:
         """Claim a helper launch; False while held. Excludes a concurrent hold-on."""
         claimed = self._helper_hold.claim(helper)
-        if claimed and self.usb_drop_recovery is not None:
+        if claimed and (recovery := self.usb_drop_recovery) is not None:
             with self._lock:
                 self._recovery_armed.discard(helper)
-            self.usb_drop_recovery.begin_launch(helper)
+            recovery.capture(recovery.begin_launch, helper)
         return claimed
 
     def _end_helper_run(self, helper: str, outcome: dict[str, object] | None) -> None:
@@ -3491,7 +3491,7 @@ class TelemetryBroker:
             if helper in self._recovery_armed:
                 return
             self._recovery_armed.add(helper)
-        self.usb_drop_recovery.note_armed(helper, pid)
+        self.usb_drop_recovery.capture(self.usb_drop_recovery.note_armed, helper, pid)
 
     def _recovery_gates(self) -> BrokerGates:
         with self._lock:

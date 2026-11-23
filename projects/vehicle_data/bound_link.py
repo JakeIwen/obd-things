@@ -14,7 +14,7 @@ from lib import canbus, netdev_instance
 from lib.can_runtime_route import LinkExpectation
 from lib.netdev_instance import NetdevInstance
 from projects.vehicle_data import usb_recovery_contract as contract
-from projects.vehicle_data.usb_recovery_contract import MutationOutcome
+from projects.vehicle_data.usb_recovery_contract import MutationOutcome, Refusal
 
 _SEND_WINDOW_SECONDS = 2.0
 _TERMINATE_WAIT_SECONDS = 2.0
@@ -28,10 +28,13 @@ class LinkRead:
     state: canbus.InterfaceState
 
 
-def read_bound_state(name: str, *, run=subprocess.run) -> LinkRead:
+def read_bound_state(name: str, *, run=None) -> LinkRead:
     try:
-        result = run(["ip", "-details", "link", "show", name], capture_output=True, text=True,
-                     timeout=contract.IP_TIMEOUT_SECONDS)
+        if run is None:
+            result = canbus.bounded_link_details(name, timeout=contract.IP_TIMEOUT_SECONDS)
+        else:
+            result = run(["ip", "-details", "link", "show", name], capture_output=True, text=True,
+                         timeout=contract.IP_TIMEOUT_SECONDS)
         text = result.stdout if result.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired):
         text = None
@@ -59,6 +62,7 @@ def link_helper_ok(*, path: str | Path | None = None, sha256: str | None = None)
 class _Submission:
     acknowledged: bool = False
     kernel_errno: int | None = None
+    started: bool = True
 
     @property
     def certain(self) -> bool:
@@ -78,17 +82,24 @@ def _stop(process):
         except ProcessLookupError:
             pass
         # A surviving command can still own the pipe. Wait only for sudo here.
-        process.wait()
+        try:
+            process.wait(timeout=_TERMINATE_WAIT_SECONDS)
+        except subprocess.TimeoutExpired:
+            pass  # Still uncertain: only a positive cgroup check can authorize rollback.
 
 
 def _submit(command, index, args, *, popen, monotonic) -> _Submission:
+    try:
+        deadline = monotonic() + _SEND_WINDOW_SECONDS
+    except Exception:
+        return _Submission(started=False)
     argv = ["sudo", "-n", "/usr/bin/python3", "-I", "-B", contract.LINK_HELPER_PATH,
-            command, str(index), *args, "--not-after", str(monotonic() + _SEND_WINDOW_SECONDS)]
+            command, str(index), *args, "--not-after", str(deadline)]
     try:
         process = popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
                         errors="replace")
     except OSError:
-        return _Submission()
+        return _Submission(started=False)
     try:
         try:
             out, _ = process.communicate(timeout=contract.IP_TIMEOUT_SECONDS)
@@ -107,28 +118,40 @@ def _submit(command, index, args, *, popen, monotonic) -> _Submission:
             process.stdout.close()
 
 
+@dataclass(frozen=True)
+class BringUpResult:
+    outcome: MutationOutcome
+    refusal: Refusal | None = None
+
+
 def bring_up_listen_only(
     instance: NetdevInstance, bitrate: int, *, read_bound_state=read_bound_state,
     popen=subprocess.Popen, monotonic=time.monotonic,
-) -> MutationOutcome:
-    before = read_bound_state(instance.channel)
-    if before.ifindex != instance.ifindex:
-        return MutationOutcome.INSTANCE_CHANGED
-    if not before.state.present or before.up is not False:
-        return MutationOutcome.VERIFICATION_FAILED
+) -> BringUpResult:
+    try:
+        before = read_bound_state(instance.channel)
+        if before.ifindex != instance.ifindex:
+            return BringUpResult(MutationOutcome.NOT_SUBMITTED, Refusal.INSTANCE_CHANGED)
+        if not before.state.present or before.up is not False:
+            return BringUpResult(MutationOutcome.NOT_SUBMITTED, Refusal.VERIFICATION_FAILED)
+    except Exception:
+        return BringUpResult(MutationOutcome.NOT_SUBMITTED, Refusal.VERIFICATION_FAILED)
     result = _submit("up-listen-only", instance.ifindex, (str(bitrate),),
                      popen=popen, monotonic=monotonic)
-    if result.kernel_errno == errno.ENODEV:
-        return MutationOutcome.INSTANCE_CHANGED
+    if not result.started:
+        return BringUpResult(MutationOutcome.NOT_SUBMITTED, Refusal.CONFIGURE_FAILED)
+    if result.kernel_errno is not None:
+        refusal = Refusal.INSTANCE_CHANGED if result.kernel_errno == errno.ENODEV else Refusal.CONFIGURE_FAILED
+        return BringUpResult(MutationOutcome.KERNEL_REFUSED, refusal)
     if not result.acknowledged:
-        return MutationOutcome.CONFIGURE_FAILED
+        return BringUpResult(MutationOutcome.CONFIGURE_FAILED, Refusal.CONFIGURE_FAILED)
     after = read_bound_state(instance.channel)
     if after.ifindex != instance.ifindex:
-        return MutationOutcome.INSTANCE_CHANGED
+        return BringUpResult(MutationOutcome.INSTANCE_CHANGED, Refusal.INSTANCE_CHANGED)
     expected = LinkExpectation(bitrate, listen_only=True, channel=instance.channel)
     if after.up is not True or not expected.matches(after.state):
-        return MutationOutcome.VERIFICATION_FAILED
-    return MutationOutcome.UP_VERIFIED
+        return BringUpResult(MutationOutcome.VERIFICATION_FAILED, Refusal.VERIFICATION_FAILED)
+    return BringUpResult(MutationOutcome.UP_VERIFIED)
 
 
 def bring_down(

@@ -51,7 +51,8 @@ class FakeCommand:
     def kill(self):
         self.lab.trace.append(('signal', 'SIGKILL'))
 
-    def wait(self):
+    def wait(self, *, timeout):
+        assert timeout == 2
         self.lab.trace.append(('reap',))
 
 
@@ -86,10 +87,10 @@ class RecoveryLab:
         )
         self.new_runtime()
 
-    def new_runtime(self):
+    def new_runtime(self, *, log=None):
         self.latched.clear()
         self.recovery = UsbDropRecovery(self, radar_marker=lambda: self.radar, effects=self.effects,
-                                        store=self.store, record_dir=self.directory, log=self.logs.append)
+                                        store=self.store, record_dir=self.directory, log=log or self.logs.append)
         self.recovery.bind(clear_latches=self.clear, display_receiver=self)
 
     def nodes(self, offset, devnum):
@@ -160,7 +161,8 @@ class RecoveryLab:
                                      present_ifindexes=self.indexes, popen=self.popen,
                                      monotonic=self.effects.monotonic)
 
-    def identify(self, channel, *, probe):
+    def identify(self, channel, *, probe, subprocess_timeout, monotonic):
+        assert subprocess_timeout == 5 and monotonic is self.effects.monotonic
         self.trace.append(('identify', channel, probe))
         return C
 

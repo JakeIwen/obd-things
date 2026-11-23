@@ -74,14 +74,14 @@ class Rejected(Exception):
 
 class UsbDropRecovery:
     def __init__(self, interface_manager, *, radar_marker=lambda: (0, False), monitor_ids=lambda: (),
-                 effects=None, store=usb_recovery_record, record_dir=contract.RECORD_DIR, log=print):
+                 effects=None, store=usb_recovery_record, record_dir=contract.RECORD_DIR, log=None):
         self.manager = interface_manager
         self.radar_marker = radar_marker
         self.monitor_ids = monitor_ids
         self.fx = effects or RecoveryEffects()
         self.store = store
         self.directory = Path(record_dir)
-        self.log = log
+        self._log_sink = log
         self.broker_instance = uuid.uuid4().hex
         self._lock = threading.Lock()
         self._slots = {}
@@ -91,6 +91,17 @@ class UsbDropRecovery:
         self._disk_commit_started = False
         self.display = None
         self.clear_latches = None
+
+    def log(self, message, *, error=False):
+        # The unit's stdout is a journal socket. Its priority prefix is parsed by systemd.
+        try:
+            if self._log_sink is None:
+                print(('<3>ERROR ' if error else '') + message, flush=True)
+            else:
+                self._log_sink(('ERROR ' if error else '') + message)
+            return True
+        except Exception:
+            return False  # Diagnostics cannot interrupt restoration or its durable record.
 
     @classmethod
     def if_enabled(cls, enabled, interface_manager, **kwargs):
@@ -113,8 +124,27 @@ class UsbDropRecovery:
         except Exception:
             return None
 
+    def _invalidate(self, helper):
+        # No injected effects (including clocks, files or logging) on this fallback path.
+        slot = model.HelperRecord(contract.HELPER_ROLES[helper], ambiguous=True)
+        self._slots[helper] = slot
+        self._delegates.pop(helper, None)
+        if self.incident is not None and helper in self.incident.helpers and self.incident.state not in contract.TERMINAL_STATES:
+            self.incident.helpers[helper] = slot
+        self._revision += 1
+
+    def capture(self, hook, helper, *args):
+        """Broker boundary: the helper's claim, real factory and finalizer do not depend on capture."""
+        try:
+            return hook(helper, *args)
+        except Exception as exc:
+            with self._lock:
+                self._invalidate(helper)
+            self.log(f'usb-drop-recovery capture unavailable helper={helper} ({type(exc).__name__})', error=True)
+            return None
+
     def begin_launch(self, helper):
-        marker = self._marker() if helper == contract.ACTIVE_DRIVE else None
+        marker = self.radar_marker() if helper == contract.ACTIVE_DRIVE else None
         with self._lock:
             self._revision += 1
             slot = model.HelperRecord(contract.HELPER_ROLES[helper], launch_seq=self._revision,
@@ -126,26 +156,29 @@ class UsbDropRecovery:
 
     def launch_recorder(self, helper, factory):
         def construct(**kwargs):
-            channel = kwargs['channel']
-            launch = model.LaunchRecord(channel, kwargs['expected_usb_serial'], kwargs['expected_dev_id'],
-                                        self.fx.instance(channel), self.fx.monotonic())
-            delegate = factory(**kwargs)
-            with self._lock:
-                slot = self._slots.get(helper)
-                if slot is not None:
-                    if slot.launch is not None:
-                        slot.ambiguous = True
-                    else:
-                        slot.launch = launch
-                        self._delegates[helper] = delegate
-                    self._revision += 1
+            delegate = factory(**kwargs)  # Real factory failures still belong to the supervisor.
+            self.capture(self._note_factory, helper, kwargs, delegate)
             return delegate
         return construct
+
+    def _note_factory(self, helper, kwargs, delegate):
+        channel = kwargs['channel']
+        launch = model.LaunchRecord(channel, kwargs['expected_usb_serial'], kwargs['expected_dev_id'],
+                                    self.fx.instance(channel), self.fx.monotonic())
+        with self._lock:
+            slot = self._slots.get(helper)
+            if slot is not None and not slot.ambiguous:
+                if slot.launch is not None:
+                    slot.ambiguous = True
+                else:
+                    slot.launch = launch
+                    self._delegates[helper] = delegate
+                self._revision += 1
 
     def note_armed(self, helper, pid):
         with self._lock:
             slot = self._slots.get(helper)
-            if slot is not None and slot.armed is None:
+            if slot is not None and not slot.ambiguous and slot.armed is None:
                 instance = self.fx.instance(slot.launch.channel) if slot.launch else None
                 slot.armed = model.ArmedRecord(instance, self.fx.monotonic())
                 slot.helper_pid = pid
@@ -178,18 +211,21 @@ class UsbDropRecovery:
                         if spent:
                             i.state, i.reason = State.INELIGIBLE, Refusal.BOOT_BUDGET_SPENT
             i.helpers[helper] = slot
-            self._save_before_reservation(i, announce=opening)
+            if not self._save_before_reservation(i, announce=opening):
+                self._invalidate(helper)
 
     def _save(self, i, *, announce=True):
         i.updated_at = self.fx.utc_now()
+        logged = True
         if announce:
-            self.log(f'{i.updated_at} usb-drop-recovery incident={i.incident_id[:8]} state={i.state} '
-                     f'reason={i.reason or "-"} detail={i.detail}')
+            logged = self.log(f'{i.updated_at} usb-drop-recovery incident={i.incident_id[:8]} state={i.state} '
+                     f'reason={i.reason or "-"} detail={i.detail}', error=i.state == State.COMMITTED_LATE)
         self.store.write_incident(i, directory=self.directory)
+        return logged
 
     def _save_before_reservation(self, i, *, announce=True):
         try:
-            self._save(i, announce=announce)
+            return self._save(i, announce=announce)
         except Exception as exc:
             i.state = State.INELIGIBLE
             i.reason = Refusal.INCIDENT_RECORD_UNWRITTEN if i.boot_id else Refusal.BOOT_ID_UNAVAILABLE
@@ -239,7 +275,7 @@ class UsbDropRecovery:
         boot = self.fx.boot_id()
         disk = {name: self.fx.disk_record(name) for name in contract.OWNED_INHIBITS.values()}
         return model.Observation(boot, bool(boot and self.store.reservation_exists(boot, directory=self.directory)),
-                                 gates(), marker, proc, self.fx.inhibits(), disk, self.fx.indexes(), board,
+                                 self._gates(gates), marker, proc, self.fx.inhibits(), disk, self.fx.indexes(), board,
                                  self.fx.helper_ok(), ignition_flag=self.fx.ignition_flag(), topology_stable=stable)
 
     def _assess(self, i, gates, resolved, revision, *, stable=True):
@@ -258,12 +294,22 @@ class UsbDropRecovery:
             finally:
                 self.display.resume_bcan_passive()
 
+    def _gates(self, read):
+        try:
+            return read()
+        except Exception as exc:
+            with self._lock:
+                for helper in contract.HELPERS:
+                    self._invalidate(helper)
+            self.log(f'usb-drop-recovery broker gates unavailable ({type(exc).__name__})', error=True)
+            return model.BrokerGates(stopping=True)
+
     def run_if_due(self, read_gates):
         with self._lock:
             i, revision = self.incident, self._revision
             if i is None or i.state in contract.TERMINAL_STATES:
                 return
-        if read_gates().stopping or not self._assess(i, read_gates, self._resolve(), revision):
+        if self._gates(read_gates).stopping or not self._assess(i, read_gates, self._resolve(), revision):
             return
         admitted = [model.StepRecord('precheck', self.fx.utc_now(), True)]
         try:
@@ -350,14 +396,14 @@ class UsbDropRecovery:
             self._phase(i, state)
             if not self.fx.helper_ok():
                 raise Rejected(Refusal.LINK_HELPER_UNVERIFIED)
-        except Rejected:
-            i.transaction.mutations.pop()  # No submission was possible, so never down this instance.
+        except Exception:
+            mutation.outcome = MutationOutcome.NOT_SUBMITTED
             raise
-        outcome = self.fx.up(instance, res.spec.bitrate)
-        mutation.outcome = outcome
-        self._step(i, f'configure_{role}', outcome == MutationOutcome.UP_VERIFIED, str(outcome))
-        if outcome != MutationOutcome.UP_VERIFIED:
-            raise Rejected(Refusal(outcome))
+        result = self.fx.up(instance, res.spec.bitrate)
+        mutation.outcome = result.outcome
+        self._step(i, f'configure_{role}', result.refusal is None, str(result.outcome))
+        if result.refusal is not None:
+            raise Rejected(result.refusal)
 
     def _engine(self, i, *, identify=False):
         instance = i.transaction.board_a[contract.BOARD_A_ROLES[0]]
@@ -365,7 +411,8 @@ class UsbDropRecovery:
         if self.fx.read_link(instance.channel).ifindex != instance.ifindex:
             raise Rejected(Refusal.INSTANCE_CHANGED)
         if identify:
-            bus = self.fx.identify(instance.channel, probe=0.25)
+            bus = self.fx.identify(instance.channel, probe=0.25, subprocess_timeout=contract.IP_TIMEOUT_SECONDS,
+                                   monotonic=self.fx.monotonic)
             self._step(i, 'identify_bus', bus == contract.BOARD_A_ROLES[0], str(bus))
             if bus != contract.BOARD_A_ROLES[0]:
                 raise Rejected(Refusal.WRONG_BUS)
@@ -417,6 +464,9 @@ class UsbDropRecovery:
                 return
             if result.removed:
                 state = State.COMMITTED if tuple(result.removed) == tuple(expected) else State.PARTIAL_COMMIT
+                if result.late:
+                    state = State.COMMITTED_LATE
+                    i.detail = result.detail
                 self._finish(i, state, result.removed, result.durable)
                 return
             self._disk_commit_started = False
@@ -439,7 +489,8 @@ class UsbDropRecovery:
             self._step(i, 'end_inhibits', i.state == State.COMMITTED)
             self._save(i)
         except Exception as exc:
-            self.log(f'usb-drop-recovery incident={i.incident_id[:8]} post-commit record failed: {type(exc).__name__}')
+            self.log(f'usb-drop-recovery incident={i.incident_id[:8]} state={i.state} '
+                     f'post-commit record failed: {type(exc).__name__}', error=True)
 
     def _quiet(self):
         deadline = self.fx.monotonic() + contract.SUBMITTER_WAIT_SECONDS
@@ -457,13 +508,21 @@ class UsbDropRecovery:
         except Exception:
             return False
 
+    def _rollback_step(self, i, name, ok, detail):
+        try:
+            self._step(i, name, ok, detail)
+        except Exception:
+            self.log(f'usb-drop-recovery could not record {name}', error=True)
+
     def _rollback(self, i, exc):
         i.state = State.FAILED
         i.reason = exc.reason if isinstance(exc, Rejected) else Refusal.UNEXPECTED_ERROR
         i.detail = str(exc)[:240] if isinstance(exc, Rejected) else type(exc).__name__
-        self._step(i, 'abort', False, str(i.reason))
-        quiet = self._rollback_quiet()
-        for n, m in enumerate(reversed(i.transaction.mutations)):
+        self._rollback_step(i, 'abort', False, str(i.reason))
+        mutations = [m for m in reversed(i.transaction.mutations)
+                     if m.outcome not in (MutationOutcome.NOT_SUBMITTED, MutationOutcome.KERNEL_REFUSED)]
+        quiet = bool(mutations) and self._rollback_quiet()
+        for n, m in enumerate(mutations):
             inst = i.transaction.board_a[m.role]
             outcome = MutationOutcome.ROLLBACK_UNVERIFIED
             if quiet:
@@ -478,12 +537,12 @@ class UsbDropRecovery:
                 except Exception:
                     pass  # An incomplete read never verifies a rollback.
             if outcome == MutationOutcome.ROLLBACK_UNVERIFIED:
-                self.log(f'ERROR usb-drop-recovery incident={i.incident_id[:8]} rollback_unverified role={m.role}')
+                self.log(f'usb-drop-recovery incident={i.incident_id[:8]} rollback_unverified role={m.role}', error=True)
                 # Re-establish quiescence before the next instance: this down might have a survivor.
-                if quiet and n + 1 < len(i.transaction.mutations):
+                if quiet and n + 1 < len(mutations):
                     quiet = self._rollback_quiet()
             m.outcome = outcome
-            self._step(i, f'rollback_{m.role}', outcome != MutationOutcome.ROLLBACK_UNVERIFIED, str(outcome))
+            self._rollback_step(i, f'rollback_{m.role}', outcome != MutationOutcome.ROLLBACK_UNVERIFIED, str(outcome))
         try:
             self._save(i)
         except Exception as failure:

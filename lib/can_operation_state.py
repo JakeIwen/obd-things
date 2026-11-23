@@ -54,6 +54,7 @@ class EndResult:
     removed: tuple[str, ...] = ()
     durable: bool = True
     detail: str = ""
+    late: bool = False
 
 
 @dataclass(frozen=True)
@@ -353,11 +354,12 @@ def _inhibit_difference(expected_paths: Mapping[Path, dict], boot_id: str) -> st
 
 
 def _end_compared_inhibits(
-    paths: Mapping[str, Path], directory_fd: int, deadline_monotonic: float,
+    paths: Mapping[Path, dict], directory_fd: int, deadline_monotonic: float,
     monotonic: Callable[[], float],
 ) -> EndResult:
     removed: list[str] = []
-    for name, path in paths.items():
+    for path, payload in paths.items():
+        name = path.stem.removeprefix('inhibit-')
         if monotonic() > deadline_monotonic:
             return EndResult("partial" if removed else "expired", tuple(removed), detail=name)
         try:
@@ -366,11 +368,24 @@ def _end_compared_inhibits(
             outcome = "mismatch" if isinstance(exc, FileNotFoundError) else "unavailable"
             return EndResult("partial" if removed else outcome, tuple(removed), detail=name)
         removed.append(name)
+        expired = monotonic() > deadline_monotonic
+        late = False
+        detail = name
+        if expired:
+            try:
+                _atomic_json(path, payload)
+            except Exception as exc:
+                # An uncompensated removal is a commit, never an invitation to retry.
+                late, detail = True, f'{name}: write-back failed ({type(exc).__name__})'
+            else:
+                removed.pop()
+        outcome = 'expired' if not removed else 'partial' if len(removed) < len(paths) else 'removed'
         try:
             os.fsync(directory_fd)
         except OSError as exc:
-            outcome = "partial" if len(removed) < len(paths) else "removed"
-            return EndResult(outcome, tuple(removed), durable=False, detail=str(exc))
+            return EndResult(outcome, tuple(removed), durable=False, detail=str(exc), late=late)
+        if expired:
+            return EndResult(outcome, tuple(removed), detail=detail, late=late)
     return EndResult("removed", tuple(removed))
 
 
@@ -394,7 +409,7 @@ def end_inhibits_if_exactly(
         except OSError as exc:
             return EndResult("unavailable", detail=str(exc))
         try:
-            return _end_compared_inhibits(paths, directory_fd, deadline_monotonic, monotonic)
+            return _end_compared_inhibits(expected_paths, directory_fd, deadline_monotonic, monotonic)
         finally:
             os.close(directory_fd)
 

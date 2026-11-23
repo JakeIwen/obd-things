@@ -171,24 +171,46 @@ def ip_up(
     return r.returncode == 0
 
 
-def rx_errors(channel):
-    out = subprocess.run(["ip", "-details", "link", "show", channel], capture_output=True, text=True).stdout
+def bounded_link_details(channel, *, timeout):
+    """Read-only ip probe; even an unkillable child must not strand its caller's leases."""
+    argv = ["ip", "-details", "link", "show", channel]
+    child = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    try:
+        stdout, _ = child.communicate(timeout=timeout)
+        return subprocess.CompletedProcess(argv, child.returncode, stdout)
+    except BaseException:
+        child.kill()
+        try:
+            child.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            pass  # No context manager: Popen.__exit__ would wait again without a bound.
+        raise
+    finally:
+        child.stdout.close()
+
+
+def rx_errors(channel, *, subprocess_timeout=None):
+    if subprocess_timeout is None:
+        out = subprocess.run(["ip", "-details", "link", "show", channel], capture_output=True, text=True).stdout
+    else:
+        out = bounded_link_details(channel, timeout=subprocess_timeout).stdout
     m = re.search(r"berr-counter\s+tx\s+\d+\s+rx\s+(\d+)", out)
     return int(m.group(1)) if m else 0
 
 
-def probe_ids(channel, probe=2.0):
+def probe_ids(channel, probe=2.0, *, subprocess_timeout=None, monotonic=None):
     """PASSIVE (never transmits): return (ids:set, rx_delta:int) -- the CAN ids seen in `probe` seconds and
     the rx-error climb over that window. Raises OSError if the socket can't be opened/bound (the caller maps
     that to its own verdict). The 11/29-bit split matches SocketCAN framing. Always closes the socket."""
-    rx0 = rx_errors(channel)
+    clock = time.time if monotonic is None else monotonic
+    rx0 = rx_errors(channel, subprocess_timeout=subprocess_timeout)
     ids = set()
     s = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
     try:
         s.bind((channel,))
-        deadline = time.time() + probe
-        while time.time() < deadline:
-            s.settimeout(max(0.05, deadline - time.time()))
+        deadline = clock() + probe
+        while clock() < deadline:
+            s.settimeout(max(0.05, deadline - clock()))
             try:
                 cid_raw = struct.unpack("=IB3x8s", s.recv(16))[0]
             except (socket.timeout, OSError):
@@ -197,7 +219,7 @@ def probe_ids(channel, probe=2.0):
             ids.add(cid)
     finally:
         s.close()
-    return ids, rx_errors(channel) - rx0
+    return ids, rx_errors(channel, subprocess_timeout=subprocess_timeout) - rx0
 
 
 def append_csv(path, volts, status):
@@ -234,15 +256,17 @@ CANCH_MIN_BROADCAST_HITS = 3
 RX_ERR_ABORT = 200           # rx-error climb over a probe -> a bus sampled at the WRONG bitrate
 
 
-def identify_bus(channel, probe=2.0):
+def identify_bus(channel, probe=2.0, *, subprocess_timeout=None, monotonic=None):
     """PASSIVE (no TX): which physical bus is `channel` on, AT ITS CURRENT BITRATE? Returns one of
     'c-can' | 'b-can' | 'can-ch' | 'silent' | 'wrong-rate' | 'unknown'. The caller must already
-    own the serial-resolved role and prove its exact passive interface state.
+    own the serial-resolved role and prove its exact passive interface state. Callers holding
+    recovery leases pass a subprocess_timeout for both ip reads and a monotonic receive clock.
+    Either counter read timing out makes the result 'unknown', even with a signature in hand.
       wrong-rate = traffic present but mis-sampled (rx-errors climb) -> the bus runs at the OTHER bitrate.
       silent     = no traffic (asleep) -- passive traffic cannot establish bus identity."""
     try:
-        ids, rxd = probe_ids(channel, probe)
-    except OSError:
+        ids, rxd = probe_ids(channel, probe, subprocess_timeout=subprocess_timeout, monotonic=monotonic)
+    except (OSError, subprocess.TimeoutExpired):
         return "unknown"
     if ids & CANCH_DIAG_SIG or len(ids & CANCH_SIG) >= CANCH_MIN_BROADCAST_HITS:
         return "can-ch"

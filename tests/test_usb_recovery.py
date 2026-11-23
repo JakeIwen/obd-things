@@ -4,7 +4,12 @@ from dataclasses import replace
 
 import pytest
 
-from lib import can_operation_state as operation, diagnostic_safety
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+from lib import can_operation_state as operation, canbus, diagnostic_safety
+from tests.test_bound_link import FakeProcess
+from tests.test_ccan_powertrain import FakeSocket, frame
 from projects.vehicle_data.usb_recovery import UsbDropRecovery
 from projects.vehicle_data.usb_recovery_contract import (
     COMMIT_PROCESS_RETRIES, RECOVERY_WINDOW_SECONDS, RUNNING_CHECK_ATTEMPTS,
@@ -84,10 +89,120 @@ def test_second_drop_between_the_two_link_commands(ready):
     txn = assert_failed(ready, Refusal.INSTANCE_CHANGED, before)
     assert ready.commands() == [('up-listen-only', ci), ('down', ci)]
     assert not ready.up_indexes
-    assert [m.outcome for m in txn.mutations] == [MutationOutcome.DOWN_VERIFIED, MutationOutcome.INSTANCE_GONE]
+    assert [m.outcome for m in txn.mutations] == [MutationOutcome.DOWN_VERIFIED, MutationOutcome.NOT_SUBMITTED]
 
 
-def test_unverified_first_rollback_does_not_abandon_the_other_instance(ready):
+@pytest.mark.parametrize('failure', ['preflight', 'kernel_refused'])
+def test_rollback_never_downs_a_link_someone_else_brought_up(ready, failure):
+    ci, bi = target_indexes(ready)
+    before = ready.owned_files()
+    if failure == 'preflight':
+        def sample(*args, **kwargs):
+            ready.up_indexes.add(bi)
+            return ready.snapshot(*args, **kwargs)
+        ready.effects.snapshot = sample
+    else:
+        normal = ready.submit
+        def refuse(cmd, idx):
+            if idx == bi and cmd == 'up-listen-only':
+                ready.up_indexes.add(bi)
+                return FakeCommand(ready, 3, 'errno=16 EBUSY\n')
+            return normal(cmd, idx)
+        ready.submit = refuse
+    ready.run()
+    reason = Refusal.VERIFICATION_FAILED if failure == 'preflight' else Refusal.CONFIGURE_FAILED
+    txn = assert_failed(ready, reason, before)
+    assert ready.up_indexes == {bi} and ('down', bi) not in ready.commands()
+    assert (('up-listen-only', bi) in ready.commands()) == (failure == 'kernel_refused')
+    assert txn.mutations[1].outcome == (MutationOutcome.NOT_SUBMITTED if failure == 'preflight' else MutationOutcome.KERNEL_REFUSED)
+    assert ready.commands()[-1] == ('down', ci)
+
+
+@pytest.mark.parametrize('read', [1, 2])
+def test_stuck_error_counter_fails_identity_and_releases_every_lease(ready, monkeypatch, read):
+    ci, _ = target_indexes(ready)
+    before = ready.owned_files()
+    stuck = FakeProcess(timeout=True)
+    children = [FakeProcess(out='berr-counter tx 0 rx 0')] * (read - 1) + [stuck]
+    monkeypatch.setattr(canbus.subprocess, 'Popen', Mock(side_effect=children))
+    monkeypatch.setattr(canbus, 'time', SimpleNamespace())  # Wall clock is not usable here.
+    sock = FakeSocket([frame(0x100, b'')])
+    monkeypatch.setattr(canbus, 'socket', SimpleNamespace(
+        AF_CAN=29, SOCK_RAW=3, CAN_RAW=1, timeout=TimeoutError, socket=lambda *_: sock,
+    ))
+    ready.effects.identify = canbus.identify_bus
+    ready.run()
+    assert_failed(ready, Refusal.WRONG_BUS, before)
+    assert stuck.history == [('communicate', 5), 'kill', ('wait', 2)] and stuck.stdout.closed
+    assert sock.closed == (read == 2)
+    assert len(ready.events('release')) == len(ready.events('lock')) == 6
+    assert ready.commands() == [('up-listen-only', ci), ('down', ci)]
+
+
+def test_broken_log_sink_during_real_latch_capture_cannot_escape_or_authorize(lab):
+    def broken(_message):
+        raise BrokenPipeError()
+
+    lab.new_runtime(log=broken)
+    lab.incident(ACTIVE)
+    before = lab.owned_files()
+    lab.replace_board()
+    lab.run()
+    assert_deferred(lab, Refusal.ARMED_INSTANCE_UNKNOWN, terminal=True)
+    assert lab.owned_files() == before and lab.latched == {ACTIVE}
+
+
+@pytest.mark.parametrize('fault', ['factory_capture', 'armed_capture', 'late_latch'])
+def test_capture_failure_never_reuses_stale_evidence_or_suppresses_factory(lab, monkeypatch, fault):
+    recovery = lab.recovery
+    lab.launch(ACTIVE)
+    if fault == 'late_latch':
+        lab.latch(ACTIVE)
+        # A later final cannot leave the first final's grant and owned payload reusable.
+        recovery.capture(recovery.note_latch, ACTIVE, object(), None)
+    else:
+        recovery.capture(recovery.begin_launch, ACTIVE)
+        instance = lab.netdevs[lab.mapping[C]]
+        delegate = SimpleNamespace(last_grant=None)
+        factory = Mock(return_value=delegate)
+        construct = recovery.launch_recorder(ACTIVE, factory)
+        def make_delegate():
+            return construct(channel=instance.channel, expected_usb_serial=instance.usb_serial,
+                             expected_dev_id=instance.dev_id)
+        if fault == 'armed_capture':
+            assert make_delegate() is delegate
+        with monkeypatch.context() as patch:
+            patch.setattr(lab.effects, 'instance', Mock(side_effect=OSError('capture failed')))
+            if fault == 'factory_capture':
+                assert make_delegate() is delegate
+            else:
+                recovery.capture(recovery.note_armed, ACTIVE, 1001)
+        factory.assert_called_once()
+        lab.latch(ACTIVE)
+    lab.replace_board()
+    lab.run()
+    assert_deferred(lab, Refusal.ARMED_INSTANCE_UNKNOWN, terminal=True)
+    record = lab.persisted().helpers[ACTIVE]
+    assert record.launch is record.armed is record.grant is None
+
+
+def test_gate_read_failure_invalidates_the_launch_even_after_the_reader_recovers(ready):
+    ready.recovery.run_if_due(Mock(side_effect=RuntimeError('gates unavailable')))
+    ready.run()
+    assert_deferred(ready, Refusal.ARMED_INSTANCE_UNKNOWN, terminal=True)
+
+
+def test_unverified_first_rollback_does_not_abandon_the_other_instance(lab):
+    errors = []
+    def failing_sink(message):
+        if 'rollback_unverified' in message:
+            errors.append(message)
+            raise BrokenPipeError()
+
+    lab.new_runtime(log=failing_sink)
+    lab.incident()
+    lab.replace_board()
+    ready = lab
     ci, bi = target_indexes(ready)
     before = ready.owned_files()
     down = ready.effects.down
@@ -103,7 +218,7 @@ def test_unverified_first_rollback_does_not_abandon_the_other_instance(ready):
     ready.run()
     txn = assert_failed(ready, Refusal.COMMIT_REFUSED, before)
     assert [m.outcome for m in txn.mutations] == [MutationOutcome.DOWN_VERIFIED, MutationOutcome.ROLLBACK_UNVERIFIED]
-    assert ready.up_indexes == {bi}
+    assert ready.up_indexes == {bi} and len(errors) == 1
 
 
 def test_orphan_delays_reservation_but_later_exit_allows_recovery(ready, tmp_path):
@@ -190,7 +305,7 @@ def test_receive_only_engine_and_identity_gates(ready, sensor_failure):
 
     ready.effects.snapshot = snapshot
     if sensor_failure == 'wrong_bus':
-        ready.effects.identify = lambda channel, *, probe: B
+        ready.effects.identify = lambda channel, **kwargs: B
     ready.run()
     reasons = {'replaced_ccan': Refusal.INSTANCE_CHANGED, 'renamed_ccan': Refusal.INSTANCE_CHANGED,
                'wrong_bus': Refusal.WRONG_BUS}

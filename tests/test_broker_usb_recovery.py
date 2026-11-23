@@ -1,5 +1,9 @@
 """The opt-in broker hooks; no service, hardware, or production state effects."""
 
+import os
+import select
+import subprocess
+import sys
 import time
 from types import SimpleNamespace
 from unittest import mock
@@ -11,7 +15,9 @@ from lib.vehicle_can_roles import BOARD_A_SERIAL, BOARD_B_SERIAL
 from projects.vehicle_data import active_drive, bcan_auxiliary, broker as telemetry
 from projects.vehicle_data.usb_recovery_contract import ACTIVE_DRIVE, AUXILIARY_DRIVE, FLAG, OWNED_INHIBITS
 from tests import test_active_drive as drive_tests
-from tests.test_broker_helper_hold import FAILED, ScriptedSupervisor
+from tests.test_broker_helper_hold import FAILED, RESTORED, ScriptedSupervisor
+from tests.usb_recovery_support import lab, assert_deferred
+from projects.vehicle_data.usb_recovery_contract import Refusal
 
 
 ARMED = dict(type="status", state="armed_diagnostic", reason="running_gate_satisfied",
@@ -29,6 +35,9 @@ class RecordingRecovery:
     def bind(self, *, clear_latches, display_receiver):
         self.clear = clear_latches
         self.display = display_receiver
+
+    def capture(self, hook, helper, *args):
+        return hook(helper, *args)
 
     def begin_launch(self, helper):
         self.begun.append(helper)
@@ -132,6 +141,50 @@ def test_valid_armed_once_per_claim_and_exact_latch_payload(helper, handler_name
     handle({**ARMED, "pid": 2345})
     assert recovery.begun == [helper, helper]
     assert recovery.armed[-1] == (helper, 2345)
+
+
+def test_startup_line_is_visible_on_a_buffered_pipe_before_exit():
+    code = '''
+import sys
+from projects.vehicle_data.usb_recovery import RecoveryEffects, UsbDropRecovery
+UsbDropRecovery.if_enabled(True, None, effects=RecoveryEffects(helper_ok=lambda: True))
+sys.stdin.buffer.read(1)
+'''
+    env = os.environ.copy()
+    env.pop('PYTHONUNBUFFERED', None)
+    with subprocess.Popen([sys.executable, '-c', code], stdin=subprocess.PIPE,
+                          stdout=subprocess.PIPE, env=env) as child:
+        try:
+            assert select.select([child.stdout], [], [], 10)[0], 'enabled line still buffered'
+            assert b'usb-drop-recovery enabled' in os.read(child.stdout.fileno(), 4096)
+            assert child.poll() is None
+        finally:
+            child.communicate(b'x', timeout=10)
+
+
+@pytest.mark.parametrize('latches', [False, True])
+def test_failed_begin_launch_keeps_helper_claim_cleanup_and_discards_stale_evidence(lab, monkeypatch, latches):
+    lab.launch(ACTIVE_DRIVE)  # Evidence of a previous, successfully armed launch.
+    supervisor = ScriptedSupervisor(FAILED if latches else RESTORED)
+    supervisor.stopped.set()
+    broker = make_broker(lab.recovery, active_drive_supervisor=supervisor, active_drive_enabled=True)
+    broker._passive_engine_evidence = 'running'
+    with monkeypatch.context() as patch:
+        patch.setattr(lab.recovery, 'begin_launch', mock.Mock(side_effect=RuntimeError('capture failed')))
+        broker._run_active_drive_if_ready()
+    assert not broker._recovery_gates().claimed and supervisor.calls == 1
+    if latches:
+        assert broker._recovery_gates().latched == {ACTIVE_DRIVE}
+        lab.replace_board()
+        lab.recovery.run_if_due(broker._recovery_gates)
+        assert_deferred(lab, Refusal.ARMED_INSTANCE_UNKNOWN, terminal=True)
+    else:
+        broker._passive_engine_evidence = 'stopped'
+        broker._passive_stop_evidence_streak = 2
+        broker._run_active_drive_if_ready()
+        broker._passive_engine_evidence = 'running'
+        broker._run_active_drive_if_ready()
+        assert not broker._recovery_gates().claimed and supervisor.calls == 2
 
 
 def collector_cycles(broker, cycles):
