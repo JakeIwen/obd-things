@@ -160,7 +160,8 @@ disks have no reason to be on USB 2.0).
     the port, such as a disk that fell back to USB 2.0, is never disconnected: it refuses and
     alerts, and a person decides. It then lists the storage behind the port again, and writes
     nothing on that attempt if a disk or storage interface appeared, left or changed while it
-    was claiming. An unused disk, or a reader with no card, does not stop the power-off. Two
+    was claiming. The known reader does not stop the power-off when both of its disks are
+    listed and unused, cards or no cards. Two
     listings are not a lock on the USB topology: a device whose storage interface appears after
     the second listing, and whose disks are registered and mounted before the kernel carries
     out the write, is not covered. A new USB 2.0-only storage device in the chain needs a row
