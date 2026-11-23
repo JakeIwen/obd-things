@@ -116,6 +116,54 @@ service, cron, network, and vehicle state before acting.
   authorization is not evidence that the van is parked, the engine is off, or the intended bus is
   connected.
 
+## USB 2.0 block for the disk hub chain
+
+The Pi 4's onboard USB 2.0 hub (`1-1`, VIA 2109:3431) carries the CAN adapters' own hub on port 4
+(`1-1.4`, adapters at `1-1.4.2` and `1-1.4.4`; moved there by the owner on 2026-11-22). Its port 2
+is the USB 2.0 half of the external disk hub chain (three Realtek 0bda:5411 hubs in series), whose
+disks all run on USB 3.0 (bus 2). Port 2 is kept logically off (owner decision 2026-11-22: the
+disks have no reason to be on USB 2.0).
+
+- Why: on 2026-11-22 port 2 of the deepest disk hub (`1-1.2.4.4`) failed low-speed enumeration
+  every few seconds for a day (about 197,000 kernel lines). Twice that evening every USB 2.0
+  device under `1-1` failed at once with `-71`, CAN adapters included: at 17:45, mid-drive, which
+  latched the two restoration inhibits and ended telemetry for the drive, and at 19:50, five
+  minutes after a reboot let the chain enumerate again. Port 2 itself also failed enumeration at
+  19:22. The USB 3.0 side logged nothing each time. The chain is the suspected cause, not a
+  proven one: hub drops are also recorded on earlier dates (`usb_can_incidents`).
+- Source: `projects/vehicle_data/usb2_block/`. `install.sh install` copies three root-owned files
+  and enables the watcher; `install.sh status` is the read-only check (installed copies identical
+  to the checkout, watcher enabled and active, block held); `install.sh uninstall` removes them.
+  - `70-vanpi-usb2-disk-hub-off.rules` → `/etc/udev/rules.d/`: writes `1` to
+    `/sys/bus/usb/devices/1-1/1-1:1.0/1-1-port2/disable` when the onboard hub's driver is bound
+    (udev's coldplug `add` at boot, `bind` after a real re-enumeration or re-bind of `1-1`). It is
+    the fast path only: one write per event, and udev ignores a failed write.
+  - `vanpi-usb2-disk-hub-off` → `/usr/local/sbin/`, run by `vanpi-usb2-disk-hub-off.service`
+    (`watch`): every 5 s for its first minute, then every 30 s, it checks that `disable` reads `1`
+    and that nothing is enumerated at `1-1.2`, writes `1` again when either fails (three attempts,
+    each confirmed twice), and sends one ntfy per boot when the port cannot be held off. It
+    covers what the rule cannot: a connection event already queued in the kernel can power the
+    port back on after a successful write, a failed control transfer leaves it on, and an
+    in-place hub reset or controller recovery fires no udev event. It writes nothing but that
+    attribute and its alert marker under `/run`, and never touches another port or a hub that
+    is not 2109:3431 at `1-1`.
+- Tested live 2026-11-22 20:17 (VL805 firmware `000138c0`, kernel 6.12.62): with `disable` 1 and
+  `early_stop` cleared, nothing enumerated on port 2 for the minutes observed, bus 2 kept all
+  eight devices, every disk and mount stayed attached, and `can0`/`can1`/`can2` stayed UP,
+  listen-only, ERROR-ACTIVE with no kernel message. The hub reports ganged power switching, so
+  one port's power-off is logical; the 5 V rail was not measured.
+- Limits: xHCI is built into the kernel, so at boot the chain enumerates for the seconds before
+  udev's coldplug runs. A USB 2.0-only device anywhere in the disk hub chain stops working (one
+  was present on 2026-11-22: a Genesys 05e3:0764 "USB Storage" reader on the first hub's port 1);
+  plug such a device into Pi port 1 or 3 instead. Do not plug the CAN hub into port 2.
+- Check: `projects/vehicle_data/usb2_block/install.sh status`, or
+  `/usr/local/sbin/vanpi-usb2-disk-hub-off status` (prints `held`). The watcher's journal
+  (`journalctl -u vanpi-usb2-disk-hub-off`) is silent while the block holds and has a warning
+  each time it had to power the port off again.
+- Undo: `install.sh uninstall`, then `echo 0 | sudo tee
+  /sys/bus/usb/devices/1-1/1-1:1.0/1-1-port2/disable`. Do that only after the faulty hub or
+  cable is out of the chain; with the watcher running, a manual `0` lasts at most 30 s.
+
 ## Private environment context
 
 Machine-specific environment/secret locations, local monitoring paths, and private compute-worker

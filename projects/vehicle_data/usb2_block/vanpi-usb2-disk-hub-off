@@ -1,0 +1,160 @@
+#!/bin/bash
+# vanpi: keep port 2 of the Pi 4's onboard USB 2.0 hub (the disk hub chain's USB 2.0 half) off.
+#
+# Installed as /usr/local/sbin/vanpi-usb2-disk-hub-off and run by
+# vanpi-usb2-disk-hub-off.service. Contract: docs/agent-context.md, section
+# "USB 2.0 block for the disk hub chain".
+#
+# The udev rule beside this file powers the port off when the hub's driver binds. That single
+# write is not enough: a connection event already queued in the kernel can power the port back
+# on, a failed control transfer leaves it on, and a hub reset or controller recovery fires no
+# udev event. This program is the check that the block holds, the retry, and the alert.
+#
+#   status  print the block's state; exit 0 only when it holds
+#   check   one pass: power the port off if it is on; exit 1 if it stays on
+#   watch   repeat `check` forever and alert once per boot when it cannot be held
+set -u
+
+sysfs=${USB2_BLOCK_SYSFS:-/sys/bus/usb/devices}
+notify_command=${USB2_BLOCK_NOTIFY:-/home/pi/scripts/ntfy_send.sh}
+state_dir=${USB2_BLOCK_STATE_DIR:-/run/vanpi-usb2-disk-hub-off}
+settle_seconds=${USB2_BLOCK_SETTLE_SECONDS:-2}
+# Boot and re-enumeration are when the port comes back, so the first minute is checked closely.
+fast_interval_seconds=${USB2_BLOCK_FAST_INTERVAL_SECONDS:-5}
+slow_interval_seconds=${USB2_BLOCK_SLOW_INTERVAL_SECONDS:-30}
+fast_passes=12
+attempts=3
+
+hub="$sysfs/1-1"
+port="$hub/1-1:1.0/1-1-port2"
+child="$sysfs/1-1.2"
+quiet=0
+
+# systemd reads the <N> prefix as the journal priority (3 error, 4 warning, 5 notice).
+log() {
+  (( quiet )) || echo "$*" >&2
+}
+
+read_attr() {
+  local value
+  IFS= read -r value < "$1" || return 1
+  printf '%s' "$value"
+} 2>/dev/null
+
+# Prints one of: held | absent | foreign <vid>:<pid> | open disable=<v> child=<present|absent>.
+# `absent` means there is nothing to block: no hub at 1-1, or its driver has no ports yet.
+# `disable` alone is not trusted (the kernel reports a failed status read as its last answer),
+# so the block holds only when nothing is enumerated behind the port as well.
+assess() {
+  local vendor product disable
+  [[ -d "$hub" ]] || { echo absent; return; }
+  if ! vendor=$(read_attr "$hub/idVendor") || ! product=$(read_attr "$hub/idProduct"); then
+    echo absent
+    return
+  fi
+  if [[ "$vendor" != 2109 || "$product" != 3431 ]]; then
+    echo "foreign $vendor:$product"
+    return
+  fi
+  [[ -e "$port/disable" ]] || { echo absent; return; }
+  disable=$(read_attr "$port/disable") || disable=unreadable
+  if [[ "$disable" == 1 && ! -e "$child" ]]; then
+    echo held
+  elif [[ -e "$child" ]]; then
+    echo "open disable=$disable child=present"
+  else
+    echo "open disable=$disable child=absent"
+  fi
+}
+
+settled() {
+  [[ "$1" == held || "$1" == absent ]]
+}
+
+enforce() {
+  local state try
+  state=$(assess)
+  for (( try = 1; try <= attempts; try++ )); do
+    if settled "$state"; then
+      return 0
+    fi
+    if [[ "$state" == foreign* ]]; then
+      log "<3>USB path 1-1 is not the Pi's onboard hub ($state); port 2 left alone"
+      return 1
+    fi
+    log "<4>port 2 of the onboard USB 2.0 hub is on ($state); powering it off, attempt $try of $attempts"
+    { echo 1 > "$port/disable"; } 2>/dev/null || log "<4>writing 1 to $port/disable failed"
+    sleep "$settle_seconds"
+    state=$(assess)
+    if settled "$state"; then
+      # A queued connection event can power the port back on after a successful write.
+      sleep "$settle_seconds"
+      state=$(assess)
+      if settled "$state"; then
+        log "<5>port 2 of the onboard USB 2.0 hub is off again"
+        return 0
+      fi
+    fi
+  done
+  log "<3>port 2 of the onboard USB 2.0 hub is still on after $attempts attempts ($state)"
+  return 1
+}
+
+# One phone alert per boot: the marker lives under /run.
+alert_once() {
+  local marker="$state_dir/alerted"
+  [[ -e "$marker" ]] && return 0
+  if ! install -d -m 0700 -- "$state_dir" 2>/dev/null; then
+    echo "<3>cannot create $state_dir; no alert sent" >&2
+    return 1
+  fi
+  if [[ -x "$notify_command" ]] && "$notify_command" "vanpi USB 2.0 block FAILED" \
+    "Port 2 of the Pi's onboard USB 2.0 hub (the disk hub chain) is on and could not be powered off. The CAN adapters share that hub. See obd-things docs/agent-context.md, USB 2.0 block for the disk hub chain." \
+    high warning; then
+    : > "$marker"
+  else
+    echo "<3>the USB 2.0 block failed and the alert could not be delivered" >&2
+    return 1
+  fi
+}
+
+watch() {
+  local pass=0 failing=0
+  while :; do
+    # While it keeps failing, say so once, not on every pass.
+    quiet=$failing
+    if enforce; then
+      if (( failing )); then
+        echo "<5>the USB 2.0 block holds again" >&2
+      fi
+      failing=0
+    else
+      failing=1
+      alert_once
+    fi
+    pass=$(( pass + 1 ))
+    if (( pass <= fast_passes )); then
+      sleep "$fast_interval_seconds"
+    else
+      sleep "$slow_interval_seconds"
+    fi
+  done
+}
+
+case "${1:-}" in
+  status)
+    state=$(assess)
+    echo "$state"
+    [[ "$state" == held ]]
+    ;;
+  check)
+    enforce
+    ;;
+  watch)
+    watch
+    ;;
+  *)
+    echo "usage: ${0##*/} status|check|watch" >&2
+    exit 2
+    ;;
+esac

@@ -1,0 +1,23 @@
+[Unit]
+Description=Keep the Pi's onboard USB 2.0 hub port 2 (disk hub chain) powered off
+Documentation=file:///home/pi/dev/obd-things/docs/agent-context.md
+
+[Service]
+Type=simple
+# Root: the port's sysfs attribute is root-writable only. The program is a root-owned copy
+# outside the checkout. No filesystem sandboxing: it writes /sys and runs the ntfy sender.
+ExecStart=/usr/local/sbin/vanpi-usb2-disk-hub-off watch
+# The watcher has no clean exit; any exit is a fault and it must come back.
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=yes
+# Holds the once-per-boot alert marker; kept across a restart of this service.
+RuntimeDirectory=vanpi-usb2-disk-hub-off
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+SyslogIdentifier=vanpi-usb2-disk-hub-off
+
+[Install]
+WantedBy=multi-user.target

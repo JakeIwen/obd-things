@@ -1,0 +1,133 @@
+"""The USB 2.0 block watcher, run as a program against a scratch sysfs tree.
+
+No test touches the real /sys or sends a notification: every path comes from the environment.
+"""
+
+import os
+import pathlib
+import stat
+import subprocess
+import time
+
+import pytest
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+PROGRAM = REPO_ROOT / "projects/vehicle_data/usb2_block/vanpi-usb2-disk-hub-off"
+
+
+class Tree:
+    """A scratch /sys/bus/usb/devices holding the onboard hub and its port 2."""
+
+    def __init__(self, root: pathlib.Path, vendor: str = "2109", product: str = "3431"):
+        self.root = root
+        self.sysfs = root / "devices"
+        self.hub = self.sysfs / "1-1"
+        self.port = self.hub / "1-1:1.0" / "1-1-port2"
+        self.port.mkdir(parents=True)
+        (self.hub / "idVendor").write_text(vendor + "\n")
+        (self.hub / "idProduct").write_text(product + "\n")
+        self.disable = self.port / "disable"
+        self.disable.write_text("0\n")
+        self.alerts = root / "alerts.log"
+        notify = root / "notify"
+        notify.write_text(f'#!/bin/bash\nprintf "%s|%s\\n" "$1" "$3" >> "{self.alerts}"\n')
+        notify.chmod(notify.stat().st_mode | stat.S_IXUSR)
+        self.env = {
+            "PATH": os.environ["PATH"],
+            "USB2_BLOCK_SYSFS": str(self.sysfs),
+            "USB2_BLOCK_NOTIFY": str(notify),
+            "USB2_BLOCK_STATE_DIR": str(root / "state"),
+            "USB2_BLOCK_SETTLE_SECONDS": "0",
+            "USB2_BLOCK_FAST_INTERVAL_SECONDS": "0.05",
+            "USB2_BLOCK_SLOW_INTERVAL_SECONDS": "0.05",
+        }
+
+    def attach_child(self) -> pathlib.Path:
+        child = self.sysfs / "1-1.2"
+        child.mkdir()
+        return child
+
+    def run(self, verb: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["bash", str(PROGRAM), verb], env=self.env, capture_output=True, text=True, timeout=20
+        )
+
+
+@pytest.fixture
+def tree(tmp_path):
+    return Tree(tmp_path)
+
+
+def test_a_held_block_is_left_alone_and_silent(tree):
+    tree.disable.write_text("1\n")
+    result = tree.run("check")
+    assert (result.returncode, result.stderr) == (0, "")
+    assert tree.run("status").stdout == "held\n"
+
+
+def test_an_open_port_is_powered_off(tree):
+    result = tree.run("check")
+    assert result.returncode == 0
+    assert tree.disable.read_text().strip() == "1"
+    assert "powering it off, attempt 1 of 3" in result.stderr
+    assert "off again" in result.stderr
+
+
+def test_a_device_still_enumerated_behind_the_port_fails_the_check(tree):
+    tree.disable.write_text("1\n")
+    tree.attach_child()
+    result = tree.run("check")
+    assert result.returncode == 1
+    assert "still on after 3 attempts" in result.stderr
+    status = tree.run("status")
+    assert (status.returncode, status.stdout) == (1, "open disable=1 child=present\n")
+
+
+def test_a_write_the_port_refuses_fails_the_check(tree):
+    tree.disable.chmod(0o444)
+    if os.access(tree.disable, os.W_OK):
+        pytest.skip("this user can write a read-only file, so a refused write cannot be staged")
+    result = tree.run("check")
+    assert result.returncode == 1
+    assert tree.disable.read_text().strip() == "0"
+    assert "writing 1 to" in result.stderr
+
+
+def test_a_different_hub_at_the_path_is_never_written(tree, tmp_path):
+    other = Tree(tmp_path / "other", vendor="0bda", product="5411")
+    result = other.run("check")
+    assert result.returncode == 1
+    assert other.disable.read_text().strip() == "0"
+    assert "not the Pi's onboard hub (foreign 0bda:5411)" in result.stderr
+
+
+def test_no_hub_or_no_ports_is_nothing_to_block(tree, tmp_path):
+    empty = Tree(tmp_path / "empty")
+    empty.disable.unlink()
+    assert empty.run("check").returncode == 0
+    assert empty.run("status").stdout == "absent\n"
+
+
+def test_watch_alerts_once_while_the_block_keeps_failing_and_reports_recovery(tree):
+    tree.disable.write_text("1\n")
+    child = tree.attach_child()
+    watcher = subprocess.Popen(
+        ["bash", str(PROGRAM), "watch"], env=tree.env, stderr=subprocess.PIPE, text=True
+    )
+    try:
+        deadline = time.monotonic() + 15
+        while not tree.alerts.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        time.sleep(0.5)  # several more failing passes
+        child.rmdir()
+        time.sleep(0.5)
+    finally:
+        watcher.terminate()
+        stderr = watcher.communicate(timeout=10)[1]
+    assert tree.alerts.read_text() == "vanpi USB 2.0 block FAILED|high\n"
+    assert stderr.count("still on after 3 attempts") == 1
+    assert "holds again" in stderr
+
+
+def test_unknown_verbs_are_usage_errors(tree):
+    assert tree.run("reset").returncode == 2
