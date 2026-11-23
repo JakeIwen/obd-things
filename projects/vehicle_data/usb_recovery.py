@@ -23,7 +23,7 @@ from projects.vehicle_data.usb_recovery_probe_client import ProbeFailed, run_pro
 from projects.vehicle_data import usb_recovery_contract as contract
 from projects.vehicle_data import usb_recovery_model as model
 from projects.vehicle_data import usb_recovery_record
-from projects.vehicle_data.usb_recovery_log import BestEffortLog
+from projects.vehicle_data.usb_recovery_log import ERROR_PREFIX, MAX_LINE_BYTES, BestEffortLog
 from projects.vehicle_data.usb_recovery_contract import IncidentState as State, MutationOutcome, Refusal
 
 
@@ -44,6 +44,24 @@ def _inhibit_file_names():
     """Names of every inhibit record physically in the state directory (foreign and fallback too)."""
     # glob suppresses listing errors; an unreadable inventory must never look empty.
     return [p.name for p in operation.STATE_DIR.iterdir() if p.match('inhibit-*.json')]
+
+
+def _inventory_line(heading, files):
+    if not files:
+        return heading + 'none'
+    owned = [f'inhibit-{name}.json' for name in contract.OWNED_INHIBITS.values()]
+    ordered = [name for name in owned if name in files] + sorted(files - set(owned))
+    names = [urllib.parse.quote_from_bytes(os.fsencode(name), safe='') for name in ordered]
+    # Encoded names are ASCII. Budget the actual journal priority and newline, then
+    # keep the longest whole prefix that still leaves room for its exact omission count.
+    room = MAX_LINE_BYTES - len((ERROR_PREFIX + heading + '\n').encode())
+    used = sum(map(len, names)) + 2 * (len(names) - 1)
+    total = len(names)
+    suffix = ''
+    while names and used + len(suffix) > room:
+        used -= len(names.pop()) + (2 if names else 0)
+        suffix = f'; {total - len(names)} omitted' if names else f'{total} omitted'
+    return heading + ', '.join(names) + suffix
 
 
 def ignition_flag_present():
@@ -142,20 +160,14 @@ class UsbDropRecovery:
             incidents = self.store.interrupted_commits(boot, directory=self.directory)
             if not incidents:
                 return
+            heading = (f'usb-drop-recovery incident(s) {",".join(i[:8] for i in incidents)} of this boot were '
+                       'interrupted while committing (outcome unknown, inspect remaining inhibits); '
+                       'remaining inhibit records: ')
             try:
-                files = set(self.fx.inhibit_files())
+                line = _inventory_line(heading, set(self.fx.inhibit_files()))
             except Exception:
-                files = None
-            if files is None:
-                remaining_text = 'inventory unavailable'
-            else:
-                owned = [f'inhibit-{n}.json' for n in contract.OWNED_INHIBITS.values()]
-                ordered = [f for f in owned if f in files] + sorted(files - set(owned))
-                remaining_text = ', '.join(urllib.parse.quote_from_bytes(os.fsencode(f), safe='') for f in ordered) or 'none'
-            self.log(
-                f'usb-drop-recovery incident(s) {",".join(i[:8] for i in incidents)} of this boot were '
-                f'interrupted while committing (outcome unknown, inspect remaining inhibits); remaining '
-                f'inhibit records: {remaining_text}', error=True)
+                line = heading + 'inventory unavailable'
+            self.log(line, error=True)
         except Exception as exc:
             self.log(f'usb-drop-recovery startup diagnostic unavailable ({type(exc).__name__})', error=True)
 

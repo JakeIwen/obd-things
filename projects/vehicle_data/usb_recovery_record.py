@@ -135,10 +135,13 @@ def write_incident(incident: Incident, *, directory: Path = RECORD_DIR) -> None:
 def read_incident(path: Path) -> Incident:
     # Never block on a FIFO or follow a symlink planted under a matching name.
     fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
-    with os.fdopen(fd, "rb") as file:
-        if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise ValueError("USB recovery record is not a regular file")
-        data = file.read(MAX_RECORD_BYTES + 1)
+        with os.fdopen(fd, "rb", closefd=False) as file:
+            data = file.read(MAX_RECORD_BYTES + 1)
+    finally:
+        os.close(fd)
     if len(data) > MAX_RECORD_BYTES:
         raise ValueError("USB recovery record exceeds its byte limit")
     return incident_from_dict(json.loads(data))

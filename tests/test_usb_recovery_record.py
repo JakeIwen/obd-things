@@ -1,6 +1,7 @@
 """File durability and bounds for recovery records on a temporary directory."""
 
 from dataclasses import replace
+import errno
 import json
 import os
 
@@ -151,3 +152,25 @@ def test_unknown_record_schema_and_unsafe_path_are_rejected(evidence, tmp_path):
         record.reservation_exists("../elsewhere", directory=tmp_path)
     with pytest.raises(ValueError, match="schema"):
         model.incident_from_dict({**model.incident_to_dict(incident), "schema": True})
+
+
+@pytest.mark.parametrize('make_entry', [os.mkdir, os.mkfifo], ids=['directory', 'fifo'])
+def test_read_incident_closes_the_descriptor_of_a_nonregular_entry(tmp_path, monkeypatch, make_entry):
+    path = tmp_path / f'incident-{BOOT}-{"1" * 32}.json'
+    make_entry(path)
+    opened = []
+    real_open = os.open
+
+    def observe_open(*args, **kwargs):
+        fd = real_open(*args, **kwargs)
+        opened.append(fd)
+        return fd
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, 'open', observe_open)
+        with pytest.raises(ValueError, match='not a regular file'):
+            record.read_incident(path)
+    fd, = opened
+    with pytest.raises(OSError) as exc:
+        os.fstat(fd)
+    assert exc.value.errno == errno.EBADF

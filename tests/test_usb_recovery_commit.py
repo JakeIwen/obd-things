@@ -10,6 +10,7 @@ import pytest
 from lib import can_operation_state as operation
 from projects.vehicle_data import usb_recovery_record as records
 from projects.vehicle_data.usb_recovery import UsbDropRecovery
+from projects.vehicle_data.usb_recovery_log import ERROR_PREFIX, MAX_LINE_BYTES
 from projects.vehicle_data.usb_recovery_contract import (
     ENGINE_EVIDENCE_MAX_AGE_SECONDS, IncidentState as State, Refusal,
 )
@@ -469,3 +470,22 @@ def test_startup_scan_ignores_fifo_and_symlink_incident_names(ready, monkeypatch
     os.symlink(target, ready.directory / f'incident-{boot}-{"2" * 32}.json')
     (line,) = _startup_lines(ready)  # would hang on the FIFO if it were opened blocking
     assert C_INHIBIT in line
+
+
+def test_long_startup_inventory_reports_the_exact_number_omitted(ready, monkeypatch, capfd):
+    _die_at_unlink(ready, monkeypatch, C_INHIBIT)
+    names = [f'inhibit-{i:03}-{"x" * 63}.json' for i in range(80)]
+    for name in names:
+        (ready.state_dir / name).touch()
+    ready.new_runtime(stdout_journal=True)
+    assert ready.recovery.flush_log()
+    line, = (s for s in capfd.readouterr().out.splitlines() if 'interrupted while committing' in s)
+    assert line.startswith(ERROR_PREFIX) and len((line + '\n').encode()) <= MAX_LINE_BYTES
+    listing, omitted = line.partition('remaining inhibit records: ')[2].split('; ')
+    shown = listing.split(', ')
+    expected = [f'inhibit-{n}.json' for n in (C_INHIBIT, B_INHIBIT)] + names
+    assert 2 <= len(shown) < len(expected) and shown == expected[:len(shown)]
+    assert omitted == f'{len(expected) - len(shown)} omitted'
+    # One more whole filename cannot fit, even accounting for the shorter omission count.
+    extra = line.rsplit('; ', 1)[0] + ', ' + expected[len(shown)] + f'; {len(expected) - len(shown) - 1} omitted\n'
+    assert len(extra.encode()) > MAX_LINE_BYTES
