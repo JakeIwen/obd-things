@@ -3,6 +3,7 @@
 No test touches the real /sys, /dev or a notification: every path comes from the environment.
 """
 
+import errno
 import importlib.machinery
 import importlib.util
 import os
@@ -60,25 +61,26 @@ class Tree:
         child.mkdir()
         return child
 
-    def attach_storage(self, model: tuple = KNOWN_READER) -> None:
-        """The USB storage device at 1-1.2.1 that attach_disk's disks sit behind."""
-        device = self.sysfs / "1-1.2.1"
+    def attach_storage(self, model: tuple = KNOWN_READER, at: str = "1-1.2.1") -> None:
+        """The USB storage device (default 1-1.2.1) that attach_disk's disks sit behind."""
+        device = self.sysfs / at
         device.mkdir()
         (device / "idVendor").write_text(model[0] + "\n")
         (device / "idProduct").write_text(model[1] + "\n")
-        interface = self.sysfs / "1-1.2.1:1.0"
+        interface = self.sysfs / (at + ":1.0")
         interface.mkdir()
         (interface / "bInterfaceClass").write_text("08\n")
 
     def attach_disk(
-        self, name: str, sectors: int = 1000, node: bool = True, device_number: object = "0:0"
+        self, name: str, sectors: int = 1000, node: bool = True, device_number: object = "0:0",
+        at: str = "1-1.2.1",
     ) -> None:
         """A block device behind that storage device's interface.
 
         Its node is a regular file, whose device number reads as 0:0.
         """
         real = (
-            self.root / "real" / "usb1" / "1-1" / "1-1.2" / "1-1.2.1" / "1-1.2.1:1.0" / "host0"
+            self.root / "real" / "usb1" / "1-1" / "1-1.2" / at / (at + ":1.0") / "host0"
             / "block" / name
         )
         real.mkdir(parents=True)
@@ -127,7 +129,7 @@ def test_a_held_block_is_left_alone_and_silent(tree):
 def test_an_open_port_is_powered_off(tree):
     result = tree.run("check")
     tree.powered_off(result)
-    assert "powering it off, attempt 1 of 5" in result.stderr
+    assert "powering it off, attempt 1 of 6" in result.stderr
     assert "off again" in result.stderr
 
 
@@ -136,7 +138,7 @@ def test_a_device_still_enumerated_behind_the_port_fails_the_check(tree):
     tree.attach_child()
     result = tree.run("check")
     assert result.returncode == 1
-    assert "still on after 5 attempts" in result.stderr
+    assert "still on after 6 attempts" in result.stderr
     status = tree.run("status")
     assert (status.returncode, status.stdout) == (1, "open disable=1 child=present\n")
 
@@ -277,7 +279,12 @@ def test_the_listed_disk_of_an_incomplete_reader_that_cannot_be_claimed_is_never
 
 
 class Program:
-    """The watcher loaded into this process, so the scratch tree can change between attempts."""
+    """The watcher loaded into this process, so the scratch tree can change between attempts.
+
+    `then(n)` runs at the n-th time.sleep (the end of attempt n, or the pause before a second
+    read-back). `on_open(path, flags)` runs on every os.open. `busy` names devices whose exclusive
+    open fails with EBUSY, as a mounted disk does; a plain open of one succeeds.
+    """
 
     def __init__(self, tree, monkeypatch):
         for key, value in tree.env.items():
@@ -286,18 +293,48 @@ class Program:
         loader = importlib.machinery.SourceFileLoader("usb2_block_program", str(PROGRAM))
         self.module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
         loader.exec_module(self.module)
+        self.monkeypatch = monkeypatch
         self.sleeps = 0
+        self.busy = set()
         self.then = lambda number: None
+        self.on_open = lambda path, flags: None
         monkeypatch.setattr(self.module.time, "sleep", self.sleep)
+        real_open = os.open
+
+        def open_node(path, flags, *more):
+            self.on_open(str(path), flags)
+            if os.path.basename(str(path)) in self.busy and flags & os.O_EXCL:
+                raise OSError(errno.EBUSY, "Device or resource busy")
+            return real_open(path, flags, *more)
+
+        monkeypatch.setattr(os, "open", open_node)
 
     def sleep(self, _seconds):
         self.sleeps += 1
         self.then(self.sleeps)
 
-    def check(self, monkeypatch, capsys):
+    def unresolvable(self, name):
+        """/sys/block/<name> cannot be resolved (EIO, as a failing lstat would show)."""
+        real = os.path.realpath
+
+        def resolve(path, *args, **kwargs):
+            if os.path.basename(str(path)) == name:
+                raise OSError(errno.EIO, "Input/output error")
+            return real(path, *args, **kwargs)
+
+        self.monkeypatch.setattr(os.path, "realpath", resolve)
+
+    def check(self, capsys):
         code = self.module.main(["vanpi-usb2-disk-hub-off", "check"])
-        monkeypatch.undo()
+        self.monkeypatch.undo()
         return code, capsys.readouterr().err
+
+
+def hide(tree, name):
+    """Take a disk out of the listing (and return a function that puts it back)."""
+    hidden = tree.root / ("hidden-" + name)
+    (tree.sys_block / name).rename(hidden)
+    return lambda: hidden.rename(tree.sys_block / name)
 
 
 def test_a_listing_that_changes_between_attempts_restarts_the_count(tree, monkeypatch, capsys):
@@ -306,12 +343,12 @@ def test_a_listing_that_changes_between_attempts_restarts_the_count(tree, monkey
     tree.attach_storage()
     program = Program(tree, monkeypatch)
     program.then = lambda number: tree.attach_disk("sdy") if number == 2 else None
-    code, stderr = program.check(monkeypatch, capsys)
+    code, stderr = program.check(capsys)
     assert code == 0
     assert tree.disable.read_text().strip() == "1"
     assert "nothing written on attempt 3" in stderr
     assert "nothing written on attempt 4" in stderr
-    assert "powering it off, attempt 5 of 5" in stderr
+    assert "powering it off, attempt 5 of 6" in stderr
     assert CUT.format(found=1) in stderr
     assert stderr.count("shows 0 of its 2 disks; nothing") == 2
 
@@ -321,7 +358,7 @@ def test_a_reader_that_completes_during_the_pass_takes_the_ordinary_path(tree, m
     tree.attach_disk("sdy")
     program = Program(tree, monkeypatch)
     program.then = lambda number: tree.attach_disk("sdz") if number == 1 else None
-    code, stderr = program.check(monkeypatch, capsys)
+    code, stderr = program.check(capsys)
     assert code == 0
     assert tree.disable.read_text().strip() == "1"
     assert "cutting it without them" not in stderr
@@ -329,38 +366,44 @@ def test_a_reader_that_completes_during_the_pass_takes_the_ordinary_path(tree, m
     assert "nothing written on attempt 2" not in stderr
 
 
-def test_a_pass_whose_listing_keeps_changing_runs_out_after_five_attempts(tree, monkeypatch, capsys):
+def test_a_pass_whose_listing_keeps_changing_runs_out_after_six_attempts(tree, monkeypatch, capsys):
     tree.attach_storage()
-    program = Program(tree, monkeypatch)
-
     tree.attach_disk("sdy")
-    hidden = tree.root / "hidden-sdy"
-    (tree.sys_block / "sdy").rename(hidden)
+    program = Program(tree, monkeypatch)
+    show = hide(tree, "sdy")
+    state = {"shown": False}
 
     def flip(_number):
         # The disk is listed on every other attempt, so no two consecutive listings match.
-        if (tree.sys_block / "sdy").is_symlink():
-            (tree.sys_block / "sdy").rename(hidden)
+        if state["shown"]:
+            hide(tree, "sdy")
         else:
-            hidden.rename(tree.sys_block / "sdy")
+            show()
+        state["shown"] = not state["shown"]
 
     program.then = flip
-    code, stderr = program.check(monkeypatch, capsys)
+    code, stderr = program.check(capsys)
     assert code == 1
     assert tree.disable.read_text().strip() == "0"
     assert "cutting it without them" not in stderr
-    # Attempts 1, 3 and 5 see no disk; the reason is the last attempt's own.
-    assert "still on after 5 attempts (open disable=0 child=absent); storage interface 1-1.2.1:1.0 behind it shows 0 of its 2 disks" in stderr
+    # Attempts 2, 4 and 6 list the disk; the reason is the last attempt's own.
+    assert "still on after 6 attempts (open disable=0 child=absent); storage interface 1-1.2.1:1.0 behind it shows 1 of its 2 disks" in stderr
 
 
-def test_the_count_does_not_carry_from_one_pass_to_the_next(tree):
+def test_the_count_does_not_carry_from_one_pass_to_the_next_in_one_process(tree, monkeypatch, capsys):
     tree.attach_storage()
-    tree.powered_off(tree.run("check"))
+    program = Program(tree, monkeypatch)
+    module = program.module
+    assert module.enforce(module.say) == (module.HELD, "storage interface 1-1.2.1:1.0 behind it " + CUT.format(found=0))
+    first = capsys.readouterr().err
+    assert first.count("nothing written") == 2
     tree.disable.write_text("0\n")
-    second = tree.run("check")
-    tree.powered_off(second)
-    assert "nothing written on attempt 2" in second.stderr
-    assert "nothing written on attempt 3" not in second.stderr
+    assert module.enforce(module.say)[0] == module.HELD
+    second = capsys.readouterr().err
+    monkeypatch.undo()
+    assert "nothing written on attempt 1" in second and "nothing written on attempt 2" in second
+    assert "nothing written on attempt 3" not in second
+    assert second.count("cutting it without them") == 1
 
 
 def test_an_unknown_reader_with_no_disks_is_never_disconnected(tree):
@@ -435,7 +478,7 @@ def test_watch_alerts_once_while_the_block_keeps_failing_and_reports_recovery(tr
         watcher.terminate()
         stderr = watcher.communicate(timeout=10)[1]
     assert tree.alerts.read_text() == "vanpi USB 2.0 block FAILED|high\n"
-    assert stderr.count("still on after 5 attempts") == 1
+    assert stderr.count("still on after 6 attempts") == 1
     assert "holds again" in stderr
 
 
@@ -470,3 +513,157 @@ def test_watch_alerts_when_the_port_control_stays_missing(tree):
 
 def test_unknown_verbs_are_usage_errors(tree):
     assert tree.run("reset").returncode == 2
+
+
+def test_a_busy_disk_is_refused_only_because_the_claim_is_exclusive(tree, monkeypatch, capsys):
+    # Regular-file nodes open fine without O_EXCL; only the exclusive open reports EBUSY, so
+    # dropping the flag from the claim makes this test write instead of refuse.
+    tree.attach_storage()
+    tree.attach_disk("sda")
+    tree.attach_disk("sdb")
+    program = Program(tree, monkeypatch)
+    program.busy.add("sdb")
+    code, stderr = program.check(capsys)
+    assert code == 1
+    assert tree.disable.read_text().strip() == "0"
+    assert "sdb behind it is mounted or held; not disconnecting it" in stderr
+
+
+def test_a_busy_listed_disk_on_the_third_sighting_refuses_without_a_cutting_line(tree, monkeypatch, capsys):
+    tree.attach_storage()
+    tree.attach_disk("sdy")
+    program = Program(tree, monkeypatch)
+    program.busy.add("sdy")
+    code, stderr = program.check(capsys)
+    assert code == 1
+    assert tree.disable.read_text().strip() == "0"
+    assert "nothing written on attempt 2" in stderr
+    assert "sdy behind it is mounted or held; not disconnecting it" in stderr
+    assert "cutting it" not in stderr
+
+
+def test_the_cut_line_comes_once_before_the_write_naming_every_short_interface(tree, monkeypatch, capsys):
+    tree.attach_storage()
+    tree.attach_storage(at="1-1.2.2")
+    tree.attach_disk("sdy")
+    program = Program(tree, monkeypatch)
+    code, stderr = program.check(capsys)
+    assert code == 0
+    assert tree.disable.read_text().strip() == "1"
+    cutting = [line for line in stderr.splitlines() if "cutting it" in line]
+    assert len(cutting) == 1
+    assert "storage interface 1-1.2.1:1.0 behind it has shown 1 of its 2 disks on 3 checks; cutting it without them; " in cutting[0]
+    assert "storage interface 1-1.2.2:1.0 behind it has shown 0 of its 2 disks on 3 checks; cutting it without them" in cutting[0]
+
+
+def test_a_listing_that_differs_when_checked_again_restarts_the_count(tree, monkeypatch, capsys):
+    # On attempt 3 a second disk shows up while the first is claimed (the validating listing
+    # differs); on attempt 4 the listing is the old one again. That is a first sighting.
+    tree.attach_storage()
+    tree.attach_disk("sdy")
+    tree.attach_disk("sdz")
+    restore = hide(tree, "sdz")
+    program = Program(tree, monkeypatch)
+    plugged = {"done": False}
+
+    def plug(path, flags):
+        if program.sleeps == 2 and not plugged["done"]:
+            plugged["done"] = True
+            restore()
+
+    program.on_open = plug
+    program.then = lambda number: hide(tree, "sdz") if number == 3 else None
+    code, stderr = program.check(capsys)
+    assert code == 0
+    assert tree.disable.read_text().strip() == "1"
+    assert "changed while its disks were being claimed; nothing written on attempt 3" in stderr
+    assert "nothing written on attempt 4" in stderr and "nothing written on attempt 5" in stderr
+    assert "powering it off, attempt 6 of 6" in stderr
+    assert stderr.count("cutting it") == 1
+
+
+def test_a_reader_that_comes_back_after_a_cut_gets_three_fresh_sightings(tree, monkeypatch, capsys):
+    tree.attach_storage()
+    program = Program(tree, monkeypatch)
+    # The write of attempt 3 is read back as held once (sleep 4 follows), then the port reopens.
+    program.then = lambda number: tree.disable.write_text("0\n") if number == 4 else None
+    code, stderr = program.check(capsys)
+    assert code == 0
+    assert tree.disable.read_text().strip() == "1"
+    assert "nothing written on attempt 4" in stderr and "nothing written on attempt 5" in stderr
+    assert "powering it off, attempt 6 of 6" in stderr
+    assert stderr.count("cutting it") == 2
+
+
+def test_an_unresolvable_block_entry_beside_an_incomplete_reader_is_never_counted_toward_a_cut(tree, monkeypatch, capsys):
+    tree.attach_storage()
+    (tree.root / "elsewhere").mkdir()
+    (tree.sys_block / "sdq").symlink_to(tree.root / "elsewhere")
+    program = Program(tree, monkeypatch)
+    # The entry reads fine on attempts 1 and 2 and then starts failing: no cut on attempt 3.
+    program.then = lambda number: program.unresolvable("sdq") if number == 2 else None
+    code, stderr = program.check(capsys)
+    assert code == 1
+    assert tree.disable.read_text().strip() == "0"
+    assert "the storage behind it cannot be listed (Input/output error); not disconnecting it" in stderr
+    assert "cutting it" not in stderr
+
+
+def test_a_block_entry_that_vanished_is_skipped(tree):
+    tree.attach_storage()
+    tree.attach_disk("sdy")
+    tree.attach_disk("sdz")
+    (tree.sys_block / "sdq").symlink_to(tree.root / "gone")
+    tree.powered_off(tree.run("check"))
+
+
+def test_an_unreadable_interface_class_behind_the_port_is_never_cut_around(tree):
+    tree.attach_storage()
+    tree.attach_disk("sdy")
+    (tree.sysfs / "1-1.2.1:1.0" / "bInterfaceClass").unlink()
+    (tree.sysfs / "1-1.2.1:1.0" / "bInterfaceClass").mkdir()
+    result = tree.run("check")
+    tree.refused(result, "the storage behind it cannot be listed")
+    assert "cutting it" not in result.stderr
+
+
+def test_an_interface_that_has_no_class_attribute_is_skipped(tree):
+    tree.attach_storage()
+    tree.attach_disk("sdy")
+    tree.attach_disk("sdz")
+    (tree.sysfs / "1-1.2.2:1.0").mkdir()
+    tree.powered_off(tree.run("check"))
+
+
+def test_a_disk_whose_device_number_cannot_be_read_after_the_open_is_refused(tree, monkeypatch, capsys):
+    tree.attach_storage()
+    tree.attach_disk("sdy")
+    tree.attach_disk("sdz")
+    program = Program(tree, monkeypatch)
+
+    def failing(_descriptor):
+        raise OSError(errno.EIO, "Input/output error")
+
+    monkeypatch.setattr(program.module.os, "fstat", failing)
+    code, stderr = program.check(capsys)
+    assert code == 1
+    assert tree.disable.read_text().strip() == "0"
+    assert "behind it cannot be inspected (Input/output error); not disconnecting it" in stderr
+
+
+def test_watch_journals_the_cut_note_when_it_reports_recovery(tree):
+    # The pass that recovers runs silent (the block was failing), so the note rides on the
+    # recovery line.
+    tree.disable.write_text("1\n")
+    child = tree.attach_child()
+    watcher = tree.watch()
+    try:
+        tree.wait_for_alert()
+        tree.attach_storage()
+        tree.disable.write_text("0\n")
+        child.rmdir()
+        time.sleep(1.0)
+    finally:
+        watcher.terminate()
+        stderr = watcher.communicate(timeout=10)[1]
+    assert "holds again; storage interface 1-1.2.1:1.0 behind it " + CUT.format(found=0) in stderr

@@ -40,12 +40,13 @@ FAST_INTERVAL_SECONDS = float(ENV.get("USB2_BLOCK_FAST_INTERVAL_SECONDS", "5"))
 # a long one leaves the reopened port on long enough for the chain to fault.
 SLOW_INTERVAL_SECONDS = float(ENV.get("USB2_BLOCK_SLOW_INTERVAL_SECONDS", "10"))
 FAST_PASSES = 12
-# Five, so that a cut on the third attempt (STUCK_SIGHTINGS) leaves two for the retry after a
-# queued connection event powers the port back on.
-ATTEMPTS = 5
 # Consecutive attempts of one pass that must show the identical snapshot, with a known reader
-# still short of its disks, before the reader is cut without them.
+# still short of its disks, before the reader is cut without them. A write or an observed change
+# of the listing restarts the count.
 STUCK_SIGHTINGS = 3
+# Room for two complete cut cycles: a queued connection event can power the port back on after a
+# write, and the reader that comes back is a fresh enumeration with its own STUCK_SIGHTINGS.
+ATTEMPTS = 2 * STUCK_SIGHTINGS
 # Passes a present hub may lack its port control (its driver still binding) before that is a fault.
 GRACE_PASSES = 3
 
@@ -121,25 +122,37 @@ def release(claims):
 WRITTEN, REFUSED, UNSETTLED = "written", "refused", "unsettled"
 
 
+def storage_class(entry):
+    """An interface entry's bInterfaceClass; None when the entry vanished, OSError otherwise."""
+    try:
+        return (entry / "bInterfaceClass").read_text().strip()
+    except FileNotFoundError:
+        return None
+
+
 def storage_behind_port():
     """A comparable snapshot of what is, or is about to be, a disk behind the port.
 
     ([(USB mass-storage interface, vendor:product)], {disk name: (device number, sectors, real
     sysfs path)}). A storage interface exists before its disks do (the kernel registers them a
-    second or more after the USB probe, one by one), so it is part of the snapshot. Raises
-    OSError when sysfs cannot be listed.
+    second or more after the USB probe, one by one), so it is part of the snapshot. An entry that
+    vanished while being read is skipped; any other failure to read or resolve an entry raises
+    OSError, because an uninspectable entry is not evidence that it is not storage.
     """
     interfaces = []
     for entry in SYSFS.iterdir():
         name = entry.name
         if name.startswith("1-1.2") and name[5:6] in (".", ":") and ":" in name:
-            if read_attr(entry / "bInterfaceClass") == "08":
+            if storage_class(entry) == "08":
                 device = SYSFS / name.split(":")[0]
                 model = "%s:%s" % (read_attr(device / "idVendor"), read_attr(device / "idProduct"))
                 interfaces.append((name, model))
     disks = {}
     for entry in SYS_BLOCK.iterdir():
-        real = os.path.realpath(str(entry))
+        try:
+            real = os.path.realpath(str(entry), strict=True)
+        except FileNotFoundError:
+            continue
         if BEHIND_PORT in real + "/":
             disks[entry.name] = (read_attr(pathlib.Path(real, "dev")), read_attr(pathlib.Path(real, "size")), real)
     return sorted(interfaces), disks
@@ -165,22 +178,40 @@ class Sightings:
         self.count = 0
 
 
-def storage_not_ready(snapshot, sightings, log):
+def short_readers(snapshot):
+    """[(interface, disks listed, disks known)] for each known reader listing fewer than it has."""
+    interfaces, disks = snapshot
+    short = []
+    for interface, model in interfaces:
+        expected = KNOWN_STORAGE_DISKS.get(model)
+        found = sum(1 for _number, _sectors, real in disks.values() if "/%s/" % interface in real)
+        if expected is not None and found < expected:
+            short.append((interface, found, expected))
+    return short
+
+
+def cut_note(short):
+    """The one journal note for cutting readers without all their disks."""
+    return "; ".join(
+        "storage interface %s behind it has shown %d of its %d disks on %d checks; cutting it without them"
+        % (interface, found, expected, STUCK_SIGHTINGS) for interface, found, expected in short)
+
+
+def storage_not_ready(snapshot, sightings):
     """Why the listed storage may not be claimed and cut yet: (outcome, why), or None.
 
     Every disk must sit behind a listed storage interface, every interface must be a known
     model, and a known model must show exactly its number of disks: more is REFUSED. Fewer
     means the kernel may still be registering them (UNSETTLED), but a reader whose kernel
     probe is failing never registers any, so the identical incomplete snapshot seen on
-    STUCK_SIGHTINGS consecutive attempts of the pass is cut with the disks that are listed
-    (None, after one WARNING). A change of snapshot restarts that count.
+    STUCK_SIGHTINGS consecutive attempts of the pass is ready (None; short_readers names what is
+    missing). A different snapshot restarts that count, and so does a complete one.
     """
     interfaces, disks = snapshot
     paths = {name: real for name, (_number, _sectors, real) in disks.items()}
     for name, real in sorted(paths.items()):
         if not any("/%s/" % interface in real for interface, _model in interfaces):
             return REFUSED, "%s behind it belongs to no listed storage interface" % name
-    short = []
     for interface, model in interfaces:
         expected = KNOWN_STORAGE_DISKS.get(model)
         if expected is None:
@@ -190,8 +221,7 @@ def storage_not_ready(snapshot, sightings, log):
         if found > expected:
             return REFUSED, "storage interface %s behind it shows %d disks where %d are known" % (
                 interface, found, expected)
-        if found < expected:
-            short.append((interface, found, expected))
+    short = short_readers(snapshot)
     if not short:
         sightings.reset()
         return None
@@ -199,9 +229,6 @@ def storage_not_ready(snapshot, sightings, log):
         interface, found, expected = short[0]
         return UNSETTLED, "storage interface %s behind it shows %d of its %d disks" % (
             interface, found, expected)
-    for interface, found, expected in short:
-        log(WARNING, "storage interface %s behind it has shown %d of its %d disks on %d checks; "
-            "cutting it without them" % (interface, found, expected, STUCK_SIGHTINGS))
     return None
 
 
@@ -220,7 +247,11 @@ def claim(name, device_number):
         if error.errno == errno.EBUSY:
             return None, "%s behind it is mounted or held" % name
         return None, "%s behind it cannot be claimed (%s)" % (name, error.strerror)
-    opened = os.fstat(descriptor).st_rdev
+    try:
+        opened = os.fstat(descriptor).st_rdev
+    except OSError as error:
+        os.close(descriptor)
+        return None, "%s behind it cannot be inspected (%s)" % (name, error.strerror)
     if device_number != "%d:%d" % (os.major(opened), os.minor(opened)):
         os.close(descriptor)
         return None, "%s behind it is not the device sysfs describes" % name
@@ -228,7 +259,7 @@ def claim(name, device_number):
 
 
 def power_off(log, sightings):
-    """One guarded write of 1 to the port's control: (outcome, why).
+    """One guarded write of 1 to the port's control: (outcome, why); WRITTEN's why is the cut note.
 
     Powering the port off disconnects everything behind it. The owner's rule is to keep disks
     from attaching over USB 2.0, not to pull one that is in use (a disk can fall back to USB 2.0
@@ -236,8 +267,11 @@ def power_off(log, sightings):
     the claims are held across the write; a disk that cannot be claimed or inspected is REFUSED.
     Only known storage is cut, and only once all of its disks are listed (storage_not_ready);
     while the kernel is still registering them nothing is written (UNSETTLED; the caller tries
-    again), until the same incomplete listing has stood for STUCK_SIGHTINGS attempts, when the
-    reader is cut with the disks it has. The claims cover the disks of one snapshot, so the
+    again), until the same incomplete listing has stood for STUCK_SIGHTINGS consecutive attempts
+    of the pass, when the reader is cut with the disks it has. The count restarts when the second
+    listing differs from the first and after every write. The one WARNING that a reader is cut
+    incomplete (the cut note, also returned with WRITTEN) is logged only after every claim
+    succeeded and the second listing matched, immediately before the write. The claims cover the disks of one snapshot, so the
     snapshot is taken again after claiming: if storage appeared, left or changed meanwhile,
     nothing is written either. Two listings are not a lock on the USB topology: a device whose
     storage interface appears after the second listing, and whose disks are registered and
@@ -252,7 +286,7 @@ def power_off(log, sightings):
             before = storage_behind_port()
         except OSError as error:
             return REFUSED, "the storage behind it cannot be listed (%s)" % error.strerror
-        not_ready = storage_not_ready(before, sightings, log)
+        not_ready = storage_not_ready(before, sightings)
         if not_ready:
             return not_ready
         for name, (device_number, _sectors, _real) in sorted(before[1].items()):
@@ -267,21 +301,30 @@ def power_off(log, sightings):
         except OSError as error:
             return REFUSED, "the storage behind it cannot be listed (%s)" % error.strerror
         if after != before:
+            sightings.reset()
             return UNSETTLED, "the storage behind it changed while its disks were being claimed"
+        note = cut_note(short_readers(before))
+        if note:
+            log(WARNING, note)
+        sightings.reset()
         try:
             DISABLE.write_text("1\n")
         except OSError as error:
             log(WARNING, "writing 1 to %s failed (%s)" % (DISABLE, error.strerror))
-        return WRITTEN, ""
+        return WRITTEN, note
     finally:
         release(claims)
 
 
 def enforce(log):
-    """One pass: (result, reason). Only a port read back as held, twice, counts as powered off."""
+    """One pass: (result, reason). Only a port read back as held, twice, counts as powered off.
+
+    HELD's reason is the cut note of the write that led to it ("" when nothing was cut incomplete).
+    """
     state = assess()
     attempt = 0
     unsettled = ""
+    written_note = ""
     sightings = Sightings()
     while True:
         if state == "held":
@@ -312,6 +355,8 @@ def enforce(log):
             return FAILED, reason
         # The last attempt's own reason, not an earlier one's.
         unsettled = "; " + why if outcome == UNSETTLED else ""
+        if outcome == WRITTEN:
+            written_note = why
         if outcome == UNSETTLED:
             log(WARNING, "%s; nothing written on attempt %d" % (why, attempt))
         time.sleep(SETTLE_SECONDS)
@@ -322,7 +367,7 @@ def enforce(log):
             state = assess()
             if state == "held":
                 log(NOTICE, "%s is off again" % PORT_NAME)
-                return HELD, ""
+                return HELD, written_note
 
 
 def alert_once(reason):
@@ -376,7 +421,7 @@ def watch():
             uncontrolled = 0
         if result == HELD:
             if failing:
-                say(NOTICE, "the USB 2.0 block holds again")
+                say(NOTICE, "the USB 2.0 block holds again" + ("; " + reason if reason else ""))
             failing = False
         elif result == FAILED:
             failing = True
