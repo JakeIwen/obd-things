@@ -64,19 +64,20 @@ status() {
 }
 
 install_all() {
-  # The program alone does nothing, so it goes first: the unit is verified against it before
-  # the unit is published, and a failure up to there leaves nothing that runs.
+  # The program goes first: the unit is verified against it before the unit is published.
   sudo install -o root -g root -m 0755 -- "$here/vanpi-usb2-disk-hub-off" "$program" || return 1
   if ! systemd-analyze verify "$here/$unit"; then
-    echo "install STOPPED: the unit failed verification; only the inert program copy was written"
+    echo "install STOPPED: the unit failed verification and was not published. The program copy"
+    echo "was written; a watcher installed earlier keeps running and would start it at its next"
+    echo "restart. See: $0 status"
     return 1
   fi
   sudo install -o root -g root -m 0644 -- "$here/$unit" "$installed_unit" || return 1
   # restart, not start: an update must replace a running watcher.
   if ! { sudo systemctl daemon-reload && sudo systemctl enable "$unit" &&
     sudo systemctl restart "$unit"; }; then
-    echo "install INCOMPLETE: both files are in place but the watcher was not (re)started,"
-    echo "so nothing enforces the block; see: systemctl status $unit"
+    echo "install INCOMPLETE: both files are in place, but this version of the watcher was not"
+    echo "confirmed started. See: $0 status and systemctl status $unit"
     return 1
   fi
   sleep 3

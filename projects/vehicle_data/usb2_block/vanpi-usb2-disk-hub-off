@@ -103,57 +103,91 @@ def release(claims):
             pass
 
 
-def claim_disks_behind_port():
-    """Take the kernel's exclusive claim on every disk behind the port, or say why not.
+def storage_behind_port():
+    """A comparable snapshot of what is, or is about to be, a disk behind the port.
 
-    Powering the port off disconnects everything behind it. The owner's rule is to keep disks
-    from attaching over USB 2.0, not to pull one that is in use (a disk can fall back to USB 2.0
-    and be mounted before a pass sees it). An exclusive open of the whole disk fails while it or
-    a partition is mounted, is swap or is held by another block device, and while it is held no
-    mount can begin; the caller keeps the claims across the write. Whatever cannot be inspected
-    or claimed counts as in use. Returns (claims, None) or ([], why).
+    (USB mass-storage interfaces, {disk name: (device number, sectors)}). A storage interface
+    exists before its disk does, so it is part of the snapshot. Raises OSError when sysfs
+    cannot be listed.
     """
-    claims = []
-    try:
-        entries = sorted(SYS_BLOCK.iterdir())
-    except OSError as error:
-        return [], "the block devices cannot be listed (%s)" % error.strerror
-    for entry in entries:
-        real = os.path.realpath(str(entry))
-        if BEHIND_PORT not in real + "/":
-            continue
+    interfaces = []
+    for entry in SYSFS.iterdir():
         name = entry.name
-        try:
-            sectors = int(pathlib.Path(real, "size").read_text())
-        except (OSError, ValueError):
-            release(claims)
-            return [], "%s behind it cannot be inspected" % name
-        if sectors == 0:
-            continue  # a card reader with no card
-        try:
-            claims.append(os.open(str(DEV_DIR / name), os.O_RDONLY | os.O_EXCL | os.O_CLOEXEC))
-        except OSError as error:
-            if error.errno == errno.ENOMEDIUM:
-                continue
-            release(claims)
-            if error.errno == errno.EBUSY:
-                return [], "%s behind it is mounted or held" % name
-            return [], "%s behind it cannot be claimed (%s)" % (name, error.strerror)
-    return claims, None
+        if name.startswith("1-1.2") and name[5:6] in (".", ":") and ":" in name:
+            if read_attr(entry / "bInterfaceClass") == "08":
+                interfaces.append(name)
+    disks = {}
+    for entry in SYS_BLOCK.iterdir():
+        real = os.path.realpath(str(entry))
+        if BEHIND_PORT in real + "/":
+            disks[entry.name] = (read_attr(pathlib.Path(real, "dev")), read_attr(pathlib.Path(real, "size")))
+    return sorted(interfaces), disks
+
+
+def claim(name, device_number):
+    """Take the kernel's exclusive claim on one whole disk. Returns (descriptor, None) or (None, why).
+
+    The open fails with EBUSY while the disk or a partition of it is mounted, is swap or is held
+    by another block device, and while the claim is held no mount of it can begin. It is tried
+    whatever capacity the disk reports (a failed capacity read shows as 0), and without waiting
+    for a medium, so a card reader with no card is claimed too.
+    """
+    flags = os.O_RDONLY | os.O_EXCL | os.O_NONBLOCK | os.O_CLOEXEC
+    try:
+        descriptor = os.open(str(DEV_DIR / name), flags)
+    except OSError as error:
+        if error.errno == errno.EBUSY:
+            return None, "%s behind it is mounted or held" % name
+        return None, "%s behind it cannot be claimed (%s)" % (name, error.strerror)
+    opened = os.fstat(descriptor).st_rdev
+    if device_number != "%d:%d" % (os.major(opened), os.minor(opened)):
+        os.close(descriptor)
+        return None, "%s behind it is not the device sysfs describes" % name
+    return descriptor, None
+
+
+# power_off's outcomes.
+WRITTEN, REFUSED, UNSETTLED = "written", "refused", "unsettled"
 
 
 def power_off(log):
-    """One guarded write. Returns why it was refused, or None when the write was attempted."""
-    claims, refusal = claim_disks_behind_port()
-    if refusal:
-        return refusal
+    """One guarded write of 1 to the port's control: (outcome, why).
+
+    Powering the port off disconnects everything behind it. The owner's rule is to keep disks
+    from attaching over USB 2.0, not to pull one that is in use (a disk can fall back to USB 2.0
+    and be mounted before a pass sees it). So every disk behind the port is claimed first and
+    the claims are held across the write; a disk that cannot be claimed or inspected is REFUSED.
+    The claims cover the disks of one snapshot, so the snapshot is taken again after claiming:
+    if storage appeared, left or changed meanwhile, nothing is written (UNSETTLED) and the caller
+    tries again. What remains is the instant between that second snapshot and the write, in
+    which a device would have to enumerate, be probed and be mounted.
+    """
+    claims = []
     try:
-        DISABLE.write_text("1\n")
-    except OSError as error:
-        log(WARNING, "writing 1 to %s failed (%s)" % (DISABLE, error.strerror))
+        try:
+            before = storage_behind_port()
+        except OSError as error:
+            return REFUSED, "the storage behind it cannot be listed (%s)" % error.strerror
+        for name, (device_number, _sectors) in sorted(before[1].items()):
+            if device_number is None:
+                return REFUSED, "%s behind it cannot be inspected" % name
+            descriptor, why = claim(name, device_number)
+            if why:
+                return REFUSED, why
+            claims.append(descriptor)
+        try:
+            after = storage_behind_port()
+        except OSError as error:
+            return REFUSED, "the storage behind it cannot be listed (%s)" % error.strerror
+        if after != before:
+            return UNSETTLED, "the storage behind it changed while its disks were being claimed"
+        try:
+            DISABLE.write_text("1\n")
+        except OSError as error:
+            log(WARNING, "writing 1 to %s failed (%s)" % (DISABLE, error.strerror))
+        return WRITTEN, ""
     finally:
         release(claims)
-    return None
 
 
 def enforce(log):
@@ -182,11 +216,13 @@ def enforce(log):
             return FAILED, reason
         attempt += 1
         log(WARNING, "%s is on (%s); powering it off, attempt %d of %d" % (PORT_NAME, state, attempt, ATTEMPTS))
-        refusal = power_off(log)
-        if refusal:
-            reason = "%s is on and %s; not disconnecting it" % (PORT_NAME, refusal)
+        outcome, why = power_off(log)
+        if outcome == REFUSED:
+            reason = "%s is on and %s; not disconnecting it" % (PORT_NAME, why)
             log(ERROR, reason)
             return FAILED, reason
+        if outcome == UNSETTLED:
+            log(WARNING, "%s; nothing written on attempt %d" % (why, attempt))
         time.sleep(SETTLE_SECONDS)
         state = assess()
         if state == "held":

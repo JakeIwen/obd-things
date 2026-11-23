@@ -148,11 +148,16 @@ disks have no reason to be on USB 2.0).
     on, and an in-place hub reset or controller recovery can restore power with no udev event.
     There is no udev rule: one would write without the disk check below, and initramfs-tools
     would copy it into every boot image, out of an uninstall's reach.
-  - It never pulls a disk that is in use. Before each write it takes the kernel's exclusive
-    claim on every disk behind the port and holds it across the write; a disk that is mounted,
-    is swap, is held by another block device or cannot be inspected makes it refuse and alert.
-    (A disk can fall back from USB 3.0 to USB 2.0 and be mounted before a pass sees it.) An
-    unused disk, or a card reader with no card, does not stop the power-off.
+  - It does not pull a disk that is in use (a disk can fall back from USB 3.0 to USB 2.0 and
+    be mounted before a pass sees it). Before each write it takes the kernel's exclusive claim
+    on every disk behind the port, whatever capacity the disk reports, checks that each opened
+    node is the device sysfs describes, and holds the claims across the write. A disk that is
+    mounted, is swap, is held by another block device or cannot be inspected or claimed makes
+    it refuse and alert. It then lists the storage behind the port again, and writes nothing on
+    that attempt if a disk or storage interface appeared, left or changed while it was claiming.
+    An unused disk, or a card reader with no card, does not stop the power-off. What is left
+    is the instant between the second listing and the write, in which a device would have to
+    enumerate, be probed and be mounted.
   - A hub at `1-1` whose port control is missing counts as a failure after three passes, at
     once when something is enumerated behind the port. It writes nothing but that attribute
     and its alert marker under `/run`, and never touches another port or a hub that is not

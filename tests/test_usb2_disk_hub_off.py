@@ -3,6 +3,8 @@
 No test touches the real /sys, /dev or a notification: every path comes from the environment.
 """
 
+import importlib.machinery
+import importlib.util
 import os
 import pathlib
 import stat
@@ -57,12 +59,18 @@ class Tree:
         child.mkdir()
         return child
 
-    def attach_disk(self, name: str, sectors: object = 1000, node: bool = True) -> None:
-        """A block device whose real sysfs path runs through the hub's port 2."""
+    def attach_disk(
+        self, name: str, sectors: int = 1000, node: bool = True, device_number: object = "0:0"
+    ) -> None:
+        """A block device whose real sysfs path runs through the hub's port 2.
+
+        Its node is a regular file, whose device number reads as 0:0.
+        """
         real = self.root / "real" / "usb1" / "1-1" / "1-1.2" / "1-1.2.1" / "block" / name
         real.mkdir(parents=True)
-        if sectors is not None:
-            (real / "size").write_text(f"{sectors}\n")
+        (real / "size").write_text(f"{sectors}\n")
+        if device_number is not None:
+            (real / "dev").write_text(f"{device_number}\n")
         (self.sys_block / name).symlink_to(real)
         if node:
             (self.dev / name).write_text("")
@@ -172,7 +180,7 @@ def test_a_disk_behind_the_port_that_cannot_be_claimed_is_never_disconnected(tre
 
 
 def test_a_disk_behind_the_port_that_cannot_be_inspected_is_never_disconnected(tree):
-    tree.attach_disk("sdz", sectors=None)
+    tree.attach_disk("sdz", device_number=None)
     result = tree.run("check")
     assert result.returncode == 1
     assert tree.disable.read_text().strip() == "0"
@@ -186,11 +194,54 @@ def test_an_unused_disk_behind_the_port_does_not_stop_the_power_off(tree):
     assert tree.disable.read_text().strip() == "1"
 
 
-def test_a_card_reader_with_no_card_does_not_stop_the_power_off(tree):
-    tree.attach_disk("sdz", sectors=0, node=False)
+def test_an_empty_card_reader_is_claimed_and_does_not_stop_the_power_off(tree):
+    tree.attach_disk("sdz", sectors=0)
     result = tree.run("check")
     assert result.returncode == 0
     assert tree.disable.read_text().strip() == "1"
+
+
+def test_a_disk_reporting_no_capacity_is_still_claimed(tree):
+    # The kernel shows a failed capacity read as 0 sectors, so 0 is not proof of an empty reader.
+    tree.attach_disk("sdz", sectors=0, node=False)
+    result = tree.run("check")
+    assert result.returncode == 1
+    assert tree.disable.read_text().strip() == "0"
+    assert "sdz behind it cannot be claimed" in result.stderr
+
+
+def test_a_node_that_is_not_the_inspected_device_is_never_trusted(tree):
+    tree.attach_disk("sdz", device_number="8:16")
+    result = tree.run("check")
+    assert result.returncode == 1
+    assert tree.disable.read_text().strip() == "0"
+    assert "sdz behind it is not the device sysfs describes" in result.stderr
+
+
+def test_a_disk_that_appears_while_disks_are_claimed_is_never_cut_unclaimed(tree, monkeypatch, capsys):
+    # Staged inside one process: the second disk is plugged in at the first claim.
+    tree.attach_disk("sda")
+    for key, value in tree.env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(sys, "dont_write_bytecode", True)
+    loader = importlib.machinery.SourceFileLoader("usb2_block_program", str(PROGRAM))
+    program = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(program)
+    real_open = os.open
+
+    def open_then_plug(path, flags, *more):
+        descriptor = real_open(path, flags, *more)
+        if not (tree.sys_block / "sdb").exists():
+            tree.attach_disk("sdb", node=False)
+        return descriptor
+
+    monkeypatch.setattr(os, "open", open_then_plug)
+    assert program.main(["vanpi-usb2-disk-hub-off", "check"]) == 1
+    monkeypatch.undo()
+    stderr = capsys.readouterr().err
+    assert tree.disable.read_text().strip() == "0"
+    assert "changed while its disks were being claimed; nothing written on attempt 1" in stderr
+    assert "sdb behind it cannot be claimed" in stderr
 
 
 def test_a_disk_elsewhere_is_not_claimed(tree):
