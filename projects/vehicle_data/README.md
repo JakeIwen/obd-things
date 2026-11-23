@@ -1161,7 +1161,7 @@ failure, timeout, malformed response, rejection, termination, or exception.
 `session_required` is reported distinctly and does not enable a session
 change. A failed or unverified restoration sets a persistent operation inhibit,
 is latched in the broker, and prevents another active interval. The one opt-in
-exception is [USB drop recovery](docs/usb-drop-recovery.md): the same broker can
+exception is [USB drop recovery](docs/usb-drop-recovery.md) (enabled in the installed unit since 2026-11-23): the same broker can
 verify *both* Board A replacements after a USB re-enumeration, and end only its
 own matching restoration inhibits. It spends at most one attempt per boot. A
 broker restart never adopts the previous process's incident.
@@ -1587,7 +1587,7 @@ the tablet reconnects within a few seconds; history and drive recording have a
 gap; and if a helper's restoration fails the broker latches its inhibit, so
 telemetry stays passive for the drive until someone inspects the adapters and
 ends it after inspection (`python3 -m tools.can_operation_state inhibit-end NAME`),
-unless the incident qualifies for the opt-in [USB drop recovery](docs/usb-drop-recovery.md). `--while-running`
+unless the incident qualifies for [USB drop recovery](docs/usb-drop-recovery.md). `--while-running`
 needs a broker that already has the hold control (a broker that predates it
 answers 404 and is refused), so the first install of that control is a parked
 restart. A restart still loads whatever code is on disk, so a deploy that

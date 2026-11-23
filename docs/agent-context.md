@@ -191,6 +191,61 @@ disks have no reason to be on USB 2.0).
   /sys/bus/usb/devices/1-1/1-1:1.0/1-1-port2/disable`. Do that only after the faulty hub or
   cable is out of the chain; while the watcher runs it undoes a manual `0` at its next pass.
 
+## CAN adapter USB drop (Board A) and automatic recovery
+
+Board A is the dual-channel adapter that carries C-CAN and B-CAN (its serial is `BOARD_A_SERIAL` in
+`lib/vehicle_can_roles.py`).
+
+- Incident, 2026-11-22 (US/Mountain): at 17:45 every USB 2.0 device under the Pi's onboard hub
+  failed at once with `-71` mid-drive (see the USB 2.0 block section above for the suspected
+  cause). Both drive helpers were armed and could not verify restoration, so the broker wrote
+  `vehicle-data-restoration-failed` and `vehicle-data-bcan-restoration-failed` (channel `*`) and
+  latched both in memory. The re-enumerated netdevs came back DOWN and stayed down, because the
+  reconciler returns `inhibited` before it looks at link state. No telemetry for the rest of the
+  drive. Hub drops are also recorded on Aug 22-25, Sep 2-3, Oct 7-8 and Nov 18.
+- Manual recovery (still needed when the automatic path does not act: parked, the boot's one
+  attempt already spent, any refusal, `committed_late`, or an incident left at `committing` after
+  a broker crash): inspect all roles and each channel
+  (`python3 -m tools.can_operation_state status --channel <ch>`), run
+  `python3 -m tools.can_operation_state inhibit-end NAME` for each restoration inhibit, then
+  `python3 -m projects.vehicle_data.restart_broker` (parked; `--while-running` with the van on),
+  because the broker holds the latch in memory. Establish why an inhibit was written before
+  ending it. Run these as `pi`, never with `sudo`: a root-created
+  `tmp/locks/operation-state/.inhibit-writers.lock` makes later `pi` writers fall back to
+  `nolock.*` wildcards and manual ends refuse.
+- Automatic path: ACTIVE since 2026-11-23. The flag `--enable-usb-drop-recovery` is in
+  `projects/vehicle_data/systemd/van-telemetry.service`. Root runs only the installed link program
+  `/usr/local/sbin/vanpi-can-link-by-index`, installed from `projects/vehicle_data/usb_recovery_link/`
+  and pinned by digest; a change there or to the digest takes effect only through
+  `install.sh install` (`status` is the check; a missing or changed copy disables recovery).
+  Conditions, vocabulary, files, activation and rollback are in
+  `projects/vehicle_data/docs/usb-drop-recovery.md`; the trail is the journal
+  (`journalctl -u van-telemetry`) and `tmp/vehicle_data/usb-recovery/`.
+- Owner decisions and accepted risks (Jacob, 2026-11-22 and 2026-11-23): the adapter-firmware
+  risk after a powered USB disconnect is accepted without bench validation (a new netdev and
+  host listen-only readback do not prove the controller stopped transmitting; lower while
+  driving, worse parked, where a stuck transmitter can keep modules awake and drain the battery).
+  Recovery runs at most once per boot and only with the engine proven running (400 rpm) on the
+  new listen-only C-CAN link. The ignition flag (`/home/pi/hooks/ignition_is_on`, written by the
+  MacBook-managed `ignitionmon.service`) is a pre-gate only; a stale flag can start the engine
+  check while parked. That check keeps C-CAN up listen-only normally two to four seconds, with
+  evidence collection capped at five; a blocked take-down leaves it up listen-only until
+  inspected. The 2 s engine rule is a check made right before each inhibit removal, not a bound
+  on when the removal takes effect; a late completion keeps the latches (`committed_late`), and a
+  broker crash at that moment leaves the incident record at `committing` with one error line in
+  the journal at the next start.
+- Verified 2026-11-23: whole offline suite; flag-off parked restart (no recovery line, no record
+  directory); link program installed and digest-verified; an unprivileged request refused by the
+  kernel (`EPERM`); the privileged request exercised only in throwaway network namespaces (down
+  on loopback ok, up-listen-only refused as not a CAN device, unknown index `ENODEV`); activation
+  restart with the enabled journal line, three vehicle roles healthy and listen-only, TX counters
+  unchanged. Not verified: a real mid-drive recovery, a real USB disconnect, adapter firmware
+  behaviour. The optional owner test (unplug and replug Board A's USB with the engine idling,
+  parked, helpers armed) has not been run.
+- Limits: other long-running services (vonstar, COP wake, the drive recorder, the web listeners)
+  keep the previous `lib/can_operation_state.py` in memory until they next start; there is no
+  dashboard indication beyond the existing restoration fault.
+
 ## Private environment context
 
 Machine-specific environment/secret locations, local monitoring paths, and private compute-worker
