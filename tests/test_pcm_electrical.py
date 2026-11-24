@@ -3,6 +3,7 @@ import inspect
 import socket
 import struct
 import unittest
+from unittest import mock
 
 from lib.modules import MODULES
 from projects.vehicle_data import ccan_powertrain
@@ -49,6 +50,9 @@ class FakeSocket:
     def settimeout(self, timeout):
         self.timeout = timeout
 
+    def gettimeout(self):
+        return self.timeout
+
     def recv(self, _size):
         self.recv_calls += 1
         if isinstance(self.response, BaseException):
@@ -94,6 +98,55 @@ def authorization(
 
 
 class PcmElectricalProfileTests(unittest.TestCase):
+    def test_existing_reads_receive_once_and_preserve_the_normal_socket_timeout(self):
+        reads = (
+            ("poll", transmit_permit.PCM_GENERATOR_DUTY, "01 A1", "05 62 01 A1 40 00"),
+            ("poll_crankshaft_torque", transmit_permit.PCM_CRANKSHAFT_TORQUE,
+             "06 DA", "05 62 06 DA 82 00"),
+            ("poll_vvt_oil_temperature", transmit_permit.PCM_VVT_OIL_TEMPERATURE,
+             "06 9F", "04 62 06 9F A0"),
+            ("poll_oil_life", transmit_permit.PCM_OIL_LIFE, "21 85", "04 62 21 85 52"),
+        )
+        for name, purpose, did, positive in reads:
+            with self.subTest(did=did):
+                other_name, other_purpose, other_did, other_positive = (
+                    reads[1] if name == "poll" else reads[0]
+                )
+                sock = FakeSocket(None)
+                sock.recv = mock.Mock(side_effect=[
+                    TimeoutError(),
+                    response_frame(bytes.fromhex(other_positive)),
+                    response_frame(bytes.fromhex("03 7F 22 78")),
+                    response_frame(bytes.fromhex(positive)),
+                ])
+                with (
+                    mock.patch.object(sock, "settimeout", wraps=sock.settimeout) as settimeout,
+                    mock.patch.object(sock, "send", wraps=sock.send) as send,
+                ):
+                    poller = pcm.PcmElectricalPoller(
+                        TEST_CHANNEL, socket_factory=lambda *_: sock, monotonic=lambda: 1.0,
+                    )
+                    other = getattr(poller, other_name)(authorization(purpose=other_purpose))
+                    self.assertEqual(other.reason, "response_timeout")
+                    read = getattr(poller, name)
+                    foreign = read(authorization(purpose=purpose))
+                    self.assertEqual(foreign.reason, "malformed_response")
+                    pending = read(authorization(purpose=purpose))
+                    self.assertEqual(pending.reason, "response_rejected")
+                    self.assertIn("NRC 78", pending.detail)
+                    self.assertEqual(sock.recv.call_count, 3)
+                    self.assertTrue(read(authorization(purpose=purpose)).available)
+
+                self.assertEqual(sock.recv.call_count, 4)
+                self.assertEqual(settimeout.call_args_list, [mock.call(0.5)] * 4)
+                self.assertEqual(sock.timeout, 0.5)
+                expected = [
+                    response_frame(bytes.fromhex(f"03 22 {request_did} 00 00 00 00"),
+                                   can_id=0x18DA10F1)
+                    for request_did in (other_did, did, did, did)
+                ]
+                self.assertEqual(send.call_args_list, [mock.call(frame) for frame in expected])
+
     def test_oil_life_fixed_wire_percent_range_and_permit(self):
         for raw in (0, 17, 82, 100, 101, 255):
             with self.subTest(raw=raw):

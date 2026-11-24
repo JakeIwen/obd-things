@@ -170,110 +170,121 @@ def test_helper_accepts_pressure_opt_in_only_for_expected_parent(env_pid, enable
 PRESSURE_REPLY = "05 62 01 09 01 97"
 PENDING = "03 7F 22 78"
 GENERATOR_REPLY = "05 62 01 A1 40 00"
-TIMEOUT = TimeoutError()
-MALFORMED = "malformed_response"
 
 
-@pytest.mark.parametrize(("pending_count", "terminal", "reason"), [
-    (1, PRESSURE_REPLY, None),
-    (2, PRESSURE_REPLY, None),
-    (1, "03 7F 22 22", "response_rejected"),
-    (4, PRESSURE_REPLY, None),
-    (5, None, "response_timeout"),
-    (1, TIMEOUT, "response_timeout"),
-])
-def test_pending_pressure_finishes_before_next_pcm_request(pending_count, terminal, reason):
-    socket = FakeSocket(None)
-    events = [(0.2, PENDING)] + [(4.9, PENDING)] * (pending_count - 1)
-    if terminal is not None:
-        events.append((5.0 if terminal is TIMEOUT else 4.9, terminal))
-    events.append((0.2, GENERATOR_REPLY))
-    clock = [0.0]
+class TimedSocket(FakeSocket):
+    """Deliver a scripted frame only while the socket is waiting for it."""
 
-    def receive(_size):
-        delay, reply = events.pop(0)
-        if reply == GENERATOR_REPLY:
-            assert socket.sent == [REQUEST, pcm_electrical.GENERATOR_FIELD_DUTY_PROFILE.request_frame]
-        else:
-            assert socket.sent == [REQUEST]
-        clock[0] += delay
-        if reply is TIMEOUT:
-            raise reply
+    def __init__(self, clock, events):
+        super().__init__(None)
+        self.clock = clock
+        self.events = list(events)
+        self.send_timeouts = []
+        self.receive_timeouts = []
+
+    def send(self, frame):
+        self.send_timeouts.append(self.timeout)
+        return super().send(frame)
+
+    def recv(self, _size):
+        self.receive_timeouts.append(self.timeout)
+        deadline = self.clock[0] + self.timeout
+        if not self.events or self.events[0][0] >= deadline:
+            self.clock[0] = deadline
+            raise TimeoutError()
+        arrival, reply = self.events.pop(0)
+        self.clock[0] = max(self.clock[0], arrival)
         return response_frame(bytes.fromhex(reply))
 
-    socket.recv = mock.Mock(side_effect=receive)
-    socket.settimeout = mock.Mock()
+
+@pytest.mark.parametrize(("events", "elapsed", "reason"), [
+    ([(0.2, PENDING), (1.0, PENDING), (2.0, PENDING), (2.5, PENDING),
+      (3.0, PENDING), (3.9, PRESSURE_REPLY)], 3.9, None),
+    ([(0.2, PENDING), (1.2, "03 7F 22 22")], 1.2, "response_rejected"),
+    ([(0.2, PENDING), (3.9, PENDING)], 4.0, "response_timeout"),
+    ([], 4.0, "response_timeout"),
+])
+def test_pressure_owns_its_replies_within_one_deadline(events, elapsed, reason):
+    clock = [0.0]
+    sock = TimedSocket(clock, events)
     poller = pcm_electrical.PcmElectricalPoller(
-        TEST_CHANNEL, socket_factory=lambda *_: socket, monotonic=lambda: clock[0],
+        TEST_CHANNEL, socket_factory=lambda *_: sock, monotonic=lambda: clock[0],
+        timeout_seconds=0.45,
     )
+
     pressure = poller.poll_barometric_pressure(authorization(purpose=PURPOSE))
+    assert clock[0] == pytest.approx(elapsed)
     assert pressure.reason == reason
     if reason is None:
         assert pressure.value == pytest.approx(VALUE)
     elif reason == "response_rejected":
         assert "NRC 22" in pressure.detail
-    assert events == [(0.2, GENERATOR_REPLY)]
-    assert [call.args[0] for call in socket.settimeout.call_args_list] == pytest.approx(
-        [0.5] + [5.0] * min(pending_count, 4)
-    )
+    assert not sock.events
+    assert sock.sent == [REQUEST]
+    reply_times = [0.0, *(arrival for arrival, reply in events if reply == PENDING)]
+    assert sock.receive_timeouts == pytest.approx([4.0 - time for time in reply_times])
+
+    sock.events.append((elapsed + 0.2, GENERATOR_REPLY))
     assert poller.poll(authorization()).value == 50.0
+    assert sock.sent == [REQUEST, pcm_electrical.GENERATOR_FIELD_DUTY_PROFILE.request_frame]
+    assert sock.send_timeouts == [None, pytest.approx(0.45)]
 
 
-@pytest.mark.parametrize(("prior_reply", "prior_reason", "queued", "age", "expected"), [
-    (TIMEOUT, "response_timeout", (PRESSURE_REPLY,), 0.2, None),
-    (TIMEOUT, "response_timeout", ("05 62 01 09 00 FA",), 0.2, None),
-    (PRESSURE_REPLY, None, (PRESSURE_REPLY,), 0.2, MALFORMED),
-    ("03 7F 22 22", "response_rejected", (PRESSURE_REPLY,), 0.2, MALFORMED),
-    ("05 62 01 09 00 FA", "response_rejected", (PRESSURE_REPLY,), 0.2, MALFORMED),
-    ("06 62 01 09 01 97 FF", MALFORMED, (PRESSURE_REPLY,), 1.0, MALFORMED),
-    (TIMEOUT, "response_timeout", (PRESSURE_REPLY,) * 2, 0.2, MALFORMED),
-    (TIMEOUT, "response_timeout", ("05 62 01 09 01",), 0.2, MALFORMED),
-    (TIMEOUT, "response_timeout", ("05 62 01 08 01 97",), 0.2, MALFORMED),
-    (TIMEOUT, "response_timeout", ("02 50 92",), 0.2, MALFORMED),
-    (None, None, (PRESSURE_REPLY,), 0.2, MALFORMED),
-    (TIMEOUT, "response_timeout", (PRESSURE_REPLY,), 4.79, None),
-    (TIMEOUT, "response_timeout", (PRESSURE_REPLY,), 4.8, MALFORMED),
-    (TIMEOUT, "response_timeout", (PRESSURE_REPLY,), 600.0, MALFORMED),
-])
-def test_generator_skips_only_a_recent_outstanding_pcm_reply(
-    prior_reply, prior_reason, queued, age, expected,
-):
-    socket = FakeSocket(None)
-    frames = [response_frame(bytes.fromhex(reply)) for reply in queued]
-    frames.append(response_frame(bytes.fromhex(GENERATOR_REPLY)))
+def test_pressure_reply_after_deadline_is_foreign_to_next_read():
     clock = [0.0]
-
-    def receive(_size):
-        clock[0] += 0.2
-        frame = frames.pop(0)
-        if isinstance(frame, TimeoutError):
-            raise frame
-        return frame
-
-    socket.recv = mock.Mock(side_effect=receive)
-    socket.settimeout = mock.Mock()
+    sock = TimedSocket(clock, [(4.05, PRESSURE_REPLY), (4.1, GENERATOR_REPLY)])
     poller = pcm_electrical.PcmElectricalPoller(
-        TEST_CHANNEL, socket_factory=lambda *_: socket, monotonic=lambda: clock[0],
+        TEST_CHANNEL, socket_factory=lambda *_: sock, monotonic=lambda: clock[0],
     )
-    if prior_reply is not None:
-        frames.insert(0, response_frame(bytes.fromhex(prior_reply))
-                      if isinstance(prior_reply, str) else prior_reply)
-        pressure = poller.poll_barometric_pressure(authorization(purpose=PURPOSE))
-        assert pressure.reason == prior_reason
-        socket.settimeout.reset_mock()
-    clock[0] = age
+    assert poller.poll_barometric_pressure(authorization(purpose=PURPOSE)).reason == "response_timeout"
     generator = poller.poll(authorization())
-    assert generator.reason == expected
-    assert socket.sent == (
-        ([REQUEST] if prior_reply is not None else [])
-        + [pcm_electrical.GENERATOR_FIELD_DUTY_PROFILE.request_frame]
+    assert generator.reason == "malformed_response"
+    assert sock.events == [(4.1, GENERATOR_REPLY)]
+
+
+@pytest.mark.parametrize(("delay", "event_type", "first_later_snapshot"), [
+    (0.2, "observation", 100.0),
+    (0.5, "observation", 100.0),
+    (0.6, "observation", 101.0),
+    (None, "metric_failure", 104.0),
+])
+def test_slow_pressure_poll_skips_radar_and_dtc_until_next_snapshot(
+    delay, event_type, first_later_snapshot,
+):
+    backend, clock = scripted_backend([], running_snapshots=15 if delay is None else 6)
+    sock = TimedSocket(clock, [] if delay is None else [(100 + delay, PRESSURE_REPLY)])
+    poller = pcm_electrical.PcmElectricalPoller(
+        TEST_CHANNEL, socket_factory=lambda *_: sock, monotonic=backend.monotonic,
     )
-    if expected is None:
-        assert generator.value == 50.0
+    backend.pcm.poll_barometric_pressure = poller.poll_barometric_pressure
+    radar = SimpleNamespace(run=mock.Mock(return_value=None))
+    dtc = SimpleNamespace(begin_cycle=mock.Mock(), run=mock.Mock(return_value=None), close=lambda: None)
+    stream = StringIO()
+    safety = active_drive.diagnostic_safety
+    with (
+        mock.patch.object(safety, "acquire_channel_lock", return_value=object()),
+        mock.patch.object(safety, "release_channel_lock"),
+        mock.patch.object(safety, "validate_channel_lock", side_effect=lambda handle, channel: handle),
+        mock.patch.object(active_drive.radar_drive_steps, "RadarDriveSteps", return_value=radar),
+        mock.patch.object(active_drive.drive_dtc_launch, "steps", return_value=dtc),
+    ):
+        outcome = active_drive.run_active_session(
+            backend, active_drive.JsonEventSink(stream), enable_barometric_pressure=True,
+            termination_guard=SimpleNamespace(begin_cleanup=lambda: None),
+        )
+
+    assert outcome.restored and outcome.reason == "engine_not_running"
+    for later_step in (radar, dtc):
+        assert later_step.run.call_args_list[0].args[0].completed_monotonic == first_later_snapshot
+    events = [event for event in map(json.loads, stream.getvalue().splitlines())
+              if event.get("metric") == METRIC]
+    assert events[0]["type"] == event_type
+    if event_type == "metric_failure":
+        assert events[0]["reason"] == "response_timeout"
+        assert len(events) == 1
+        assert sock.sent == [REQUEST]
     else:
-        assert len(frames) == 1
-    expected_timeouts = [0.5, 0.3] if len(queued) == 2 or expected is None else [0.5]
-    assert [call.args[0] for call in socket.settimeout.call_args_list] == pytest.approx(expected_timeouts)
+        assert events[0]["value"] == pytest.approx(VALUE)
 
 
 @pytest.mark.parametrize(("pressure_enabled", "purpose", "poll_name"), [

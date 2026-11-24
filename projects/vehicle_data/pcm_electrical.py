@@ -59,8 +59,10 @@ OIL_LIFE_POSITIVE_ECHO = bytes.fromhex("62 21 85")
 NM_TO_LB_FT = 0.7375621492772656
 SESSION_REQUIRED_NRCS = frozenset((0x7E, 0x7F))
 _RESPONSE_PENDING_PAYLOAD = bytes.fromhex("7F 22 78")
-_P2_STAR_WINDOW_SECONDS = 5.0
-_MAX_PENDING_FRAMES = 4
+DEFAULT_RESPONSE_TIMEOUT_SECONDS = 0.5
+# Give a pending request more time than the PCM is expected to need, well
+# within the helper's 10-second event-silence limit.
+_BAROMETRIC_RESPONSE_TIMEOUT_SECONDS = 4.0
 
 
 @dataclass(frozen=True)
@@ -81,6 +83,7 @@ class PcmElectricalProfile:
     response_data_length: int
     minimum: float
     maximum: float
+    extended_response_timeout: float | None = None
 
     @property
     def request_frame(self) -> bytes:
@@ -213,6 +216,7 @@ _BAROMETRIC_PRESSURE_PROFILE = PcmElectricalProfile(
     response_data_length=2,
     minimum=baro.DEFINITION.minimum,
     maximum=baro.DEFINITION.maximum,
+    extended_response_timeout=_BAROMETRIC_RESPONSE_TIMEOUT_SECONDS,
 )
 
 # MappingProxyType plus a frozen value makes the reviewed registry immutable at
@@ -512,17 +516,16 @@ def _decode_wire_response(
     return _decode_response(profile, frame)
 
 
-def _matches_single_frame(
-    frame: bytes, response_id: int, payload_length: int, prefix: bytes,
-) -> bool:
+def _is_pending_response(frame: bytes, response_id: int) -> bool:
     if len(frame) != CAN_FRAME_SIZE:
         return False
     raw_can_id, dlc, data = struct.unpack(CAN_FRAME_FORMAT, frame)
+    payload_length = len(_RESPONSE_PENDING_PAYLOAD)
     return (
         raw_can_id == (CAN_EFF_FLAG | response_id)
         and payload_length + 1 <= dlc <= 8
         and data[0] == payload_length
-        and data[1:1 + len(prefix)] == prefix
+        and data[1:1 + payload_length] == _RESPONSE_PENDING_PAYLOAD
     )
 
 
@@ -549,15 +552,14 @@ class PcmElectricalPoller:
 
     This poller keeps its receive queue intact so a foreign tester's reply
     still stands the helper down for that engine run, which the owner confirmed
-    as the wanted behaviour on 2026-11-23. Only a structurally valid positive
-    reply to a recent, outstanding request on this socket can be skipped.
+    as the wanted behaviour on 2026-11-23.
     """
 
     def __init__(
         self,
         channel: str,
         *,
-        timeout_seconds: float = 0.5,
+        timeout_seconds: float = DEFAULT_RESPONSE_TIMEOUT_SECONDS,
         socket_factory: Callable[..., socket.socket] = socket.socket,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -568,7 +570,6 @@ class PcmElectricalPoller:
         self._socket_factory = socket_factory
         self._monotonic = monotonic
         self._socket: socket.socket | None = None
-        self._outstanding_until: dict[str, float] = {}
 
     @property
     def is_open(self) -> bool:
@@ -602,7 +603,6 @@ class PcmElectricalPoller:
         """Close the raw socket; interface restoration remains owner-managed."""
 
         sock, self._socket = self._socket, None
-        self._outstanding_until.clear()
         if sock is not None:
             sock.close()
 
@@ -708,72 +708,62 @@ class PcmElectricalPoller:
                 f"fixed PCM request send length {sent} is not {CAN_FRAME_SIZE}",
             )
 
-        # Once the same DID is sent again, its replies are indistinguishable.
-        self._outstanding_until[profile.metric] = sent_at + _P2_STAR_WINDOW_SECONDS
-        return self._receive_reply(sock, profile, deadline)
+        now = self._monotonic()
+        remaining = deadline - now
+        if profile.extended_response_timeout is not None:
+            return self._receive_extended_reply(
+                sock, profile, sent_at + profile.extended_response_timeout, now, remaining,
+            )
+        frame = self._receive_frame(sock, profile, remaining)
+        if isinstance(frame, PcmElectricalResult):
+            return frame
+        return _decode_wire_response(profile, frame)
 
-    def _receive_reply(self, sock, profile, deadline) -> PcmElectricalResult:
-        pending_count = 0
-        while True:
-            remaining = deadline - self._monotonic()
-            if remaining <= 0:
-                return _failure(
-                    profile, "response_timeout",
-                    "PCM response deadline expired after the fixed request",
-                )
-            try:
-                sock.settimeout(remaining)
-                frame = sock.recv(CAN_FRAME_SIZE)
-            except (socket.timeout, TimeoutError):
-                return _failure(
-                    profile, "response_timeout",
-                    f"PCM did not answer physical 22 {profile.did:04X} before the deadline",
-                )
-            except OSError as exc:
-                self.close()
-                return _failure(
-                    profile, "response_rejected", f"PCM response receive failed: {exc}",
-                )
-            try:
-                frame_bytes = bytes(frame)
-            except (TypeError, ValueError):
-                return _failure(
-                    profile, "malformed_response",
-                    "raw SocketCAN transport returned a non-byte response",
-                )
-            if _matches_single_frame(
-                frame_bytes, profile.response_id, len(_RESPONSE_PENDING_PAYLOAD),
-                _RESPONSE_PENDING_PAYLOAD,
-            ):
-                # A negative response has no DID. Keep subsequent NRCs with
-                # this request by waiting here, without another transmission.
-                if pending_count == _MAX_PENDING_FRAMES:
-                    return _failure(
-                        profile, "response_timeout",
-                        "PCM exceeded the response-pending limit",
-                    )
-                pending_count += 1
-                deadline = self._monotonic() + _P2_STAR_WINDOW_SECONDS
-                continue
+    def _receive_extended_reply(
+        self, sock, profile, deadline, now, normal_remaining,
+    ) -> PcmElectricalResult:
+        # Restore the timeout a normal read would have left for the next send.
+        normal_timeout = normal_remaining if normal_remaining > 0 else sock.gettimeout()
+        try:
+            while True:
+                frame = self._receive_frame(sock, profile, deadline - now)
+                if isinstance(frame, PcmElectricalResult):
+                    return frame
+                now = self._monotonic()
+                if now < deadline and not _is_pending_response(frame, profile.response_id):
+                    return _decode_wire_response(profile, frame)
+        finally:
+            if self._socket is sock:
+                sock.settimeout(normal_timeout)
 
-            result = _decode_wire_response(profile, frame_bytes)
-            if result.reason == "malformed_response" and self._discard_late_reply(
-                frame_bytes, profile.metric,
-            ):
-                continue
-            # A PCM frame can end the transaction even when its payload is invalid.
-            if frame_bytes.startswith(struct.pack("=I", CAN_EFF_FLAG | profile.response_id)):
-                self._outstanding_until.pop(profile.metric, None)
-            return result
-
-    def _discard_late_reply(self, frame: bytes, current_metric: str) -> bool:
-        for metric, expires_at in self._outstanding_until.items():
-            if metric == current_metric:
-                continue
-            profile = PCM_ELECTRICAL_PROFILES[metric]
-            if _matches_single_frame(
-                frame, profile.response_id, 3 + profile.response_data_length, profile.positive_echo,
-            ):
-                del self._outstanding_until[metric]
-                return self._monotonic() < expires_at
-        return False
+    def _receive_frame(self, sock, profile, remaining) -> bytes | PcmElectricalResult:
+        if remaining <= 0:
+            return _failure(
+                profile,
+                "response_timeout",
+                "PCM response deadline expired after the fixed request",
+            )
+        try:
+            sock.settimeout(remaining)
+            frame = sock.recv(CAN_FRAME_SIZE)
+        except (socket.timeout, TimeoutError):
+            return _failure(
+                profile,
+                "response_timeout",
+                f"PCM did not answer physical 22 {profile.did:04X} before the deadline",
+            )
+        except OSError as exc:
+            self.close()
+            return _failure(
+                profile,
+                "response_rejected",
+                f"PCM response receive failed: {exc}",
+            )
+        try:
+            return bytes(frame)
+        except (TypeError, ValueError):
+            return _failure(
+                profile,
+                "malformed_response",
+                "raw SocketCAN transport returned a non-byte response",
+            )

@@ -653,14 +653,12 @@ reply and scales it by 0.199773 (AlfaOBD evidence, observed raw 404–411). Valu
 outside 50–110 kPa are rejected. Within an armed, engine-running active-drive
 interval it can send one `22 0109` per 10 seconds, each under the existing PCM
 gates and its own one-use permit. A timeout, negative or invalid reply ends
-barometric polling for that helper interval. For any fixed PCM read, each of
-the first four `7F 22 78` responses opens a five-second window to receive the
-next reply without sending again. A fifth pending response or an expired
-window times out the read. A terminal PCM reply clears the outstanding record
-even if its payload is invalid. During a later PCM read, the helper can
-discard a structurally matching positive reply for a still-outstanding DID
-within five seconds of the earlier request. Discarding a late reply leaves the
-current receive deadline in place. Snapshot completeness is unchanged.
+barometric polling for that helper interval. Pressure has one four-second
+response deadline from the send. A `7F 22 78` pending reply keeps the pressure
+read waiting within that deadline without sending again. After a pressure poll
+takes longer than 0.5 seconds, the helper emits its result and starts the next
+cycle with a fresh snapshot before running radar and the remaining steps.
+Snapshot completeness is unchanged.
 A value expires after 30 seconds or when the diagnostic owner stops; both Drive
 footers dim the retained pressure altitude next to the compass and show it only
 after a reading is available. Weather can move pressure altitude by hundreds
@@ -1155,14 +1153,14 @@ fixed-DLC-8 frames:
 18DA10F1#0322010900000000
 ```
 
-Each response must be a single frame from `18DAF110` with the corresponding
+Each positive response must be a single frame from `18DAF110` with the corresponding
 exact echo. Generator duty (`62 01 A1`), crankshaft torque (`62 06 DA`) and
 opt-in barometric pressure (`62 01 09`) each require two data bytes. VVT oil
-temperature (`62 06 9F`) and oil life (`62 21 85`) each require one. The shared
-raw CAN socket can skip a matching late positive reply to one of its timed-out
-reads within the current request's deadline. Other unexpected replies retain
-their failure handling. The raw socket prevents a malformed multi-frame reply
-from causing an ISO-TP FlowControl transmission.
+temperature (`62 06 9F`) and oil life (`62 21 85`) each require one. Those four
+reads each receive one reply and treat `7F 22 78` as a rejection. Unexpected
+replies, including a stray positive reply after a pressure timeout, remain
+malformed for the next PCM read. The raw socket prevents a malformed
+multi-frame reply from causing an ISO-TP FlowControl transmission.
 There is no caller-selectable DID, service, CAN ID, payload, functional
 address, session, or tester-present option. In particular, this path contains
 no `10 92` or `3E` traffic. Future PCM metrics require a reviewed code change

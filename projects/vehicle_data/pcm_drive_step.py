@@ -2,8 +2,16 @@
 
 from __future__ import annotations
 
-from projects.vehicle_data import barometric_pressure as baro, transmit_permit
+from dataclasses import dataclass
+
+from projects.vehicle_data import barometric_pressure as baro, pcm_electrical, transmit_permit
 from projects.vehicle_data.active_session_gates import SessionOutcome
+
+
+@dataclass(frozen=True)
+class PcmStepResult:
+    outcome: SessionOutcome | None = None
+    skip_cycle: bool = False
 
 
 class PcmDriveStep:
@@ -14,24 +22,25 @@ class PcmDriveStep:
     """
 
     def __init__(self, backend, sink, lock_handle, initial, *, poll, purpose,
-                 interval_seconds, next_due):
+                 interval_seconds, next_due, skip_after_seconds=None):
         self.backend = backend
         self.sink = sink
         self.poll = poll
         self.purpose = purpose
         self.interval_seconds = interval_seconds
+        self.skip_after_seconds = skip_after_seconds
         self.lock_handle = lock_handle
         self.initial = initial
         self.enabled = True
         self.next_due = next_due
 
-    def run(self, snapshot, *, active_gate, pcm_outcome, permit_api) -> SessionOutcome | None:
+    def run(self, snapshot, *, active_gate, pcm_outcome, permit_api) -> PcmStepResult:
         # Optional data waits for preceding PCM/TPMS replies and requires its
         # own one-use permit; a failed read is never retried in this epoch.
         if self.enabled and self.backend.monotonic() >= self.next_due:
             gate_failure = active_gate(self.backend, self.initial)
             if gate_failure is not None:
-                return gate_failure
+                return PcmStepResult(outcome=gate_failure)
             try:
                 permit = permit_api.issue(
                     self.lock_handle, snapshot,
@@ -40,11 +49,13 @@ class PcmDriveStep:
                 )
             except permit_api.StaleTransmitEvidenceError:
                 # Keep this read due and let radar obtain its own fresh evidence.
-                return None
+                return PcmStepResult()
+            poll_started = self.backend.monotonic() if self.skip_after_seconds is not None else None
             result = self.poll(permit)
             if result.reason == "transmit_permit_expired":
-                return None
-            self.next_due = self.backend.monotonic() + self.interval_seconds
+                return PcmStepResult()
+            poll_finished = self.backend.monotonic()
+            self.next_due = poll_finished + self.interval_seconds
             failed = pcm_outcome(result)
             if failed is not None:
                 self.enabled = False
@@ -63,17 +74,21 @@ class PcmDriveStep:
                     quality=result.quality, detail=result.detail,
                     interface_mode="armed_diagnostic",
                 )
-        return None
+            # Later steps need a new snapshot after an extended pressure read.
+            return PcmStepResult(skip_cycle=(
+                poll_started is not None and poll_finished - poll_started > self.skip_after_seconds
+            ))
+        return PcmStepResult()
 
 
-def run_pcm_steps(steps, snapshot, *, active_gate, pcm_outcome, permit_api) -> SessionOutcome | None:
+def run_pcm_steps(steps, snapshot, *, active_gate, pcm_outcome, permit_api) -> PcmStepResult:
     for step in steps:
-        outcome = step.run(
+        result = step.run(
             snapshot, active_gate=active_gate, pcm_outcome=pcm_outcome, permit_api=permit_api,
         )
-        if outcome is not None:
-            return outcome
-    return None
+        if result.outcome is not None or result.skip_cycle:
+            return result
+    return PcmStepResult()
 
 
 def optional_steps(backend, sink, poller, lock_handle, initial, *, next_due,
@@ -90,5 +105,6 @@ def optional_steps(backend, sink, poller, lock_handle, initial, *, next_due,
             backend, sink, lock_handle, initial, next_due=next_due,
             poll=poller.poll_barometric_pressure, purpose=transmit_permit.PCM_BAROMETRIC_PRESSURE,
             interval_seconds=baro.INTERVAL_SECONDS,
+            skip_after_seconds=pcm_electrical.DEFAULT_RESPONSE_TIMEOUT_SECONDS,
         ))
     return steps

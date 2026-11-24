@@ -949,27 +949,26 @@ def run_active_session(
                         interface_mode="armed_diagnostic",
                     )
 
-            pcm_stop = pcm_drive_step.run_pcm_steps(
+            pcm_step_result = pcm_drive_step.run_pcm_steps(
                 pcm_steps, snapshot, active_gate=_active_gate, pcm_outcome=_pcm_outcome,
                 permit_api=transmit_permit,
             )
-            if pcm_stop is not None:
-                outcome = pcm_stop
+            if pcm_step_result.outcome is not None:
+                outcome = pcm_step_result.outcome
                 break
+            if not pcm_step_result.skip_cycle:
+                # The radar's 0845 read and any owner-started service alignment.
+                radar_stop = radar_steps.run(snapshot)
+                if radar_stop is not None:
+                    outcome = radar_stop
+                    break
 
-            # The radar's 0845 read and any owner-started service alignment.
-            radar_stop = radar_steps.run(snapshot)
-            if radar_stop is not None:
-                outcome = radar_stop
-                break
+                dtc_stop = dtc_steps.run(snapshot)
+                if dtc_stop is not None:
+                    outcome = dtc_stop
+                    break
 
-            dtc_stop = dtc_steps.run(snapshot)
-            if dtc_stop is not None:
-                outcome = dtc_stop
-                break
-            next_cycle = _wait_for_next_cycle(
-                backend, next_cycle, cycle_started
-            )
+            next_cycle = _wait_for_next_cycle(backend, next_cycle, cycle_started)
         return outcome
     except KeyboardInterrupt:
         outcome = SessionOutcome(
