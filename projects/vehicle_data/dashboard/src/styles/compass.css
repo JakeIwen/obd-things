@@ -1,4 +1,18 @@
-.drive-footer .compass { grid-column: 3; grid-row: 1; justify-self: end; }
+.drive-footer__direction {
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+}
+.pressure-altitude {
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 .compass {
   min-width: 2.6ch;
   text-align: right;
@@ -7,7 +21,10 @@
   font-weight: 700;
   line-height: 1;
   letter-spacing: .06em;
-  color: var(--text);
 }
-.compass--stale { opacity: .7; }
-@media (max-width: 640px) { .compass { font-size: 23px; } }
+.compass--stale, .pressure-altitude--stale { opacity: .7; }
+@media (max-width: 640px) {
+  .drive-footer__direction { gap: 6px; }
+  .compass { font-size: 23px; }
+  .pressure-altitude { font-size: 13px; }
+}

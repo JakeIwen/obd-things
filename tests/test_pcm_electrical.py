@@ -156,11 +156,11 @@ class PcmElectricalProfileTests(unittest.TestCase):
         self.assertIn("NRC 12", result.detail)
         self.assertEqual(len(sock.sent), 1)
 
-    def test_registry_has_four_immutable_reviewed_profiles(self):
+    def test_registry_has_five_immutable_reviewed_profiles(self):
         self.assertEqual(
             tuple(pcm.PCM_ELECTRICAL_PROFILES),
             ("generator.field_duty", "engine.crankshaft_torque", "engine.vvt_oil_temperature",
-             "engine.oil_life_remaining"),
+             "engine.oil_life_remaining", "engine.barometric_pressure"),
         )
         profile = pcm.PCM_ELECTRICAL_PROFILES["generator.field_duty"]
         torque = pcm.PCM_ELECTRICAL_PROFILES["engine.crankshaft_torque"]

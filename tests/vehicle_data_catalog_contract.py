@@ -12,6 +12,7 @@ EXPECTED_METRIC_NAMES = frozenset({
     "engine.oil_pressure",
     "engine.oil_life_remaining",
     "engine.vvt_oil_temperature",
+    "engine.barometric_pressure",
     "engine.rpm",
     "engine.target_crankshaft_torque",
     "transmission.output_speed",

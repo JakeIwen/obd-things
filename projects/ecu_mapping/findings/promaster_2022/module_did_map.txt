@@ -6,6 +6,9 @@
 #   The VIN above is only the F190-identified vehicle; a multi-session log can mix
 #   profiles AND vehicles, so a profile name may not match that VIN.
 # NOTE: single-frame 22 reads reassemble clean; multi-frame commands (2E/2F/31/27) are fragmented -> reassemble_commands.py.
+# PCM 0109 barometric pressure: see 2026-11-18_pcm_plots_reference_drive.md
+# for the exact two-data-byte wire reply and AlfaOBD scale. The Pi has a guarded
+# read for that profile, disabled by default and not yet run on the vehicle.
 # line: <svc/DID>  reads=N  resp=<hex> |ascii|
 
 ==============================================================================

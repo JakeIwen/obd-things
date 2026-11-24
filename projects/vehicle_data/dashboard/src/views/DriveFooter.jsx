@@ -1,5 +1,6 @@
 import { LightIndicators } from "../components/LightIndicators.jsx";
 import { Compass } from "../components/Compass.jsx";
+import { PressureAltitude } from "../components/PressureAltitude.jsx";
 import { DRIVE_PAGE_NAMES } from "./drivePager.js";
 
 /** Shared by the lazy Drive pages so the icons stay out of the boot bundle. */
@@ -21,7 +22,10 @@ export function DriveFooter({ page, onPageChange }) {
           </button>
         ))}
       </nav>
-      <Compass />
+      <div class="drive-footer__direction">
+        <PressureAltitude />
+        <Compass />
+      </div>
     </div>
   );
 }

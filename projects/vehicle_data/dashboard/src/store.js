@@ -24,6 +24,7 @@
  */
 
 import { signal, computed, batch } from "@preact/signals-core";
+import { BAROMETRIC_PRESSURE_METRIC } from "./pressureAltitude.helpers.js";
 
 /** Qualities that may drive a primary (hero) number. Rule 8. */
 export const DRIVER_QUALITIES = new Set(["verified", "observed_alfa_scale"]);
@@ -33,6 +34,7 @@ export const RETAIN_LAST_READING = new Set([
   "battery.voltage",
   "vehicle.odometer",
   "vehicle.compass_direction",
+  BAROMETRIC_PRESSURE_METRIC,
   "fuel.tank_level",
   "fuel.range",
   "engine.oil_life_remaining",

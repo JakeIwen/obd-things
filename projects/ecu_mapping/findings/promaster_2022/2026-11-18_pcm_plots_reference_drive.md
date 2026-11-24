@@ -91,6 +91,15 @@ only with coarse load fields (`0x412`, `0x0FB`, `0x100`) and are not identified 
 signals. Slow few-valued references (outside temperature, baro, battery temperature) match
 several unrelated drifting fields equally, so none was promoted.
 
+## Guarded Pi support for barometric pressure
+
+The Pi has a disabled-by-default drive poll and a parked support profile for
+`0109`, using the reference drive's exact `62 01 09 <hi> <lo>` reply and
+unsigned big-endian scale. The Pi has not requested it on the vehicle yet.
+The recorded AlfaOBD result remains the evidence for the decode and its
+medium grade. The passive scan harvester excludes that request on the PCM
+address because the Pi and AlfaOBD use the same tester address.
+
 ## Method
 
 - AlfaOBD drove on the owner's tablet (OBDLink MX+ Bluetooth on the OBD port), operated by the

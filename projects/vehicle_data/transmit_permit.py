@@ -24,6 +24,7 @@ PCM_GENERATOR_DUTY = "pcm.generator_field_duty"
 PCM_CRANKSHAFT_TORQUE = "pcm.crankshaft_torque"
 PCM_VVT_OIL_TEMPERATURE = "pcm.vvt_oil_temperature"
 PCM_OIL_LIFE = "pcm.oil_life_remaining"
+PCM_BAROMETRIC_PRESSURE = "pcm.barometric_pressure"
 RF_HUB_PRESSURE = "rf_hub.pressure"
 # Literal on purpose: every C-CAN helper imports this module before `ready`,
 # so a damaged drive_dtc.json must not break them. A test pins these to it.
@@ -41,7 +42,7 @@ RADAR_SERVICE_KEEPALIVE = "radar_acc.service_alignment.keepalive"
 RADAR_SERVICE_FLOW = "radar_acc.service_alignment.flow_control"
 ALLOWED_PURPOSES = frozenset(
     (PCM_GENERATOR_DUTY, PCM_CRANKSHAFT_TORQUE, PCM_VVT_OIL_TEMPERATURE, PCM_OIL_LIFE,
-     RF_HUB_PRESSURE, RADAR_ALIGNMENT, RADAR_ALIGNMENT_FLOW,
+     PCM_BAROMETRIC_PRESSURE, RF_HUB_PRESSURE, RADAR_ALIGNMENT, RADAR_ALIGNMENT_FLOW,
      RADAR_DTC_READ, BCM_DTC_READ,
      RADAR_SERVICE_SESSION, RADAR_SERVICE_START, RADAR_SERVICE_STOP,
      RADAR_SERVICE_STATUS, RADAR_SERVICE_KEEPALIVE, RADAR_SERVICE_FLOW)

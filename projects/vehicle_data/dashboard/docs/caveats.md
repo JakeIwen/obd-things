@@ -24,6 +24,14 @@ you might want to know about that value is on this page.
   between Drive and Parked by itself. When you tap a tab yourself, it turns off until the engine
   next starts or stops.
 
+## Drive altitude
+
+The value left of the compass is pressure altitude. The dashboard converts the
+engine computer's barometric reading using standard sea-level pressure and
+rounds to the nearest 10 ft. Weather can shift the estimate by a few hundred
+feet relative to GPS elevation. Each pressure step observed on the reference
+drive represented about 65 ft. A dim number is the last reading.
+
 ## What the colours mean
 
 - **Band bar** (the thin bar under a gauge): the lighter grey-green segment is the normal range for

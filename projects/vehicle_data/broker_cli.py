@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import pathlib
 
-from projects.vehicle_data import usb_recovery_contract
+from projects.vehicle_data import barometric_pressure as baro, usb_recovery_contract
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 DEFAULT_SOCKET = "/run/van-telemetry/api.sock"
@@ -88,6 +88,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-auxiliary-drive",
         action="store_true",
         help="disable the fixed engine-running B-CAN ICS odometer candidate",
+    )
+    parser.add_argument(
+        baro.BROKER_FLAG, action="store_true",
+        help="opt in to the fixed PCM barometric-pressure read during qualified drives",
     )
     parser.add_argument(usb_recovery_contract.FLAG, action="store_true", help=usb_recovery_contract.FLAG_HELP)
     return parser

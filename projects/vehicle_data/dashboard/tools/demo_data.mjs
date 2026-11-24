@@ -1,3 +1,5 @@
+import { BAROMETRIC_PRESSURE_METRIC } from "../src/pressureAltitude.helpers.js";
+
 export const MINUTE_MS = 60_000;
 export const HOUR_MS = 60 * MINUTE_MS;
 export const DAY_MS = 24 * HOUR_MS;
@@ -10,6 +12,7 @@ export const DRIVE_DEMO_METRICS = Object.freeze([
   "acc.set_speed",
   "acc.state",
   "battery.voltage",
+  BAROMETRIC_PRESSURE_METRIC,
   "engine.coolant_temperature",
   "engine.crankshaft_power",
   "engine.crankshaft_torque",
@@ -57,6 +60,7 @@ export const DEMO_SCENE = Object.freeze({
     "acc.set_speed": metric(65, "mph", "verified", "ccan.broadcast.0x5a0"),
     "acc.state": metric("engaged", "state", "verified", "ccan.broadcast.0x5a0"),
     "battery.voltage": metric(14.1, "V", "verified", "bcan.broadcast.0x46c"),
+    [BAROMETRIC_PRESSURE_METRIC]: metric(81.107838, "kPa", "observed_alfa_scale", "pcm.did.0109"),
     "engine.coolant_temperature": metric(203, "°F", "observed_alfa_scale", "ccan.broadcast.0x2ed"),
     "engine.crankshaft_power": metric(64, "hp", "observed_alfa_scale", "derived.pcm_06da_x_ccan_0x0fc"),
     "engine.crankshaft_torque": metric(148, "lb-ft", "observed_alfa_scale", "pcm.did.06da"),

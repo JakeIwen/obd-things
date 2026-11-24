@@ -645,6 +645,32 @@ qualified passive `engine.rpm` metric supersedes the need to interpret raw
 cluster `1000` in the dashboard. These remain diagnostics metrics, not a
 general-purpose DID publication namespace.
 
+## Barometric pressure and Drive altitude
+
+The optional `engine.barometric_pressure` metric is C-CAN PCM DID `0109`
+(source `pcm.did.0109`, kPa). The fixed read accepts an exact two-byte positive
+reply and scales it by 0.199773 (AlfaOBD evidence, observed raw 404–411). Values
+outside 50–110 kPa are rejected. Within an armed, engine-running active-drive
+interval it can send one `22 0109` per 10 seconds, each under the existing PCM
+gates and its own one-use permit. A timeout, negative or invalid reply ends
+barometric polling for that helper interval. Snapshot completeness is unchanged.
+A value expires after 30 seconds or when the diagnostic owner stops; both Drive
+footers dim the retained pressure altitude next to the compass and show it only
+after a reading is available. Weather can move pressure altitude by hundreds
+of feet relative to GPS elevation.
+
+The Pi's `0109` read has not been run on the vehicle. The guarded parked
+`pcm_temperature_support` CLI offers `--profile barometric-pressure` for the
+one-request support check using the same parked, ignition-on, engine-off gates
+described above. The broker flag `--enable-barometric-pressure` is off by default
+and absent from the unit. After the support check and owner approval, activation
+adds the broker flag and follows “Restarting the broker”. Rollback removes the
+flag and follows the same restart procedure. Only the enabled broker sets
+`VAN_TELEMETRY_BAROMETRIC_PRESSURE=1` in its C-CAN helper's launch environment.
+A new helper launched by an older broker sees no capability, and an older
+helper under a new broker ignores the environment variable and accepts the
+same arguments.
+
 ## Owner-priority telemetry roadmap
 
 The first engine-health additions are oil pressure, coolant temperature,

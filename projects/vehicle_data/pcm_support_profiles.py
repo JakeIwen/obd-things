@@ -5,7 +5,7 @@ from __future__ import annotations
 import struct
 
 from lib.modules import MODULES
-from projects.vehicle_data import pcm_electrical as pcm
+from projects.vehicle_data import barometric_pressure as baro, pcm_electrical as pcm
 
 
 TEMPERATURE_DIDS = (0xF45C, 0x069F)
@@ -14,6 +14,7 @@ INJECTOR_PULSE_WIDTH_DIDS = tuple(range(0x0234, 0x023A))
 CHECK_PROFILES = {
     "temperature": TEMPERATURE_DIDS,
     "oil-life": OIL_LIFE_DIDS,
+    "barometric-pressure": (baro.DID,),
     "injector-pulse-width": INJECTOR_PULSE_WIDTH_DIDS,
 }
 
@@ -53,7 +54,6 @@ def decode_reply(did: int, frame: bytes) -> dict:
     if can_id != (pcm.CAN_EFF_FLAG | MODULES["pcm"].rxid) or not 1 <= dlc <= 8:
         raise ValueError("wrong PCM response identity, flags, or DLC")
     length = padded[0]
-    expected_length = 7 if did in INJECTOR_PULSE_WIDTH_DIDS else 4
     if length == 3 and dlc >= 4 and padded[1:3] == b"\x7f\x22":
         payload = padded[1:4]
         return {
@@ -61,6 +61,18 @@ def decode_reply(did: int, frame: bytes) -> dict:
             "nrc": f"{payload[2]:02X}",
             "response_hex": payload.hex(" ").upper(),
         }
+    if did == baro.DID:
+        result = pcm.decode_barometric_pressure_response(frame)
+        if not result.available:
+            raise ValueError(result.detail)
+        return {
+            "status": "positive",
+            "response_hex": padded[1:1 + length].hex(" ").upper(),
+            "raw": result.raw_value,
+            "value_kpa": result.value,
+            "scale_basis": result.quality,
+        }
+    expected_length = 7 if did in INJECTOR_PULSE_WIDTH_DIDS else 4
     if length != expected_length or dlc < length + 1:
         raise ValueError("response must be the exact complete SingleFrame; no FlowControl sent")
     payload = padded[1:1 + length]

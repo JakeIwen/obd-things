@@ -149,12 +149,7 @@ class PiRequestSetSyncTests(unittest.TestCase):
         def target(module) -> int:
             return (module.txid >> 8) & 0xFF
 
-        pcm = {
-            uds(pcm_electrical.GENERATOR_DUTY_REQUEST_DATA),
-            uds(pcm_electrical.CRANKSHAFT_TORQUE_REQUEST_DATA),
-            uds(pcm_electrical.VVT_OIL_TEMPERATURE_REQUEST_DATA),
-            uds(pcm_electrical.OIL_LIFE_REQUEST_DATA),
-        }
+        pcm = {uds(profile.request_data) for profile in pcm_electrical.PCM_ELECTRICAL_PROFILES.values()}
         self.assertEqual(harvest.PI_FIXED_REQUESTS[target(MODULES["pcm"])], pcm)
         tpms = {bytes((0x22, did >> 8, did & 0xFF)) for did, _ in active_drive.TPMS_PROFILES}
         self.assertEqual(harvest.PI_FIXED_REQUESTS[target(MODULES["rf_hub"])], tpms)
@@ -185,6 +180,13 @@ class PiRequestSetSyncTests(unittest.TestCase):
         exchanges, _, _, stats = harvest.process_frames("c-can", frames_of(lines))
         self.assertEqual(stats["pi_requests"], 1)
         self.assertEqual([(e["target"], e["request_hex"]) for e in exchanges], [("2A", "222185")])
+
+    def test_barometric_request_is_only_excluded_for_pcm(self):
+        lines = exchange(T0, "10", "220109", "6201090197")
+        lines += exchange(T0 + 1, "2A", "220109", "6201090197")
+        exchanges, _, _, stats = harvest.process_frames("c-can", frames_of(lines))
+        self.assertEqual(stats["pi_requests"], 1)
+        self.assertEqual([(e["target"], e["request_hex"]) for e in exchanges], [("2A", "220109")])
 
     def test_radar_service_requests_are_only_excluded_for_radar(self):
         from projects.vehicle_data import radar_service_transport

@@ -223,9 +223,14 @@ format; `dashboard/src/dialogs/useController.js` creates a dialog's controller
 once per mount; `dashboard/src/jsonReply.js` reads a fetch reply that must be one
 JSON object.
 
-`projects/vehicle_data/oil_life_drive_step.py` is the oil-life part of a helper
-cycle (cadence, one failed read ends it for the epoch); the active session owns
-its gates, permits and cleanup.
+`projects/vehicle_data/pcm_drive_step.py` schedules the optional oil-life and
+barometric reads. One failed read disables that metric for the helper epoch.
+The active session owns the gates and cleanup, and gives each read its own
+transmit permit. `barometric_pressure.py` owns the metric and launch capability,
+and `pcm_electrical.py` owns the fixed wire profile. The dashboard's
+`src/pressureAltitude.helpers.js` converts the reading.
+`components/PressureAltitude.jsx` renders it beside the compass in the shared
+Drive footer.
 
 Oil-life telemetry is enabled (owner activation 2026-10-03):
 `engine.oil_life_remaining` is PCM DID `2185`, unsigned percent, polled at
@@ -296,7 +301,7 @@ candump logs as per-identifier numpy arrays for offline reference syncs.
 `lib.reports.require_distinct_output` protects evidence inputs from report
 destination aliases in the fuel and lighting research CLIs.
 `projects/vehicle_data/pcm_support_profiles.py` owns the fixed temperature,
-oil-life and injector support plans/decoders; `pcm_temperature_support.py`
+oil-life, barometric-pressure and injector support plans/decoders; `pcm_temperature_support.py`
 retains the guarded parked CLI and all CAN ownership/restoration effects.
 
 Zero-behaviour refactor waves (audit items #1–#8; deployed and validated on four drives) moved

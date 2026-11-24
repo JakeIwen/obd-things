@@ -19,17 +19,17 @@ from datetime import datetime, timezone
 
 from lib import can_operation_state, diagnostic_safety
 from lib.vehicle_can_roles import B_CAN_ROLE, CAN_BUS_ROLES, C_CAN_ROLE
+from projects.vehicle_data import barometric_pressure as baro
 from projects.vehicle_data.broker_cli import (
     DEFAULT_DTC_CACHE, DEFAULT_HISTORY_DB, DEFAULT_SOCKET, build_parser,
 )
 from projects.vehicle_data.armed_at_startup import ArmedRole, assess_startup_roles
-from projects.vehicle_data.drive_helper_launch import HELPER_CWD, helper_command
+from projects.vehicle_data.drive_helper_launch import HELPER_CWD, helper_command, helper_environment
 from projects.vehicle_data.drive_dtc_control import (
     DriveDtcControl, drive_dtc_arguments, grant_helper_ready,
 )
 from projects.vehicle_data.engine_off_voltage import EngineOffVoltageCapture
 from projects.vehicle_data.helper_events import validate_helper_status
-from projects.vehicle_data.ccan_powertrain import INTAKE_AC_ENV, INTAKE_AC_ENV_ON
 from projects.vehicle_data.helper_hold import (
     HELD_BLOCKED_REASON,
     HoldRefusal,
@@ -106,6 +106,7 @@ ACTIVE_DRIVE_SOURCES = frozenset(
         "pcm.did.06da",
         "pcm.did.069f",
         "pcm.did.2185",
+        baro.SOURCE.name,
         "rf_hub.did.31d0",
         "rf_hub.did.31d1",
         "rf_hub.did.31d2",
@@ -116,7 +117,7 @@ ACTIVE_DRIVE_SOURCES = frozenset(
 )
 ACTIVE_DRIVE_OPTIONAL_METRICS = frozenset(
     {"engine.crankshaft_torque", "engine.vvt_oil_temperature",
-     "engine.oil_life_remaining", *RADAR_METRICS}
+     "engine.oil_life_remaining", baro.DEFINITION.name, *RADAR_METRICS}
 )
 DERIVED_POWER_METRIC = "engine.crankshaft_power"
 DERIVED_POWER_SOURCE = "derived.pcm_06da_x_ccan_0x0fc"
@@ -202,6 +203,7 @@ class ActiveDriveSupervisor:
         queue_poll_seconds: float = 0.1,
         helper_module: str = ACTIVE_DRIVE_HELPER,
         drive_dtc=None,
+        enable_barometric_pressure=False,
         stall_tolerance_seconds: float = 30.0,
         stall_detection_seconds: float = 1.0,
         monotonic=time.monotonic,
@@ -221,6 +223,7 @@ class ActiveDriveSupervisor:
         self.expected_dev_id = expected_dev_id
         self.helper_module = helper_module
         self.drive_dtc = drive_dtc
+        self.enable_barometric_pressure = enable_barometric_pressure
         if (
             not isinstance(self.expected_usb_serial, str)
             or not self.expected_usb_serial
@@ -368,8 +371,10 @@ class ActiveDriveSupervisor:
                 bufsize=1,
                 cwd=HELPER_CWD,
                 pass_fds=(grant.child_fd,),
-                # Only the active-drive helper reads it; see INTAKE_AC_ENV.
-                env={**os.environ, INTAKE_AC_ENV: INTAKE_AC_ENV_ON},
+                env=helper_environment(
+                    enable_barometric_pressure=self.helper_module == ACTIVE_DRIVE_HELPER
+                    and self.enable_barometric_pressure,
+                ),
             )
         except Exception as exc:
             return None, None, {
@@ -1939,6 +1944,7 @@ class TelemetryBroker:
                 "engine.crankshaft_torque",
                 "engine.vvt_oil_temperature",
                 "engine.oil_life_remaining",
+                baro.DEFINITION.name,
                 *RADAR_METRICS,
                 DERIVED_POWER_METRIC,
             ):
@@ -3737,7 +3743,10 @@ def main(argv=None) -> int:
     auxiliary_drive_enabled = active_drive_enabled and not args.no_auxiliary_drive
     def active_factory(**kwargs):
         broker = broker_holder["broker"]
-        return broker.radar_service.supervisor(ActiveDriveSupervisor, drive_dtc=broker.drive_dtc, **kwargs)
+        return broker.radar_service.supervisor(
+            ActiveDriveSupervisor, drive_dtc=broker.drive_dtc,
+            enable_barometric_pressure=args.enable_barometric_pressure, **kwargs,
+        )
 
     auxiliary_factory = AuxiliaryDriveSupervisor
     recovery = None

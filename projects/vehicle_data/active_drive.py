@@ -42,7 +42,8 @@ from projects.vehicle_data import (
     drive_dtc_launch,
     helper_startup_grant,
     pcm_electrical,
-    oil_life_drive_step,
+    barometric_pressure as baro,
+    pcm_drive_step,
     transmit_permit,
     radar_alignment,
     radar_drive_steps,
@@ -609,6 +610,7 @@ def run_active_session(
     *,
     termination_guard=None,
     enable_oil_life: bool = False,
+    enable_barometric_pressure: bool = False,
     service_commands=None,
     startup_gate=None,
     drive_dtc=None,
@@ -700,12 +702,10 @@ def run_active_session(
         torque_enabled = True
         vvt_temperature_enabled = True
         next_vvt_temperature = next_cycle
-        # Old running brokers do not know this metric. Only a newly loaded
-        # broker advertises support through the fixed CLI flag, so an old
-        # process launching updated source cannot receive an unknown event.
-        oil_life_step = oil_life_drive_step.OilLifeDriveStep(
-            backend, sink, pcm_poller, lock_handle, initial,
-            enabled=enable_oil_life, next_due=next_cycle,
+        pcm_steps = pcm_drive_step.optional_steps(
+            backend, sink, pcm_poller, lock_handle, initial, next_due=next_cycle,
+            enable_oil_life=enable_oil_life, oil_life_interval=OIL_LIFE_INTERVAL_SECONDS,
+            enable_barometric_pressure=enable_barometric_pressure,
         )
         radar_steps = radar_drive_steps.RadarDriveSteps(
             backend, sink, radar_poller,
@@ -949,14 +949,14 @@ def run_active_session(
                         interface_mode="armed_diagnostic",
                     )
 
-            oil_step_result = oil_life_step.run(
-                snapshot, active_gate=_active_gate, pcm_outcome=_pcm_outcome,
-                permit_api=transmit_permit, interval_seconds=OIL_LIFE_INTERVAL_SECONDS,
+            pcm_step = pcm_drive_step.run_pcm_steps(
+                pcm_steps, snapshot, active_gate=_active_gate, pcm_outcome=_pcm_outcome,
+                permit_api=transmit_permit,
             )
-            if oil_step_result.outcome is not None:
-                outcome = oil_step_result.outcome
+            if pcm_step.outcome is not None:
+                outcome = pcm_step.outcome
                 break
-            if oil_step_result.skip_cycle:
+            if pcm_step.skip_cycle:
                 next_cycle = _wait_for_next_cycle(backend, next_cycle, cycle_started)
                 continue
 
@@ -1157,6 +1157,7 @@ def main(argv=None) -> int:
             sink,
             termination_guard=termination,
             enable_oil_life=args.enable_oil_life,
+            enable_barometric_pressure=os.environ.get(baro.HELPER_ENV) == baro.HELPER_ENV_ON,
             drive_dtc=drive_dtc,
             startup_gate=helper_startup_grant.child_gate_from_arguments(
                 args.startup_grant_fd, args.expected_parent_pid,

@@ -1,4 +1,4 @@
-.drive-footer { display: grid; grid-template-columns: minmax(70px, 1fr) minmax(0, 336px) minmax(70px, 1fr); align-items: center; gap: 20px; min-width: 0; }
+.drive-footer { display: grid; grid-template-columns: minmax(70px, 1fr) minmax(0, 336px) minmax(max-content, 1fr); align-items: center; gap: 20px; min-width: 0; }
 .drive-footer .drive-pager { grid-column: 2; grid-row: 1; }
 .drive-footer .light-indicators { grid-column: 1; grid-row: 1; justify-self: start; }
 .light-indicators { display: flex; align-items: center; flex: 0 0 auto; gap: 14px; }
@@ -16,7 +16,7 @@
 @media (max-width: 640px) {
   .view--drive > .drive2 { grid-auto-rows: minmax(150px, auto); }
   .view--drive .area-d2radar { min-height: 248px; }
-  .drive-footer { grid-template-columns: minmax(54.8px, 1fr) minmax(0, 336px) minmax(54.8px, 1fr); margin-top: var(--gap); gap: 8px; }
+  .drive-footer { grid-template-columns: minmax(54.8px, 1fr) minmax(0, 336px) minmax(max-content, 1fr); margin-top: var(--gap); gap: 8px; }
   .drive-footer .drive-pager { margin-top: 0; }
   .drive-footer .drive-pager__btn { padding: 0 4px; gap: 4px; }
   .light-indicators { gap: 10px; }

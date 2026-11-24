@@ -2,7 +2,8 @@
 
 This module deliberately is not a general UDS transport.  Its public poller can
 send only the reviewed, physical, 29-bit SocketCAN frames for generator field
-duty, current crankshaft torque, VVT oil temperature, and oil life remaining. Responses are single-frame,
+duty, current crankshaft torque, VVT oil temperature, oil life remaining,
+and barometric pressure. Responses are single-frame,
 so a raw CAN socket is used instead of an ISO-TP socket: malformed multi-frame
 traffic is rejected without any possibility of transmitting an ISO-TP
 FlowControl frame.
@@ -26,7 +27,7 @@ import time
 from typing import Callable
 
 from lib.modules import MODULES, NORMAL_29BITS
-from projects.vehicle_data import transmit_permit
+from projects.vehicle_data import barometric_pressure as baro, transmit_permit
 
 
 # Numeric SocketCAN constants keep the offline tests portable to Python builds
@@ -192,6 +193,24 @@ _OIL_LIFE_PROFILE = PcmElectricalProfile(
     maximum=100,
 )
 OIL_LIFE_PROFILE = _OIL_LIFE_PROFILE
+_BAROMETRIC_PRESSURE_PROFILE = PcmElectricalProfile(
+    metric=baro.DEFINITION.name,
+    did=baro.DID,
+    unit=baro.DEFINITION.unit,
+    source=baro.SOURCE.name,
+    bus=baro.SOURCE.bus,
+    quality=baro.SOURCE.quality,
+    acquisition_class=baro.SOURCE.acquisition_class,
+    bitrate=baro.SOURCE.bitrate,
+    addressing_mode=_PCM.addressing_mode,
+    request_id=_PCM.txid,
+    response_id=_PCM.rxid,
+    request_data=bytes.fromhex("03 22 01 09 00 00 00 00"),
+    positive_echo=bytes.fromhex("62 01 09"),
+    response_data_length=2,
+    minimum=baro.DEFINITION.minimum,
+    maximum=baro.DEFINITION.maximum,
+)
 
 # MappingProxyType plus a frozen value makes the reviewed registry immutable at
 # runtime.  No function below accepts a profile name, DID, CAN ID, or payload.
@@ -201,6 +220,7 @@ PCM_ELECTRICAL_PROFILES = MappingProxyType(
         _CRANKSHAFT_TORQUE_PROFILE.metric: _CRANKSHAFT_TORQUE_PROFILE,
         _VVT_OIL_TEMPERATURE_PROFILE.metric: _VVT_OIL_TEMPERATURE_PROFILE,
         _OIL_LIFE_PROFILE.metric: _OIL_LIFE_PROFILE,
+        _BAROMETRIC_PRESSURE_PROFILE.metric: _BAROMETRIC_PRESSURE_PROFILE,
     }
 )
 
@@ -211,9 +231,10 @@ def _validate_closed_registry() -> None:
         "engine.crankshaft_torque",
         "engine.vvt_oil_temperature",
         "engine.oil_life_remaining",
+        baro.DEFINITION.name,
     ):
         raise RuntimeError(
-            "PCM engine-running allowlist must contain exactly the four "
+            "PCM engine-running allowlist must contain exactly the five "
             "reviewed metrics"
         )
     expected_module = (
@@ -270,6 +291,13 @@ def _validate_closed_registry() -> None:
         or _OIL_LIFE_PROFILE.response_data_length != 1
     ):
         raise RuntimeError("Oil life wire profile changed")
+    if (
+        _BAROMETRIC_PRESSURE_PROFILE.did != 0x0109
+        or _BAROMETRIC_PRESSURE_PROFILE.request_data != bytes.fromhex("03 22 01 09 00 00 00 00")
+        or _BAROMETRIC_PRESSURE_PROFILE.positive_echo != bytes.fromhex("62 01 09")
+        or _BAROMETRIC_PRESSURE_PROFILE.response_data_length != 2
+    ):
+        raise RuntimeError("Barometric pressure wire profile changed")
 
 
 _validate_closed_registry()
@@ -393,6 +421,10 @@ def _decode_response(
         raw_value = payload[3]
         value = raw_value
         decode_detail = "u8 percent; PCM oil-life maintenance estimate, not measured oil quality"
+    elif profile is _BAROMETRIC_PRESSURE_PROFILE:
+        raw_value = int.from_bytes(payload[3:5], "big")
+        value = raw_value * baro.SCALE
+        decode_detail = f"u16be x {baro.SCALE} kPa"
     else:
         raise RuntimeError("unreviewed PCM profile reached the decoder")
     if (
@@ -421,6 +453,11 @@ def _decode_response(
             f"62 {profile.did:04X} echo; {decode_detail}"
         ),
     )
+
+
+def decode_barometric_pressure_response(frame: bytes) -> PcmElectricalResult:
+    """Decode the exact positive barometric reply for the parked support check."""
+    return _decode_response(_BAROMETRIC_PRESSURE_PROFILE, frame)
 
 
 def _decode_wire_response(
@@ -590,6 +627,12 @@ class PcmElectricalPoller:
     def poll_oil_life(self, permit: object) -> PcmElectricalResult:
         """Consume one oil-life permit and send only physical PCM ``22 2185``."""
         return self._poll(_OIL_LIFE_PROFILE, transmit_permit.PCM_OIL_LIFE, permit)
+
+    def poll_barometric_pressure(self, permit: object) -> PcmElectricalResult:
+        """Consume one barometric-pressure permit and send only physical PCM 22 0109."""
+        return self._poll(
+            _BAROMETRIC_PRESSURE_PROFILE, transmit_permit.PCM_BAROMETRIC_PRESSURE, permit,
+        )
 
     def _poll(
         self,

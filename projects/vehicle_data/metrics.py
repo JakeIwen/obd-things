@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from projects.vehicle_data.metric_types import MetricDefinition, SourceDefinition
 from projects.vehicle_data.display_contract import DISPLAY_METRICS
-from projects.vehicle_data import fuel_economy, intake_ac_metrics
+from projects.vehicle_data import barometric_pressure, fuel_economy, intake_ac_metrics
 
 BATTERY_VOLTAGE = MetricDefinition(
     name="battery.voltage",
@@ -799,6 +799,7 @@ METRICS = {
         CRANKSHAFT_TORQUE,
         VVT_OIL_TEMPERATURE,
         OIL_LIFE_REMAINING,
+        barometric_pressure.DEFINITION,
         ESTIMATED_CRANKSHAFT_POWER,
         TRANSMISSION_OUTPUT_SPEED,
         TRANSMISSION_OIL_TEMPERATURE,

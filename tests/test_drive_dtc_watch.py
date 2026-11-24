@@ -61,13 +61,14 @@ def test_every_existing_helper_request_is_ours_only_with_local_flag():
     for can_id, data in sentinel.signatures:
         feed.entries.append(watch_entry(can_id, data))
     assert sentinel.drain()
-    assert len(sentinel.signatures) == 4 + 4 + 2 + 5 + 2
+    assert len(sentinel.signatures) == 5 + 4 + 2 + 5 + 2
     feed.entries.append(foreign())
     assert not sentinel.drain()
 
 
 @pytest.mark.parametrize('entry', [
-    foreign(), watch_entry(0x98DA2AF1, contract.REQUEST_DATA, flags=MSG_CONFIRM),
+    foreign(), watch_entry(0x98DA10F1, bytes.fromhex("03 22 01 09 00 00 00 00"), flags=0),
+    watch_entry(0x98DA2AF1, contract.REQUEST_DATA, flags=MSG_CONFIRM),
     watch_entry(0x98DA2AF1, b'\x03\x19\x02\xff\0\0\0\0'),
     watch_entry(0x98DA2AF2, contract.REQUEST_DATA),
     watch_entry(0x98DA2AF1, contract.REQUEST_DATA, dlc=7),
