@@ -1,0 +1,14 @@
+/* Tile titles: 21 px (owner request, about 50 % over the former 14 px) where the title fits on one
+   line, shrinking per tile toward the minimum where it would not (components/TileLabel.jsx sets the
+   size through the CSSOM; tileLabel.helpers.js holds the rule). Both bounds live only here. */
+:root {
+  --tile-label-size: 21px;
+  --tile-label-min: 14px;
+}
+.tile__label {
+  font-size: var(--tile-label-size); line-height: 1.15;
+  font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  /* Never give up height: a fixed-height tile squeezes its flexible rows (the numeral, the sparkline) instead. */
+  flex: 0 0 auto;
+}

@@ -20,7 +20,7 @@ import types
 from dataclasses import dataclass, field
 from typing import Any
 
-from projects.vehicle_data import dtc_ignore, fuel_floor_contract, helper_hold, history_recent, radar_service_control
+from projects.vehicle_data import dtc_ignore, fuel_floor_contract, helper_hold, history_recent, history_series, radar_service_control
 from projects.vehicle_data.http_common import (
     MAX_REQUEST_BYTES,
     MAX_OBSERVATION_QUEUE_SECONDS,
@@ -108,6 +108,7 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
     }
     GET_ROUTES = (
         (r"/v1/events(?:/.*)?", "_event_get"),
+        (re.escape(history_series.API_PATH), "_history_series_get"),
         # The broker (unlike the web proxy) accepts an empty metric name.
         (r"/v1/metrics/[^/]*", "_metric_get"),
         (radar_service_control.API_ROUTE, "_radar_service_get"),
@@ -143,6 +144,10 @@ class TelemetryApiHandler(http.server.BaseHTTPRequestHandler):
 
     def _event_get(self, path: str) -> None:
         return self._json(*self.broker.event_request("GET", self.path))
+
+    def _history_series_get(self, path: str) -> None:
+        query_string = self.path.partition("?")[2]
+        return self._json(*self.broker.history_series_response(query_string))
 
     def _metric_get(self, path: str) -> None:
         metric = path[len("/v1/metrics/"):]

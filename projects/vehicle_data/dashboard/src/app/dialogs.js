@@ -18,11 +18,12 @@ export const DIALOG_LOADERS = {
   radar: () => import("../dialogs/RadarCalibration.jsx"),
   radarReference: () => import("../dialogs/RadarReference.jsx"),
   research: () => import("../dialogs/DtcResearch.jsx"),
+  chart: () => import("../dialogs/Chart.jsx"),
 };
 
 /**
  * Open a dialog.
- * @param {'events'|'chat'|'customize'|'oil'|'radar'|'radarReference'|'research'} name
+ * @param {'events'|'chat'|'customize'|'oil'|'radar'|'radarReference'|'research'|'chart'} name
  * @param {object} [props]
  */
 export function openDialog(name, props) {

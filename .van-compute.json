@@ -84,7 +84,8 @@
         "projects/vehicle_data/drive_dtc.json",
         "projects/vehicle_data/dtc_ignore.json",
         "projects/vehicle_data/dtc_research.json",
-        "projects/vehicle_data/history_recent.json"
+        "projects/vehicle_data/history_recent.json",
+        "projects/vehicle_data/history_series.json"
       ],
       "minimum_inputs": 0,
       "maximum_inputs": 0,

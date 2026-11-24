@@ -293,6 +293,7 @@ class CannedBrokerHandler(http.server.BaseHTTPRequestHandler):
             "/v1/snapshot": {"status": STATUS, "catalog": CATALOG, "metrics": METRICS},
             "/v1/history": {"available": True, "schema_version": 1, "recent_trips": []},
             "/v1/history/recent": {"available": True, "bucket_seconds": 60, "metrics": {}},
+            "/v1/history/series": {"available": True, "query": self.path.partition("?")[2]},
             "/v1/health": HEALTH,
             "/v1/diagnostics/dtcs": DTCS,
             "/v1/maintenance": {"available": True, "oil_changes": []},
@@ -409,6 +410,13 @@ class WebV2Tests(unittest.TestCase):
             del self.api.RequestHandlerClass.routes_without
         self.assertEqual(status, 404)
         self.assertEqual(json.loads(raw)["reason"], "not_found")
+
+    def test_history_series_is_relayed_with_its_query_string(self):
+        status, _, raw = self.request("GET", "/v1/history/series?metric=engine.rpm&span=6h")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw)["query"], "metric=engine.rpm&span=6h")
+        status, _, _ = self.request("GET", "/v1/history/series/other")
+        self.assertEqual(status, 404)
 
     def test_gzip_is_used_only_when_accepted_and_worthwhile(self):
         status, head, raw = self.request("GET", "/assets/app.deadbeef01.js", {"Accept-Encoding": "gzip, deflate"})

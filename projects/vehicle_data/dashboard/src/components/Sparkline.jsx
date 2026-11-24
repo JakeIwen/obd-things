@@ -9,22 +9,10 @@
 import { useEffect, useRef } from "preact/hooks";
 import { ringFor, ringVersion } from "../app/rings.js";
 import { band } from "../app/derive.js";
-import { splitByThreshold } from "../sparkline.helpers.js";
+import { MIN_SPAN, splitByThreshold } from "../sparkline.helpers.js";
 import { HEAT_TOKENS, heatRangeFor } from "../tileHeat.helpers.js";
 
 const REDRAW_MS = 10000;
-/** Minimum vertical span per metric, in its display unit. */
-const MIN_SPAN = {
-  "engine.coolant_temperature": 20,
-  "transmission.oil_temperature": 20,
-  "engine.vvt_oil_temperature": 20,
-  "engine.oil_pressure": 10,
-  "battery.voltage": 0.5,
-  "engine.crankshaft_power": 20,
-  "engine.rpm": 500,
-  "vehicle.speed": 10,
-  "generator.field_duty": 20,
-};
 const COLUMN_PX = 4;
 const mounted = new Set();
 let timer = null;

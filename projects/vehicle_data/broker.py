@@ -43,7 +43,7 @@ from projects.vehicle_data.helper_startup_grant import (
     pregrant_event_problem,
     ready_event_problem,
 )
-from projects.vehicle_data import history_recent
+from projects.vehicle_data import history_recent, history_series
 from projects.vehicle_data.dtc_ignore import FILE_NAME as DTC_IGNORE_FILE, DtcIgnoreStore
 from projects.vehicle_data.maintenance import MaintenanceStore
 from projects.vehicle_data.fuel_economy import METRIC as FUEL_RATE_METRIC
@@ -844,6 +844,7 @@ class TelemetryBroker:
         # Memory-only product of history_recent.query, refreshed with the supplemental cache but
         # kept out of its status so a failure here never marks history/health/dtcs degraded.
         self._history_recent_cache: dict[str, object] | None = None
+        self._history_series = history_series.SeriesService(metrics=self._history_series_metrics)
         self._supplemental_cache_status: dict[str, object] = {
             "enabled": insights is not None,
             "state": "starting" if insights is not None else "disabled",
@@ -1135,6 +1136,15 @@ class TelemetryBroker:
             }
         return history_recent.fresh_response(cached)
 
+    def _history_series_metrics(self) -> tuple[str, ...]:
+        trends = () if self.insights is None else self.insights.history_metrics
+        return history_series.accepted_metrics(trends)
+
+    def history_series_response(self, query_string: str):
+        """``(status, payload)`` from memory for ``GET /v1/history/series`` (``history_series.py``)."""
+
+        return self._history_series.respond(self.insights is not None, query_string)
+
     def _event_related_context(self):
         health = self.cached_health_response()
         return {"dtcs":self.cached_dtc_response(), "maintenance":self.maintenance.snapshot(),
@@ -1177,6 +1187,10 @@ class TelemetryBroker:
             recent = json.loads(json.dumps(history_recent.query(self.insights.historian)))
         except Exception:
             recent = None  # the previous product ages out through fresh_response
+        try:
+            self._history_series.refresh(self.insights.historian)  # records its own failures per key
+        except Exception:
+            pass
         duration_ms = max(0.0, self.monotonic() - started) * 1000.0
         with self._lock:
             if recent is not None:

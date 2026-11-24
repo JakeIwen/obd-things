@@ -7,9 +7,11 @@
 import { computed, useComputed, useSignalEffect } from "@preact/signals";
 import { useRef } from "preact/hooks";
 import { liveValue, tileModel } from "../app/derive.js";
+import { openDialog } from "../app/dialogs.js";
 import { readTokens } from "../paletteTokens.js";
 import { HEAT_TOKENS, heatFraction, heatRangeFor, mixHeat } from "../tileHeat.helpers.js";
 import { Sparkline } from "./Sparkline.jsx";
+import { TileLabel } from "./TileLabel.jsx";
 
 /** The heat stops' colours in the current palette, re-read on a theme change. */
 const heatStops = computed(() => readTokens(HEAT_TOKENS));
@@ -53,15 +55,23 @@ export function BandBar({ name }) {
  *   `sub` is an optional live sub-line (e.g. the torque under Power); when the value is
  *   held, the held time stamp replaces it. `overspeed` tints the value soft red while true.
  *   `value` is an optional node replacing the numeral text (state, held time stamp, colour and band stay the metric's, so it must not imply fresher data than that state).
+ *   A tile with `spark` and no `onClick` opens the full chart dialog when tapped.
  *   `extra` renders beside the numeral; `detail` renders under it, above the band and sub-line.
  */
 export function Tile({ name, label, area, size = "value", band = false, spark = false, sub, extra, detail, onClick, decimals, showUnit = true, overspeed, value }) {
   const m = tileModel(name, decimals === undefined ? undefined : { decimals });
+  // A tile with a graph opens it full size when tapped, unless the view gave the tile its own tap.
+  const opensChart = spark && !onClick;
+  const openChart = () => openDialog("chart", { name, label, decimals });
+  const onKeyDown = (ev) => {
+    if (ev.target === ev.currentTarget && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); openChart(); }
+  };
   // Metrics with a heat range (tileHeat.helpers.js) shade their numeral yellow → orange → red while live.
   const hasHeat = heatRangeFor(name) !== null;
   const cls = useComputed(() => {
     let c = "tile tile--" + size + " tile--" + m.kind.value;
     if (area) c += " area-" + area;
+    if (opensChart) c += " tile--chart";
     const colour = m.colour.value;
     if (colour) c += " tile--" + colour;
     if (overspeed && overspeed.value) c += " tile--overspeed";
@@ -84,8 +94,13 @@ export function Tile({ name, label, area, size = "value", band = false, spark = 
     return sub ? sub.value : "";
   });
   return (
-    <section class={cls} aria-label={label} onClick={onClick}>
-      <div class="tile__label">{label}</div>
+    <section
+      class={cls}
+      aria-label={label}
+      onClick={opensChart ? openChart : onClick}
+      {...(opensChart ? { role: "button", tabIndex: 0, "aria-haspopup": "dialog", onKeyDown } : {})}
+    >
+      <TileLabel text={label} />
       <div class="tile__value num" ref={valueRef}>
         <span>{value || m.valueText}</span>
         {showUnit ? <span class="tile__unit">{m.unitText}</span> : null}

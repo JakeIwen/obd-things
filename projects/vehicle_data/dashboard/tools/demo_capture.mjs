@@ -35,7 +35,9 @@ async function extraRoutes(nowMs) {
   // 12 explains event 614 and 13 drafts a new warning; the scene decides which chat opens.
   const {DEMO_ASSISTANT_SCENES, demoAssistantRoutes, demoAssistantStorage, demoResearchRoutes} = await import("./demo_assistant.mjs");
   const chats = DEMO_ASSISTANT_SCENES.flatMap((chatScene) => demoAssistantRoutes(nowMs, chatScene).map((r) => ({...r, chatScene})));
-  return {routes: [...demoEventRoutes(nowMs), ...demoResearchRoutes(nowMs), ...chats], storage: demoAssistantStorage()};
+  const {demoSeriesRoutes} = await import("./demo_series.mjs");
+  const {buildDemoScene} = await import("./demo_data.mjs");
+  return {routes: [...demoEventRoutes(nowMs), ...demoResearchRoutes(nowMs), ...demoSeriesRoutes(buildDemoScene(nowMs)), ...chats], storage: demoAssistantStorage()};
 }
 
 /**
@@ -103,8 +105,11 @@ async function answerDemoRequest(route, DEMO, state) {
   // The MCP sandbox has no URL global; strip the origin and query by hand.
   const target = route.request().url().replace(/^[a-z]+:\/\/[^/]+/, "");
   const path = target.split("?")[0];
+  const query = target.slice(path.length + 1);
+  // A route with a `query` answers only that exact query string (the chart's history spans).
   const answer = [...DEMO.variants[state.variant].routes, ...DEMO.routes].find((r) => r.method === method
-    && (r.prefix ? path.startsWith(r.pathname) : path === r.pathname) && (!r.chatScene || r.chatScene === state.chatScene));
+    && (r.prefix ? path.startsWith(r.pathname) : path === r.pathname) && (!r.chatScene || r.chatScene === state.chatScene)
+    && (r.query === undefined || r.query === query));
   if (answer) return route.fulfill(json(answer.json, answer.status));
   // Nothing that could change state ever leaves the browser.
   if (method !== "GET" && method !== "HEAD") return route.abort("blockedbyclient");

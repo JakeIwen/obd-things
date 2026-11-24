@@ -217,7 +217,7 @@ deliberately tabled; this work neither diagnosed nor modified the hub.
    gaps; missing observations are never stored as zero. Raw numeric and
    interface samples default to seven-day retention. Bounded daily maintenance
    first advances minute rollups and refuses to prune if that rollup cursor is
-   behind; trips, gap records, catalogs, and compact rollups remain available.
+   behind (a minute is sealed only 120 s after it ends, so a late insert cannot be missed); trips, gap records, catalogs, and compact rollups remain available.
    The five-second writer checks this daily-gated maintenance no more than once
    per hour, and reports a maintenance failure without losing an already
    committed snapshot.
@@ -1709,6 +1709,49 @@ POST /v1/radar/alignment-reference
      {"action":"start","confirm_stationary_engine_running":true,"confirm_drive_without_acc":true}
      {"action":"stop"}
 ```
+
+#### History series route
+
+`GET /v1/history/series?metric=<name>&span=<key>` (contract in `history_series.json`, code in
+`history_series.py`) feeds the dashboard's full chart for the spans the browser's own 15-minute
+ring cannot cover. `metric` is one of `history_recent.METRICS` or the broker's history trend
+metrics (`insights.history_metrics`: the History view's 24-hour trend cards and the Parked
+battery trend, `battery.voltage`); `span` is `1h`, `6h`, `24h` or `7d` (60, 120, 360 and 2520 s
+buckets, at most 240 points). `15m` is the ring's span and is refused. Reply: `{available,
+metric, span, window_seconds, bucket_seconds, start_at, end_at, queried_at, points: [{at, value,
+min, max}]}`, oldest first, `at` the bucket start in UTC, only buckets with a numeric mean. Like
+`/v1/history/recent` the query ends at the last whole minute, so the minute in progress is not
+included. An unknown or missing metric or span, the live span, a repeated key or any extra key is
+HTTP 400 `{available: false, reason: "invalid_request"}`; with history disabled it is 200
+`history_disabled`. The web relay forwards the query string.
+
+The route is cache-only, like every broker GET: no request touches SQLite. The broker's 60-second
+supplemental refresh on the recorder thread after its insert calls `SeriesService.refresh`, which recomputes a (metric, span) product
+when its span's bucket has advanced since the product was built (1 h every pass, 6 h every
+2 minutes, 24 h every 6, 7 d every 42), so the 7-day queries run about every 42 minutes, not every
+minute. Products are bounded at metrics x 4 spans (52 today) and held in memory; a metric that
+leaves the allowlist is dropped. A GET before a key's first product answers 200
+`{available: false, reason: "pending"}` unless the last refresh pass failed, in which case it answers
+503 `history_unavailable`. A product is served only while younger than the greater of two span
+buckets and three refresh periods (measured from its
+`queried_at`) and not dated in the future; this is checked on every GET, whether or not a refresh
+failed, so a stalled producer cannot leave a chart looking fresh. Past that bound the route answers
+503 `history_unavailable` (also after a failed first build); a product dated ahead of the clock
+(the wall clock stepped back) is rebuilt on the next pass. A pass stops at its first failed query,
+leaving the remaining keys due, because each query on a busy database can wait out SQLite's 10 s
+timeout on the recorder thread. A pass also handles at most `max_keys_per_pass` keys (32, in
+`history_series.json`; the steady state needs about 22), finest span first and oldest first within
+a span, so the every-42-minute all-spans-due pass (52 keys) takes two passes. Measured on
+a copy of the 2026-10-03 export (13 metrics) under a load average near 13: a full cold pass
+about 210 ms (7 d 112 ms of it), the worst later pass 414 ms (all four spans due at once, every
+42 minutes), a pass with nothing due 1 ms.
+
+Ordering: the pass runs on the recorder thread inside `_refresh_supplemental_cache`, which
+`_history_loop` calls after the snapshot's insert, so a series query never starts between a
+snapshot's timestamp and its insert, and the historian's rollup cursor needs no grace (the earlier
+race that motivated one is gone by ordering). Test:
+`test_the_series_refresh_runs_after_the_recorders_insert_on_the_same_thread` in
+`tests/test_history_series.py`, which runs `_history_loop` for one iteration.
 
 GETs are cache-only. `GET /v1/history/recent` (no parameters; contract in `history_recent.json`,
 code in `history_recent.py`) is the Drive sparklines' page-load seed: `{available, generated_at,

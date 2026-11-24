@@ -6,6 +6,8 @@
 import { render } from "preact";
 import "./styles/palette.css";
 import "./styles/app.css";
+import "./styles/tile-label.css";
+import "./styles/chart.css";
 import "./styles/lighting.css";
 import "./styles/acc-distance.css";
 import "./styles/speed-acc.css";
