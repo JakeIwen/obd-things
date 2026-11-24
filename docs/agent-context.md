@@ -229,7 +229,10 @@ socket or replace the unit.
   stay on: a listing that keeps changing, or a refusal, leaves it on and alerts. The margin
   rests on one observation, and the bounded wait has run
   only against a scratch sysfs tree (`tests/test_usb2_disk_hub_off.py`), never against the real
-  stuck reader. From 03:18 to 13:41 that day, with the block held, the kernel logged no USB
+  stuck reader. Installed 2026-11-23 18:12 with the van parked: `install.sh status` exit 0 with
+  `block: held`, the installed program identical to the checkout, the watcher active with a
+  clean journal, and `can0`/`can1`/`can2` still UP and listen-only with unchanged transmit
+  counters. From 03:18 to 13:41 that day, with the block held, the kernel logged no USB
   line at all.
 - The fault's pattern, reconciled from the kernel logs by a Mac session on 2026-11-23 (not
   re-derived here): the failing port enumerates a low-speed device that is not there, about four
