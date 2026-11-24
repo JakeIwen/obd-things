@@ -1124,26 +1124,50 @@ press dims it). The dialog is `src/dialogs/Chart.jsx`, registered as `chart` in 
 about 92 vw by 72 vh (capped at 1100 by 760 px) so a backdrop margin stays all round; a tap on
 the backdrop, the × button or Esc closes it.
 
+- Openers: every Drive `<Tile spark>`; the History view's 24 h trend graphs (`TrendSpark`, the
+  card's metric and title) and the Parked battery trend graph (`battery.voltage`, "Battery
+  voltage"), through `components/ChartTarget.jsx`. The graph region is the tap target (a
+  `role="button"` div, since the graphs hold a caption paragraph); the Parked card's voltage-read
+  button stays separate. Those two open on 24 h, as their graphs are 24 h graphs. A metric the
+  browser keeps no 15 min ring for (not in `RECENT_METRICS`, e.g. the tyre trends) offers history
+  spans only and opens on 24 h (`spansFor`, `startSpanFor`); the broker's route decides which
+  metrics it serves.
+- Current value: the header follows the tile's freshness rules (`nowReading`): live plainly, a
+  held reading dimmed with "as of <time>" (the tile's held time stamp), an absent one as the dash.
+  Its accessible name follows the state (`nowLabel`: "Last reading as of <time>" when held).
 - Spans: 15 min, 1 h, 6 h, 24 h, 7 d, from `history_series.json` (`chart.helpers.js` imports it;
   nothing re-declares them). The last choice is kept in memory for the page's lifetime only.
 - 15 min draws the browser ring (`ringFor`), at most every 5 s while open. Longer spans fetch
   `GET /v1/history/series?metric=&span=`, refetch every `refresh_seconds` and abort on a span
-  change or close. A broker that answers 404, history off, or any failure shows a sentence instead
-  of a chart, never an error trace.
+  change or close; each attempt also has a 15 s deadline (`FETCH_DEADLINE_MS`) whose abort is an
+  ordinary failure (`settleFetch`), so a request that never settles still reaches the stale/retry
+  path, while a deliberate abort does nothing; a span change clears the plot first. Failure handling is
+  `chart.helpers.js: nextHistoryView`, one rule for every kind of failure: with nothing on screen
+  yet a sentence replaces the chart (404, history off, 503 `history_unavailable`, a network
+  error), never an error trace; after a success the last series stays, dimmed, under a visible
+  "Showing data as of <time>" notice until a refresh works. A 200 `{"available": false, "reason":
+  "pending"}` (products still being prepared) is loading ("Preparing history…"), retried after
+  5 s instead of the 60 s cadence; a retained series is dimmed only once it is clearly older than
+  the refresh cadence.
 - The chart: y-axis with 4 to 6 round ticks (`niceTicks`, formatted with the tile's decimals,
   widened when the step needs more), x-axis in local clock times (5 min ticks for 15 min, 10 min
   for 1 h, hourly for 6 h, every 4 h for 24 h, daily for 7 d; coarser when the width is short).
-  The normal band is shaded as the sparkline shades it; history spans add a light min-max
-  envelope behind the mean line; a missing bucket lifts the pen; Alternator field keeps its
-  yellow, orange, red heat above 60 %. The value range keeps the sparkline's per-metric minimum span.
+  Sub-day ticks are stepped in elapsed time and labelled in local time, so a DST change cannot
+  lose labels; day ticks sit on local midnights. The normal band is shaded as the sparkline shades
+  it on the live 15 min span only (it is today's context-dependent range, wrong over a week);
+  history spans add a light min-max envelope behind the mean line, and a bucket with no neighbour
+  (a short drive inside one 42 minute bucket) draws its min-max as a whisker behind the mean dot;
+  a missing bucket lifts the pen; Alternator field keeps its yellow, orange, red heat above 60 %.
+  The value range keeps the sparkline's per-metric minimum span.
 - Canvas, not SVG: one bitmap repaint per update, no DOM to diff on the tablet, and the same
   technique as the sparkline. Canvas pixels do not follow CSS tokens, so the dialog repaints when
   the root class changes (theme, Dim) and on resize (`ResizeObserver`). Painting is
   `chartDraw.js`; all decisions are pure in `chart.helpers.js`.
 - Clock: history points are placed by their epoch `at` on the reply's own window; the 15 min axis
   labels use the tablet's clock (labels only, the line comes from the monotonic ring).
-- Demo captures: `tools/demo_series.mjs` answers every history span for the scene's metrics (the
-  same trips as History, warming up from cold, ending at the Drive tile's values); `demo_capture.mjs`
+- Demo captures: `tools/demo_series.mjs` answers every history span for the scene's metrics and the
+  tyre pressures (the same trips as History, warming up from cold, ending at the Drive tile's
+  values), so the History trends and the Parked battery graph open on data; `demo_capture.mjs`
   matches a route's optional `query`. `shoot.mjs --demo` has no route interception, so its chart
   shows the 15 min span only.
 
@@ -1153,4 +1177,7 @@ web font arrives and when the tile's width changes (never on a data update), and
 `tileLabel.helpers.js: fitLabelSize` picks the largest half-pixel size from 14 to 21 px that
 fits, set through the CSSOM. Both bounds are the `--tile-label-size` and `--tile-label-min`
 tokens in `styles/tile-label.css`. The line height is 1.15, so a title costs about 9 px more height
-than before; the numeral takes it from its flexible row.
+than before. The title never gives up height (`flex: 0 0 auto`); in a fixed-height tile the
+flexible rows give way instead: the numeral's row, the sparkline (`flex: 0 1 36px`, at least
+16 px) and an empty sub-line, which is not rendered. The width fit alone cannot guarantee the
+title's full height, so this layout rule does.

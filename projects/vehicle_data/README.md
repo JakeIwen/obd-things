@@ -1686,29 +1686,32 @@ HTTP 400 `{available: false, reason: "invalid_request"}`; with history disabled 
 `history_disabled`. The web relay forwards the query string.
 
 The route is cache-only, like every broker GET: no request touches SQLite. The broker's 60-second
-supplemental refresh calls `SeriesService.refresh`, which recomputes a (metric, span) product
+supplemental refresh on the recorder thread after its insert calls `SeriesService.refresh`, which recomputes a (metric, span) product
 when its span's bucket has advanced since the product was built (1 h every pass, 6 h every
 2 minutes, 24 h every 6, 7 d every 42), so the 7-day queries run about every 42 minutes, not every
 minute. Products are bounded at metrics x 4 spans (52 today) and held in memory; a metric that
 leaves the allowlist is dropped. A GET before a key's first product answers 200
-`{available: false, reason: "pending"}`. A failed recomputation keeps the previous product served
-while it is younger than two of that span's buckets, then the route answers 503
-`history_unavailable` (also when there is no earlier product); the next pass retries. Measured on
+`{available: false, reason: "pending"}` unless the last refresh pass failed, in which case it answers
+503 `history_unavailable`. A product is served only while younger than the greater of two span
+buckets and three refresh periods (measured from its
+`queried_at`) and not dated in the future; this is checked on every GET, whether or not a refresh
+failed, so a stalled producer cannot leave a chart looking fresh. Past that bound the route answers
+503 `history_unavailable` (also after a failed first build); a product dated ahead of the clock
+(the wall clock stepped back) is rebuilt on the next pass. A pass stops at its first failed query,
+leaving the remaining keys due, because each query on a busy database can wait out SQLite's 10 s
+timeout on the recorder thread. A pass also handles at most `max_keys_per_pass` keys (32, in
+`history_series.json`; the steady state needs about 22), finest span first and oldest first within
+a span, so the every-42-minute all-spans-due pass (52 keys) takes two passes. Measured on
 a copy of the 2026-10-03 export (13 metrics) under a load average near 13: a full cold pass
 about 210 ms (7 d 112 ms of it), the worst later pass 414 ms (all four spans due at once, every
-42 minutes), a pass with nothing due 1 ms. The pass runs on the recorder thread after the
-snapshot is stored, so it can delay only the next snapshot by that much.
+42 minutes), a pass with nothing due 1 ms.
 
-Minute rollups are sealed only after a grace (`HistorianConfig.rollup_grace_seconds`, 120 s,
-applied in `refresh_rollups` against the wall clock whatever `through` says). The recorder
-timestamps a snapshot (every 5 s) before it reads the broker cache and inserts it, so a query that
-crossed a minute boundary in between could seal the minute without that sample, and the cursor
-never revisits a sealed minute. 120 s is about 15 times the longest recorded stall between
-timestamp and insert (7.8 s, before the O2 fix; see AGENTS.md). The unsealed minutes are served
-from the raw tail by `metric_series` (`series_basis: minute_rollups_plus_raw_tail`), so charts and
-`history_recent` show recent minutes unchanged; only the stored per-minute summary, trip
-aggregates and the warning engine's rollup reads trail by up to two minutes. Test:
-`RollupRaceTests` in `tests/test_history_series.py`.
+Ordering: the pass runs on the recorder thread inside `_refresh_supplemental_cache`, which
+`_history_loop` calls after the snapshot's insert, so a series query never starts between a
+snapshot's timestamp and its insert, and the historian's rollup cursor needs no grace (the earlier
+race that motivated one is gone by ordering). Test:
+`test_the_series_refresh_runs_after_the_recorders_insert_on_the_same_thread` in
+`tests/test_history_series.py`, which runs `_history_loop` for one iteration.
 
 GETs are cache-only. `GET /v1/history/recent` (no parameters; contract in `history_recent.json`,
 code in `history_recent.py`) is the Drive sparklines' page-load seed: `{available, generated_at,

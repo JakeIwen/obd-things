@@ -10,5 +10,6 @@
     {"key": "24h", "label": "24 hours", "seconds": 86400, "bucket_seconds": 360, "source": "history"},
     {"key": "7d", "label": "7 days", "seconds": 604800, "bucket_seconds": 2520, "source": "history"}
   ],
-  "refresh_seconds": 60
+  "refresh_seconds": 60,
+  "max_keys_per_pass": 32
 }

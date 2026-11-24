@@ -14,6 +14,7 @@ const AXIS_FONT_PX = 14;
 const PAD = { top: 12, right: 16, bottom: 30, left: 12 };
 const LABEL_GAP = 8;
 const ENVELOPE_ALPHA = 0.2;
+const WHISKER_ALPHA = 0.3;
 
 /** Space a time label needs along the axis: a clock time like "12:45 pm" plus breathing room. */
 export const TIME_LABEL_SLOT_PX = 96;
@@ -117,6 +118,21 @@ export function drawChart(ctx, w, h, model, colours, heat) {
       ctx.fill();
     }
     ctx.globalAlpha = 1;
+  }
+  // A bucket with no neighbour has no band to join, so its range is a whisker behind the mean dot.
+  if (model.whiskers.length) {
+    ctx.strokeStyle = colours.line;
+    ctx.globalAlpha = WHISKER_ALPHA;
+    ctx.lineWidth = 5;
+    ctx.lineCap = "round";
+    for (const w of model.whiskers) {
+      ctx.beginPath();
+      ctx.moveTo(x(w.t), py(w.max));
+      ctx.lineTo(x(w.t), py(w.min));
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    ctx.lineCap = "butt";
   }
 
   // The same yellow, orange, red as the numeral, laid along the value axis above the range's start.

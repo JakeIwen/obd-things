@@ -105,6 +105,18 @@ class QueryTests(unittest.TestCase):
         self.assertEqual((product["window_seconds"], product["bucket_seconds"]), (3600, 60))
 
 
+def drain(service, historian):
+    """Refresh until a pass finds nothing due (a cold start takes more than one capped pass)."""
+
+    passes = 0
+    while True:
+        before = len(historian.calls)
+        service.refresh(historian)
+        if len(historian.calls) == before:
+            return passes
+        passes += 1
+
+
 class RefreshTests(unittest.TestCase):
     def service(self, metrics=lambda: history_series.accepted_metrics(TRENDS)):
         self.now = NOW
@@ -118,7 +130,7 @@ class RefreshTests(unittest.TestCase):
 
     def test_refresh_fills_every_key_and_respond_reads_memory_only(self):
         service, historian = self.service(), FakeHistorian([point(120, 5.0)])
-        service.refresh(historian)
+        drain(service, historian)
         keys = len(history_series.accepted_metrics(TRENDS)) * len(history_series.SPANS)
         self.assertEqual(len(historian.calls), keys)
         for name in ("battery.voltage", "tire.pressure.fl", METRIC):
@@ -128,13 +140,13 @@ class RefreshTests(unittest.TestCase):
 
     def test_each_span_is_recomputed_only_when_its_bucket_has_advanced(self):
         service, historian = self.service(), FakeHistorian([point(120, 5.0)])
-        service.refresh(historian)
+        drain(service, historian)
         metrics = len(historian.calls) // len(history_series.SPANS)
 
         def buckets_after(seconds):
             self.now = NOW + timedelta(seconds=seconds)
             historian.calls.clear()
-            service.refresh(historian)
+            drain(service, historian)
             return sorted({kwargs["bucket_seconds"] for _, kwargs in historian.calls})
 
         self.assertEqual(buckets_after(60), [60, 120], "12:08:31 crossed a minute and a 2-minute edge only")
@@ -144,9 +156,9 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual(buckets_after(7 * 60 + 5), [], "nothing is due inside the same minute")
         self.assertEqual(buckets_after(2520 * 2), [60, 120, 360, 2520])
 
-    def test_a_failed_refresh_serves_the_old_product_for_two_buckets_then_is_unavailable(self):
+    def test_a_failed_refresh_serves_the_old_product_until_its_age_bound(self):
         service, historian = self.service(), FakeHistorian([point(120, 5.0)])
-        service.refresh(historian)
+        drain(service, historian)
         broken = mock.Mock()
         broken.metric_series.side_effect = RuntimeError("db busy")
         self.now = NOW + timedelta(seconds=90)
@@ -154,26 +166,74 @@ class RefreshTests(unittest.TestCase):
         query = f"metric={METRIC}&span=1h"
         status, payload = service.respond(True, query)
         self.assertEqual((status, payload["queried_at"]), (200, NOW.isoformat()))
-        self.now = NOW + timedelta(seconds=2 * 60)
+        bound = max(2 * history_series.SPANS["1h"]["bucket_seconds"], 3 * history_series.REFRESH_SECONDS)
+        self.now = NOW + timedelta(seconds=bound)
         status, payload = service.respond(True, query)
         self.assertEqual((status, payload["reason"]), (503, "history_unavailable"))
         self.assertEqual(service.respond(True, f"metric={METRIC}&span=7d")[0], 200)
-        self.now = NOW + timedelta(seconds=180)
+        self.now = NOW + timedelta(seconds=bound)
         service.refresh(historian)  # recovery
         self.assertEqual(service.respond(True, query)[0], 200)
+
+    def test_a_pass_stops_at_its_first_failed_query(self):
+        service = self.service()
+        broken = mock.Mock()
+        broken.metric_series.side_effect = RuntimeError("db busy")
+        service.refresh(broken)
+        self.assertEqual(broken.metric_series.call_count, 1, "one busy timeout, not one per key")
+        healthy = FakeHistorian([point(120, 5.0)])
+        drain(service, healthy)  # the untried keys were left due
+        keys = len(history_series.accepted_metrics(TRENDS)) * len(history_series.SPANS)
+        self.assertEqual(len(healthy.calls), keys)
+
+    def test_a_pass_is_capped_finest_span_first_and_the_rest_follows(self):
+        service, historian = self.service(), FakeHistorian([point(120, 5.0)])
+        service.refresh(historian)
+        cap = history_series.MAX_KEYS_PER_PASS
+        self.assertEqual(len(historian.calls), cap)
+        first = [kwargs["bucket_seconds"] for _, kwargs in historian.calls]
+        self.assertEqual(first, sorted(first), "the finest spans are served first")
+        self.assertEqual(drain(service, historian), 1, "the all-due pass finishes in a second pass")
+        self.assertEqual(len(historian.calls), len(history_series.accepted_metrics(TRENDS)) * len(history_series.SPANS))
+
+    def test_a_product_is_unavailable_once_old_even_with_no_refresh_failure(self):
+        service, historian = self.service(), FakeHistorian([point(120, 5.0)])
+        drain(service, historian)
+        query = f"metric={METRIC}&span=1h"
+        bound = max(2 * history_series.SPANS["1h"]["bucket_seconds"], 3 * history_series.REFRESH_SECONDS)
+        self.now = NOW + timedelta(seconds=bound - 1)
+        self.assertEqual(service.respond(True, query)[0], 200)
+        self.now = NOW + timedelta(seconds=bound)  # the producer stalled: refresh() never runs
+        status, payload = service.respond(True, query)
+        self.assertEqual((status, payload["reason"]), (503, "history_unavailable"))
+
+    def test_a_product_dated_in_the_future_is_not_served_and_is_rebuilt(self):
+        service, historian = self.service(), FakeHistorian([point(120, 5.0)])
+        drain(service, historian)
+        query = f"metric={METRIC}&span=1h"
+        self.now = NOW - timedelta(hours=1)  # the wall clock stepped back
+        self.assertEqual(service.respond(True, query)[0], 503)
+        historian.calls.clear()
+        drain(service, historian)
+        self.assertEqual(len(historian.calls), len(history_series.accepted_metrics(TRENDS)) * len(history_series.SPANS))
+        status, payload = service.respond(True, query)
+        self.assertEqual((status, payload["queried_at"]), (200, self.now.isoformat()))
 
     def test_failure_with_no_earlier_product_is_unavailable_not_pending(self):
         service = self.service()
         broken = mock.Mock()
         broken.metric_series.side_effect = RuntimeError("db busy")
         service.refresh(broken)
-        self.assertEqual(service.respond(True, f"metric={METRIC}&span=1h")[1]["reason"], "history_unavailable")
+        query = f"metric={METRIC}&span=7d"
+        self.assertEqual(service.respond(True, query)[1]["reason"], "history_unavailable")
+        service.refresh(FakeHistorian())
+        self.assertEqual(service.respond(True, query)[1]["reason"], "pending")
 
     def test_products_are_bounded_and_a_metric_that_leaves_the_allowlist_is_dropped(self):
         metrics = ["battery.voltage", "engine.rpm"]
         service = self.service(metrics=lambda: tuple(metrics))
         historian = FakeHistorian([point(120, 5.0)])
-        service.refresh(historian)
+        drain(service, historian)
         self.assertEqual(len(service._products), 2 * len(history_series.SPANS))
         metrics.remove("engine.rpm")
         service.refresh(historian)
@@ -236,29 +296,6 @@ class RealHistorianTests(unittest.TestCase):
                 json.dumps(product)
 
 
-class RollupRaceTests(unittest.TestCase):
-    def test_a_sample_inserted_after_a_boundary_crossing_query_still_counts(self):
-        """Timestamp before the minute boundary, query after it, insert after the query."""
-
-        speed = definition(METRIC, "mph")
-        wall = datetime.now(timezone.utc)
-        minute = wall.replace(second=0, microsecond=0) - timedelta(minutes=1)
-        first, late = minute + timedelta(seconds=10), minute + timedelta(seconds=59, milliseconds=900)
-        with tempfile.TemporaryDirectory() as tmp:
-            with TelemetryHistorian(pathlib.Path(tmp) / "h.sqlite3") as historian:
-                historian.ingest_snapshot(snapshot(first, [speed], {METRIC: available(speed, 10.0, first)}),
-                                          captured_at=first)
-                end = minute + timedelta(minutes=1)  # the query crosses the boundary
-                series = historian.metric_series(METRIC, end=end, window_seconds=3600, bucket_seconds=60)
-                self.assertEqual([p["value"] for p in series["points"]], [10.0], "the recent minute is served raw")
-                historian.ingest_snapshot(snapshot(late, [speed], {METRIC: available(speed, 80.0, late)}),
-                                          captured_at=late)  # stamped before the boundary, stored after the query
-                series = historian.metric_series(METRIC, end=end, window_seconds=3600, bucket_seconds=60)
-                (entry,) = series["points"]
-                self.assertEqual((entry["value"], entry["minimum"], entry["maximum"]), (45.0, 10.0, 80.0))
-                self.assertEqual(historian.refresh_rollups(through=end)["buckets"], 0, "the grace holds the cursor")
-
-
 class BrokerRouteTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="vt-series-", dir="/tmp")
@@ -293,6 +330,27 @@ class BrokerRouteTests(unittest.TestCase):
                          ("battery.voltage", "24h", 360))
         self.assertEqual(len(payload["points"]), 1)
         self.assertEqual(len(self.historian.calls), calls, "a GET reads memory")
+
+    def test_the_series_refresh_runs_after_the_recorders_insert_on_the_same_thread(self):
+        """Why the rollup needs no grace: the minute a snapshot belongs to is sealed only by a query
+        that starts after its insert, because the recorder thread inserts, then refreshes."""
+
+        events = []
+        self.broker.insights.ingest_snapshot.side_effect = lambda *a, **k: events.append(("insert", threading.get_ident()))
+        original = self.historian.metric_series
+
+        def recording(name, **kwargs):
+            events.append(("query", threading.get_ident()))
+            self.broker._history_stop.set()  # one loop iteration is enough
+            return original(name, **kwargs)
+
+        self.historian.metric_series = recording
+        self.broker._history_loop()
+        kinds = [kind for kind, _ in events]
+        self.assertEqual(kinds[0], "insert")
+        self.assertIn("query", kinds)
+        self.assertLess(kinds.index("insert"), kinds.index("query"))
+        self.assertEqual({thread for _, thread in events}, {threading.get_ident()})
 
     def test_trend_metrics_are_served_and_refusals_are_400(self):
         self.broker._refresh_supplemental_cache()

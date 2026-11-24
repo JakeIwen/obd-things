@@ -35,6 +35,7 @@ import { manualRefresh } from "../app/runtime.js";
 import { warningCards } from "../app/warningCards.js";
 import { selectView } from "../app/App.jsx";
 import { Card } from "../components/Card.jsx";
+import { ChartTarget } from "../components/ChartTarget.jsx";
 import { TireGrid } from "../components/TireGrid.jsx";
 import { ServiceCard } from "../components/ServiceCard.jsx";
 import { isUnavailableCanState } from "../canAvailability.js";
@@ -96,10 +97,14 @@ const trend = computed(() => trendGate(H.trendModel(store.summary.history.value)
 const acquireGate = H.createStableGate();
 const acquire = computed(() => acquireGate(H.acquireAvailability(store.web.value, store.vehicle.value)));
 
+/** The trend is the battery voltage's (parked.helpers.js trendModel default); its graph opens that metric's chart. */
+const BATTERY_METRIC = "battery.voltage";
+
 function BatteryTrend() {
   const t = trend.value;
   if (t.empty) return <p class="parked-trend__caption">{t.caption}</p>;
   return (
+    <ChartTarget name={BATTERY_METRIC} label="Battery voltage">
     <div class="parked-trend">
       <svg
         class="parked-trend__svg"
@@ -116,6 +121,7 @@ function BatteryTrend() {
       </svg>
       <p class="parked-trend__caption">{t.caption}</p>
     </div>
+    </ChartTarget>
   );
 }
 

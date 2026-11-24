@@ -1,10 +1,12 @@
 /* Full chart dialog: a tile's graph opened large, with axis labels and a choice of time span. Opened
    by tapping a Drive tile that has a sparkline (components/Tile.jsx). Lazily loaded:
      const Chart = (await import("./dialogs/Chart.jsx")).default;
-   Props: { open, onClose(), name, label, decimals? }.
+   Props: { open, onClose(), name, label, decimals?, startSpan? } (startSpan: the span to open on, else the last one chosen). Opened from a Drive tile, a History trend or
+   the Parked battery graph; a metric with no browser ring offers no 15 min span.
    15 min is the browser's own ring, redrawn at most every 5 s while open; longer spans come from
    GET /v1/history/series (contract: history_series.json), refetched on its refresh interval and
-   aborted when the span changes or the dialog closes. Rules in chart.helpers.js, painting in
+   aborted when the span changes or the dialog closes (each attempt also has a deadline, FETCH_DEADLINE_MS, after which it counts as a failure and retries). A failed refresh keeps the last series
+   dimmed with an "as of" notice; "pending" is retried quickly (chart.helpers.js: nextHistoryView). Rules in chart.helpers.js, painting in
    chartDraw.js, styles in styles/chart.css. A tap outside the pane, the × button and Esc close it.
    No inline styles (CSP): the canvas is sized through its width/height properties. */
 import { useEffect, useRef, useState } from "preact/hooks";
@@ -12,22 +14,23 @@ import { band, tileModel } from "../app/derive.js";
 import { ringFor } from "../app/rings.js";
 import { drawChart, maxTimeTicksFor, readChartColours } from "../chartDraw.js";
 import {
-  DEFAULT_SPAN, LIVE_REDRAW_MS, SERIES_REFRESH_MS, SPANS, buildChartModel, historySeries, liveSeries, seriesUrl,
-  spanByKey, unavailableText,
+  FETCH_DEADLINE_MS, LIVE_REDRAW_MS, SERIES_REFRESH_MS, buildChartModel, historySeries, liveSeries, nextHistoryView,
+  nowLabel, nowReading, seriesUrl, settleFetch, spanByKey, spansFor, startSpanFor, unavailableText,
 } from "../chart.helpers.js";
+import { fmtClock } from "../format.js";
 import { readReply } from "../jsonReply.js";
 import { MIN_SPAN } from "../sparkline.helpers.js";
 import { heatRangeFor } from "../tileHeat.helpers.js";
 import { useModalDialog } from "./modalDialog.js";
 
 /** The span last chosen, kept for the page's lifetime only (not storage), as the owner asked. */
-let lastSpan = DEFAULT_SPAN;
+let lastSpan = "";
 /** Live columns: one per ~6 px of plot, bounded so a wide desktop pane stays cheap. */
 const LIVE_COLUMN_PX = 6;
 const LIVE_MIN_COLUMNS = 40;
 const LIVE_MAX_COLUMNS = 160;
 
-/** Fetch one history span; resolves `{series}` or `{note}` (what to say instead of a chart). */
+/** Fetch one history span; resolves `{series}`, `{pending}` (still being prepared) or `{note}` (what to say instead). */
 async function loadHistory(name, spanKey, signal) {
   let response;
   try {
@@ -43,19 +46,23 @@ async function loadHistory(name, spanKey, signal) {
   } catch (error) {
     return { note: unavailableText("") };
   }
-  if (reply.available === false) return { note: unavailableText(reply.reason) };
+  if (reply.available === false) return reply.reason === "pending" ? { pending: true } : { note: unavailableText(reply.reason) };
   const series = historySeries(reply);
   return series ? { series } : { note: unavailableText("") };
 }
 
-export default function Chart({ open, onClose, name, label, decimals }) {
+export default function Chart({ open, onClose, name, label, decimals, startSpan }) {
   const closeRef = useRef(null);
   const canvasRef = useRef(null);
   const frameRef = useRef(null);
-  const [spanKey, setSpanKey] = useState(lastSpan);
+  const [spanKey, setSpanKey] = useState(() => startSpanFor(name, startSpan || lastSpan));
   const [note, setNote] = useState("");
-  const live = useRef({ series: null, size: { w: 0, h: 0 }, colours: null, spanKey });
+  const [staleAs, setStaleAs] = useState(null);
+  const live = useRef({ series: null, size: { w: 0, h: 0 }, colours: null, spanKey, fetchedMono: 0 });
   const model = tileModel(name, decimals === undefined ? undefined : { decimals });
+  const reading = nowReading({
+    kind: model.kind.value, valueText: model.valueText.value, unitText: model.unitText.value, heldText: model.heldText.value,
+  });
   const { dialogRef, close } = useModalDialog({ open, onClose, focusRef: closeRef });
   const onBackdrop = (ev) => { if (ev.target === dialogRef.current) close(); };
 
@@ -106,7 +113,10 @@ export default function Chart({ open, onClose, name, label, decimals }) {
     const spec = spanByKey(spanKey);
     live.current.spanKey = spanKey;
     live.current.series = null;
+    live.current.fetchedMono = 0;
     setNote("");
+    setStaleAs(null);
+    paint(); // the old span's bitmap must not sit under the new span's note
     if (!spec) return undefined;
     if (spec.source === "live") {
       const ring = ringFor(name);
@@ -121,25 +131,42 @@ export default function Chart({ open, onClose, name, label, decimals }) {
       return () => clearInterval(timer);
     }
     let controller = null;
+    let timer = null;
+    let closed = false;
+    const schedule = (ms) => {
+      timer = setTimeout(() => {
+        if (document.visibilityState === "visible") fetchSpan(); else schedule(SERIES_REFRESH_MS);
+      }, ms);
+    };
     const fetchSpan = async () => {
       if (controller) controller.abort();
       controller = new AbortController();
       const mine = controller;
-      const result = await loadHistory(name, spanKey, mine.signal);
-      if (!result || mine.signal.aborted) return;
-      if (result.series) {
-        live.current.series = result.series;
-        paint();
-      } else if (!live.current.series) {
-        setNote(result.note);
-        paint();
+      let timedOut = false;
+      // A fetch that never settles must still reach the retry path, so each attempt has a deadline.
+      const deadline = setTimeout(() => { timedOut = true; mine.abort(); }, FETCH_DEADLINE_MS);
+      let result;
+      try {
+        result = await loadHistory(name, spanKey, mine.signal);
+      } finally {
+        clearTimeout(deadline);
       }
+      result = settleFetch(result, { cancelled: closed || (mine.signal.aborted && !timedOut), timedOut });
+      if (!result) return;
+      const state = live.current;
+      const view = nextHistoryView(state.series, result, performance.now() - state.fetchedMono);
+      if (result.series) state.fetchedMono = performance.now();
+      state.series = view.series;
+      setNote(view.note);
+      setStaleAs(view.staleAs);
+      paint();
+      schedule(view.retryMs || SERIES_REFRESH_MS);
     };
     setNote("Loading…");
     fetchSpan();
-    const timer = setInterval(() => { if (document.visibilityState === "visible") fetchSpan(); }, SERIES_REFRESH_MS);
     return () => {
-      clearInterval(timer);
+      closed = true;
+      clearTimeout(timer);
       if (controller) controller.abort();
     };
   }, [name, spanKey]);
@@ -150,14 +177,15 @@ export default function Chart({ open, onClose, name, label, decimals }) {
     <dialog ref={dialogRef} class="dialog chart-dialog" aria-labelledby="chart-title" onClick={onBackdrop}>
       <header class="dialog__head chart__head">
         <h2 id="chart-title" class="dialog__title">{label}</h2>
-        <div class="chart__now num" aria-label="Current value">
-          <span>{model.valueText}</span>
-          <span class="chart__unit">{model.unitText}</span>
+        <div class={"chart__now num chart__now--" + reading.state} aria-label={nowLabel(reading)}>
+          <span>{reading.valueText}</span>
+          <span class="chart__unit">{reading.unitText}</span>
+          {reading.stamp ? <span class="chart__stamp">{reading.stamp}</span> : null}
         </div>
         <button type="button" class="dialog__close" aria-label={"Close " + label + " chart"} ref={closeRef} onClick={close}>×</button>
       </header>
       <div class="chart__spans" role="group" aria-label="Time span">
-        {SPANS.map((span) => (
+        {spansFor(name).map((span) => (
           <button
             key={span.key}
             type="button"
@@ -170,8 +198,9 @@ export default function Chart({ open, onClose, name, label, decimals }) {
         ))}
       </div>
       <div class="chart__frame" ref={frameRef}>
-        <canvas ref={canvasRef} class="chart__canvas" role="img" aria-label={label + " over the last " + (spanByKey(spanKey) ? spanByKey(spanKey).label : "")} />
+        <canvas ref={canvasRef} class={"chart__canvas" + (staleAs ? " chart__canvas--stale" : "")} role="img" aria-label={label + " over the last " + (spanByKey(spanKey) ? spanByKey(spanKey).label : "")} />
         {note ? <p class="chart__note" role="status">{note}</p> : null}
+        {staleAs ? <p class="chart__stale" role="status">{"Showing data as of " + fmtClock(new Date(staleAs)) + "; it could not be refreshed."}</p> : null}
       </div>
     </dialog>
   );

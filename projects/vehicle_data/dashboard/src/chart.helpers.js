@@ -9,6 +9,7 @@
 
 import vocabulary from "../../history_series.json" with { type: "json" };
 import { THOUSANDS, decimalsFor, fmtClock, fmtDate, fmtFixed } from "./format.js";
+import { RECENT_METRICS } from "./historySeed.helpers.js";
 import { parseEpochMs } from "./ring.js";
 
 export const SERIES_PATH = vocabulary.path;
@@ -29,9 +30,85 @@ const HOUR = 3600000;
 const DAY = 86400000;
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
+/** The span a metric without a browser ring opens on (a drive's warm-up fits in it). */
+export const RINGLESS_DEFAULT_SPAN = "24h";
+/** First retry after a "pending" answer (the broker is still preparing its products), well under the normal refresh. */
+export const PENDING_RETRY_MS = 5000;
+/** One history fetch (request and body) gets this long before it counts as a failure and the retry path runs. */
+export const FETCH_DEADLINE_MS = 15000;
+/** A retained series this many refresh intervals old is dimmed even when the route only said "pending". */
+const STALE_AFTER_REFRESHES = 2;
+
 /** @param {string} key a span key @returns {object|undefined} */
 export function spanByKey(key) {
   return SPANS.find((span) => span.key === key);
+}
+
+/** Does the browser keep a 15 min ring for this metric (history_recent.json)? Only then is the live span offered. */
+export function hasLiveRing(name) {
+  return RECENT_METRICS.includes(name);
+}
+
+/** The spans a metric's chart offers: all of them with a ring, the history ones without. */
+export function spansFor(name) {
+  return hasLiveRing(name) ? SPANS : SPANS.filter((span) => span.source !== "live");
+}
+
+/** The span to open on: the one last chosen when this metric offers it, else the default for its kind. */
+export function startSpanFor(name, last) {
+  if (spansFor(name).some((span) => span.key === last)) return last;
+  return hasLiveRing(name) ? DEFAULT_SPAN : RINGLESS_DEFAULT_SPAN;
+}
+
+/** The accessible name of the header's reading: a held value is not the current one. */
+export function nowLabel(reading) {
+  return reading.state === "held" ? "Last reading " + reading.stamp : reading.state === "off" ? "No current reading" : "Current value";
+}
+
+/**
+ * The header's current reading under the tile's freshness rules (`Tile.jsx`): a live value plainly,
+ * a held one dimmed with the time it was last seen, an absent one as the dash.
+ * @param {{kind: string, valueText: string, unitText: string, heldText: string}} input the tile model's values
+ * @returns {{state: "live"|"held"|"off", valueText: string, unitText: string, stamp: string}}
+ */
+export function nowReading({ kind, valueText, unitText, heldText }) {
+  if (kind === "live") return { state: "live", valueText, unitText, stamp: "" };
+  if (kind === "held") return { state: "held", valueText, unitText, stamp: heldText ? "as of " + heldText : "held" };
+  return { state: "off", valueText, unitText, stamp: "" };
+}
+
+/**
+ * What the dialog shows after one history fetch, given what it showed before.
+ * A usable answer replaces the series. A failure after a success keeps the old series but marks it
+ * stale (`staleAs` is its "as of" time, for a dimmed plot and a visible notice); a failure with
+ * nothing to keep says why. "Pending" (the broker is preparing its products) is loading, retried
+ * quickly; the retained series is only marked stale once it is clearly older than the refresh cadence.
+ * @param {object|null} series the series on screen, if any
+ * @param {{series?: object, note?: string, pending?: boolean}} result `loadHistory`'s answer
+ * @param {number} ageMs how long ago the series on screen arrived (monotonic)
+ * @returns {{series: object|null, note: string, staleAs: number|null, retryMs: number|null}}
+ */
+export function nextHistoryView(series, result, ageMs) {
+  if (result.series) return { series: result.series, note: "", staleAs: null, retryMs: null };
+  if (result.pending) {
+    const old = series && ageMs > STALE_AFTER_REFRESHES * SERIES_REFRESH_MS;
+    return { series, note: series ? "" : "Preparing history…", staleAs: old ? series.endMs : null, retryMs: PENDING_RETRY_MS };
+  }
+  return { series, note: series ? "" : result.note || unavailableText(""), staleAs: series ? series.endMs : null, retryMs: null };
+}
+
+/**
+ * What an aborted or finished fetch means. A deliberate cancel (dialog closed, span changed) is
+ * dropped; the deadline's own abort is an ordinary failure, so the stale/retry path still runs
+ * instead of the dialog waiting on a request that never settles.
+ * @param {object|null} result `loadHistory`'s answer (null when its signal aborted)
+ * @param {{cancelled: boolean, timedOut: boolean}} how why the signal aborted, if it did
+ * @returns {object|null} the result to show, or null for nothing to do
+ */
+export function settleFetch(result, { cancelled, timedOut }) {
+  if (cancelled) return null;
+  if (result) return result;
+  return timedOut ? { note: unavailableText("timeout") } : null;
 }
 
 /** The request for one metric and span, from the contract's path and query keys. */
@@ -144,15 +221,22 @@ export function timeTicks(spanKey, startMs, endMs, maxTicks, offsetAt = localOff
     }
     return ticks;
   }
-  let offset = offsetAt(startMs);
-  let local = Math.ceil((startMs + offset) / step) * step;
-  for (;;) {
-    let t = local - offset;
-    offset = offsetAt(t);
-    t = local - offset;
-    if (t > endMs) break;
+  // Elapsed time, not a local-clock loop: across a DST change the wall clock repeats or skips an
+  // hour, and stepping it loses ticks. The first tick is aligned on the local clock; later ones keep
+  // the step and, from an hour up, snap back onto the local clock after the offset changes.
+  const first = startMs + offsetAt(startMs);
+  let t = Math.ceil(first / step) * step - offsetAt(startMs);
+  const settled = Math.ceil((startMs + offsetAt(t)) / step) * step - offsetAt(t);
+  if (settled >= startMs) t = settled;
+  while (t <= endMs) {
     if (t >= startMs) ticks.push({ t, label: formatTimeTick(t, step) });
-    local += step;
+    let next = t + step;
+    if (step >= HOUR && offsetAt(next) !== offsetAt(t)) {
+      const off = offsetAt(next);
+      const snapped = Math.round((next + off) / step) * step - off;
+      if (snapped > t) next = snapped;
+    }
+    t = next;
   }
   return ticks;
 }
@@ -216,13 +300,36 @@ export function splitRuns(points, gapMs) {
   return runs;
 }
 
+/** A point's min and max, each falling back to the mean when the bucket did not carry it. */
+function rangeOf(p) {
+  const lo = Number.isFinite(p.min) ? Math.min(p.min, p.mean) : p.mean;
+  const hi = Number.isFinite(p.max) ? Math.max(p.max, p.mean) : p.mean;
+  return [lo, hi];
+}
+
+/**
+ * Points that stand alone (a run of one, so no envelope band can join them) but still span a
+ * range: a short drive inside one 42-minute bucket. The canvas draws each as a min-max whisker.
+ * @param {{t: number, mean: number, min: number, max: number}[][]} runs
+ * @returns {{t: number, mean: number, min: number, max: number}[]}
+ */
+export function isolatedRanges(runs) {
+  const out = [];
+  for (const run of runs) {
+    if (run.length !== 1) continue;
+    const [min, max] = rangeOf(run[0]);
+    if (max > min) out.push({ t: run[0].t, mean: run[0].mean, min, max });
+  }
+  return out;
+}
+
 /**
  * Everything the canvas needs except pixels.
  * @param {{series: object|null, name: string, spanKey: string, band: {lo: number|null, hi: number|null}|null,
  *   minSpan: number, maxTimeTicks: number, decimals?: number, offsetAt?: Function}} input
  * @returns {{empty: true, startMs: number, endMs: number, xTicks: object[]}|{empty: false, startMs: number,
  *   endMs: number, xTicks: object[], y: {lo: number, hi: number, step: number, ticks: {v: number, label: string}[]},
- *   runs: object[][], envelope: boolean, band: {lo: number, hi: number}|null}}
+ *   runs: object[][], envelope: boolean, whiskers: object[], band: {lo: number, hi: number}|null}}
  */
 export function buildChartModel({ series, name, spanKey, band, minSpan, maxTimeTicks, decimals, offsetAt }) {
   const startMs = series ? series.startMs : 0;
@@ -232,8 +339,9 @@ export function buildChartModel({ series, name, spanKey, band, minSpan, maxTimeT
   let lo = Infinity;
   let hi = -Infinity;
   for (const p of series.points) {
-    if (p.min < lo) lo = p.min;
-    if (p.max > hi) hi = p.max;
+    const [pLo, pHi] = rangeOf(p);
+    if (pLo < lo) lo = pLo;
+    if (pHi > hi) hi = pHi;
   }
   // A per-metric minimum span (the sparkline's rule), so a steady value is not a dramatic wiggle.
   if (hi - lo < minSpan) {
@@ -241,6 +349,7 @@ export function buildChartModel({ series, name, spanKey, band, minSpan, maxTimeT
     lo = mid - minSpan / 2;
     hi = mid + minSpan / 2;
   }
+  const runs = splitRuns(series.points, series.gapMs);
   const pad = (hi - lo) * 0.05;
   const nice = niceTicks(lo - pad, hi + pad, 6);
   const y = {
@@ -249,14 +358,17 @@ export function buildChartModel({ series, name, spanKey, band, minSpan, maxTimeT
     step: nice.step,
     ticks: nice.ticks.map((v) => ({ v, label: formatTick(name, v, nice.step, decimals) })),
   };
-  const inBand = band && band.lo !== null && band.hi !== null && band.hi > y.lo && band.lo < y.hi
+  // The band is today's context-dependent normal range (charging voltage, RPM-dependent oil
+  // pressure), so it only describes the live span; painted across a week it would be wrong.
+  const inBand = series.kind === "live" && band && band.lo !== null && band.hi !== null && band.hi > y.lo && band.lo < y.hi
     ? { lo: Math.max(band.lo, y.lo), hi: Math.min(band.hi, y.hi) }
     : null;
   return {
     empty: false, startMs, endMs, xTicks, y,
-    runs: splitRuns(series.points, series.gapMs),
+    runs,
     // The min-max envelope only means something where a point summarises many samples.
     envelope: series.kind === "history",
+    whiskers: series.kind === "history" ? isolatedRanges(runs) : [],
     band: inBand,
   };
 }
@@ -264,6 +376,7 @@ export function buildChartModel({ series, name, spanKey, band, minSpan, maxTimeT
 /** What to say when the history route cannot answer. */
 export function unavailableText(reason) {
   if (reason === "history_disabled") return "History recording is off on this listener.";
+  if (reason === "timeout") return "History took too long to answer.";
   if (reason === "not_found") return "This broker does not serve longer spans yet.";
   return "History is not available right now.";
 }

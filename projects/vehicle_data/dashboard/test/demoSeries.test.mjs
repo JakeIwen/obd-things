@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildDemoScene } from "../tools/demo_data.mjs";
-import { demoSeriesReply, demoSeriesRoutes } from "../tools/demo_series.mjs";
+import { demoSeriesMetrics, demoSeriesReply, demoSeriesRoutes } from "../tools/demo_series.mjs";
 import { historySeries, seriesUrl, SPANS } from "../src/chart.helpers.js";
 
 // Why: the demo captures must answer the chart dialog's history spans, with data the chart accepts
@@ -13,7 +13,7 @@ const routes = demoSeriesRoutes(scene);
 
 test("every scene metric has a route for each history span, matching the page's own request", () => {
   const history = SPANS.filter((s) => s.source === "history");
-  assert.equal(routes.length, Object.keys(scene.sparklines).length * history.length);
+  assert.equal(routes.length, demoSeriesMetrics(scene).length * history.length);
   for (const span of history) {
     const url = seriesUrl("engine.coolant_temperature", span.key);
     const route = routes.find((r) => r.pathname + "?" + r.query === url);
@@ -39,4 +39,14 @@ test("a cold start warms up: the first reading of a drive is well below its high
   const series = historySeries(demoSeriesReply(scene, "engine.coolant_temperature", span));
   const lowest = Math.min(...series.points.map((p) => p.min));
   assert.ok(lowest < 150);
+});
+
+test("History's tyre trends and the Parked battery graph have replies too", () => {
+  for (const name of ["tire.pressure.fl", "tire.pressure.rr", "battery.voltage"]) {
+    const url = seriesUrl(name, "24h");
+    const route = routes.find((r) => r.pathname + "?" + r.query === url);
+    assert.ok(route, "a route answers " + url);
+    const series = historySeries(route.json);
+    assert.ok(series && series.points.length > 10, name);
+  }
 });

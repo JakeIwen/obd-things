@@ -15,6 +15,7 @@ import { computed } from "@preact/signals";
 import * as store from "../store.js";
 import { minuteClock, orderedIds, isHidden, monoNow } from "../app/derive.js";
 import { Card, Empty } from "../components/Card.jsx";
+import { ChartTarget } from "../components/ChartTarget.jsx";
 import * as H from "./history.helpers.js";
 import { cruiseLines } from "./cruise.helpers.js";
 
@@ -139,9 +140,10 @@ function TripsCard() {
   );
 }
 
-function TrendSpark({ m }) {
+/** The 24 h graph; tapping it opens the full chart for the same metric (the card's stats are not a target). */
+function TrendSpark({ m, metric }) {
   const s = m.spark;
-  return (
+  const graph = (
     <div class="history-spark">
       {s.empty ? null : (
         <>
@@ -164,6 +166,7 @@ function TrendSpark({ m }) {
       <p class="history-spark__caption">{m.sparkCaption}</p>
     </div>
   );
+  return s.empty ? graph : <ChartTarget name={metric} label={m.title}>{graph}</ChartTarget>;
 }
 
 function TrendCard({ metric }) {
@@ -200,7 +203,7 @@ function TrendCard({ metric }) {
       ) : null}
       {m.current ? <p class="history-trend__now">{m.current}</p> : null}
       {m.typical ? <p class="history-trend__typical">{m.typical}</p> : null}
-      <TrendSpark m={m} />
+      <TrendSpark m={m} metric={metric} />
       {m.emptyText ? <Empty>{m.emptyText}</Empty> : null}
     </section>
   );

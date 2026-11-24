@@ -13,12 +13,16 @@ const WARM_UP = Object.freeze({
   "engine.vvt_oil_temperature": {cold: 58, minutes: 14},
   "transmission.oil_temperature": {cold: 60, minutes: 18},
   "engine.oil_pressure": {cold: 63, minutes: 6},
+  // Tyres gain a few psi as they warm (History's tyre trends have no sparkline, so no knots).
+  "tire.pressure.fl": {cold: 61, minutes: 25}, "tire.pressure.fr": {cold: 62, minutes: 25},
+  "tire.pressure.rl": {cold: 76, minutes: 25}, "tire.pressure.rr": {cold: 75, minutes: 25},
 });
 /** Wobble amplitude (display units) around a steady cruise, so buckets have a min-max envelope. */
 const WOBBLE = Object.freeze({
   "engine.coolant_temperature": 1.5, "engine.vvt_oil_temperature": 1.5, "transmission.oil_temperature": 1.5,
   "engine.oil_pressure": 2, "battery.voltage": 0.12, "generator.field_duty": 6, "engine.crankshaft_power": 14,
   "engine.rpm": 120, "vehicle.speed": 4,
+  "tire.pressure.fl": 0.4, "tire.pressure.fr": 0.4, "tire.pressure.rl": 0.4, "tire.pressure.rr": 0.4,
 });
 const SAMPLES_PER_BUCKET = 6;
 
@@ -42,7 +46,7 @@ export function demoDriveWindows(scene) {
 
 /** The metric's value `minutesIn` minutes into a drive, before wobble. */
 function profile(name, scene, minutesIn, minutesFromNow, current) {
-  const knots = scene.sparklines[name];
+  const knots = scene.sparklines[name] || [scene.metrics[name].value];
   const warm = WARM_UP[name];
   // A drive's steady value before the scene's own trace begins: the trace's first knot.
   const cruise = knots[0];
@@ -92,10 +96,19 @@ export function demoSeriesReply(scene, name, span) {
     start_at: iso(startMs), end_at: iso(scene.nowMs), queried_at: iso(scene.nowMs), points};
 }
 
-/** Route-table entries (the shape demo_capture's answerDemoRequest matches, with `query`) for every history span of every scene metric. */
+/**
+ * The metrics a chart can open on in the demo: every sparkline tile, plus the tyre pressures that
+ * History's trend cards open (no sparkline, so the chart offers history spans only).
+ */
+export function demoSeriesMetrics(scene) {
+  const tyres = Object.keys(scene.metrics).filter((name) => name.startsWith("tire.pressure."));
+  return [...Object.keys(scene.sparklines), ...tyres];
+}
+
+/** Route-table entries (the shape demo_capture's answerDemoRequest matches, with `query`) for every history span of every demo chart metric. */
 export function demoSeriesRoutes(scene) {
   const spans = historySeries.spans.filter((span) => span.source === "history");
-  return Object.keys(scene.sparklines).flatMap((name) => spans.map((span) => ({
+  return demoSeriesMetrics(scene).flatMap((name) => spans.map((span) => ({
     method: "GET", pathname: historySeries.path, prefix: false, status: 200,
     query: `${historySeries.query_keys[0]}=${encodeURIComponent(name)}&${historySeries.query_keys[1]}=${span.key}`,
     json: demoSeriesReply(scene, name, span),

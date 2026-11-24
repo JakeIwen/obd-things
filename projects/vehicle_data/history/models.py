@@ -101,10 +101,6 @@ class HistorianConfig:
     vehicle_state_max_age_seconds: float = 5.0
     rollup_seconds: int = 60
     rollup_max_buckets_per_call: int = 1_440
-    # A snapshot is timestamped before it is inserted, so a minute may only be sealed once no
-    # in-flight insert can still land in it. The recorder's worst observed stall between the two
-    # was 7.8 s (AGENTS.md, O2 latency evidence); 120 s is that with ample margin.
-    rollup_grace_seconds: int = 120
     raw_retention_days: int = 7
     maintenance_interval_seconds: int = 24 * 60 * 60
     maintenance_max_rollup_passes: int = 32
@@ -148,12 +144,6 @@ class HistorianConfig:
         for name, value in integer_fields:
             if not isinstance(value, int) or isinstance(value, bool):
                 raise ValueError(f"{name} must be an integer")
-        if (
-            not isinstance(self.rollup_grace_seconds, int)
-            or isinstance(self.rollup_grace_seconds, bool)
-            or self.rollup_grace_seconds < 0
-        ):
-            raise ValueError("rollup_grace_seconds must be a non-negative integer")
 
 
 @dataclass(frozen=True)

@@ -10,9 +10,12 @@ written twice.
 Like every broker GET the route is cache-only: ``SeriesService.refresh`` runs inside the broker's
 60-second supplemental refresh and fills one product per (metric, span); ``respond`` only reads
 memory under a short lock. A key is recomputed when its span's bucket has advanced since its last
-product, so the 7-day span is queried about every 42 minutes, not every minute. A failed
-recomputation leaves the previous product served for two of that span's buckets, then the route
-answers ``history_unavailable``. Products are bounded at metrics x 4 spans.
+product, so the 7-day span is queried about every 42 minutes, not every minute. A product
+is served only while its build time is within the greater of two span buckets and three refresh
+periods (and not in the future), whether or not a refresh failed; after that the route answers
+``history_unavailable``. A pass stops at its first failed
+query and handles at most ``MAX_KEYS_PER_PASS`` keys, so a busy database costs the recorder one
+timeout, not one per key. Products are bounded at metrics x 4 spans.
 
 The query ends at the last whole minute, never later than now, for the reasons in
 ``history_recent``: ``at`` is then the true bucket start and the minute in progress is not frozen
@@ -35,10 +38,15 @@ VOCABULARY = json.loads(Path(__file__).with_suffix(".json").read_text())
 API_PATH = VOCABULARY["path"]
 QUERY_KEYS = tuple(VOCABULARY["query_keys"])
 REFRESH_SECONDS = VOCABULARY["refresh_seconds"]
+# Why a cap: the pass runs on the recorder thread, and a busy database holds each query for up to
+# SQLite's 10 s timeout. The steady state needs about 22 keys a pass (13 metrics x (1 + 1/2 + 1/6 +
+# 1/42)), so 32 leaves headroom while the every-42-minute all-due pass (52 keys) spreads over two.
+MAX_KEYS_PER_PASS = VOCABULARY["max_keys_per_pass"]
 SPANS = {span["key"]: span for span in VOCABULARY["spans"] if span["source"] == "history"}
 LIVE_SPANS = frozenset(span["key"] for span in VOCABULARY["spans"] if span["source"] == "live")
 # The historian's rollups are one minute wide; ending on that boundary keeps buckets aligned to them.
 ALIGN_SECONDS = 60
+_NEVER = datetime.min.replace(tzinfo=timezone.utc)
 
 
 class InvalidRequest(ValueError):
@@ -120,13 +128,17 @@ class SeriesService:
         self._lock = threading.Lock()
         self._products: dict[tuple[str, str], dict[str, object]] = {}
         self._computed_at: dict[tuple[str, str], datetime] = {}
-        self._failed: set[tuple[str, str]] = set()
+        # Whether the last pass hit a failing query. One flag, not one per key: the pass stops at
+        # its first failure, so keys it never reached are just as unavailable as the one that failed.
+        self._last_pass_failed = False
 
     def refresh(self, historian) -> dict[str, float]:
-        """Recompute every due product off the request path; return per-span seconds spent.
+        """Recompute due products off the request path; return per-span seconds spent.
 
         Each key is queried outside the lock and swapped in under it, so a slow query never
-        delays a GET. A failure is recorded per key and retried on the next pass.
+        delays a GET. The pass stops at the first failed query (the rest stay due for the next
+        pass) and handles at most ``MAX_KEYS_PER_PASS`` keys, finest span first and oldest first
+        within a span: short spans go stale soonest, and a deferred long span is harmless.
         """
 
         now = self._clock()
@@ -137,26 +149,28 @@ class SeriesService:
             for key in set(self._products) - wanted:  # a metric left the allowlist
                 self._products.pop(key, None)
                 self._computed_at.pop(key, None)
-                self._failed.discard(key)
-            due = [key for key in sorted(wanted) if self._is_due(key, now)]
-        for key in due:
+            due = [key for key in wanted if self._is_due(key, now)]
+            due.sort(key=lambda key: (SPANS[key[1]]["bucket_seconds"], self._computed_at.get(key, _NEVER), key))
+        for key in due[:MAX_KEYS_PER_PASS]:
             started = time.monotonic()
             try:
                 product = query(historian, key[0], key[1], now)
             except Exception:  # a busy or broken database must not take the refresh down
                 with self._lock:
-                    self._failed.add(key)
-            else:
-                with self._lock:
-                    self._products[key] = product
-                    self._computed_at[key] = now
-                    self._failed.discard(key)
+                    self._last_pass_failed = True
+                spent[key[1]] += time.monotonic() - started
+                return spent  # every later key would wait out the same busy timeout
+            with self._lock:
+                self._products[key] = product
+                self._computed_at[key] = now
             spent[key[1]] += time.monotonic() - started
+        with self._lock:
+            self._last_pass_failed = False
         return spent
 
     def _is_due(self, key: tuple[str, str], now: datetime) -> bool:
         computed = self._computed_at.get(key)
-        if computed is None:
+        if computed is None or computed > now:  # never built, or the wall clock stepped back
             return True
         bucket = SPANS[key[1]]["bucket_seconds"]
         return history_recent.aligned_end(now, bucket) > history_recent.aligned_end(computed, bucket)
@@ -179,10 +193,17 @@ class SeriesService:
         with self._lock:
             product = self._products.get(key)
             computed = self._computed_at.get(key)
-            failed = key in self._failed
-        stale_after = timedelta(seconds=2 * SPANS[span]["bucket_seconds"])
-        if product is not None and not (failed and now - computed >= stale_after):
-            return 200, product
+            failed = self._last_pass_failed
+        # Two buckets, but never under three refresh periods: the 1 h span's bucket equals the
+        # refresh period, so one late or failed pass must not flip a healthy chart to unavailable.
+        stale_after = timedelta(seconds=max(2 * SPANS[span]["bucket_seconds"], 3 * REFRESH_SECONDS))
+        if product is not None:
+            # Always enforced: a producer that stalled or died fails nothing, so age alone must
+            # end service. A product dated ahead of now (the clock stepped back) is not trusted.
+            if timedelta(0) <= now - computed < stale_after:
+                return 200, product
+            return 503, {"available": False, "reason": "history_unavailable",
+                         "detail": "this series is out of date; the background refresh is not keeping up"}
         if failed:
             return 503, {"available": False, "reason": "history_unavailable",
                          "detail": "the last refresh of this series failed"}

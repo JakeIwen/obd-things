@@ -128,7 +128,8 @@ test("the chart model scales to the data, clips the band, and marks empties", ()
   assert.equal(m.envelope, true);
   assert.ok(m.y.lo <= 185 && m.y.hi >= 205);
   assert.ok(m.y.ticks.length >= 3 && m.y.ticks.length <= 6);
-  assert.ok(m.band.lo >= m.y.lo && m.band.hi <= m.y.hi);
+  assert.equal(m.band, null, "a history span never paints today's normal band");
+  assert.equal(m.whiskers.length, 1, "the lone evening bucket keeps its range");
   assert.equal(m.xTicks.length, 7, "midnight to midnight, every 4 h, both ends");
   const steady = buildChartModel({
     series: { ...series, points: [{ t: series.startMs + 1000, mean: 14.1, min: 14.1, max: 14.1 }] },
