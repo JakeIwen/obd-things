@@ -123,10 +123,15 @@ WRITTEN, REFUSED, UNSETTLED = "written", "refused", "unsettled"
 
 
 def storage_class(entry):
-    """An interface entry's bInterfaceClass; None when the entry vanished, OSError otherwise."""
+    """An interface entry's bInterfaceClass; None when the entry itself vanished, OSError otherwise.
+
+    An entry that is still there without a readable class is not evidence that it is not storage.
+    """
     try:
         return (entry / "bInterfaceClass").read_text().strip()
     except FileNotFoundError:
+        if entry.exists():
+            raise OSError(errno.EIO, "its interface class cannot be read")
         return None
 
 
@@ -258,8 +263,8 @@ def claim(name, device_number):
     return descriptor, None
 
 
-def power_off(log, sightings):
-    """One guarded write of 1 to the port's control: (outcome, why); WRITTEN's why is the cut note.
+def power_off(log, sightings, cut_log):
+    """One guarded write of 1 to the port's control: (outcome, why).
 
     Powering the port off disconnects everything behind it. The owner's rule is to keep disks
     from attaching over USB 2.0, not to pull one that is in use (a disk can fall back to USB 2.0
@@ -269,8 +274,8 @@ def power_off(log, sightings):
     while the kernel is still registering them nothing is written (UNSETTLED; the caller tries
     again), until the same incomplete listing has stood for STUCK_SIGHTINGS consecutive attempts
     of the pass, when the reader is cut with the disks it has. The count restarts when the second
-    listing differs from the first and after every write. The one WARNING that a reader is cut
-    incomplete (the cut note, also returned with WRITTEN) is logged only after every claim
+    listing differs from the first, after every write and (enforce) when the port is read back
+    held. The one note that a reader is cut incomplete goes to cut_log only after every claim
     succeeded and the second listing matched, immediately before the write. The claims cover the disks of one snapshot, so the
     snapshot is taken again after claiming: if storage appeared, left or changed meanwhile,
     nothing is written either. Two listings are not a lock on the USB topology: a device whose
@@ -305,26 +310,26 @@ def power_off(log, sightings):
             return UNSETTLED, "the storage behind it changed while its disks were being claimed"
         note = cut_note(short_readers(before))
         if note:
-            log(WARNING, note)
+            cut_log(note)
         sightings.reset()
         try:
             DISABLE.write_text("1\n")
         except OSError as error:
             log(WARNING, "writing 1 to %s failed (%s)" % (DISABLE, error.strerror))
-        return WRITTEN, note
+        return WRITTEN, ""
     finally:
         release(claims)
 
 
-def enforce(log):
+def enforce(log, cut_log):
     """One pass: (result, reason). Only a port read back as held, twice, counts as powered off.
 
-    HELD's reason is the cut note of the write that led to it ("" when nothing was cut incomplete).
+    `log(priority, text)` takes the pass's messages; `cut_log(note)` takes the note of a reader
+    cut without all its disks, which the caller may want even when `log` is silent.
     """
     state = assess()
     attempt = 0
     unsettled = ""
-    written_note = ""
     sightings = Sightings()
     while True:
         if state == "held":
@@ -348,26 +353,26 @@ def enforce(log):
             return FAILED, reason
         attempt += 1
         log(WARNING, "%s is on (%s); powering it off, attempt %d of %d" % (PORT_NAME, state, attempt, ATTEMPTS))
-        outcome, why = power_off(log, sightings)
+        outcome, why = power_off(log, sightings, cut_log)
         if outcome == REFUSED:
             reason = "%s is on and %s; not disconnecting it" % (PORT_NAME, why)
             log(ERROR, reason)
             return FAILED, reason
         # The last attempt's own reason, not an earlier one's.
         unsettled = "; " + why if outcome == UNSETTLED else ""
-        if outcome == WRITTEN:
-            written_note = why
         if outcome == UNSETTLED:
             log(WARNING, "%s; nothing written on attempt %d" % (why, attempt))
         time.sleep(SETTLE_SECONDS)
         state = assess()
         if state == "held":
+            # The enumeration the sightings described is gone, written or not.
+            sightings.reset()
             # A queued connection event can power the port back on after a successful write.
             time.sleep(SETTLE_SECONDS)
             state = assess()
             if state == "held":
                 log(NOTICE, "%s is off again" % PORT_NAME)
-                return HELD, written_note
+                return HELD, ""
 
 
 def alert_once(reason):
@@ -399,17 +404,47 @@ def alert_once(reason):
         say(ERROR, "the USB 2.0 block failed and the alert could not be delivered (%s)" % error)
 
 
+class CutJournal:
+    """Says each incomplete-reader cut note, but a repeat while the block keeps failing only counts.
+
+    One per watch process; it forgets what it said when the block holds.
+    """
+
+    def __init__(self):
+        self.said = set()
+        self.repeats = 0
+
+    def note(self, text, failing):
+        if failing and text in self.said:
+            self.repeats += 1
+            return
+        self.said.add(text)
+        say(WARNING, text)
+
+    def held(self, was_failing):
+        """Recovery line text (after "holds again"), and a fresh episode."""
+        tail = ""
+        if was_failing and self.repeats:
+            tail = "; an incomplete reader was cut %d more times while it was failing" % self.repeats
+        self.said.clear()
+        self.repeats = 0
+        return tail
+
+
 def watch():
     passes = 0
     failing = False
     uncontrolled = 0
+    journal = CutJournal()
 
     def silent(priority, text):
         pass
 
     while True:
         # While it keeps failing, say so once, not on every pass.
-        result, reason = enforce(silent if failing else say)
+        was_failing = failing
+        result, reason = enforce(
+            silent if failing else say, lambda text: journal.note(text, was_failing))
         if result == UNCONTROLLED:
             uncontrolled += 1
             if uncontrolled > GRACE_PASSES:
@@ -420,8 +455,9 @@ def watch():
         else:
             uncontrolled = 0
         if result == HELD:
+            tail = journal.held(failing)
             if failing:
-                say(NOTICE, "the USB 2.0 block holds again" + ("; " + reason if reason else ""))
+                say(NOTICE, "the USB 2.0 block holds again" + tail)
             failing = False
         elif result == FAILED:
             failing = True
@@ -438,7 +474,7 @@ def main(arguments):
         print(state)
         return 0 if state == "held" else 1
     if verb == "check":
-        result, reason = enforce(say)
+        result, reason = enforce(say, lambda note: say(WARNING, note))
         if result == NO_HUB:
             return 0
         if result == UNCONTROLLED:
