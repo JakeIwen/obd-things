@@ -582,6 +582,35 @@ class PcmElectricalWireTests(unittest.TestCase):
         )
         self.assertEqual(rejected.reason, "response_rejected")
 
+    def test_reply_queued_for_another_tester_ends_the_poll(self):
+        # Frames as captured on 2026-11-23: a scan tool's `10 92` drew
+        # `02 50 92` from the PCM before the helper's next request.
+        class QueuedSocket(FakeSocket):
+            def recv(self, _size):
+                self.recv_calls += 1
+                return self.response.pop(0)
+
+        fake = QueuedSocket([
+            response_frame(bytes.fromhex("02 50 92 DA 12 FF 00 00"), dlc=8),
+            response_frame(bytes.fromhex("05 62 01 A1 40 00 00 00"), dlc=8),
+        ])
+        poller = pcm.PcmElectricalPoller(
+            channel=TEST_CHANNEL,
+            socket_factory=lambda *_args: fake,
+            monotonic=lambda: 10.0,
+        )
+        try:
+            result = poller.poll(authorization())
+        finally:
+            poller.close()
+
+        # The queued frame is neither discarded nor skipped: the poll fails,
+        # so the helper stands down while another tester is on the PCM.
+        self.assertEqual(result.reason, "malformed_response")
+        self.assertIn("SingleFrame length 2 is not 5", result.detail)
+        self.assertEqual(len(fake.sent), 1)
+        self.assertEqual(fake.recv_calls, 1)
+
     def test_timeout_is_structured_and_socket_is_closed(self):
         result, fake = self.poll(socket.timeout())
         self.assertFalse(result.available)

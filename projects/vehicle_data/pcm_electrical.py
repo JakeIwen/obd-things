@@ -492,6 +492,12 @@ class PcmElectricalPoller:
     ``channel`` exists so a coordinated active-drive owner can pass its already
     identity- and topology-verified interface explicitly. The immutable PCM
     IDs, bus role, bitrate, requests, and response filters remain fixed.
+
+    Unlike the other drive pollers, this one does not empty its receive queue
+    before a request. A queued PCM frame means another tester on address ``F1``
+    (a scan tool) is talking to the PCM; reading it as a malformed answer is
+    what stands the helper down for that engine run, which the owner confirmed
+    as the wanted behaviour on 2026-11-23.
     """
 
     def __init__(

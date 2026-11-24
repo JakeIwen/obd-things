@@ -1166,6 +1166,27 @@ verify *both* Board A replacements after a USB re-enumeration, and end only its
 own matching restoration inhibits. It spends at most one attempt per boot. A
 broker restart never adopts the previous process's incident.
 
+A scan tool on the PCM stands the helper down. Other testers share address F1
+on C-CAN (a connected scan tool such as AlfaOBD), so the PCM's replies to them
+reach the PCM poller's socket. That poller does not discard queued frames
+before a request, so it reads the first such reply as a malformed answer
+within one poll; the helper ends and the broker reports
+`blocked_until_engine_stop` with reason `malformed_response`
+("response SingleFrame length 2 is not 5" for a session reply). Polled metrics
+stay missing for that engine run and return at the next engine start;
+broadcast metrics are unaffected. A scan tool that talks only to other modules
+does not affect the helper. The owner confirmed this as the wanted behaviour
+(2026-11-23): the Pi should not poll the PCM beside another tester. To bring
+polling back without an engine stop once the scan tool is disconnected, restart
+the broker with `s restart_broker --while-running` (see "Restarting the
+broker"): the block is held in broker memory, so the new broker starts the
+helpers again, and they stand down again within a second if a tester is still
+on the PCM. With the helpers stopped, any tester request on C-CAN is foreign,
+so `timeout 8 candump can0,18DA00F1:1FFF00FF` printing nothing shows the scan
+tool has gone. Observed
+2026-11-23 16:51:43 MST, drive capture `broker-drive-20261123T225945084531`:
+a foreign `10 92` drew `02 50 92`, read 345 ms later as the answer to `22 01A1`.
+
 The broker's supervisor (`ActiveDriveSupervisor`, also used for the B-CAN
 auxiliary helper) ends a helper that emits nothing for 10 s, and kills one that
 has not finished cleanup 10 s after termination. Either case is an unverified
