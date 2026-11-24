@@ -774,7 +774,7 @@ def test_a_failing_episode_journals_a_repeated_cut_once_and_counts_the_rest(tree
     assert stderr.count("cutting it") == 1
     # Pass 2 and 3 each cut on attempts 3 and 6 (a write does not remove the device), pass 4 once.
     assert stderr.rstrip().endswith(
-        "the USB 2.0 block holds again; an incomplete reader was cut 4 more times while it was failing")
+        "the USB 2.0 block holds again; 4 more attempts to cut an incomplete reader while it was failing")
 
 
 def test_a_pass_that_is_not_failing_journals_every_cut(tree, monkeypatch, capsys):

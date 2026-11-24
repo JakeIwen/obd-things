@@ -425,7 +425,7 @@ class CutJournal:
         """Recovery line text (after "holds again"), and a fresh episode."""
         tail = ""
         if was_failing and self.repeats:
-            tail = "; an incomplete reader was cut %d more times while it was failing" % self.repeats
+            tail = "; %d more attempts to cut an incomplete reader while it was failing" % self.repeats
         self.said.clear()
         self.repeats = 0
         return tail

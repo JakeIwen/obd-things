@@ -167,8 +167,8 @@ socket or replace the unit.
     (owner approval 2026-11-23): a reader whose probe is failing never lists its disks, so when
     three attempts in a row see the identical listing with a known reader still short of its
     disks, the third claims the disks that are listed and writes, with one warning in the
-    journal that names the reader (while the block keeps failing, a repeat of the same cut is
-    counted and reported when it holds again). A write, a listing that changes, or the port
+    journal that names the reader (while the block keeps failing, a repeat of the same cut
+    attempt is counted and reported when it holds again). A write, a listing that changes, or the port
     reading off in between restarts the count, and a listing that cannot be read in full
     counts for nothing: it refuses. Three checks span
     about 4 s, which a slow but working reader can meet too, so such a reader is cut as well.
