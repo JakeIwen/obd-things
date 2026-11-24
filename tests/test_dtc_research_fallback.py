@@ -246,7 +246,10 @@ class CancelTests(FallbackBase):
         self.worker.behavior = behave
         run_id = self.start()["run_id"]
         self.assertTrue(wait_for(lambda: (self.turn(run_id).get("pending_fallback") or {}).get("refusal") == "busy"))
-        run = self.cancel(run_id)
+        # A cancel that lands while a retry is out is settled when that send returns,
+        # so the reply to the cancel itself may still say running.
+        self.cancel(run_id)
+        run = self.settle(run_id)
         self.assertEqual(run["state"], "cancelled")
         count = len(self.worker.launches)
         time.sleep(.3)
