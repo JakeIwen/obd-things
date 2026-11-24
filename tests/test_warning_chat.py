@@ -77,7 +77,8 @@ class WarningChatTests(unittest.TestCase):
 
     def finish(self):
         self.runner.release.set()
-        self.manager.worker.join(timeout=2)
+        # This guards against a hung worker. The worker may still have state to save.
+        self.manager.worker.join(timeout=20)
         self.assertFalse(self.manager.worker.is_alive())
 
     def test_server_resolves_evidence_and_never_acquires(self):
@@ -265,15 +266,29 @@ for event in [
                  ([{"type": "turn.completed"}], "finishing", "waiting for Codex to exit")]
         for events, phase, message in cases:
             with self.subTest(phase=phase):
-                # A busy Pi can take over 0.4 s just to start the child and print its
-                # events, so the timeout leaves room for the phase to be reached first.
-                runner = CodexRunner("/unused", Path(self.tmp.name) / "runtime", timeout=2.0)
-                script = "import sys,json,time;json.load(sys.stdin);" + "".join(
-                    f"print({json.dumps(event)!r},flush=True);" for event in events) + "sys.stdout.close();sys.stderr.close();time.sleep(5)"
+                runner = CodexRunner("/unused", Path(self.tmp.name) / "runtime", timeout=2)
+                script = "\n".join([
+                    "import json, os, signal, sys",
+                    "signal.alarm(30)",  # Bound the fixture's lifetime if the runner breaks.
+                    "json.load(sys.stdin)",
+                    *(f"print({json.dumps(event)!r}, flush=True)" for event in events),
+                    "os.close(1)",
+                    "os.close(2)",
+                    "signal.pause()",
+                ])
                 diagnostics = {}
-                with mock.patch.object(runner, "command", return_value=[sys.executable, "-c", script]), mock.patch("sys.stderr", io.StringIO()):
+                cancelled = threading.Event()
+                with (
+                    mock.patch.object(runner, "command", return_value=[sys.executable, "-c", script]),
+                    mock.patch("projects.vehicle_data.warning_chat.time") as clock,
+                    mock.patch.object(cancelled, "wait") as wait_for_exit,
+                    mock.patch("sys.stderr", io.StringIO()),
+                ):
+                    # Advance the deadline only after the runner has drained the event stream.
+                    clock.monotonic.return_value = 0
+                    wait_for_exit.side_effect = lambda _: clock.monotonic.configure_mock(return_value=runner.timeout)
                     with self.assertRaises(ChatError) as error:
-                        runner.run({}, [{"state": "running", "user": "explain"}], threading.Event(), diagnostics)
+                        runner.run({}, [{"state": "running", "user": "explain"}], cancelled, diagnostics)
                 self.assertEqual(error.exception.status, 504)
                 self.assertIn(message, str(error.exception))
                 self.assertEqual(diagnostics["phase"], phase)
