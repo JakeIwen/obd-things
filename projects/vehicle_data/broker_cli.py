@@ -90,7 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="disable the fixed engine-running B-CAN ICS odometer candidate",
     )
     parser.add_argument(
-        baro.BROKER_FLAG, action="store_true",
+        baro.ENABLE_FLAG, action="store_true",
         help="opt in to the fixed PCM barometric-pressure read during qualified drives",
     )
     parser.add_argument(usb_recovery_contract.FLAG, action="store_true", help=usb_recovery_contract.FLAG_HELP)

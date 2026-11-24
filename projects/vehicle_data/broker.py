@@ -24,12 +24,13 @@ from projects.vehicle_data.broker_cli import (
     DEFAULT_DTC_CACHE, DEFAULT_HISTORY_DB, DEFAULT_SOCKET, build_parser,
 )
 from projects.vehicle_data.armed_at_startup import ArmedRole, assess_startup_roles
-from projects.vehicle_data.drive_helper_launch import HELPER_CWD, helper_command, helper_environment
+from projects.vehicle_data.drive_helper_launch import HELPER_CWD, helper_command
 from projects.vehicle_data.drive_dtc_control import (
     DriveDtcControl, drive_dtc_arguments, grant_helper_ready,
 )
 from projects.vehicle_data.engine_off_voltage import EngineOffVoltageCapture
 from projects.vehicle_data.helper_events import validate_helper_status
+from projects.vehicle_data.ccan_powertrain import INTAKE_AC_ENV, INTAKE_AC_ENV_ON
 from projects.vehicle_data.helper_hold import (
     HELD_BLOCKED_REASON,
     HoldRefusal,
@@ -371,10 +372,8 @@ class ActiveDriveSupervisor:
                 bufsize=1,
                 cwd=HELPER_CWD,
                 pass_fds=(grant.child_fd,),
-                env=helper_environment(
-                    enable_barometric_pressure=self.helper_module == ACTIVE_DRIVE_HELPER
-                    and self.enable_barometric_pressure,
-                ),
+                # Only the active-drive helper reads it; see INTAKE_AC_ENV.
+                env={**os.environ, INTAKE_AC_ENV: INTAKE_AC_ENV_ON},
             )
         except Exception as exc:
             return None, None, {
@@ -403,17 +402,15 @@ class ActiveDriveSupervisor:
             self.channel,
             "--expected-parent-pid",
             str(os.getpid()),
+            "--expected-usb-serial",
+            self.expected_usb_serial,
+            "--expected-dev-id",
+            hex(self.expected_dev_id),
         ]
-        command.extend(
-            [
-                "--expected-usb-serial",
-                self.expected_usb_serial,
-                "--expected-dev-id",
-                hex(self.expected_dev_id),
-            ]
-        )
         if self.helper_module == ACTIVE_DRIVE_HELPER:
             command.extend(["--enable-oil-life", *drive_dtc_arguments(self.drive_dtc)])
+            if self.enable_barometric_pressure:
+                command.append(baro.ENABLE_FLAG)
         grant, process, early_final = self._start_helper(command, stop_event)
         if early_final is not None:
             return early_final

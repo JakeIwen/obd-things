@@ -2,16 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from projects.vehicle_data import barometric_pressure as baro, transmit_permit
 from projects.vehicle_data.active_session_gates import SessionOutcome
-
-
-@dataclass(frozen=True)
-class PcmStepResult:
-    outcome: SessionOutcome | None = None
-    skip_cycle: bool = False
 
 
 class PcmDriveStep:
@@ -33,13 +25,13 @@ class PcmDriveStep:
         self.enabled = True
         self.next_due = next_due
 
-    def run(self, snapshot, *, active_gate, pcm_outcome, permit_api):
+    def run(self, snapshot, *, active_gate, pcm_outcome, permit_api) -> SessionOutcome | None:
         # Optional data waits for preceding PCM/TPMS replies and requires its
         # own one-use permit; a failed read is never retried in this epoch.
         if self.enabled and self.backend.monotonic() >= self.next_due:
             gate_failure = active_gate(self.backend, self.initial)
             if gate_failure is not None:
-                return PcmStepResult(outcome=gate_failure)
+                return gate_failure
             try:
                 permit = permit_api.issue(
                     self.lock_handle, snapshot,
@@ -47,10 +39,11 @@ class PcmDriveStep:
                     channel=self.backend.channel, monotonic=self.backend.monotonic,
                 )
             except permit_api.StaleTransmitEvidenceError:
-                return PcmStepResult(skip_cycle=True)
+                # Keep this read due and let radar obtain its own fresh evidence.
+                return None
             result = self.poll(permit)
             if result.reason == "transmit_permit_expired":
-                return PcmStepResult(skip_cycle=True)
+                return None
             self.next_due = self.backend.monotonic() + self.interval_seconds
             failed = pcm_outcome(result)
             if failed is not None:
@@ -70,17 +63,17 @@ class PcmDriveStep:
                     quality=result.quality, detail=result.detail,
                     interface_mode="armed_diagnostic",
                 )
-        return PcmStepResult()
+        return None
 
 
-def run_pcm_steps(steps, snapshot, *, active_gate, pcm_outcome, permit_api):
+def run_pcm_steps(steps, snapshot, *, active_gate, pcm_outcome, permit_api) -> SessionOutcome | None:
     for step in steps:
-        result = step.run(
+        outcome = step.run(
             snapshot, active_gate=active_gate, pcm_outcome=pcm_outcome, permit_api=permit_api,
         )
-        if result.outcome is not None or result.skip_cycle:
-            return result
-    return PcmStepResult()
+        if outcome is not None:
+            return outcome
+    return None
 
 
 def optional_steps(backend, sink, poller, lock_handle, initial, *, next_due,

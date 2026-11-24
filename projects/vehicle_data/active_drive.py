@@ -949,16 +949,13 @@ def run_active_session(
                         interface_mode="armed_diagnostic",
                     )
 
-            pcm_step = pcm_drive_step.run_pcm_steps(
+            pcm_stop = pcm_drive_step.run_pcm_steps(
                 pcm_steps, snapshot, active_gate=_active_gate, pcm_outcome=_pcm_outcome,
                 permit_api=transmit_permit,
             )
-            if pcm_step.outcome is not None:
-                outcome = pcm_step.outcome
+            if pcm_stop is not None:
+                outcome = pcm_stop
                 break
-            if pcm_step.skip_cycle:
-                next_cycle = _wait_for_next_cycle(backend, next_cycle, cycle_started)
-                continue
 
             # The radar's 0845 read and any owner-started service alignment.
             radar_stop = radar_steps.run(snapshot)
@@ -1116,6 +1113,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--expected-parent-pid", type=int, required=True)
     parser.add_argument("--enable-oil-life", action="store_true",
                         help="broker accepts the fixed oil-life metric (rolling-deploy handshake)")
+    parser.add_argument(baro.ENABLE_FLAG, action="store_true",
+                        help="broker opts in to the fixed barometric-pressure read")
     parser.add_argument(helper_startup_grant.GRANT_FD_FLAG, type=int, default=None,
                         help="internal: read end of the supervisor's startup grant pipe")
     parser.add_argument(radar_service_alignment.ENABLE_FLAG, action="store_true",
@@ -1157,7 +1156,7 @@ def main(argv=None) -> int:
             sink,
             termination_guard=termination,
             enable_oil_life=args.enable_oil_life,
-            enable_barometric_pressure=os.environ.get(baro.HELPER_ENV) == baro.HELPER_ENV_ON,
+            enable_barometric_pressure=args.enable_barometric_pressure,
             drive_dtc=drive_dtc,
             startup_gate=helper_startup_grant.child_gate_from_arguments(
                 args.startup_grant_fd, args.expected_parent_pid,

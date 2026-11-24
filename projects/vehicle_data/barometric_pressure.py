@@ -6,9 +6,7 @@ from projects.vehicle_data.metric_types import MetricDefinition, SourceDefinitio
 DID = 0x0109
 SCALE = 0.199773
 INTERVAL_SECONDS = 10.0
-BROKER_FLAG = "--enable-barometric-pressure"
-HELPER_ENV = "VAN_TELEMETRY_BAROMETRIC_PRESSURE"
-HELPER_ENV_ON = "1"
+ENABLE_FLAG = "--enable-barometric-pressure"
 
 _PCM = MODULES["pcm"]
 SOURCE = SourceDefinition(

@@ -664,12 +664,13 @@ The Pi's `0109` read has not been run on the vehicle. The guarded parked
 one-request support check using the same parked, ignition-on, engine-off gates
 described above. The broker flag `--enable-barometric-pressure` is off by default
 and absent from the unit. After the support check and owner approval, activation
-adds the broker flag and follows “Restarting the broker”. Rollback removes the
-flag and follows the same restart procedure. Only the enabled broker sets
-`VAN_TELEMETRY_BAROMETRIC_PRESSURE=1` in its C-CAN helper's launch environment.
-A new helper launched by an older broker sees no capability, and an older
-helper under a new broker ignores the environment variable and accepts the
-same arguments.
+adds the broker flag and follows “Restarting the broker”. Only an enabled
+broker passes the same flag to its C-CAN helper. An older broker launches an
+updated helper with pressure reads disabled. To disable pressure, remove the
+broker flag and use the guarded restart. An older helper rejects the unknown
+flag before announcing readiness. When rolling back below this feature, remove
+the broker flag and pair the source rollback with a guarded parked broker
+restart before the next drive, as with `--enable-oil-life`.
 
 ## Owner-priority telemetry roadmap
 
@@ -1135,7 +1136,7 @@ passive while it is armed. The design trades one down/up transition at the
 start and end of a running epoch for continuous powertrain, generator, battery,
 and TPMS telemetry; it does not cycle SocketCAN once per poll.
 
-The closed PCM engine-running registry contains exactly three immutable
+The closed PCM engine-running registry contains five immutable
 profiles. Its only possible PCM transmissions are these physical, 29-bit,
 fixed-DLC-8 frames:
 
@@ -1143,13 +1144,18 @@ fixed-DLC-8 frames:
 18DA10F1#032201A100000000
 18DA10F1#032206DA00000000
 18DA10F1#0322069F00000000
+18DA10F1#0322218500000000
+18DA10F1#0322010900000000
 ```
 
 Each response must be a single frame from `18DAF110` with the corresponding
-exact echo: `62 01 A1` and `62 06 DA` each require two data bytes;
-`62 06 9F` requires one. A raw CAN
-socket is used so a malformed multi-frame reply cannot cause an ISO-TP
-FlowControl transmission.
+exact echo. Generator duty (`62 01 A1`), crankshaft torque (`62 06 DA`) and
+opt-in barometric pressure (`62 01 09`) each require two data bytes. VVT oil
+temperature (`62 06 9F`) and oil life (`62 21 85`) each require one. The shared
+raw CAN socket can skip a matching late positive reply to one of its timed-out
+reads within the current request's deadline. Other unexpected replies retain
+their failure handling. The raw socket prevents a malformed multi-frame reply
+from causing an ISO-TP FlowControl transmission.
 There is no caller-selectable DID, service, CAN ID, payload, functional
 address, session, or tester-present option. In particular, this path contains
 no `10 92` or `3E` traffic. Future PCM metrics require a reviewed code change

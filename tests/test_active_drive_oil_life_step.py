@@ -25,10 +25,10 @@ from tests.test_active_drive import FakeBackend, rpm_observation, snapshot
 CASES = ("disabled", "cadence", "failure", "stale", "expired", "gate", "fatal", "poll_error")
 
 
-def scripted_backend(actions):
-    """A running epoch spanning three maintenance slots, followed by shutdown."""
+def scripted_backend(actions, *, running_snapshots=125):
+    """Script a running epoch followed by shutdown."""
     backend = FakeBackend(
-        snapshots=[snapshot((750, 751, 752), rpm_observation()) for _ in range(125)]
+        snapshots=[snapshot((750, 751, 752), rpm_observation()) for _ in range(running_snapshots)]
         + [snapshot((0, 0, 0), rpm_observation(0))], events=actions,
     )
     clock = [100.0]
@@ -151,7 +151,7 @@ def test_oil_life_through_public_session(case):
         assert len(oil_events) == 3
         assert all(event["type"] == "observation" and event["value"] == 82 for event in oil_events)
     if case in ("stale", "expired"):
-        assert ["radar_cycle", 100.0] not in captured["actions"]
+        assert ["radar_cycle", 100.0] in captured["actions"]
 
 
 def main():

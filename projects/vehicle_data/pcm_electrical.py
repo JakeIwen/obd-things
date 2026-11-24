@@ -524,17 +524,16 @@ def _positive_finite_timeout(value: object) -> float:
 
 
 class PcmElectricalPoller:
-    """Reusable owner-scoped transport for three reviewed PCM metrics.
+    """Reusable owner-scoped transport for the closed PCM registry.
 
     ``channel`` exists so a coordinated active-drive owner can pass its already
     identity- and topology-verified interface explicitly. The immutable PCM
     IDs, bus role, bitrate, requests, and response filters remain fixed.
 
-    Unlike the other drive pollers, this one does not empty its receive queue
-    before a request. A queued PCM frame means another tester on address ``F1``
-    (a scan tool) is talking to the PCM; reading it as a malformed answer is
-    what stands the helper down for that engine run, which the owner confirmed
-    as the wanted behaviour on 2026-11-23.
+    This poller keeps its receive queue intact so a foreign tester's reply
+    still stands the helper down for that engine run, which the owner confirmed
+    as the wanted behaviour on 2026-11-23. Only a checked positive reply for
+    one of this socket's timed-out requests can be skipped.
     """
 
     def __init__(
@@ -552,6 +551,7 @@ class PcmElectricalPoller:
         self._socket_factory = socket_factory
         self._monotonic = monotonic
         self._socket: socket.socket | None = None
+        self._timed_out_metrics: set[str] = set()
 
     @property
     def is_open(self) -> bool:
@@ -585,6 +585,7 @@ class PcmElectricalPoller:
         """Close the raw socket; interface restoration remains owner-managed."""
 
         sock, self._socket = self._socket, None
+        self._timed_out_metrics.clear()
         if sock is not None:
             sock.close()
 
@@ -689,36 +690,50 @@ class PcmElectricalPoller:
                 f"fixed PCM request send length {sent} is not {CAN_FRAME_SIZE}",
             )
 
-        remaining = deadline - self._monotonic()
-        if remaining <= 0:
-            return _failure(
-                profile,
-                "response_timeout",
-                "PCM response deadline expired after the fixed request",
-            )
-        try:
-            sock.settimeout(remaining)
-            frame = sock.recv(CAN_FRAME_SIZE)
-        except (socket.timeout, TimeoutError):
-            return _failure(
-                profile,
-                "response_timeout",
-                f"PCM did not answer physical 22 {profile.did:04X} "
-                "before the deadline",
-            )
-        except OSError as exc:
-            self.close()
-            return _failure(
-                profile,
-                "response_rejected",
-                f"PCM response receive failed: {exc}",
-            )
-        try:
-            frame_bytes = bytes(frame)
-        except (TypeError, ValueError):
-            return _failure(
-                profile,
-                "malformed_response",
-                "raw SocketCAN transport returned a non-byte response",
-            )
-        return _decode_wire_response(profile, frame_bytes)
+        # Once the same DID is sent again, its replies are indistinguishable.
+        self._timed_out_metrics.discard(profile.metric)
+        result = self._receive_reply(sock, profile, deadline)
+        if result.reason == "response_timeout":
+            self._timed_out_metrics.add(profile.metric)
+        return result
+
+    def _receive_reply(self, sock, profile, deadline) -> PcmElectricalResult:
+        # Each skipped reply removes one different registry entry, so at most
+        # four can be skipped with the five fixed DIDs. The deadline never moves.
+        while True:
+            remaining = deadline - self._monotonic()
+            if remaining <= 0:
+                return _failure(
+                    profile, "response_timeout",
+                    "PCM response deadline expired after the fixed request",
+                )
+            try:
+                sock.settimeout(remaining)
+                frame = sock.recv(CAN_FRAME_SIZE)
+            except (socket.timeout, TimeoutError):
+                return _failure(
+                    profile, "response_timeout",
+                    f"PCM did not answer physical 22 {profile.did:04X} before the deadline",
+                )
+            except OSError as exc:
+                self.close()
+                return _failure(
+                    profile, "response_rejected", f"PCM response receive failed: {exc}",
+                )
+            try:
+                frame_bytes = bytes(frame)
+            except (TypeError, ValueError):
+                return _failure(
+                    profile, "malformed_response",
+                    "raw SocketCAN transport returned a non-byte response",
+                )
+            result = _decode_wire_response(profile, frame_bytes)
+            if result.reason != "malformed_response" or not self._discard_late_reply(frame_bytes):
+                return result
+
+    def _discard_late_reply(self, frame: bytes) -> bool:
+        for metric in self._timed_out_metrics:
+            if _decode_response(PCM_ELECTRICAL_PROFILES[metric], frame).available:
+                self._timed_out_metrics.remove(metric)
+                return True
+        return False
