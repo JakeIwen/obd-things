@@ -665,18 +665,28 @@ footers dim the retained pressure altitude next to the compass and show it only
 after a reading is available. Weather can move pressure altitude by hundreds
 of feet relative to GPS elevation.
 
-The Pi's `0109` read has not been run on the vehicle. The guarded parked
-`pcm_temperature_support` CLI offers `--profile barometric-pressure` for the
-one-request support check using the same parked, ignition-on, engine-off gates
-described above. The broker flag `--enable-barometric-pressure` is off by default
-and absent from the unit. After the support check and owner approval, activation
-adds the broker flag and follows “Restarting the broker”. The opted-in broker
+The broker flag `--enable-barometric-pressure` is in the installed broker unit
+since the owner-approved activation of 2026-11-24. To switch the read off: remove
+the flag from the tracked `systemd/van-telemetry.service`, install it over
+`/etc/systemd/system/van-telemetry.service` (`sudo install -m 644`), run
+`sudo systemctl daemon-reload`, check that
+`systemctl show -p ExecStart van-telemetry.service` no longer lists the flag, and
+only then use the guarded restart in “Restarting the broker”. Without the reload
+systemd keeps starting the broker with the old arguments. The Pi's `0109` read had not been run on
+the vehicle when it was activated: the parked support check below was skipped,
+so the first drive's read is the check (one failed read disables it for that
+helper epoch). AlfaOBD read the same DID from the same tester address 627 times
+on the 2026-11-18 drive, every one answered within 8 ms. The guarded parked
+`pcm_temperature_support` CLI still offers `--profile barometric-pressure` for a
+one-request support check under the parked, ignition-on, engine-off gates
+described above. The opted-in broker
 sets `VAN_TELEMETRY_BAROMETRIC_PRESSURE` to its own PID for the C-CAN helper.
 The updated helper requires the value to match its verified parent PID.
 An older broker launches the updated helper with pressure reads disabled.
-An older helper ignores the environment setting and starts normally. To
-disable pressure or roll back the broker below this feature, remove the broker
-flag and use the guarded restart.
+An older helper ignores the environment setting and starts normally. Before
+rolling the broker's code back below this feature, take the flag out of the
+loaded unit by the steps above: an older broker refuses the unknown flag and
+would not start.
 
 ## Owner-priority telemetry roadmap
 

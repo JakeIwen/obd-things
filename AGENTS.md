@@ -225,6 +225,8 @@ JSON object.
 
 `projects/vehicle_data/pcm_drive_step.py` schedules the optional oil-life and
 barometric reads. One failed read disables that metric for the helper epoch.
+The barometric read needs the broker flag `--enable-barometric-pressure`, in the installed
+broker unit since the owner-approved activation of 2026-11-24 (remove the flag to switch it off).
 The active session owns the gates and cleanup, and gives each read its own
 transmit permit. `barometric_pressure.py` owns the metric and launch capability,
 and `pcm_electrical.py` owns the fixed wire profile. The dashboard's
