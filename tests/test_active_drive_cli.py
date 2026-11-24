@@ -20,7 +20,7 @@ class ActiveDriveCliTests(unittest.TestCase):
                 "expected_usb_serial",
                 "expected_dev_id",
                 "expected_parent_pid",
-                "enable_oil_life", "enable_barometric_pressure",
+                "enable_oil_life",
                 "enable_radar_service_alignment",
                 "startup_grant_fd",
                 "enable_drive_dtc", "drive_dtc_reservation",

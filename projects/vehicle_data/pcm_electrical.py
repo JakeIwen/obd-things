@@ -58,6 +58,9 @@ OIL_LIFE_REQUEST_DATA = bytes.fromhex("03 22 21 85 00 00 00 00")
 OIL_LIFE_POSITIVE_ECHO = bytes.fromhex("62 21 85")
 NM_TO_LB_FT = 0.7375621492772656
 SESSION_REQUIRED_NRCS = frozenset((0x7E, 0x7F))
+_RESPONSE_PENDING_PAYLOAD = bytes.fromhex("7F 22 78")
+# Attribute a late reply to this socket only within the UDS P2* ceiling.
+_LATE_REPLY_WINDOW_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -509,6 +512,20 @@ def _decode_wire_response(
     return _decode_response(profile, frame)
 
 
+def _matches_single_frame(
+    frame: bytes, response_id: int, payload_length: int, prefix: bytes,
+) -> bool:
+    if len(frame) != CAN_FRAME_SIZE:
+        return False
+    raw_can_id, dlc, data = struct.unpack(CAN_FRAME_FORMAT, frame)
+    return (
+        raw_can_id == (CAN_EFF_FLAG | response_id)
+        and payload_length + 1 <= dlc <= 8
+        and data[0] == payload_length
+        and data[1:1 + len(prefix)] == prefix
+    )
+
+
 def _positive_finite_timeout(value: object) -> float:
     if isinstance(value, (bool, str, bytes, bytearray)):
         raise ValueError("timeout_seconds must be a positive finite number")
@@ -532,8 +549,8 @@ class PcmElectricalPoller:
 
     This poller keeps its receive queue intact so a foreign tester's reply
     still stands the helper down for that engine run, which the owner confirmed
-    as the wanted behaviour on 2026-11-23. Only a checked positive reply for
-    one of this socket's timed-out requests can be skipped.
+    as the wanted behaviour on 2026-11-23. Only a structurally valid positive
+    reply to a recent, outstanding request on this socket can be skipped.
     """
 
     def __init__(
@@ -551,7 +568,7 @@ class PcmElectricalPoller:
         self._socket_factory = socket_factory
         self._monotonic = monotonic
         self._socket: socket.socket | None = None
-        self._timed_out_metrics: set[str] = set()
+        self._outstanding_until: dict[str, float] = {}
 
     @property
     def is_open(self) -> bool:
@@ -585,7 +602,7 @@ class PcmElectricalPoller:
         """Close the raw socket; interface restoration remains owner-managed."""
 
         sock, self._socket = self._socket, None
-        self._timed_out_metrics.clear()
+        self._outstanding_until.clear()
         if sock is not None:
             sock.close()
 
@@ -672,7 +689,8 @@ class PcmElectricalPoller:
                 "response_rejected",
                 f"fixed PCM request lacked a valid transmit permit: {exc}",
             )
-        deadline = self._monotonic() + self.timeout_seconds
+        sent_at = self._monotonic()
+        deadline = sent_at + self.timeout_seconds
         try:
             sent = sock.send(profile.request_frame)
         except OSError as exc:
@@ -691,11 +709,8 @@ class PcmElectricalPoller:
             )
 
         # Once the same DID is sent again, its replies are indistinguishable.
-        self._timed_out_metrics.discard(profile.metric)
-        result = self._receive_reply(sock, profile, deadline)
-        if result.reason == "response_timeout":
-            self._timed_out_metrics.add(profile.metric)
-        return result
+        self._outstanding_until[profile.metric] = sent_at + _LATE_REPLY_WINDOW_SECONDS
+        return self._receive_reply(sock, profile, deadline)
 
     def _receive_reply(self, sock, profile, deadline) -> PcmElectricalResult:
         # Each skipped reply removes one different registry entry, so at most
@@ -728,12 +743,24 @@ class PcmElectricalPoller:
                     "raw SocketCAN transport returned a non-byte response",
                 )
             result = _decode_wire_response(profile, frame_bytes)
-            if result.reason != "malformed_response" or not self._discard_late_reply(frame_bytes):
-                return result
+            if result.reason == "malformed_response":
+                if self._discard_late_reply(frame_bytes, profile.metric):
+                    continue
+            elif not _matches_single_frame(
+                frame_bytes, profile.response_id, len(_RESPONSE_PENDING_PAYLOAD),
+                _RESPONSE_PENDING_PAYLOAD,
+            ):
+                self._outstanding_until.pop(profile.metric)
+            return result
 
-    def _discard_late_reply(self, frame: bytes) -> bool:
-        for metric in self._timed_out_metrics:
-            if _decode_response(PCM_ELECTRICAL_PROFILES[metric], frame).available:
-                self._timed_out_metrics.remove(metric)
-                return True
+    def _discard_late_reply(self, frame: bytes, current_metric: str) -> bool:
+        for metric, expires_at in self._outstanding_until.items():
+            if metric == current_metric:
+                continue
+            profile = PCM_ELECTRICAL_PROFILES[metric]
+            if _matches_single_frame(
+                frame, profile.response_id, 3 + profile.response_data_length, profile.positive_echo,
+            ):
+                del self._outstanding_until[metric]
+                return self._monotonic() < expires_at
         return False

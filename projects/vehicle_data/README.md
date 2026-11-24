@@ -653,7 +653,10 @@ reply and scales it by 0.199773 (AlfaOBD evidence, observed raw 404–411). Valu
 outside 50–110 kPa are rejected. Within an armed, engine-running active-drive
 interval it can send one `22 0109` per 10 seconds, each under the existing PCM
 gates and its own one-use permit. A timeout, negative or invalid reply ends
-barometric polling for that helper interval. Snapshot completeness is unchanged.
+barometric polling for that helper interval. During a later PCM read, the
+helper can discard a structurally matching positive reply to an outstanding
+earlier DID for up to five seconds after its request. The later read keeps
+its original deadline. Snapshot completeness is unchanged.
 A value expires after 30 seconds or when the diagnostic owner stops; both Drive
 footers dim the retained pressure altitude next to the compass and show it only
 after a reading is available. Weather can move pressure altitude by hundreds
@@ -664,13 +667,13 @@ The Pi's `0109` read has not been run on the vehicle. The guarded parked
 one-request support check using the same parked, ignition-on, engine-off gates
 described above. The broker flag `--enable-barometric-pressure` is off by default
 and absent from the unit. After the support check and owner approval, activation
-adds the broker flag and follows “Restarting the broker”. Only an enabled
-broker passes the same flag to its C-CAN helper. An older broker launches an
-updated helper with pressure reads disabled. To disable pressure, remove the
-broker flag and use the guarded restart. An older helper rejects the unknown
-flag before announcing readiness. When rolling back below this feature, remove
-the broker flag and pair the source rollback with a guarded parked broker
-restart before the next drive, as with `--enable-oil-life`.
+adds the broker flag and follows “Restarting the broker”. The opted-in broker
+sets `VAN_TELEMETRY_BAROMETRIC_PRESSURE` to its own PID for the C-CAN helper.
+The updated helper requires the value to match its verified parent PID.
+An older broker launches the updated helper with pressure reads disabled.
+An older helper ignores the environment setting and starts normally. To
+disable pressure or roll back the broker below this feature, remove the broker
+flag and use the guarded restart.
 
 ## Owner-priority telemetry roadmap
 
@@ -1186,10 +1189,11 @@ see "Radar alignment dashboard" and "Radar Service Drive Alignment from the
 dashboard" below. Those service requests are the one place this helper changes
 a diagnostic session or sends TesterPresent.
 
-All seven are physical `ReadDataByIdentifier` requests to endpoints registered
-in `lib/modules.py`; no functional broadcast request exists. The helper stops
-on loss of RPM or C-CAN traffic, topology/inhibit changes, adapter health
-failure, timeout, malformed response, rejection, termination, or exception.
+The nine PCM and RF Hub reads are physical `ReadDataByIdentifier` requests
+to endpoints registered in `lib/modules.py`. All requests use physical
+addressing. The helper stops on loss of RPM or C-CAN traffic, topology/inhibit
+changes, adapter health failure, timeout, malformed response, rejection,
+termination, or exception.
 `session_required` is reported distinctly and does not enable a session
 change. A failed or unverified restoration sets a persistent operation inhibit,
 is latched in the broker, and prevents another active interval. The one opt-in

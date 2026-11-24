@@ -1113,8 +1113,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--expected-parent-pid", type=int, required=True)
     parser.add_argument("--enable-oil-life", action="store_true",
                         help="broker accepts the fixed oil-life metric (rolling-deploy handshake)")
-    parser.add_argument(baro.ENABLE_FLAG, action="store_true",
-                        help="broker opts in to the fixed barometric-pressure read")
     parser.add_argument(helper_startup_grant.GRANT_FD_FLAG, type=int, default=None,
                         help="internal: read end of the supervisor's startup grant pipe")
     parser.add_argument(radar_service_alignment.ENABLE_FLAG, action="store_true",
@@ -1143,6 +1141,8 @@ def main(argv=None) -> int:
         raise SystemExit(
             f"active-drive helper refused parent handshake: {exc}"
         ) from None
+    # An older broker may pass through an inherited value for a different PID.
+    pressure_parent_pid = os.environ.get(baro.ENABLE_ENV, "").lstrip("0")
     sink = JsonEventSink()
     backend = SystemBackend(
         args.channel,
@@ -1156,7 +1156,7 @@ def main(argv=None) -> int:
             sink,
             termination_guard=termination,
             enable_oil_life=args.enable_oil_life,
-            enable_barometric_pressure=args.enable_barometric_pressure,
+            enable_barometric_pressure=pressure_parent_pid == str(args.expected_parent_pid),
             drive_dtc=drive_dtc,
             startup_gate=helper_startup_grant.child_gate_from_arguments(
                 args.startup_grant_fd, args.expected_parent_pid,

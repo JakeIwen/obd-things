@@ -7,6 +7,7 @@ DID = 0x0109
 SCALE = 0.199773
 INTERVAL_SECONDS = 10.0
 ENABLE_FLAG = "--enable-barometric-pressure"
+ENABLE_ENV = "VAN_TELEMETRY_BAROMETRIC_PRESSURE"
 
 _PCM = MODULES["pcm"]
 SOURCE = SourceDefinition(
