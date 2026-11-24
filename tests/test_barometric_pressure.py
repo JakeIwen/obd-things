@@ -168,16 +168,64 @@ def test_helper_accepts_pressure_opt_in_only_for_expected_parent(env_pid, enable
 
 
 PRESSURE_REPLY = "05 62 01 09 01 97"
+PENDING = "03 7F 22 78"
+GENERATOR_REPLY = "05 62 01 A1 40 00"
 TIMEOUT = TimeoutError()
 MALFORMED = "malformed_response"
+
+
+@pytest.mark.parametrize(("pending_count", "terminal", "reason"), [
+    (1, PRESSURE_REPLY, None),
+    (2, PRESSURE_REPLY, None),
+    (1, "03 7F 22 22", "response_rejected"),
+    (4, PRESSURE_REPLY, None),
+    (5, None, "response_timeout"),
+    (1, TIMEOUT, "response_timeout"),
+])
+def test_pending_pressure_finishes_before_next_pcm_request(pending_count, terminal, reason):
+    socket = FakeSocket(None)
+    events = [(0.2, PENDING)] + [(4.9, PENDING)] * (pending_count - 1)
+    if terminal is not None:
+        events.append((5.0 if terminal is TIMEOUT else 4.9, terminal))
+    events.append((0.2, GENERATOR_REPLY))
+    clock = [0.0]
+
+    def receive(_size):
+        delay, reply = events.pop(0)
+        if reply == GENERATOR_REPLY:
+            assert socket.sent == [REQUEST, pcm_electrical.GENERATOR_FIELD_DUTY_PROFILE.request_frame]
+        else:
+            assert socket.sent == [REQUEST]
+        clock[0] += delay
+        if reply is TIMEOUT:
+            raise reply
+        return response_frame(bytes.fromhex(reply))
+
+    socket.recv = mock.Mock(side_effect=receive)
+    socket.settimeout = mock.Mock()
+    poller = pcm_electrical.PcmElectricalPoller(
+        TEST_CHANNEL, socket_factory=lambda *_: socket, monotonic=lambda: clock[0],
+    )
+    pressure = poller.poll_barometric_pressure(authorization(purpose=PURPOSE))
+    assert pressure.reason == reason
+    if reason is None:
+        assert pressure.value == pytest.approx(VALUE)
+    elif reason == "response_rejected":
+        assert "NRC 22" in pressure.detail
+    assert events == [(0.2, GENERATOR_REPLY)]
+    assert [call.args[0] for call in socket.settimeout.call_args_list] == pytest.approx(
+        [0.5] + [5.0] * min(pending_count, 4)
+    )
+    assert poller.poll(authorization()).value == 50.0
 
 
 @pytest.mark.parametrize(("prior_reply", "prior_reason", "queued", "age", "expected"), [
     (TIMEOUT, "response_timeout", (PRESSURE_REPLY,), 0.2, None),
     (TIMEOUT, "response_timeout", ("05 62 01 09 00 FA",), 0.2, None),
-    ("03 7F 22 78", "response_rejected", (PRESSURE_REPLY,), 0.2, None),
+    (PRESSURE_REPLY, None, (PRESSURE_REPLY,), 0.2, MALFORMED),
     ("03 7F 22 22", "response_rejected", (PRESSURE_REPLY,), 0.2, MALFORMED),
     ("05 62 01 09 00 FA", "response_rejected", (PRESSURE_REPLY,), 0.2, MALFORMED),
+    ("06 62 01 09 01 97 FF", MALFORMED, (PRESSURE_REPLY,), 1.0, MALFORMED),
     (TIMEOUT, "response_timeout", (PRESSURE_REPLY,) * 2, 0.2, MALFORMED),
     (TIMEOUT, "response_timeout", ("05 62 01 09 01",), 0.2, MALFORMED),
     (TIMEOUT, "response_timeout", ("05 62 01 08 01 97",), 0.2, MALFORMED),
@@ -192,7 +240,7 @@ def test_generator_skips_only_a_recent_outstanding_pcm_reply(
 ):
     socket = FakeSocket(None)
     frames = [response_frame(bytes.fromhex(reply)) for reply in queued]
-    frames.append(response_frame(bytes.fromhex("05 62 01 A1 40 00")))
+    frames.append(response_frame(bytes.fromhex(GENERATOR_REPLY)))
     clock = [0.0]
 
     def receive(_size):

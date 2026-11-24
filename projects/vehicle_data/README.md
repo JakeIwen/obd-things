@@ -653,10 +653,14 @@ reply and scales it by 0.199773 (AlfaOBD evidence, observed raw 404–411). Valu
 outside 50–110 kPa are rejected. Within an armed, engine-running active-drive
 interval it can send one `22 0109` per 10 seconds, each under the existing PCM
 gates and its own one-use permit. A timeout, negative or invalid reply ends
-barometric polling for that helper interval. During a later PCM read, the
-helper can discard a structurally matching positive reply to an outstanding
-earlier DID for up to five seconds after its request. The later read keeps
-its original deadline. Snapshot completeness is unchanged.
+barometric polling for that helper interval. For any fixed PCM read, each of
+the first four `7F 22 78` responses opens a five-second window to receive the
+next reply without sending again. A fifth pending response or an expired
+window times out the read. A terminal PCM reply clears the outstanding record
+even if its payload is invalid. During a later PCM read, the helper can
+discard a structurally matching positive reply for a still-outstanding DID
+within five seconds of the earlier request. Discarding a late reply leaves the
+current receive deadline in place. Snapshot completeness is unchanged.
 A value expires after 30 seconds or when the diagnostic owner stops; both Drive
 footers dim the retained pressure altitude next to the compass and show it only
 after a reading is available. Weather can move pressure altitude by hundreds

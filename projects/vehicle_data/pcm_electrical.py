@@ -59,8 +59,8 @@ OIL_LIFE_POSITIVE_ECHO = bytes.fromhex("62 21 85")
 NM_TO_LB_FT = 0.7375621492772656
 SESSION_REQUIRED_NRCS = frozenset((0x7E, 0x7F))
 _RESPONSE_PENDING_PAYLOAD = bytes.fromhex("7F 22 78")
-# Attribute a late reply to this socket only within the UDS P2* ceiling.
-_LATE_REPLY_WINDOW_SECONDS = 5.0
+_P2_STAR_WINDOW_SECONDS = 5.0
+_MAX_PENDING_FRAMES = 4
 
 
 @dataclass(frozen=True)
@@ -709,12 +709,11 @@ class PcmElectricalPoller:
             )
 
         # Once the same DID is sent again, its replies are indistinguishable.
-        self._outstanding_until[profile.metric] = sent_at + _LATE_REPLY_WINDOW_SECONDS
+        self._outstanding_until[profile.metric] = sent_at + _P2_STAR_WINDOW_SECONDS
         return self._receive_reply(sock, profile, deadline)
 
     def _receive_reply(self, sock, profile, deadline) -> PcmElectricalResult:
-        # Each skipped reply removes one different registry entry, so at most
-        # four can be skipped with the five fixed DIDs. The deadline never moves.
+        pending_count = 0
         while True:
             remaining = deadline - self._monotonic()
             if remaining <= 0:
@@ -742,15 +741,29 @@ class PcmElectricalPoller:
                     profile, "malformed_response",
                     "raw SocketCAN transport returned a non-byte response",
                 )
-            result = _decode_wire_response(profile, frame_bytes)
-            if result.reason == "malformed_response":
-                if self._discard_late_reply(frame_bytes, profile.metric):
-                    continue
-            elif not _matches_single_frame(
+            if _matches_single_frame(
                 frame_bytes, profile.response_id, len(_RESPONSE_PENDING_PAYLOAD),
                 _RESPONSE_PENDING_PAYLOAD,
             ):
-                self._outstanding_until.pop(profile.metric)
+                # A negative response has no DID. Keep subsequent NRCs with
+                # this request by waiting here, without another transmission.
+                if pending_count == _MAX_PENDING_FRAMES:
+                    return _failure(
+                        profile, "response_timeout",
+                        "PCM exceeded the response-pending limit",
+                    )
+                pending_count += 1
+                deadline = self._monotonic() + _P2_STAR_WINDOW_SECONDS
+                continue
+
+            result = _decode_wire_response(profile, frame_bytes)
+            if result.reason == "malformed_response" and self._discard_late_reply(
+                frame_bytes, profile.metric,
+            ):
+                continue
+            # A PCM frame can end the transaction even when its payload is invalid.
+            if frame_bytes.startswith(struct.pack("=I", CAN_EFF_FLAG | profile.response_id)):
+                self._outstanding_until.pop(profile.metric, None)
             return result
 
     def _discard_late_reply(self, frame: bytes, current_metric: str) -> bool:
