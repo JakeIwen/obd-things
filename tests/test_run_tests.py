@@ -9,15 +9,76 @@ import tempfile
 import textwrap
 import time
 import unittest
+from unittest.mock import patch
 
 import run_tests
+
+
+class RedirectTests(unittest.TestCase):
+    def test_target_narrowing(self):
+        for args, default in (((), True), (("-k", "expr"), True),
+                              (("-k", "tests"), True),
+                              (("tests/test_run_tests.py",), False),
+                              (("tests/test_run_tests.py::SuitePlanTests",), False)):
+            with self.subTest(args=args):
+                steps = run_tests.suite_steps(base_python="python", test_python="python",
+                    npm="npm", node="node", scratch=Path("/tmp"), pytest_args=args,
+                    profile=run_tests.Profile.PYTEST_ONLY)
+                command = steps[-1].command
+                self.assertEqual(command[6:7] == ("tests",), default)
+
+    def test_redirect_profiles(self):
+        cases = (([], "repo-full-suite"), (["--dashboard"], "repo-dashboard-suite"),
+                 (["--pytest-only", "--", "-k", "expr"], "repo-tests"))
+        for args, task in cases:
+            with self.subTest(task=task), patch.object(run_tests, "VAN_COMPUTE", Path("/")), \
+                 patch.object(run_tests, "ROOT", Path("/tmp")), \
+                 patch.object(run_tests, "mac_worker_available", return_value=True), \
+                 patch.object(run_tests, "run_plan", side_effect=AssertionError), \
+                 redirect_stderr(StringIO()) as errors:
+                self.assertEqual(run_tests.main(args), 3)
+                self.assertIn(task, errors.getvalue())
+                self.assertIn("--source-root /tmp", errors.getvalue())
+                if task == "repo-tests":
+                    self.assertIn("--arg=-k --arg=expr", errors.getvalue())
+
+    def test_probe_errors_are_unavailable(self):
+        results = [OSError("missing"), subprocess.TimeoutExpired("probe", 15),
+                   subprocess.CalledProcessError(1, "probe")]
+        for error in results:
+            with self.subTest(error=error), patch.object(run_tests.subprocess, "run", side_effect=error):
+                self.assertFalse(run_tests.mac_worker_available())
+        with patch.object(run_tests.subprocess, "run") as run:
+            run.return_value.stdout = "not json"
+            self.assertFalse(run_tests.mac_worker_available())
+
+    def test_local_paths_run_plan_without_real_priority_changes(self):
+        cases = ((True, False, False), (True, True, False), (False, False, False))
+        for exists, local, available in cases:
+            with self.subTest(exists=exists, local=local), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                compute = root if exists else root / "missing"
+                args = ["--local"] if local else []
+                with patch.object(run_tests, "ROOT", root), \
+                     patch.object(run_tests, "LOCK_PATH", root / "lock"), \
+                     patch.object(run_tests, "VAN_COMPUTE", compute), \
+                     patch.object(run_tests, "mac_worker_available", return_value=available) as probe, \
+                     patch.object(run_tests, "lower_local_priority") as priority, \
+                     patch.object(run_tests, "require_executable", side_effect=lambda name: name), \
+                     patch.object(run_tests.subprocess, "run"), \
+                     patch.object(run_tests, "run_plan", return_value=0) as plan, \
+                     redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                    self.assertEqual(run_tests.main(args), 0)
+                self.assertEqual(probe.call_count, int(exists and not local))
+                self.assertEqual(priority.call_count, int(exists))
+                plan.assert_called_once()
 
 
 class SuitePlanTests(unittest.TestCase):
     def test_compute_arguments_preserve_pytest_help_after_separator(self):
         self.assertEqual(
             run_tests.parse_args(["--pytest-only", "--", "--help"]),
-            (run_tests.Profile.PYTEST_ONLY, ("--help",)),
+            (run_tests.Profile.PYTEST_ONLY, ("--help",), False),
         )
 
     def plan(self, scratch: Path, *, profile):
@@ -62,7 +123,7 @@ class SuitePlanTests(unittest.TestCase):
 
     def test_dashboard_profile_takes_no_passthrough_and_excludes_pytest_only(self):
         self.assertEqual(
-            run_tests.parse_args(["--dashboard"]), (run_tests.Profile.DASHBOARD, ())
+            run_tests.parse_args(["--dashboard"]), (run_tests.Profile.DASHBOARD, (), False)
         )
         with redirect_stderr(StringIO()):
             with self.assertRaises(SystemExit):

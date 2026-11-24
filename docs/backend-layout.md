@@ -91,6 +91,40 @@ that is absent from the source payload; that is not a live vehicle validation.
 Browser checks are separate when UI behavior changes. Backend-only changes do
 not require inventing a visual comparison.
 
+### Targeted runs on vanpi
+
+AGENTS.md "Safe automated suite" sends every `run_tests.py` profile and all
+dashboard npm/Node work to the Mac while a worker is up, and keeps plain
+pytest on a few Python files on the Pi. Measured 2026-11-24 (US/Mountain
+04:30–05:00), m4mac up with 0–1 of 10 slots busy, Pi load average 10–13:
+
+| Work | On the Pi | On the Mac (`pi_compute.py`, wall from submit) |
+| --- | --- | --- |
+| `pytest tests/test_dtc_research_fallback.py` (33 tests), plain, `nice 10`/`ionice -c2 -n7` | 37 s | — |
+| The same file through `run_tests.py --pytest-only` (venv, pip, `npm ci`, pytest) | 259 s, pytest 9 s; load 10 → 15 | `repo-tests`: 97 s, pytest 8.5 s |
+| `npm ci` of the dashboard lockfile alone, scratch copy | 7 s, 309 files, 27 MB | — |
+| `dashboard-test-build` (pinned install, Node regressions, build) | not run | 29 s |
+
+Setup dominates a filtered run in both places: about four minutes of SD-card
+writes on the Pi against about 75 s on the Mac, where it adds no load here.
+Plain pytest on one Python file skips setup entirely, so it stays local; the
+Mac wins once that local run would exceed the ~100 s floor of a `repo-tests`
+job, or as soon as Node is involved.
+
+When its arguments name an existing path (`has_pytest_target`),
+`--pytest-only` drops its default `tests` target, so `repo-tests --arg
+tests/<file>` runs that file alone; `-k` and other option values don't count
+as paths. Without a path it runs all of `tests/`, filtered by the options.
+
+`run_tests.py` enforces the first half on vanpi: when `VAN_COMPUTE`
+(`/home/pi/van_compute/scripts/van_compute.py`) exists and `available` says
+`true`, it prints the matching `pi_compute.py` command and exits 3 without
+running anything; `--local` overrides. When the probe fails or says `false`,
+or with `--local`, it lowers itself to nice 10 and best-effort I/O 7 before
+running. Where that script is absent (a Mac worker, a development machine) it
+behaves as before. Plain `pytest` cannot be intercepted, so the second half is
+a documented rule only.
+
 ### Pi-local placement
 
 A suite job placed on the Pi cannot pass, and making it pass is not planned:

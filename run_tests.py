@@ -8,7 +8,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 import fcntl
+import json
 import os
+import shlex
 from pathlib import Path
 import shutil
 import subprocess
@@ -20,6 +22,10 @@ from typing import Iterator
 
 ROOT = Path(__file__).resolve().parent
 DASHBOARD = ROOT / "projects/vehicle_data/dashboard"
+VAN_COMPUTE = Path("/home/pi/van_compute/scripts/van_compute.py")
+PI_COMPUTE = Path("/home/pi/van_compute/scripts/pi_compute.py")
+DEFAULT_CHECKOUT = Path("/home/pi/dev/obd-things")
+REDIRECT_EXIT = 3
 # The paths the dashboard profile covers; docs cite this constant.
 DASHBOARD_SCOPE = "projects/vehicle_data/dashboard/"
 # Backend file types inside DASHBOARD_SCOPE fall outside the gate: repo-wide
@@ -165,6 +171,25 @@ def build_step(node: str, scratch: Path) -> Step:
     )
 
 
+PYTEST_VALUE_OPTIONS = frozenset((
+    "-k", "-m", "-p", "-o", "-c", "-W", "--deselect", "--ignore",
+    "--ignore-glob", "--rootdir", "--maxfail", "--tb", "--confcutdir", "--basetemp",
+))
+
+
+def has_pytest_target(args: tuple[str, ...]) -> bool:
+    """Identify existing paths without mistaking option values for targets."""
+    skip = False
+    for arg in args:
+        if skip:
+            skip = False
+        elif arg in PYTEST_VALUE_OPTIONS:
+            skip = True
+        elif not arg.startswith("-") and (ROOT / arg.split("::", 1)[0]).exists():
+            return True
+    return False
+
+
 def suite_steps(
     *,
     base_python: str,
@@ -194,7 +219,8 @@ def suite_steps(
             build_step(node, scratch),
         ),
         Profile.PYTEST_ONLY: lambda: (
-            pytest("Full Python and Node regression suite", ("tests",), 1800),
+            pytest("Full Python and Node regression suite",
+                   () if has_pytest_target(pytest_args) else ("tests",), 1800),
         ),
         Profile.DASHBOARD: lambda: (
             pytest("Dashboard-scoped Python and Node tests", DASHBOARD_PYTEST_TARGETS, 900),
@@ -258,8 +284,10 @@ def checkout_lock(
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
-def parse_args(argv: list[str] | None) -> tuple[Profile, tuple[str, ...]]:
+def parse_args(argv: list[str] | None) -> tuple[Profile, tuple[str, ...], bool]:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--local", action="store_true",
+                        help="run on this host even when a Mac compute worker is available")
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
         "--pytest-only",
@@ -283,7 +311,7 @@ def parse_args(argv: list[str] | None) -> tuple[Profile, tuple[str, ...]]:
         profile = Profile.DASHBOARD
     else:
         profile = Profile.FULL
-    return profile, tuple(pytest_args)
+    return profile, tuple(pytest_args), options.local
 
 
 DONE_MESSAGES = {
@@ -308,11 +336,58 @@ def run_plan(profile: Profile, pytest_args: tuple[str, ...], npm: str, node: str
         return run_steps(steps, suite_env(scratch, dict(os.environ)))
 
 
+COMPUTE_TASKS = {
+    Profile.FULL: "repo-full-suite",
+    Profile.DASHBOARD: "repo-dashboard-suite",
+    Profile.PYTEST_ONLY: "repo-tests",
+}
+
+
+def mac_worker_available() -> bool:
+    try:
+        result = subprocess.run([str(VAN_COMPUTE), "available"], capture_output=True,
+                                text=True, timeout=15, check=True)
+        return json.loads(result.stdout).get("available") is True
+    except (OSError, subprocess.SubprocessError, ValueError, AttributeError):
+        return False
+
+
+def compute_command(profile: Profile, pytest_args: tuple[str, ...]) -> list[str]:
+    command = [str(PI_COMPUTE), "run", COMPUTE_TASKS[profile]]
+    if ROOT.resolve() != DEFAULT_CHECKOUT.resolve():
+        command.extend(("--source-root", str(ROOT)))
+    command.extend(f"--arg={arg}" for arg in pytest_args)
+    return [*command, "--wait", "1200", "--stdout"]
+
+
+def lower_local_priority() -> None:
+    current = os.nice(0)
+    if current < 10:
+        os.nice(10 - current)
+    try:
+        subprocess.run(["ionice", "-c2", "-n7", "-p", str(os.getpid())],
+                       timeout=10, check=True, capture_output=True)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def main(argv: list[str] | None = None, lock_timeout: float | None = None) -> int:
-    profile, pytest_args = parse_args(argv)
+    profile, pytest_args, local = parse_args(argv)
     if not os.access(ROOT, os.W_OK):
         print(f"SETUP ERROR: {READ_ONLY_CHECKOUT_ERROR.format(root=ROOT)}", file=sys.stderr)
         return 2
+
+    if VAN_COMPUTE.exists():
+        if not local and mac_worker_available():
+            print('A Mac compute worker is up; local runs load the Pi SD card. '
+                  'Run this instead, or pass --local to run here anyway '
+                  '(AGENTS.md "Safe automated suite"):', file=sys.stderr)
+            print(shlex.join(compute_command(profile, pytest_args)), file=sys.stderr)
+            return REDIRECT_EXIT
+        if not local:
+            print("No Mac worker is up; continuing on this host at nice 10 / "
+                  "best-effort I/O 7.", file=sys.stderr)
+        lower_local_priority()
 
     try:
         require_executable("git")

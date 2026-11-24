@@ -430,6 +430,34 @@ fails for sandbox reasons that say nothing about the change set):
    child missed its 20 s hang guard, and the suite has about 70 such guards. The run needs
    the Pi's internet only when pip's or npm's user cache lacks a pinned package.
 
+Below the full suite, the same rule holds for anything that installs packages or runs Node.
+The Pi's SD-card root is the bottleneck: with many sessions open, the small writes of venv,
+pip and npm setup pushed iowait to 25–46 % and the load average past 20 (2026-11-24). On
+vanpi, while `available` is `true`:
+
+- Any `run_tests.py` profile, filtered or not, goes to its compute task, because every profile
+  builds a venv, pip-installs and runs `npm ci` before pytest. A filtered run is
+  `pi_compute.py run repo-tests --arg tests/test_x.py --arg=-k --arg=<expr> --wait 1200 --stdout`
+  (one `--arg` per pytest argument, `--arg=` for those starting with a dash). On vanpi with a
+  Mac worker up, `run_tests.py` itself refuses (exit 3) and prints that command; `--local`
+  runs it here anyway. Every Pi-local run, `--local` or Mac down, lowers itself to
+  `nice 10`/`ionice -c2 -n7`.
+- Dashboard npm and Node work (`npm ci`, `npm test`, `node --test`, `npm run build`, esbuild)
+  goes to `pi_compute.py run dashboard-test-build --wait 900`: a pinned install without
+  lifecycle scripts, the Node regressions and a build. Pytest modules that start Node
+  (`DASHBOARD_PYTEST_TARGETS` in `run_tests.py`) need that install, so they go through
+  `repo-tests` too.
+- Plain `python3 -m pytest` on a few Python test files with no Node stays on the Pi, at
+  `nice -n 10 ionice -c2 -n7`: it writes almost nothing and starts at once, while a
+  `repo-tests` job spends about a minute on setup before pytest begins. Send it to
+  `repo-tests` when it would take longer here than a `repo-tests` job's floor of about 100 s.
+- The notes gate stays direct, as below. Codegen that runs through npm gets a compute task
+  in `.van-compute.json` before it becomes routine; none exists in this repository yet.
+
+When `available` is `false`, or a job lands `pi-local`, all of this runs here at that priority.
+The measurements behind the split are in [backend verification](docs/backend-layout.md) section
+"Targeted runs on vanpi".
+
 A direct full run on vanpi takes 15–25 minutes, depending on what else the Pi is doing
 (five passing runs on 2026-11-15; [backend verification](docs/backend-layout.md) section "Pi-local
 placement" has the measurements). Don't start two suites at once on the Pi; check `uptime`
