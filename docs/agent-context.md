@@ -255,7 +255,10 @@ socket or replace the unit.
   blue sockets and ports 3 and 4 are the two black ones, so a blue socket with a USB 3.0 device
   in it is not free. On 2026-11-23 none was free: a USB 3.0 stick in port 1's socket, the disk
   hub in port 2's, and the CAN hub and (at times) the owner's Galaxy tablet in the black ones.
-  Do not plug the CAN hub into port 2.
+  Do not plug the CAN hub into port 2. The tablet's place is port 1 of the CAN hub (`1-1.4.1`),
+  by owner decision of 2026-11-23: that hub is the only one near the cab, where the tablet is
+  needed for voice. It reconnects there from time to time (twice on 2026-11-23, at 15:46 and
+  16:01, without disturbing the adapters), so do not advise moving it.
 - Check: `projects/vehicle_data/usb2_block/install.sh status`, or
   `/usr/local/sbin/vanpi-usb2-disk-hub-off status` (prints `held`). The watcher's journal
   (`journalctl -u vanpi-usb2-disk-hub-off`) is silent while the block holds and has a warning
