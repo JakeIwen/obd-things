@@ -16,16 +16,14 @@ import run_tests
 
 class RedirectTests(unittest.TestCase):
     def test_target_narrowing(self):
-        for args, default in (((), True), (("-k", "expr"), True),
-                              (("-k", "tests"), True),
-                              (("tests/test_run_tests.py",), False),
-                              (("tests/test_run_tests.py::SuitePlanTests",), False)):
+        for args in ((), ("-k", "expr"), ("-k", "tests"),
+                     ("tests/test_run_tests.py",),
+                     ("tests/test_run_tests.py::SuitePlanTests",)):
             with self.subTest(args=args):
                 steps = run_tests.suite_steps(base_python="python", test_python="python",
                     npm="npm", node="node", scratch=Path("/tmp"), pytest_args=args,
                     profile=run_tests.Profile.PYTEST_ONLY)
-                command = steps[-1].command
-                self.assertEqual(command[6:7] == ("tests",), default)
+                self.assertEqual(steps[-1].command[6:], args)
 
     def test_redirect_profiles(self):
         cases = (([], "repo-full-suite"), (["--dashboard"], "repo-dashboard-suite"),
@@ -41,6 +39,34 @@ class RedirectTests(unittest.TestCase):
                 self.assertIn("--source-root /tmp", errors.getvalue())
                 if task == "repo-tests":
                     self.assertIn("--arg=-k --arg=expr", errors.getvalue())
+
+    def test_portable_arguments(self):
+        with patch.object(run_tests, "ROOT", Path("/tmp/checkout")):
+            args = ("/tmp/checkout/tests/a.py::Test::test", "--ignore=/tmp/checkout/tests/b.py",
+                    "-k", "expr")
+            converted, errors = run_tests.portable_pytest_args(args)
+            self.assertEqual(converted, ("tests/a.py::Test::test", "--ignore=tests/b.py",
+                                         "-k", "expr"))
+            self.assertEqual(errors, [])
+            command = run_tests.compute_command(run_tests.Profile.PYTEST_ONLY, converted)
+            self.assertEqual(command[3:5], ["--source-root", "/tmp/checkout"])
+
+    def test_nonportable_arguments_refuse_redirect(self):
+        cases = (("/outside/file.py", "absolute path outside"),
+                 ("--lf", "local state"), ("--junitxml=x.xml", "local state"),
+                 ("--junitxml", "local state"))
+        for arg, reason in cases:
+            with self.subTest(arg=arg), patch.object(run_tests, "VAN_COMPUTE", Path("/")), \
+                 patch.object(run_tests, "ROOT", Path("/tmp/checkout")), \
+                 patch.object(run_tests.os, "access", return_value=True), \
+                 patch.object(run_tests, "mac_worker_available", return_value=True), \
+                 patch.object(run_tests, "run_plan", side_effect=AssertionError), \
+                 redirect_stderr(StringIO()) as errors:
+                self.assertEqual(run_tests.main(["--pytest-only", "--", arg]), 3)
+                self.assertIn(arg, errors.getvalue())
+                self.assertIn(reason, errors.getvalue())
+                self.assertIn("--local", errors.getvalue())
+                self.assertNotIn("pi_compute.py run", errors.getvalue())
 
     def test_probe_errors_are_unavailable(self):
         results = [OSError("missing"), subprocess.TimeoutExpired("probe", 15),

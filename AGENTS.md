@@ -225,8 +225,6 @@ JSON object.
 
 `projects/vehicle_data/pcm_drive_step.py` schedules the optional oil-life and
 barometric reads. One failed read disables that metric for the helper epoch.
-The barometric read needs the broker flag `--enable-barometric-pressure`, in the installed
-broker unit since the owner-approved activation of 2026-11-24 (remove the flag to switch it off).
 The active session owns the gates and cleanup, and gives each read its own
 transmit permit. `barometric_pressure.py` owns the metric and launch capability,
 and `pcm_electrical.py` owns the fixed wire profile. The dashboard's
@@ -440,11 +438,15 @@ vanpi, while `available` is `true`:
   `pi_compute.py run repo-tests --arg tests/test_x.py --arg=-k --arg=<expr> --wait 1200 --stdout`
   (one `--arg` per pytest argument, `--arg=` for those starting with a dash). On vanpi with a
   Mac worker up, `run_tests.py` itself refuses (exit 3) and prints that command; `--local`
-  runs it here anyway. Every Pi-local run, `--local` or Mac down, lowers itself to
+  runs it here anyway. Arguments the job can't reproduce (a path outside the checkout,
+  `--lf`/`--sw` and other cache-state options, report files such as `--junitxml`) get a
+  refusal that names them instead; use `--local` for those. Every Pi-local run, `--local` or Mac down, lowers itself to
   `nice 10`/`ionice -c2 -n7`.
 - Dashboard npm and Node work (`npm ci`, `npm test`, `node --test`, `npm run build`, esbuild)
   goes to `pi_compute.py run dashboard-test-build --wait 900`: a pinned install without
-  lifecycle scripts, the Node regressions and a build. Pytest modules that start Node
+  lifecycle scripts, the Node regressions and a build. That covers verification only: the task returns
+  its build as a result and never writes the served `dist/`, so a frontend deploy (and anything
+  else that must install or write live files here) still builds on the Pi, by its own procedure. Pytest modules that start Node
   (`DASHBOARD_PYTEST_TARGETS` in `run_tests.py`) need that install, so they go through
   `repo-tests` too.
 - Plain `python3 -m pytest` on a few Python test files with no Node stays on the Pi, at

@@ -111,10 +111,9 @@ Plain pytest on one Python file skips setup entirely, so it stays local; the
 Mac wins once that local run would exceed the ~100 s floor of a `repo-tests`
 job, or as soon as Node is involved.
 
-When its arguments name an existing path (`has_pytest_target`),
-`--pytest-only` drops its default `tests` target, so `repo-tests --arg
-tests/<file>` runs that file alone; `-k` and other option values don't count
-as paths. Without a path it runs all of `tests/`, filtered by the options.
+`--pytest-only` passes no target of its own: pytest falls back to
+`testpaths = ["tests"]` in `pyproject.toml` when the arguments name no path,
+so `repo-tests --arg tests/<file>` runs that file alone.
 
 `run_tests.py` enforces the first half on vanpi: when `VAN_COMPUTE`
 (`/home/pi/van_compute/scripts/van_compute.py`) exists and `available` says

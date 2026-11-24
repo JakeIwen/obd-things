@@ -24,7 +24,6 @@ ROOT = Path(__file__).resolve().parent
 DASHBOARD = ROOT / "projects/vehicle_data/dashboard"
 VAN_COMPUTE = Path("/home/pi/van_compute/scripts/van_compute.py")
 PI_COMPUTE = Path("/home/pi/van_compute/scripts/pi_compute.py")
-DEFAULT_CHECKOUT = Path("/home/pi/dev/obd-things")
 REDIRECT_EXIT = 3
 # The paths the dashboard profile covers; docs cite this constant.
 DASHBOARD_SCOPE = "projects/vehicle_data/dashboard/"
@@ -171,25 +170,6 @@ def build_step(node: str, scratch: Path) -> Step:
     )
 
 
-PYTEST_VALUE_OPTIONS = frozenset((
-    "-k", "-m", "-p", "-o", "-c", "-W", "--deselect", "--ignore",
-    "--ignore-glob", "--rootdir", "--maxfail", "--tb", "--confcutdir", "--basetemp",
-))
-
-
-def has_pytest_target(args: tuple[str, ...]) -> bool:
-    """Identify existing paths without mistaking option values for targets."""
-    skip = False
-    for arg in args:
-        if skip:
-            skip = False
-        elif arg in PYTEST_VALUE_OPTIONS:
-            skip = True
-        elif not arg.startswith("-") and (ROOT / arg.split("::", 1)[0]).exists():
-            return True
-    return False
-
-
 def suite_steps(
     *,
     base_python: str,
@@ -219,8 +199,7 @@ def suite_steps(
             build_step(node, scratch),
         ),
         Profile.PYTEST_ONLY: lambda: (
-            pytest("Full Python and Node regression suite",
-                   () if has_pytest_target(pytest_args) else ("tests",), 1800),
+            pytest("Full Python and Node regression suite", (), 1800),
         ),
         Profile.DASHBOARD: lambda: (
             pytest("Dashboard-scoped Python and Node tests", DASHBOARD_PYTEST_TARGETS, 900),
@@ -352,10 +331,38 @@ def mac_worker_available() -> bool:
         return False
 
 
+NONPORTABLE_OPTIONS = frozenset((
+    "--lf", "--last-failed", "--ff", "--failed-first", "--nf", "--new-first",
+    "--sw", "--stepwise", "--sw-skip", "--stepwise-skip", "--junitxml",
+    "--junit-xml", "--result-log", "--html", "--cov-report", "--basetemp",
+))
+
+
+def portable_pytest_args(args: tuple[str, ...]) -> tuple[tuple[str, ...], list[str]]:
+    converted = []
+    errors = []
+    for arg in args:
+        option, separator, value = arg.partition("=")
+        if option in NONPORTABLE_OPTIONS:
+            errors.append(f"{arg}: depends on local state or writes files not returned by the job")
+            continue
+        prefix = option + separator if separator and option.startswith("-") else ""
+        path_arg = value if prefix else arg
+        path, marker, selector = path_arg.partition("::")
+        if Path(path).is_absolute():
+            try:
+                relative = Path(path).resolve().relative_to(ROOT.resolve())
+            except ValueError:
+                errors.append(f"{arg}: absolute path outside the checkout")
+                continue
+            arg = prefix + str(relative) + marker + selector
+        converted.append(arg)
+    return tuple(converted), errors
+
+
 def compute_command(profile: Profile, pytest_args: tuple[str, ...]) -> list[str]:
-    command = [str(PI_COMPUTE), "run", COMPUTE_TASKS[profile]]
-    if ROOT.resolve() != DEFAULT_CHECKOUT.resolve():
-        command.extend(("--source-root", str(ROOT)))
+    command = [str(PI_COMPUTE), "run", COMPUTE_TASKS[profile],
+               "--source-root", str(ROOT.resolve())]
     command.extend(f"--arg={arg}" for arg in pytest_args)
     return [*command, "--wait", "1200", "--stdout"]
 
@@ -379,10 +386,17 @@ def main(argv: list[str] | None = None, lock_timeout: float | None = None) -> in
 
     if VAN_COMPUTE.exists():
         if not local and mac_worker_available():
+            portable_args, problems = portable_pytest_args(pytest_args)
+            if problems:
+                print("Cannot redirect these arguments to the Mac worker:", file=sys.stderr)
+                for problem in problems:
+                    print(f"  {problem}", file=sys.stderr)
+                print("Pass --local to run on the Pi instead.", file=sys.stderr)
+                return REDIRECT_EXIT
             print('A Mac compute worker is up; local runs load the Pi SD card. '
                   'Run this instead, or pass --local to run here anyway '
                   '(AGENTS.md "Safe automated suite"):', file=sys.stderr)
-            print(shlex.join(compute_command(profile, pytest_args)), file=sys.stderr)
+            print(shlex.join(compute_command(profile, portable_args)), file=sys.stderr)
             return REDIRECT_EXIT
         if not local:
             print("No Mac worker is up; continuing on this host at nice 10 / "
