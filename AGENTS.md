@@ -605,6 +605,16 @@ and serves it from memory. Its query ends at the last whole minute, never later:
 rolls up every minute before its `end`. `src/historySeed.helpers.js` places the points by their age
 on the Pi's clock and joins adjacent minutes; `src/app/historySeed.js` is the one-shot fetch. The
 strokes use the `--spark-line` and `--heat-*` tokens.
+Tapping a sparkline tile (owner request 2026-11-23) opens the full chart dialog: spans 15 min
+(the browser ring, live) to 7 d (history). `GET /v1/history/series?metric=&span=` serves the
+history spans: `history_series.py` with `history_series.json` (path, spans, buckets, the 60 s
+memo; metrics are `history_recent.METRICS`), queried on the broker's GET workers through a
+per-(metric, span) memo; the vehicle-data README section "History series route" is the
+contract. Dashboard: `dialogs/Chart.jsx`, `src/chart.helpers.js` (ticks, model, request),
+`src/chartDraw.js` (canvas painter), `styles/chart.css`; demo replies `tools/demo_series.mjs`.
+`MIN_SPAN` lives in `src/sparkline.helpers.js` for both. Every `.tile__label` is
+`components/TileLabel.jsx`: 21 px, shrunk toward 14 px only when the title would not fit on one
+line (`src/tileLabel.helpers.js`, tokens in `styles/tile-label.css`).
 
 The hourly drive DTC read (radar and BCM, one `19 02 8F` frame each, no flow control) is
 off by default behind the broker flag `--enable-drive-dtc-reads`, which is not in the unit.
