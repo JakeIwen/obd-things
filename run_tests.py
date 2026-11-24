@@ -362,7 +362,7 @@ def portable_pytest_args(args: tuple[str, ...]) -> tuple[tuple[str, ...], list[s
 
 def compute_command(profile: Profile, pytest_args: tuple[str, ...]) -> list[str]:
     command = [str(PI_COMPUTE), "run", COMPUTE_TASKS[profile],
-               "--source-root", str(ROOT.resolve())]
+               "--source-root", str(ROOT)]
     command.extend(f"--arg={arg}" for arg in pytest_args)
     return [*command, "--wait", "1200", "--stdout"]
 
