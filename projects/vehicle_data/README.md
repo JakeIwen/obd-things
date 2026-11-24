@@ -653,11 +653,12 @@ reply and scales it by 0.199773 (AlfaOBD evidence, observed raw 404–411). Valu
 outside 50–110 kPa are rejected. Within an armed, engine-running active-drive
 interval it can send one `22 0109` per 10 seconds, each under the existing PCM
 gates and its own one-use permit. A timeout, negative or invalid reply ends
-barometric polling for that helper interval. Pressure has one four-second
+barometric polling for that helper interval. Pressure has one five-second
 response deadline from the send. A `7F 22 78` pending reply keeps the pressure
-read waiting within that deadline without sending again. After a pressure poll
-takes longer than 0.5 seconds, the helper emits its result and starts the next
-cycle with a fresh snapshot before running radar and the remaining steps.
+read waiting within that deadline without sending again. Pressure runs last,
+after the radar and drive DTC steps. An active radar service alignment or queued
+service command leaves pressure due for a later cycle. A command received
+during a pressure read is handled on the next cycle's fresh snapshot.
 Snapshot completeness is unchanged.
 A value expires after 30 seconds or when the diagnostic owner stops; both Drive
 footers dim the retained pressure altitude next to the compass and show it only
@@ -1158,8 +1159,9 @@ exact echo. Generator duty (`62 01 A1`), crankshaft torque (`62 06 DA`) and
 opt-in barometric pressure (`62 01 09`) each require two data bytes. VVT oil
 temperature (`62 06 9F`) and oil life (`62 21 85`) each require one. Those four
 reads each receive one reply and treat `7F 22 78` as a rejection. Unexpected
-replies, including a stray positive reply after a pressure timeout, remain
-malformed for the next PCM read. The raw socket prevents a malformed
+replies remain malformed for the next PCM read. A pressure reply received
+by the next generator request after the five-second deadline is treated as
+foreign traffic and ends the helper interval. The raw socket prevents a malformed
 multi-frame reply from causing an ISO-TP FlowControl transmission.
 There is no caller-selectable DID, service, CAN ID, payload, functional
 address, session, or tester-present option. In particular, this path contains

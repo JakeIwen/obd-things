@@ -14,9 +14,12 @@ import pytest
 
 from projects.vehicle_data import active_drive, barometric_pressure, broker, pcm_electrical
 from projects.vehicle_data import pcm_temperature_support
-from projects.vehicle_data import radar_alignment, transmit_permit
+from projects.vehicle_data import radar_alignment, radar_service_alignment as service, transmit_permit
+from tests.radar_service_support import FakeRadar, Sink
+from tests.test_active_drive import speed_observation
 from tests.test_active_drive_oil_life_step import scripted_backend
 from tests.test_pcm_electrical import FakeSocket, TEST_CHANNEL, authorization, response_frame
+from tests.test_radar_service_alignment import link_for
 
 
 METRIC = "engine.barometric_pressure"
@@ -199,10 +202,10 @@ class TimedSocket(FakeSocket):
 
 @pytest.mark.parametrize(("events", "elapsed", "reason"), [
     ([(0.2, PENDING), (1.0, PENDING), (2.0, PENDING), (2.5, PENDING),
-      (3.0, PENDING), (3.9, PRESSURE_REPLY)], 3.9, None),
+      (3.0, PENDING), (4.9, PRESSURE_REPLY)], 4.9, None),
     ([(0.2, PENDING), (1.2, "03 7F 22 22")], 1.2, "response_rejected"),
-    ([(0.2, PENDING), (3.9, PENDING)], 4.0, "response_timeout"),
-    ([], 4.0, "response_timeout"),
+    ([(0.2, PENDING), (4.9, PENDING)], 5.0, "response_timeout"),
+    ([], 5.0, "response_timeout"),
 ])
 def test_pressure_owns_its_replies_within_one_deadline(events, elapsed, reason):
     clock = [0.0]
@@ -222,7 +225,7 @@ def test_pressure_owns_its_replies_within_one_deadline(events, elapsed, reason):
     assert not sock.events
     assert sock.sent == [REQUEST]
     reply_times = [0.0, *(arrival for arrival, reply in events if reply == PENDING)]
-    assert sock.receive_timeouts == pytest.approx([4.0 - time for time in reply_times])
+    assert sock.receive_timeouts == pytest.approx([5.0 - time for time in reply_times])
 
     sock.events.append((elapsed + 0.2, GENERATOR_REPLY))
     assert poller.poll(authorization()).value == 50.0
@@ -232,59 +235,214 @@ def test_pressure_owns_its_replies_within_one_deadline(events, elapsed, reason):
 
 def test_pressure_reply_after_deadline_is_foreign_to_next_read():
     clock = [0.0]
-    sock = TimedSocket(clock, [(4.05, PRESSURE_REPLY), (4.1, GENERATOR_REPLY)])
+    sock = TimedSocket(clock, [(5.05, PRESSURE_REPLY), (5.1, GENERATOR_REPLY)])
     poller = pcm_electrical.PcmElectricalPoller(
         TEST_CHANNEL, socket_factory=lambda *_: sock, monotonic=lambda: clock[0],
     )
     assert poller.poll_barometric_pressure(authorization(purpose=PURPOSE)).reason == "response_timeout"
     generator = poller.poll(authorization())
     assert generator.reason == "malformed_response"
-    assert sock.events == [(4.1, GENERATOR_REPLY)]
+    assert sock.events == [(5.1, GENERATOR_REPLY)]
 
 
-@pytest.mark.parametrize(("delay", "event_type", "first_later_snapshot"), [
-    (0.2, "observation", 100.0),
-    (0.5, "observation", 100.0),
-    (0.6, "observation", 101.0),
-    (None, "metric_failure", 104.0),
-])
-def test_slow_pressure_poll_skips_radar_and_dtc_until_next_snapshot(
-    delay, event_type, first_later_snapshot,
-):
-    backend, clock = scripted_backend([], running_snapshots=15 if delay is None else 6)
-    sock = TimedSocket(clock, [] if delay is None else [(100 + delay, PRESSURE_REPLY)])
+@pytest.fixture
+def run_pressure_session(monkeypatch):
+    safety = active_drive.diagnostic_safety
+    monkeypatch.setattr(safety, "acquire_channel_lock", lambda _: object())
+    monkeypatch.setattr(safety, "release_channel_lock", lambda _: None)
+    monkeypatch.setattr(safety, "validate_channel_lock", lambda handle, _: handle)
+    inhibit = mock.Mock()
+    monkeypatch.setattr(active_drive.can_operation_state, "begin_inhibit", inhibit)
+
+    def run(backend, sink, *, enabled=True, commands=None):
+        outcome = active_drive.run_active_session(
+            backend, sink, enable_barometric_pressure=enabled, service_commands=commands,
+            termination_guard=SimpleNamespace(begin_cleanup=lambda: None),
+        )
+        assert outcome.restored and outcome.reason == "engine_not_running", outcome
+        inhibit.assert_not_called()
+
+    return run
+
+
+def install_pressure_socket(backend, sock):
     poller = pcm_electrical.PcmElectricalPoller(
         TEST_CHANNEL, socket_factory=lambda *_: sock, monotonic=backend.monotonic,
     )
     backend.pcm.poll_barometric_pressure = poller.poll_barometric_pressure
-    radar = SimpleNamespace(run=mock.Mock(return_value=None))
-    dtc = SimpleNamespace(begin_cycle=mock.Mock(), run=mock.Mock(return_value=None), close=lambda: None)
-    stream = StringIO()
-    safety = active_drive.diagnostic_safety
-    with (
-        mock.patch.object(safety, "acquire_channel_lock", return_value=object()),
-        mock.patch.object(safety, "release_channel_lock"),
-        mock.patch.object(safety, "validate_channel_lock", side_effect=lambda handle, channel: handle),
-        mock.patch.object(active_drive.radar_drive_steps, "RadarDriveSteps", return_value=radar),
-        mock.patch.object(active_drive.drive_dtc_launch, "steps", return_value=dtc),
-    ):
-        outcome = active_drive.run_active_session(
-            backend, active_drive.JsonEventSink(stream), enable_barometric_pressure=True,
-            termination_guard=SimpleNamespace(begin_cleanup=lambda: None),
-        )
 
-    assert outcome.restored and outcome.reason == "engine_not_running"
-    for later_step in (radar, dtc):
-        assert later_step.run.call_args_list[0].args[0].completed_monotonic == first_later_snapshot
-    events = [event for event in map(json.loads, stream.getvalue().splitlines())
-              if event.get("metric") == METRIC]
-    assert events[0]["type"] == event_type
-    if event_type == "metric_failure":
-        assert events[0]["reason"] == "response_timeout"
-        assert len(events) == 1
-        assert sock.sent == [REQUEST]
-    else:
-        assert events[0]["value"] == pytest.approx(VALUE)
+
+def longest_gap(times):
+    return max(later - earlier for earlier, later in zip(times, times[1:]))
+
+
+def test_pressure_runs_last_and_silence_stays_below_watchdog(run_pressure_session, monkeypatch):
+    backend, clock = scripted_backend([], running_snapshots=6)
+    actions, event_times = [], []
+    sock = TimedSocket(clock, [])
+    sink = Sink()
+
+    def emit(event_type, **payload):
+        event_times.append(clock[0])
+        Sink.emit(sink, event_type, **payload)
+
+    def radar_step(snapshot):
+        actions.append(("radar", snapshot.completed_monotonic))
+
+    def dtc_step(snapshot):
+        actions.append(("dtc", snapshot.completed_monotonic))
+        clock[0] += 0.030
+
+    def send(frame):
+        actions.append(("pressure", clock[0]))
+        return TimedSocket.send(sock, frame)
+
+    sink.emit = emit
+    sock.send = send
+    install_pressure_socket(backend, sock)
+    radar = SimpleNamespace(run=radar_step, service_work_pending=lambda: False)
+    dtc = SimpleNamespace(begin_cycle=lambda: None, run=dtc_step, close=lambda: None)
+    monkeypatch.setattr(active_drive.radar_drive_steps, "RadarDriveSteps", lambda *a, **kw: radar)
+    monkeypatch.setattr(active_drive.drive_dtc_launch, "steps", lambda *a, **kw: dtc)
+    run_pressure_session(backend, sink)
+
+    assert [name for name, _ in actions[:5]] == ["radar", "dtc", "pressure", "radar", "dtc"]
+    assert [time for _, time in actions[:5]] == pytest.approx([100, 100, 100.03, 105.03, 105.03])
+    failures = [event for event in sink.events if event.get("metric") == METRIC]
+    assert [(event["type"], event["reason"]) for event in failures] == [
+        ("metric_failure", "response_timeout"),
+    ]
+    assert sock.sent == [REQUEST]
+    assert longest_gap(event_times) == pytest.approx(5.03)
+
+
+@pytest.fixture
+def send_service_command():
+    read_fd, write_fd = os.pipe()
+    try:
+        reader = service.CommandReader(read_fd)
+
+        def send(command):
+            os.write(write_fd, service.encode_command(command, "a" * 32).encode("ascii"))
+
+        yield reader, send
+    finally:
+        os.close(write_fd)
+        os.close(read_fd)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_start_queued_during_pressure_wait_uses_next_cycles_speed(
+    enabled, send_service_command, run_pressure_session,
+):
+    reader, send = send_service_command
+    backend, clock = scripted_backend([], running_snapshots=8)
+    fake = FakeRadar()
+    backend.open_radar = lambda: link_for(fake, backend.monotonic)
+    sample_speed = backend.broadcast_snapshot
+    sock = TimedSocket(clock, [(100.45, PRESSURE_REPLY)])
+    sink = Sink()
+
+    def broadcast_snapshot(seconds):
+        sample = sample_speed(seconds)
+        speed = speed_observation(0.0 if clock[0] < 100.45 else 1.0)
+        return replace(sample, observations=(*sample.observations, speed))
+
+    def recv(size):
+        assert clock[0] == 100.0
+        clock[0] += 0.2
+        send(service.START_COMMAND)
+        assert reader.pending()
+        return TimedSocket.recv(sock, size)
+
+    def sleep(seconds):
+        if clock[0] == 100:
+            send(service.START_COMMAND)
+        clock[0] += seconds
+
+    backend.broadcast_snapshot = broadcast_snapshot
+    backend.sleep = sleep
+    sock.recv = recv
+    install_pressure_socket(backend, sock)
+    run_pressure_session(backend, sink, enabled=enabled, commands=reader)
+
+    assert sock.sent == ([REQUEST] if enabled else [])
+    refused = [event for event in sink.service() if event["reason"] == "start_refused_moving"]
+    assert [event["speed_mph"] for event in refused] == [1.0]
+    assert fake.requests() == ["22 08 45", "FC"]
+
+
+def test_silent_pressure_leaves_active_alignment_cadence_unchanged(
+    send_service_command, run_pressure_session,
+):
+    reader, send_command = send_service_command
+    radar_gaps = []
+    for enabled in (False, True):
+        send_command(service.START_COMMAND)
+        backend, clock = scripted_backend([], running_snapshots=13)
+        fake = FakeRadar(progress=(0, 10, 20, 30, 40, 50))
+        sock = TimedSocket(clock, [])
+        sink = Sink()
+        radar_times = []
+        sample_speed = backend.broadcast_snapshot
+
+        def broadcast_snapshot(seconds):
+            sample = sample_speed(seconds)
+            return replace(sample, observations=(*sample.observations, speed_observation(0.0)))
+
+        def send(frame):
+            radar_times.append(clock[0])
+            return FakeRadar.send(fake, frame)
+
+        backend.broadcast_snapshot = broadcast_snapshot
+        backend.open_radar = lambda: link_for(fake, backend.monotonic)
+        fake.send = send
+        install_pressure_socket(backend, sock)
+        run_pressure_session(backend, sink, enabled=enabled, commands=reader)
+
+        assert "3E 00" in fake.requests()
+        assert any(event["state"] == service.RUNNING for event in sink.service())
+        assert not sock.sent
+        assert not any(event.get("metric") == METRIC for event in sink.events)
+        radar_gaps.append(longest_gap(radar_times))
+
+    assert radar_gaps == pytest.approx([1.0, 1.0])
+
+
+@pytest.mark.parametrize("queue_after_permit", [False, True])
+def test_pending_service_command_defers_pressure_until_it_can_run(
+    queue_after_permit, send_service_command, run_pressure_session, monkeypatch,
+):
+    reader, send = send_service_command
+    backend, clock = scripted_backend([], running_snapshots=6)
+    sock = TimedSocket(clock, [(101.1, PRESSURE_REPLY)])
+    sink = Sink()
+    dtc_steps = active_drive.drive_dtc_launch.steps(backend, sink, None, reservation=None)
+    issue = transmit_permit.issue
+    permit_times = []
+
+    def dtc_step(snapshot):
+        if not queue_after_permit and clock[0] == 100.0:
+            send(service.START_COMMAND)
+
+    def issue_permit(*args, **kwargs):
+        permit = issue(*args, **kwargs)
+        if kwargs["purpose"] == PURPOSE:
+            permit_times.append(clock[0])
+            if queue_after_permit and clock[0] == 100.0:
+                send(service.START_COMMAND)
+        return permit
+
+    dtc_steps.run = dtc_step
+    monkeypatch.setattr(active_drive.drive_dtc_launch, "steps", lambda *a, **kw: dtc_steps)
+    monkeypatch.setattr(transmit_permit, "issue", issue_permit)
+    install_pressure_socket(backend, sock)
+    run_pressure_session(backend, sink, commands=reader)
+
+    assert permit_times == ([100.0, 101.0] if queue_after_permit else [101.0])
+    assert sock.sent == [REQUEST]
+    assert sock.receive_timeouts == pytest.approx([5.0])
+    assert [event["type"] for event in sink.events if event.get("metric") == METRIC] == ["observation"]
 
 
 @pytest.mark.parametrize(("pressure_enabled", "purpose", "poll_name"), [

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from projects.vehicle_data import active_session_gates as gates
 from projects.vehicle_data import radar_alignment, transmit_permit
-from projects.vehicle_data.radar_service_alignment import ServiceAlignment
+from projects.vehicle_data.radar_service_alignment import ACTIVE_STATES, ServiceAlignment
 
 
 class SessionEnding(Exception):
@@ -74,6 +74,11 @@ class RadarDriveSteps:
         self.service = None if service_commands is None else ServiceAlignment(
             poller, sink, authority, service_commands, monotonic=backend.monotonic,
         )
+
+    def service_work_pending(self) -> bool:
+        """Observe an active run or queued commands without consuming them."""
+        service = self.service
+        return service is not None and (service.state in ACTIVE_STATES or service.commands.pending())
 
     def _poll_alignment(self) -> None:
         if not self.alignment_enabled or self.backend.monotonic() < self.next_alignment:

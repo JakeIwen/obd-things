@@ -702,11 +702,6 @@ def run_active_session(
         torque_enabled = True
         vvt_temperature_enabled = True
         next_vvt_temperature = next_cycle
-        pcm_steps = pcm_drive_step.optional_steps(
-            backend, sink, pcm_poller, lock_handle, initial, next_due=next_cycle,
-            enable_oil_life=enable_oil_life, oil_life_interval=OIL_LIFE_INTERVAL_SECONDS,
-            enable_barometric_pressure=enable_barometric_pressure,
-        )
         radar_steps = radar_drive_steps.RadarDriveSteps(
             backend, sink, radar_poller,
             radar_drive_steps.FreshAuthority(
@@ -715,6 +710,14 @@ def run_active_session(
         )
         dtc_steps = drive_dtc_launch.steps(
             backend, sink, radar_steps, reservation=drive_dtc, rf_hub_profiles=TPMS_PROFILES)
+        oil_life, pressure = pcm_drive_step.optional_steps(
+            backend, sink, pcm_poller, lock_handle, initial, next_due=next_cycle,
+            enable_oil_life=enable_oil_life, oil_life_interval=OIL_LIFE_INTERVAL_SECONDS,
+            enable_barometric_pressure=enable_barometric_pressure,
+            active_gate=_active_gate, pcm_outcome=_pcm_outcome,
+            defer_barometric_pressure=lambda: radar_steps.service_work_pending(),
+        )
+        cycle_steps = (oil_life, radar_steps.run, dtc_steps.run, pressure)
         while True:
             cycle_started = backend.monotonic()
             dtc_steps.begin_cycle()
@@ -949,24 +952,12 @@ def run_active_session(
                         interface_mode="armed_diagnostic",
                     )
 
-            pcm_step_result = pcm_drive_step.run_pcm_steps(
-                pcm_steps, snapshot, active_gate=_active_gate, pcm_outcome=_pcm_outcome,
-                permit_api=transmit_permit,
-            )
-            if pcm_step_result.outcome is not None:
-                outcome = pcm_step_result.outcome
-                break
-            if not pcm_step_result.skip_cycle:
-                # The radar's 0845 read and any owner-started service alignment.
-                radar_stop = radar_steps.run(snapshot)
-                if radar_stop is not None:
-                    outcome = radar_stop
-                    break
-
-                dtc_stop = dtc_steps.run(snapshot)
-                if dtc_stop is not None:
-                    outcome = dtc_stop
-                    break
+            # The pressure wait comes after every other consumer of this snapshot.
+            for step in cycle_steps:
+                if step is not None:
+                    outcome = step(snapshot)
+                    if outcome is not None:
+                        return outcome
 
             next_cycle = _wait_for_next_cycle(backend, next_cycle, cycle_started)
         return outcome

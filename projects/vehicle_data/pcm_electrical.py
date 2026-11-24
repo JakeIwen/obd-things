@@ -60,9 +60,8 @@ NM_TO_LB_FT = 0.7375621492772656
 SESSION_REQUIRED_NRCS = frozenset((0x7E, 0x7F))
 _RESPONSE_PENDING_PAYLOAD = bytes.fromhex("7F 22 78")
 DEFAULT_RESPONSE_TIMEOUT_SECONDS = 0.5
-# Give a pending request more time than the PCM is expected to need, well
-# within the helper's 10-second event-silence limit.
-_BAROMETRIC_RESPONSE_TIMEOUT_SECONDS = 4.0
+# One P2* window from the pressure send, including any pending replies.
+_BAROMETRIC_RESPONSE_TIMEOUT_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
