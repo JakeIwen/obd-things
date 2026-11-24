@@ -32,6 +32,7 @@ from projects.vehicle_data.warning_chat import (
 from projects.vehicle_data.broker import DEFAULT_SOCKET
 from projects.vehicle_data.dtc_ignore import API_PATH as DTC_IGNORE_PATH
 from projects.vehicle_data.history_recent import API_PATH as HISTORY_RECENT_PATH
+from projects.vehicle_data.history_series import API_PATH as HISTORY_SERIES_PATH
 from projects.vehicle_data.dtc_research_contract import relay_allowed as dtc_research_relay_allowed
 from projects.vehicle_data.assistant_pairing import (
     REDEEM_BODY_MAX as PAIRING_REDEEM_MAX, REDEEM_PATH as PAIRING_REDEEM_PATH, relay_allowed as pairing_relay_allowed,
@@ -135,6 +136,7 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
         (r"/v1/events(?:/.*)?", "_event_get"),
         (r"/v1/(?:status|snapshot|history|health|diagnostics/dtcs|maintenance)", "_proxy_get"),
         (HISTORY_RECENT_PATH, "_proxy_get"),
+        (HISTORY_SERIES_PATH, "_history_series_get"),
         (r"/v1/metrics(?:/[^/]+)?", "_proxy_get"),
         (r"/v1/stream", "_stream_get"),
         (r"/v1/diagnostics/dtc-jobs/current", "_dtc_current"),
@@ -170,6 +172,10 @@ class TelemetryWebHandler(http.server.BaseHTTPRequestHandler):
         return self._broker_request("GET", path)
 
     def _event_get(self, path: str) -> None:
+        return self._broker_request("GET", self.path)
+
+    def _history_series_get(self, path: str) -> None:
+        # The broker validates the query; the proxy only has to carry it through.
         return self._broker_request("GET", self.path)
 
     def _assistant_get(self, path: str) -> None:

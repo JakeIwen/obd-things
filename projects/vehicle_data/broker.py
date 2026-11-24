@@ -43,7 +43,7 @@ from projects.vehicle_data.helper_startup_grant import (
     pregrant_event_problem,
     ready_event_problem,
 )
-from projects.vehicle_data import history_recent
+from projects.vehicle_data import history_recent, history_series
 from projects.vehicle_data.dtc_ignore import FILE_NAME as DTC_IGNORE_FILE, DtcIgnoreStore
 from projects.vehicle_data.maintenance import MaintenanceStore
 from projects.vehicle_data.fuel_economy import METRIC as FUEL_RATE_METRIC
@@ -844,6 +844,7 @@ class TelemetryBroker:
         # Memory-only product of history_recent.query, refreshed with the supplemental cache but
         # kept out of its status so a failure here never marks history/health/dtcs degraded.
         self._history_recent_cache: dict[str, object] | None = None
+        self._history_series = history_series.SeriesService()
         self._supplemental_cache_status: dict[str, object] = {
             "enabled": insights is not None,
             "state": "starting" if insights is not None else "disabled",
@@ -1134,6 +1135,12 @@ class TelemetryBroker:
                 "detail": "telemetry history is disabled by broker configuration",
             }
         return history_recent.fresh_response(cached)
+
+    def history_series_response(self, query_string: str):
+        """``(status, payload)`` for ``GET /v1/history/series`` (``history_series.py``)."""
+
+        historian = None if self.insights is None else self.insights.historian
+        return self._history_series.respond(historian, query_string)
 
     def _event_related_context(self):
         health = self.cached_health_response()

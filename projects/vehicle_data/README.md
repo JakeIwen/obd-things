@@ -1670,6 +1670,27 @@ POST /v1/radar/alignment-reference
      {"action":"stop"}
 ```
 
+#### History series route
+
+`GET /v1/history/series?metric=<name>&span=<key>` (contract in `history_series.json`, code in
+`history_series.py`) feeds the dashboard's full sparkline chart for the spans the browser's own
+15-minute ring cannot cover. `metric` is one of `history_recent.METRICS`; `span` is `1h`, `6h`,
+`24h` or `7d` (60, 120, 360 and 2520 s buckets, at most 240 points). `15m` is the ring's span and is
+refused. Reply: `{available, metric, span, window_seconds, bucket_seconds, start_at, end_at,
+queried_at, points: [{at, value, min, max}]}`, oldest first, `at` the bucket start in UTC, only
+buckets with a numeric mean. Like `/v1/history/recent` the query ends at the last whole minute, so
+the minute in progress is not included. An unknown or missing metric or span, the live span, a
+repeated key or any extra key is HTTP 400 `{available: false, reason: "invalid_request"}`; with
+history disabled it is 200 `history_disabled`; a failing query is 503 `history_unavailable` and is
+not memoised. The web relay forwards the query string.
+
+The broker memoises each (metric, span) product for `cache_seconds` (60) behind one lock, so a
+second concurrent request waits for and reuses the first. This route queries SQLite on the
+request path (the recent route does not), which is acceptable because the windows are
+rollup-backed and bounded and the memo holds it to one query per key per minute. Measured on a
+copy of the 2026-10-03 export on vanpi under a load average near 10 (three runs each, ms): 1 h
+2-60, 6 h 2-12, 24 h 3-9, 7 d 11-28 typically (one 176 ms outlier while the Pi was busy).
+
 GETs are cache-only. `GET /v1/history/recent` (no parameters; contract in `history_recent.json`,
 code in `history_recent.py`) is the Drive sparklines' page-load seed: `{available, generated_at,
 window_seconds: 900, bucket_seconds: 60, at_basis: "bucket_start", metrics: {name: [{at, value}]}}`

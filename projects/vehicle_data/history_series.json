@@ -1,0 +1,15 @@
+{
+  "path": "/v1/history/series",
+  "query_keys": ["metric", "span"],
+  "metrics_source": "history_recent.json metrics",
+  "default_span": "15m",
+  "spans": [
+    {"key": "15m", "label": "15 min", "seconds": 900, "source": "live"},
+    {"key": "1h", "label": "1 hour", "seconds": 3600, "bucket_seconds": 60, "source": "history"},
+    {"key": "6h", "label": "6 hours", "seconds": 21600, "bucket_seconds": 120, "source": "history"},
+    {"key": "24h", "label": "24 hours", "seconds": 86400, "bucket_seconds": 360, "source": "history"},
+    {"key": "7d", "label": "7 days", "seconds": 604800, "bucket_seconds": 2520, "source": "history"}
+  ],
+  "cache_seconds": 60,
+  "refresh_seconds": 60
+}

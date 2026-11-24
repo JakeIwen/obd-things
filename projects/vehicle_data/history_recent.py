@@ -35,9 +35,7 @@ def query(historian, now: datetime | None = None) -> dict[str, object]:
     """Run the bounded series queries (one per metric) and return the cacheable product."""
 
     now = now or datetime.now(timezone.utc)
-    bucket_us = BUCKET_SECONDS * 1_000_000
-    now_us = (now - _EPOCH) // timedelta(microseconds=1)
-    end = _EPOCH + timedelta(microseconds=now_us - now_us % bucket_us)
+    end = aligned_end(now, BUCKET_SECONDS)
     metrics: dict[str, list[dict[str, object]]] = {}
     for name in METRICS:
         series = historian.metric_series(
@@ -55,14 +53,23 @@ def query(historian, now: datetime | None = None) -> dict[str, object]:
     return {"queried_at": now.isoformat(), "metrics": metrics}
 
 
+def aligned_end(now: datetime, bucket_seconds: int) -> datetime:
+    """``now`` floored to a whole ``bucket_seconds`` boundary (never later than ``now``); shared
+    with ``history_series.py`` so both routes label buckets the same way."""
+
+    bucket_us = bucket_seconds * 1_000_000
+    now_us = (now - _EPOCH) // timedelta(microseconds=1)
+    return _EPOCH + timedelta(microseconds=now_us - now_us % bucket_us)
+
+
 def _is_complete_minute(at: object, end: datetime) -> bool:
     """A point labelled at or after ``end`` is raw samples exactly on the boundary: a partial minute."""
 
-    start = _parse(at)
+    start = parse_at(at)
     return start is not None and start < end
 
 
-def _parse(at: object) -> datetime | None:
+def parse_at(at: object) -> datetime | None:
     try:
         parsed = datetime.fromisoformat(str(at))
     except ValueError:
@@ -87,7 +94,7 @@ def fresh_response(cached: Mapping[str, object] | None, now: datetime | None = N
     for name in METRICS:
         points = []
         for point in cached["metrics"].get(name, []):
-            start = _parse(point["at"])
+            start = parse_at(point["at"])
             if start is not None and start + bucket > oldest:
                 points.append(dict(point))
         metrics[name] = points
