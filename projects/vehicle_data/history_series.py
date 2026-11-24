@@ -1,14 +1,18 @@
-"""``GET /v1/history/series?metric=<name>&span=<key>``: one sparkline metric over 1 h to 7 d.
+"""``GET /v1/history/series?metric=<name>&span=<key>``: one metric over 1 h to 7 d.
 
 The dashboard's tap-to-open chart draws its 15-minute span from the browser's own ring; longer
-spans come from here as a downsampled, read-only history product. Spans, buckets and the cache
-lifetime come from ``history_series.json`` (the dashboard reads it too) and the metric list is
-``history_recent.METRICS``, so neither is written twice.
+spans come from here as a downsampled, read-only history product. Spans, buckets and the refresh
+cadence come from ``history_series.json`` (the dashboard reads it too). The accepted metrics are
+``history_recent.METRICS`` plus the broker's own history trend metrics (``insights.history_metrics``,
+the History view's trend cards and the Parked battery trend), handed in by the broker so no list is
+written twice.
 
-Unlike ``history_recent.py`` this queries on the request path: the broker's bounded GET workers
-call ``SeriesService.respond``, and a memo keeps each (metric, span) product for
-``cache_seconds``, so at most one rollup-backed query of at most 240 buckets runs per key per
-minute. Concurrent requests wait on the memo lock and reuse the first product.
+Like every broker GET the route is cache-only: ``SeriesService.refresh`` runs inside the broker's
+60-second supplemental refresh and fills one product per (metric, span); ``respond`` only reads
+memory under a short lock. A key is recomputed when its span's bucket has advanced since its last
+product, so the 7-day span is queried about every 42 minutes, not every minute. A failed
+recomputation leaves the previous product served for two of that span's buckets, then the route
+answers ``history_unavailable``. Products are bounded at metrics x 4 spans.
 
 The query ends at the last whole minute, never later than now, for the reasons in
 ``history_recent``: ``at`` is then the true bucket start and the minute in progress is not frozen
@@ -21,7 +25,8 @@ from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import threading
-from typing import Callable, Mapping
+import time
+from typing import Callable, Mapping, Sequence
 from urllib.parse import parse_qsl
 
 from projects.vehicle_data import history_recent
@@ -29,7 +34,7 @@ from projects.vehicle_data import history_recent
 VOCABULARY = json.loads(Path(__file__).with_suffix(".json").read_text())
 API_PATH = VOCABULARY["path"]
 QUERY_KEYS = tuple(VOCABULARY["query_keys"])
-CACHE_SECONDS = VOCABULARY["cache_seconds"]
+REFRESH_SECONDS = VOCABULARY["refresh_seconds"]
 SPANS = {span["key"]: span for span in VOCABULARY["spans"] if span["source"] == "history"}
 LIVE_SPANS = frozenset(span["key"] for span in VOCABULARY["spans"] if span["source"] == "live")
 # The historian's rollups are one minute wide; ending on that boundary keeps buckets aligned to them.
@@ -40,7 +45,13 @@ class InvalidRequest(ValueError):
     """The query string is not one known metric and one served span."""
 
 
-def parse_query(query_string: str) -> tuple[str, str]:
+def accepted_metrics(history_metrics=()) -> tuple[str, ...]:
+    """The route's metric allowlist: the sparkline metrics plus the broker's trend metrics."""
+
+    return tuple(dict.fromkeys((*history_recent.METRICS, *history_metrics)))
+
+
+def parse_query(query_string: str, metrics=history_recent.METRICS) -> tuple[str, str]:
     """Return ``(metric, span_key)`` or raise ``InvalidRequest``; no other key is accepted."""
 
     try:
@@ -53,7 +64,7 @@ def parse_query(query_string: str) -> tuple[str, str]:
     if set(keys) != set(QUERY_KEYS):
         raise InvalidRequest("the query must be exactly " + " and ".join(QUERY_KEYS))
     values = dict(pairs)
-    if values["metric"] not in history_recent.METRICS:
+    if values["metric"] not in metrics:
         raise InvalidRequest("unknown metric")
     span = values["span"]
     if span in LIVE_SPANS:
@@ -97,32 +108,83 @@ def query(historian, metric: str, span_key: str, now: datetime) -> dict[str, obj
 
 
 class SeriesService:
-    """Validation plus the per-(metric, span) memo; one lock serialises queries and memo access."""
+    """Validation, the per-(metric, span) product cache and its due-time bookkeeping."""
 
-    def __init__(self, clock: Callable[[], datetime] | None = None) -> None:
+    def __init__(
+        self,
+        clock: Callable[[], datetime] | None = None,
+        metrics: Callable[[], Sequence[str]] = lambda: history_recent.METRICS,
+    ) -> None:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._metrics = metrics
         self._lock = threading.Lock()
-        self._memo: dict[tuple[str, str], tuple[datetime, dict[str, object]]] = {}
+        self._products: dict[tuple[str, str], dict[str, object]] = {}
+        self._computed_at: dict[tuple[str, str], datetime] = {}
+        self._failed: set[tuple[str, str]] = set()
 
-    def respond(self, historian, query_string: str) -> tuple[int, Mapping[str, object]]:
+    def refresh(self, historian) -> dict[str, float]:
+        """Recompute every due product off the request path; return per-span seconds spent.
+
+        Each key is queried outside the lock and swapped in under it, so a slow query never
+        delays a GET. A failure is recorded per key and retried on the next pass.
+        """
+
+        now = self._clock()
+        metrics = tuple(self._metrics())
+        wanted = {(metric, span) for metric in metrics for span in SPANS}
+        spent = {span: 0.0 for span in SPANS}
+        with self._lock:
+            for key in set(self._products) - wanted:  # a metric left the allowlist
+                self._products.pop(key, None)
+                self._computed_at.pop(key, None)
+                self._failed.discard(key)
+            due = [key for key in sorted(wanted) if self._is_due(key, now)]
+        for key in due:
+            started = time.monotonic()
+            try:
+                product = query(historian, key[0], key[1], now)
+            except Exception:  # a busy or broken database must not take the refresh down
+                with self._lock:
+                    self._failed.add(key)
+            else:
+                with self._lock:
+                    self._products[key] = product
+                    self._computed_at[key] = now
+                    self._failed.discard(key)
+            spent[key[1]] += time.monotonic() - started
+        return spent
+
+    def _is_due(self, key: tuple[str, str], now: datetime) -> bool:
+        computed = self._computed_at.get(key)
+        if computed is None:
+            return True
+        bucket = SPANS[key[1]]["bucket_seconds"]
+        return history_recent.aligned_end(now, bucket) > history_recent.aligned_end(computed, bucket)
+
+    def respond(self, enabled: bool, query_string: str) -> tuple[int, Mapping[str, object]]:
+        """``(status, payload)`` from memory; ``enabled`` is whether a historian exists."""
+
         try:
-            metric, span = parse_query(query_string)
+            metric, span = parse_query(query_string, tuple(self._metrics()))
         except InvalidRequest as exc:
             return 400, {"available": False, "reason": "invalid_request", "detail": str(exc)}
-        if historian is None:
+        if not enabled:
             return 200, {
                 "available": False,
                 "reason": "history_disabled",
                 "detail": "telemetry history is disabled by broker configuration",
             }
+        key = (metric, span)
+        now = self._clock()
         with self._lock:
-            now = self._clock()
-            held = self._memo.get((metric, span))
-            if held is not None and timedelta(0) <= now - held[0] < timedelta(seconds=CACHE_SECONDS):
-                return 200, held[1]
-            try:
-                product = query(historian, metric, span, now)
-            except Exception as exc:  # a busy or broken database must not take the route down
-                return 503, {"available": False, "reason": "history_unavailable", "detail": type(exc).__name__}
-            self._memo[(metric, span)] = (now, product)
+            product = self._products.get(key)
+            computed = self._computed_at.get(key)
+            failed = key in self._failed
+        stale_after = timedelta(seconds=2 * SPANS[span]["bucket_seconds"])
+        if product is not None and not (failed and now - computed >= stale_after):
             return 200, product
+        if failed:
+            return 503, {"available": False, "reason": "history_unavailable",
+                         "detail": "the last refresh of this series failed"}
+        return 200, {"available": False, "reason": "pending",
+                     "detail": "the background refresh has not produced this series yet"}

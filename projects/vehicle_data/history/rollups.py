@@ -50,6 +50,12 @@ class RollupMixin:
 
         Work is bounded so a caller cannot accidentally monopolize the Pi after
         a long offline interval.  Repeated calls advance the stored cursor.
+
+        A minute is sealed only once it ended ``rollup_grace_seconds`` ago on the wall clock, even
+        when ``through`` is later: a snapshot is timestamped before it is inserted, so a query
+        crossing a minute boundary between the two would otherwise seal the minute without that
+        sample, and the cursor never revisits it.  Readers get the unsealed minutes from the raw
+        tail (``metric_series``), so the grace delays only the stored summary.
         """
 
         limit = max_buckets or self.config.rollup_max_buckets_per_call
@@ -57,7 +63,8 @@ class RollupMixin:
             raise ValueError("max_buckets must be between 1 and 10000")
         end_dt = datetime.now(timezone.utc) if through is None else _utc_datetime(through, "through")
         bucket_us = self.config.rollup_seconds * MICROSECONDS
-        complete_end = (_to_us(end_dt) // bucket_us) * bucket_us
+        settled_us = _to_us(datetime.now(timezone.utc)) - self.config.rollup_grace_seconds * MICROSECONDS
+        complete_end = (min(_to_us(end_dt), settled_us) // bucket_us) * bucket_us
         with self._lock, self._conn:
             return self._refresh_rollups_locked(
                 complete_end=complete_end,

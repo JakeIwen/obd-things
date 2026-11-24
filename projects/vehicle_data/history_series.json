@@ -1,7 +1,7 @@
 {
   "path": "/v1/history/series",
   "query_keys": ["metric", "span"],
-  "metrics_source": "history_recent.json metrics",
+  "metrics_source": "history_recent.json metrics plus the broker's history trend metrics (insights history_metrics)",
   "default_span": "15m",
   "spans": [
     {"key": "15m", "label": "15 min", "seconds": 900, "source": "live"},
@@ -10,6 +10,5 @@
     {"key": "24h", "label": "24 hours", "seconds": 86400, "bucket_seconds": 360, "source": "history"},
     {"key": "7d", "label": "7 days", "seconds": 604800, "bucket_seconds": 2520, "source": "history"}
   ],
-  "cache_seconds": 60,
   "refresh_seconds": 60
 }

@@ -844,7 +844,7 @@ class TelemetryBroker:
         # Memory-only product of history_recent.query, refreshed with the supplemental cache but
         # kept out of its status so a failure here never marks history/health/dtcs degraded.
         self._history_recent_cache: dict[str, object] | None = None
-        self._history_series = history_series.SeriesService()
+        self._history_series = history_series.SeriesService(metrics=self._history_series_metrics)
         self._supplemental_cache_status: dict[str, object] = {
             "enabled": insights is not None,
             "state": "starting" if insights is not None else "disabled",
@@ -1136,11 +1136,14 @@ class TelemetryBroker:
             }
         return history_recent.fresh_response(cached)
 
-    def history_series_response(self, query_string: str):
-        """``(status, payload)`` for ``GET /v1/history/series`` (``history_series.py``)."""
+    def _history_series_metrics(self) -> tuple[str, ...]:
+        trends = () if self.insights is None else self.insights.history_metrics
+        return history_series.accepted_metrics(trends)
 
-        historian = None if self.insights is None else self.insights.historian
-        return self._history_series.respond(historian, query_string)
+    def history_series_response(self, query_string: str):
+        """``(status, payload)`` from memory for ``GET /v1/history/series`` (``history_series.py``)."""
+
+        return self._history_series.respond(self.insights is not None, query_string)
 
     def _event_related_context(self):
         health = self.cached_health_response()
@@ -1184,6 +1187,10 @@ class TelemetryBroker:
             recent = json.loads(json.dumps(history_recent.query(self.insights.historian)))
         except Exception:
             recent = None  # the previous product ages out through fresh_response
+        try:
+            self._history_series.refresh(self.insights.historian)  # records its own failures per key
+        except Exception:
+            pass
         duration_ms = max(0.0, self.monotonic() - started) * 1000.0
         with self._lock:
             if recent is not None:

@@ -1,4 +1,4 @@
-"""GET /v1/history/series: validation, the bounded query, the memo and the broker route."""
+"""GET /v1/history/series: validation, the bounded query, the cache-only refresh and the route."""
 
 from __future__ import annotations
 
@@ -14,12 +14,14 @@ from projects.vehicle_data import history_recent, history_series
 from projects.vehicle_data.api import TelemetryClient, UnixHTTPServer
 from projects.vehicle_data.broker import TelemetryBroker
 from projects.vehicle_data.historian import TelemetryHistorian
+from projects.vehicle_data.insights import DEFAULT_HISTORY_METRICS
 from tests.test_vehicle_data import FakeAcquirer, FakeClock
 from tests.test_vehicle_historian import available, definition, snapshot
 
 NOW = datetime(2026, 11, 23, 12, 7, 31, 250000, tzinfo=timezone.utc)
 END = datetime(2026, 11, 23, 12, 7, 0, tzinfo=timezone.utc)
 METRIC = "vehicle.speed"
+TRENDS = ("battery.voltage", "tire.pressure.fl")
 
 
 class FakeHistorian:
@@ -43,11 +45,17 @@ class ParseTests(unittest.TestCase):
             self.assertEqual(history_series.parse_query(f"metric={METRIC}&span={span}"), (METRIC, span))
         self.assertEqual(history_series.parse_query("span=1h&metric=engine.rpm"), ("engine.rpm", "1h"))
 
-    def test_every_recent_metric_is_accepted_and_nothing_else(self):
-        for name in history_recent.METRICS:
-            history_series.parse_query(f"metric={name}&span=1h")
+    def test_every_recent_and_trend_metric_is_accepted_and_nothing_else(self):
+        allowed = history_series.accepted_metrics(DEFAULT_HISTORY_METRICS)
+        self.assertTrue(set(history_recent.METRICS) | set(DEFAULT_HISTORY_METRICS) <= set(allowed))
+        self.assertEqual(len(allowed), len(set(allowed)))
+        for name in allowed:
+            history_series.parse_query(f"metric={name}&span=1h", allowed)
+        history_series.parse_query("metric=battery.voltage&span=7d", allowed)
+        with self.assertRaises(history_series.InvalidRequest):
+            history_series.parse_query("metric=tire.pressure.fl&span=1h")  # default is the sparklines only
         for query in (
-            "metric=tire.pressure.fl&span=1h",
+            "metric=tire.pressure.xx&span=1h",
             "metric=&span=1h",
             f"metric={METRIC}&span=2h",
             f"metric={METRIC}&span=15m",  # the browser's ring serves it
@@ -61,7 +69,7 @@ class ParseTests(unittest.TestCase):
         ):
             with self.subTest(query=query):
                 with self.assertRaises(history_series.InvalidRequest):
-                    history_series.parse_query(query)
+                    history_series.parse_query(query, allowed)
 
     def test_spans_are_bounded_and_whole_minutes(self):
         self.assertEqual(sorted(history_series.SPANS), ["1h", "24h", "6h", "7d"])
@@ -97,64 +105,107 @@ class QueryTests(unittest.TestCase):
         self.assertEqual((product["window_seconds"], product["bucket_seconds"]), (3600, 60))
 
 
-class MemoTests(unittest.TestCase):
-    def service(self):
+class RefreshTests(unittest.TestCase):
+    def service(self, metrics=lambda: history_series.accepted_metrics(TRENDS)):
         self.now = NOW
-        return history_series.SeriesService(clock=lambda: self.now)
+        return history_series.SeriesService(clock=lambda: self.now, metrics=metrics)
 
-    def test_a_second_call_within_the_ttl_reuses_the_product_and_one_after_it_queries_again(self):
+    def test_a_request_before_the_first_refresh_is_pending_and_never_queries(self):
         service, historian = self.service(), FakeHistorian([point(120, 5.0)])
-        first = service.respond(historian, f"metric={METRIC}&span=1h")
-        self.now = NOW + timedelta(seconds=history_series.CACHE_SECONDS - 1)
-        second = service.respond(historian, f"span=1h&metric={METRIC}")
-        self.assertEqual(len(historian.calls), 1)
-        self.assertEqual(first, second)
-        service.respond(historian, f"metric={METRIC}&span=6h")
-        service.respond(historian, f"metric=engine.rpm&span=1h")
-        self.assertEqual(len(historian.calls), 3, "each (metric, span) has its own memo entry")
-        self.now = NOW + timedelta(seconds=history_series.CACHE_SECONDS)
-        status, third = service.respond(historian, f"metric={METRIC}&span=1h")
-        self.assertEqual((status, len(historian.calls)), (200, 4))
-        self.assertEqual(third["queried_at"], self.now.isoformat())
+        status, payload = service.respond(True, f"metric={METRIC}&span=1h")
+        self.assertEqual((status, payload["available"], payload["reason"]), (200, False, "pending"))
+        self.assertEqual(historian.calls, [])
 
-    def test_concurrent_requests_for_one_key_share_one_query(self):
+    def test_refresh_fills_every_key_and_respond_reads_memory_only(self):
+        service, historian = self.service(), FakeHistorian([point(120, 5.0)])
+        service.refresh(historian)
+        keys = len(history_series.accepted_metrics(TRENDS)) * len(history_series.SPANS)
+        self.assertEqual(len(historian.calls), keys)
+        for name in ("battery.voltage", "tire.pressure.fl", METRIC):
+            status, payload = service.respond(True, f"metric={name}&span=7d")
+            self.assertEqual((status, payload["available"], payload["metric"]), (200, True, name))
+        self.assertEqual(len(historian.calls), keys)
+
+    def test_each_span_is_recomputed_only_when_its_bucket_has_advanced(self):
+        service, historian = self.service(), FakeHistorian([point(120, 5.0)])
+        service.refresh(historian)
+        metrics = len(historian.calls) // len(history_series.SPANS)
+
+        def buckets_after(seconds):
+            self.now = NOW + timedelta(seconds=seconds)
+            historian.calls.clear()
+            service.refresh(historian)
+            return sorted({kwargs["bucket_seconds"] for _, kwargs in historian.calls})
+
+        self.assertEqual(buckets_after(60), [60, 120], "12:08:31 crossed a minute and a 2-minute edge only")
+        self.assertEqual(len(historian.calls), 2 * metrics)
+        self.assertEqual(buckets_after(90), [60], "12:09:01 crossed a minute edge only")
+        self.assertEqual(buckets_after(7 * 60), [60, 120, 360])  # 12:14:31 crosses the 12:12 edge too
+        self.assertEqual(buckets_after(7 * 60 + 5), [], "nothing is due inside the same minute")
+        self.assertEqual(buckets_after(2520 * 2), [60, 120, 360, 2520])
+
+    def test_a_failed_refresh_serves_the_old_product_for_two_buckets_then_is_unavailable(self):
+        service, historian = self.service(), FakeHistorian([point(120, 5.0)])
+        service.refresh(historian)
+        broken = mock.Mock()
+        broken.metric_series.side_effect = RuntimeError("db busy")
+        self.now = NOW + timedelta(seconds=90)
+        service.refresh(broken)
+        query = f"metric={METRIC}&span=1h"
+        status, payload = service.respond(True, query)
+        self.assertEqual((status, payload["queried_at"]), (200, NOW.isoformat()))
+        self.now = NOW + timedelta(seconds=2 * 60)
+        status, payload = service.respond(True, query)
+        self.assertEqual((status, payload["reason"]), (503, "history_unavailable"))
+        self.assertEqual(service.respond(True, f"metric={METRIC}&span=7d")[0], 200)
+        self.now = NOW + timedelta(seconds=180)
+        service.refresh(historian)  # recovery
+        self.assertEqual(service.respond(True, query)[0], 200)
+
+    def test_failure_with_no_earlier_product_is_unavailable_not_pending(self):
         service = self.service()
-        release = threading.Event()
+        broken = mock.Mock()
+        broken.metric_series.side_effect = RuntimeError("db busy")
+        service.refresh(broken)
+        self.assertEqual(service.respond(True, f"metric={METRIC}&span=1h")[1]["reason"], "history_unavailable")
+
+    def test_products_are_bounded_and_a_metric_that_leaves_the_allowlist_is_dropped(self):
+        metrics = ["battery.voltage", "engine.rpm"]
+        service = self.service(metrics=lambda: tuple(metrics))
+        historian = FakeHistorian([point(120, 5.0)])
+        service.refresh(historian)
+        self.assertEqual(len(service._products), 2 * len(history_series.SPANS))
+        metrics.remove("engine.rpm")
+        service.refresh(historian)
+        self.assertEqual(len(service._products), len(history_series.SPANS))
+        self.assertEqual(service.respond(True, "metric=engine.rpm&span=1h")[0], 400)
+
+    def test_refusals_and_no_historian(self):
+        service = self.service()
+        status, payload = service.respond(True, f"metric={METRIC}&span=15m")
+        self.assertEqual((status, payload["reason"], payload["available"]), (400, "invalid_request", False))
+        status, payload = service.respond(False, f"metric={METRIC}&span=1h")
+        self.assertEqual((status, payload["reason"]), (200, "history_disabled"))
+        self.assertEqual(service.respond(False, "metric=x&span=1h")[0], 400)
+
+    def test_a_slow_refresh_does_not_block_requests(self):
+        service = self.service()
+        started, release = threading.Event(), threading.Event()
         historian = FakeHistorian([point(120, 5.0)])
         original = historian.metric_series
 
         def slow(name, **kwargs):
-            release.wait(2)
+            started.set()
+            release.wait(5)
             return original(name, **kwargs)
 
         historian.metric_series = slow
-        results = []
-        threads = [threading.Thread(target=lambda: results.append(service.respond(historian, f"metric={METRIC}&span=7d")))
-                   for _ in range(4)]
-        for thread in threads:
-            thread.start()
+        worker = threading.Thread(target=service.refresh, args=(historian,))
+        worker.start()
+        self.assertTrue(started.wait(2))
+        self.assertEqual(service.respond(True, f"metric={METRIC}&span=1h")[1]["reason"], "pending")
         release.set()
-        for thread in threads:
-            thread.join()
-        self.assertEqual(len(historian.calls), 1)
-        self.assertEqual({status for status, _ in results}, {200})
-
-    def test_refusals_never_query_and_a_failed_query_is_not_memoised(self):
-        service, historian = self.service(), FakeHistorian()
-        status, payload = service.respond(historian, f"metric={METRIC}&span=15m")
-        self.assertEqual((status, payload["reason"], payload["available"]), (400, "invalid_request", False))
-        self.assertEqual(historian.calls, [])
-        broken = mock.Mock()
-        broken.metric_series.side_effect = RuntimeError("db busy")
-        self.assertEqual(service.respond(broken, f"metric={METRIC}&span=1h")[0], 503)
-        self.assertEqual(service.respond(broken, f"metric={METRIC}&span=1h")[0], 503)
-        self.assertEqual(broken.metric_series.call_count, 2)
-
-    def test_no_historian_is_history_disabled_after_validation(self):
-        service = self.service()
-        status, payload = service.respond(None, f"metric={METRIC}&span=1h")
-        self.assertEqual((status, payload["reason"]), (200, "history_disabled"))
-        self.assertEqual(service.respond(None, "metric=x&span=1h")[0], 400)
+        worker.join()
 
 
 class RealHistorianTests(unittest.TestCase):
@@ -185,6 +236,29 @@ class RealHistorianTests(unittest.TestCase):
                 json.dumps(product)
 
 
+class RollupRaceTests(unittest.TestCase):
+    def test_a_sample_inserted_after_a_boundary_crossing_query_still_counts(self):
+        """Timestamp before the minute boundary, query after it, insert after the query."""
+
+        speed = definition(METRIC, "mph")
+        wall = datetime.now(timezone.utc)
+        minute = wall.replace(second=0, microsecond=0) - timedelta(minutes=1)
+        first, late = minute + timedelta(seconds=10), minute + timedelta(seconds=59, milliseconds=900)
+        with tempfile.TemporaryDirectory() as tmp:
+            with TelemetryHistorian(pathlib.Path(tmp) / "h.sqlite3") as historian:
+                historian.ingest_snapshot(snapshot(first, [speed], {METRIC: available(speed, 10.0, first)}),
+                                          captured_at=first)
+                end = minute + timedelta(minutes=1)  # the query crosses the boundary
+                series = historian.metric_series(METRIC, end=end, window_seconds=3600, bucket_seconds=60)
+                self.assertEqual([p["value"] for p in series["points"]], [10.0], "the recent minute is served raw")
+                historian.ingest_snapshot(snapshot(late, [speed], {METRIC: available(speed, 80.0, late)}),
+                                          captured_at=late)  # stamped before the boundary, stored after the query
+                series = historian.metric_series(METRIC, end=end, window_seconds=3600, bucket_seconds=60)
+                (entry,) = series["points"]
+                self.assertEqual((entry["value"], entry["minimum"], entry["maximum"]), (45.0, 10.0, 80.0))
+                self.assertEqual(historian.refresh_rollups(through=end)["buckets"], 0, "the grace holds the cursor")
+
+
 class BrokerRouteTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="vt-series-", dir="/tmp")
@@ -192,6 +266,7 @@ class BrokerRouteTests(unittest.TestCase):
         self.historian = FakeHistorian([point(120, 5.0)])
         insights = mock.Mock()
         insights.historian = self.historian
+        insights.history_metrics = DEFAULT_HISTORY_METRICS
         self.broker = TelemetryBroker(acquirer=FakeAcquirer(), monotonic=FakeClock(), insights=insights)
         self.server = UnixHTTPServer(socket_path, self.broker)
         self.thread = threading.Thread(target=self.server.serve_forever)
@@ -204,17 +279,30 @@ class BrokerRouteTests(unittest.TestCase):
         self.thread.join()
         self.tmp.cleanup()
 
-    def test_series_is_served_with_its_query_string_and_refusals_are_400(self):
-        status, payload = self.client.request("GET", f"/v1/history/series?metric={METRIC}&span=24h")
+    def test_get_is_pending_until_the_supplemental_refresh_and_never_queries(self):
+        path = "/v1/history/series?metric=battery.voltage&span=24h"
+        status, payload = self.client.request("GET", path)
+        self.assertEqual((status, payload["available"], payload["reason"]), (200, False, "pending"))
+        self.assertEqual(self.historian.calls, [])
+        self.broker._refresh_supplemental_cache()
+        calls = len(self.historian.calls)
+        self.assertGreater(calls, 0)
+        status, payload = self.client.request("GET", path)
         self.assertEqual(status, 200)
-        self.assertEqual((payload["metric"], payload["span"], payload["bucket_seconds"]), (METRIC, "24h", 360))
+        self.assertEqual((payload["metric"], payload["span"], payload["bucket_seconds"]),
+                         ("battery.voltage", "24h", 360))
         self.assertEqual(len(payload["points"]), 1)
-        self.assertEqual(self.historian.calls[0][1]["max_points"], 240)
+        self.assertEqual(len(self.historian.calls), calls, "a GET reads memory")
+
+    def test_trend_metrics_are_served_and_refusals_are_400(self):
+        self.broker._refresh_supplemental_cache()
+        for name in DEFAULT_HISTORY_METRICS:
+            status, payload = self.client.request("GET", f"/v1/history/series?metric={name}&span=1h")
+            self.assertEqual((status, payload["available"]), (200, True), name)
         for query in ("", f"?metric={METRIC}&span=15m", f"?metric={METRIC}&span=1h&x=1", "?metric=nope&span=1h"):
             with self.subTest(query=query):
                 status, payload = self.client.request("GET", "/v1/history/series" + query)
                 self.assertEqual((status, payload["reason"], payload["available"]), (400, "invalid_request", False))
-        self.assertEqual(len(self.historian.calls), 1)
 
     def test_history_disabled(self):
         self.broker.insights = None

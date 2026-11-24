@@ -217,7 +217,7 @@ deliberately tabled; this work neither diagnosed nor modified the hub.
    gaps; missing observations are never stored as zero. Raw numeric and
    interface samples default to seven-day retention. Bounded daily maintenance
    first advances minute rollups and refuses to prune if that rollup cursor is
-   behind; trips, gap records, catalogs, and compact rollups remain available.
+   behind (a minute is sealed only 120 s after it ends, so a late insert cannot be missed); trips, gap records, catalogs, and compact rollups remain available.
    The five-second writer checks this daily-gated maintenance no more than once
    per hour, and reports a maintenance failure without losing an already
    committed snapshot.
@@ -1673,23 +1673,42 @@ POST /v1/radar/alignment-reference
 #### History series route
 
 `GET /v1/history/series?metric=<name>&span=<key>` (contract in `history_series.json`, code in
-`history_series.py`) feeds the dashboard's full sparkline chart for the spans the browser's own
-15-minute ring cannot cover. `metric` is one of `history_recent.METRICS`; `span` is `1h`, `6h`,
-`24h` or `7d` (60, 120, 360 and 2520 s buckets, at most 240 points). `15m` is the ring's span and is
-refused. Reply: `{available, metric, span, window_seconds, bucket_seconds, start_at, end_at,
-queried_at, points: [{at, value, min, max}]}`, oldest first, `at` the bucket start in UTC, only
-buckets with a numeric mean. Like `/v1/history/recent` the query ends at the last whole minute, so
-the minute in progress is not included. An unknown or missing metric or span, the live span, a
-repeated key or any extra key is HTTP 400 `{available: false, reason: "invalid_request"}`; with
-history disabled it is 200 `history_disabled`; a failing query is 503 `history_unavailable` and is
-not memoised. The web relay forwards the query string.
+`history_series.py`) feeds the dashboard's full chart for the spans the browser's own 15-minute
+ring cannot cover. `metric` is one of `history_recent.METRICS` or the broker's history trend
+metrics (`insights.history_metrics`: the History view's 24-hour trend cards and the Parked
+battery trend, `battery.voltage`); `span` is `1h`, `6h`, `24h` or `7d` (60, 120, 360 and 2520 s
+buckets, at most 240 points). `15m` is the ring's span and is refused. Reply: `{available,
+metric, span, window_seconds, bucket_seconds, start_at, end_at, queried_at, points: [{at, value,
+min, max}]}`, oldest first, `at` the bucket start in UTC, only buckets with a numeric mean. Like
+`/v1/history/recent` the query ends at the last whole minute, so the minute in progress is not
+included. An unknown or missing metric or span, the live span, a repeated key or any extra key is
+HTTP 400 `{available: false, reason: "invalid_request"}`; with history disabled it is 200
+`history_disabled`. The web relay forwards the query string.
 
-The broker memoises each (metric, span) product for `cache_seconds` (60) behind one lock, so a
-second concurrent request waits for and reuses the first. This route queries SQLite on the
-request path (the recent route does not), which is acceptable because the windows are
-rollup-backed and bounded and the memo holds it to one query per key per minute. Measured on a
-copy of the 2026-10-03 export on vanpi under a load average near 10 (three runs each, ms): 1 h
-2-60, 6 h 2-12, 24 h 3-9, 7 d 11-28 typically (one 176 ms outlier while the Pi was busy).
+The route is cache-only, like every broker GET: no request touches SQLite. The broker's 60-second
+supplemental refresh calls `SeriesService.refresh`, which recomputes a (metric, span) product
+when its span's bucket has advanced since the product was built (1 h every pass, 6 h every
+2 minutes, 24 h every 6, 7 d every 42), so the 7-day queries run about every 42 minutes, not every
+minute. Products are bounded at metrics x 4 spans (52 today) and held in memory; a metric that
+leaves the allowlist is dropped. A GET before a key's first product answers 200
+`{available: false, reason: "pending"}`. A failed recomputation keeps the previous product served
+while it is younger than two of that span's buckets, then the route answers 503
+`history_unavailable` (also when there is no earlier product); the next pass retries. Measured on
+a copy of the 2026-10-03 export (13 metrics) under a load average near 13: a full cold pass
+about 210 ms (7 d 112 ms of it), the worst later pass 414 ms (all four spans due at once, every
+42 minutes), a pass with nothing due 1 ms. The pass runs on the recorder thread after the
+snapshot is stored, so it can delay only the next snapshot by that much.
+
+Minute rollups are sealed only after a grace (`HistorianConfig.rollup_grace_seconds`, 120 s,
+applied in `refresh_rollups` against the wall clock whatever `through` says). The recorder
+timestamps a snapshot (every 5 s) before it reads the broker cache and inserts it, so a query that
+crossed a minute boundary in between could seal the minute without that sample, and the cursor
+never revisits a sealed minute. 120 s is about 15 times the longest recorded stall between
+timestamp and insert (7.8 s, before the O2 fix; see AGENTS.md). The unsealed minutes are served
+from the raw tail by `metric_series` (`series_basis: minute_rollups_plus_raw_tail`), so charts and
+`history_recent` show recent minutes unchanged; only the stored per-minute summary, trip
+aggregates and the warning engine's rollup reads trail by up to two minutes. Test:
+`RollupRaceTests` in `tests/test_history_series.py`.
 
 GETs are cache-only. `GET /v1/history/recent` (no parameters; contract in `history_recent.json`,
 code in `history_recent.py`) is the Drive sparklines' page-load seed: `{available, generated_at,
