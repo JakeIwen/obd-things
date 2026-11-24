@@ -266,15 +266,20 @@ socket or replace the unit.
 - Undo: `install.sh uninstall`, then `echo 0 | sudo tee
   /sys/bus/usb/devices/1-1/1-1:1.0/1-1-port2/disable`. Do that only after the faulty hub or
   cable is out of the chain; while the watcher runs it undoes a manual `0` at its next pass.
-- Open as of 2026-11-23, the first boot with the block installed (installed 2026-11-22 21:14
-  US/Mountain; the Pi had been up since 19:47 that evening). A boot is the first time the watcher
-  has to cut an enumerated chain. Whichever session first finds `uptime -s` later than the
-  install time runs the check and replaces this bullet with the dated result: `install.sh status`
-  exits 0 with `block: held`; `journalctl -u vanpi-usb2-disk-hub-off -b` shows one or more
-  "powering it off" warnings followed by "off again" (an error line, or an ntfy "vanpi USB 2.0
-  block FAILED", is a failure); `journalctl -k -b | grep -c 'usb 1-1'` stays flat after the first
-  minute. The owner reboots when he chooses (`sudo /home/pi/scripts/safe_reboot.sh`); agents do
-  not reboot the Pi for this.
+- First boot with the block installed: passed, checked 2026-11-24 (the owner's reboot, up at
+  10:54 US/Mountain). A boot is the one time the watcher has to cut a chain that has already
+  enumerated. The chain enumerated during boot, with six failure lines from the faulty port
+  (`1-1.2.4.4.2`, `error -32` and `error -71`). The watcher started at 10:54:59, logged
+  "powering it off, attempt 1 of 6" at 10:55:01 and "off again" at 10:55:05, with no error
+  line. The three disconnects at 10:55:01 were the last kernel `usb 1-1` lines of the boot (69
+  in all, unchanged ten minutes later). `install.sh status` exited 0 with `block: held`,
+  `can0`/`can1`/`can2` were UP and listen-only, both adapters and the tablet were on the CAN
+  hub, and `get_throttled` read `0x0`. To repeat the check after a later boot: that status
+  line, `journalctl -u vanpi-usb2-disk-hub-off -b` (a "powering it off" warning followed by
+  "off again"; an error line, or an ntfy "vanpi USB 2.0 block FAILED", is a failure) and
+  `journalctl -k -b | grep -c 'usb 1-1'` staying flat after the first minute. The owner
+  reboots when he chooses (`sudo /home/pi/scripts/safe_reboot.sh`); agents do not reboot the
+  Pi for this.
 - Waiting on the owner (physical, not urgent while the block holds; told 2026-11-22 and
   2026-11-23, no answer recorded): port 2 of the deepest disk hub (`1-1.2.4.4`) is the faulty
   one, since the failures stayed on it after the Seagate was moved to port 3, which cleared that
@@ -284,13 +289,24 @@ socket or replace the unit.
   whether an empty socket still fails is not known, because the block has kept the USB 2.0 side
   off since. At 19:22 on 2026-11-22 the first disk hub's own USB 2.0 link to the Pi's port 2
   also failed, so the unit's upstream cable or the Pi port may be involved too. The card reader
-  the block cuts off works only on a free Pi socket (see Limits); if he does not use it,
-  unplugging it removes the one device that has stalled the watcher.
-- Unrelated to USB 2.0, also the owner's: the WD Elements 6 TB (`/mnt/bigboi`) has a disk fault,
-  not a cable fault. SMART shows 12 pending sectors and no CRC errors, and the kernel's medium
-  errors repeat at the same three addresses on every mount (13 on 2026-11-22; SMART read by a
-  Mac session on 2026-11-23). `/mnt/EXFAT512` was flagged "not properly unmounted" at 17:52 and
-  19:46 on 2026-11-22 and has not been checked.
+  is out of the blocked chain since the boot of 2026-11-24: it sits on the Pi's own port 3
+  (`1-1.3`) and lists both of its cards, so the block no longer cuts it off and it can no longer
+  stall the watcher.
+- Unrelated to USB 2.0: the WD Elements 6 TB (`/mnt/bigboi`, the Pi's backup target) has a disk
+  fault, not a cable fault. SMART on 2026-11-24 03:01: 12 pending sectors, none reallocated, no
+  CRC errors. The kernel's medium errors repeated at three addresses (LBAs 7375355272,
+  7376333280 and 7378213088), which `debugfs -c` (`icheck`, then `ncheck`) mapped to three
+  files of one staged weekly iCloud generation
+  (`icloud-weekly/vanpi-20261121T104047Z-3d30dcf0/payload/repository/data/0/8`, `913` and
+  `914`), not to the media mirror. The job re-verified that stage every run and failed, so no
+  iCloud generation completed after 2026-11-21. The backup system (source in the Mac's scripts
+  repo, deployed read-only as `/home/pi/scripts/backup`) owns the repair: after a deploy at
+  05:02 on 2026-11-24 its job discarded that stage at 05:22. Not checked from this repo: that a
+  new generation has completed, that the live borg repository reads cleanly, and the rest of
+  the disk surface (a SMART long test takes 12 to 15 hours with the drive kept awake). An
+  obd-things session diagnoses such a fault read-only and never mounts or writes a backup disk.
+  `/mnt/EXFAT512` was flagged "not properly unmounted" at 17:52 and 19:46 on 2026-11-22 and has
+  not been checked.
 
 ## CAN adapter USB drop (Board A) and automatic recovery
 
