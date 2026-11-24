@@ -6,6 +6,7 @@
 
 import { useComputed } from "@preact/signals";
 import { tileModel } from "../app/derive.js";
+import { TileLabel } from "./TileLabel.jsx";
 
 export const WHEELS = [
   ["tire.pressure.fl", "FL"],
@@ -52,7 +53,7 @@ export function TireGrid({ area, label = "Tires", withFooter = true }) {
   const cls = area ? "tile area-" + area : "tile";
   return (
     <section class={cls} aria-label={label}>
-      <div class="tile__label">{label}</div>
+      <TileLabel text={label} />
       <div class="tires">
         {WHEELS.map(([name, pos]) => (
           <Wheel key={name} name={name} pos={pos} />

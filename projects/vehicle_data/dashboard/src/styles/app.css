@@ -258,7 +258,6 @@ a { color: var(--blue); }
   border: 1px solid var(--line); border-radius: var(--radius); background: var(--card);
   contain: layout paint style;
 }
-.tile__label { font-size: 14px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tile__value {
   flex: 1 1 auto; display: flex; align-items: baseline; gap: 6px; min-height: 0;
   font-size: var(--value); font-weight: 600; line-height: 1; letter-spacing: -.02em; white-space: nowrap;

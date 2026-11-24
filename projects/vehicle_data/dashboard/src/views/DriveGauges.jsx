@@ -3,6 +3,7 @@ import { useRef, useState } from "preact/hooks";
 import { useModalDialog } from "../dialogs/modalDialog.js";
 import { DRIVE_INFO, tripRowsModel } from "./driveTrip.helpers.js";
 import { Tile } from "../components/Tile.jsx";
+import { TileLabel } from "../components/TileLabel.jsx";
 import { TireGrid } from "../components/TireGrid.jsx";
 import { overspeed } from "../overspeed.js";
 import { DriveFooter } from "./DriveFooter.jsx";
@@ -49,7 +50,7 @@ function TripTile() {
     <>
       <section class="tile area-trip" aria-label="This drive">
         <div class="drive-trip__head">
-          <div class="tile__label">This drive</div>
+          <TileLabel text="This drive" />
           <button type="button" class="drive-trip__info" title={DRIVE_INFO} aria-label="About this drive" onClick={() => setInfoOpen(true)}>
             <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
               <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.5" />

@@ -57,7 +57,8 @@ function cruise({minutes, engaged, ahead, button, brake, compared, delta, covera
 }
 
 /** Completed trips before the demo drive: [hours before it started, minutes, mpg, cruise]. */
-const EARLIER_TRIPS = Object.freeze([
+/** Earlier trips as [hours before the demo drive, minutes, mpg, cruise summary]; demo_series.mjs draws the same drives. */
+export const EARLIER_TRIPS = Object.freeze([
   [5, 52, 16.8, {engaged: 33, ahead: 16, button: 3, brake: 1, compared: 31, delta: -1.1, coverage: 98.0}],
   [21, 38, 17.2, {engaged: 24, ahead: 11, button: 1, brake: 2, compared: 22, delta: -0.8, coverage: 98.6}],
   [46, 240, 15.9, {engaged: 156, ahead: 76, button: 2, brake: 2, compared: 144, delta: -0.6, coverage: 98.3}],

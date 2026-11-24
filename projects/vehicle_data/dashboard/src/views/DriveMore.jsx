@@ -11,6 +11,7 @@
 
 import { computed, useComputed } from "@preact/signals";
 import { Tile } from "../components/Tile.jsx";
+import { TileLabel } from "../components/TileLabel.jsx";
 import { AccDistance } from "../components/AccDistance.jsx";
 import { currentAcc } from "../accDisplay.js";
 import { overspeed } from "../overspeed.js";
@@ -44,7 +45,7 @@ const limitUnit = computed(() => (limitOn.value ? "mph" : ""));
 function LimitTile() {
   return (
     <section class={limitCls} aria-label="Speed limit">
-      <div class="tile__label">Speed limit</div>
+      <TileLabel text="Speed limit" />
       <div class="drive2-limit">
         <div class="drive2-limit__sign num">
           <span class="drive2-limit__value">{limit}</span>
@@ -68,7 +69,7 @@ const accLabel = computed(() => currentAcc.value.mode === "fixed" ? "Cruise" : "
 function AccTile() {
   return (
     <section class={accCls} aria-label={accLabel}>
-      <div class="tile__label">{accLabel}</div>
+      <TileLabel text={accLabel} />
       <div class="tile__value num">
         <span>{accValue}</span>
         <span class="tile__unit">{accUnit}</span>
@@ -91,7 +92,7 @@ const fuelSub = computed(() =>
 function FuelTile() {
   return (
     <section class={fuelCls} aria-label="Fuel rate">
-      <div class="tile__label">Fuel rate</div>
+      <TileLabel text="Fuel rate" />
       <div class="tile__value num">
         <span>{fuel}</span>
         <span class="tile__unit">{fuelUnit}</span>
@@ -129,7 +130,7 @@ const tankSub = computed(() => tankModel.value.sub);
 function TankTile() {
   return (
     <section class={tankCls} aria-label="Fuel tank">
-      <div class="tile__label">Fuel tank</div>
+      <TileLabel text="Fuel tank" />
       <div class="tile__value num">
         <span>{tank}</span>
         <span class="tile__unit">{tankUnit}</span>
@@ -148,7 +149,7 @@ function CandidateTile({ name, label, area }) {
   const unit = useComputed(() => model.value.unit);
   return (
     <section class={cls} aria-label={label}>
-      <div class="tile__label">{label}</div>
+      <TileLabel text={label} />
       <div class="tile__value num">
         <span>{text}</span>
         <span class="tile__unit">{unit}</span>
@@ -169,7 +170,7 @@ const ratio = computed(() =>
 function GearTile() {
   return (
     <section class={gearCls} aria-label="Gear">
-      <div class="tile__label">Gear</div>
+      <TileLabel text="Gear" />
       <div class="tile__value num">
         <span>{gear}</span>
       </div>
@@ -224,7 +225,7 @@ function RadarTile() {
   return (
     <section class={radarCls} aria-label="Radar aim">
       <div class="drive2-radar__head">
-        <div class="tile__label">Radar aim</div>
+        <TileLabel text="Radar aim" />
         <div class="drive2-radar__note">{radarNote}</div>
       </div>
       <div class="drive2-radar__axes">

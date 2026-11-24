@@ -542,7 +542,8 @@ test("(b) views/components read the clock only through minuteClock; no timers, l
     }
   }
   const TIMER_OK = new Set(["components/Sparkline.jsx", "components/dtcScan.helpers.js", "components/DtcScan.jsx"]);
-  const LAYOUT_OK = new Set(["components/Sparkline.jsx"]); // Drive only: measured on mount/resize
+  // Drive only, measured on mount/resize: the sparkline canvas size and the tile title fit.
+  const LAYOUT_OK = new Set(["components/Sparkline.jsx", "components/TileLabel.jsx"]);
   for (const file of files) {
     const src = readFileSync(new URL(file, root), "utf8").replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "");
     assert.ok(!/\bstore\.clock\b|\bclock\.value\b/.test(src), file + " reads the 1 Hz clock");

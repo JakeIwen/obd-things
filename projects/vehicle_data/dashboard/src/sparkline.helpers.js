@@ -5,6 +5,19 @@
  * nothing here raises a warning, chime or alert colour.
  */
 
+/** Minimum vertical span per metric, in its display unit. */
+export const MIN_SPAN = {
+  "engine.coolant_temperature": 20,
+  "transmission.oil_temperature": 20,
+  "engine.vvt_oil_temperature": 20,
+  "engine.oil_pressure": 10,
+  "battery.voltage": 0.5,
+  "engine.crankshaft_power": 20,
+  "engine.rpm": 500,
+  "vehicle.speed": 10,
+  "generator.field_duty": 20,
+};
+
 /**
  * Split one continuous run of points into polylines on either side of a threshold, adding a point
  * at each crossing so the colour changes exactly where the line meets the threshold.

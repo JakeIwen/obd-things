@@ -1114,3 +1114,43 @@ That line also carries the distance to empty (`fuel.range`, candidate, `fuel_ran
 `tank ~49% · 126 mi`. A single trailing `(last)` marks the line when any shown part is a retained
 reading, so the retained form stays short enough for the tile at 800 px portrait. The System catalog
 labels it "Distance to empty".
+
+### Full chart dialog and tile titles (November 23)
+
+Every Drive tile with a sparkline (`<Tile spark />`: Coolant, Oil temp, Trans oil, Voltage,
+Alternator field, Oil pressure and page 2's Power) opens a large chart when tapped, unless the
+view gave the tile its own `onClick`. The tile keeps its resting look (pointer, hover border,
+press dims it). The dialog is `src/dialogs/Chart.jsx`, registered as `chart` in `app/dialogs.js`:
+about 92 vw by 72 vh (capped at 1100 by 760 px) so a backdrop margin stays all round; a tap on
+the backdrop, the × button or Esc closes it.
+
+- Spans: 15 min, 1 h, 6 h, 24 h, 7 d, from `history_series.json` (`chart.helpers.js` imports it;
+  nothing re-declares them). The last choice is kept in memory for the page's lifetime only.
+- 15 min draws the browser ring (`ringFor`), at most every 5 s while open. Longer spans fetch
+  `GET /v1/history/series?metric=&span=`, refetch every `refresh_seconds` and abort on a span
+  change or close. A broker that answers 404, history off, or any failure shows a sentence instead
+  of a chart, never an error trace.
+- The chart: y-axis with 4 to 6 round ticks (`niceTicks`, formatted with the tile's decimals,
+  widened when the step needs more), x-axis in local clock times (5 min ticks for 15 min, 10 min
+  for 1 h, hourly for 6 h, every 4 h for 24 h, daily for 7 d; coarser when the width is short).
+  The normal band is shaded as the sparkline shades it; history spans add a light min-max
+  envelope behind the mean line; a missing bucket lifts the pen; Alternator field keeps its
+  yellow, orange, red heat above 60 %. The value range keeps the sparkline's per-metric minimum span.
+- Canvas, not SVG: one bitmap repaint per update, no DOM to diff on the tablet, and the same
+  technique as the sparkline. Canvas pixels do not follow CSS tokens, so the dialog repaints when
+  the root class changes (theme, Dim) and on resize (`ResizeObserver`). Painting is
+  `chartDraw.js`; all decisions are pure in `chart.helpers.js`.
+- Clock: history points are placed by their epoch `at` on the reply's own window; the 15 min axis
+  labels use the tablet's clock (labels only, the line comes from the monotonic ring).
+- Demo captures: `tools/demo_series.mjs` answers every history span for the scene's metrics (the
+  same trips as History, warming up from cold, ending at the Drive tile's values); `demo_capture.mjs`
+  matches a route's optional `query`. `shoot.mjs --demo` has no route interception, so its chart
+  shows the 15 min span only.
+
+Tile titles (`.tile__label`) are 21 px, about 50 % above the former 14 px, unless that would not
+fit on one line: `components/TileLabel.jsx` measures each title at 21 px once on mount, when the
+web font arrives and when the tile's width changes (never on a data update), and
+`tileLabel.helpers.js: fitLabelSize` picks the largest half-pixel size from 14 to 21 px that
+fits, set through the CSSOM. Both bounds are the `--tile-label-size` and `--tile-label-min`
+tokens in `styles/tile-label.css`. The line height is 1.15, so a title costs about 9 px more height
+than before; the numeral takes it from its flexible row.
